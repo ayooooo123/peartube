@@ -2,8 +2,9 @@
  * PearTube - Main App Component
  */
 
-import React, { useState, useEffect } from 'react';
-import { rpc, type BackendStatus, type Identity, type Video, type PublicFeedEntry, type ChannelMetadata } from './lib/rpc';
+import React, { useState, useEffect, useRef } from 'react';
+import { rpc, type Video } from './lib/rpc';
+import { useAppStore, type AppStoreState } from './state/appStore';
 import { AppLayout } from './components/layout/AppLayout';
 import { HomePage } from './pages/HomePage';
 import { WatchPage } from './pages/WatchPage';
@@ -16,47 +17,13 @@ import { colors, spacing, radius } from './lib/theme';
 
 type View = 'home' | 'watch' | 'studio' | 'subscriptions' | 'settings' | 'channel' | 'onboarding';
 
-interface AppState {
-  view: View;
-  status: BackendStatus | null;
-  identity: Identity | null;
-  videos: Video[];
-  channelNames: Record<string, string>;
-  subscriptions: { driveKey: string; name: string }[];
-  loading: boolean;
-  error: string | null;
-  // Watch page state
-  currentVideo: Video | null;
-  currentVideoKey: string | null;
-  relatedVideos: Video[];
-  // Channel page state
-  viewingChannelKey: string | null;
-  // Public feed state
-  publicFeed: PublicFeedEntry[];
-  channelMetadata: Record<string, ChannelMetadata>;
-  feedLoading: boolean;
-  peerCount: number;
-}
-
 export default function App() {
-  const [state, setState] = useState<AppState>({
-    view: 'home',
-    status: null,
-    identity: null,
-    videos: [],
-    channelNames: {},
-    subscriptions: [],
-    loading: true,
-    error: null,
-    currentVideo: null,
-    currentVideoKey: null,
-    relatedVideos: [],
-    viewingChannelKey: null,
-    publicFeed: [],
-    channelMetadata: {},
-    feedLoading: false,
-    peerCount: 0,
-  });
+  const { state, dispatch } = useAppStore();
+  const stateRef = useRef(state);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Onboarding state
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -66,16 +33,104 @@ export default function App() {
   const [recoverMnemonic, setRecoverMnemonic] = useState('');
   const [recoverName, setRecoverName] = useState('');
 
+  // ---- Simple hash-based router ----
+  function navigate(path: string) {
+    const normalized = path.startsWith('#') ? path : `#${path.startsWith('/') ? path.slice(1) : path}`;
+    window.location.hash = normalized || '#/';
+  }
+
+  function parseRoute(hash: string) {
+    const raw = hash.replace(/^#/, '') || '/';
+    const path = raw.startsWith('/') ? raw : `/${raw}`;
+    const parts = path.split('/').filter(Boolean);
+
+    if (parts.length === 0) return { view: 'home' as View };
+    const [first, second, third] = parts;
+
+    switch (first) {
+      case 'studio':
+        return { view: 'studio' as View };
+      case 'subscriptions':
+        return { view: 'subscriptions' as View };
+      case 'settings':
+        return { view: 'settings' as View };
+      case 'channel':
+        return { view: 'channel' as View, driveKey: second };
+      case 'watch':
+        return { view: 'watch' as View, driveKey: second, videoId: third };
+      case 'onboarding':
+        return { view: 'onboarding' as View };
+      default:
+        return { view: 'home' as View };
+    }
+  }
+
+  function applyRoute(hash: string, snapshot: AppStoreState) {
+    const route = parseRoute(hash);
+    let view = route.view;
+
+    // Gate onboarding if no identity
+    if (!snapshot.identity && view !== 'onboarding') {
+      view = 'onboarding';
+    }
+
+    dispatch({ type: 'setView', payload: view });
+
+    if (view === 'channel' && route.driveKey) {
+      dispatch({ type: 'setViewingChannel', payload: route.driveKey });
+    } else {
+      dispatch({ type: 'setViewingChannel', payload: null });
+    }
+
+    if (view === 'watch' && route.driveKey && route.videoId) {
+      const found =
+        snapshot.videos.find(v => v.id === route.videoId && v.channelKey === route.driveKey) ||
+        snapshot.videos.find(v => v.id === route.videoId);
+
+      const placeholder: Video = found || {
+        id: route.videoId,
+        title: 'Loading...',
+        description: '',
+        path: '', // will be fetched via listVideos
+        mimeType: '',
+        size: 0,
+        uploadedAt: Date.now(),
+        channelKey: route.driveKey,
+      };
+
+      const related = snapshot.videos.filter(v => v.id !== route.videoId).slice(0, 10);
+
+      dispatch({
+        type: 'setCurrentVideo',
+        payload: { video: placeholder, driveKey: route.driveKey, related },
+      });
+    } else {
+      dispatch({ type: 'setCurrentVideo', payload: { video: null, driveKey: null, related: [] } });
+    }
+  }
+
   useEffect(() => {
-    loadInitialData().then(() => {
-      // Load public feed after initial data
-      loadPublicFeed();
-    });
+    const syncRoute = () => applyRoute(window.location.hash, stateRef.current);
+    window.addEventListener('hashchange', syncRoute);
+
+    (async () => {
+      await loadInitialData();
+      await loadPublicFeed();
+      syncRoute();
+    })();
+
+    // Apply route on first render
+    syncRoute();
+
+    return () => {
+      window.removeEventListener('hashchange', syncRoute);
+    };
   }, []);
 
   async function loadInitialData() {
     try {
-      setState(s => ({ ...s, loading: true, error: null }));
+      dispatch({ type: 'setLoading', payload: true });
+      dispatch({ type: 'setError', payload: null });
 
       const [statusData, identitiesData] = await Promise.all([
         rpc.getStatus(),
@@ -123,24 +178,28 @@ export default function App() {
         }
       }
 
-      setState(s => ({
-        ...s,
+      dispatch({ type: 'setStatus', payload: statusData });
+      dispatch({ type: 'setIdentity', payload: activeIdentity });
+      dispatch({ type: 'setVideos', payload: videos });
+      dispatch({ type: 'setChannelNames', payload: channelNames });
+      dispatch({ type: 'setSubscriptions', payload: subscriptions });
+      dispatch({ type: 'setLoading', payload: false });
+
+      const snapshot: AppStoreState = {
+        ...stateRef.current,
         status: statusData,
         identity: activeIdentity,
         videos,
         channelNames,
         subscriptions,
         loading: false,
-        view: activeIdentity ? 'home' : 'onboarding',
-      }));
+      };
+      stateRef.current = snapshot;
+      applyRoute(window.location.hash || (activeIdentity ? '#/' : '#/onboarding'), snapshot);
     } catch (err: any) {
       console.error('[App] loadInitialData error:', err);
-      setState(s => ({
-        ...s,
-        loading: false,
-        error: err.message || 'Failed to load data',
-        view: 'onboarding',
-      }));
+      dispatch({ type: 'setLoading', payload: false });
+      dispatch({ type: 'setError', payload: err.message || 'Failed to load data' });
     }
   }
 
@@ -149,7 +208,8 @@ export default function App() {
     if (!newIdentityName.trim()) return;
 
     try {
-      setState(s => ({ ...s, loading: true, error: null }));
+      dispatch({ type: 'setLoading', payload: true });
+      dispatch({ type: 'setError', payload: null });
 
       const result = await rpc.createIdentity(newIdentityName);
 
@@ -161,7 +221,8 @@ export default function App() {
       setShowCreateForm(false);
       await loadInitialData();
     } catch (err: any) {
-      setState(s => ({ ...s, loading: false, error: err.message || 'Failed to create identity' }));
+      dispatch({ type: 'setLoading', payload: false });
+      dispatch({ type: 'setError', payload: err.message || 'Failed to create identity' });
     }
   }
 
@@ -170,7 +231,8 @@ export default function App() {
     if (!recoverMnemonic.trim()) return;
 
     try {
-      setState(s => ({ ...s, loading: true, error: null }));
+      dispatch({ type: 'setLoading', payload: true });
+      dispatch({ type: 'setError', payload: null });
 
       await rpc.recoverIdentity(recoverMnemonic, recoverName || undefined);
 
@@ -178,35 +240,33 @@ export default function App() {
       setRecoverName('');
       setShowRecoverForm(false);
       await loadInitialData();
+      navigate('/');
+      navigate('/');
     } catch (err: any) {
-      setState(s => ({ ...s, loading: false, error: err.message || 'Failed to recover identity' }));
+      dispatch({ type: 'setLoading', payload: false });
+      dispatch({ type: 'setError', payload: err.message || 'Failed to recover identity' });
     }
   }
 
   function handleNavigate(id: string) {
-    if (id === 'home') setState(s => ({ ...s, view: 'home' }));
-    else if (id === 'subscriptions') setState(s => ({ ...s, view: 'subscriptions' }));
-    else if (id === 'studio') setState(s => ({ ...s, view: 'studio' }));
-    else if (id === 'settings') setState(s => ({ ...s, view: 'settings' }));
+    if (id === 'home') navigate('/'); 
+    else if (id === 'subscriptions') navigate('/subscriptions');
+    else if (id === 'studio') navigate('/studio');
+    else if (id === 'settings') navigate('/settings');
     else if (id === 'channel' && state.identity?.driveKey) {
-      setState(s => ({ ...s, view: 'channel', viewingChannelKey: state.identity!.driveKey! }));
+      navigate(`/channel/${state.identity.driveKey}`);
     }
   }
 
   function handleVideoClick(video: Video) {
     const channelKey = video.channelKey || state.identity?.driveKey || '';
     const related = state.videos.filter(v => v.id !== video.id).slice(0, 10);
-    setState(s => ({
-      ...s,
-      view: 'watch',
-      currentVideo: video,
-      currentVideoKey: channelKey,
-      relatedVideos: related,
-    }));
+    dispatch({ type: 'setCurrentVideo', payload: { video, driveKey: channelKey, related } });
+    navigate(`/watch/${channelKey}/${video.id}`);
   }
 
   function handleChannelClick(driveKey: string) {
-    setState(s => ({ ...s, view: 'channel', viewingChannelKey: driveKey }));
+    navigate(`/channel/${driveKey}`);
   }
 
   function handleSearch(query: string) {
@@ -215,28 +275,24 @@ export default function App() {
   }
 
   async function loadPublicFeed() {
-    setState(s => ({ ...s, feedLoading: true }));
+    dispatch({ type: 'setFeedLoading', payload: true });
     try {
       console.log('[Home] Loading public feed...');
       const result = await rpc.getPublicFeed();
       console.log('[Home] Public feed result:', result);
 
-      setState(s => ({
-        ...s,
-        publicFeed: result.entries,
-        peerCount: result.stats.peerCount,
-        feedLoading: false,
-      }));
+      dispatch({ type: 'setPublicFeed', payload: result.entries });
+      dispatch({ type: 'setPeerCount', payload: result.stats.peerCount });
+      dispatch({ type: 'setFeedLoading', payload: false });
 
       // Lazy load metadata for first 10 channels
       for (const entry of result.entries.slice(0, 10)) {
-        if (!state.channelMetadata[entry.driveKey]) {
+        if (!stateRef.current.channelMetadata[entry.driveKey]) {
           try {
             const meta = await rpc.getChannelMetadata(entry.driveKey);
-            setState(s => ({
-              ...s,
-              channelMetadata: { ...s.channelMetadata, [entry.driveKey]: meta },
-            }));
+            const nextMeta = { ...stateRef.current.channelMetadata, [entry.driveKey]: meta };
+            stateRef.current = { ...stateRef.current, channelMetadata: nextMeta };
+            dispatch({ type: 'setChannelMetadata', payload: nextMeta });
           } catch (err) {
             console.error('[Home] Failed to load metadata for', entry.driveKey.slice(0, 8), err);
           }
@@ -244,7 +300,7 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('[Home] Failed to load public feed:', err);
-      setState(s => ({ ...s, feedLoading: false }));
+      dispatch({ type: 'setFeedLoading', payload: false });
     }
   }
 
@@ -290,7 +346,7 @@ export default function App() {
           {state.error && (
             <Alert
               variant="error"
-              onClose={() => setState(s => ({ ...s, error: null }))}
+              onClose={() => dispatch({ type: 'setError', payload: null })}
               style={{ marginBottom: spacing.lg, width: '100%' }}
             >
               {state.error}
@@ -460,14 +516,14 @@ export default function App() {
       onSearch={handleSearch}
       identity={state.identity}
       subscriptions={state.subscriptions}
-      onUploadClick={() => setState(s => ({ ...s, view: 'studio' }))}
-      onProfileClick={() => setState(s => ({ ...s, view: 'settings' }))}
+      onUploadClick={() => navigate('/studio')}
+      onProfileClick={() => navigate('/settings')}
       onSubscriptionClick={handleChannelClick}
     >
       {state.error && (
         <Alert
           variant="error"
-          onClose={() => setState(s => ({ ...s, error: null }))}
+          onClose={() => dispatch({ type: 'setError', payload: null })}
           style={{ margin: spacing.lg }}
         >
           {state.error}
@@ -498,7 +554,7 @@ export default function App() {
           driveKey={state.currentVideoKey}
           relatedVideos={state.relatedVideos}
           channelNames={state.channelNames}
-          onBack={() => setState(s => ({ ...s, view: 'home' }))}
+          onBack={() => navigate('/')}
           onVideoClick={handleVideoClick}
           onChannelClick={handleChannelClick}
         />
@@ -522,7 +578,16 @@ export default function App() {
         <SettingsPage
           identity={state.identity}
           status={state.status}
-          onLogout={() => setState(s => ({ ...s, view: 'onboarding', identity: null }))}
+          onLogout={() => {
+            dispatch({ type: 'setIdentity', payload: null });
+            dispatch({ type: 'setVideos', payload: [] });
+            dispatch({ type: 'setSubscriptions', payload: [] });
+            dispatch({ type: 'setChannelNames', payload: {} });
+            dispatch({ type: 'setCurrentVideo', payload: { video: null, driveKey: null, related: [] } });
+            dispatch({ type: 'setViewingChannel', payload: null });
+            dispatch({ type: 'setView', payload: 'onboarding' });
+            navigate('/onboarding');
+          }}
         />
       )}
 
@@ -530,7 +595,7 @@ export default function App() {
         <ChannelPage
           driveKey={state.viewingChannelKey}
           identity={state.identity}
-          onBack={() => setState(s => ({ ...s, view: 'home' }))}
+          onBack={() => navigate('/')}
           onVideoClick={handleVideoClick}
         />
       )}

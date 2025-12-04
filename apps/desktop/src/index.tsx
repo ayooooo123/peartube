@@ -8,6 +8,7 @@
 import { createRoot } from 'react-dom/client';
 import { TamaguiProvider } from './lib/TamaguiProvider';
 import App from './App';
+import { AppStoreProvider } from './state/appStore';
 
 // Enable Pear hot updates if available
 if (typeof window !== 'undefined') {
@@ -33,7 +34,9 @@ if (!container) throw new Error('Root element not found');
 const root = createRoot(container);
 root.render(
   <TamaguiProvider>
-    <App />
+    <AppStoreProvider>
+      <App />
+    </AppStoreProvider>
   </TamaguiProvider>
 );
 

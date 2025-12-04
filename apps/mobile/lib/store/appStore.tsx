@@ -1,74 +1,87 @@
 /**
- * Shared App Store (Desktop)
+ * Shared App Store (Mobile)
  *
- * Central place to keep identity, subscriptions, videos, and feed state so UI can stay thin.
- * Mirrors the data we also need on mobile; platform-specific adapters provide IO.
+ * Mirrors desktop's appStore pattern for consistent state management.
+ * Platform-specific RPC calls are abstracted through actions.
  */
 
 import React, { createContext, useContext, useReducer, useRef, useMemo, ReactNode } from 'react';
-import type { BackendStatus, Identity, Video, PublicFeedEntry, ChannelMetadata } from '@peartube/shared';
-import { createActions, type AppActions } from './actions';
+import type { Identity, Video, VideoData, PublicFeedEntry, ChannelMetadata, VideoStats } from '@peartube/shared';
 
 export type AppStoreState = {
-  status: BackendStatus | null;
-  identity: Identity | null;
-  videos: Video[];
-  channelNames: Record<string, string>;
-  subscriptions: { driveKey: string; name: string }[];
+  // Connection status
+  ready: boolean;
   loading: boolean;
   error: string | null;
+
+  // Identity & channel
+  identity: Identity | null;
+
+  // Videos & content
+  videos: Video[];
+  channelNames: Record<string, string>;
+
+  // Subscriptions
+  subscriptions: { driveKey: string; name: string }[];
+
+  // Public feed
   publicFeed: PublicFeedEntry[];
   channelMetadata: Record<string, ChannelMetadata>;
   feedLoading: boolean;
   peerCount: number;
-  // View-specific state (still kept here for now)
-  view: 'home' | 'watch' | 'studio' | 'subscriptions' | 'settings' | 'channel' | 'onboarding';
-  currentVideo: Video | null;
+
+  // Platform-specific
+  blobServerPort: number | null;
+
+  // Current video (player state)
+  currentVideo: VideoData | null;
   currentVideoKey: string | null;
-  relatedVideos: Video[];
-  viewingChannelKey: string | null;
+  videoStats: VideoStats | null;
 };
 
 type Action =
-  | { type: 'setStatus'; payload: BackendStatus | null }
+  | { type: 'setReady'; payload: boolean }
+  | { type: 'setLoading'; payload: boolean }
+  | { type: 'setError'; payload: string | null }
   | { type: 'setIdentity'; payload: Identity | null }
   | { type: 'setVideos'; payload: Video[] }
   | { type: 'upsertVideo'; payload: Video }
   | { type: 'setChannelNames'; payload: Record<string, string> }
   | { type: 'setSubscriptions'; payload: { driveKey: string; name: string }[] }
-  | { type: 'setLoading'; payload: boolean }
-  | { type: 'setError'; payload: string | null }
   | { type: 'setPublicFeed'; payload: PublicFeedEntry[] }
   | { type: 'setChannelMetadata'; payload: Record<string, ChannelMetadata> }
   | { type: 'setFeedLoading'; payload: boolean }
   | { type: 'setPeerCount'; payload: number }
-  | { type: 'setView'; payload: AppStoreState['view'] }
-  | { type: 'setCurrentVideo'; payload: { video: Video | null; driveKey: string | null; related?: Video[] } }
-  | { type: 'setViewingChannel'; payload: string | null };
+  | { type: 'setBlobServerPort'; payload: number | null }
+  | { type: 'setCurrentVideo'; payload: { video: VideoData | null; driveKey: string | null } }
+  | { type: 'setVideoStats'; payload: VideoStats | null };
 
 const initialState: AppStoreState = {
-  status: null,
+  ready: false,
+  loading: true,
+  error: null,
   identity: null,
   videos: [],
   channelNames: {},
   subscriptions: [],
-  loading: true,
-  error: null,
   publicFeed: [],
   channelMetadata: {},
   feedLoading: false,
   peerCount: 0,
-  view: 'home',
+  blobServerPort: null,
   currentVideo: null,
   currentVideoKey: null,
-  relatedVideos: [],
-  viewingChannelKey: null,
+  videoStats: null,
 };
 
 function reducer(state: AppStoreState, action: Action): AppStoreState {
   switch (action.type) {
-    case 'setStatus':
-      return { ...state, status: action.payload };
+    case 'setReady':
+      return { ...state, ready: action.payload };
+    case 'setLoading':
+      return { ...state, loading: action.payload };
+    case 'setError':
+      return { ...state, error: action.payload };
     case 'setIdentity':
       return { ...state, identity: action.payload };
     case 'setVideos':
@@ -81,10 +94,6 @@ function reducer(state: AppStoreState, action: Action): AppStoreState {
       return { ...state, channelNames: action.payload };
     case 'setSubscriptions':
       return { ...state, subscriptions: action.payload };
-    case 'setLoading':
-      return { ...state, loading: action.payload };
-    case 'setError':
-      return { ...state, error: action.payload };
     case 'setPublicFeed':
       return { ...state, publicFeed: action.payload };
     case 'setChannelMetadata':
@@ -93,17 +102,16 @@ function reducer(state: AppStoreState, action: Action): AppStoreState {
       return { ...state, feedLoading: action.payload };
     case 'setPeerCount':
       return { ...state, peerCount: action.payload };
-    case 'setView':
-      return { ...state, view: action.payload };
+    case 'setBlobServerPort':
+      return { ...state, blobServerPort: action.payload };
     case 'setCurrentVideo':
       return {
         ...state,
         currentVideo: action.payload.video,
         currentVideoKey: action.payload.driveKey,
-        relatedVideos: action.payload.related ?? state.relatedVideos,
       };
-    case 'setViewingChannel':
-      return { ...state, viewingChannelKey: action.payload };
+    case 'setVideoStats':
+      return { ...state, videoStats: action.payload };
     default:
       return state;
   }
@@ -112,28 +120,16 @@ function reducer(state: AppStoreState, action: Action): AppStoreState {
 const AppStoreContext = createContext<{
   state: AppStoreState;
   dispatch: React.Dispatch<Action>;
-  actions: AppActions;
 }>({
   state: initialState,
   dispatch: () => {},
-  actions: null as unknown as AppActions, // Will be set by provider
 });
 
 export const AppStoreProvider = ({ children }: { children: ReactNode }) => {
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  // Keep a ref to current state for actions that need to read state
-  const stateRef = useRef(state);
-  stateRef.current = state;
-
-  // Create actions once, memoized
-  const actions = useMemo(
-    () => createActions(dispatch, () => stateRef.current),
-    [dispatch]
-  );
-
   return (
-    <AppStoreContext.Provider value={{ state, dispatch, actions }}>
+    <AppStoreContext.Provider value={{ state, dispatch }}>
       {children}
     </AppStoreContext.Provider>
   );
@@ -141,5 +137,5 @@ export const AppStoreProvider = ({ children }: { children: ReactNode }) => {
 
 export const useAppStore = () => useContext(AppStoreContext);
 
-// Re-export actions type for consumers
-export type { AppActions } from './actions';
+// Re-export types for convenience
+export type { AppStoreState };

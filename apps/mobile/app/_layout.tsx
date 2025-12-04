@@ -62,22 +62,8 @@ const PearCommands = {
   GET_CHANNEL_META: 18,
 }
 
-// Types
-interface Identity {
-  name: string
-  publicKey: string
-  driveKey: string
-}
-
-interface Video {
-  id: string
-  title: string
-  description: string
-  path: string
-  size: number
-  uploadedAt: number
-  channelKey: string
-}
+// Types from shared package
+import type { Identity, Video } from '@peartube/shared'
 
 interface AppContextType {
   ready: boolean

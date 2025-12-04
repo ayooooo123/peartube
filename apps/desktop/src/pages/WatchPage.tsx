@@ -43,7 +43,7 @@ const P2PStatsBar: React.FC<{ stats: VideoStats | null; videoSize: number }> = (
       alignItems: 'center',
       gap: spacing.md,
       padding: `${spacing.sm}px ${spacing.md}px`,
-      backgroundColor: colors.cardBg,
+      backgroundColor: colors.bgCard,
       borderRadius: radius.md,
       marginTop: spacing.sm,
       flexWrap: 'wrap',

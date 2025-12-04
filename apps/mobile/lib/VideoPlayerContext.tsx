@@ -4,6 +4,10 @@
  * Uses VLC player for broad codec support
  */
 import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react'
+import type { VideoData, VideoStats } from '@peartube/shared'
+
+// Re-export types for backwards compatibility
+export type { VideoData, VideoStats } from '@peartube/shared'
 
 // Simple event emitter for video stats (allows RPC handler to push stats to context)
 type VideoStatsListener = (driveKey: string, videoPath: string, stats: VideoStats) => void
@@ -33,35 +37,6 @@ export const videoLoadEventEmitter = {
     loadListeners.add(listener)
     return () => loadListeners.delete(listener)
   }
-}
-
-// Video data type (matches VideoCard component)
-export interface VideoData {
-  id: string
-  title: string
-  description?: string
-  path: string
-  size: number
-  uploadedAt: number
-  channelKey: string
-  channel?: { name: string }
-  thumbnailUrl?: string | null
-}
-
-// Video stats from P2P network
-export interface VideoStats {
-  status: 'connecting' | 'resolving' | 'downloading' | 'complete' | 'error' | 'unknown'
-  progress: number
-  totalBlocks: number
-  downloadedBlocks: number
-  totalBytes: number
-  downloadedBytes: number
-  peerCount: number
-  speedMBps: string
-  uploadSpeedMBps?: string
-  elapsed: number
-  isComplete: boolean
-  error?: string
 }
 
 // Player mode

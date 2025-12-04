@@ -8,88 +8,31 @@
 import path from 'path';
 import run from 'pear-run';
 
-export interface BackendStatus {
-  connected: boolean;
-  peers: number;
-  storage: string;
-  blobServerPort: number;
-  version: string;
-}
+// Import shared types - single source of truth
+export type {
+  BackendStatus,
+  Identity,
+  CreateIdentityResult,
+  Channel,
+  Video,
+  UploadVideoResult,
+  PublicFeedEntry,
+  ChannelMetadata,
+  VideoStats,
+  PublicFeedResult,
+} from '@peartube/shared'
 
-export interface Identity {
-  publicKey: string;
-  driveKey?: string;
-  name?: string;
-  createdAt: number;
-  isActive?: boolean;
-}
-
-export interface CreateIdentityResult {
-  success: boolean;
-  publicKey: string;
-  driveKey: string;
-  mnemonic?: string;
-}
-
-export interface Channel {
-  driveKey: string;
-  name: string;
-  description?: string;
-  publicKey?: string;
-  createdAt?: number;
-}
-
-export interface Video {
-  id: string;
-  title: string;
-  description: string;
-  path: string;
-  mimeType: string;
-  size: number;
-  uploadedAt: number;
-  channelKey: string;
-}
-
-export interface UploadVideoResult {
-  success: boolean;
-  videoId: string;
-  metadata: Video;
-}
-
-export interface PublicFeedEntry {
-  driveKey: string;
-  addedAt: number;
-  source: 'peer' | 'local';
-}
-
-export interface ChannelMetadata {
-  name?: string;
-  description?: string;
-  thumbnail?: string;
-  videoCount?: number;
-  driveKey?: string;
-}
-
-// P2P Video Stats - same as mobile
-export interface VideoStats {
-  status: 'connecting' | 'resolving' | 'downloading' | 'complete' | 'error' | 'unknown';
-  progress: number;
-  totalBlocks: number;
-  downloadedBlocks: number;
-  totalBytes: number;
-  downloadedBytes: number;
-  peerCount: number;
-  speedMBps: string;
-  uploadSpeedMBps?: string;
-  elapsed: number;
-  isComplete: boolean;
-  error?: string;
-}
-
-export interface PublicFeedResult {
-  entries: PublicFeedEntry[];
-  stats: { totalEntries: number; hiddenCount: number; peerCount: number };
-}
+import type {
+  BackendStatus,
+  Identity,
+  CreateIdentityResult,
+  Channel,
+  Video,
+  UploadVideoResult,
+  PublicFeedResult,
+  ChannelMetadata,
+  VideoStats,
+} from '@peartube/shared'
 
 interface Pipe {
   on(event: 'data', handler: (data: Buffer) => void): void;

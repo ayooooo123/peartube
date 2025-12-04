@@ -60,20 +60,53 @@ export const RPC_METHODS = {
   getChannelMeta: 'getChannelMeta',
 } as const;
 
-// Design tokens
+// ============================================
+// Design Tokens - Shared across all platforms
+// ============================================
+
 export const colors = {
+  // Brand
   primary: '#9147ff',
   primaryHover: '#772ce8',
+  primaryLight: 'rgba(145, 71, 255, 0.2)',
+
+  // Accent
+  accent: '#00f0b5',
+  accentHover: '#00d9a4',
+
+  // Status
+  success: '#00c853',
+  successLight: 'rgba(0, 200, 83, 0.2)',
+  warning: '#ffb300',
+  warningLight: 'rgba(255, 179, 0, 0.2)',
+  error: '#ff5252',
+  errorLight: 'rgba(255, 82, 82, 0.2)',
+
+  // Backgrounds
   bg: '#0e0e10',
   bgElevated: '#18181b',
+  bgSecondary: '#18181b', // Alias for bgElevated
+  bgHover: '#1f1f23',
+  bgActive: '#26262c',
+  bgOverlay: 'rgba(0, 0, 0, 0.85)',
   bgCard: '#1f1f23',
-  text: '#efeff1',
+
+  // Surfaces
+  surface: '#1f1f23',
+  surfaceHover: '#26262c',
+  surfaceBorder: '#303035',
+
+  // Text
+  text: '#efeff1', // Alias for textPrimary
+  textPrimary: '#efeff1',
   textSecondary: '#adadb8',
   textMuted: '#7a7a85',
+  textDisabled: '#53535f',
+
+  // Borders
   border: '#303035',
-  error: '#ff5252',
-  success: '#00c853',
-  warning: '#ffab00',
+  borderLight: '#404045',
+  borderFocus: '#9147ff',
 } as const;
 
 export const spacing = {
@@ -103,3 +136,60 @@ export const borderRadius = {
   xl: 16,
   full: 9999,
 } as const;
+
+// Alias for radius
+export const radius = borderRadius;
+
+export const fontWeight = {
+  normal: '400',
+  medium: '500',
+  semibold: '600',
+  bold: '700',
+} as const;
+
+export const shadows = {
+  sm: '0 1px 2px rgba(0, 0, 0, 0.3)',
+  md: '0 4px 8px rgba(0, 0, 0, 0.4)',
+  lg: '0 8px 16px rgba(0, 0, 0, 0.5)',
+  xl: '0 16px 32px rgba(0, 0, 0, 0.6)',
+} as const;
+
+export const transitions = {
+  fast: '0.1s ease',
+  normal: '0.2s ease',
+  slow: '0.3s ease',
+} as const;
+
+// Layout constants
+export const layout = {
+  sidebarWidth: 240,
+  sidebarCollapsedWidth: 72,
+  headerHeight: 56,
+  maxContentWidth: 1800,
+} as const;
+
+// Z-index layers
+export const zIndex = {
+  base: 0,
+  dropdown: 100,
+  sticky: 200,
+  modal: 300,
+  tooltip: 400,
+  toast: 500,
+  overlay: 1000,
+} as const;
+
+// Bundled theme object
+export const theme = {
+  colors,
+  spacing,
+  radius,
+  fontSize,
+  fontWeight,
+  shadows,
+  transitions,
+  layout,
+  zIndex,
+} as const;
+
+export type Theme = typeof theme;

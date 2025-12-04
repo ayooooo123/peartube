@@ -1,17 +1,5 @@
 /**
- * PearTube colors - matches desktop theme
- * Extracted to avoid circular dependencies
+ * PearTube colors - Re-exports from shared package
+ * All design tokens are centralized in @peartube/shared
  */
-export const colors = {
-  primary: '#9147ff',
-  primaryHover: '#772ce8',
-  bg: '#0e0e10',
-  bgSecondary: '#18181b',
-  bgHover: '#26262c',
-  text: '#efeff1',
-  textSecondary: '#adadb8',
-  textMuted: '#7a7a85',
-  border: '#303035',
-  error: '#ff5252',
-  success: '#00c853',
-}
+export { colors, spacing, radius, fontSize, theme } from '@peartube/shared';

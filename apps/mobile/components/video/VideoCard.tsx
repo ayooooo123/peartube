@@ -14,6 +14,8 @@ export interface VideoData {
   channelKey: string
   thumbnailUrl?: string | null
   duration?: number
+  description?: string
+  mimeType?: string
   channel?: {
     name: string
     avatarUrl?: string

@@ -9,6 +9,7 @@ import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, Scrol
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
 import { usePlatform } from '@/lib/PlatformProvider'
+import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from './desktop/constants'
 
 // VLC player for iOS/Android
 let VLCPlayer: any = null
@@ -187,7 +188,12 @@ function ChannelInfo({ channelName, channelInitial }: { channelName: string, cha
 export function VideoPlayerOverlay() {
   const insets = useSafeAreaInsets()
   const { width: screenWidth, height: screenHeight } = useWindowDimensions()
-  const { isDesktop } = usePlatform()
+  const { isDesktop, isPear } = usePlatform()
+  const { isCollapsed } = useSidebar()
+
+  // Dynamic sidebar width for desktop overlay positioning
+  const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH
+
   const videoHeight = Math.round(screenWidth * 9 / 16)
 
   // Desktop video dimensions (YouTube-style - video takes ~70% width, max 1280px)
@@ -461,7 +467,7 @@ export function VideoPlayerOverlay() {
   // Desktop: YouTube-style layout (not fullscreen overlay)
   if (isDesktop && Platform.OS === 'web') {
     return (
-      <div style={desktopStyles.overlay}>
+      <div style={{ ...desktopStyles.overlay, left: sidebarWidth, transition: 'left 0.2s ease' }}>
         <div style={desktopStyles.container}>
           {/* Main content area */}
           <div style={desktopStyles.mainColumn}>

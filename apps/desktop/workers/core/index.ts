@@ -42,6 +42,9 @@ const CMD = {
   SUBMIT_TO_FEED: 16,
   HIDE_CHANNEL: 17,
   GET_CHANNEL_META: 18,
+  // Video prefetch/stats
+  PREFETCH_VIDEO: 19,
+  GET_VIDEO_STATS: 20,
 };
 
 console.log('PearTube Core Worker starting...');
@@ -946,6 +949,14 @@ if (!ipcPipe) {
 
           case CMD.GET_CHANNEL_META:
             result = await api.getChannelMeta(data.driveKey);
+            break;
+
+          case CMD.PREFETCH_VIDEO:
+            result = await api.prefetchVideo(data.driveKey, data.videoPath);
+            break;
+
+          case CMD.GET_VIDEO_STATS:
+            result = await api.getVideoStats(data.driveKey, data.videoPath);
             break;
 
           default:

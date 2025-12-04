@@ -4,7 +4,9 @@
 
 import React from 'react';
 import { colors, spacing, radius } from '../lib/theme';
-import { rpc, type Video, type Channel, type VideoStats } from '../lib/rpc';
+import { rpc } from '../lib/rpc';
+import { useP2PVideo, type Video, type Channel, type VideoStats } from '@peartube/shared';
+import { useAppStore } from '../state/appStore';
 import { Column, Row, Text, Button, Avatar, Card, TextArea, Divider, IconButton } from '../components/ui';
 import { VideoCard } from '../components/VideoCard';
 
@@ -139,78 +141,58 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   onVideoClick,
   onChannelClick,
 }) => {
+  const { state, actions } = useAppStore();
   const [videoUrl, setVideoUrl] = React.useState<string | null>(null);
   const [channel, setChannel] = React.useState<Channel | null>(null);
-  const [loading, setLoading] = React.useState(true);
   const [liked, setLiked] = React.useState(false);
   const [subscribed, setSubscribed] = React.useState(false);
   const [showFullDescription, setShowFullDescription] = React.useState(false);
   const [theaterMode, setTheaterMode] = React.useState(false);
-  const [videoStats, setVideoStats] = React.useState<VideoStats | null>(null);
+
+  const videoService = React.useMemo(() => ({
+    getVideoUrl: (key: string, path: string) => rpc.getVideoUrl(key, path),
+    prefetchVideo: (key: string, path: string) => rpc.prefetchVideo(key, path),
+    getVideoStats: (key: string, path: string) => rpc.getVideoStats(key, path),
+  }), []);
+
+  const {
+    url,
+    status: videoStatus,
+    stats: videoStats,
+    error: videoError,
+  } = useP2PVideo(videoService, driveKey, video.path, { pollInterval: 500 });
+
+  const isLoading = React.useMemo(
+    () => videoStatus === 'idle' || videoStatus === 'loading' || (videoStatus === 'prefetching' && !videoUrl),
+    [videoStatus, videoUrl]
+  );
 
   React.useEffect(() => {
-    loadVideo();
-  }, [video, driveKey]);
+    setVideoUrl(url);
+  }, [url]);
 
-  // Start prefetch and poll for video stats
   React.useEffect(() => {
-    let pollInterval: ReturnType<typeof setInterval> | null = null;
-
-    async function startPrefetchAndPolling() {
+    let cancelled = false;
+    (async () => {
       try {
-        // Start prefetching the video
-        await rpc.prefetchVideo(driveKey, video.path);
-
-        // Initial stats fetch
-        const stats = await rpc.getVideoStats(driveKey, video.path);
-        setVideoStats(stats);
-
-        // Poll for stats updates every 500ms
-        pollInterval = setInterval(async () => {
-          try {
-            const stats = await rpc.getVideoStats(driveKey, video.path);
-            setVideoStats(stats);
-
-            // Stop polling if complete
-            if (stats.isComplete) {
-              if (pollInterval) clearInterval(pollInterval);
-            }
-          } catch (err) {
-            console.error('Failed to get video stats:', err);
-          }
-        }, 500);
+        const channelData = await rpc.getChannel(driveKey);
+        if (!cancelled) setChannel(channelData);
       } catch (err) {
-        console.error('Failed to start prefetch:', err);
+        console.error('Failed to load channel:', err);
       }
-    }
+    })();
+    return () => { cancelled = true; };
+  }, [driveKey]);
 
-    startPrefetchAndPolling();
-
-    return () => {
-      if (pollInterval) clearInterval(pollInterval);
-    };
-  }, [driveKey, video.path]);
-
-  async function loadVideo() {
-    try {
-      setLoading(true);
-      const [urlResult, channelData] = await Promise.all([
-        rpc.getVideoUrl(driveKey, video.path),
-        rpc.getChannel(driveKey),
-      ]);
-      setVideoUrl(urlResult.url);
-      setChannel(channelData);
-    } catch (err) {
-      console.error('Failed to load video:', err);
-    } finally {
-      setLoading(false);
-    }
-  }
+  React.useEffect(() => {
+    const isSubbed = state.subscriptions.some((s) => s.driveKey === driveKey);
+    setSubscribed(isSubbed);
+  }, [driveKey, state.subscriptions]);
 
   const handleSubscribe = async () => {
     try {
-      await rpc.subscribeChannel(driveKey);
-      setSubscribed(true);
+      const ok = await actions.subscribe(driveKey);
+      if (ok) setSubscribed(true);
     } catch (err) {
       console.error('Failed to subscribe:', err);
     }
@@ -225,7 +207,20 @@ export const WatchPage: React.FC<WatchPageProps> = ({
       borderRadius: theaterMode ? 0 : radius.lg,
       overflow: 'hidden',
     }}>
-      {loading ? (
+      {videoError ? (
+        <div style={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: colors.textMuted,
+          padding: spacing.lg,
+          textAlign: 'center',
+        }}>
+          <Text color="secondary">Unable to load video. {videoError.message || 'Please try again.'}</Text>
+        </div>
+      ) : isLoading ? (
         <div style={{
           width: '100%',
           height: '100%',
@@ -403,42 +398,8 @@ export const WatchPage: React.FC<WatchPageProps> = ({
     </Column>
   );
 
-  // Theater mode: full width video, content below
-  if (theaterMode) {
-    return (
-      <Column style={{ height: '100%', overflow: 'auto' }}>
-        {/* Full-width video player */}
-        <div style={{
-          width: '100%',
-          backgroundColor: '#000',
-        }}>
-          {VideoPlayer}
-        </div>
-
-        {/* Content below video */}
-        <Row style={{ flex: 1 }}>
-          {/* Main content */}
-          <Column style={{ flex: '1 1 70%', padding: spacing.lg }}>
-            {VideoInfo}
-          </Column>
-
-          {/* Related videos sidebar */}
-          <Column style={{
-            flex: '0 0 30%',
-            minWidth: 300,
-            borderLeft: `1px solid ${colors.border}`,
-            padding: spacing.md,
-          }}>
-            {RelatedVideos}
-          </Column>
-        </Row>
-      </Column>
-    );
-  }
-
-  // Default mode: side-by-side layout like YouTube
-  return (
-    <Row style={{ height: '100%' }}>
+  const content = (
+    <>
       {/* Main Content Area */}
       <div style={{
         flex: '1 1 0%',
@@ -465,7 +426,45 @@ export const WatchPage: React.FC<WatchPageProps> = ({
       }}>
         {RelatedVideos}
       </Column>
-    </Row>
+    </>
+  );
+
+  // Theater mode: full width video, content below
+  if (theaterMode) {
+    return (
+      <div style={{
+        height: '100%',
+        overflow: 'auto',
+        padding: spacing.lg,
+        backgroundColor: colors.bg,
+      }}>
+        <Column style={{ maxWidth: 1440, margin: '0 auto', gap: spacing.lg }}>
+          <div style={{ width: '100%', backgroundColor: '#000' }}>
+            {VideoPlayer}
+          </div>
+          <Column style={{ gap: spacing.lg }}>
+            {VideoInfo}
+            <Column style={{ borderTop: `1px solid ${colors.border}`, paddingTop: spacing.md }}>
+              {RelatedVideos}
+            </Column>
+          </Column>
+        </Column>
+      </div>
+    );
+  }
+
+  // Default mode: side-by-side layout like YouTube
+  return (
+    <div style={{
+      height: '100%',
+      overflow: 'auto',
+      padding: spacing.lg,
+      backgroundColor: colors.bg,
+    }}>
+      <Row style={{ height: '100%', maxWidth: 1440, margin: '0 auto', gap: spacing.lg }}>
+        {content}
+      </Row>
+    </div>
   );
 };
 

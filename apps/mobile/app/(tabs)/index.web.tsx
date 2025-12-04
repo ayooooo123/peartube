@@ -3,16 +3,21 @@
  *
  * Uses VideoGrid for desktop layout while sharing logic with mobile.
  * Uses pure HTML/CSS for desktop instead of React Native components.
+ * Includes hash-based routing for /watch/{channelKey}/{videoId} on Pear desktop.
  */
-import { useCallback, useState, useEffect, useMemo } from 'react'
+import { useCallback, useState, useEffect, useMemo, useRef } from 'react'
 import { ActivityIndicator } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { useApp, colors } from '../_layout'
 import { VideoData } from '../../components/video'
-import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+// We navigate to the dedicated video route on web instead of overlay playback
 import { VideoGrid } from '@/components/video/VideoGrid.web'
 import { VideoCardProps } from '@/components/video/VideoCard.web'
+import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/desktop/constants'
+
+// Check if running on Pear desktop
+const isPear = typeof window !== 'undefined' && !!(window as any).Pear
 
 // Icons as simple SVG components
 function GlobeIcon({ color, size }: { color: string; size: number }) {
@@ -100,12 +105,563 @@ const PearCommands = {
   SUBMIT_TO_FEED: 16,
   HIDE_CHANNEL: 17,
   GET_CHANNEL_META: 18,
+  PREFETCH_VIDEO: 19,
+  GET_VIDEO_STATS: 20,
+}
+
+// Route parsing for hash-based routing
+interface WatchRoute {
+  type: 'watch'
+  channelKey: string
+  videoId: string
+}
+
+interface HomeRoute {
+  type: 'home'
+}
+
+type Route = WatchRoute | HomeRoute
+
+function parseHash(hash: string): Route {
+  const path = hash.replace(/^#\/?/, '') || ''
+  const parts = path.split('/').filter(Boolean)
+
+  if (parts[0] === 'watch' && parts[1] && parts[2]) {
+    return { type: 'watch', channelKey: parts[1], videoId: parts[2] }
+  }
+  return { type: 'home' }
+}
+
+// WatchPageView - YouTube-style video playback page
+interface WatchPageViewProps {
+  channelKey: string
+  videoId: string
+  video: VideoData | null
+  onBack: () => void
+  onVideoClick: (video: VideoData) => void
+  rpcCall: (command: number, data?: any) => Promise<any>
+  relatedVideos: VideoData[]
+  channelMeta: Record<string, ChannelMeta>
+}
+
+function WatchPageView({
+  channelKey,
+  videoId,
+  video,
+  onBack,
+  onVideoClick,
+  rpcCall,
+  relatedVideos,
+  channelMeta,
+}: WatchPageViewProps) {
+  const { isCollapsed } = useSidebar()
+  const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH
+
+  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [channel, setChannel] = useState<ChannelMeta | null>(null)
+  const [videoStats, setVideoStats] = useState<any>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+
+  // Load video URL
+  useEffect(() => {
+    if (!video?.path) return
+
+    let cancelled = false
+    setIsLoading(true)
+    setError(null)
+
+    async function loadVideo() {
+      try {
+        // Get video URL from backend
+        const result = await rpcCall(PearCommands.GET_VIDEO_URL, {
+          driveKey: channelKey,
+          videoPath: video!.path,
+        })
+
+        if (cancelled) return
+
+        if (result?.url) {
+          setVideoUrl(result.url)
+        } else {
+          setError('Failed to get video URL')
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setError(err.message || 'Failed to load video')
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    loadVideo()
+    return () => { cancelled = true }
+  }, [channelKey, video?.path, rpcCall])
+
+  // Load channel info
+  useEffect(() => {
+    if (channelMeta[channelKey]) {
+      setChannel(channelMeta[channelKey])
+      return
+    }
+
+    rpcCall(PearCommands.GET_CHANNEL_META, { driveKey: channelKey })
+      .then(meta => setChannel(meta))
+      .catch(err => console.error('Failed to load channel:', err))
+  }, [channelKey, channelMeta, rpcCall])
+
+  // Start prefetch and poll for video stats
+  useEffect(() => {
+    if (!video?.path || !channelKey) return
+
+    let cancelled = false
+    let interval: NodeJS.Timeout | null = null
+
+    // Start prefetch first
+    rpcCall(PearCommands.PREFETCH_VIDEO, {
+      driveKey: channelKey,
+      videoPath: video.path,
+    }).catch(err => console.log('[WatchPage] Prefetch already running or failed:', err))
+
+    async function pollStats() {
+      try {
+        const stats = await rpcCall(PearCommands.GET_VIDEO_STATS, {
+          driveKey: channelKey,
+          videoPath: video!.path,
+        })
+        if (!cancelled && stats) {
+          setVideoStats(stats)
+          // Stop polling if complete
+          if (stats.isComplete && interval) {
+            clearInterval(interval)
+            interval = null
+          }
+        }
+      } catch (err) {
+        // Ignore polling errors
+      }
+    }
+
+    // Start polling
+    pollStats()
+    interval = setInterval(pollStats, 1000)
+
+    return () => {
+      cancelled = true
+      if (interval) clearInterval(interval)
+    }
+  }, [channelKey, video?.path, rpcCall])
+
+  if (!video) {
+    return (
+      <div style={{ ...watchStyles.container, left: sidebarWidth }}>
+        <div style={watchStyles.loadingState}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <p style={{ color: colors.textMuted, marginTop: 16 }}>Loading video...</p>
+        </div>
+      </div>
+    )
+  }
+
+  const channelName = channel?.name || 'Loading...'
+  const channelInitial = channelName.charAt(0).toUpperCase()
+
+  return (
+    <div style={{ ...watchStyles.container, left: sidebarWidth, transition: 'left 0.2s ease' }}>
+      <div style={watchStyles.content}>
+        {/* Main column - video + info */}
+        <div style={watchStyles.mainColumn}>
+          {/* Video player */}
+          <div style={watchStyles.videoWrapper}>
+            {error ? (
+              <div style={watchStyles.errorState}>
+                <p style={{ color: colors.textMuted }}>{error}</p>
+                <button onClick={onBack} style={watchStyles.backButton}>Go Back</button>
+              </div>
+            ) : isLoading ? (
+              <div style={watchStyles.loadingOverlay}>
+                <ActivityIndicator size="large" color="#fff" />
+                <p style={{ color: '#fff', marginTop: 12 }}>Connecting to P2P network...</p>
+              </div>
+            ) : (
+              <video
+                ref={videoRef}
+                src={videoUrl || undefined}
+                controls
+                autoPlay
+                style={watchStyles.video}
+              />
+            )}
+          </div>
+
+          {/* Video info */}
+          <div style={watchStyles.videoInfo}>
+            <h1 style={watchStyles.title}>{video.title}</h1>
+
+            {/* P2P Stats bar */}
+            {videoStats && (
+              <div style={watchStyles.statsBar}>
+                <div style={watchStyles.statsRow}>
+                  <div style={watchStyles.statusIndicator}>
+                    <div style={{
+                      ...watchStyles.statusDot,
+                      backgroundColor: videoStats.isComplete ? '#4ade80' :
+                        videoStats.status === 'downloading' ? '#3b82f6' : colors.textMuted
+                    }} />
+                    <span style={{ color: videoStats.isComplete ? '#4ade80' : colors.textSecondary, fontSize: 13 }}>
+                      {videoStats.isComplete ? 'Cached' : videoStats.status === 'downloading' ? 'Downloading' : 'Loading...'}
+                    </span>
+                  </div>
+                  <span style={{ color: colors.textMuted, fontSize: 12 }}>
+                    {videoStats.peerCount || 0} peers
+                  </span>
+                  {!videoStats.isComplete && parseFloat(videoStats.speedMBps) > 0 && (
+                    <span style={{ color: '#3b82f6', fontSize: 12 }}>↓ {videoStats.speedMBps} MB/s</span>
+                  )}
+                  {videoStats.uploadSpeedMBps && parseFloat(videoStats.uploadSpeedMBps) > 0 && (
+                    <span style={{ color: '#4ade80', fontSize: 12 }}>↑ {videoStats.uploadSpeedMBps} MB/s</span>
+                  )}
+                  {!videoStats.isComplete && videoStats.progress > 0 && (
+                    <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 500 }}>
+                      {videoStats.progress}%
+                    </span>
+                  )}
+                </div>
+                {!videoStats.isComplete && (
+                  <div style={watchStyles.progressBar}>
+                    <div style={{ ...watchStyles.progressFill, width: `${videoStats.progress || 0}%` }} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Meta info */}
+            <div style={watchStyles.meta}>
+              <span>{formatTimeAgo(video.uploadedAt)}</span>
+              <span style={{ color: colors.textMuted }}>•</span>
+              <span>{video.size < 1024 * 1024 * 1024
+                ? `${(video.size / (1024 * 1024)).toFixed(1)} MB`
+                : `${(video.size / (1024 * 1024 * 1024)).toFixed(2)} GB`}</span>
+            </div>
+
+            {/* Channel info */}
+            <div style={watchStyles.channelRow}>
+              <div style={watchStyles.avatar}>
+                <span style={watchStyles.avatarText}>{channelInitial}</span>
+              </div>
+              <div style={watchStyles.channelInfo}>
+                <span style={watchStyles.channelName}>{channelName}</span>
+                <span style={watchStyles.channelKey}>{channelKey.slice(0, 16)}...</span>
+              </div>
+            </div>
+
+            {/* Description */}
+            {video.description && (
+              <div style={watchStyles.description}>
+                <p style={watchStyles.descriptionText}>{video.description}</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Sidebar - related videos */}
+        <div style={watchStyles.sidebar}>
+          <h3 style={watchStyles.sidebarTitle}>Related Videos</h3>
+          {relatedVideos.length === 0 ? (
+            <p style={{ color: colors.textMuted, fontSize: 14 }}>No related videos</p>
+          ) : (
+            <div style={watchStyles.relatedList}>
+              {relatedVideos.map((v) => (
+                <div
+                  key={v.id}
+                  style={watchStyles.relatedCard}
+                  onClick={() => onVideoClick(v)}
+                >
+                  <div style={watchStyles.relatedThumb}>
+                    <span style={watchStyles.relatedThumbText}>{v.title.charAt(0).toUpperCase()}</span>
+                  </div>
+                  <div style={watchStyles.relatedInfo}>
+                    <span style={watchStyles.relatedTitle}>{v.title}</span>
+                    <span style={watchStyles.relatedMeta}>
+                      {channelMeta[v.channelKey]?.name || 'Channel'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Back button */}
+        <button onClick={onBack} style={watchStyles.closeButton} aria-label="Back to Home">
+          <CloseIcon color={colors.text} size={24} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// WatchPageView styles
+const watchStyles: Record<string, React.CSSProperties> = {
+  container: {
+    position: 'fixed',
+    top: 108, // PEAR_BAR_HEIGHT (52) + HEADER_HEIGHT (56)
+    left: SIDEBAR_WIDTH,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.bg,
+    zIndex: 1000,
+    overflow: 'auto',
+  },
+  content: {
+    display: 'flex',
+    flexDirection: 'row',
+    padding: 24,
+    gap: 24,
+    maxWidth: 1600,
+    position: 'relative',
+  },
+  mainColumn: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 16,
+    minWidth: 0,
+  },
+  videoWrapper: {
+    position: 'relative',
+    width: '100%',
+    aspectRatio: '16/9',
+    backgroundColor: '#000',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  video: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000',
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+  },
+  loadingState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '100%',
+  },
+  errorState: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '100%',
+    gap: 16,
+  },
+  backButton: {
+    padding: '8px 16px',
+    backgroundColor: colors.primary,
+    color: '#fff',
+    border: 'none',
+    borderRadius: 8,
+    cursor: 'pointer',
+    fontSize: 14,
+  },
+  videoInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: 600,
+    color: colors.text,
+    margin: 0,
+    lineHeight: 1.3,
+  },
+  statsBar: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    padding: '12px 16px',
+    backgroundColor: colors.bgSecondary,
+    borderRadius: 8,
+  },
+  statsRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+    flexWrap: 'wrap',
+  },
+  statusIndicator: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+  },
+  progressBar: {
+    width: '100%',
+    height: 4,
+    backgroundColor: colors.border,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#3b82f6',
+    transition: 'width 0.3s ease',
+  },
+  meta: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 14,
+    color: colors.textMuted,
+  },
+  channelRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    paddingTop: 16,
+    borderTop: `1px solid ${colors.border}`,
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 600,
+  },
+  channelInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+  },
+  channelName: {
+    fontSize: 15,
+    fontWeight: 500,
+    color: colors.text,
+  },
+  channelKey: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  description: {
+    paddingTop: 16,
+    borderTop: `1px solid ${colors.border}`,
+  },
+  descriptionText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    lineHeight: 1.6,
+    margin: 0,
+    whiteSpace: 'pre-wrap',
+  },
+  sidebar: {
+    width: 360,
+    flexShrink: 0,
+  },
+  sidebarTitle: {
+    fontSize: 16,
+    fontWeight: 600,
+    color: colors.text,
+    margin: '0 0 16px 0',
+  },
+  relatedList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+  relatedCard: {
+    display: 'flex',
+    gap: 12,
+    padding: 8,
+    borderRadius: 8,
+    cursor: 'pointer',
+    transition: 'background-color 0.2s',
+  },
+  relatedThumb: {
+    width: 160,
+    height: 90,
+    borderRadius: 8,
+    backgroundColor: colors.bgSecondary,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  relatedThumbText: {
+    fontSize: 24,
+    color: colors.primary,
+    fontWeight: 600,
+  },
+  relatedInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    minWidth: 0,
+  },
+  relatedTitle: {
+    fontSize: 14,
+    fontWeight: 500,
+    color: colors.text,
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+  },
+  relatedMeta: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 24,
+    right: 24,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.bgSecondary,
+    border: 'none',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 }
 
 export default function HomeScreen() {
   const router = useRouter()
   const { ready, identity, videos, loading, loadVideos, rpcCall } = useApp()
-  const { loadAndPlayVideo } = useVideoPlayerContext()
+
+  // Hash-based routing state (for Pear desktop)
+  const [currentRoute, setCurrentRoute] = useState<Route>({ type: 'home' })
+  const [watchVideo, setWatchVideo] = useState<VideoData | null>(null)
 
   // UI state
   const [refreshing, setRefreshing] = useState(false)
@@ -121,11 +677,73 @@ export default function HomeScreen() {
   const [channelVideos, setChannelVideos] = useState<VideoData[]>([])
   const [loadingChannel, setLoadingChannel] = useState(false)
 
+  // Hash routing effect - listen for hash changes
+  useEffect(() => {
+    if (!isPear) return
+
+    function handleHashChange() {
+      const route = parseHash(window.location.hash)
+      setCurrentRoute(route)
+
+      if (route.type === 'watch') {
+        // Try to find the video in local state first
+        const allVideos = [...videos, ...channelVideos]
+        const foundVideo = allVideos.find(
+          v => v.id === route.videoId && (v.channelKey === route.channelKey || !v.channelKey)
+        )
+        if (foundVideo) {
+          setWatchVideo({ ...foundVideo, channelKey: route.channelKey })
+        } else {
+          // Need to load video info from backend
+          loadVideoInfo(route.channelKey, route.videoId)
+        }
+      } else {
+        setWatchVideo(null)
+      }
+    }
+
+    // Check initial hash
+    handleHashChange()
+
+    // Listen for hash changes
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [videos, channelVideos])
+
+  // Load video info when navigating directly to a watch URL
+  const loadVideoInfo = useCallback(async (driveKey: string, videoId: string) => {
+    try {
+      // First, list videos from the channel to find the one we want
+      const result = await rpcCall(PearCommands.LIST_VIDEOS, { driveKey })
+      if (Array.isArray(result)) {
+        const found = result.find((v: any) => v.id === videoId)
+        if (found) {
+          setWatchVideo({ ...found, channelKey: driveKey })
+          return
+        }
+      }
+      // If video not found, create a placeholder
+      setWatchVideo({
+        id: videoId,
+        title: 'Loading...',
+        description: '',
+        path: '',
+        mimeType: 'video/mp4',
+        size: 0,
+        uploadedAt: Date.now(),
+        channelKey: driveKey,
+        thumbnailUrl: null
+      })
+    } catch (err) {
+      console.error('[Home] Failed to load video info:', err)
+    }
+  }, [rpcCall])
+
   // Convert videos to VideoData format - defined early to avoid reference issues
   const myVideosWithMeta: VideoData[] = useMemo(() => videos.map(v => ({
     ...v,
     channelKey: identity?.driveKey || '',
-    channel: identity ? { name: identity.name } : undefined,
+    channel: identity?.name ? { name: identity.name } : undefined,
     thumbnailUrl: null
   })), [videos, identity])
 
@@ -227,25 +845,29 @@ export default function HomeScreen() {
     setChannelVideos([])
   }, [])
 
-  // Play video - load into animated overlay player
-  const playVideo = useCallback(async (video: VideoData) => {
-    try {
-      // Close channel view - video overlay takes over the main content area
+  // Play video - navigate to watch page via hash routing (Pear) or URL (web fallback)
+  const playVideo = useCallback((video: VideoData) => {
+    const channelKey = video.channelKey || identity?.driveKey || (video as any).driveKey || ''
+
+    // Desktop (Pear): use hash routing which triggers the hashchange handler
+    if (isPear) {
       setViewingChannel(null)
       setChannelVideos([])
-
-      const result = await rpcCall(PearCommands.GET_VIDEO_URL, {
-        driveKey: video.channelKey,
-        videoPath: video.path
-      })
-
-      if (result?.url) {
-        loadAndPlayVideo(video, result.url)
-      }
-    } catch (err) {
-      console.error('[Home] Failed to play video:', err)
+      // Set watchVideo immediately for smooth transition
+      setWatchVideo({ ...video, channelKey })
+      // Navigate via hash - this triggers the hashchange event listener
+      window.location.hash = `/watch/${channelKey}/${video.id}`
+      return
     }
-  }, [rpcCall, loadAndPlayVideo])
+
+    // Web/static fallback (Expo web export): navigate to the video page with encoded data
+    setViewingChannel(null)
+    setChannelVideos([])
+    const base = window.location.href.split('#')[0].replace(/index\.html$/, '')
+    const videoData = encodeURIComponent(JSON.stringify({ ...video, channelKey }))
+    const target = `${base}video/${video.id}.html?videoData=${videoData}`
+    window.location.href = target
+  }, [identity?.driveKey])
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
@@ -271,6 +893,34 @@ export default function HomeScreen() {
         <p style={styles.loadingText}>
           {!ready ? 'Starting P2P network...' : 'Loading...'}
         </p>
+      </div>
+    )
+  }
+
+  // On Pear desktop with watch route, render the WatchPageView
+  if (isPear && currentRoute.type === 'watch') {
+    // Get related videos (other videos from same channel + your videos)
+    const relatedVideos = [
+      ...channelVideos.filter(v => v.id !== currentRoute.videoId),
+      ...myVideosWithMeta.filter(v => v.id !== currentRoute.videoId),
+    ].slice(0, 10)
+
+    return (
+      <div style={styles.container}>
+        <WatchPageView
+          channelKey={currentRoute.channelKey}
+          videoId={currentRoute.videoId}
+          video={watchVideo}
+          onBack={() => {
+            window.location.hash = ''
+            setCurrentRoute({ type: 'home' })
+            setWatchVideo(null)
+          }}
+          onVideoClick={playVideo}
+          rpcCall={rpcCall}
+          relatedVideos={relatedVideos}
+          channelMeta={channelMeta}
+        />
       </div>
     )
   }

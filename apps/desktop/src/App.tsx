@@ -3,7 +3,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { rpc, type Video } from './lib/rpc';
+import type { Video } from '@peartube/shared';
 import { useAppStore, type AppStoreState } from './state/appStore';
 import { AppLayout } from './components/layout/AppLayout';
 import { HomePage } from './pages/HomePage';
@@ -18,7 +18,7 @@ import { colors, spacing, radius } from './lib/theme';
 type View = 'home' | 'watch' | 'studio' | 'subscriptions' | 'settings' | 'channel' | 'onboarding';
 
 export default function App() {
-  const { state, dispatch } = useAppStore();
+  const { state, dispatch, actions } = useAppStore();
   const stateRef = useRef(state);
 
   useEffect(() => {
@@ -40,7 +40,11 @@ export default function App() {
   }
 
   function parseRoute(hash: string) {
-    const raw = hash.replace(/^#/, '') || '/';
+    // Support both "#/watch/..." and "...index.html#/watch/..." forms
+    const normalizedHash = hash.includes('index.html#')
+      ? hash.slice(hash.indexOf('#', hash.indexOf('index.html#') + 'index.html'.length))
+      : hash;
+    const raw = normalizedHash.replace(/^#/, '') || '/';
     const path = raw.startsWith('/') ? raw : `/${raw}`;
     const parts = path.split('/').filter(Boolean);
 
@@ -114,8 +118,8 @@ export default function App() {
     window.addEventListener('hashchange', syncRoute);
 
     (async () => {
-      await loadInitialData();
-      await loadPublicFeed();
+      await actions.loadInitialData();
+      await actions.loadPublicFeed();
       syncRoute();
     })();
 
@@ -125,126 +129,39 @@ export default function App() {
     return () => {
       window.removeEventListener('hashchange', syncRoute);
     };
-  }, []);
+  }, [actions]);
 
-  async function loadInitialData() {
-    try {
-      dispatch({ type: 'setLoading', payload: true });
-      dispatch({ type: 'setError', payload: null });
-
-      const [statusData, identitiesData] = await Promise.all([
-        rpc.getStatus(),
-        rpc.getIdentities(),
-      ]);
-
-      const activeIdentity = identitiesData.find(i => i.isActive) || null;
-
-      // Load videos and subscriptions if we have an identity
-      let videos: Video[] = [];
-      let channelNames: Record<string, string> = {};
-      let subscriptions: { driveKey: string; name: string }[] = [];
-
-      if (activeIdentity) {
-        try {
-          const subs = await rpc.getSubscriptions();
-          subscriptions = subs;
-
-          // Load videos from subscribed channels
-          for (const sub of subs) {
-            try {
-              const channelVideos = await rpc.listVideos(sub.driveKey);
-              videos = [...videos, ...channelVideos.map(v => ({ ...v, channelKey: sub.driveKey }))];
-              channelNames[sub.driveKey] = sub.name;
-            } catch (err) {
-              console.error('Failed to load videos from', sub.driveKey, err);
-            }
-          }
-
-          // Also load own channel videos
-          if (activeIdentity.driveKey) {
-            try {
-              const ownVideos = await rpc.listVideos(activeIdentity.driveKey);
-              videos = [...videos, ...ownVideos.map(v => ({ ...v, channelKey: activeIdentity.driveKey! }))];
-              channelNames[activeIdentity.driveKey] = activeIdentity.name || 'My Channel';
-            } catch (err) {
-              console.error('Failed to load own videos', err);
-            }
-          }
-
-          // Sort by upload date
-          videos.sort((a, b) => b.uploadedAt - a.uploadedAt);
-        } catch (err) {
-          console.error('Failed to load subscriptions:', err);
-        }
-      }
-
-      dispatch({ type: 'setStatus', payload: statusData });
-      dispatch({ type: 'setIdentity', payload: activeIdentity });
-      dispatch({ type: 'setVideos', payload: videos });
-      dispatch({ type: 'setChannelNames', payload: channelNames });
-      dispatch({ type: 'setSubscriptions', payload: subscriptions });
-      dispatch({ type: 'setLoading', payload: false });
-
-      const snapshot: AppStoreState = {
-        ...stateRef.current,
-        status: statusData,
-        identity: activeIdentity,
-        videos,
-        channelNames,
-        subscriptions,
-        loading: false,
-      };
-      stateRef.current = snapshot;
-      applyRoute(window.location.hash || (activeIdentity ? '#/' : '#/onboarding'), snapshot);
-    } catch (err: any) {
-      console.error('[App] loadInitialData error:', err);
-      dispatch({ type: 'setLoading', payload: false });
-      dispatch({ type: 'setError', payload: err.message || 'Failed to load data' });
-    }
-  }
+  // When identity or video list changes (e.g., after initial load), reconcile route/view
+  useEffect(() => {
+    applyRoute(window.location.hash || '#/', state);
+  }, [state.identity, state.videos]);
 
   async function handleCreateIdentity(e?: React.FormEvent) {
     e?.preventDefault();
     if (!newIdentityName.trim()) return;
 
-    try {
-      dispatch({ type: 'setLoading', payload: true });
-      dispatch({ type: 'setError', payload: null });
+    const result = await actions.createIdentity(newIdentityName.trim());
 
-      const result = await rpc.createIdentity(newIdentityName);
-
-      if (result.success && result.mnemonic) {
-        setCreatedMnemonic(result.mnemonic);
-      }
-
-      setNewIdentityName('');
-      setShowCreateForm(false);
-      await loadInitialData();
-    } catch (err: any) {
-      dispatch({ type: 'setLoading', payload: false });
-      dispatch({ type: 'setError', payload: err.message || 'Failed to create identity' });
+    if (result.success && result.mnemonic) {
+      setCreatedMnemonic(result.mnemonic);
     }
+
+    setNewIdentityName('');
+    setShowCreateForm(false);
+    navigate('/');
   }
 
   async function handleRecoverIdentity(e?: React.FormEvent) {
     e?.preventDefault();
     if (!recoverMnemonic.trim()) return;
 
-    try {
-      dispatch({ type: 'setLoading', payload: true });
-      dispatch({ type: 'setError', payload: null });
+    const ok = await actions.recoverIdentity(recoverMnemonic.trim(), recoverName || undefined);
 
-      await rpc.recoverIdentity(recoverMnemonic, recoverName || undefined);
-
+    if (ok) {
       setRecoverMnemonic('');
       setRecoverName('');
       setShowRecoverForm(false);
-      await loadInitialData();
       navigate('/');
-      navigate('/');
-    } catch (err: any) {
-      dispatch({ type: 'setLoading', payload: false });
-      dispatch({ type: 'setError', payload: err.message || 'Failed to recover identity' });
     }
   }
 
@@ -272,36 +189,6 @@ export default function App() {
   function handleSearch(query: string) {
     console.log('Search:', query);
     // TODO: Implement search
-  }
-
-  async function loadPublicFeed() {
-    dispatch({ type: 'setFeedLoading', payload: true });
-    try {
-      console.log('[Home] Loading public feed...');
-      const result = await rpc.getPublicFeed();
-      console.log('[Home] Public feed result:', result);
-
-      dispatch({ type: 'setPublicFeed', payload: result.entries });
-      dispatch({ type: 'setPeerCount', payload: result.stats.peerCount });
-      dispatch({ type: 'setFeedLoading', payload: false });
-
-      // Lazy load metadata for first 10 channels
-      for (const entry of result.entries.slice(0, 10)) {
-        if (!stateRef.current.channelMetadata[entry.driveKey]) {
-          try {
-            const meta = await rpc.getChannelMetadata(entry.driveKey);
-            const nextMeta = { ...stateRef.current.channelMetadata, [entry.driveKey]: meta };
-            stateRef.current = { ...stateRef.current, channelMetadata: nextMeta };
-            dispatch({ type: 'setChannelMetadata', payload: nextMeta });
-          } catch (err) {
-            console.error('[Home] Failed to load metadata for', entry.driveKey.slice(0, 8), err);
-          }
-        }
-      }
-    } catch (err: any) {
-      console.error('[Home] Failed to load public feed:', err);
-      dispatch({ type: 'setFeedLoading', payload: false });
-    }
   }
 
   // Loading state
@@ -542,7 +429,7 @@ export default function App() {
             videoCount: state.channelMetadata[e.driveKey]?.videoCount,
           }))}
           onChannelClick={handleChannelClick}
-          onRefreshFeed={loadPublicFeed}
+          onRefreshFeed={actions.loadPublicFeed}
           feedLoading={state.feedLoading}
           peerCount={state.peerCount}
         />

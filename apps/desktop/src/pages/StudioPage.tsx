@@ -4,7 +4,9 @@
 
 import React from 'react';
 import { colors, spacing, radius } from '../lib/theme';
-import { rpc, type Video, type Channel } from '../lib/rpc';
+import { rpc } from '../lib/rpc';
+import type { Video, Channel } from '@peartube/shared';
+import desktopAdapter from '../platform/desktopAdapter';
 import { Column, Row, Text, Button, Input, TextArea, Card, Tabs, Avatar, Alert } from '../components/ui';
 import { VideoCard } from '../components/VideoCard';
 
@@ -30,8 +32,6 @@ export const StudioPage: React.FC<StudioPageProps> = ({
   const [uploading, setUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState<string | null>(null);
 
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
-
   React.useEffect(() => {
     loadData();
   }, [identity.driveKey]);
@@ -53,19 +53,22 @@ export const StudioPage: React.FC<StudioPageProps> = ({
     }
   }
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (!file.type.startsWith('video/')) {
-        setUploadError('Please select a video file');
-        return;
-      }
-      setUploadFile(file);
-      setUploadError(null);
-      if (!uploadTitle) {
-        setUploadTitle(file.name.replace(/\.[^/.]+$/, ''));
-      }
+  const handleFile = (file: File | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('video/')) {
+      setUploadError('Please select a video file');
+      return;
     }
+    setUploadFile(file);
+    setUploadError(null);
+    if (!uploadTitle) {
+      setUploadTitle(file.name.replace(/\.[^/.]+$/, ''));
+    }
+  };
+
+  const handleChooseFile = async () => {
+    const file = await desktopAdapter.pickVideoFile();
+    handleFile(file);
   };
 
   // Upload progress state
@@ -166,14 +169,10 @@ export const StudioPage: React.FC<StudioPageProps> = ({
             <Column gap={spacing.md}>
               {/* File Drop Zone */}
               <div
-                onClick={() => fileInputRef.current?.click()}
+                onClick={handleChooseFile}
                 onDrop={(e) => {
                   e.preventDefault();
-                  const file = e.dataTransfer.files[0];
-                  if (file?.type.startsWith('video/')) {
-                    setUploadFile(file);
-                    if (!uploadTitle) setUploadTitle(file.name.replace(/\.[^/.]+$/, ''));
-                  }
+                  handleFile(e.dataTransfer.files[0]);
                 }}
                 onDragOver={(e) => e.preventDefault()}
                 style={{
@@ -185,13 +184,6 @@ export const StudioPage: React.FC<StudioPageProps> = ({
                   backgroundColor: uploadFile ? colors.primaryLight : colors.bgElevated,
                 }}
               >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="video/*"
-                  onChange={handleFileSelect}
-                  style={{ display: 'none' }}
-                />
                 {uploadFile ? (
                   <Column gap={spacing.sm} align="center">
                     <Text size="xl">📹</Text>

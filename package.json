@@ -1,0 +1,34 @@
+{
+  "name": "peartube-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PearTube monorepo - P2P video streaming for desktop and mobile",
+  "scripts": {
+    "dev:desktop": "pnpm --filter @peartube/desktop dev",
+    "dev:mobile": "pnpm --filter @peartube/mobile start",
+    "build:desktop": "pnpm --filter @peartube/desktop build",
+    "build:mobile": "pnpm --filter @peartube/mobile build",
+    "ios": "pnpm --filter @peartube/mobile ios",
+    "android": "pnpm --filter @peartube/mobile android",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx --quiet",
+    "lint:fix": "pnpm run lint -- --fix"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.41.0",
+    "@typescript-eslint/parser": "^8.41.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-jsx-a11y": "^6.10.0",
+    "eslint-plugin-react": "^7.37.0",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "hypercore-blob-server": "^1.12.0",
+    "typescript": "^5.9.0"
+  },
+  "overrides": {
+    "eslint-plugin-react-hooks": "^4.6.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

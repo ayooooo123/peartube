@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+bun.lock
+
+# Build output
+build/
+dist/
+*.bundle.js
+
+# Expo
+.expo/
+apps/mobile/.expo/
+apps/mobile/dist/
+
+# iOS/Android
+apps/mobile/ios/Pods/
+apps/mobile/ios/build/
+apps/mobile/android/.gradle/
+apps/mobile/android/app/build/
+
+# Storage (P2P data)
+storage/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+
+# Config
+.mcp.json

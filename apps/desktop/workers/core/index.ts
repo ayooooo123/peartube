@@ -3,7 +3,7 @@
  *
  * This worker handles all P2P operations, storage, and networking.
  * It runs in a separate process from the UI for better performance.
- * Uses pear-pipe with newline-delimited JSON (qvac pattern).
+ * Uses HRPC (Holepunch RPC) over pear-pipe for typed binary communication.
  */
 
 import Hyperswarm from 'hyperswarm';
@@ -17,40 +17,13 @@ import fs from 'bare-fs';
 import pipe from 'pear-pipe';
 import { spawn } from 'bare-subprocess';
 
-// Import shared modules
-import { CMD as SharedCMD } from '@peartube/shared';
 // @ts-ignore - backend-core is JavaScript
 import { PublicFeedManager } from '@peartube/backend-core/public-feed';
+// @ts-ignore - Generated HRPC code
+import HRPC from '@peartube/rpc';
 
 // Get Pear runtime globals
 declare const Pear: any;
-
-// Use shared CMD, with backwards-compatible aliases for desktop-specific commands
-const CMD = {
-  ...SharedCMD,
-  // Desktop uses different IDs currently - map to shared for new code
-  // These will be gradually migrated to match shared IDs
-  GET_STATUS: 1,
-  CREATE_IDENTITY: 2,
-  GET_IDENTITIES: 3,
-  SET_ACTIVE_IDENTITY: 4,
-  LIST_VIDEOS: 5,
-  GET_VIDEO_URL: 6,
-  SUBSCRIBE_CHANNEL: 7,
-  GET_SUBSCRIPTIONS: 8,
-  GET_BLOB_SERVER_PORT: 9,
-  UPLOAD_VIDEO: 10,
-  GET_CHANNEL: 11,
-  RECOVER_IDENTITY: 12,
-  PICK_VIDEO_FILE: 13,
-  GET_PUBLIC_FEED: 14,
-  REFRESH_FEED: 15,
-  SUBMIT_TO_FEED: 16,
-  HIDE_CHANNEL: 17,
-  GET_CHANNEL_META: 18,
-  PREFETCH_VIDEO: 19,
-  GET_VIDEO_STATS: 20,
-};
 
 console.log('PearTube Core Worker starting...');
 
@@ -808,7 +781,6 @@ console.log('Active identity:', activeIdentity || 'none');
 console.log('Blob server port:', blobServerPort);
 
 // Get the pipe for IPC communication using pear-pipe
-// Uses newline-delimited JSON protocol (qvac pattern)
 const ipcPipe = pipe();
 
 if (!ipcPipe) {
@@ -816,171 +788,345 @@ if (!ipcPipe) {
 } else {
   console.log('[Worker] IPC pipe connected via pear-pipe');
 
-  // Message buffer for newline-delimited JSON
-  let messageBuffer = '';
+  // Create HRPC instance with the pipe stream
+  const rpc = new HRPC(ipcPipe);
+  console.log('[Worker] HRPC initialized');
 
-  // Helper to send a response (newline-delimited JSON)
-  const sendResponse = (id: string, success: boolean, data?: any, error?: string) => {
-    const response = success
-      ? { id, success: true, data }
-      : { id, success: false, error: error || 'Unknown error' };
-    ipcPipe.write(JSON.stringify(response) + '\n');
-  };
+  // ============================================
+  // HRPC Handler Registration
+  // ============================================
 
-  // Send worker_initialized message
-  ipcPipe.write(JSON.stringify({ type: 'worker_initialized' }) + '\n');
-  console.log('[Worker] Sent worker_initialized');
-
-  // Handle incoming data with newline-delimited JSON
-  ipcPipe.on('data', async (chunk: Buffer) => {
-    messageBuffer += Buffer.from(chunk).toString();
-
-    // Process complete messages (split by newline)
-    const messages = messageBuffer.split('\n');
-    messageBuffer = messages.pop() || '';
-
-    for (const msg of messages) {
-      if (!msg.trim()) continue;
-
-      // Check for exit command
-      let parsed: any;
-      try {
-        parsed = JSON.parse(msg);
-      } catch (err) {
-        console.error('[Worker] Failed to parse message:', err);
-        continue;
+  // Identity handlers
+  rpc.onCreateIdentity(async (req: any) => {
+    console.log('[HRPC] createIdentity:', req);
+    const result = await api.createIdentity(req.name || 'New Channel', true);
+    return {
+      identity: {
+        publicKey: result.publicKey,
+        name: req.name || 'New Channel',
+        seedPhrase: result.mnemonic,
       }
-
-      // Handle exit
-      if (parsed.type === 'exit') {
-        console.log('[Worker] Received exit command');
-        Pear.exit();
-        return;
-      }
-
-      const { id, command, method, args = [], data = {} } = parsed;
-      console.log(`[Worker] Command ${command || method} (id: ${id})`);
-
-      try {
-        let result: any;
-
-        // Handle method-based RPC calls (from rpc.ts client)
-        if (method && typeof method === 'string' && api[method as keyof typeof api]) {
-          result = await (api[method as keyof typeof api] as Function)(...args);
-          // Send response in format expected by rpc.ts
-          ipcPipe.write(JSON.stringify({ type: 'rpc-response', id, result }) + '\n');
-          continue;
-        }
-
-        switch (command) {
-          case CMD.GET_STATUS:
-            result = await api.getStatus();
-            break;
-
-          case CMD.CREATE_IDENTITY:
-            result = await api.createIdentity(data.name, data.generateMnemonic ?? true);
-            break;
-
-          case CMD.RECOVER_IDENTITY:
-            result = await api.recoverIdentity(data.mnemonic, data.name);
-            break;
-
-          case CMD.GET_IDENTITIES:
-            result = await api.getIdentities();
-            break;
-
-          case CMD.SET_ACTIVE_IDENTITY:
-            result = await api.setActiveIdentity(data.publicKey);
-            break;
-
-          case CMD.LIST_VIDEOS:
-            result = await api.listVideos(data.driveKey);
-            break;
-
-          case CMD.GET_VIDEO_URL:
-            result = await api.getVideoUrl(data.driveKey, data.videoPath);
-            break;
-
-          case CMD.SUBSCRIBE_CHANNEL:
-            result = await api.subscribeChannel(data.driveKey);
-            break;
-
-          case CMD.GET_SUBSCRIPTIONS:
-            result = await api.getSubscriptions();
-            break;
-
-          case CMD.GET_BLOB_SERVER_PORT:
-            result = await api.getBlobServerPort();
-            break;
-
-          case CMD.GET_CHANNEL:
-            result = await api.getChannel(data.driveKey);
-            break;
-
-          case CMD.UPLOAD_VIDEO:
-            // Upload via file path with progress callback
-            result = await api.uploadVideo(data.title, data.description, data.filePath, data.mimeType, (progress, bytesWritten, totalBytes) => {
-              // Send progress event to UI
-              ipcPipe.write(JSON.stringify({
-                type: 'upload_progress',
-                requestId: id,
-                progress,
-                bytesWritten,
-                totalBytes
-              }) + '\n');
-            });
-            break;
-
-          case CMD.PICK_VIDEO_FILE:
-            result = await api.pickVideoFile();
-            break;
-
-          // Public Feed commands
-          case CMD.GET_PUBLIC_FEED:
-            result = await api.getPublicFeed();
-            break;
-
-          case CMD.REFRESH_FEED:
-            result = await api.refreshFeed();
-            break;
-
-          case CMD.SUBMIT_TO_FEED:
-            result = await api.submitToFeed(data.driveKey);
-            break;
-
-          case CMD.HIDE_CHANNEL:
-            result = await api.hideChannel(data.driveKey);
-            break;
-
-          case CMD.GET_CHANNEL_META:
-            result = await api.getChannelMeta(data.driveKey);
-            break;
-
-          case CMD.PREFETCH_VIDEO:
-            result = await api.prefetchVideo(data.driveKey, data.videoPath);
-            break;
-
-          case CMD.GET_VIDEO_STATS:
-            result = await api.getVideoStats(data.driveKey, data.videoPath);
-            break;
-
-          default:
-            throw new Error(`Unknown command: ${command}`);
-        }
-
-        sendResponse(id, true, result);
-      } catch (error: any) {
-        console.error('[Worker] Error:', error);
-        sendResponse(id, false, null, error.message || 'Unknown error');
-      }
-    }
+    };
   });
+
+  rpc.onGetIdentity(async () => {
+    console.log('[HRPC] getIdentity');
+    const allIdentities = await api.getIdentities();
+    const active = allIdentities.find((i: any) => i.isActive);
+    return { identity: active || null };
+  });
+
+  rpc.onGetIdentities(async () => {
+    console.log('[HRPC] getIdentities');
+    const allIdentities = await api.getIdentities();
+    return { identities: allIdentities };
+  });
+
+  rpc.onSetActiveIdentity(async (req: any) => {
+    console.log('[HRPC] setActiveIdentity:', req.publicKey);
+    await api.setActiveIdentity(req.publicKey);
+    return { success: true };
+  });
+
+  rpc.onRecoverIdentity(async (req: any) => {
+    console.log('[HRPC] recoverIdentity');
+    const result = await api.recoverIdentity(req.seedPhrase);
+    return {
+      identity: {
+        publicKey: result.publicKey,
+        name: 'Recovered',
+      }
+    };
+  });
+
+  // Channel handlers
+  rpc.onGetChannel(async (req: any) => {
+    console.log('[HRPC] getChannel:', req.publicKey?.slice(0, 16));
+    const channel = await api.getChannel(req.publicKey || '');
+    return { channel };
+  });
+
+  rpc.onUpdateChannel(async (req: any) => {
+    console.log('[HRPC] updateChannel');
+    // TODO: Implement updateChannel in api
+    return { channel: {} };
+  });
+
+  // Video handlers
+  rpc.onListVideos(async (req: any) => {
+    console.log('[HRPC] listVideos:', req.channelKey?.slice(0, 16));
+    const videos = await api.listVideos(req.channelKey || '');
+    return { videos };
+  });
+
+  rpc.onGetVideoUrl(async (req: any) => {
+    console.log('[HRPC] getVideoUrl:', req.channelKey?.slice(0, 16), req.videoId);
+    // Note: Schema uses channelKey/videoId, api uses driveKey/videoPath
+    const result = await api.getVideoUrl(req.channelKey, req.videoId);
+    return { url: result.url };
+  });
+
+  rpc.onGetVideoData(async (req: any) => {
+    console.log('[HRPC] getVideoData:', req.channelKey?.slice(0, 16), req.videoId);
+    // TODO: Implement getVideoData
+    return { video: { id: req.videoId, title: 'Unknown' } };
+  });
+
+  rpc.onUploadVideo(async (req: any) => {
+    console.log('[HRPC] uploadVideo:', req.title);
+    const result = await api.uploadVideo(
+      req.title,
+      req.description || '',
+      req.filePath,
+      'video/mp4',
+      (progress: number, bytesWritten: number, totalBytes: number) => {
+        // Send progress event via HRPC
+        try {
+          rpc.eventUploadProgress({
+            videoId: '',
+            progress,
+            bytesUploaded: bytesWritten,
+            totalBytes,
+          });
+        } catch (e) {
+          console.error('[HRPC] Failed to send progress event:', e);
+        }
+      }
+    );
+    return {
+      video: {
+        id: result.videoId,
+        title: req.title,
+        description: req.description || '',
+        channelKey: result.metadata?.channelKey,
+      }
+    };
+  });
+
+  // Subscription handlers
+  rpc.onSubscribeChannel(async (req: any) => {
+    console.log('[HRPC] subscribeChannel:', req.channelKey?.slice(0, 16));
+    await api.subscribeChannel(req.channelKey);
+    return { success: true };
+  });
+
+  rpc.onUnsubscribeChannel(async (req: any) => {
+    console.log('[HRPC] unsubscribeChannel:', req.channelKey?.slice(0, 16));
+    // TODO: Implement unsubscribeChannel in api
+    return { success: true };
+  });
+
+  rpc.onGetSubscriptions(async () => {
+    console.log('[HRPC] getSubscriptions');
+    const subs = await api.getSubscriptions();
+    return {
+      subscriptions: subs.map((s: any) => ({
+        channelKey: s.driveKey,
+        channelName: s.name,
+      }))
+    };
+  });
+
+  rpc.onJoinChannel(async (req: any) => {
+    console.log('[HRPC] joinChannel:', req.channelKey?.slice(0, 16));
+    // Join is same as subscribe for now
+    await api.subscribeChannel(req.channelKey);
+    return { success: true };
+  });
+
+  // Public Feed handlers
+  rpc.onGetPublicFeed(async () => {
+    console.log('[HRPC] getPublicFeed');
+    const result = await api.getPublicFeed();
+    return {
+      entries: result.entries.map((e: any) => ({
+        channelKey: e.driveKey || e.channelKey,
+        channelName: e.name,
+        videoCount: e.videoCount || 0,
+        peerCount: e.peerCount || 0,
+        lastSeen: e.lastSeen || 0,
+      }))
+    };
+  });
+
+  rpc.onRefreshFeed(async () => {
+    console.log('[HRPC] refreshFeed');
+    await api.refreshFeed();
+    return { success: true };
+  });
+
+  rpc.onSubmitToFeed(async () => {
+    console.log('[HRPC] submitToFeed');
+    const allIdentities = await api.getIdentities();
+    const active = allIdentities.find((i: any) => i.isActive);
+    if (active?.driveKey) {
+      await api.submitToFeed(active.driveKey);
+    }
+    return { success: true };
+  });
+
+  rpc.onHideChannel(async (req: any) => {
+    console.log('[HRPC] hideChannel:', req.channelKey?.slice(0, 16));
+    await api.hideChannel(req.channelKey);
+    return { success: true };
+  });
+
+  rpc.onGetChannelMeta(async (req: any) => {
+    console.log('[HRPC] getChannelMeta:', req.channelKey?.slice(0, 16));
+    const meta = await api.getChannelMeta(req.channelKey);
+    return {
+      name: meta.name,
+      description: meta.description,
+      videoCount: meta.videoCount || 0,
+    };
+  });
+
+  rpc.onGetSwarmStatus(async () => {
+    console.log('[HRPC] getSwarmStatus');
+    return {
+      connected: swarm.connections.size > 0,
+      peerCount: swarm.connections.size,
+    };
+  });
+
+  // Video prefetch and stats
+  rpc.onPrefetchVideo(async (req: any) => {
+    console.log('[HRPC] prefetchVideo:', req.channelKey?.slice(0, 16), req.videoId);
+    await api.prefetchVideo(req.channelKey, req.videoId);
+    return { success: true };
+  });
+
+  rpc.onGetVideoStats(async (req: any) => {
+    console.log('[HRPC] getVideoStats:', req.channelKey?.slice(0, 16), req.videoId);
+    const stats = await api.getVideoStats(req.channelKey, req.videoId);
+    return {
+      stats: {
+        videoId: req.videoId,
+        channelKey: req.channelKey,
+        downloadedBytes: stats.downloadedBytes || 0,
+        totalBytes: stats.totalBytes || 0,
+        downloadProgress: stats.progress || 0,
+        peerCount: stats.peerCount || 0,
+        downloadSpeed: Math.round(parseFloat(stats.speedMBps || '0') * 1024 * 1024),
+        uploadSpeed: Math.round(parseFloat(stats.uploadSpeedMBps || '0') * 1024 * 1024),
+      }
+    };
+  });
+
+  // Seeding handlers (stubs for now)
+  rpc.onGetSeedingStatus(async () => {
+    console.log('[HRPC] getSeedingStatus');
+    return {
+      status: {
+        enabled: false,
+        usedStorage: 0,
+        maxStorage: 0,
+        seedingCount: 0,
+      }
+    };
+  });
+
+  rpc.onSetSeedingConfig(async (req: any) => {
+    console.log('[HRPC] setSeedingConfig');
+    return { success: true };
+  });
+
+  rpc.onPinChannel(async (req: any) => {
+    console.log('[HRPC] pinChannel:', req.channelKey?.slice(0, 16));
+    return { success: true };
+  });
+
+  rpc.onUnpinChannel(async (req: any) => {
+    console.log('[HRPC] unpinChannel:', req.channelKey?.slice(0, 16));
+    return { success: true };
+  });
+
+  rpc.onGetPinnedChannels(async () => {
+    console.log('[HRPC] getPinnedChannels');
+    return { channels: [] };
+  });
+
+  // Thumbnail/Metadata handlers
+  rpc.onGetVideoThumbnail(async (req: any) => {
+    console.log('[HRPC] getVideoThumbnail:', req.channelKey?.slice(0, 16), req.videoId);
+    return { url: null, dataUrl: null };
+  });
+
+  rpc.onGetVideoMetadata(async (req: any) => {
+    console.log('[HRPC] getVideoMetadata:', req.channelKey?.slice(0, 16), req.videoId);
+    return { video: { id: req.videoId, title: 'Unknown' } };
+  });
+
+  rpc.onSetVideoThumbnail(async (req: any) => {
+    console.log('[HRPC] setVideoThumbnail');
+    return { success: true };
+  });
+
+  // Desktop-specific handlers
+  rpc.onGetStatus(async () => {
+    console.log('[HRPC] getStatus');
+    const status = await api.getStatus();
+    return {
+      status: {
+        ready: true,
+        hasIdentity: identities.length > 0,
+        blobServerPort: status.blobServerPort,
+      }
+    };
+  });
+
+  rpc.onPickVideoFile(async () => {
+    console.log('[HRPC] pickVideoFile');
+    const result = await api.pickVideoFile();
+    return {
+      filePath: result.filePath || null,
+      cancelled: result.cancelled || false,
+    };
+  });
+
+  rpc.onGetBlobServerPort(async () => {
+    console.log('[HRPC] getBlobServerPort');
+    return { port: blobServerPort };
+  });
+
+  // Event handlers (client -> server, usually no-ops)
+  rpc.onEventReady(() => {
+    console.log('[HRPC] Client acknowledged ready');
+  });
+
+  rpc.onEventError((data: any) => {
+    console.error('[HRPC] Client reported error:', data?.message);
+  });
+
+  rpc.onEventUploadProgress(() => {
+    // Client shouldn't send this
+  });
+
+  rpc.onEventFeedUpdate(() => {
+    // Client shouldn't send this
+  });
+
+  rpc.onEventLog(() => {
+    // Client shouldn't send this
+  });
+
+  rpc.onEventVideoStats(() => {
+    // Client shouldn't send this
+  });
+
+  // Send ready event to client
+  try {
+    rpc.eventReady({ blobServerPort });
+    console.log('[Worker] Sent eventReady via HRPC');
+  } catch (e) {
+    console.error('[Worker] Failed to send eventReady:', e);
+  }
 
   ipcPipe.on('error', (err: Error) => {
     console.error('[Worker] Pipe error:', err);
   });
 
-  console.log('[Worker] Newline-delimited JSON message handler ready');
+  console.log('[Worker] HRPC handlers registered');
 }
 
 // Keep worker alive

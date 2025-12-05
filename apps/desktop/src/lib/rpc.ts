@@ -1,12 +1,13 @@
 /**
- * RPC Client - Frontend to Backend Communication (IPC v2)
+ * RPC Client - Frontend to Backend Communication via HRPC
  *
- * Uses pear-run to spawn worker and the returned pipe for bidirectional communication.
- * This is the v2 standard pattern for Pear worker communication.
+ * Uses pear-run to spawn worker and HRPC for typed binary communication.
  */
 
 import path from 'path';
 import run from 'pear-run';
+// @ts-ignore - Generated HRPC code
+import HRPC from '@peartube/rpc';
 
 // Import shared types - single source of truth
 export type {
@@ -37,16 +38,30 @@ import type {
 interface Pipe {
   on(event: 'data', handler: (data: Buffer) => void): void;
   on(event: 'end', handler: () => void): void;
+  on(event: 'error', handler: (err: Error) => void): void;
   write(data: string | Buffer): boolean;
   destroy(): void;
 }
 
+// Event callbacks
+type ReadyCallback = (data: { blobServerPort?: number }) => void;
+type ErrorCallback = (data: { message: string }) => void;
+type ProgressCallback = (data: { videoId: string; progress: number; bytesUploaded?: number; totalBytes?: number }) => void;
+type FeedUpdateCallback = (data: { channelKey: string; action: string }) => void;
+type VideoStatsCallback = (data: { stats: VideoStats }) => void;
+
 class RPCClient {
-  private requestId = 0;
-  private pending = new Map<number, { resolve: Function; reject: Function }>();
   private initialized = false;
   private pipe: Pipe | null = null;
-  private messageBuffer = '';
+  private rpc: any = null;
+  private blobServerPort: number = 0;
+
+  // Event handlers
+  private onReadyCallbacks: ReadyCallback[] = [];
+  private onErrorCallbacks: ErrorCallback[] = [];
+  private onProgressCallbacks: ProgressCallback[] = [];
+  private onFeedUpdateCallbacks: FeedUpdateCallback[] = [];
+  private onVideoStatsCallbacks: VideoStatsCallback[] = [];
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -77,237 +92,260 @@ class RPCClient {
       return;
     }
 
-    // Handle incoming data from worker
-    this.pipe.on('data', (data: Buffer | Uint8Array | string) => {
-      // Decode buffer to string
-      let str: string;
-      if (typeof data === 'string') {
-        str = data;
-      } else if (data instanceof Uint8Array || ArrayBuffer.isView(data)) {
-        str = new TextDecoder().decode(data);
-      } else {
-        str = (data as Buffer).toString('utf-8');
-      }
+    // Create HRPC instance with the pipe
+    this.rpc = new HRPC(this.pipe);
+    console.log('[RPC] HRPC client initialized');
 
-      // Buffer messages (newline-delimited JSON)
-      this.messageBuffer += str;
-      const lines = this.messageBuffer.split('\n');
-      this.messageBuffer = lines.pop() || '';
+    // Register event handlers
+    this.rpc.onEventReady((data: any) => {
+      console.log('[RPC] Backend ready, blobServerPort:', data?.blobServerPort);
+      this.blobServerPort = data?.blobServerPort || 0;
+      this.onReadyCallbacks.forEach(cb => cb(data));
+    });
 
-      for (const line of lines) {
-        if (line.trim() === '') continue;
+    this.rpc.onEventError((data: any) => {
+      console.error('[RPC] Backend error:', data?.message);
+      this.onErrorCallbacks.forEach(cb => cb(data));
+    });
 
-        try {
-          const msg = JSON.parse(line);
-          this.handleResponse(msg);
-        } catch (err) {
-          console.error('[RPC] JSON parse error:', err, 'Line:', line);
-        }
-      }
+    this.rpc.onEventUploadProgress((data: any) => {
+      this.onProgressCallbacks.forEach(cb => cb(data));
+    });
+
+    this.rpc.onEventFeedUpdate((data: any) => {
+      this.onFeedUpdateCallbacks.forEach(cb => cb(data));
+    });
+
+    this.rpc.onEventVideoStats((data: any) => {
+      this.onVideoStatsCallbacks.forEach(cb => cb(data));
     });
 
     this.pipe.on('end', () => {
       console.log('[RPC] Worker pipe ended');
       this.initialized = false;
       this.pipe = null;
+      this.rpc = null;
+    });
+
+    this.pipe.on('error', (err: Error) => {
+      console.error('[RPC] Pipe error:', err);
     });
 
     this.initialized = true;
-    console.log('[RPC] Pipe-based RPC initialized (IPC v2)');
+    console.log('[RPC] HRPC-based RPC initialized');
   }
 
-  private handleResponse(msg: any) {
-    const { id, error, result, type } = msg;
-
-    // Handle RPC responses
-    if (type === 'rpc-response' && id !== undefined) {
-      const handler = this.pending.get(id);
-      if (handler) {
-        this.pending.delete(id);
-        if (error) {
-          handler.reject(new Error(error));
-        } else {
-          handler.resolve(result);
-        }
-      }
-    }
+  // Event subscription methods
+  onReady(callback: ReadyCallback) {
+    this.onReadyCallbacks.push(callback);
   }
 
-  private async call<T>(method: string, ...args: any[]): Promise<T> {
-    if (!this.initialized || !this.pipe) {
-      throw new Error('RPC not initialized');
-    }
-
-    const id = ++this.requestId;
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`RPC timeout: ${method}`));
-      }, 30000);
-
-      this.pending.set(id, {
-        resolve: (result: T) => {
-          clearTimeout(timeout);
-          resolve(result);
-        },
-        reject: (error: Error) => {
-          clearTimeout(timeout);
-          reject(error);
-        }
-      });
-
-      // Send RPC request as newline-delimited JSON
-      const request = JSON.stringify({
-        type: 'rpc-request',
-        id,
-        method,
-        args
-      }) + '\n';
-
-      this.pipe!.write(request);
-    });
+  onError(callback: ErrorCallback) {
+    this.onErrorCallbacks.push(callback);
   }
+
+  onUploadProgress(callback: ProgressCallback) {
+    this.onProgressCallbacks.push(callback);
+  }
+
+  onFeedUpdate(callback: FeedUpdateCallback) {
+    this.onFeedUpdateCallbacks.push(callback);
+  }
+
+  onVideoStats(callback: VideoStatsCallback) {
+    this.onVideoStatsCallbacks.push(callback);
+  }
+
+  // ============================================
+  // RPC Methods - All use generated HRPC client
+  // ============================================
 
   async getStatus(): Promise<BackendStatus> {
-    return this.call<BackendStatus>('getStatus');
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getStatus({});
+    return {
+      connected: true,
+      peers: 0,
+      storage: '',
+      version: '0.1.0',
+      blobServerPort: result.status?.blobServerPort || this.blobServerPort,
+      ...result.status
+    } as BackendStatus;
   }
 
   async createIdentity(name: string, generateMnemonic = true): Promise<CreateIdentityResult> {
-    return this.call<CreateIdentityResult>('createIdentity', name, generateMnemonic);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.createIdentity({ name });
+    return {
+      success: true,
+      publicKey: result.identity?.publicKey || '',
+      driveKey: result.identity?.publicKey || '',
+      mnemonic: result.identity?.seedPhrase,
+    };
   }
 
   async recoverIdentity(mnemonic: string, name?: string): Promise<CreateIdentityResult> {
-    return this.call<CreateIdentityResult>('recoverIdentity', mnemonic, name);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.recoverIdentity({ seedPhrase: mnemonic });
+    return {
+      success: true,
+      publicKey: result.identity?.publicKey || '',
+      driveKey: result.identity?.publicKey || '',
+    };
   }
 
   async getIdentities(): Promise<Identity[]> {
-    return this.call<Identity[]>('getIdentities');
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getIdentities({});
+    return result.identities || [];
   }
 
   async setActiveIdentity(publicKey: string): Promise<void> {
-    return this.call<void>('setActiveIdentity', publicKey);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    await this.rpc.setActiveIdentity({ publicKey });
   }
 
   // Channel methods
   async getChannel(driveKey: string): Promise<Channel> {
-    return this.call<Channel>('getChannel', driveKey);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getChannel({ publicKey: driveKey });
+    return result.channel || { driveKey, name: 'Unknown' };
   }
 
   async listVideos(driveKey: string): Promise<Video[]> {
-    return this.call<Video[]>('listVideos', driveKey);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.listVideos({ channelKey: driveKey });
+    return result.videos || [];
   }
 
   async uploadVideo(title: string, description: string, filePath: string, mimeType: string): Promise<UploadVideoResult> {
-    return this.call<UploadVideoResult>('uploadVideo', title, description, filePath, mimeType);
-  }
-
-  // Stream upload - sends binary data directly through pipe
-  async streamUpload(
-    title: string,
-    description: string,
-    fileName: string,
-    mimeType: string,
-    file: File,
-    onProgress?: (percent: number) => void
-  ): Promise<UploadVideoResult> {
-    if (!this.initialized || !this.pipe) {
-      throw new Error('RPC not initialized');
-    }
-
-    // Start the upload session via RPC
-    const session = await this.call<{ uploadId: string; ready: boolean }>(
-      'startStreamUpload',
-      title,
-      description,
-      fileName,
-      mimeType,
-      file.size
-    );
-
-    console.log('[RPC] Stream upload started:', session.uploadId);
-
-    // Stream the file through the pipe as raw binary with a simple framing protocol
-    // Frame format: [4 bytes: upload ID length][upload ID][4 bytes: chunk length][chunk data]
-    const uploadIdBytes = new TextEncoder().encode(session.uploadId);
-    const CHUNK_SIZE = 64 * 1024; // 64KB chunks for streaming
-    let offset = 0;
-
-    while (offset < file.size) {
-      const end = Math.min(offset + CHUNK_SIZE, file.size);
-      const chunk = file.slice(offset, end);
-      const arrayBuffer = await chunk.arrayBuffer();
-      const chunkData = new Uint8Array(arrayBuffer);
-
-      // Create frame: magic byte (0x02 for binary) + uploadId length (4) + uploadId + chunk length (4) + chunk
-      const frame = new Uint8Array(1 + 4 + uploadIdBytes.length + 4 + chunkData.length);
-      const view = new DataView(frame.buffer);
-
-      let pos = 0;
-      frame[pos++] = 0x02; // Binary frame marker
-      view.setUint32(pos, uploadIdBytes.length, false); pos += 4;
-      frame.set(uploadIdBytes, pos); pos += uploadIdBytes.length;
-      view.setUint32(pos, chunkData.length, false); pos += 4;
-      frame.set(chunkData, pos);
-
-      this.pipe.write(Buffer.from(frame));
-
-      offset = end;
-      if (onProgress) {
-        onProgress(Math.round((offset / file.size) * 100));
-      }
-    }
-
-    // Signal upload complete and get result
-    return this.call<UploadVideoResult>('finishStreamUpload', session.uploadId);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.uploadVideo({ title, description, filePath });
+    return {
+      success: true,
+      videoId: result.video?.id || '',
+      metadata: result.video,
+    };
   }
 
   async getVideoUrl(driveKey: string, videoPath: string): Promise<{ url: string }> {
-    return this.call<{ url: string }>('getVideoUrl', driveKey, videoPath);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getVideoUrl({ channelKey: driveKey, videoId: videoPath });
+    return { url: result.url || '' };
   }
 
   // Subscription methods
   async subscribeChannel(driveKey: string): Promise<{ success: boolean; driveKey: string }> {
-    return this.call<{ success: boolean; driveKey: string }>('subscribeChannel', driveKey);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    await this.rpc.subscribeChannel({ channelKey: driveKey });
+    return { success: true, driveKey };
   }
 
   async getSubscriptions(): Promise<Channel[]> {
-    return this.call<Channel[]>('getSubscriptions');
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getSubscriptions({});
+    return (result.subscriptions || []).map((s: any) => ({
+      driveKey: s.channelKey,
+      name: s.channelName,
+    }));
   }
 
   async getBlobServerPort(): Promise<{ port: number }> {
-    return this.call<{ port: number }>('getBlobServerPort');
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getBlobServerPort({});
+    return { port: result.port || this.blobServerPort };
   }
 
   // Public Feed methods
   async getPublicFeed(): Promise<PublicFeedResult> {
-    return this.call<PublicFeedResult>('getPublicFeed');
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getPublicFeed({});
+    return {
+      entries: (result.entries || []).map((e: any) => ({
+        driveKey: e.channelKey,
+        channelKey: e.channelKey,
+        name: e.channelName,
+        videoCount: e.videoCount,
+        peerCount: e.peerCount,
+        lastSeen: e.lastSeen,
+      })),
+      stats: { peerCount: 0 }
+    };
   }
 
   async refreshFeed(): Promise<{ success: boolean; peerCount: number }> {
-    return this.call<{ success: boolean; peerCount: number }>('refreshFeed');
+    if (!this.rpc) throw new Error('RPC not initialized');
+    await this.rpc.refreshFeed({});
+    return { success: true, peerCount: 0 };
   }
 
   async getChannelMetadata(driveKey: string): Promise<ChannelMetadata> {
-    return this.call<ChannelMetadata>('getChannelMetadata', driveKey);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getChannelMeta({ channelKey: driveKey });
+    return {
+      driveKey,
+      name: result.name || 'Unknown',
+      description: result.description || '',
+      videoCount: result.videoCount || 0,
+    };
   }
 
   async hideChannel(driveKey: string): Promise<{ success: boolean }> {
-    return this.call<{ success: boolean }>('hideChannel', driveKey);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    await this.rpc.hideChannel({ channelKey: driveKey });
+    return { success: true };
   }
 
   async submitToFeed(driveKey: string): Promise<{ success: boolean }> {
-    return this.call<{ success: boolean }>('submitToFeed', driveKey);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    await this.rpc.submitToFeed({});
+    return { success: true };
   }
 
   // Video prefetch (start downloading all blocks for seeking)
   async prefetchVideo(driveKey: string, videoPath: string): Promise<{ success: boolean }> {
-    return this.call<{ success: boolean }>('prefetchVideo', driveKey, videoPath);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    await this.rpc.prefetchVideo({ channelKey: driveKey, videoId: videoPath });
+    return { success: true };
   }
 
   // Get real-time P2P stats for a video
   async getVideoStats(driveKey: string, videoPath: string): Promise<VideoStats> {
-    return this.call<VideoStats>('getVideoStats', driveKey, videoPath);
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getVideoStats({ channelKey: driveKey, videoId: videoPath });
+    return result.stats || {
+      status: 'unknown',
+      progress: 0,
+      totalBlocks: 0,
+      downloadedBlocks: 0,
+      totalBytes: 0,
+      downloadedBytes: 0,
+      peerCount: 0,
+      speedMBps: '0',
+      uploadSpeedMBps: '0',
+      elapsed: 0,
+      isComplete: false,
+    };
+  }
+
+  // Desktop-specific: Native file picker
+  async pickVideoFile(): Promise<{ filePath?: string; name?: string; size?: number; cancelled?: boolean }> {
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.pickVideoFile({});
+    return {
+      filePath: result.filePath || undefined,
+      cancelled: result.cancelled || false,
+    };
+  }
+
+  // Swarm status
+  async getSwarmStatus(): Promise<{ connected: boolean; peerCount: number }> {
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getSwarmStatus({});
+    return {
+      connected: result.connected || false,
+      peerCount: result.peerCount || 0,
+    };
   }
 }
 

@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@peartube/backend-core": "file:../../packages/backend-core",
+    "@peartube/rpc": "file:../../packages/rpc",
     "@peartube/shared": "file:../../packages/shared",
     "@peartube/ui": "file:../../packages/ui",
     "@reduxjs/toolkit": "^2.8.0",
@@ -32,6 +33,7 @@
     "compact-encoding": "^2.18.0",
     "corestore": "^6.18.0",
     "framed-stream": "^1.0.1",
+    "hrpc": "^4.2.0",
     "hyperbee": "^2.26.0",
     "hypercore": "^10.37.0",
     "hypercore-blob-server": "^1.12.0",

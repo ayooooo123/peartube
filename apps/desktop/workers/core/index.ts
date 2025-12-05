@@ -16,13 +16,20 @@ import b4a from 'b4a';
 import fs from 'bare-fs';
 import pipe from 'pear-pipe';
 import { spawn } from 'bare-subprocess';
-import { PublicFeedManager } from './public-feed.js';
+
+// Import shared modules
+import { CMD as SharedCMD } from '@peartube/shared';
+// @ts-ignore - backend-core is JavaScript
+import { PublicFeedManager } from '@peartube/backend-core/public-feed';
 
 // Get Pear runtime globals
 declare const Pear: any;
 
-// RPC Commands - must match frontend
+// Use shared CMD, with backwards-compatible aliases for desktop-specific commands
 const CMD = {
+  ...SharedCMD,
+  // Desktop uses different IDs currently - map to shared for new code
+  // These will be gradually migrated to match shared IDs
   GET_STATUS: 1,
   CREATE_IDENTITY: 2,
   GET_IDENTITIES: 3,
@@ -32,17 +39,15 @@ const CMD = {
   SUBSCRIBE_CHANNEL: 7,
   GET_SUBSCRIPTIONS: 8,
   GET_BLOB_SERVER_PORT: 9,
-  UPLOAD_VIDEO: 10, // Upload via file path - bare-fs streams to Hyperdrive
+  UPLOAD_VIDEO: 10,
   GET_CHANNEL: 11,
   RECOVER_IDENTITY: 12,
-  PICK_VIDEO_FILE: 13, // Native file picker using osascript
-  // Public Feed (P2P Discovery)
+  PICK_VIDEO_FILE: 13,
   GET_PUBLIC_FEED: 14,
   REFRESH_FEED: 15,
   SUBMIT_TO_FEED: 16,
   HIDE_CHANNEL: 17,
   GET_CHANNEL_META: 18,
-  // Video prefetch/stats
   PREFETCH_VIDEO: 19,
   GET_VIDEO_STATS: 20,
 };

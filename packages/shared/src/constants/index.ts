@@ -1,37 +1,76 @@
-// RPC command IDs for bare-rpc (mobile)
-export const RPC = {
-  // Identity
+/**
+ * Unified RPC Command IDs
+ *
+ * Single source of truth for all command IDs used by mobile (bare-rpc) and desktop (pear-pipe).
+ * Mobile uses numeric command IDs, desktop uses both command IDs and method strings.
+ */
+export const CMD = {
+  // Identity (0-1)
   CREATE_IDENTITY: 0,
   GET_IDENTITY: 1,
-  UPDATE_IDENTITY: 2,
 
-  // Videos
-  LIST_VIDEOS: 20,
-  GET_VIDEO: 21,
-  DELETE_VIDEO: 22,
-  UPLOAD_VIDEO: 23,
+  // Channel (2-3)
+  GET_CHANNEL: 2,
+  UPDATE_CHANNEL: 3,
 
-  // Channels
-  SUBSCRIBE_CHANNEL: 30,
-  UNSUBSCRIBE_CHANNEL: 31,
-  LIST_SUBSCRIPTIONS: 32,
-  GET_CHANNEL: 33,
+  // Videos (4-7)
+  LIST_VIDEOS: 4,
+  GET_VIDEO_URL: 5,
+  GET_VIDEO_DATA: 6,
+  UPLOAD_VIDEO: 7,
 
-  // Public Feed (P2P Discovery)
-  GET_PUBLIC_FEED: 40,
-  PUBLIC_FEED_RESPONSE: 41,
-  REFRESH_FEED: 42,
-  SUBMIT_TO_FEED: 43,
-  HIDE_CHANNEL: 44,
-  GET_CHANNEL_META: 45,
+  // Subscriptions (8-11)
+  SUBSCRIBE_CHANNEL: 8,
+  UNSUBSCRIBE_CHANNEL: 9,
+  LIST_SUBSCRIPTIONS: 10,
+  JOIN_CHANNEL: 11,
 
-  // Events
+  // Public Feed (12-17)
+  GET_PUBLIC_FEED: 12,
+  REFRESH_FEED: 13,
+  SUBMIT_TO_FEED: 14,
+  HIDE_CHANNEL: 15,
+  GET_CHANNEL_META: 16,
+  GET_SWARM_STATUS: 17,
+
+  // Video Prefetch (18)
+  PREFETCH_VIDEO: 18,
+
+  // Seeding (19-23)
+  GET_SEEDING_STATUS: 19,
+  SET_SEEDING_CONFIG: 20,
+  PIN_CHANNEL: 21,
+  UNPIN_CHANNEL: 22,
+  GET_PINNED_CHANNELS: 23,
+
+  // Video Stats (24)
+  GET_VIDEO_STATS: 24,
+
+  // Thumbnails/Metadata (25-27)
+  GET_VIDEO_THUMBNAIL: 25,
+  GET_VIDEO_METADATA: 26,
+  SET_VIDEO_THUMBNAIL: 27,
+
+  // Desktop-specific (50-59)
+  GET_STATUS: 50,
+  GET_IDENTITIES: 51,
+  SET_ACTIVE_IDENTITY: 52,
+  RECOVER_IDENTITY: 53,
+  PICK_VIDEO_FILE: 54,
+  GET_BLOB_SERVER_PORT: 55,
+  GET_SUBSCRIPTIONS: 56,
+
+  // Events from backend (100+)
   EVENT_READY: 100,
   EVENT_ERROR: 101,
-  EVENT_PROGRESS: 102,
-  EVENT_SYNC: 103,
-  EVENT_FEED_UPDATE: 104,
+  EVENT_UPLOAD_PROGRESS: 102,
+  EVENT_FEED_UPDATE: 103,
+  EVENT_LOG: 104,
+  EVENT_VIDEO_STATS: 105,
 } as const;
+
+// Legacy alias for backwards compatibility
+export const RPC = CMD;
 
 /**
  * Hardcoded hyperswarm topic for public feed discovery
@@ -39,25 +78,47 @@ export const RPC = {
  */
 export const PUBLIC_FEED_TOPIC = 'peartube-public-feed-v1';
 
+/**
+ * Protocol name for Protomux feed exchange
+ */
+export const FEED_PROTOCOL_NAME = 'peartube-feed';
+
 // String-based RPC methods for pear-pipe (desktop)
+// Maps method names to CMD IDs for the command-based approach
 export const RPC_METHODS = {
+  // Identity
   createIdentity: 'createIdentity',
   getIdentity: 'getIdentity',
-  updateIdentity: 'updateIdentity',
+  getIdentities: 'getIdentities',
+  setActiveIdentity: 'setActiveIdentity',
+  recoverIdentity: 'recoverIdentity',
+
+  // Videos
   listVideos: 'listVideos',
-  getVideo: 'getVideo',
-  deleteVideo: 'deleteVideo',
+  getVideoUrl: 'getVideoUrl',
   uploadVideo: 'uploadVideo',
+  prefetchVideo: 'prefetchVideo',
+  getVideoStats: 'getVideoStats',
+
+  // Channel
+  getChannel: 'getChannel',
   subscribeChannel: 'subscribeChannel',
   unsubscribeChannel: 'unsubscribeChannel',
   getSubscriptions: 'getSubscriptions',
-  getChannel: 'getChannel',
-  // Public Feed methods
+
+  // Public Feed
   getPublicFeed: 'getPublicFeed',
   refreshFeed: 'refreshFeed',
   submitToFeed: 'submitToFeed',
   hideChannel: 'hideChannel',
   getChannelMeta: 'getChannelMeta',
+
+  // Status
+  getStatus: 'getStatus',
+  getBlobServerPort: 'getBlobServerPort',
+
+  // Desktop-specific
+  pickVideoFile: 'pickVideoFile',
 } as const;
 
 // ============================================

@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@peartube/backend-core": "file:../../packages/backend-core",
     "@peartube/shared": "file:../../packages/shared",
     "@peartube/ui": "file:../../packages/ui",
     "@reduxjs/toolkit": "^2.8.0",

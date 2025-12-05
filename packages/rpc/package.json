@@ -1,7 +1,6 @@
 {
   "name": "@peartube/rpc",
   "version": "0.1.0",
-  "type": "module",
   "description": "HRPC schema and generated code for PearTube",
   "exports": {
     ".": "./spec/hrpc/index.js",

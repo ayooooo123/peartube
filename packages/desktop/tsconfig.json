@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@peartube/core": ["../core/src/index.ts"],
+      "@peartube/platform": ["../platform/src/index.js"],
+      "@peartube/spec": ["../spec/spec/hrpc/index.js"],
+      "@peartube/backend": ["../backend/src/index.js"]
+    }
+  },
+  "include": ["src/**/*", "workers/**/*"],
+  "exclude": ["node_modules", "build"]
+}

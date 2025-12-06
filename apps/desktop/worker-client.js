@@ -3,7 +3,7 @@
  *
  * Uses ES modules - load with <script type="module" src="./worker-client.js">
  */
-import HRPC from '@peartube/rpc'
+import HRPC from '@peartube/spec'
 import run from 'pear-run'
 
 class WorkerClient {

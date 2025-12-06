@@ -3,7 +3,7 @@
  *
  * This gets bundled with HRPC so it works in Pear's renderer context.
  */
-import HRPC from '@peartube/rpc'
+import HRPC from '@peartube/spec'
 import run from 'pear-run'
 
 declare const Pear: any

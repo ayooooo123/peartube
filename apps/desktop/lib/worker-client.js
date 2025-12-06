@@ -7,7 +7,7 @@
 'use strict'
 
 // Load HRPC in Pear renderer environment
-const HRPC = require('@peartube/rpc')
+const HRPC = require('@peartube/spec')
 
 // Helper to spawn worker - mirrors pear-run's renderer logic
 function runWorker(path, args) {

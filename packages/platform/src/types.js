@@ -2,10 +2,27 @@
  * Platform Types
  *
  * Type definitions for the platform abstraction layer.
+ * Includes RPC types derived from HRPC schema.
  */
 
 /**
  * @typedef {'ios' | 'android' | 'pear-macos' | 'pear-windows' | 'pear-linux' | 'web' | 'bare'} PlatformType
+ */
+
+/**
+ * Video stats from P2P download
+ * @typedef {Object} VideoStats
+ * @property {'connecting' | 'resolving' | 'downloading' | 'complete' | 'error' | 'unknown'} status
+ * @property {number} progress - Download progress (0-100)
+ * @property {number} totalBlocks - Total blocks in video
+ * @property {number} downloadedBlocks - Downloaded blocks
+ * @property {number} totalBytes - Total bytes
+ * @property {number} downloadedBytes - Downloaded bytes
+ * @property {number} peerCount - Connected peers
+ * @property {string} speedMBps - Download speed
+ * @property {string} [uploadSpeedMBps] - Upload speed
+ * @property {number} elapsed - Elapsed time in ms
+ * @property {boolean} isComplete - Whether download is complete
  */
 
 /**

@@ -16,8 +16,10 @@
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
     "paths": {
-      "@peartube/shared": ["../../packages/shared/src/index.ts"],
-      "@peartube/ui": ["../../packages/ui/src/index.ts"]
+      "@peartube/core": ["../../packages/core/src/index.ts"],
+      "@peartube/platform": ["../../packages/platform/src/index.js"],
+      "@peartube/spec": ["../../packages/spec/spec/hrpc/index.js"],
+      "@peartube/backend": ["../../packages/backend/src/index.js"]
     }
   },
   "include": ["src/**/*", "workers/**/*"],

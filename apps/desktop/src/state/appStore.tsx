@@ -6,7 +6,7 @@
  */
 
 import React, { createContext, useContext, useReducer, useRef, useMemo, ReactNode } from 'react';
-import type { BackendStatus, Identity, Video, PublicFeedEntry, ChannelMetadata } from '@peartube/shared';
+import type { BackendStatus, Identity, Video, PublicFeedEntry, ChannelMetadata } from '@peartube/core';
 import { createActions, type AppActions } from './actions';
 
 export type AppStoreState = {

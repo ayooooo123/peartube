@@ -4,10 +4,10 @@
  * Uses VLC player for broad codec support
  */
 import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react'
-import type { VideoData, VideoStats } from '@peartube/shared'
+import type { VideoData, VideoStats } from '@peartube/core'
 
 // Re-export types for backwards compatibility
-export type { VideoData, VideoStats } from '@peartube/shared'
+export type { VideoData, VideoStats } from '@peartube/core'
 
 // Simple event emitter for video stats (allows RPC handler to push stats to context)
 type VideoStatsListener = (driveKey: string, videoPath: string, stats: VideoStats) => void

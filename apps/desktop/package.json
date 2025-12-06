@@ -15,10 +15,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@peartube/backend-core": "file:../../packages/backend-core",
-    "@peartube/rpc": "file:../../packages/rpc",
-    "@peartube/shared": "file:../../packages/shared",
-    "@peartube/ui": "file:../../packages/ui",
+    "@peartube/backend": "file:../../packages/backend",
+    "@peartube/core": "file:../../packages/core",
+    "@peartube/platform": "file:../../packages/platform",
+    "@peartube/spec": "file:../../packages/spec",
     "@reduxjs/toolkit": "^2.8.0",
     "autobase": "^7.22.0",
     "b4a": "^1.6.0",

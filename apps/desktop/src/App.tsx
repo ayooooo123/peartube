@@ -3,7 +3,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import type { Video } from '@peartube/shared';
+import type { Video } from '@peartube/core';
 import { useAppStore, type AppStoreState } from './state/appStore';
 import { AppLayout } from './components/layout/AppLayout';
 import { HomePage } from './pages/HomePage';

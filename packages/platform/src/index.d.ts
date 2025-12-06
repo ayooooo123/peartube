@@ -5,6 +5,21 @@
 export type PlatformType = 'ios' | 'android' | 'pear-macos' | 'pear-windows' | 'pear-linux' | 'web' | 'bare';
 export type PlatformCategory = 'mobile' | 'desktop' | 'web';
 
+// Video stats from P2P download
+export interface VideoStats {
+  status: 'connecting' | 'resolving' | 'downloading' | 'complete' | 'error' | 'unknown';
+  progress: number;
+  totalBlocks: number;
+  downloadedBlocks: number;
+  totalBytes: number;
+  downloadedBytes: number;
+  peerCount: number;
+  speedMBps: string;
+  uploadSpeedMBps?: string;
+  elapsed: number;
+  isComplete: boolean;
+}
+
 export interface LayoutInsets {
   top: number;
   bottom: number;

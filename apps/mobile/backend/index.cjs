@@ -6,7 +6,7 @@
  */
 
 // Use require for CommonJS modules in Bare
-const HRPC = require('@peartube/rpc')
+const HRPC = require('@peartube/spec')
 const Corestore = require('corestore')
 const Hyperdrive = require('hyperdrive')
 const Hyperswarm = require('hyperswarm')

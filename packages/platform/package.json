@@ -10,12 +10,16 @@
     ".": "./src/index.js",
     "./types": "./src/types.js",
     "./detection": "./src/detection.js",
-    "./storage": "./src/storage.js"
+    "./storage": "./src/storage.js",
+    "./rpc.native": "./src/rpc.native.ts",
+    "./rpc.web": "./src/rpc.web.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@peartube/spec": "file:../spec"
+  },
   "devDependencies": {
     "typescript": "^5.9.0"
   }

@@ -1,0 +1,17 @@
+{
+  "name": "@peartube/spec",
+  "version": "0.1.0",
+  "description": "HRPC schema and generated code for PearTube",
+  "exports": {
+    ".": "./spec/hrpc/index.js",
+    "./messages": "./spec/hrpc/messages.js",
+    "./schema": "./spec/schema/index.js"
+  },
+  "scripts": {
+    "gen:schema": "node schema.cjs"
+  },
+  "dependencies": {
+    "hrpc": "^4.2.0",
+    "hyperschema": "^1.17.1"
+  }
+}

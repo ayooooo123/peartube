@@ -7,7 +7,7 @@
 import path from 'path';
 import run from 'pear-run';
 // @ts-ignore - Generated HRPC code
-import HRPC from '@peartube/rpc';
+import HRPC from '@peartube/spec';
 
 // Import shared types - single source of truth
 export type {
@@ -21,7 +21,7 @@ export type {
   ChannelMetadata,
   VideoStats,
   PublicFeedResult,
-} from '@peartube/shared'
+} from '@peartube/core'
 
 import type {
   BackendStatus,
@@ -33,7 +33,7 @@ import type {
   PublicFeedResult,
   ChannelMetadata,
   VideoStats,
-} from '@peartube/shared'
+} from '@peartube/core'
 
 interface Pipe {
   on(event: 'data', handler: (data: Buffer) => void): void;

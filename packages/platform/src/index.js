@@ -1,7 +1,7 @@
 /**
  * Platform Abstraction Layer
  *
- * Provides platform detection and utilities for PearTube.
+ * Provides platform detection, storage utilities, and RPC abstraction for PearTube.
  * Works across desktop (Pear), mobile (React Native), and web.
  */
 
@@ -35,3 +35,8 @@ export {
 
 // Re-export types (for documentation/JSDoc purposes)
 export * from './types.js';
+
+// RPC is exported from platform-specific files:
+// - rpc.native.ts for React Native (mobile)
+// - rpc.web.ts for Pear (desktop)
+// Apps should import from the appropriate file based on platform.

@@ -5,7 +5,7 @@
 import React from 'react';
 import { colors, spacing, radius } from '../lib/theme';
 import { rpc } from '../lib/rpc';
-import type { Video, Channel } from '@peartube/shared';
+import type { Video, Channel } from '@peartube/core';
 import desktopAdapter from '../platform/desktopAdapter';
 import { Column, Row, Text, Button, Input, TextArea, Card, Tabs, Avatar, Alert } from '../components/ui';
 import { VideoCard } from '../components/VideoCard';

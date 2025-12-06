@@ -6,7 +6,7 @@
  */
 
 import { rpc } from '../lib/rpc';
-import type { Video, Identity, PublicFeedEntry, ChannelMetadata, BackendStatus } from '@peartube/shared';
+import type { Video, Identity, PublicFeedEntry, ChannelMetadata, BackendStatus } from '@peartube/core';
 
 // Action dispatch type - mirrors reducer actions
 type Dispatch = React.Dispatch<any>;

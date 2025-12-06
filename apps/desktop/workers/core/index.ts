@@ -18,9 +18,9 @@ import pipe from 'pear-pipe';
 import { spawn } from 'bare-subprocess';
 
 // @ts-ignore - backend-core is JavaScript
-import { PublicFeedManager } from '@peartube/backend-core/public-feed';
+import { PublicFeedManager } from '@peartube/backend/public-feed';
 // @ts-ignore - Generated HRPC code
-import HRPC from '@peartube/rpc';
+import HRPC from '@peartube/spec';
 
 // Get Pear runtime globals
 declare const Pear: any;

@@ -6,7 +6,7 @@
  */
 
 import React, { createContext, useContext, useReducer, useRef, useMemo, ReactNode } from 'react';
-import type { Identity, Video, VideoData, PublicFeedEntry, ChannelMetadata, VideoStats } from '@peartube/shared';
+import type { Identity, Video, VideoData, PublicFeedEntry, ChannelMetadata, VideoStats } from '@peartube/core';
 
 export type AppStoreState = {
   // Connection status

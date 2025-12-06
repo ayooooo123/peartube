@@ -27,14 +27,14 @@ let FileSystem: any = null
 
 if (isNative) {
   Worklet = require('react-native-bare-kit').Worklet
-  HRPC = require('@peartube/rpc')
+  HRPC = require('@peartube/spec')
   FileSystem = require('expo-file-system')
 }
 
 // Note: We now use HRPC typed methods directly instead of command IDs
 
 // Types from shared package
-import type { Identity, Video } from '@peartube/shared'
+import type { Identity, Video } from '@peartube/core'
 
 interface AppContextType {
   ready: boolean

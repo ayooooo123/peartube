@@ -4,7 +4,7 @@
 import '../global.css'
 import { useEffect, useState, createContext, useContext, useRef, useCallback } from 'react'
 import { Stack } from 'expo-router'
-import { StatusBar, View, Text, Platform } from 'react-native'
+import { StatusBar, View, Text, Platform, AppState, AppStateStatus } from 'react-native'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData } from '@/lib/VideoPlayerContext'
@@ -30,6 +30,9 @@ if (isNative) {
   HRPC = require('@peartube/spec')
   FileSystem = require('expo-file-system')
 }
+
+// Module-level worklet reference for lifecycle management
+let workletInstance: any = null
 
 // Note: We now use HRPC typed methods directly instead of command IDs
 
@@ -68,7 +71,37 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (isNative) {
+      // Handle app state changes for worklet lifecycle
+      const handleAppStateChange = (nextState: AppStateStatus) => {
+        if (nextState === 'background' || nextState === 'inactive') {
+          if (workletInstance) {
+            console.log('[App] Terminating worklet for background')
+            try {
+              workletInstance.terminate()
+            } catch (err) {
+              console.error('[App] Failed to terminate worklet:', err)
+            }
+            workletInstance = null
+            rpcRef.current = null
+            setReady(false)
+          }
+        } else if (nextState === 'active' && !workletInstance) {
+          console.log('[App] Re-initializing backend from foreground')
+          initBackend()
+        }
+      }
+
+      const subscription = AppState.addEventListener('change', handleAppStateChange)
       initBackend()
+
+      return () => {
+        subscription.remove()
+        // Cleanup on unmount
+        if (workletInstance) {
+          workletInstance.terminate()
+          workletInstance = null
+        }
+      }
     } else if (isPear) {
       initPearBackend()
     } else {
@@ -104,7 +137,9 @@ export default function RootLayout() {
   async function initBackend() {
     console.log('[App] Initializing backend with HRPC...')
 
+    // Create and store worklet reference for lifecycle management
     const worklet = new Worklet()
+    workletInstance = worklet
 
     // Get document directory for storage (strip file:// prefix for bare-fs)
     let storageDir = FileSystem.documentDirectory || ''
@@ -121,6 +156,7 @@ export default function RootLayout() {
       console.log('[App] Backend worklet started')
     } catch (err) {
       console.error('[App] Backend worklet failed:', err)
+      workletInstance = null
       return
     }
 

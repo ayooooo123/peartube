@@ -23,7 +23,7 @@ function formatDate(timestamp: number): string {
 
 export default function StudioScreen() {
   const insets = useSafeAreaInsets()
-  const { identity, videos, rpcCall, uploadVideo, pickVideoFile, loadVideos } = useApp()
+  const { identity, videos, rpc, uploadVideo, pickVideoFile, loadVideos } = useApp()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [title, setTitle] = useState('')
@@ -119,13 +119,12 @@ export default function StudioScreen() {
         })
         // Reload videos after upload
         await loadVideos(identity.driveKey)
-      } else {
-        // Native: use regular RPC upload
-        await rpcCall(Commands.UPLOAD_VIDEO, {
-          uri: selectedVideo,
+      } else if (rpc) {
+        // Native: use HRPC upload
+        await rpc.uploadVideo({
+          filePath: selectedVideo,
           title: title.trim(),
           description: '',
-          driveKey: identity.driveKey,
         })
         await loadVideos(identity.driveKey)
       }

@@ -41,6 +41,12 @@
           "version": 1
         },
         {
+          "name": "driveKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
           "name": "name",
           "required": false,
           "type": "string",
@@ -56,6 +62,18 @@
           "name": "seedPhrase",
           "required": false,
           "type": "string",
+          "version": 1
+        },
+        {
+          "name": "createdAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "isActive",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]
@@ -324,6 +342,12 @@
         },
         {
           "name": "description",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "path",
           "required": false,
           "type": "string",
           "version": 1
@@ -892,22 +916,40 @@
       "name": "video-stats",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": 2,
+      "flagsPosition": 0,
       "fields": [
         {
           "name": "videoId",
-          "required": true,
+          "required": false,
           "type": "string",
           "version": 1
         },
         {
           "name": "channelKey",
-          "required": true,
+          "required": false,
           "type": "string",
           "version": 1
         },
         {
-          "name": "downloadedBytes",
+          "name": "status",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "progress",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "totalBlocks",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "downloadedBlocks",
           "required": false,
           "type": "uint",
           "version": 1
@@ -919,7 +961,7 @@
           "version": 1
         },
         {
-          "name": "downloadProgress",
+          "name": "downloadedBytes",
           "required": false,
           "type": "uint",
           "version": 1
@@ -931,15 +973,27 @@
           "version": 1
         },
         {
-          "name": "downloadSpeed",
+          "name": "speedMBps",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "uploadSpeedMBps",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "elapsed",
           "required": false,
           "type": "uint",
           "version": 1
         },
         {
-          "name": "uploadSpeed",
+          "name": "isComplete",
           "required": false,
-          "type": "uint",
+          "type": "bool",
           "version": 1
         }
       ]

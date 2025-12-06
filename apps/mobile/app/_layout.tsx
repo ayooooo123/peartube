@@ -17,50 +17,21 @@ export { colors }
 
 // Platform detection
 const isNative = Platform.OS !== 'web'
-// Check for PearWorkerClient which is set by worker-client.js preload script
-const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).PearWorkerClient
+// Check for Pear runtime (available on Pear desktop)
+const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
 
 // Native-only imports (not available on web)
 let Worklet: any = null
-let RPC: any = null
-let b4a: any = null
+let HRPC: any = null
 let FileSystem: any = null
-let Commands: any = null
-let pearRun: any = null
-let path: any = null
 
 if (isNative) {
   Worklet = require('react-native-bare-kit').Worklet
-  RPC = require('bare-rpc')
-  b4a = require('b4a')
+  HRPC = require('@peartube/rpc')
   FileSystem = require('expo-file-system')
-  Commands = require('../rpc-commands.mjs').RPC
 }
-// Note: Pear modules (bare-rpc, b4a, pear-run, path) are loaded dynamically
-// in initPearBackend() using Pear's require to bypass the web bundler
 
-// Desktop command IDs (different from mobile)
-const PearCommands = {
-  GET_STATUS: 1,
-  CREATE_IDENTITY: 2,
-  GET_IDENTITIES: 3,
-  SET_ACTIVE_IDENTITY: 4,
-  LIST_VIDEOS: 5,
-  GET_VIDEO_URL: 6,
-  SUBSCRIBE_CHANNEL: 7,
-  GET_SUBSCRIPTIONS: 8,
-  GET_BLOB_SERVER_PORT: 9,
-  UPLOAD_VIDEO: 10, // Upload via file path - bare-fs streams to Hyperdrive
-  GET_CHANNEL: 11,
-  RECOVER_IDENTITY: 12,
-  PICK_VIDEO_FILE: 13, // Native file picker using osascript
-  // Public Feed (P2P Discovery)
-  GET_PUBLIC_FEED: 14,
-  REFRESH_FEED: 15,
-  SUBMIT_TO_FEED: 16,
-  HIDE_CHANNEL: 17,
-  GET_CHANNEL_META: 18,
-}
+// Note: We now use HRPC typed methods directly instead of command IDs
 
 // Types from shared package
 import type { Identity, Video } from '@peartube/shared'
@@ -71,7 +42,7 @@ interface AppContextType {
   videos: Video[]
   loading: boolean
   blobServerPort: number | null
-  rpcCall: (command: number, data?: any) => Promise<any>
+  rpc: any // HRPC instance - typed methods available
   uploadVideo: (filePath: string, title: string, description: string, mimeType?: string, onProgress?: (progress: number) => void) => Promise<any>
   pickVideoFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
   loadIdentity: () => Promise<void>
@@ -94,9 +65,6 @@ export default function RootLayout() {
   const [loading, setLoading] = useState(true)
   const [blobServerPort, setBlobServerPort] = useState<number | null>(null)
   const rpcRef = useRef<any>(null)
-  const pearPipeRef = useRef<any>(null)
-  const pendingRequestsRef = useRef<Map<string, { resolve: Function, reject: Function, timeout: NodeJS.Timeout }>>(new Map())
-  const requestIdRef = useRef<number>(0)
 
   useEffect(() => {
     if (isNative) {
@@ -112,25 +80,19 @@ export default function RootLayout() {
 
   // Subscribe to video load events to trigger prefetch
   useEffect(() => {
-    if (!isNative || !ready) return
+    if (!ready) return
 
     const unsubscribe = videoLoadEventEmitter.subscribe(async (video: VideoData) => {
-      if (!rpcRef.current || !Commands) return
+      if (!rpcRef.current) return
 
       console.log('[App] Video loaded, starting prefetch for:', video.title)
       try {
-        // Call PREFETCH_VIDEO to start P2P download and stats streaming
-        const requestId = ++requestIdRef.current
-        const pendingKey = String(requestId)
-
-        const request = rpcRef.current.request(Commands.PREFETCH_VIDEO)
-        request.send(b4a.from(JSON.stringify({
-          driveKey: video.channelKey,
-          videoPath: video.path,
-          _requestId: requestId
-        })))
-
-        console.log('[App] PREFETCH_VIDEO sent for:', video.path)
+        // Call prefetchVideo via HRPC to start P2P download and stats streaming
+        await rpcRef.current.prefetchVideo({
+          channelKey: video.channelKey,
+          videoId: video.path,
+        })
+        console.log('[App] prefetchVideo sent for:', video.path)
       } catch (err) {
         console.error('[App] Failed to start prefetch:', err)
       }
@@ -140,7 +102,7 @@ export default function RootLayout() {
   }, [ready])
 
   async function initBackend() {
-    console.log('[App] Initializing backend...')
+    console.log('[App] Initializing backend with HRPC...')
 
     const worklet = new Worklet()
 
@@ -164,102 +126,116 @@ export default function RootLayout() {
 
     const { IPC } = worklet
 
-    // Setup RPC
-    const rpcClient = new RPC(IPC, (req: any) => {
-      const command = req.command
-      const data = req.data ? JSON.parse(b4a.toString(req.data)) : {}
+    // Setup HRPC client with the IPC stream
+    const rpc = new HRPC(IPC)
+    rpcRef.current = rpc
+    console.log('[App] HRPC client initialized')
 
-      console.log('[App] Backend event:', command, data)
-
-      // Check if response to pending request - use _requestId if present
-      const requestId = data._requestId
-      const pendingKey = requestId !== undefined ? String(requestId) : String(command)
-      const pending = pendingRequestsRef.current.get(pendingKey)
-      if (pending) {
-        clearTimeout(pending.timeout)
-        pendingRequestsRef.current.delete(pendingKey)
-        if (data.success) {
-          pending.resolve(data.data)
-        } else {
-          pending.reject(new Error(data.error || 'Unknown error'))
-        }
-        return
+    // Register event handlers
+    rpc.onEventReady(async (data: any) => {
+      console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
+      if (data?.blobServerPort) {
+        setBlobServerPort(data.blobServerPort)
       }
+      setReady(true)
 
-      // Handle events
-      if (command === Commands.EVENT_READY) {
-        setReady(true)
-        loadIdentityFromBackend()
-      } else if (command === Commands.EVENT_ERROR) {
-        console.error('[App] Backend error:', data.error)
-      } else if (command === Commands.EVENT_VIDEO_STATS) {
-        // Push stats to VideoPlayerContext via event emitter
-        console.log('[App] Received video stats event:', data.stats?.progress + '%')
-        if (data.driveKey && data.videoPath && data.stats) {
-          videoStatsEventEmitter.emit(data.driveKey, data.videoPath, data.stats)
+      // Load identity after ready
+      try {
+        setLoading(true)
+        const result = await rpc.getIdentity({})
+        const id = result?.identity
+        if (id) {
+          setIdentity(id)
+          if (id.driveKey) {
+            const videosResult = await rpc.listVideos({ channelKey: id.driveKey })
+            setVideos(videosResult?.videos || [])
+          }
         }
+      } catch (err) {
+        console.error('[App] Failed to load identity:', err)
+      } finally {
+        setLoading(false)
       }
     })
 
-    rpcRef.current = rpcClient
-    console.log('[App] RPC client initialized')
+    rpc.onEventError((data: any) => {
+      console.error('[App] Backend error:', data?.message)
+    })
+
+    rpc.onEventVideoStats((data: any) => {
+      // Push stats to VideoPlayerContext via event emitter
+      console.log('[App] Received video stats event:', data?.stats?.progress + '%')
+      if (data?.channelKey && data?.videoId && data?.stats) {
+        videoStatsEventEmitter.emit(data.channelKey, data.videoId, data.stats)
+      }
+    })
+
+    rpc.onEventUploadProgress((data: any) => {
+      console.log('[App] Upload progress:', data?.progress + '%')
+    })
   }
 
   async function initPearBackend() {
-    console.log('[App] Initializing Pear desktop backend...')
+    console.log('[App] Initializing Pear desktop backend via PearWorkerClient...')
 
-    // Check for PearWorkerClient which is injected by worker-client.js preload script
+    // Access PearWorkerClient (set up by worker-client.js unbundled script)
     const workerClient = (window as any).PearWorkerClient
     if (!workerClient) {
-      console.error('[App] PearWorkerClient not available - worker-client.js may not have loaded')
+      console.error('[App] PearWorkerClient not available')
       setReady(true)
       setLoading(false)
       return
     }
 
-    // Initialize the worker client (uses pear-run with newline-delimited JSON)
-    console.log('[App] Initializing PearWorkerClient...')
-
     try {
-      // PearWorkerClient.initialize() spawns the worker and waits for worker_initialized
+      // Initialize the worker client (spawns worker, sets up HRPC)
       await workerClient.initialize()
-      pearPipeRef.current = workerClient
-    } catch (err) {
-      console.error('[App] Failed to initialize worker:', err)
-      setReady(true)
-      setLoading(false)
-      return
-    }
 
-    if (!workerClient.isConnected) {
-      console.error('[App] Worker not connected')
-      setReady(true)
-      setLoading(false)
-      return
-    }
-
-    // PearWorkerClient provides .call() method for RPC
-    rpcRef.current = workerClient
-    console.log('[App] Pear RPC client initialized via PearWorkerClient')
-
-    // Get blob server port and load identity
-    try {
-      const portResult = await pearRpcCall(PearCommands.GET_BLOB_SERVER_PORT, {})
-      if (portResult?.port) {
-        setBlobServerPort(portResult.port)
-        console.log('[App] Blob server port:', portResult.port)
+      const rpc = workerClient.getRpc()
+      if (!rpc) {
+        throw new Error('Failed to get RPC from worker client')
       }
 
+      rpcRef.current = rpc
+      console.log('[App] HRPC client ready')
+
+      // Set blob server port
+      if (workerClient.blobServerPort) {
+        setBlobServerPort(workerClient.blobServerPort)
+      }
+
+      // Subscribe to video stats events from worker
+      window.addEventListener('pearVideoStats', ((e: CustomEvent) => {
+        const data = e.detail
+        if (data?.channelKey && data?.videoId && data?.stats) {
+          videoStatsEventEmitter.emit(data.channelKey, data.videoId, data.stats)
+        }
+      }) as EventListener)
+
       // Load identities and set active one
-      const identities = await pearRpcCall(PearCommands.GET_IDENTITIES, {})
-      if (identities && identities.length > 0) {
+      console.log('[App] Loading identities via HRPC...')
+      const result = await rpc.getIdentities({})
+      const identities = result?.identities || []
+      console.log('[App] Got', identities.length, 'identities')
+
+      if (identities.length > 0) {
         const active = identities.find((id: any) => id.isActive) || identities[0]
         setIdentity(active)
 
         // Load videos for the active identity
         if (active?.driveKey) {
-          const vids = await pearRpcCall(PearCommands.LIST_VIDEOS, { driveKey: active.driveKey })
-          setVideos(vids || [])
+          console.log('[App] Loading videos for drive:', active.driveKey)
+          const videosResult = await rpc.listVideos({ channelKey: active.driveKey })
+          setVideos(videosResult?.videos || [])
+        }
+      }
+
+      // Get blob server port if not already set
+      if (!workerClient.blobServerPort) {
+        const portResult = await rpc.getBlobServerPort({})
+        if (portResult?.port) {
+          setBlobServerPort(portResult.port)
+          console.log('[App] Blob server port:', portResult.port)
         }
       }
     } catch (err) {
@@ -270,36 +246,13 @@ export default function RootLayout() {
     setLoading(false)
   }
 
-  // Pear-specific RPC call using simple JSON protocol over pipe
-  async function pearRpcCall(command: number, data: any = {}): Promise<any> {
-    if (!rpcRef.current) throw new Error('RPC not ready')
-    return rpcRef.current.call(command, data)
-  }
-
-  const rpcCall = useCallback(async (command: number, data: any = {}): Promise<any> => {
-    if (!rpcRef.current) throw new Error('RPC not ready')
-
-    return new Promise((resolve, reject) => {
-      // Generate unique request ID
-      const requestId = ++requestIdRef.current
-      const pendingKey = String(requestId)
-
-      const timeout = setTimeout(() => {
-        pendingRequestsRef.current.delete(pendingKey)
-        reject(new Error('RPC timeout'))
-      }, 30000)
-
-      pendingRequestsRef.current.set(pendingKey, { resolve, reject, timeout })
-
-      const request = rpcRef.current.request(command)
-      request.send(b4a.from(JSON.stringify({ ...data, _requestId: requestId })))
-    })
-  }, [])
-
+  // Load identity using HRPC
   const loadIdentityFromBackend = useCallback(async () => {
+    if (!rpcRef.current) return
     try {
       setLoading(true)
-      const id = await rpcCall(Commands.GET_IDENTITY)
+      const result = await rpcRef.current.getIdentity({})
+      const id = result?.identity
       setIdentity(id)
 
       if (id?.driveKey) {
@@ -310,41 +263,35 @@ export default function RootLayout() {
     } finally {
       setLoading(false)
     }
-  }, [rpcCall])
+  }, [])
 
+  // Load videos using HRPC
   const loadVideosFromBackend = useCallback(async (driveKey: string) => {
+    if (!rpcRef.current) return
     try {
-      if (isPear) {
-        const vids = await pearRpcCall(PearCommands.LIST_VIDEOS, { driveKey })
-        setVideos(vids || [])
-      } else {
-        const vids = await rpcCall(Commands.LIST_VIDEOS, { driveKey })
-        setVideos(vids || [])
-      }
+      const result = await rpcRef.current.listVideos({ channelKey: driveKey })
+      setVideos(result?.videos || [])
     } catch (err) {
       console.error('[App] Failed to load videos:', err)
     }
-  }, [rpcCall])
+  }, [])
 
+  // Create identity using HRPC
   const createIdentityHandler = useCallback(async (name: string): Promise<Identity> => {
+    if (!rpcRef.current) throw new Error('RPC not ready')
     setLoading(true)
     try {
-      if (isPear) {
-        const id = await pearRpcCall(PearCommands.CREATE_IDENTITY, { name })
-        setIdentity(id)
-        return id
-      } else {
-        const id = await rpcCall(Commands.CREATE_IDENTITY, { name })
-        setIdentity(id)
-        return id
-      }
+      const result = await rpcRef.current.createIdentity({ name })
+      const id = result?.identity
+      setIdentity(id)
+      return id
     } finally {
       setLoading(false)
     }
-  }, [rpcCall])
+  }, [])
 
-  // Upload video for Pear desktop - simple file path based upload
-  // Worker handles streaming with bare-fs to Hyperdrive
+  // Upload video using HRPC
+  // Worker handles streaming to Hyperdrive
   const uploadVideoHandler = useCallback(async (
     filePath: string,
     title: string,
@@ -352,40 +299,38 @@ export default function RootLayout() {
     mimeType: string = 'video/mp4',
     onProgress?: (progress: number) => void
   ): Promise<any> => {
-    if (!isPear || !rpcRef.current) {
-      throw new Error('Upload only available on Pear desktop')
+    if (!rpcRef.current) {
+      throw new Error('RPC not ready')
     }
 
     console.log('[App] Uploading video:', filePath)
 
-    // RPC call with progress callback - worker sends progress events during upload
-    const result = await rpcRef.current.call(PearCommands.UPLOAD_VIDEO, {
+    // Use HRPC uploadVideo method - progress comes via eventUploadProgress events
+    const result = await rpcRef.current.uploadVideo({
       filePath,
       title,
       description,
-      mimeType,
-    }, onProgress ? (progress: number) => onProgress(progress) : null)
+    })
 
     console.log('[App] Upload complete:', result)
 
     // Reload videos
     if (identity?.driveKey) {
-      const vids = await pearRpcCall(PearCommands.LIST_VIDEOS, { driveKey: identity.driveKey })
-      setVideos(vids || [])
+      await loadVideosFromBackend(identity.driveKey)
     }
 
-    return result
-  }, [identity])
+    return result?.video
+  }, [identity, loadVideosFromBackend])
 
-  // Pick video file using native file picker (Pear desktop only)
+  // Pick video file using native file picker
   const pickVideoFileHandler = useCallback(async (): Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null> => {
-    if (!isPear || !rpcRef.current) {
-      console.log('[App] pickVideoFile only available on Pear desktop')
+    if (!rpcRef.current) {
+      console.log('[App] pickVideoFile: RPC not ready')
       return null
     }
 
     console.log('[App] Opening native file picker...')
-    return rpcRef.current.call(PearCommands.PICK_VIDEO_FILE, {})
+    return await rpcRef.current.pickVideoFile({})
   }, [])
 
   const contextValue: AppContextType = {
@@ -394,7 +339,7 @@ export default function RootLayout() {
     videos,
     loading,
     blobServerPort,
-    rpcCall: isPear ? pearRpcCall : rpcCall,
+    rpc: rpcRef.current, // Direct HRPC instance access
     uploadVideo: uploadVideoHandler,
     pickVideoFile: pickVideoFileHandler,
     loadIdentity: loadIdentityFromBackend,

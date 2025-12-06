@@ -7,13 +7,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Copy, Share2, User, Key, Info, ExternalLink, Globe } from 'lucide-react-native'
 import { useApp, colors } from '../_layout'
 
-// Command IDs - different for mobile (Bare) vs desktop (Pear)
-const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).PearWorkerClient
-const CMD_SUBMIT_TO_FEED = isPear ? 16 : 14 // Pear: 16, Mobile: 14
-
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets()
-  const { identity, createIdentity, rpcCall } = useApp()
+  const { identity, createIdentity, rpc } = useApp()
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
 
@@ -48,7 +44,7 @@ export default function SettingsScreen() {
       setNewName('')
 
       // Prompt user to publish channel to public feed
-      if (newIdentity?.driveKey) {
+      if (newIdentity?.driveKey && rpc) {
         Alert.alert(
           'Publish to Public Feed?',
           'Would you like to add your channel to the public feed so others can discover it? You can keep it private if you prefer.',
@@ -61,7 +57,7 @@ export default function SettingsScreen() {
               text: 'Publish',
               onPress: async () => {
                 try {
-                  await rpcCall(CMD_SUBMIT_TO_FEED, { driveKey: newIdentity.driveKey })
+                  await rpc.submitToFeed({})
                   Alert.alert('Published!', 'Your channel is now visible on the public feed.')
                 } catch (err) {
                   console.error('Failed to publish to feed:', err)
@@ -80,7 +76,7 @@ export default function SettingsScreen() {
 
   // Publish existing channel to public feed
   const publishToFeed = async () => {
-    if (!identity?.driveKey) return
+    if (!identity?.driveKey || !rpc) return
 
     // Use window.confirm on web (Pear desktop), Alert.alert on native
     if (Platform.OS === 'web') {
@@ -88,7 +84,7 @@ export default function SettingsScreen() {
       if (confirmed) {
         try {
           console.log('[Settings] Publishing to feed, driveKey:', identity.driveKey)
-          await rpcCall(CMD_SUBMIT_TO_FEED, { driveKey: identity.driveKey })
+          await rpc.submitToFeed({})
           window.alert('Published! Your channel is now visible on the public feed.')
         } catch (err) {
           console.error('Failed to publish:', err)
@@ -105,7 +101,7 @@ export default function SettingsScreen() {
             text: 'Publish',
             onPress: async () => {
               try {
-                await rpcCall(CMD_SUBMIT_TO_FEED, { driveKey: identity.driveKey })
+                await rpc.submitToFeed({})
                 Alert.alert('Published!', 'Your channel is now visible on the public feed.')
               } catch (err) {
                 console.error('Failed to publish:', err)

@@ -95,19 +95,7 @@ function formatTimeAgo(timestamp: number): string {
   return `${days}d ago`
 }
 
-// Desktop (Pear) command IDs
-const PearCommands = {
-  LIST_VIDEOS: 5,
-  GET_VIDEO_URL: 6,
-  GET_CHANNEL: 11,
-  GET_PUBLIC_FEED: 14,
-  REFRESH_FEED: 15,
-  SUBMIT_TO_FEED: 16,
-  HIDE_CHANNEL: 17,
-  GET_CHANNEL_META: 18,
-  PREFETCH_VIDEO: 19,
-  GET_VIDEO_STATS: 20,
-}
+// Now using HRPC methods directly - no command IDs needed
 
 // Route parsing for hash-based routing
 interface WatchRoute {
@@ -139,7 +127,7 @@ interface WatchPageViewProps {
   video: VideoData | null
   onBack: () => void
   onVideoClick: (video: VideoData) => void
-  rpcCall: (command: number, data?: any) => Promise<any>
+  rpc: any  // HRPC instance
   relatedVideos: VideoData[]
   channelMeta: Record<string, ChannelMeta>
 }
@@ -150,7 +138,7 @@ function WatchPageView({
   video,
   onBack,
   onVideoClick,
-  rpcCall,
+  rpc,
   relatedVideos,
   channelMeta,
 }: WatchPageViewProps) {
@@ -166,7 +154,7 @@ function WatchPageView({
 
   // Load video URL
   useEffect(() => {
-    if (!video?.path) return
+    if (!video?.path || !rpc) return
 
     let cancelled = false
     setIsLoading(true)
@@ -175,9 +163,9 @@ function WatchPageView({
     async function loadVideo() {
       try {
         // Get video URL from backend
-        const result = await rpcCall(PearCommands.GET_VIDEO_URL, {
-          driveKey: channelKey,
-          videoPath: video!.path,
+        const result = await rpc.getVideoUrl({
+          channelKey: channelKey,
+          videoId: video!.path,
         })
 
         if (cancelled) return
@@ -200,39 +188,41 @@ function WatchPageView({
 
     loadVideo()
     return () => { cancelled = true }
-  }, [channelKey, video?.path, rpcCall])
+  }, [channelKey, video?.path, rpc])
 
   // Load channel info
   useEffect(() => {
+    if (!rpc) return
     if (channelMeta[channelKey]) {
       setChannel(channelMeta[channelKey])
       return
     }
 
-    rpcCall(PearCommands.GET_CHANNEL_META, { driveKey: channelKey })
-      .then(meta => setChannel(meta))
-      .catch(err => console.error('Failed to load channel:', err))
-  }, [channelKey, channelMeta, rpcCall])
+    rpc.getChannelMeta({ channelKey: channelKey })
+      .then((result: any) => setChannel(result))
+      .catch((err: any) => console.error('Failed to load channel:', err))
+  }, [channelKey, channelMeta, rpc])
 
   // Start prefetch and poll for video stats
   useEffect(() => {
-    if (!video?.path || !channelKey) return
+    if (!video?.path || !channelKey || !rpc) return
 
     let cancelled = false
     let interval: NodeJS.Timeout | null = null
 
     // Start prefetch first
-    rpcCall(PearCommands.PREFETCH_VIDEO, {
-      driveKey: channelKey,
-      videoPath: video.path,
-    }).catch(err => console.log('[WatchPage] Prefetch already running or failed:', err))
+    rpc.prefetchVideo({
+      channelKey: channelKey,
+      videoId: video.path,
+    }).catch((err: any) => console.log('[WatchPage] Prefetch already running or failed:', err))
 
     async function pollStats() {
       try {
-        const stats = await rpcCall(PearCommands.GET_VIDEO_STATS, {
-          driveKey: channelKey,
-          videoPath: video!.path,
+        const result = await rpc.getVideoStats({
+          channelKey: channelKey,
+          videoId: video!.path,
         })
+        const stats = result?.stats
         if (!cancelled && stats) {
           setVideoStats(stats)
           // Stop polling if complete
@@ -254,7 +244,7 @@ function WatchPageView({
       cancelled = true
       if (interval) clearInterval(interval)
     }
-  }, [channelKey, video?.path, rpcCall])
+  }, [channelKey, video?.path, rpc])
 
   if (!video) {
     return (
@@ -657,7 +647,7 @@ const watchStyles: Record<string, React.CSSProperties> = {
 
 export default function HomeScreen() {
   const router = useRouter()
-  const { ready, identity, videos, loading, loadVideos, rpcCall } = useApp()
+  const { ready, identity, videos, loading, loadVideos, rpc } = useApp()
 
   // Hash-based routing state (for Pear desktop)
   const [currentRoute, setCurrentRoute] = useState<Route>({ type: 'home' })
@@ -712,11 +702,13 @@ export default function HomeScreen() {
 
   // Load video info when navigating directly to a watch URL
   const loadVideoInfo = useCallback(async (driveKey: string, videoId: string) => {
+    if (!rpc) return
     try {
       // First, list videos from the channel to find the one we want
-      const result = await rpcCall(PearCommands.LIST_VIDEOS, { driveKey })
-      if (Array.isArray(result)) {
-        const found = result.find((v: any) => v.id === videoId)
+      const result = await rpc.listVideos({ channelKey: driveKey })
+      const videoList = result?.videos || []
+      if (Array.isArray(videoList)) {
+        const found = videoList.find((v: any) => v.id === videoId)
         if (found) {
           setWatchVideo({ ...found, channelKey: driveKey })
           return
@@ -737,7 +729,7 @@ export default function HomeScreen() {
     } catch (err) {
       console.error('[Home] Failed to load video info:', err)
     }
-  }, [rpcCall])
+  }, [rpc])
 
   // Convert videos to VideoData format - defined early to avoid reference issues
   const myVideosWithMeta: VideoData[] = useMemo(() => videos.map(v => ({
@@ -766,14 +758,16 @@ export default function HomeScreen() {
 
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {
+    if (!rpc) return
     try {
       setFeedLoading(true)
-      const result = await rpcCall(PearCommands.GET_PUBLIC_FEED, {})
+      const result = await rpc.getPublicFeed({})
       if (result?.entries) {
         setFeedEntries(result.entries)
         for (const entry of result.entries) {
-          if (!channelMeta[entry.driveKey]) {
-            loadChannelMeta(entry.driveKey)
+          // Schema returns channelKey, not driveKey
+          if (entry.channelKey && !channelMeta[entry.channelKey]) {
+            loadChannelMeta(entry.channelKey)
           }
         }
       }
@@ -785,48 +779,53 @@ export default function HomeScreen() {
     } finally {
       setFeedLoading(false)
     }
-  }, [rpcCall, channelMeta])
+  }, [rpc, channelMeta])
 
   const loadChannelMeta = useCallback(async (driveKey: string) => {
+    if (!rpc) return
     try {
-      const meta = await rpcCall(PearCommands.GET_CHANNEL_META, { driveKey })
-      if (meta) {
-        setChannelMeta(prev => ({ ...prev, [driveKey]: meta }))
+      const result = await rpc.getChannelMeta({ channelKey: driveKey })
+      if (result) {
+        setChannelMeta(prev => ({ ...prev, [driveKey]: result }))
       }
     } catch (err) {
       console.error('[Home] Failed to load channel meta:', err)
     }
-  }, [rpcCall])
+  }, [rpc])
 
   const refreshFeed = useCallback(async () => {
+    if (!rpc) return
     try {
-      await rpcCall(PearCommands.REFRESH_FEED, {})
+      await rpc.refreshFeed({})
       setTimeout(() => loadPublicFeed(), 1000)
     } catch (err) {
       console.error('[Home] Failed to refresh feed:', err)
     }
-  }, [rpcCall, loadPublicFeed])
+  }, [rpc, loadPublicFeed])
 
   const hideChannel = useCallback(async (driveKey: string) => {
+    if (!rpc) return
     try {
-      await rpcCall(PearCommands.HIDE_CHANNEL, { driveKey })
+      await rpc.hideChannel({ channelKey: driveKey })
       setFeedEntries(prev => prev.filter(e => e.driveKey !== driveKey))
     } catch (err) {
       console.error('[Home] Failed to hide channel:', err)
     }
-  }, [rpcCall])
+  }, [rpc])
 
   // View a channel's videos
   const viewChannel = useCallback(async (driveKey: string) => {
+    if (!rpc) return
     setViewingChannel(driveKey)
     setLoadingChannel(true)
     setChannelVideos([])
 
     try {
-      await rpcCall(PearCommands.GET_CHANNEL, { driveKey })
-      const result = await rpcCall(PearCommands.LIST_VIDEOS, { driveKey })
-      if (Array.isArray(result)) {
-        const videosWithChannel = result.map((v: any) => ({
+      await rpc.joinChannel({ channelKey: driveKey })
+      const result = await rpc.listVideos({ channelKey: driveKey })
+      const videoList = result?.videos || []
+      if (Array.isArray(videoList)) {
+        const videosWithChannel = videoList.map((v: any) => ({
           ...v,
           channelKey: driveKey,
           channel: channelMeta[driveKey] ? { name: channelMeta[driveKey].name } : undefined
@@ -838,7 +837,7 @@ export default function HomeScreen() {
     } finally {
       setLoadingChannel(false)
     }
-  }, [rpcCall, channelMeta])
+  }, [rpc, channelMeta])
 
   const closeChannelView = useCallback(() => {
     setViewingChannel(null)
@@ -917,7 +916,7 @@ export default function HomeScreen() {
             setWatchVideo(null)
           }}
           onVideoClick={playVideo}
-          rpcCall={rpcCall}
+          rpc={rpc}
           relatedVideos={relatedVideos}
           channelMeta={channelMeta}
         />
@@ -1020,9 +1019,9 @@ export default function HomeScreen() {
             ) : (
               <div style={styles.channelGrid}>
                 {feedEntries.map((entry) => {
-                  const meta = channelMeta[entry.driveKey]
+                  const meta = channelMeta[entry.channelKey]
                   return (
-                    <div key={entry.driveKey} style={styles.channelCard}>
+                    <div key={entry.channelKey} style={styles.channelCard}>
                       <div style={styles.channelAvatar}>
                         <span style={styles.channelInitial}>
                           {(meta?.name || '?')[0].toUpperCase()}
@@ -1033,17 +1032,17 @@ export default function HomeScreen() {
                         {meta?.videoCount !== undefined ? `${meta.videoCount} videos` : '...'}
                       </p>
                       <p style={styles.channelMeta}>
-                        {formatTimeAgo(entry.addedAt)} · {entry.source === 'local' ? 'you' : 'peer'}
+                        {formatTimeAgo(entry.lastSeen)} · {entry.peerCount || 0} peers
                       </p>
                       <div style={styles.channelActions}>
                         <button
-                          onClick={() => viewChannel(entry.driveKey)}
+                          onClick={() => viewChannel(entry.channelKey)}
                           style={styles.viewButton}
                         >
                           View
                         </button>
                         <button
-                          onClick={() => hideChannel(entry.driveKey)}
+                          onClick={() => hideChannel(entry.channelKey)}
                           style={styles.hideButton}
                         >
                           <EyeOffIcon color={colors.textMuted} size={16} />

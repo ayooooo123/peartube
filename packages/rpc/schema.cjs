@@ -40,9 +40,12 @@ ns.register({
   name: 'identity',
   fields: [
     { name: 'publicKey', type: 'string', required: true },
+    { name: 'driveKey', type: 'string', required: false },
     { name: 'name', type: 'string', required: false },
     { name: 'avatar', type: 'string', required: false },
-    { name: 'seedPhrase', type: 'string', required: false }
+    { name: 'seedPhrase', type: 'string', required: false },
+    { name: 'createdAt', type: 'uint', required: false },
+    { name: 'isActive', type: 'bool', required: false }
   ]
 })
 
@@ -169,6 +172,7 @@ ns.register({
     { name: 'id', type: 'string', required: true },
     { name: 'title', type: 'string', required: true },
     { name: 'description', type: 'string', required: false },
+    { name: 'path', type: 'string', required: false },
     { name: 'duration', type: 'uint', required: false },
     { name: 'thumbnail', type: 'string', required: false },
     { name: 'channelKey', type: 'string', required: false },
@@ -426,14 +430,19 @@ ns.register({
 ns.register({
   name: 'video-stats',
   fields: [
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'downloadedBytes', type: 'uint', required: false },
+    { name: 'videoId', type: 'string', required: false },
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'status', type: 'string', required: false },
+    { name: 'progress', type: 'uint', required: false },
+    { name: 'totalBlocks', type: 'uint', required: false },
+    { name: 'downloadedBlocks', type: 'uint', required: false },
     { name: 'totalBytes', type: 'uint', required: false },
-    { name: 'downloadProgress', type: 'uint', required: false },
+    { name: 'downloadedBytes', type: 'uint', required: false },
     { name: 'peerCount', type: 'uint', required: false },
-    { name: 'downloadSpeed', type: 'uint', required: false },
-    { name: 'uploadSpeed', type: 'uint', required: false }
+    { name: 'speedMBps', type: 'string', required: false },
+    { name: 'uploadSpeedMBps', type: 'string', required: false },
+    { name: 'elapsed', type: 'uint', required: false },
+    { name: 'isComplete', type: 'bool', required: false }
   ]
 })
 

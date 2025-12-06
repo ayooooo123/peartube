@@ -40,41 +40,10 @@ function formatTimeAgo(timestamp: number): string {
 // Detect Pear desktop vs mobile
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).PearWorkerClient
 
-// Mobile command IDs (from rpc-commands.mjs)
-const MobileCommands = {
-  LIST_VIDEOS: 4,
-  GET_VIDEO_URL: 5,
-  JOIN_CHANNEL: 11,
-  GET_PUBLIC_FEED: 12,
-  REFRESH_FEED: 13,
-  SUBMIT_TO_FEED: 14,
-  HIDE_CHANNEL: 15,
-  GET_CHANNEL_META: 16,
-  GET_SWARM_STATUS: 17,
-  PREFETCH_VIDEO: 18,
-  GET_VIDEO_STATS: 24,
-  GET_VIDEO_THUMBNAIL: 25,
-  GET_VIDEO_METADATA: 26,
-}
-
-// Desktop (Pear) command IDs
-const PearCommands = {
-  LIST_VIDEOS: 5,
-  GET_VIDEO_URL: 6,
-  GET_CHANNEL: 11,
-  GET_PUBLIC_FEED: 14,
-  REFRESH_FEED: 15,
-  SUBMIT_TO_FEED: 16,
-  HIDE_CHANNEL: 17,
-  GET_CHANNEL_META: 18,
-}
-
-const CMD = isPear ? PearCommands : MobileCommands
-
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
-  const { ready, identity, videos, loading, loadVideos, rpcCall } = useApp()
+  const { ready, identity, videos, loading, loadVideos, rpc } = useApp()
   const { loadAndPlayVideo } = useVideoPlayerContext()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
@@ -108,12 +77,12 @@ export default function HomeScreen() {
 
   // Fetch thumbnail for a video (non-blocking)
   const fetchThumbnail = useCallback(async (driveKey: string, videoId: string) => {
-    if (isPear) return // Desktop handles thumbnails differently
+    if (isPear || !rpc) return // Desktop handles thumbnails differently
     const cacheKey = `${driveKey}:${videoId}`
     if (thumbnailCache[cacheKey]) return // Already cached
 
     try {
-      const result = await rpcCall(MobileCommands.GET_VIDEO_THUMBNAIL, { driveKey, videoId })
+      const result = await rpc.getVideoThumbnail({ channelKey: driveKey, videoId })
       if (result?.exists && result?.url) {
         setThumbnailCache(prev => ({ ...prev, [cacheKey]: result.url }))
       }
@@ -121,7 +90,7 @@ export default function HomeScreen() {
       // Silently fail - thumbnails are optional
       console.log('[Home] Thumbnail fetch failed:', videoId)
     }
-  }, [rpcCall, thumbnailCache])
+  }, [rpc, thumbnailCache])
 
   // Fetch thumbnails for a list of videos
   const fetchThumbnailsForVideos = useCallback((vids: VideoData[]) => {
@@ -150,14 +119,16 @@ export default function HomeScreen() {
 
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {
+    if (!rpc) return
     try {
       setFeedLoading(true)
-      const result = await rpcCall(CMD.GET_PUBLIC_FEED, {})
+      const result = await rpc.getPublicFeed({})
       if (result?.entries) {
         setFeedEntries(result.entries)
         for (const entry of result.entries) {
-          if (!channelMeta[entry.driveKey]) {
-            loadChannelMeta(entry.driveKey)
+          // Schema returns channelKey, not driveKey
+          if (entry.channelKey && !channelMeta[entry.channelKey]) {
+            loadChannelMeta(entry.channelKey)
           }
         }
       }
@@ -169,49 +140,54 @@ export default function HomeScreen() {
     } finally {
       setFeedLoading(false)
     }
-  }, [rpcCall, channelMeta])
+  }, [rpc, channelMeta])
 
   const loadChannelMeta = useCallback(async (driveKey: string) => {
+    if (!rpc) return
     try {
-      const meta = await rpcCall(CMD.GET_CHANNEL_META, { driveKey })
-      if (meta) {
-        setChannelMeta(prev => ({ ...prev, [driveKey]: meta }))
+      const result = await rpc.getChannelMeta({ channelKey: driveKey })
+      if (result) {
+        setChannelMeta(prev => ({ ...prev, [driveKey]: result }))
       }
     } catch (err) {
       console.error('[Home] Failed to load channel meta:', err)
     }
-  }, [rpcCall])
+  }, [rpc])
 
   const refreshFeed = useCallback(async () => {
+    if (!rpc) return
     try {
-      await rpcCall(CMD.REFRESH_FEED, {})
+      await rpc.refreshFeed({})
       setTimeout(() => loadPublicFeed(), 1000)
     } catch (err) {
       console.error('[Home] Failed to refresh feed:', err)
     }
-  }, [rpcCall, loadPublicFeed])
+  }, [rpc, loadPublicFeed])
 
   const hideChannel = useCallback(async (driveKey: string) => {
+    if (!rpc) return
     try {
-      await rpcCall(CMD.HIDE_CHANNEL, { driveKey })
+      await rpc.hideChannel({ channelKey: driveKey })
       setFeedEntries(prev => prev.filter(e => e.driveKey !== driveKey))
     } catch (err) {
       console.error('[Home] Failed to hide channel:', err)
     }
-  }, [rpcCall])
+  }, [rpc])
 
   // View a channel's videos
   const viewChannel = useCallback(async (driveKey: string) => {
+    if (!rpc) return
     setViewingChannel(driveKey)
     setLoadingChannel(true)
     setChannelVideos([])
 
     try {
-      const joinCmd = isPear ? PearCommands.GET_CHANNEL : MobileCommands.JOIN_CHANNEL
-      await rpcCall(joinCmd, { driveKey })
-      const result = await rpcCall(CMD.LIST_VIDEOS, { driveKey })
-      if (Array.isArray(result)) {
-        const videosWithChannel = result.map((v: any) => ({
+      // Join/get the channel first
+      await rpc.joinChannel({ channelKey: driveKey })
+      const result = await rpc.listVideos({ channelKey: driveKey })
+      const videoList = result?.videos || []
+      if (Array.isArray(videoList)) {
+        const videosWithChannel = videoList.map((v: any) => ({
           ...v,
           channelKey: driveKey,
           channel: channelMeta[driveKey] ? { name: channelMeta[driveKey].name } : undefined
@@ -225,7 +201,7 @@ export default function HomeScreen() {
     } finally {
       setLoadingChannel(false)
     }
-  }, [rpcCall, channelMeta, fetchThumbnailsForVideos])
+  }, [rpc, channelMeta, fetchThumbnailsForVideos])
 
   const closeChannelView = useCallback(() => {
     setViewingChannel(null)
@@ -234,6 +210,7 @@ export default function HomeScreen() {
 
   // Play video - load into animated overlay player
   const playVideo = useCallback(async (video: VideoData) => {
+    if (!rpc) return
     try {
       // Always close channel view when playing video
       // On desktop: video overlay takes over the main content area
@@ -242,9 +219,9 @@ export default function HomeScreen() {
       setChannelVideos([])
 
       // Get video URL from backend
-      const result = await rpcCall(CMD.GET_VIDEO_URL, {
-        driveKey: video.channelKey,
-        videoPath: video.path
+      const result = await rpc.getVideoUrl({
+        channelKey: video.channelKey,
+        videoId: video.path
       })
 
       if (result?.url) {
@@ -254,7 +231,7 @@ export default function HomeScreen() {
     } catch (err) {
       console.error('[Home] Failed to play video:', err)
     }
-  }, [rpcCall, loadAndPlayVideo])
+  }, [rpc, loadAndPlayVideo])
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
@@ -393,9 +370,9 @@ export default function HomeScreen() {
             ) : (
               <ScrollView horizontal={!isDesktop} showsHorizontalScrollIndicator={false} contentContainerStyle={isDesktop ? { flexDirection: 'row', flexWrap: 'wrap', gap: 16 } : { gap: 12 }}>
                 {feedEntries.map((entry) => {
-                  const meta = channelMeta[entry.driveKey]
+                  const meta = channelMeta[entry.channelKey]
                   return (
-                    <View key={entry.driveKey} className="bg-pear-bg-elevated rounded-xl p-4" style={{ width: isDesktop ? 220 : 200 }}>
+                    <View key={entry.channelKey} className="bg-pear-bg-elevated rounded-xl p-4" style={{ width: isDesktop ? 220 : 200 }}>
                       <View className="w-12 h-12 rounded-full bg-pear-bg-card items-center justify-center mb-2">
                         <Text className="text-headline text-pear-primary">{(meta?.name || '?')[0].toUpperCase()}</Text>
                       </View>
@@ -404,13 +381,13 @@ export default function HomeScreen() {
                         {meta?.videoCount !== undefined ? `${meta.videoCount} videos` : '...'}
                       </Text>
                       <Text className="text-caption text-pear-text-muted mt-1">
-                        {formatTimeAgo(entry.addedAt)} · {entry.source === 'local' ? 'you' : 'peer'}
+                        {formatTimeAgo(entry.lastSeen)} · {entry.peerCount || 0} peers
                       </Text>
                       <View className="flex-row mt-3 gap-2">
-                        <Pressable onPress={() => viewChannel(entry.driveKey)} className="flex-1 bg-pear-primary py-2 rounded-lg items-center">
+                        <Pressable onPress={() => viewChannel(entry.channelKey)} className="flex-1 bg-pear-primary py-2 rounded-lg items-center">
                           <Text className="text-caption text-white font-semibold">View</Text>
                         </Pressable>
-                        <Pressable onPress={() => hideChannel(entry.driveKey)} className="p-2 bg-pear-bg-card rounded-lg">
+                        <Pressable onPress={() => hideChannel(entry.channelKey)} className="p-2 bg-pear-bg-card rounded-lg">
                           <EyeOff color={colors.textMuted} size={16} />
                         </Pressable>
                       </View>

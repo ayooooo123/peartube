@@ -1,0 +1,22 @@
+{
+  "name": "@peartube/platform",
+  "version": "0.1.0",
+  "description": "Platform abstraction layer for PearTube",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": "./src/index.js",
+    "./types": "./src/types.js",
+    "./detection": "./src/detection.js",
+    "./storage": "./src/storage.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

@@ -26,5 +26,15 @@ export { SeedingManager } from './seeding.js';
 // API - Shared backend methods
 export { createApi } from './api.js';
 
+// Identity Management
+export {
+  createIdentityManager,
+  generateMnemonic,
+  keypairFromMnemonic
+} from './identity.js';
+
+// Video Upload
+export { createUploadManager } from './upload.js';
+
 // Types and constants
 export { FEED_TOPIC_STRING, PROTOCOL_NAME } from './types.js';

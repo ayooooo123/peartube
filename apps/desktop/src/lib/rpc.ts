@@ -179,7 +179,7 @@ class RPCClient {
     return {
       success: true,
       publicKey: result.identity?.publicKey || '',
-      driveKey: result.identity?.publicKey || '',
+      driveKey: result.identity?.driveKey || result.identity?.publicKey || '',
       mnemonic: result.identity?.seedPhrase,
     };
   }
@@ -190,7 +190,7 @@ class RPCClient {
     return {
       success: true,
       publicKey: result.identity?.publicKey || '',
-      driveKey: result.identity?.publicKey || '',
+      driveKey: result.identity?.driveKey || result.identity?.publicKey || '',
     };
   }
 

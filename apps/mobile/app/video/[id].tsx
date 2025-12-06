@@ -17,13 +17,7 @@ import { ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Us
 import { useApp, colors } from '../_layout'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 
-// Mobile command IDs
-const MobileCommands = {
-  GET_VIDEO_URL: 5,
-  PREFETCH_VIDEO: 18,
-  GET_VIDEO_STATS: 24,
-  GET_CHANNEL_META: 16,
-}
+// HRPC methods used: getVideoUrl, prefetchVideo, getVideoStats, getChannelMeta
 
 // Format helpers
 function formatSize(bytes: number): string {
@@ -213,7 +207,7 @@ export default function VideoPlayerScreen() {
   const insets = useSafeAreaInsets()
   const { width: screenWidth } = useWindowDimensions()
   const videoHeight = Math.round(screenWidth * 9 / 16)
-  const { rpcCall } = useApp()
+  const { rpc } = useApp()
 
   // VideoPlayerContext - SHARED player for continuous playback
   // Stats come via EVENT_VIDEO_STATS events from backend -> videoStatsEventEmitter -> context
@@ -279,14 +273,14 @@ export default function VideoPlayerScreen() {
   }, [videoData, fromMiniPlayer])
 
   const loadVideo = async () => {
-    if (!videoData) return
+    if (!videoData || !rpc) return
     setIsLoading(true)
 
     try {
       // Get video URL from backend
-      const result = await rpcCall(MobileCommands.GET_VIDEO_URL, {
-        driveKey: videoData.channelKey,
-        videoPath: videoData.path
+      const result = await rpc.getVideoUrl({
+        channelKey: videoData.channelKey,
+        videoId: videoData.path
       })
 
       if (result?.url) {
@@ -297,7 +291,7 @@ export default function VideoPlayerScreen() {
         if (Platform.OS !== 'web') {
           // Start prefetch first, then poll after a short delay to ensure stats are initialized
           startPrefetch()
-          // Poll for stats - delay slightly to let PREFETCH_VIDEO initialize stats
+          // Poll for stats - delay slightly to let prefetchVideo initialize stats
           setTimeout(() => startStatsPolling(), 500)
         }
       }
@@ -308,21 +302,21 @@ export default function VideoPlayerScreen() {
   }
 
   const loadChannelInfo = async () => {
-    if (!videoData?.channelKey) return
+    if (!videoData?.channelKey || !rpc) return
     try {
-      const meta = await rpcCall(MobileCommands.GET_CHANNEL_META, { driveKey: videoData.channelKey })
-      setChannelMeta(meta)
+      const result = await rpc.getChannelMeta({ channelKey: videoData.channelKey })
+      setChannelMeta(result)
     } catch (err) {
       console.error('[VideoPlayer] Failed to load channel info:', err)
     }
   }
 
   const startPrefetch = async () => {
-    if (!videoData) return
+    if (!videoData || !rpc) return
     try {
-      await rpcCall(MobileCommands.PREFETCH_VIDEO, {
-        driveKey: videoData.channelKey,
-        videoPath: videoData.path
+      await rpc.prefetchVideo({
+        channelKey: videoData.channelKey,
+        videoId: videoData.path
       })
     } catch (err) {
       console.error('[VideoPlayer] Prefetch failed:', err)
@@ -330,16 +324,17 @@ export default function VideoPlayerScreen() {
   }
 
   const startStatsPolling = () => {
-    if (!videoData) return
+    if (!videoData || !rpc) return
     if (statsPollingRef.current) clearInterval(statsPollingRef.current)
     console.log('[VideoPlayer] Starting stats polling for', videoData.path)
 
     const pollStats = async () => {
       try {
-        const stats = await rpcCall(MobileCommands.GET_VIDEO_STATS, {
-          driveKey: videoData.channelKey,
-          videoPath: videoData.path
+        const result = await rpc.getVideoStats({
+          channelKey: videoData.channelKey,
+          videoId: videoData.path
         })
+        const stats = result?.stats
         console.log('[VideoPlayer] Got stats:', stats ? `${stats.progress}%` : 'null')
         if (stats) {
           setLocalStats(stats as VideoStats)

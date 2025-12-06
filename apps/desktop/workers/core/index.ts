@@ -57,7 +57,7 @@ const blobServer = new BlobServer(store, {
   host: '127.0.0.1'
 });
 await blobServer.listen();
-const blobServerPort = blobServer.address.port;
+const blobServerPort = blobServer.port;
 console.log('Blob server listening on port:', blobServerPort);
 
 console.log('Database initialized');
@@ -270,13 +270,16 @@ const api: Record<string, (...args: any[]) => Promise<any>> = {
 
   // Get list of identities
   async getIdentities() {
-    return identities.map(i => ({
-      publicKey: i.publicKey,
-      driveKey: i.driveKey,
-      name: i.name,
-      createdAt: i.createdAt,
-      isActive: i.publicKey === activeIdentity
-    }));
+    // Only return well-formed identities (with driveKey/publicKey)
+    return identities
+      .filter(i => typeof i.publicKey === 'string' && i.publicKey && typeof i.driveKey === 'string' && i.driveKey)
+      .map(i => ({
+        publicKey: i.publicKey || '',
+        driveKey: i.driveKey || '',
+        name: i.name || 'Channel',
+        createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0 ? i.createdAt : Date.now(),
+        isActive: i.publicKey === activeIdentity
+      }));
   },
 
   // Set active identity
@@ -732,6 +735,15 @@ if (storedActive && storedActive.value) {
   activeIdentity = storedActive.value;
 }
 
+// Normalize identities loaded from DB (drop malformed, mark active)
+identities = (identities || [])
+  .filter(i => i && typeof i.publicKey === 'string' && i.publicKey && typeof i.driveKey === 'string' && i.driveKey)
+  .map(i => ({
+    ...i,
+    isActive: i.publicKey === activeIdentity,
+    createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0 ? i.createdAt : Date.now(),
+  }));
+
 // Load existing channel drives
 for (const identity of identities) {
   if (identity.driveKey) {
@@ -788,7 +800,7 @@ if (!ipcPipe) {
 } else {
   console.log('[Worker] IPC pipe connected via pear-pipe');
 
-  // Create HRPC instance with the pipe stream
+  // Create HRPC instance with the pipe
   const rpc = new HRPC(ipcPipe);
   console.log('[Worker] HRPC initialized');
 
@@ -800,11 +812,20 @@ if (!ipcPipe) {
   rpc.onCreateIdentity(async (req: any) => {
     console.log('[HRPC] createIdentity:', req);
     const result = await api.createIdentity(req.name || 'New Channel', true);
+
+    // Mark active identity
+    activeIdentity = result.publicKey;
+    identities = (identities || []).map(i => ({ ...i, isActive: i.publicKey === result.publicKey }));
+    await db.put('activeIdentity', result.publicKey);
+    await saveIdentities();
+
     return {
       identity: {
         publicKey: result.publicKey,
+        driveKey: result.driveKey,
         name: req.name || 'New Channel',
         seedPhrase: result.mnemonic,
+        isActive: true,
       }
     };
   });
@@ -813,18 +834,42 @@ if (!ipcPipe) {
     console.log('[HRPC] getIdentity');
     const allIdentities = await api.getIdentities();
     const active = allIdentities.find((i: any) => i.isActive);
-    return { identity: active || null };
+    return {
+      identity: active
+        ? {
+            publicKey: active.publicKey,
+            driveKey: active.driveKey,
+            name: active.name,
+            createdAt: active.createdAt,
+            isActive: true,
+          }
+        : null
+    };
   });
 
   rpc.onGetIdentities(async () => {
     console.log('[HRPC] getIdentities');
     const allIdentities = await api.getIdentities();
-    return { identities: allIdentities };
+    return {
+      identities: allIdentities.map((i: any) => ({
+        publicKey: i.publicKey || '',
+        driveKey: i.driveKey || '',
+        name: i.name || '',
+        // Ensure createdAt is a valid positive uint
+        createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0 ? i.createdAt : 0,
+        isActive: Boolean(i.isActive),
+      }))
+    };
   });
 
   rpc.onSetActiveIdentity(async (req: any) => {
     console.log('[HRPC] setActiveIdentity:', req.publicKey);
     await api.setActiveIdentity(req.publicKey);
+    // Persist active identity
+    activeIdentity = req.publicKey;
+    identities = (identities || []).map(i => ({ ...i, isActive: i.publicKey === req.publicKey }));
+    await saveIdentities();
+    await db.put('activeIdentity', req.publicKey);
     return { success: true };
   });
 
@@ -834,7 +879,9 @@ if (!ipcPipe) {
     return {
       identity: {
         publicKey: result.publicKey,
-        name: 'Recovered',
+        driveKey: result.driveKey,
+        name: req.name || 'Recovered',
+        isActive: true,
       }
     };
   });
@@ -855,7 +902,22 @@ if (!ipcPipe) {
   // Video handlers
   rpc.onListVideos(async (req: any) => {
     console.log('[HRPC] listVideos:', req.channelKey?.slice(0, 16));
-    const videos = await api.listVideos(req.channelKey || '');
+    const rawVideos = await api.listVideos(req.channelKey || '');
+    // Map stored metadata to HRPC schema format
+    // Schema expects: id, title, description, duration, thumbnail, channelKey, channelName, createdAt, views
+    // Stored has: id, title, description, path, mimeType, size, uploadedAt, channelKey
+    const videos = rawVideos.map((v: any) => ({
+      id: v.id || '',
+      title: v.title || 'Untitled',
+      description: v.description || '',
+      path: v.path || '',
+      duration: typeof v.duration === 'number' && v.duration >= 0 ? v.duration : 0,
+      thumbnail: v.thumbnail || '',
+      channelKey: v.channelKey || req.channelKey || '',
+      channelName: v.channelName || '',
+      createdAt: typeof v.uploadedAt === 'number' && v.uploadedAt >= 0 ? v.uploadedAt : (typeof v.createdAt === 'number' && v.createdAt >= 0 ? v.createdAt : 0),
+      views: typeof v.views === 'number' && v.views >= 0 ? v.views : 0,
+    }));
     return { videos };
   });
 
@@ -999,16 +1061,26 @@ if (!ipcPipe) {
   rpc.onGetVideoStats(async (req: any) => {
     console.log('[HRPC] getVideoStats:', req.channelKey?.slice(0, 16), req.videoId);
     const stats = await api.getVideoStats(req.channelKey, req.videoId);
+    // Ensure all uint fields are valid positive integers
+    const safeUint = (val: any) => {
+      const num = typeof val === 'number' ? val : parseFloat(val);
+      return isNaN(num) || num < 0 ? 0 : Math.round(num);
+    };
     return {
       stats: {
-        videoId: req.videoId,
-        channelKey: req.channelKey,
-        downloadedBytes: stats.downloadedBytes || 0,
-        totalBytes: stats.totalBytes || 0,
-        downloadProgress: stats.progress || 0,
-        peerCount: stats.peerCount || 0,
-        downloadSpeed: Math.round(parseFloat(stats.speedMBps || '0') * 1024 * 1024),
-        uploadSpeed: Math.round(parseFloat(stats.uploadSpeedMBps || '0') * 1024 * 1024),
+        videoId: req.videoId || '',
+        channelKey: req.channelKey || '',
+        status: stats.status || 'unknown',
+        progress: safeUint(stats.progress),
+        totalBlocks: safeUint(stats.totalBlocks),
+        downloadedBlocks: safeUint(stats.downloadedBlocks),
+        totalBytes: safeUint(stats.totalBytes),
+        downloadedBytes: safeUint(stats.downloadedBytes),
+        peerCount: safeUint(stats.peerCount),
+        speedMBps: stats.speedMBps || '0',
+        uploadSpeedMBps: stats.uploadSpeedMBps || '0',
+        elapsed: safeUint(stats.elapsed),
+        isComplete: Boolean(stats.isComplete),
       }
     };
   });

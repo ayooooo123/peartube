@@ -19,8 +19,8 @@ const PEAR_BAR_CSS = `<style id="pear-bar-css">html,body{margin:0;padding:0;heig
 // CSP meta tag for Pear
 const PEAR_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' pear: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' pear:; style-src 'self' 'unsafe-inline'; connect-src 'self' pear: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*;">`
 
-// Worker client script - uses pear-run to spawn worker, exposes to window.PearWorkerClient
-const PEAR_WORKER_SCRIPT = `<script src="lib/worker-client.js"></script>`
+// Worker client script - ES module that has access to Pear's import resolution
+const WORKER_CLIENT_SCRIPT = `<script type="module" src="./worker-client.js"></script>`
 
 function processHtmlFile(filePath) {
   let html = readFileSync(filePath, 'utf-8')
@@ -30,7 +30,7 @@ function processHtmlFile(filePath) {
   html = html.replace(/<style id="pear-bar-css">[\s\S]*?<\/style>\n?/g, '')
   html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>\n?/g, '')
   html = html.replace(/<script src="src\/pear-bridge\.js"><\/script>\n?/g, '')
-  html = html.replace(/<script src="(?:src|lib)\/worker-client\.js"[^>]*><\/script>\n?/g, '')
+  html = html.replace(/<script[^>]*src="(?:\.\/)?worker-client\.js"[^>]*><\/script>\n?/g, '')
 
   // Convert module scripts to regular scripts for Pear compatibility
   // Pear's DependencyStream cannot analyze ES module scripts properly
@@ -47,14 +47,14 @@ function processHtmlFile(filePath) {
   // Inject CSP after <head>
   html = html.replace('<head>', `<head>\n${PEAR_CSP}`)
 
-  // Inject worker-client script BEFORE other scripts (right after <head>)
-  html = html.replace(`${PEAR_CSP}`, `${PEAR_CSP}\n${PEAR_WORKER_SCRIPT}`)
-
   // Inject CSS before </head>
   html = html.replace('</head>', `${PEAR_BAR_CSS}\n</head>`)
 
   // Inject pear bar after <body>
   html = html.replace('<body>', `<body>\n${PEAR_BAR_HTML}`)
+
+  // Inject worker client script before </body> (after other scripts load, unbundled for Pear require access)
+  html = html.replace('</body>', `${WORKER_CLIENT_SCRIPT}\n</body>`)
 
   writeFileSync(filePath, html)
   console.log(`  Processed ${filePath}`)

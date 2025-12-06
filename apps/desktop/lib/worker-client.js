@@ -1,10 +1,13 @@
 /**
- * Worker Client - UI-side RPC to worker
+ * Worker Client - UI-side HRPC communication with worker
  *
- * Spawns workers with newline-delimited JSON protocol.
+ * Spawns workers and uses HRPC for typed binary RPC.
  * Uses Pear IPC API (preferred) or falls back to Pear.worker.run (deprecated).
  */
 'use strict'
+
+// Load HRPC in Pear renderer environment
+const HRPC = require('@peartube/rpc')
 
 // Helper to spawn worker - mirrors pear-run's renderer logic
 function runWorker(path, args) {
@@ -19,17 +22,14 @@ function runWorker(path, args) {
 class WorkerClient {
   constructor() {
     this.pipe = null
+    this.rpc = null
     this.isConnected = false
-    this.pendingRequests = new Map()
-    this.progressCallbacks = new Map() // requestId -> callback
-    this.messageBuffer = ''
-    this.reqId = 0
-    this._initCheck = null
     this._initPromise = null
+    this._readyResolve = null
   }
 
   async initialize() {
-    if (this.pipe) {
+    if (this.rpc) {
       console.log('[WorkerClient] Already initialized')
       return
     }
@@ -46,7 +46,7 @@ class WorkerClient {
   async _doInitialize() {
     const config = Pear.config
 
-    // Build worker path - use simple string concatenation to avoid path module
+    // Build worker path
     const workerPath = Pear.key
       ? `${config.applink || ''}/build/workers/core/index.js`
       : `${config.dir || ''}/build/workers/core/index.js`.replace(/\/+/g, '/')
@@ -61,10 +61,56 @@ class WorkerClient {
       throw new Error('Failed to create worker pipe')
     }
 
-    // Handle incoming data with newline-delimited JSON
-    this.pipe.on('data', (data) => {
-      this.messageBuffer += Buffer.from(data).toString()
-      this._processMessages()
+    // Create HRPC instance with the pipe
+    this.rpc = new HRPC(this.pipe)
+    console.log('[WorkerClient] HRPC client initialized')
+
+    // Wait for eventReady from worker
+    const readyPromise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this._readyResolve = null
+        reject(new Error('Worker init timeout'))
+      }, 30000)
+
+      this._readyResolve = (data) => {
+        clearTimeout(timeout)
+        this._readyResolve = null
+        this.isConnected = true
+        console.log('[WorkerClient] Worker ready, blobServerPort:', data?.blobServerPort)
+        resolve(data)
+      }
+    })
+
+    // Register event handlers
+    this.rpc.onEventReady((data) => {
+      if (this._readyResolve) {
+        this._readyResolve(data)
+      }
+    })
+
+    this.rpc.onEventError((data) => {
+      console.error('[WorkerClient] Backend error:', data?.message)
+    })
+
+    this.rpc.onEventUploadProgress((data) => {
+      console.log('[WorkerClient] Upload progress:', data?.progress, '%')
+      // Emit event for UI to handle
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pearUploadProgress', { detail: data }))
+      }
+    })
+
+    this.rpc.onEventFeedUpdate((data) => {
+      console.log('[WorkerClient] Feed update:', data?.action)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pearFeedUpdate', { detail: data }))
+      }
+    })
+
+    this.rpc.onEventVideoStats((data) => {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pearVideoStats', { detail: data }))
+      }
     })
 
     this.pipe.on('end', () => {
@@ -76,112 +122,40 @@ class WorkerClient {
       console.error('[WorkerClient] Pipe error:', err)
     })
 
-    // Wait for worker_initialized message
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this._initCheck = null
-        this._initPromise = null
-        reject(new Error('Worker init timeout'))
-      }, 30000)
-
-      this._initCheck = (msg) => {
-        if (msg.type === 'worker_initialized') {
-          clearTimeout(timeout)
-          this._initCheck = null
-          this.isConnected = true
-          console.log('[WorkerClient] Worker initialized')
-          resolve()
-          return true
-        }
-        return false
-      }
-    })
-
+    // Wait for ready event
+    await readyPromise
     this._initPromise = null
   }
 
-  _processMessages() {
-    const messages = this.messageBuffer.split('\n')
-    this.messageBuffer = messages.pop() || ''
-
-    for (const msg of messages) {
-      if (!msg.trim()) continue
-
-      try {
-        const parsed = JSON.parse(msg)
-        console.log('[WorkerClient] Received:', parsed.type || parsed.id)
-
-        // Check if this is the init message
-        if (this._initCheck && this._initCheck(parsed)) {
-          continue
-        }
-
-        // Handle progress events
-        if (parsed.type === 'upload_progress') {
-          const callback = this.progressCallbacks.get(parsed.requestId)
-          if (callback) {
-            callback(parsed.progress, parsed.bytesWritten, parsed.totalBytes)
-          }
-          continue
-        }
-
-        // Handle response to pending request
-        if (parsed.id) {
-          const pending = this.pendingRequests.get(parsed.id)
-          if (pending) {
-            this.pendingRequests.delete(parsed.id)
-            this.progressCallbacks.delete(parsed.id) // Clean up progress callback
-            if (parsed.success === false) {
-              pending.reject(new Error(parsed.error || 'Unknown error'))
-            } else {
-              pending.resolve(parsed.data)
-            }
-          }
-        }
-      } catch (e) {
-        console.error('[WorkerClient] Parse error:', e)
-      }
-    }
-  }
-
-  async call(command, data = {}, onProgress = null) {
+  // Expose HRPC methods directly - the RPC instance has typed methods
+  // Methods: getStatus, createIdentity, getIdentities, listVideos, etc.
+  async call(methodName, args = {}) {
     if (!this.isConnected) {
       await this.initialize()
     }
 
-    if (!this.pipe || !this.isConnected) {
+    if (!this.rpc || !this.isConnected) {
       throw new Error('Worker not connected')
     }
 
-    const id = String(++this.reqId)
-
-    // Register progress callback if provided
-    if (onProgress) {
-      this.progressCallbacks.set(id, onProgress)
+    // Call the HRPC method directly
+    if (typeof this.rpc[methodName] === 'function') {
+      return this.rpc[methodName](args)
     }
 
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingRequests.delete(id)
-        this.progressCallbacks.delete(id)
-        reject(new Error('Request timeout'))
-      }, 300000) // 5 min for uploads
+    throw new Error(`Unknown HRPC method: ${methodName}`)
+  }
 
-      this.pendingRequests.set(id, {
-        resolve: (data) => { clearTimeout(timeout); resolve(data) },
-        reject: (err) => { clearTimeout(timeout); reject(err) }
-      })
-
-      const msg = JSON.stringify({ id, command, data }) + '\n'
-      this.pipe.write(msg)
-    })
+  // Get the raw RPC instance for direct access to all methods
+  getRpc() {
+    return this.rpc
   }
 
   close() {
     if (this.pipe) {
-      this.pipe.write(JSON.stringify({ type: 'exit' }) + '\n')
       this.pipe.destroy()
       this.pipe = null
+      this.rpc = null
       this.isConnected = false
     }
   }

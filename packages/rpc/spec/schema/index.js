@@ -55,24 +55,31 @@ const encoding1 = {
 const encoding2 = {
   preencode(state, m) {
     c.string.preencode(state, m.publicKey)
-    state.end++ // max flag is 4 so always one byte
+    state.end++ // max flag is 32 so always one byte
 
+    if (m.driveKey) c.string.preencode(state, m.driveKey)
     if (m.name) c.string.preencode(state, m.name)
     if (m.avatar) c.string.preencode(state, m.avatar)
     if (m.seedPhrase) c.string.preencode(state, m.seedPhrase)
+    if (m.createdAt) c.uint.preencode(state, m.createdAt)
   },
   encode(state, m) {
     const flags =
-      (m.name ? 1 : 0) |
-      (m.avatar ? 2 : 0) |
-      (m.seedPhrase ? 4 : 0)
+      (m.driveKey ? 1 : 0) |
+      (m.name ? 2 : 0) |
+      (m.avatar ? 4 : 0) |
+      (m.seedPhrase ? 8 : 0) |
+      (m.createdAt ? 16 : 0) |
+      (m.isActive ? 32 : 0)
 
     c.string.encode(state, m.publicKey)
     c.uint.encode(state, flags)
 
+    if (m.driveKey) c.string.encode(state, m.driveKey)
     if (m.name) c.string.encode(state, m.name)
     if (m.avatar) c.string.encode(state, m.avatar)
     if (m.seedPhrase) c.string.encode(state, m.seedPhrase)
+    if (m.createdAt) c.uint.encode(state, m.createdAt)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -80,9 +87,12 @@ const encoding2 = {
 
     return {
       publicKey: r0,
-      name: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      avatar: (flags & 2) !== 0 ? c.string.decode(state) : null,
-      seedPhrase: (flags & 4) !== 0 ? c.string.decode(state) : null
+      driveKey: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      name: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      avatar: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      seedPhrase: (flags & 8) !== 0 ? c.string.decode(state) : null,
+      createdAt: (flags & 16) !== 0 ? c.uint.decode(state) : 0,
+      isActive: (flags & 32) !== 0
     }
   }
 }
@@ -414,11 +424,22 @@ const encoding17 = {
 // @peartube/video
 const encoding18 = {
   preencode(state, m) {
+    const flags =
+      (m.description ? 1 : 0) |
+      (m.path ? 2 : 0) |
+      (m.duration ? 4 : 0) |
+      (m.thumbnail ? 8 : 0) |
+      (m.channelKey ? 16 : 0) |
+      (m.channelName ? 32 : 0) |
+      (m.createdAt ? 64 : 0) |
+      (m.views ? 128 : 0)
+
     c.string.preencode(state, m.id)
     c.string.preencode(state, m.title)
-    state.end++ // max flag is 64 so always one byte
+    c.uint.preencode(state, flags)
 
     if (m.description) c.string.preencode(state, m.description)
+    if (m.path) c.string.preencode(state, m.path)
     if (m.duration) c.uint.preencode(state, m.duration)
     if (m.thumbnail) c.string.preencode(state, m.thumbnail)
     if (m.channelKey) c.string.preencode(state, m.channelKey)
@@ -429,18 +450,20 @@ const encoding18 = {
   encode(state, m) {
     const flags =
       (m.description ? 1 : 0) |
-      (m.duration ? 2 : 0) |
-      (m.thumbnail ? 4 : 0) |
-      (m.channelKey ? 8 : 0) |
-      (m.channelName ? 16 : 0) |
-      (m.createdAt ? 32 : 0) |
-      (m.views ? 64 : 0)
+      (m.path ? 2 : 0) |
+      (m.duration ? 4 : 0) |
+      (m.thumbnail ? 8 : 0) |
+      (m.channelKey ? 16 : 0) |
+      (m.channelName ? 32 : 0) |
+      (m.createdAt ? 64 : 0) |
+      (m.views ? 128 : 0)
 
     c.string.encode(state, m.id)
     c.string.encode(state, m.title)
     c.uint.encode(state, flags)
 
     if (m.description) c.string.encode(state, m.description)
+    if (m.path) c.string.encode(state, m.path)
     if (m.duration) c.uint.encode(state, m.duration)
     if (m.thumbnail) c.string.encode(state, m.thumbnail)
     if (m.channelKey) c.string.encode(state, m.channelKey)
@@ -457,12 +480,13 @@ const encoding18 = {
       id: r0,
       title: r1,
       description: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      duration: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
-      thumbnail: (flags & 4) !== 0 ? c.string.decode(state) : null,
-      channelKey: (flags & 8) !== 0 ? c.string.decode(state) : null,
-      channelName: (flags & 16) !== 0 ? c.string.decode(state) : null,
-      createdAt: (flags & 32) !== 0 ? c.uint.decode(state) : 0,
-      views: (flags & 64) !== 0 ? c.uint.decode(state) : 0
+      path: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      duration: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
+      thumbnail: (flags & 8) !== 0 ? c.string.decode(state) : null,
+      channelKey: (flags & 16) !== 0 ? c.string.decode(state) : null,
+      channelName: (flags & 32) !== 0 ? c.string.decode(state) : null,
+      createdAt: (flags & 64) !== 0 ? c.uint.decode(state) : 0,
+      views: (flags & 128) !== 0 ? c.uint.decode(state) : 0
     }
   }
 }
@@ -914,51 +938,84 @@ const encoding50 = encoding10
 // @peartube/video-stats
 const encoding51 = {
   preencode(state, m) {
-    c.string.preencode(state, m.videoId)
-    c.string.preencode(state, m.channelKey)
-    state.end++ // max flag is 32 so always one byte
+    const flags =
+      (m.videoId ? 1 : 0) |
+      (m.channelKey ? 2 : 0) |
+      (m.status ? 4 : 0) |
+      (m.progress ? 8 : 0) |
+      (m.totalBlocks ? 16 : 0) |
+      (m.downloadedBlocks ? 32 : 0) |
+      (m.totalBytes ? 64 : 0) |
+      (m.downloadedBytes ? 128 : 0) |
+      (m.peerCount ? 256 : 0) |
+      (m.speedMBps ? 512 : 0) |
+      (m.uploadSpeedMBps ? 1024 : 0) |
+      (m.elapsed ? 2048 : 0) |
+      (m.isComplete ? 4096 : 0)
 
-    if (m.downloadedBytes) c.uint.preencode(state, m.downloadedBytes)
+    c.uint.preencode(state, flags)
+
+    if (m.videoId) c.string.preencode(state, m.videoId)
+    if (m.channelKey) c.string.preencode(state, m.channelKey)
+    if (m.status) c.string.preencode(state, m.status)
+    if (m.progress) c.uint.preencode(state, m.progress)
+    if (m.totalBlocks) c.uint.preencode(state, m.totalBlocks)
+    if (m.downloadedBlocks) c.uint.preencode(state, m.downloadedBlocks)
     if (m.totalBytes) c.uint.preencode(state, m.totalBytes)
-    if (m.downloadProgress) c.uint.preencode(state, m.downloadProgress)
+    if (m.downloadedBytes) c.uint.preencode(state, m.downloadedBytes)
     if (m.peerCount) c.uint.preencode(state, m.peerCount)
-    if (m.downloadSpeed) c.uint.preencode(state, m.downloadSpeed)
-    if (m.uploadSpeed) c.uint.preencode(state, m.uploadSpeed)
+    if (m.speedMBps) c.string.preencode(state, m.speedMBps)
+    if (m.uploadSpeedMBps) c.string.preencode(state, m.uploadSpeedMBps)
+    if (m.elapsed) c.uint.preencode(state, m.elapsed)
   },
   encode(state, m) {
     const flags =
-      (m.downloadedBytes ? 1 : 0) |
-      (m.totalBytes ? 2 : 0) |
-      (m.downloadProgress ? 4 : 0) |
-      (m.peerCount ? 8 : 0) |
-      (m.downloadSpeed ? 16 : 0) |
-      (m.uploadSpeed ? 32 : 0)
+      (m.videoId ? 1 : 0) |
+      (m.channelKey ? 2 : 0) |
+      (m.status ? 4 : 0) |
+      (m.progress ? 8 : 0) |
+      (m.totalBlocks ? 16 : 0) |
+      (m.downloadedBlocks ? 32 : 0) |
+      (m.totalBytes ? 64 : 0) |
+      (m.downloadedBytes ? 128 : 0) |
+      (m.peerCount ? 256 : 0) |
+      (m.speedMBps ? 512 : 0) |
+      (m.uploadSpeedMBps ? 1024 : 0) |
+      (m.elapsed ? 2048 : 0) |
+      (m.isComplete ? 4096 : 0)
 
-    c.string.encode(state, m.videoId)
-    c.string.encode(state, m.channelKey)
     c.uint.encode(state, flags)
 
-    if (m.downloadedBytes) c.uint.encode(state, m.downloadedBytes)
+    if (m.videoId) c.string.encode(state, m.videoId)
+    if (m.channelKey) c.string.encode(state, m.channelKey)
+    if (m.status) c.string.encode(state, m.status)
+    if (m.progress) c.uint.encode(state, m.progress)
+    if (m.totalBlocks) c.uint.encode(state, m.totalBlocks)
+    if (m.downloadedBlocks) c.uint.encode(state, m.downloadedBlocks)
     if (m.totalBytes) c.uint.encode(state, m.totalBytes)
-    if (m.downloadProgress) c.uint.encode(state, m.downloadProgress)
+    if (m.downloadedBytes) c.uint.encode(state, m.downloadedBytes)
     if (m.peerCount) c.uint.encode(state, m.peerCount)
-    if (m.downloadSpeed) c.uint.encode(state, m.downloadSpeed)
-    if (m.uploadSpeed) c.uint.encode(state, m.uploadSpeed)
+    if (m.speedMBps) c.string.encode(state, m.speedMBps)
+    if (m.uploadSpeedMBps) c.string.encode(state, m.uploadSpeedMBps)
+    if (m.elapsed) c.uint.encode(state, m.elapsed)
   },
   decode(state) {
-    const r0 = c.string.decode(state)
-    const r1 = c.string.decode(state)
     const flags = c.uint.decode(state)
 
     return {
-      videoId: r0,
-      channelKey: r1,
-      downloadedBytes: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
-      totalBytes: (flags & 2) !== 0 ? c.uint.decode(state) : 0,
-      downloadProgress: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
-      peerCount: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
-      downloadSpeed: (flags & 16) !== 0 ? c.uint.decode(state) : 0,
-      uploadSpeed: (flags & 32) !== 0 ? c.uint.decode(state) : 0
+      videoId: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      channelKey: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      status: (flags & 4) !== 0 ? c.string.decode(state) : null,
+      progress: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
+      totalBlocks: (flags & 16) !== 0 ? c.uint.decode(state) : 0,
+      downloadedBlocks: (flags & 32) !== 0 ? c.uint.decode(state) : 0,
+      totalBytes: (flags & 64) !== 0 ? c.uint.decode(state) : 0,
+      downloadedBytes: (flags & 128) !== 0 ? c.uint.decode(state) : 0,
+      peerCount: (flags & 256) !== 0 ? c.uint.decode(state) : 0,
+      speedMBps: (flags & 512) !== 0 ? c.string.decode(state) : null,
+      uploadSpeedMBps: (flags & 1024) !== 0 ? c.string.decode(state) : null,
+      elapsed: (flags & 2048) !== 0 ? c.uint.decode(state) : 0,
+      isComplete: (flags & 4096) !== 0
     }
   }
 }

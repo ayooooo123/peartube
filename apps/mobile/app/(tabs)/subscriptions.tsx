@@ -6,7 +6,6 @@ import { View, Text, FlatList, RefreshControl, Alert, Pressable, TextInput } fro
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { UserPlus, Users, Trash2 } from 'lucide-react-native'
 import { useApp, colors } from '../_layout'
-import { RPC as Commands } from '../../rpc-commands.mjs'
 
 interface Subscription {
   channelKey: string
@@ -19,20 +18,21 @@ const isValidChannelKey = (key: string) => /^[a-f0-9]{64}$/i.test(key)
 
 export default function SubscriptionsScreen() {
   const insets = useSafeAreaInsets()
-  const { rpcCall } = useApp()
+  const { rpc } = useApp()
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [channelKey, setChannelKey] = useState('')
   const [loading, setLoading] = useState(false)
 
   const loadSubscriptions = useCallback(async () => {
+    if (!rpc) return
     try {
-      const subs = await rpcCall(Commands.LIST_SUBSCRIPTIONS)
-      setSubscriptions(subs || [])
+      const result = await rpc.getSubscriptions({})
+      setSubscriptions(result?.subscriptions || [])
     } catch (err) {
       console.error('Failed to load subscriptions:', err)
     }
-  }, [rpcCall])
+  }, [rpc])
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
@@ -41,6 +41,7 @@ export default function SubscriptionsScreen() {
   }, [loadSubscriptions])
 
   const subscribeToChannel = async () => {
+    if (!rpc) return
     const key = channelKey.trim()
     if (!key) return
 
@@ -52,7 +53,7 @@ export default function SubscriptionsScreen() {
 
     setLoading(true)
     try {
-      await rpcCall(Commands.SUBSCRIBE_CHANNEL, { channelKey: key })
+      await rpc.subscribeChannel({ channelKey: key })
       await loadSubscriptions()
       setChannelKey('')
       Alert.alert('Subscribed', 'Successfully subscribed to channel')
@@ -64,6 +65,7 @@ export default function SubscriptionsScreen() {
   }
 
   const unsubscribe = async (key: string) => {
+    if (!rpc) return
     Alert.alert(
       'Unsubscribe',
       'Are you sure you want to unsubscribe from this channel?',
@@ -74,7 +76,7 @@ export default function SubscriptionsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await rpcCall(Commands.UNSUBSCRIBE_CHANNEL, { channelKey: key })
+              await rpc.unsubscribeChannel({ channelKey: key })
               await loadSubscriptions()
             } catch (err: any) {
               Alert.alert('Error', err.message || 'Failed to unsubscribe')

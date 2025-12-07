@@ -45,9 +45,19 @@ export async function initializeStorage(config) {
 
   console.log('[Storage] Initializing storage at:', storagePath);
 
+  // Validate storage path
+  if (!storagePath || storagePath === './storage') {
+    console.warn('[Storage] WARNING: Using relative/default storage path. Data may not persist!');
+    console.warn('[Storage] Consider using --store flag for persistent storage.');
+  }
+
   // Initialize Corestore
+  console.log('[Storage] Creating Corestore...');
   const store = new Corestore(storagePath);
+
+  console.log('[Storage] Waiting for Corestore ready...');
   await store.ready();
+  console.log('[Storage] Corestore ready, opened:', store.opened, 'closed:', store.closed);
 
   // Optionally wrap with timeout for P2P operations
   const blobStore = wrapTimeout ? wrapStoreWithTimeout(store, defaultTimeout) : store;

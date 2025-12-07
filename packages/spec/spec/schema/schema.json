@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 4,
   "schema": [
     {
       "name": "empty",
@@ -533,6 +533,12 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "skipThumbnailGeneration",
+          "required": false,
+          "type": "bool",
+          "version": 3
         }
       ]
     },
@@ -1657,6 +1663,70 @@
           "required": true,
           "type": "@peartube/video-stats",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "download-video-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "destPath",
+          "required": true,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "download-video-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "filePath",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "size",
+          "required": false,
+          "type": "uint",
+          "version": 2
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "data",
+          "required": false,
+          "type": "string",
+          "version": 4
         }
       ]
     }

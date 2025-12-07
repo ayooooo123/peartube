@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "id": 0,
@@ -528,6 +528,19 @@
         "send": true
       },
       "version": 1
+    },
+    {
+      "id": 11,
+      "name": "@peartube/download-video",
+      "request": {
+        "name": "@peartube/download-video-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/download-video-response",
+        "stream": false
+      },
+      "version": 2
     }
   ]
 }

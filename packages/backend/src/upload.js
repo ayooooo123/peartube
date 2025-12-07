@@ -262,12 +262,39 @@ export function createUploadManager({ ctx }) {
      */
     async setThumbnailFromBuffer(drive, videoId, buffer, mimeType = 'image/jpeg') {
       try {
-        const ext = mimeType.includes('png') ? 'png' : 'jpg';
+        const ext = mimeType.includes('png') ? 'png' :
+                    mimeType.includes('webp') ? 'webp' :
+                    mimeType.includes('gif') ? 'gif' : 'jpg';
         const thumbnailPath = `/thumbnails/${videoId}.${ext}`;
 
-        await drive.put(thumbnailPath, buffer);
-
+        // Write via createWriteStream to ensure a blob entry (avoids inline values that break URL resolution)
+        await new Promise((resolve, reject) => {
+          const ws = drive.createWriteStream(thumbnailPath);
+          ws.on('error', reject);
+          ws.on('close', resolve);
+          ws.end(buffer);
+        });
         console.log('[Upload] Thumbnail saved:', thumbnailPath);
+
+        // Update video metadata with thumbnail path
+        const metaPath = `/videos/${videoId}.json`;
+        const metaBuf = await drive.get(metaPath);
+        if (metaBuf) {
+          const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
+          meta.thumbnail = thumbnailPath;
+          await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
+          console.log('[Upload] Updated video metadata with thumbnail:', thumbnailPath);
+        }
+
+        // Flush drive to persist to disk
+        try {
+          if (drive.flush) {
+            await drive.flush();
+            console.log('[Upload] Drive flushed after thumbnail save');
+          }
+        } catch (flushErr) {
+          console.log('[Upload] Drive flush warning:', flushErr.message);
+        }
 
         return {
           success: true,

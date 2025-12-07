@@ -60,11 +60,13 @@ export default function StudioScreen() {
 
   // Pick custom thumbnail image
   const pickThumbnail = useCallback(async () => {
+    console.log('[Studio] pickThumbnail called, isPear:', isPear)
     if (isPear) {
       // Pear desktop: use native file picker
       try {
         console.log('[Studio] Opening native image file picker...')
         const result = await pickImageFile()
+        console.log('[Studio] pickImageFile result:', JSON.stringify(result))
 
         if (!result) {
           console.log('[Studio] Image picker not available')
@@ -80,8 +82,10 @@ export default function StudioScreen() {
           console.log('[Studio] Thumbnail selected:', result.filePath)
           // Store file path for upload and dataUrl for preview
           setThumbnailFilePath(result.filePath)
+          console.log('[Studio] setThumbnailFilePath called with:', result.filePath)
           if (result.dataUrl) {
             setThumbnailUri(result.dataUrl)
+            console.log('[Studio] setThumbnailUri called with dataUrl (length:', result.dataUrl.length, ')')
           }
         }
       } catch (err: any) {
@@ -179,7 +183,9 @@ export default function StudioScreen() {
       selectedVideo: !!selectedVideo,
       title: title.trim(),
       identity: !!identity,
-      filePath: !!filePath
+      filePath: !!filePath,
+      thumbnailFilePath: thumbnailFilePath || 'none',
+      thumbnailUri: thumbnailUri || 'none',
     })
 
     if (!selectedVideo) {
@@ -191,6 +197,7 @@ export default function StudioScreen() {
       return
     }
     if (!identity) {
+      console.error('[Studio] No identity! Please create one in Settings first')
       Alert.alert('No identity', 'Please create an identity in Settings first')
       return
     }
@@ -203,10 +210,12 @@ export default function StudioScreen() {
 
       if (isPear && filePath) {
         // Pear desktop: use file path based upload via uploadVideo from context
-        console.log('[Studio] Uploading via Pear:', filePath, 'category:', selectedCategory)
+        // Skip FFmpeg thumbnail generation if user selected a custom thumbnail
+        const skipThumbnail = !!thumbnailFilePath
+        console.log('[Studio] Uploading via Pear:', filePath, 'category:', selectedCategory, 'skipThumbnail:', skipThumbnail)
         const video = await uploadVideo(filePath, title.trim(), '', mimeType, selectedCategory, (progress) => {
           setUploadProgress(progress)
-        })
+        }, skipThumbnail)
         videoId = video?.id
 
         // If we have a thumbnail selected, upload it
@@ -228,32 +237,47 @@ export default function StudioScreen() {
         await loadVideos(identity.driveKey)
       } else if (rpc) {
         // Native: use HRPC upload
+        // Skip FFmpeg thumbnail generation if user selected/generated a thumbnail
+        const skipThumbnail = !!thumbnailUri
         const result = await rpc.uploadVideo({
           filePath: selectedVideo,
           title: title.trim(),
           description: '',
           category: selectedCategory,
+          skipThumbnailGeneration: skipThumbnail,
         })
         videoId = result?.video?.id
-        console.log('[Studio] Upload complete, videoId:', videoId)
+        console.log('[Studio] Upload complete, videoId:', videoId, 'skippedThumbnail:', skipThumbnail)
 
         // If we have a thumbnail, upload it
         if (thumbnailUri && videoId) {
-          console.log('[Studio] Uploading thumbnail...')
+          console.log('[Studio] Uploading thumbnail from URI:', thumbnailUri)
           try {
-            const thumbBase64 = await FileSystem.readAsStringAsync(thumbnailUri, {
-              encoding: FileSystem.EncodingType.Base64,
-            })
-            await rpc.setVideoThumbnail({
-              videoId,
-              imageData: thumbBase64,
-              mimeType: 'image/jpeg',
-            })
-            console.log('[Studio] Thumbnail uploaded')
-          } catch (thumbErr) {
-            console.error('[Studio] Failed to upload thumbnail:', thumbErr)
+            // Check if file exists first
+            const fileInfo = await FileSystem.getInfoAsync(thumbnailUri)
+            console.log('[Studio] Thumbnail file info:', JSON.stringify(fileInfo))
+
+            if (!fileInfo.exists) {
+              console.error('[Studio] Thumbnail file does not exist at:', thumbnailUri)
+            } else {
+              const thumbBase64 = await FileSystem.readAsStringAsync(thumbnailUri, {
+                encoding: FileSystem.EncodingType.Base64,
+              })
+              console.log('[Studio] Thumbnail base64 length:', thumbBase64.length)
+
+              const uploadResult = await rpc.setVideoThumbnail({
+                videoId,
+                imageData: thumbBase64,
+                mimeType: 'image/jpeg',
+              })
+              console.log('[Studio] Thumbnail upload result:', JSON.stringify(uploadResult))
+            }
+          } catch (thumbErr: any) {
+            console.error('[Studio] Failed to upload thumbnail:', thumbErr?.message || thumbErr)
             // Don't fail the whole upload if thumbnail fails
           }
+        } else {
+          console.log('[Studio] No thumbnail to upload, thumbnailUri:', thumbnailUri, 'videoId:', videoId)
         }
 
         await loadVideos(identity.driveKey)

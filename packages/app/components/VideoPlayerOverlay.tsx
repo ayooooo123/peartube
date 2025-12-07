@@ -5,7 +5,10 @@
  * Uses VLC player for broad codec support
  */
 import { useCallback, useEffect, useState, useRef } from 'react'
-import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator } from 'react-native'
+import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert } from 'react-native'
+import * as FileSystem from 'expo-file-system'
+import * as Sharing from 'expo-sharing'
+import { rpc } from '@peartube/platform/rpc'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
 import { usePlatform } from '@/lib/PlatformProvider'
@@ -456,6 +459,89 @@ export function VideoPlayerOverlay() {
     setPlaybackRate(PLAYBACK_SPEEDS[nextIndex])
   }, [playbackRate, setPlaybackRate])
 
+  // State for download
+  const [isDownloading, setIsDownloading] = useState(false)
+
+  // Handle video download - streams from Hyperdrive and opens share sheet
+  const handleDownload = useCallback(async () => {
+    if (!currentVideo || isDownloading) return
+
+    // Only supported on native platforms
+    if (Platform.OS === 'web') {
+      Alert.alert('Download', 'Download is only available on mobile devices')
+      return
+    }
+
+    // Ensure RPC is ready
+    if (!rpc) {
+      Alert.alert('Download Failed', 'Backend not ready yet. Please try again in a moment.')
+      return
+    }
+
+    try {
+      setIsDownloading(true)
+
+      // Generate safe filename
+      const safeTitle = currentVideo.title.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 50)
+      const ext = currentVideo.mimeType?.includes('webm') ? 'webm' : 'mp4'
+      const filename = `${safeTitle}_${currentVideo.id.slice(0, 8)}.${ext}`
+
+      // Write to Documents directory (visible in Files app)
+      const downloadsDir = `${FileSystem.documentDirectory}Downloads/`
+      await FileSystem.makeDirectoryAsync(downloadsDir, { intermediates: true }).catch(() => {})
+      const destPath = `${downloadsDir}${filename}`
+
+      // Get channel key from the video
+      const channelKey = currentVideo.channelKey || currentVideo.channel?.key
+
+      if (!channelKey) {
+        Alert.alert('Download Failed', 'Could not determine channel for this video')
+        setIsDownloading(false)
+        return
+      }
+
+      console.log('[Download] Starting download via RPC:', currentVideo.title)
+
+      // Stream video data as base64 from backend
+      const result = await rpc.downloadVideo({
+        channelKey,
+        videoId: currentVideo.path || currentVideo.id,
+        destPath: '', // Not used, but required by RPC spec
+      })
+
+      if (result?.success && result?.data) {
+        console.log('[Download] Got data, size:', result.size, 'writing to:', destPath)
+
+        // Write base64 to file using expo-file-system
+        await FileSystem.writeAsStringAsync(destPath, result.data, {
+          encoding: FileSystem.EncodingType.Base64,
+        })
+
+        // Open share sheet for "Save to Files" option
+        const isAvailable = await Sharing.isAvailableAsync()
+        if (isAvailable) {
+          await Sharing.shareAsync(destPath, {
+            mimeType: ext === 'webm' ? 'video/webm' : 'video/mp4',
+            dialogTitle: `Save "${currentVideo.title}"`,
+            UTI: ext === 'webm' ? 'org.webmproject.webm' : 'public.mpeg-4',
+          })
+        } else {
+          Alert.alert(
+            'Download Complete',
+            `"${currentVideo.title}" saved to:\nFiles > On My iPhone > PearTube > Downloads`
+          )
+        }
+      } else {
+        Alert.alert('Download Failed', result?.error || 'Unknown error')
+      }
+    } catch (err: any) {
+      console.error('[Download] Error:', err)
+      Alert.alert('Download Failed', err.message || 'Failed to download video')
+    } finally {
+      setIsDownloading(false)
+    }
+  }, [currentVideo, isDownloading])
+
   // Don't render if no video
   if (!currentVideo || playerMode === 'hidden') {
     return null
@@ -745,7 +831,7 @@ export function VideoPlayerOverlay() {
               <ActionButton icon={ThumbsUp} label="Like" />
               <ActionButton icon={ThumbsDown} label="Dislike" />
               <ActionButton icon={Share2} label="Share" />
-              <ActionButton icon={Download} label="Download" />
+              <ActionButton icon={Download} label={isDownloading ? "Downloading..." : "Download"} onPress={handleDownload} />
               <ActionButton icon={MoreHorizontal} label="More" />
             </View>
 

@@ -9,6 +9,7 @@
 
 import HRPC from '@peartube/spec'
 import { createBackendContext } from '@peartube/backend/orchestrator'
+import { loadDrive } from '@peartube/backend/storage'
 import path from 'bare-path'
 import fs from 'bare-fs'
 
@@ -70,6 +71,43 @@ console.log('[Backend] Backend initialized, blob server port:', blobPort, '(from
 // Create HRPC instance
 rpc = new HRPC(IPC)
 console.log('[Backend] HRPC initialized')
+
+function getThumbnailMime(thumbPath) {
+  const ext = thumbPath.split('.').pop()?.toLowerCase() || 'jpg'
+  if (ext === 'png') return 'image/png'
+  if (ext === 'webp') return 'image/webp'
+  if (ext === 'gif') return 'image/gif'
+  return 'image/jpeg'
+}
+
+// Migrate existing thumbnails to blob-backed entries (so URLs persist across restarts)
+async function migrateThumbnails(drive) {
+  try {
+    for await (const name of drive.readdir('/thumbnails').catch(() => [])) {
+      const thumbPath = `/thumbnails/${name}`
+      const entry = await drive.entry(thumbPath).catch(() => null)
+      if (entry && entry.value?.blob) continue
+
+      const buf = await drive.get(thumbPath, { wait: true, timeout: 3000 }).catch(() => null)
+      if (!buf) continue
+
+      console.log('[Backend] Migrating inline thumbnail to blob:', thumbPath)
+      await new Promise((resolve, reject) => {
+        const ws = drive.createWriteStream(thumbPath)
+        ws.on('error', reject)
+        ws.on('close', resolve)
+        ws.end(buf)
+      })
+    }
+  } catch (e) {
+    console.log('[Backend] Thumbnail migration skipped:', e?.message)
+  }
+}
+
+const activeDriveForMigration = identityManager.getActiveDrive?.()
+if (activeDriveForMigration) {
+  migrateThumbnails(activeDriveForMigration)
+}
 
 // ============================================
 // HRPC Handler Registration - Thin delegation layer
@@ -142,7 +180,58 @@ rpc.onUpdateChannel(async (req) => {
 // Video handlers
 rpc.onListVideos(async (req) => {
   console.log('[HRPC] listVideos:', req.channelKey?.slice(0, 16))
-  const videos = await api.listVideos(req.channelKey || '')
+  const rawVideos = await api.listVideos(req.channelKey || '')
+
+  const videos = await Promise.all(rawVideos.map(async (v) => {
+    const channelKey = v.channelKey || req.channelKey
+    let thumbnailUrl = ''
+
+    if (v.thumbnail && channelKey) {
+      try {
+        let drive = ctx.drives.get(channelKey)
+        if (!drive) {
+          const activeDrive = identityManager.getActiveDrive?.()
+          if (activeDrive && b4a.toString(activeDrive.key, 'hex') === channelKey) {
+            drive = activeDrive
+          }
+        }
+
+        if (drive) {
+          const entry = await drive.entry(v.thumbnail).catch(() => null)
+          const mime = getThumbnailMime(v.thumbnail)
+
+          if (entry && entry.value?.blob) {
+            const blobsCore = await drive.getBlobs()
+            if (blobsCore) {
+              thumbnailUrl = ctx.blobServer.getLink(blobsCore.core.key, {
+                blob: entry.value.blob,
+                type: mime,
+                host: '127.0.0.1',
+                port: ctx.blobServer?.port || ctx.blobServerPort
+              })
+            }
+          } else {
+            // Inline thumbnail (no blob) - fall back to data URL so we don't mutate foreign drives
+            const buf = await drive.get(v.thumbnail, { wait: true, timeout: 2000 }).catch(() => null)
+            if (buf) {
+              const base64 = b4a.from(buf).toString('base64')
+              thumbnailUrl = `data:${mime};base64,${base64}`
+            }
+          }
+        }
+      } catch (e) {
+        console.log('[HRPC] listVideos thumbnail resolve failed:', e?.message)
+      }
+    }
+
+    return {
+      ...v,
+      thumbnail: thumbnailUrl,
+      channelKey,
+      channelName: v.channelName || ''
+    }
+  }))
+
   return { videos }
 })
 
@@ -206,6 +295,45 @@ rpc.onUploadVideo(async (req) => {
       description: req.description || '',
       channelKey: active.driveKey
     }
+  }
+})
+
+rpc.onDownloadVideo(async (req) => {
+  console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId)
+
+  try {
+    // Load drive and get video entry
+    const drive = await loadDrive(ctx, req.channelKey, { waitForSync: true, syncTimeout: 15000 })
+    const entry = await drive.entry(req.videoId, { wait: true, timeout: 10000 })
+    if (!entry) {
+      return { success: false, error: 'Video not found in drive' }
+    }
+
+    const totalBytes = entry.value?.blob?.byteLength || 0
+    console.log('[HRPC] Video size:', totalBytes)
+
+    // Stream into buffer and return as base64
+    const chunks = []
+    const readStream = drive.createReadStream(req.videoId)
+
+    await new Promise((resolve, reject) => {
+      readStream.on('data', chunk => chunks.push(chunk))
+      readStream.on('error', reject)
+      readStream.on('end', resolve)
+    })
+
+    const buffer = Buffer.concat(chunks)
+    const base64 = buffer.toString('base64')
+    console.log('[HRPC] Download complete, size:', buffer.length)
+
+    return {
+      success: true,
+      data: base64,
+      size: buffer.length
+    }
+  } catch (err) {
+    console.error('[HRPC] downloadVideo failed:', err?.message)
+    return { success: false, error: err?.message || 'download failed' }
   }
 })
 

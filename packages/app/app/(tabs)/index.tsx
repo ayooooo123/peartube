@@ -91,12 +91,12 @@ export default function HomeScreen() {
 
     try {
       const result = await rpc.getVideoThumbnail({ channelKey: driveKey, videoId })
-      if (result?.exists && result?.url) {
-        setThumbnailCache(prev => ({ ...prev, [cacheKey]: result.url }))
+      const url = result?.dataUrl || result?.url
+      if (result?.exists && url) {
+        setThumbnailCache(prev => ({ ...prev, [cacheKey]: url }))
       }
-    } catch (err) {
+    } catch {
       // Silently fail - thumbnails are optional
-      console.log('[Home] Thumbnail fetch failed:', videoId)
     }
   }, [rpc, thumbnailCache])
 
@@ -302,7 +302,6 @@ export default function HomeScreen() {
   const myVideosWithMeta: VideoData[] = videos.map(v => {
     const cacheKey = identity?.driveKey ? `${identity.driveKey}:${v.id}` : ''
     const thumbnailUrl = thumbnailCache[cacheKey] || v.thumbnail || null
-    console.log('[Home] Video:', v.id, 'thumbnail from backend:', v.thumbnail, 'final thumbnailUrl:', thumbnailUrl)
     return {
       ...v,
       channelKey: identity?.driveKey || '',

@@ -235,7 +235,8 @@ ns.register({
     { name: 'filePath', type: 'string', required: true },
     { name: 'title', type: 'string', required: true },
     { name: 'description', type: 'string', required: false },
-    { name: 'category', type: 'string', required: false }
+    { name: 'category', type: 'string', required: false },
+    { name: 'skipThumbnailGeneration', type: 'bool', required: false }
   ]
 })
 
@@ -243,6 +244,26 @@ ns.register({
   name: 'upload-video-response',
   fields: [
     { name: 'video', type: '@peartube/video', required: true }
+  ]
+})
+
+ns.register({
+  name: 'download-video-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'destPath', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'download-video-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'filePath', type: 'string', required: false },
+    { name: 'size', type: 'uint', required: false },
+    { name: 'error', type: 'string', required: false },
+    { name: 'data', type: 'string', required: false }
   ]
 })
 
@@ -819,6 +840,12 @@ rpcNs.register({
   name: 'upload-video',
   request: { name: '@peartube/upload-video-request', stream: false },
   response: { name: '@peartube/upload-video-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'download-video',
+  request: { name: '@peartube/download-video-request', stream: false },
+  response: { name: '@peartube/download-video-response', stream: false }
 })
 
 // Subscription commands

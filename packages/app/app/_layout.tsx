@@ -253,13 +253,20 @@ export default function RootLayout() {
     description: string,
     mimeType: string = 'video/mp4',
     category: string = 'Other',
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number) => void,
+    skipThumbnailGeneration: boolean = false
   ): Promise<any> => {
     if (!platformRPC) throw new Error('RPC not ready')
 
-    console.log('[App] Uploading video:', filePath, 'category:', category)
+    console.log('[App] Uploading video:', filePath, 'category:', category, 'skipThumbnailGeneration:', skipThumbnailGeneration)
 
-    const result = await platformRPC.rpc.uploadVideo(filePath, title, description, category)
+    const result = await platformRPC.rpc.uploadVideo({
+      filePath,
+      title,
+      description,
+      category,
+      skipThumbnailGeneration,
+    })
     console.log('[App] Upload complete:', result)
 
     // Reload videos

@@ -27,8 +27,20 @@ console.log('[Worker] PearTube Desktop Worker starting...');
 // Initialize Backend using Orchestrator
 // ============================================
 
-const storage = Pear.config.storage || './storage';
-console.log('[Worker] Using storage path:', storage);
+// Determine storage path - prefer explicit --store, fall back to home directory
+let storage: string;
+if (Pear.config.storage) {
+  storage = Pear.config.storage;
+  console.log('[Worker] Using --store storage path:', storage);
+} else {
+  // Without --store, use a more stable path based on home directory
+  // Pear.config.storage being null means ephemeral storage which can cause issues
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '/tmp';
+  storage = `${homeDir}/.peartube-storage`;
+  console.log('[Worker] No --store flag, using fallback storage:', storage);
+  console.log('[Worker] For persistent storage, run with: pear run --store ~/.peartube-data --dev .');
+}
+
 console.log('[Worker] Pear.config:', JSON.stringify({
   storage: Pear.config.storage,
   key: Pear.config.key ? 'present' : 'null',
@@ -55,6 +67,18 @@ console.log('[Worker] Blob server port:', getBlobPort());
 // ============================================
 // Desktop-Specific Functions (File Pickers, FFmpeg)
 // ============================================
+
+// Helper to get mime type from extension
+function getMimeType(ext: string): string {
+  const types: Record<string, string> = {
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'webp': 'image/webp',
+    'gif': 'image/gif',
+  };
+  return types[ext.toLowerCase()] || 'image/jpeg';
+}
 
 // FFmpeg availability check (cached)
 let ffmpegAvailable: boolean | null = null;
@@ -108,7 +132,13 @@ async function generateThumbnail(filePath: string, videoId: string, drive: any):
         if (code === 0 && chunks.length > 0) {
           try {
             const thumbBuf = Buffer.concat(chunks);
-            await drive.put(thumbnailPath, thumbBuf);
+            // Use createWriteStream to ensure blob entry (not inline) for blob server compatibility
+            await new Promise<void>((res, rej) => {
+              const ws = drive.createWriteStream(thumbnailPath);
+              ws.on('error', rej);
+              ws.on('close', res);
+              ws.end(thumbBuf);
+            });
             resolve(thumbnailPath);
           } catch {
             resolve(null);
@@ -164,7 +194,7 @@ async function pickVideoFile(): Promise<any> {
 async function pickImageFile(): Promise<any> {
   return new Promise((resolve, reject) => {
     const script = `
-      set theFile to choose file with prompt "Select a thumbnail image" of type {"public.jpeg", "public.png", "public.image"}
+      set theFile to choose file with prompt "Select a thumbnail image" of type {"public.jpeg", "public.png", "public.image", "org.webmproject.webp"}
       return POSIX path of theFile
     `;
 
@@ -182,7 +212,16 @@ async function pickImageFile(): Promise<any> {
           const stat = fs.statSync(filePath);
           const fileBuffer = fs.readFileSync(filePath);
           const base64 = fileBuffer.toString('base64');
-          const mimeType = filePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+          // Detect mime type from extension
+          const ext = filePath.toLowerCase().split('.').pop() || '';
+          const mimeTypes: Record<string, string> = {
+            'png': 'image/png',
+            'webp': 'image/webp',
+            'gif': 'image/gif',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+          };
+          const mimeType = mimeTypes[ext] || 'image/jpeg';
           const dataUrl = `data:${mimeType};base64,${base64}`;
           resolve({ filePath, name: filePath.split('/').pop() || 'image', size: stat.size, dataUrl });
         } catch (err: any) {
@@ -241,16 +280,23 @@ videoStats.setOnStatsUpdate((driveKey: string, videoPath: string, stats: any) =>
 
 // Identity handlers
 rpc.onCreateIdentity(async (req: any) => {
-  const result = await identityManager.createIdentity(req.name || 'New Channel', true);
-  return {
-    identity: {
-      publicKey: result.publicKey,
-      driveKey: result.driveKey,
-      name: req.name || 'New Channel',
-      seedPhrase: result.mnemonic,
-      isActive: true,
-    }
-  };
+  console.log('[Worker] onCreateIdentity called, name:', req.name);
+  try {
+    const result = await identityManager.createIdentity(req.name || 'New Channel', true);
+    console.log('[Worker] Identity created:', result.publicKey?.slice(0, 16));
+    return {
+      identity: {
+        publicKey: result.publicKey,
+        driveKey: result.driveKey,
+        name: req.name || 'New Channel',
+        seedPhrase: result.mnemonic,
+        isActive: true,
+      }
+    };
+  } catch (err: any) {
+    console.error('[Worker] createIdentity failed:', err.message);
+    throw err;
+  }
 });
 
 rpc.onGetIdentity(async () => {
@@ -303,24 +349,65 @@ rpc.onUpdateChannel(async () => ({ channel: {} }));
 
 // Video handlers
 rpc.onListVideos(async (req: any) => {
+  console.log('[Worker] onListVideos called for channelKey:', req.channelKey?.slice(0, 16));
   const videos = await api.listVideos(req.channelKey || '');
+  console.log('[Worker] Got', videos.length, 'videos from API');
+
   // Resolve thumbnail URLs via blob server
   const enriched = await Promise.all(videos.map(async (v: any) => {
     let thumbnailUrl = '';
     const channelKey = v.channelKey || req.channelKey;
+    console.log('[Worker] Processing video:', v.id, 'thumbnail field:', v.thumbnail);
+
     if (v.thumbnail && channelKey) {
       try {
-        const drive = ctx.drives.get(channelKey);
-        if (drive) {
-          const entry = await drive.entry(v.thumbnail);
-          if (entry) {
-            thumbnailUrl = ctx.blobServer.getLink(b4a.from(channelKey, 'hex'), {
-              filename: v.thumbnail.replace(/^\/+/, '')
-            });
+        // Try ctx.drives first, then fall back to identity drive if it's the user's own channel
+        let drive = ctx.drives.get(channelKey);
+        if (!drive) {
+          // Check if this is the user's own identity drive
+          const activeDrive = identityManager.getActiveDrive();
+          if (activeDrive && b4a.toString(activeDrive.key, 'hex') === channelKey) {
+            drive = activeDrive;
           }
         }
-      } catch {}
+        console.log('[Worker] Drive found for', channelKey?.slice(0, 16), ':', !!drive);
+
+        if (drive) {
+          const entry = await drive.entry(v.thumbnail);
+          console.log('[Worker] Entry for', v.thumbnail, ':', entry ? 'found' : 'not found');
+
+          if (entry) {
+            console.log('[Worker] Entry value:', JSON.stringify(entry.value));
+          }
+
+          if (entry && entry.value?.blob) {
+            // Use blob reference for proper blob server URL
+            const blobsCore = await drive.getBlobs();
+            console.log('[Worker] BlobsCore:', blobsCore ? 'found' : 'not found');
+
+            if (blobsCore) {
+              // Detect mime type from thumbnail path extension
+              const thumbExt = v.thumbnail.split('.').pop()?.toLowerCase() || 'jpg';
+              thumbnailUrl = ctx.blobServer.getLink(blobsCore.core.key, {
+                blob: entry.value.blob,
+                type: getMimeType(thumbExt)
+              });
+              console.log('[Worker] Resolved thumbnail URL for', v.id, ':', thumbnailUrl?.slice(0, 80));
+            }
+          } else {
+            console.log('[Worker] No blob entry found for thumbnail:', v.thumbnail, 'entry.value:', entry?.value);
+          }
+        } else {
+          console.log('[Worker] No drive in ctx.drives for:', channelKey?.slice(0, 16));
+          console.log('[Worker] Available drives:', Array.from(ctx.drives.keys()).map(k => k.slice(0, 16)));
+        }
+      } catch (e: any) {
+        console.error('[Worker] Failed to resolve thumbnail URL:', e.message, e.stack);
+      }
+    } else {
+      console.log('[Worker] Skipping thumbnail - thumbnail:', v.thumbnail, 'channelKey:', channelKey?.slice(0, 16));
     }
+
     return {
       id: v.id || '',
       title: v.title || 'Untitled',
@@ -361,8 +448,10 @@ rpc.onUploadVideo(async (req: any) => {
     }
   );
 
-  // Generate thumbnail if FFmpeg available
-  if (result.success && result.videoId) {
+  // Generate thumbnail if FFmpeg available AND no custom thumbnail will be provided
+  // skipThumbnailGeneration is true when user has selected a custom thumbnail
+  if (result.success && result.videoId && !req.skipThumbnailGeneration) {
+    console.log('[Worker] Generating FFmpeg thumbnail (no custom thumbnail provided)');
     const hasFFmpeg = await checkFFmpeg();
     if (hasFFmpeg) {
       const thumbPath = await generateThumbnail(req.filePath, result.videoId, drive);
@@ -376,6 +465,8 @@ rpc.onUploadVideo(async (req: any) => {
         }
       }
     }
+  } else if (req.skipThumbnailGeneration) {
+    console.log('[Worker] Skipping FFmpeg thumbnail - custom thumbnail will be uploaded');
   }
 
   return {
@@ -386,6 +477,28 @@ rpc.onUploadVideo(async (req: any) => {
       channelKey: b4a.toString(drive.key, 'hex'),
     }
   };
+});
+
+// Download video using streams
+rpc.onDownloadVideo(async (req: any) => {
+  let destPath = req.destPath;
+  if (destPath.startsWith('file://')) {
+    destPath = destPath.slice(7);
+  }
+
+  const result = await api.downloadVideo(
+    req.channelKey,
+    req.videoId,
+    destPath,
+    fs,
+    (progress: number, bytesWritten: number, totalBytes: number) => {
+      try {
+        rpc.eventUploadProgress({ videoId: req.videoId, progress, bytesUploaded: bytesWritten, totalBytes });
+      } catch {}
+    }
+  );
+
+  return result;
 });
 
 // Video stats
@@ -487,13 +600,22 @@ rpc.onGetPinnedChannels(async () => {
 rpc.onGetVideoThumbnail(async (req: any) => {
   const drive = ctx.drives.get(req.channelKey);
   if (drive) {
-    const thumbPath = `/thumbnails/${req.videoId}.jpg`;
-    const entry = await drive.entry(thumbPath);
-    if (entry) {
-      const url = ctx.blobServer.getLink(b4a.from(req.channelKey, 'hex'), {
-        filename: thumbPath.replace(/^\/+/, '')
-      });
-      return { url, exists: true };
+    // Try all supported formats
+    for (const ext of ['jpg', 'jpeg', 'png', 'webp', 'gif']) {
+      const thumbPath = `/thumbnails/${req.videoId}.${ext}`;
+      try {
+        const entry = await drive.entry(thumbPath);
+        if (entry && entry.value?.blob) {
+          const blobsCore = await drive.getBlobs();
+          if (blobsCore) {
+            const url = ctx.blobServer.getLink(blobsCore.core.key, {
+              blob: entry.value.blob,
+              type: getMimeType(ext)
+            });
+            return { url, exists: true };
+          }
+        }
+      } catch {}
     }
   }
   return { url: null, exists: false };
@@ -519,7 +641,13 @@ rpc.onSetVideoThumbnail(async (req: any) => {
   const ext = req.mimeType?.includes('png') ? 'png' : 'jpg';
   const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
 
-  await drive.put(thumbnailPath, imageBuffer);
+  // Use createWriteStream to ensure blob entry (not inline) for blob server compatibility
+  await new Promise<void>((resolve, reject) => {
+    const ws = drive.createWriteStream(thumbnailPath);
+    ws.on('error', reject);
+    ws.on('close', resolve);
+    ws.end(imageBuffer);
+  });
 
   // Update metadata
   const metaPath = `/videos/${req.videoId}.json`;
@@ -534,24 +662,69 @@ rpc.onSetVideoThumbnail(async (req: any) => {
 });
 
 rpc.onSetVideoThumbnailFromFile(async (req: any) => {
+  console.log('[Worker] setVideoThumbnailFromFile called:', req.videoId, req.filePath);
   const drive = identityManager.getActiveDrive();
-  if (!drive) return { success: false };
+  if (!drive) {
+    console.error('[Worker] No active drive for thumbnail upload');
+    return { success: false };
+  }
+  console.log('[Worker] Active drive key:', b4a.toString(drive.key, 'hex').slice(0, 16));
 
   const imageBuffer = fs.readFileSync(req.filePath);
-  const ext = req.filePath.toLowerCase().endsWith('.png') ? 'png' : 'jpg';
-  const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
+  console.log('[Worker] Read image file, size:', imageBuffer.length);
 
-  await drive.put(thumbnailPath, imageBuffer);
+  // Detect extension from file path
+  const fileExt = req.filePath.toLowerCase().split('.').pop() || 'jpg';
+  const ext = ['png', 'webp', 'gif', 'jpeg'].includes(fileExt) ? fileExt : 'jpg';
+  const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
+  console.log('[Worker] Saving thumbnail:', thumbnailPath, 'ext:', ext);
+
+  // Use createWriteStream to ensure blob entry (not inline) for blob server compatibility
+  await new Promise<void>((resolve, reject) => {
+    const ws = drive.createWriteStream(thumbnailPath);
+    ws.on('error', reject);
+    ws.on('close', resolve);
+    ws.end(imageBuffer);
+  });
+  console.log('[Worker] Thumbnail saved to drive as blob');
+
+  // Verify the entry was created
+  const thumbEntry = await drive.entry(thumbnailPath);
+  console.log('[Worker] Verify thumbnail entry:', thumbEntry ? 'found' : 'NOT FOUND');
+  if (thumbEntry) {
+    console.log('[Worker] Thumbnail entry value:', JSON.stringify(thumbEntry.value));
+  }
 
   const metaPath = `/videos/${req.videoId}.json`;
   const metaBuf = await drive.get(metaPath);
+  console.log('[Worker] Video metadata exists:', !!metaBuf);
+
   if (metaBuf) {
     const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
+    console.log('[Worker] Old thumbnail in meta:', meta.thumbnail);
     meta.thumbnail = thumbnailPath;
     await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
+    console.log('[Worker] Updated metadata with thumbnail:', thumbnailPath);
+
+    // Verify the update
+    const verifyBuf = await drive.get(metaPath);
+    if (verifyBuf) {
+      const verifyMeta = JSON.parse(b4a.toString(verifyBuf, 'utf-8'));
+      console.log('[Worker] Verified thumbnail in meta:', verifyMeta.thumbnail);
+    }
+  } else {
+    console.error('[Worker] No video metadata found at:', metaPath);
   }
 
-  if (drive.flush) await drive.flush();
+  // Try to flush, but don't fail if flush isn't fully supported
+  try {
+    if (drive.flush) {
+      await drive.flush();
+      console.log('[Worker] Drive flushed');
+    }
+  } catch (flushErr: any) {
+    console.log('[Worker] Drive flush not supported (ok):', flushErr.message);
+  }
   return { success: true };
 });
 

@@ -36,6 +36,7 @@ declare const HRPC: new (stream: any) => {
   getStatus(req: {}): Promise<any>;
   getSwarmStatus(req: {}): Promise<any>;
   uploadVideo(req: { filePath: string; title: string; description: string; category?: string }): Promise<any>;
+  downloadVideo(req: { channelKey: string; videoId: string; destPath: string }): Promise<any>;
   pickVideoFile(req: {}): Promise<any>;
   pickImageFile(req: {}): Promise<any>;
   onEventReady(handler: (data: any) => void): void;
@@ -256,6 +257,13 @@ export const rpc = {
       ? { filePath: filePathOrReq, title: title!, description: description!, category }
       : filePathOrReq;
     return ensureRPC().uploadVideo(req);
+  },
+
+  async downloadVideo(channelKeyOrReq: string | { channelKey: string; videoId: string; destPath: string }, videoId?: string, destPath?: string): Promise<{ success: boolean; filePath?: string; size?: number; error?: string }> {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId!, destPath: destPath! }
+      : channelKeyOrReq;
+    return ensureRPC().downloadVideo(req);
   },
 
   async getVideoThumbnail(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {

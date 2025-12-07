@@ -118,6 +118,15 @@ export function createIdentityManager({ ctx }) {
     async createIdentity(name, generateMnem = true) {
       console.log('[Identity] Creating identity:', name);
 
+      // Check if corestore is in a valid state
+      if (!ctx.store) {
+        throw new Error('Corestore not available');
+      }
+      if (ctx.store.closed) {
+        throw new Error('Corestore is closed - storage may have been terminated');
+      }
+      console.log('[Identity] Corestore state: opened=', ctx.store.opened, 'closed=', ctx.store.closed);
+
       let keypair;
       let mnemonic;
 
@@ -129,10 +138,27 @@ export function createIdentityManager({ ctx }) {
       }
 
       const publicKey = b4a.toString(keypair.publicKey, 'hex');
+      console.log('[Identity] Generated keypair:', publicKey.slice(0, 16));
 
-      // Create the channel's Hyperdrive
-      const drive = new Hyperdrive(ctx.store);
-      await drive.ready();
+      // Create the channel's Hyperdrive with timeout
+      console.log('[Identity] Creating Hyperdrive...');
+      let drive;
+      try {
+        drive = new Hyperdrive(ctx.store);
+        console.log('[Identity] Hyperdrive created, waiting for ready...');
+
+        // Add timeout to prevent infinite hang
+        await Promise.race([
+          drive.ready(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Hyperdrive ready timeout after 30s')), 30000)
+          )
+        ]);
+        console.log('[Identity] Hyperdrive ready');
+      } catch (driveErr) {
+        console.error('[Identity] Failed to create/ready Hyperdrive:', driveErr.message);
+        throw driveErr;
+      }
 
       const driveKey = b4a.toString(drive.key, 'hex');
 

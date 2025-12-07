@@ -249,11 +249,18 @@ export const rpc = {
     return ensureRPC().getVideoStats(req);
   },
 
-  async uploadVideo(titleOrReq: string | { title: string; description: string; filePath: string }, description?: string, filePath?: string) {
-    const req = typeof titleOrReq === 'string'
-      ? { title: titleOrReq, description: description!, filePath: filePath! }
-      : titleOrReq;
+  async uploadVideo(filePathOrReq: string | { filePath: string; title: string; description: string; category?: string }, title?: string, description?: string, category?: string) {
+    const req = typeof filePathOrReq === 'string'
+      ? { filePath: filePathOrReq, title: title!, description: description!, category }
+      : filePathOrReq;
     return ensureRPC().uploadVideo(req);
+  },
+
+  async downloadVideo(channelKeyOrReq: string | { channelKey: string; videoId: string; destPath: string }, videoId?: string, destPath?: string): Promise<{ success: boolean; filePath?: string; size?: number; error?: string }> {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId!, destPath: destPath! }
+      : channelKeyOrReq;
+    return ensureRPC().downloadVideo(req);
   },
 
   async setVideoThumbnail(videoIdOrReq: string | { videoId: string; imageData: string; mimeType: string }, imageData?: string, mimeType?: string) {
@@ -261,6 +268,13 @@ export const rpc = {
       ? { videoId: videoIdOrReq, imageData: imageData!, mimeType: mimeType! }
       : videoIdOrReq;
     return ensureRPC().setVideoThumbnail(req);
+  },
+
+  async setVideoThumbnailFromFile(videoIdOrReq: string | { videoId: string; filePath: string }, filePath?: string) {
+    const req = typeof videoIdOrReq === 'string'
+      ? { videoId: videoIdOrReq, filePath: filePath! }
+      : videoIdOrReq;
+    return ensureRPC().setVideoThumbnailFromFile(req);
   },
 
   async getVideoThumbnail(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {

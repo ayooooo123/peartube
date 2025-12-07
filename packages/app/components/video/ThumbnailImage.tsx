@@ -2,7 +2,7 @@
  * ThumbnailImage - YouTube-style video thumbnail with duration badge
  * Shows gradient placeholder with play icon when no thumbnail available
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { View, Image, Text, StyleSheet, ActivityIndicator } from 'react-native'
 import { Play } from 'lucide-react-native'
 
@@ -34,6 +34,17 @@ export function ThumbnailImage({
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
   const durationText = duration ? formatDuration(duration) : null
+
+  // Timeout for loading - give up after 8 seconds
+  useEffect(() => {
+    if (thumbnailUrl && imageLoading && !imageError) {
+      const timeout = setTimeout(() => {
+        setImageError(true)
+        setImageLoading(false)
+      }, 8000)
+      return () => clearTimeout(timeout)
+    }
+  }, [thumbnailUrl, imageLoading, imageError])
 
   return (
     <View style={[styles.container, style]}>

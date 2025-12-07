@@ -31,5 +31,8 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "expo-media-library": "^18.2.1"
   }
 }

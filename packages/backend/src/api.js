@@ -253,20 +253,36 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
 
         const thumbnailPaths = [
           `/thumbnails/${videoId}.jpg`,
-          `/thumbnails/${videoId}.png`
+          `/thumbnails/${videoId}.png`,
+          `/thumbnails/${videoId}.webp`,
+          `/thumbnails/${videoId}.jpeg`,
+          `/thumbnails/${videoId}.gif`
         ];
 
         for (const thumbPath of thumbnailPaths) {
-          const entry = await drive.entry(thumbPath);
+          const entry = await drive.entry(thumbPath).catch(() => null);
+          const mime = thumbPath.endsWith('.png') ? 'image/png' :
+                       thumbPath.endsWith('.webp') ? 'image/webp' :
+                       thumbPath.endsWith('.gif') ? 'image/gif' : 'image/jpeg';
+
           if (entry && entry.value?.blob) {
             const blobsCore = await drive.getBlobs();
             if (blobsCore) {
               const url = ctx.blobServer.getLink(blobsCore.core.key, {
                 blob: entry.value.blob,
-                type: thumbPath.endsWith('.png') ? 'image/png' : 'image/jpeg'
+                type: mime,
+                host: '127.0.0.1',
+                port: ctx.blobServer?.port || ctx.blobServerPort
               });
               console.log('[API] Thumbnail URL:', url);
               return { url, exists: true };
+            }
+          } else if (entry) {
+            // Inline entry - return data URL without mutating the drive
+            const buf = await drive.get(thumbPath).catch(() => null);
+            if (buf) {
+              const dataUrl = `data:${mime};base64,${b4a.from(buf).toString('base64')}`;
+              return { url: dataUrl, dataUrl, exists: true };
             }
           }
         }
@@ -603,6 +619,62 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         elapsed: 0,
         isComplete: false
       };
+    },
+
+    /**
+     * Get video data as base64 for download
+     * Reads from Hyperdrive and returns base64-encoded content
+     * @param {string} driveKey - Channel drive key
+     * @param {string} videoPath - Video path in drive (e.g., /videos/xxx.mp4)
+     * @returns {Promise<{success: boolean, data?: string, size?: number, error?: string}>}
+     */
+    async getVideoData(driveKey, videoPath) {
+      console.log('[API] GET_VIDEO_DATA:', driveKey?.slice(0, 16), videoPath);
+
+      try {
+        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 15000 });
+
+        // Get the video entry
+        const entry = await drive.entry(videoPath, { wait: true, timeout: 10000 });
+        if (!entry) {
+          throw new Error('Video not found in drive');
+        }
+
+        const totalBytes = entry.value?.blob?.byteLength || 0;
+        console.log('[API] Video size:', totalBytes, 'bytes');
+
+        // Read entire file into buffer
+        const chunks = [];
+        const readStream = drive.createReadStream(videoPath);
+
+        return new Promise((resolve, reject) => {
+          readStream.on('data', (chunk) => {
+            chunks.push(chunk);
+          });
+
+          readStream.on('error', (err) => {
+            console.error('[API] Read stream error:', err.message);
+            reject(err);
+          });
+
+          readStream.on('end', () => {
+            const buffer = Buffer.concat(chunks);
+            const base64 = buffer.toString('base64');
+            console.log('[API] Video data ready, size:', buffer.length, 'base64 length:', base64.length);
+            resolve({
+              success: true,
+              data: base64,
+              size: buffer.length
+            });
+          });
+        });
+      } catch (err) {
+        console.error('[API] GET_VIDEO_DATA error:', err.message);
+        return {
+          success: false,
+          error: err.message
+        };
+      }
     },
 
     // ============================================

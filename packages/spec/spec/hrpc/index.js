@@ -89,7 +89,9 @@ const methods = new Map([
   ['@peartube/event-log', 40],
   [40, '@peartube/event-log'],
   ['@peartube/event-video-stats', 41],
-  [41, '@peartube/event-video-stats']
+  [41, '@peartube/event-video-stats'],
+  ['@peartube/download-video', 42],
+  [42, '@peartube/download-video']
 ])
 
 class HRPC {
@@ -138,7 +140,8 @@ class HRPC {
       ['@peartube/event-upload-progress', getEncoding('@peartube/event-upload-progress')],
       ['@peartube/event-feed-update', getEncoding('@peartube/event-feed-update')],
       ['@peartube/event-log', getEncoding('@peartube/event-log')],
-      ['@peartube/event-video-stats', getEncoding('@peartube/event-video-stats')]
+      ['@peartube/event-video-stats', getEncoding('@peartube/event-video-stats')],
+      ['@peartube/download-video', getEncoding('@peartube/download-video-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -176,7 +179,8 @@ class HRPC {
       ['@peartube/get-status', getEncoding('@peartube/get-status-response')],
       ['@peartube/pick-video-file', getEncoding('@peartube/pick-video-file-response')],
       ['@peartube/pick-image-file', getEncoding('@peartube/pick-image-file-response')],
-      ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-response')]
+      ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-response')],
+      ['@peartube/download-video', getEncoding('@peartube/download-video-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -439,6 +443,10 @@ class HRPC {
     return this._callSync('@peartube/event-video-stats', args)
   }
 
+  async downloadVideo(args) {
+    return this._call('@peartube/download-video', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -605,6 +613,10 @@ class HRPC {
 
   onEventVideoStats(responseFn) {
     this._handlers['@peartube/event-video-stats'] = responseFn
+  }
+
+  onDownloadVideo(responseFn) {
+    this._handlers['@peartube/download-video'] = responseFn
   }
 
   _requestIsStream(command) {

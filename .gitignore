@@ -48,3 +48,6 @@ coverage/
 .mcp.json
 peartube-src.zip
 packages/desktop/_expo/
+packages/desktop/*.html
+packages/desktop/(tabs)/
+packages/desktop/video/

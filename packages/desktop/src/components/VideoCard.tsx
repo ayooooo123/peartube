@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { colors, spacing, radius, fontSize, fontWeight } from '../lib/theme';
-import { type Video } from '../lib/rpc';
+import type { Video } from '@peartube/core';
 import { Column, Row, Text, Avatar } from './ui';
 
 interface VideoCardProps {

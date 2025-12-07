@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { colors, spacing, radius } from '../lib/theme';
-import { rpc } from '../lib/rpc';
+import { rpc } from '@peartube/platform/rpc';
 import { Column, Row, Text, Button, Input, Card, Avatar, Alert, EmptyState } from '../components/ui';
 
 interface SubscriptionsPageProps {

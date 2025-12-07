@@ -28,6 +28,12 @@ console.log('[Worker] PearTube Desktop Worker starting...');
 // ============================================
 
 const storage = Pear.config.storage || './storage';
+console.log('[Worker] Using storage path:', storage);
+console.log('[Worker] Pear.config:', JSON.stringify({
+  storage: Pear.config.storage,
+  key: Pear.config.key ? 'present' : 'null',
+  dev: Pear.config.dev
+}, null, 2));
 
 const backend = await createBackendContext({
   storagePath: storage,
@@ -42,7 +48,9 @@ const backend = await createBackendContext({
 const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
 
 console.log('[Worker] Backend initialized via orchestrator');
-console.log('[Worker] Blob server port:', ctx.blobServerPort);
+// Use dynamic port from blobServer object (more reliable than captured value)
+const getBlobPort = () => (ctx.blobServer as any)?.port || ctx.blobServerPort || 0;
+console.log('[Worker] Blob server port:', getBlobPort());
 
 // ============================================
 // Desktop-Specific Functions (File Pickers, FFmpeg)
@@ -247,6 +255,8 @@ rpc.onCreateIdentity(async (req: any) => {
 
 rpc.onGetIdentity(async () => {
   const active = identityManager.getActiveIdentity();
+  console.log('[Worker] getIdentity called, active:', active ? active.name : 'none');
+  console.log('[Worker] All identities count:', identityManager.getIdentities().length);
   return { identity: active };
 });
 
@@ -550,7 +560,7 @@ rpc.onGetStatus(async () => ({
   status: {
     ready: true,
     hasIdentity: identityManager.getIdentities().length > 0,
-    blobServerPort: ctx.blobServerPort,
+    blobServerPort: getBlobPort(),
   }
 }));
 
@@ -559,7 +569,7 @@ rpc.onGetSwarmStatus(async () => ({
   peerCount: ctx.swarm.connections.size,
 }));
 
-rpc.onGetBlobServerPort(async () => ({ port: ctx.blobServerPort }));
+rpc.onGetBlobServerPort(async () => ({ port: getBlobPort() }));
 
 // Desktop-specific file pickers
 rpc.onPickVideoFile(async () => {
@@ -592,7 +602,7 @@ rpc.onEventLog(() => {});
 rpc.onEventVideoStats(() => {});
 
 // Send ready event
-rpc.eventReady({ blobServerPort: ctx.blobServerPort });
+rpc.eventReady({ blobServerPort: getBlobPort() });
 console.log('[Worker] HRPC ready, handlers registered');
 
 ipcPipe.on('error', (err: Error) => {

@@ -1,13 +1,17 @@
 /**
  * RPC Client - Web (Pear Desktop)
  *
- * Uses the PearWorkerClient to communicate with the Pear worker.
- * The worker runs in a separate process via pear-run.
+ * Unified platform RPC layer for Pear desktop apps.
+ * Uses the existing PearWorkerClient set up by worker-client.js (unbundled script).
+ *
+ * NOTE: The actual HRPC/pear-run initialization happens in worker-client.js,
+ * which is loaded as an unbundled ESM script in Pear. This module just
+ * provides a clean interface to that existing infrastructure.
  */
 
 import type { VideoStats } from './types';
 
-// PearWorkerClient is set on window by worker-client.js
+// PearWorkerClient is set on window by worker-client.js (unbundled)
 declare global {
   interface Window {
     PearWorkerClient?: {
@@ -15,153 +19,327 @@ declare global {
       isConnected: boolean;
       blobServerPort: number | null;
       initialize(): Promise<void>;
+      getRpc(): any;
     };
   }
 }
 
-/**
- * Get the RPC instance from PearWorkerClient
- */
-function getRpc() {
-  if (typeof window === 'undefined') {
-    throw new Error('RPC not available in non-browser context');
-  }
-  if (!window.PearWorkerClient?.rpc) {
-    throw new Error('PearWorkerClient not initialized');
-  }
-  return window.PearWorkerClient.rpc;
+// Module state
+let _blobServerPort: number | null = null;
+let _isInitialized = false;
+
+// Event callback types
+type ReadyCallback = (data: { blobServerPort: number }) => void;
+type ErrorCallback = (data: { message: string }) => void;
+type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
+type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
+type FeedUpdateCallback = (data: { channelKey: string; action: string }) => void;
+
+// Event callback storage
+const eventCallbacks = {
+  ready: [] as ReadyCallback[],
+  error: [] as ErrorCallback[],
+  videoStats: [] as VideoStatsCallback[],
+  uploadProgress: [] as UploadProgressCallback[],
+  feedUpdate: [] as FeedUpdateCallback[],
+};
+
+// Helper to remove callback
+function removeCallback<T>(arr: T[], cb: T) {
+  const idx = arr.indexOf(cb);
+  if (idx !== -1) arr.splice(idx, 1);
 }
 
 /**
- * RPC Client for Desktop (Pear)
+ * Event subscription system
+ */
+export const events = {
+  onReady: (cb: ReadyCallback) => {
+    eventCallbacks.ready.push(cb);
+    return () => removeCallback(eventCallbacks.ready, cb);
+  },
+  onError: (cb: ErrorCallback) => {
+    eventCallbacks.error.push(cb);
+    return () => removeCallback(eventCallbacks.error, cb);
+  },
+  onVideoStats: (cb: VideoStatsCallback) => {
+    eventCallbacks.videoStats.push(cb);
+    return () => removeCallback(eventCallbacks.videoStats, cb);
+  },
+  onUploadProgress: (cb: UploadProgressCallback) => {
+    eventCallbacks.uploadProgress.push(cb);
+    return () => removeCallback(eventCallbacks.uploadProgress, cb);
+  },
+  onFeedUpdate: (cb: FeedUpdateCallback) => {
+    eventCallbacks.feedUpdate.push(cb);
+    return () => removeCallback(eventCallbacks.feedUpdate, cb);
+  },
+};
+
+// Event listeners for window events (dispatched by worker-client.js)
+let eventListenersSetup = false;
+
+function setupEventListeners() {
+  if (eventListenersSetup || typeof window === 'undefined') return;
+  eventListenersSetup = true;
+
+  window.addEventListener('pearVideoStats', ((e: CustomEvent) => {
+    eventCallbacks.videoStats.forEach(cb => cb(e.detail));
+  }) as EventListener);
+
+  window.addEventListener('pearUploadProgress', ((e: CustomEvent) => {
+    eventCallbacks.uploadProgress.forEach(cb => cb(e.detail));
+  }) as EventListener);
+
+  window.addEventListener('pearFeedUpdate', ((e: CustomEvent) => {
+    eventCallbacks.feedUpdate.forEach(cb => cb(e.detail));
+  }) as EventListener);
+}
+
+/**
+ * Initialize platform RPC for Pear desktop
  *
- * Provides typed methods that call the backend via HRPC
+ * This initializes the PearWorkerClient which spawns the worker process.
+ * The worker-client.js script must be loaded before calling this.
+ */
+export async function initPlatformRPC(): Promise<void> {
+  if (_isInitialized) {
+    console.log('[Platform RPC] Already initialized');
+    return;
+  }
+
+  if (typeof window === 'undefined') {
+    throw new Error('Platform RPC can only be initialized in browser context');
+  }
+
+  const workerClient = window.PearWorkerClient;
+  if (!workerClient) {
+    throw new Error('PearWorkerClient not available - ensure worker-client.js is loaded');
+  }
+
+  console.log('[Platform RPC] Initializing via PearWorkerClient...');
+
+  // Set up DOM event listeners for worker events
+  setupEventListeners();
+
+  try {
+    // Initialize the worker client (spawns worker, sets up HRPC)
+    await workerClient.initialize();
+
+    _blobServerPort = workerClient.blobServerPort;
+    _isInitialized = true;
+
+    console.log('[Platform RPC] Initialized, blobServerPort:', _blobServerPort);
+
+    // Fire ready callbacks
+    eventCallbacks.ready.forEach(cb => cb({ blobServerPort: _blobServerPort! }));
+  } catch (err) {
+    console.error('[Platform RPC] Failed to initialize:', err);
+    throw err;
+  }
+}
+
+/**
+ * Terminate platform RPC
+ */
+export function terminatePlatformRPC(): void {
+  const workerClient = window?.PearWorkerClient;
+  if (workerClient && (workerClient as any).close) {
+    console.log('[Platform RPC] Closing worker client');
+    (workerClient as any).close();
+  }
+  _isInitialized = false;
+  _blobServerPort = null;
+}
+
+/**
+ * Check if RPC is initialized
+ */
+export function isInitialized(): boolean {
+  return _isInitialized;
+}
+
+/**
+ * Get blob server port
+ */
+export function getBlobServerPort(): number | null {
+  return _blobServerPort;
+}
+
+/**
+ * Get raw HRPC instance (for advanced use cases)
+ */
+export function getHRPCInstance(): any {
+  return window?.PearWorkerClient?.getRpc?.() || window?.PearWorkerClient?.rpc;
+}
+
+// Helper to get RPC and ensure it's ready
+function ensureRPC() {
+  const rpc = getHRPCInstance();
+  if (!rpc) throw new Error('Platform RPC not initialized');
+  return rpc;
+}
+
+// Helper to normalize string or object params
+function normalizeParam<T extends string>(
+  arg: T | { [K in T]: string },
+  key: T
+): { [K in T]: string } {
+  if (typeof arg === 'string') {
+    return { [key]: arg } as { [K in T]: string };
+  }
+  return arg as { [K in T]: string };
+}
+
+/**
+ * RPC Client - Typed methods for backend communication
+ * Methods accept either individual args or object params for flexibility
  */
 export const rpc = {
   // Identity
-  async createIdentity(name: string) {
-    return getRpc().createIdentity({ name });
+  async createIdentity(nameOrReq: string | { name: string }) {
+    const req = typeof nameOrReq === 'string' ? { name: nameOrReq } : nameOrReq;
+    return ensureRPC().createIdentity(req);
   },
 
   async getIdentity() {
-    return getRpc().getIdentity({});
+    return ensureRPC().getIdentity({});
   },
 
   async getIdentities() {
-    return getRpc().getIdentities({});
+    return ensureRPC().getIdentities({});
   },
 
-  async setActiveIdentity(publicKey: string) {
-    return getRpc().setActiveIdentity({ publicKey });
+  async setActiveIdentity(publicKeyOrReq: string | { publicKey: string }) {
+    const req = typeof publicKeyOrReq === 'string' ? { publicKey: publicKeyOrReq } : publicKeyOrReq;
+    return ensureRPC().setActiveIdentity(req);
   },
 
-  async recoverIdentity(seedPhrase: string, name?: string) {
-    return getRpc().recoverIdentity({ seedPhrase, name });
+  async recoverIdentity(seedPhraseOrReq: string | { seedPhrase: string; name?: string }, name?: string) {
+    const req = typeof seedPhraseOrReq === 'string'
+      ? { seedPhrase: seedPhraseOrReq, name }
+      : seedPhraseOrReq;
+    return ensureRPC().recoverIdentity(req);
   },
 
   // Videos
-  async listVideos(channelKey: string) {
-    return getRpc().listVideos({ channelKey });
+  async listVideos(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().listVideos(req);
   },
 
-  async getVideoUrl(channelKey: string, videoId: string) {
-    return getRpc().getVideoUrl({ channelKey, videoId });
+  async getVideoUrl(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().getVideoUrl(req);
   },
 
-  async prefetchVideo(channelKey: string, videoId: string) {
-    return getRpc().prefetchVideo({ channelKey, videoId });
+  async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().prefetchVideo(req);
   },
 
-  async getVideoStats(channelKey: string, videoId: string): Promise<{ stats: VideoStats }> {
-    return getRpc().getVideoStats({ channelKey, videoId });
+  async getVideoStats(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string): Promise<{ stats: VideoStats }> {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().getVideoStats(req);
   },
 
-  async uploadVideo(title: string, description: string, filePath: string) {
-    return getRpc().uploadVideo({ title, description, filePath });
+  async uploadVideo(titleOrReq: string | { title: string; description: string; filePath: string }, description?: string, filePath?: string) {
+    const req = typeof titleOrReq === 'string'
+      ? { title: titleOrReq, description: description!, filePath: filePath! }
+      : titleOrReq;
+    return ensureRPC().uploadVideo(req);
+  },
+
+  async setVideoThumbnail(videoIdOrReq: string | { videoId: string; imageData: string; mimeType: string }, imageData?: string, mimeType?: string) {
+    const req = typeof videoIdOrReq === 'string'
+      ? { videoId: videoIdOrReq, imageData: imageData!, mimeType: mimeType! }
+      : videoIdOrReq;
+    return ensureRPC().setVideoThumbnail(req);
+  },
+
+  async getVideoThumbnail(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().getVideoThumbnail(req);
   },
 
   // Channels
-  async getChannel(publicKey: string) {
-    return getRpc().getChannel({ publicKey });
+  async getChannel(publicKeyOrReq: string | { publicKey: string }) {
+    const req = typeof publicKeyOrReq === 'string' ? { publicKey: publicKeyOrReq } : publicKeyOrReq;
+    return ensureRPC().getChannel(req);
   },
 
-  async subscribeChannel(channelKey: string) {
-    return getRpc().subscribeChannel({ channelKey });
+  async subscribeChannel(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().subscribeChannel(req);
   },
 
-  async unsubscribeChannel(channelKey: string) {
-    return getRpc().unsubscribeChannel({ channelKey });
+  // Alias for subscribeChannel (used by some UI components)
+  async joinChannel(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().joinChannel(req);
+  },
+
+  async unsubscribeChannel(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().unsubscribeChannel(req);
   },
 
   async getSubscriptions() {
-    return getRpc().getSubscriptions({});
+    return ensureRPC().getSubscriptions({});
   },
 
   // Public Feed
   async getPublicFeed() {
-    return getRpc().getPublicFeed({});
+    return ensureRPC().getPublicFeed({});
   },
 
   async refreshFeed() {
-    return getRpc().refreshFeed({});
+    return ensureRPC().refreshFeed({});
   },
 
   async submitToFeed() {
-    return getRpc().submitToFeed({});
+    return ensureRPC().submitToFeed({});
   },
 
-  async hideChannel(channelKey: string) {
-    return getRpc().hideChannel({ channelKey });
+  async hideChannel(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().hideChannel(req);
   },
 
-  async getChannelMeta(channelKey: string) {
-    return getRpc().getChannelMeta({ channelKey });
+  async getChannelMeta(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().getChannelMeta(req);
   },
 
   // Status
   async getStatus() {
-    return getRpc().getStatus({});
+    return ensureRPC().getStatus({});
   },
 
   async getSwarmStatus() {
-    return getRpc().getSwarmStatus({});
+    return ensureRPC().getSwarmStatus({});
   },
 
   async getBlobServerPort() {
-    return getRpc().getBlobServerPort({});
+    return ensureRPC().getBlobServerPort({});
   },
 
-  // Desktop-specific
+  // Desktop-specific: Native file picker
   async pickVideoFile() {
-    return getRpc().pickVideoFile({});
+    return ensureRPC().pickVideoFile({});
+  },
+
+  async pickImageFile() {
+    return ensureRPC().pickImageFile({});
   },
 };
 
 export type RPCClient = typeof rpc;
-
-/**
- * Initialize the RPC connection
- * Called once during app startup
- */
-export async function initializeRPC(): Promise<void> {
-  if (typeof window === 'undefined') return;
-  if (!window.PearWorkerClient) {
-    console.warn('[RPC] PearWorkerClient not available');
-    return;
-  }
-  await window.PearWorkerClient.initialize();
-}
-
-/**
- * Check if RPC is connected
- */
-export function isRPCConnected(): boolean {
-  return window?.PearWorkerClient?.isConnected ?? false;
-}
-
-/**
- * Get the blob server port
- */
-export function getBlobServerPort(): number | null {
-  return window?.PearWorkerClient?.blobServerPort ?? null;
-}

@@ -24,6 +24,18 @@
   "dependencies": {
     "@peartube/spec": "file:../spec"
   },
+  "peerDependencies": {
+    "react-native-bare-kit": "*",
+    "expo-file-system": "*"
+  },
+  "peerDependenciesMeta": {
+    "react-native-bare-kit": {
+      "optional": true
+    },
+    "expo-file-system": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "typescript": "^5.9.0"
   }

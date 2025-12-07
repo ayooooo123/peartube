@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { colors, spacing } from '../lib/theme';
-import { type BackendStatus, type Identity } from '../lib/rpc';
+import type { BackendStatus, Identity } from '@peartube/core';
 import { Column, Row, Text, Button, Input, Card, Avatar, Divider, Alert } from '../components/ui';
 
 interface SettingsPageProps {

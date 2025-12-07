@@ -205,9 +205,9 @@ export default function HomeScreen() {
           channel: { name: channelMeta[channelKey]?.name || 'Unknown' }
         }))
         allVideos.push(...videos)
-      } catch (err) {
-        // Continue with other channels
-        console.log('[Home] Failed to load videos from channel:', channelKey)
+      } catch (err: any) {
+        // Continue with other channels - this is expected for channels that haven't synced yet
+        console.log('[Home] Failed to load videos from channel:', channelKey, '-', err?.message || err)
       }
     }
 

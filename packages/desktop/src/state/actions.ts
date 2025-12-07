@@ -5,7 +5,7 @@
  * These can be shared across components and eventually mirrored to mobile.
  */
 
-import { rpc } from '../lib/rpc';
+import { rpc } from '@peartube/platform/rpc';
 import type { Video, Identity, PublicFeedEntry, ChannelMetadata, BackendStatus } from '@peartube/core';
 
 // Action dispatch type - mirrors reducer actions

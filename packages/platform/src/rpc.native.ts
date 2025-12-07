@@ -1,126 +1,320 @@
 /**
  * RPC Client - Native (React Native / Mobile)
  *
- * Uses BareKit IPC to communicate with the Bare worklet backend.
- * The backend runs in a separate thread via react-native-bare-kit.
+ * Unified platform RPC layer for mobile apps.
+ * Handles BareKit Worklet initialization, HRPC setup, and event subscriptions.
  */
 
 import type { VideoStats } from './types';
 
-// BareKit types (provided by react-native-bare-kit)
-declare const BareKit: {
-  IPC: {
-    write(data: Buffer): void;
-    on(event: 'data', callback: (data: Buffer) => void): void;
-  };
+// Types for external dependencies (provided at runtime)
+declare const Worklet: new () => {
+  start(name: string, source: string, args?: string[]): void;
+  terminate(): void;
+  IPC: any;
 };
 
-// HRPC instance will be set by the app initialization
-let hrpcInstance: any = null;
+// HRPC class from @peartube/spec
+declare const HRPC: new (stream: any) => {
+  createIdentity(req: { name: string }): Promise<any>;
+  getIdentity(req: {}): Promise<any>;
+  getIdentities(req: {}): Promise<any>;
+  setActiveIdentity(req: { publicKey: string }): Promise<any>;
+  listVideos(req: { channelKey: string }): Promise<any>;
+  getVideoUrl(req: { channelKey: string; videoId: string }): Promise<any>;
+  prefetchVideo(req: { channelKey: string; videoId: string }): Promise<any>;
+  getVideoStats(req: { channelKey: string; videoId: string }): Promise<any>;
+  getVideoThumbnail(req: { channelKey: string; videoId: string }): Promise<any>;
+  getChannel(req: { publicKey: string }): Promise<any>;
+  subscribeChannel(req: { channelKey: string }): Promise<any>;
+  joinChannel(req: { channelKey: string }): Promise<any>;
+  getSubscriptions(req: {}): Promise<any>;
+  getPublicFeed(req: {}): Promise<any>;
+  refreshFeed(req: {}): Promise<any>;
+  getChannelMeta(req: { channelKey: string }): Promise<any>;
+  getStatus(req: {}): Promise<any>;
+  getSwarmStatus(req: {}): Promise<any>;
+  uploadVideo(req: { filePath: string; title: string; description: string; category?: string }): Promise<any>;
+  pickVideoFile(req: {}): Promise<any>;
+  pickImageFile(req: {}): Promise<any>;
+  onEventReady(handler: (data: any) => void): void;
+  onEventError(handler: (data: any) => void): void;
+  onEventVideoStats(handler: (data: any) => void): void;
+  onEventUploadProgress(handler: (data: any) => void): void;
+};
 
-/**
- * Set the HRPC instance (called during app initialization)
- */
-export function setHRPCInstance(rpc: any) {
-  hrpcInstance = rpc;
+// FileSystem from expo-file-system
+declare const FileSystem: {
+  documentDirectory: string | null;
+};
+
+// Module state
+let worklet: InstanceType<typeof Worklet> | null = null;
+let hrpc: InstanceType<typeof HRPC> | null = null;
+let _blobServerPort: number | null = null;
+let _isInitialized = false;
+
+// Event callback types
+type ReadyCallback = (data: { blobServerPort: number }) => void;
+type ErrorCallback = (data: { message: string }) => void;
+type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
+type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
+
+// Event callback storage
+const eventCallbacks = {
+  ready: [] as ReadyCallback[],
+  error: [] as ErrorCallback[],
+  videoStats: [] as VideoStatsCallback[],
+  uploadProgress: [] as UploadProgressCallback[],
+};
+
+// Helper to remove callback
+function removeCallback<T>(arr: T[], cb: T) {
+  const idx = arr.indexOf(cb);
+  if (idx !== -1) arr.splice(idx, 1);
 }
 
 /**
- * Get the HRPC instance
+ * Event subscription system
  */
-export function getHRPCInstance() {
-  return hrpcInstance;
-}
+export const events = {
+  onReady: (cb: ReadyCallback) => {
+    eventCallbacks.ready.push(cb);
+    return () => removeCallback(eventCallbacks.ready, cb);
+  },
+  onError: (cb: ErrorCallback) => {
+    eventCallbacks.error.push(cb);
+    return () => removeCallback(eventCallbacks.error, cb);
+  },
+  onVideoStats: (cb: VideoStatsCallback) => {
+    eventCallbacks.videoStats.push(cb);
+    return () => removeCallback(eventCallbacks.videoStats, cb);
+  },
+  onUploadProgress: (cb: UploadProgressCallback) => {
+    eventCallbacks.uploadProgress.push(cb);
+    return () => removeCallback(eventCallbacks.uploadProgress, cb);
+  },
+};
 
 /**
- * RPC Client for Mobile
+ * Initialize platform RPC for mobile
  *
- * Provides typed methods that call the backend via HRPC
+ * @param config.backendSource - Backend bundle source code
+ * @param config.storagePath - Optional storage path (defaults to documentDirectory)
+ */
+export async function initPlatformRPC(config: {
+  backendSource: string;
+  storagePath?: string;
+}): Promise<void> {
+  if (_isInitialized && worklet) {
+    console.log('[Platform RPC] Already initialized');
+    return;
+  }
+
+  // Get dependencies at runtime
+  const WorkletClass = require('react-native-bare-kit').Worklet;
+  const HRPCClass = require('@peartube/spec');
+  const FS = require('expo-file-system');
+
+  // Determine storage path
+  let storagePath = config.storagePath || FS.documentDirectory || '';
+  if (storagePath.startsWith('file://')) {
+    storagePath = storagePath.slice(7);
+  }
+
+  console.log('[Platform RPC] Initializing with storage:', storagePath);
+
+  // Create and start worklet
+  worklet = new WorkletClass();
+  worklet.start('/backend.bundle', config.backendSource, [storagePath]);
+  console.log('[Platform RPC] Worklet started');
+
+  // Setup HRPC client
+  hrpc = new HRPCClass(worklet.IPC);
+  console.log('[Platform RPC] HRPC client initialized');
+
+  // Wire event handlers
+  hrpc.onEventReady((data: any) => {
+    console.log('[Platform RPC] Backend ready, blobServerPort:', data?.blobServerPort);
+    _blobServerPort = data?.blobServerPort || null;
+    _isInitialized = true;
+    eventCallbacks.ready.forEach(cb => cb(data));
+  });
+
+  hrpc.onEventError((data: any) => {
+    console.error('[Platform RPC] Backend error:', data?.message);
+    eventCallbacks.error.forEach(cb => cb(data));
+  });
+
+  hrpc.onEventVideoStats((data: any) => {
+    eventCallbacks.videoStats.forEach(cb => cb(data));
+  });
+
+  hrpc.onEventUploadProgress((data: any) => {
+    eventCallbacks.uploadProgress.forEach(cb => cb(data));
+  });
+}
+
+/**
+ * Terminate platform RPC (for app lifecycle management)
+ */
+export function terminatePlatformRPC(): void {
+  if (worklet) {
+    console.log('[Platform RPC] Terminating worklet');
+    try {
+      worklet.terminate();
+    } catch (err) {
+      console.error('[Platform RPC] Failed to terminate:', err);
+    }
+    worklet = null;
+    hrpc = null;
+    _isInitialized = false;
+  }
+}
+
+/**
+ * Check if RPC is initialized
+ */
+export function isInitialized(): boolean {
+  return _isInitialized;
+}
+
+/**
+ * Get blob server port
+ */
+export function getBlobServerPort(): number | null {
+  return _blobServerPort;
+}
+
+/**
+ * Get raw HRPC instance (for advanced use cases)
+ */
+export function getHRPCInstance(): any {
+  return hrpc;
+}
+
+// Helper to ensure RPC is ready
+function ensureRPC() {
+  if (!hrpc) throw new Error('Platform RPC not initialized');
+  return hrpc;
+}
+
+/**
+ * RPC Client - Typed methods for backend communication
+ * Methods accept either individual args or object params for flexibility
  */
 export const rpc = {
   // Identity
-  async createIdentity(name: string) {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.createIdentity({ name });
+  async createIdentity(nameOrReq: string | { name: string }) {
+    const req = typeof nameOrReq === 'string' ? { name: nameOrReq } : nameOrReq;
+    return ensureRPC().createIdentity(req);
   },
 
   async getIdentity() {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getIdentity({});
+    return ensureRPC().getIdentity({});
   },
 
   async getIdentities() {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getIdentities({});
+    return ensureRPC().getIdentities({});
   },
 
-  async setActiveIdentity(publicKey: string) {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.setActiveIdentity({ publicKey });
+  async setActiveIdentity(publicKeyOrReq: string | { publicKey: string }) {
+    const req = typeof publicKeyOrReq === 'string' ? { publicKey: publicKeyOrReq } : publicKeyOrReq;
+    return ensureRPC().setActiveIdentity(req);
   },
 
   // Videos
-  async listVideos(channelKey: string) {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.listVideos({ channelKey });
+  async listVideos(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().listVideos(req);
   },
 
-  async getVideoUrl(channelKey: string, videoId: string) {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getVideoUrl({ channelKey, videoId });
+  async getVideoUrl(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().getVideoUrl(req);
   },
 
-  async prefetchVideo(channelKey: string, videoId: string) {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.prefetchVideo({ channelKey, videoId });
+  async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().prefetchVideo(req);
   },
 
-  async getVideoStats(channelKey: string, videoId: string): Promise<{ stats: VideoStats }> {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getVideoStats({ channelKey, videoId });
+  async getVideoStats(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string): Promise<{ stats: VideoStats }> {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().getVideoStats(req);
+  },
+
+  async uploadVideo(filePathOrReq: string | { filePath: string; title: string; description: string; category?: string }, title?: string, description?: string, category?: string) {
+    const req = typeof filePathOrReq === 'string'
+      ? { filePath: filePathOrReq, title: title!, description: description!, category }
+      : filePathOrReq;
+    return ensureRPC().uploadVideo(req);
+  },
+
+  async getVideoThumbnail(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().getVideoThumbnail(req);
   },
 
   // Channels
-  async getChannel(publicKey: string) {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getChannel({ publicKey });
+  async getChannel(publicKeyOrReq: string | { publicKey: string }) {
+    const req = typeof publicKeyOrReq === 'string' ? { publicKey: publicKeyOrReq } : publicKeyOrReq;
+    return ensureRPC().getChannel(req);
   },
 
-  async subscribeChannel(channelKey: string) {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.subscribeChannel({ channelKey });
+  async subscribeChannel(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().subscribeChannel(req);
+  },
+
+  // Alias for subscribeChannel (used by some UI components)
+  async joinChannel(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().joinChannel(req);
   },
 
   async getSubscriptions() {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getSubscriptions({});
+    return ensureRPC().getSubscriptions({});
   },
 
   // Public Feed
   async getPublicFeed() {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getPublicFeed({});
+    return ensureRPC().getPublicFeed({});
   },
 
   async refreshFeed() {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.refreshFeed({});
+    return ensureRPC().refreshFeed({});
   },
 
-  async getChannelMeta(channelKey: string) {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getChannelMeta({ channelKey });
+  async getChannelMeta(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().getChannelMeta(req);
   },
 
   // Status
   async getStatus() {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getStatus({});
+    return ensureRPC().getStatus({});
   },
 
   async getSwarmStatus() {
-    if (!hrpcInstance) throw new Error('HRPC not initialized');
-    return hrpcInstance.getSwarmStatus({});
+    return ensureRPC().getSwarmStatus({});
+  },
+
+  // File pickers
+  async pickVideoFile() {
+    return ensureRPC().pickVideoFile({});
+  },
+
+  async pickImageFile() {
+    return ensureRPC().pickImageFile({});
   },
 };
 

@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { colors, spacing } from '../lib/theme';
-import { type Video, type ChannelMetadata } from '../lib/rpc';
+import type { Video, ChannelMetadata } from '@peartube/core';
 import { Column, Row, Text, Button } from '../components/ui';
 import { VideoGrid, VideoCard } from '../components/VideoCard';
 

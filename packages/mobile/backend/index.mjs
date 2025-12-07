@@ -64,7 +64,8 @@ const backend = await createBackendContext({
 
 const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend
 
-console.log('[Backend] Backend initialized, blob server port:', ctx.blobServerPort)
+const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
+console.log('[Backend] Backend initialized, blob server port:', blobPort, '(from blobServer.port:', ctx.blobServer?.port, ', from ctx.blobServerPort:', ctx.blobServerPort, ')')
 
 // Create HRPC instance
 rpc = new HRPC(IPC)
@@ -341,7 +342,7 @@ rpc.onGetPinnedChannels(async () => {
 rpc.onGetVideoThumbnail(async (req) => {
   console.log('[HRPC] getVideoThumbnail:', req.channelKey?.slice(0, 16), req.videoId)
   const result = await api.getVideoThumbnail(req.channelKey, req.videoId)
-  return { url: result.url || null, dataUrl: null }
+  return { url: result.url || null, exists: result.exists || false, dataUrl: null }
 })
 
 rpc.onGetVideoMetadata(async (req) => {
@@ -374,14 +375,14 @@ rpc.onGetStatus(async () => {
     status: {
       ready: true,
       hasIdentity: active !== null,
-      blobServerPort: ctx.blobServerPort || 0
+      blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0
     }
   }
 })
 
 rpc.onGetBlobServerPort(async () => {
   console.log('[HRPC] getBlobServerPort')
-  return { port: ctx.blobServerPort || 0 }
+  return { port: ctx.blobServer?.port || ctx.blobServerPort || 0 }
 })
 
 // Desktop-specific handlers (stubs for mobile)
@@ -418,8 +419,9 @@ console.log('[Backend] HRPC handlers registered')
 
 // Send ready event
 try {
-  rpc.eventReady({ blobServerPort: ctx.blobServerPort || 0 })
-  console.log('[Backend] Sent eventReady via HRPC')
+  const port = ctx.blobServer?.port || ctx.blobServerPort || 0
+  rpc.eventReady({ blobServerPort: port })
+  console.log('[Backend] Sent eventReady via HRPC, blobServerPort:', port)
 } catch (e) {
   console.error('[Backend] Failed to send eventReady:', e.message)
 }

@@ -53,29 +53,23 @@ export async function initializeStorage(config) {
   const blobStore = wrapTimeout ? wrapStoreWithTimeout(store, defaultTimeout) : store;
 
   // Initialize blob server for video streaming
-  const blobServer = new BlobServer(blobStore, {
-    port: 0, // Random available port
-    host: '127.0.0.1'
-  });
+  let blobServer = null;
+  let blobServerPort = 0;
 
-  // Hook into blob server's _getCore for optimized video streaming
-  // Uses wait:false so local blocks return instantly without network delay
-  const originalGetCore = blobServer._getCore.bind(blobServer);
-  blobServer._getCore = async function(k, info, active) {
-    const core = await originalGetCore(k, info, active);
-    if (!core) return core;
-
-    // Return a fast session - wait:false means local blocks return instantly
-    return core.session({
-      wait: false,
-      timeout: 5000,
-      activeRequests: true
+  try {
+    blobServer = new BlobServer(blobStore, {
+      port: 0, // Random available port
+      host: '127.0.0.1'
     });
-  };
 
-  await blobServer.listen();
-  const blobServerPort = blobServer.port;
-  console.log('[Storage] Blob server listening on port:', blobServerPort);
+    console.log('[Storage] Starting blob server listen...');
+    await blobServer.listen();
+    blobServerPort = blobServer.port;
+    console.log('[Storage] Blob server listening on port:', blobServerPort);
+  } catch (err) {
+    console.error('[Storage] Failed to initialize blob server:', err.message);
+    // Continue without blob server - will need alternative video streaming
+  }
 
   // Initialize metadata database
   const metaCore = store.get({ name: 'peartube-meta' });

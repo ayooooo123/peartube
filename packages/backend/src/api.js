@@ -685,7 +685,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       return {
         connected: true,
         peers: ctx.swarm?.connections?.size || 0,
-        blobServerPort: ctx.blobServerPort,
+        blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
         version: '0.1.0'
       };
     },

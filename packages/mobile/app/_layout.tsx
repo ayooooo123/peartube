@@ -1,10 +1,12 @@
 /**
  * Root Layout - Wraps app with providers
+ *
+ * Uses @peartube/platform/rpc for unified backend communication.
  */
 import '../global.css'
-import { useEffect, useState, createContext, useContext, useRef, useCallback } from 'react'
+import { useEffect, useState, createContext, useContext, useCallback } from 'react'
 import { Stack } from 'expo-router'
-import { StatusBar, View, Text, Platform, AppState, AppStateStatus } from 'react-native'
+import { StatusBar, View, Platform, AppState, AppStateStatus } from 'react-native'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData } from '@/lib/VideoPlayerContext'
@@ -17,27 +19,13 @@ export { colors }
 
 // Platform detection
 const isNative = Platform.OS !== 'web'
-// Check for Pear runtime (available on Pear desktop)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
-
-// Native-only imports (not available on web)
-let Worklet: any = null
-let HRPC: any = null
-let FileSystem: any = null
-
-if (isNative) {
-  Worklet = require('react-native-bare-kit').Worklet
-  HRPC = require('@peartube/spec')
-  FileSystem = require('expo-file-system')
-}
-
-// Module-level worklet reference for lifecycle management
-let workletInstance: any = null
-
-// Note: We now use HRPC typed methods directly instead of command IDs
 
 // Types from shared package
 import type { Identity, Video } from '@peartube/core'
+
+// Platform RPC - conditionally imported
+let platformRPC: any = null
 
 interface AppContextType {
   ready: boolean
@@ -45,7 +33,7 @@ interface AppContextType {
   videos: Video[]
   loading: boolean
   blobServerPort: number | null
-  rpc: any // HRPC instance - typed methods available
+  rpc: any
   uploadVideo: (filePath: string, title: string, description: string, mimeType?: string, category?: string, onProgress?: (progress: number) => void) => Promise<any>
   pickVideoFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
   pickImageFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
@@ -68,39 +56,16 @@ export default function RootLayout() {
   const [videos, setVideos] = useState<Video[]>([])
   const [loading, setLoading] = useState(true)
   const [blobServerPort, setBlobServerPort] = useState<number | null>(null)
-  const rpcRef = useRef<any>(null)
 
   useEffect(() => {
     if (isNative) {
-      // Handle app state changes for worklet lifecycle
-      const handleAppStateChange = (nextState: AppStateStatus) => {
-        if (nextState === 'background' || nextState === 'inactive') {
-          if (workletInstance) {
-            console.log('[App] Terminating worklet for background')
-            try {
-              workletInstance.terminate()
-            } catch (err) {
-              console.error('[App] Failed to terminate worklet:', err)
-            }
-            workletInstance = null
-            rpcRef.current = null
-            setReady(false)
-          }
-        } else if (nextState === 'active' && !workletInstance) {
-          console.log('[App] Re-initializing backend from foreground')
-          initBackend()
-        }
-      }
+      initNativeBackend()
 
       const subscription = AppState.addEventListener('change', handleAppStateChange)
-      initBackend()
-
       return () => {
         subscription.remove()
-        // Cleanup on unmount
-        if (workletInstance) {
-          workletInstance.terminate()
-          workletInstance = null
+        if (platformRPC) {
+          platformRPC.terminatePlatformRPC()
         }
       }
     } else if (isPear) {
@@ -114,18 +79,12 @@ export default function RootLayout() {
 
   // Subscribe to video load events to trigger prefetch
   useEffect(() => {
-    if (!ready) return
+    if (!ready || !platformRPC) return
 
     const unsubscribe = videoLoadEventEmitter.subscribe(async (video: VideoData) => {
-      if (!rpcRef.current) return
-
       console.log('[App] Video loaded, starting prefetch for:', video.title)
       try {
-        // Call prefetchVideo via HRPC to start P2P download and stats streaming
-        await rpcRef.current.prefetchVideo({
-          channelKey: video.channelKey,
-          videoId: video.path,
-        })
+        await platformRPC.rpc.prefetchVideo(video.channelKey, video.path)
         console.log('[App] prefetchVideo sent for:', video.path)
       } catch (err) {
         console.error('[App] Failed to start prefetch:', err)
@@ -135,150 +94,82 @@ export default function RootLayout() {
     return unsubscribe
   }, [ready])
 
-  async function initBackend() {
-    console.log('[App] Initializing backend with HRPC...')
+  function handleAppStateChange(nextState: AppStateStatus) {
+    if (!platformRPC) return
 
-    // Create and store worklet reference for lifecycle management
-    const worklet = new Worklet()
-    workletInstance = worklet
-
-    // Get document directory for storage (strip file:// prefix for bare-fs)
-    let storageDir = FileSystem.documentDirectory || ''
-    if (storageDir.startsWith('file://')) {
-      storageDir = storageDir.slice(7)
+    if (nextState === 'background' || nextState === 'inactive') {
+      console.log('[App] Terminating backend for background')
+      platformRPC.terminatePlatformRPC()
+      setReady(false)
+    } else if (nextState === 'active' && !platformRPC.isInitialized()) {
+      console.log('[App] Re-initializing backend from foreground')
+      initNativeBackend()
     }
+  }
 
-    // Load bundled backend
-    const backendSource = require('../backend.bundle.js')
-    console.log('[App] Backend bundle length:', backendSource?.length || 0)
+  async function initNativeBackend() {
+    console.log('[App] Initializing native backend via platform RPC...')
 
-    try {
-      worklet.start('/backend.bundle', backendSource, [storageDir])
-      console.log('[App] Backend worklet started')
-    } catch (err) {
-      console.error('[App] Backend worklet failed:', err)
-      workletInstance = null
-      return
-    }
+    // Import platform RPC
+    platformRPC = await import('@peartube/platform/rpc')
 
-    const { IPC } = worklet
-
-    // Setup HRPC client with the IPC stream
-    const rpc = new HRPC(IPC)
-    rpcRef.current = rpc
-    console.log('[App] HRPC client initialized')
-
-    // Register event handlers
-    rpc.onEventReady(async (data: any) => {
+    // Subscribe to events before initialization
+    platformRPC.events.onReady(async (data: any) => {
       console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
-      if (data?.blobServerPort) {
-        setBlobServerPort(data.blobServerPort)
-      }
+      setBlobServerPort(data?.blobServerPort || null)
       setReady(true)
 
       // Load identity after ready
-      try {
-        setLoading(true)
-        const result = await rpc.getIdentity({})
-        const id = result?.identity
-        if (id) {
-          setIdentity(id)
-          if (id.driveKey) {
-            const videosResult = await rpc.listVideos({ channelKey: id.driveKey })
-            setVideos(videosResult?.videos || [])
-          }
-        }
-      } catch (err) {
-        console.error('[App] Failed to load identity:', err)
-      } finally {
-        setLoading(false)
-      }
+      await loadInitialData()
     })
 
-    rpc.onEventError((data: any) => {
+    platformRPC.events.onError((data: any) => {
       console.error('[App] Backend error:', data?.message)
     })
 
-    rpc.onEventVideoStats((data: any) => {
-      // Push stats to VideoPlayerContext via event emitter
-      console.log('[App] Received video stats event:', data?.stats?.progress + '%')
+    platformRPC.events.onVideoStats((data: any) => {
       if (data?.channelKey && data?.videoId && data?.stats) {
         videoStatsEventEmitter.emit(data.channelKey, data.videoId, data.stats)
       }
     })
 
-    rpc.onEventUploadProgress((data: any) => {
+    platformRPC.events.onUploadProgress((data: any) => {
       console.log('[App] Upload progress:', data?.progress + '%')
     })
+
+    // Initialize with backend source
+    const backendSource = require('../backend.bundle.js')
+    console.log('[App] Backend bundle length:', backendSource?.length || 0)
+
+    try {
+      await platformRPC.initPlatformRPC({ backendSource })
+    } catch (err) {
+      console.error('[App] Failed to initialize platform RPC:', err)
+    }
   }
 
   async function initPearBackend() {
-    console.log('[App] Initializing Pear desktop backend via PearWorkerClient...')
-
-    // Access PearWorkerClient (set up by worker-client.js unbundled script)
-    const workerClient = (window as any).PearWorkerClient
-    if (!workerClient) {
-      console.error('[App] PearWorkerClient not available')
-      setReady(true)
-      setLoading(false)
-      return
-    }
+    console.log('[App] Initializing Pear desktop backend via platform RPC...')
 
     try {
-      // Initialize the worker client (spawns worker, sets up HRPC)
-      await workerClient.initialize()
+      // Import platform RPC for web
+      platformRPC = await import('@peartube/platform/rpc')
 
-      const rpc = workerClient.getRpc()
-      if (!rpc) {
-        throw new Error('Failed to get RPC from worker client')
-      }
+      // Subscribe to events
+      platformRPC.events.onReady(async (data: any) => {
+        console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
+        setBlobServerPort(data?.blobServerPort || null)
+        await loadInitialData()
+      })
 
-      rpcRef.current = rpc
-      console.log('[App] HRPC client ready')
-
-      // Set blob server port
-      if (workerClient.blobServerPort) {
-        setBlobServerPort(workerClient.blobServerPort)
-      }
-
-      // Subscribe to video stats events from worker
-      window.addEventListener('pearVideoStats', ((e: CustomEvent) => {
-        const data = e.detail
+      platformRPC.events.onVideoStats((data: any) => {
         if (data?.channelKey && data?.videoId && data?.stats) {
           videoStatsEventEmitter.emit(data.channelKey, data.videoId, data.stats)
         }
-      }) as EventListener)
+      })
 
-      // Load identities and set active one
-      console.log('[App] Loading identities via HRPC...')
-      const result = await rpc.getIdentities({})
-      const identities = result?.identities || []
-      console.log('[App] Got', identities.length, 'identities')
-
-      if (identities.length > 0) {
-        const active = identities.find((id: any) => id.isActive) || identities[0]
-        setIdentity(active)
-
-        // Load videos for the active identity
-        if (active?.driveKey) {
-          console.log('[App] Loading videos for drive:', active.driveKey)
-          const videosResult = await rpc.listVideos({ channelKey: active.driveKey })
-          console.log('[App] Loaded videos:', videosResult?.videos?.length, 'videos')
-          if (videosResult?.videos?.length > 0) {
-            console.log('[App] First video:', videosResult.videos[0].id, 'thumbnail:', videosResult.videos[0].thumbnail)
-          }
-          setVideos(videosResult?.videos || [])
-        }
-      }
-
-      // Get blob server port if not already set
-      if (!workerClient.blobServerPort) {
-        const portResult = await rpc.getBlobServerPort({})
-        if (portResult?.port) {
-          setBlobServerPort(portResult.port)
-          console.log('[App] Blob server port:', portResult.port)
-        }
-      }
+      // Initialize
+      await platformRPC.initPlatformRPC()
     } catch (err) {
       console.error('[App] Failed to initialize Pear backend:', err)
     }
@@ -287,12 +178,39 @@ export default function RootLayout() {
     setLoading(false)
   }
 
-  // Load identity using HRPC
-  const loadIdentityFromBackend = useCallback(async () => {
-    if (!rpcRef.current) return
+  async function loadInitialData() {
+    if (!platformRPC) return
+
     try {
       setLoading(true)
-      const result = await rpcRef.current.getIdentity({})
+
+      // Load identities
+      const result = await platformRPC.rpc.getIdentities()
+      const identities = result?.identities || []
+      console.log('[App] Got', identities.length, 'identities')
+
+      if (identities.length > 0) {
+        const active = identities.find((id: any) => id.isActive) || identities[0]
+        setIdentity(active)
+
+        // Load videos for active identity
+        if (active?.driveKey) {
+          const videosResult = await platformRPC.rpc.listVideos(active.driveKey)
+          setVideos(videosResult?.videos || [])
+        }
+      }
+    } catch (err) {
+      console.error('[App] Failed to load initial data:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadIdentityFromBackend = useCallback(async () => {
+    if (!platformRPC) return
+    try {
+      setLoading(true)
+      const result = await platformRPC.rpc.getIdentity()
       const id = result?.identity
       setIdentity(id)
 
@@ -306,27 +224,21 @@ export default function RootLayout() {
     }
   }, [])
 
-  // Load videos using HRPC
   const loadVideosFromBackend = useCallback(async (driveKey: string) => {
-    if (!rpcRef.current) return
+    if (!platformRPC) return
     try {
-      const result = await rpcRef.current.listVideos({ channelKey: driveKey })
-      console.log('[App] Loaded videos:', result?.videos?.length, 'videos')
-      if (result?.videos?.length > 0) {
-        console.log('[App] First video thumbnail:', result.videos[0].thumbnail)
-      }
+      const result = await platformRPC.rpc.listVideos(driveKey)
       setVideos(result?.videos || [])
     } catch (err) {
       console.error('[App] Failed to load videos:', err)
     }
   }, [])
 
-  // Create identity using HRPC
   const createIdentityHandler = useCallback(async (name: string): Promise<Identity> => {
-    if (!rpcRef.current) throw new Error('RPC not ready')
+    if (!platformRPC) throw new Error('RPC not ready')
     setLoading(true)
     try {
-      const result = await rpcRef.current.createIdentity({ name })
+      const result = await platformRPC.rpc.createIdentity(name)
       const id = result?.identity
       setIdentity(id)
       return id
@@ -335,8 +247,6 @@ export default function RootLayout() {
     }
   }, [])
 
-  // Upload video using HRPC
-  // Worker handles streaming to Hyperdrive
   const uploadVideoHandler = useCallback(async (
     filePath: string,
     title: string,
@@ -345,20 +255,11 @@ export default function RootLayout() {
     category: string = 'Other',
     onProgress?: (progress: number) => void
   ): Promise<any> => {
-    if (!rpcRef.current) {
-      throw new Error('RPC not ready')
-    }
+    if (!platformRPC) throw new Error('RPC not ready')
 
     console.log('[App] Uploading video:', filePath, 'category:', category)
 
-    // Use HRPC uploadVideo method - progress comes via eventUploadProgress events
-    const result = await rpcRef.current.uploadVideo({
-      filePath,
-      title,
-      description,
-      category,
-    })
-
+    const result = await platformRPC.rpc.uploadVideo(filePath, title, description, category)
     console.log('[App] Upload complete:', result)
 
     // Reload videos
@@ -369,26 +270,14 @@ export default function RootLayout() {
     return result?.video
   }, [identity, loadVideosFromBackend])
 
-  // Pick video file using native file picker
-  const pickVideoFileHandler = useCallback(async (): Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null> => {
-    if (!rpcRef.current) {
-      console.log('[App] pickVideoFile: RPC not ready')
-      return null
-    }
-
-    console.log('[App] Opening native file picker...')
-    return await rpcRef.current.pickVideoFile({})
+  const pickVideoFileHandler = useCallback(async () => {
+    if (!platformRPC) return null
+    return await platformRPC.rpc.pickVideoFile()
   }, [])
 
-  // Pick image file using native file picker (for thumbnails)
-  const pickImageFileHandler = useCallback(async (): Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null> => {
-    if (!rpcRef.current) {
-      console.log('[App] pickImageFile: RPC not ready')
-      return null
-    }
-
-    console.log('[App] Opening native image file picker...')
-    return await rpcRef.current.pickImageFile({})
+  const pickImageFileHandler = useCallback(async () => {
+    if (!platformRPC) return null
+    return await platformRPC.rpc.pickImageFile()
   }, [])
 
   const contextValue: AppContextType = {
@@ -397,7 +286,7 @@ export default function RootLayout() {
     videos,
     loading,
     blobServerPort,
-    rpc: rpcRef.current, // Direct HRPC instance access
+    rpc: platformRPC?.rpc,
     uploadVideo: uploadVideoHandler,
     pickVideoFile: pickVideoFileHandler,
     pickImageFile: pickImageFileHandler,

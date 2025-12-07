@@ -72,6 +72,14 @@ export default function HomeScreen() {
   const [channelVideos, setChannelVideos] = useState<VideoData[]>([])
   const [loadingChannel, setLoadingChannel] = useState(false)
 
+  // Aggregated feed videos from all discovered channels
+  const [feedVideos, setFeedVideos] = useState<VideoData[]>([])
+  const [loadingFeedVideos, setLoadingFeedVideos] = useState(false)
+
+  // Category filter state
+  const categories = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
+  const [activeCategory, setActiveCategory] = useState('All')
+
   // Thumbnail cache: key = `${driveKey}:${videoId}` -> url
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
 
@@ -168,11 +176,59 @@ export default function HomeScreen() {
     if (!rpc) return
     try {
       await rpc.hideChannel({ channelKey: driveKey })
-      setFeedEntries(prev => prev.filter(e => e.driveKey !== driveKey))
+      setFeedEntries(prev => prev.filter(e => e.driveKey !== driveKey && e.channelKey !== driveKey))
+      // Also remove videos from that channel
+      setFeedVideos(prev => prev.filter(v => v.channelKey !== driveKey))
     } catch (err) {
       console.error('[Home] Failed to hide channel:', err)
     }
   }, [rpc])
+
+  // Load videos from all discovered channels
+  const loadFeedVideos = useCallback(async () => {
+    if (!rpc || feedEntries.length === 0) return
+
+    setLoadingFeedVideos(true)
+    const allVideos: VideoData[] = []
+
+    // Limit to first 15 channels to avoid overloading
+    for (const entry of feedEntries.slice(0, 15)) {
+      const channelKey = entry.channelKey || entry.driveKey
+      if (!channelKey) continue
+
+      try {
+        await rpc.joinChannel({ channelKey })
+        const result = await rpc.listVideos({ channelKey })
+        const videos = (result?.videos || []).map((v: any) => ({
+          ...v,
+          channelKey,
+          channel: { name: channelMeta[channelKey]?.name || 'Unknown' }
+        }))
+        allVideos.push(...videos)
+      } catch (err) {
+        // Continue with other channels
+        console.log('[Home] Failed to load videos from channel:', channelKey)
+      }
+    }
+
+    // Sort by uploadedAt descending, limit to 50 videos
+    const sorted = allVideos
+      .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
+      .slice(0, 50)
+
+    setFeedVideos(sorted)
+    setLoadingFeedVideos(false)
+
+    // Fetch thumbnails for feed videos
+    fetchThumbnailsForVideos(sorted)
+  }, [rpc, feedEntries, channelMeta, fetchThumbnailsForVideos])
+
+  // Load feed videos when feed entries change
+  useEffect(() => {
+    if (feedEntries.length > 0) {
+      loadFeedVideos()
+    }
+  }, [feedEntries])
 
   // View a channel's videos
   const viewChannel = useCallback(async (driveKey: string) => {
@@ -245,11 +301,13 @@ export default function HomeScreen() {
   // Convert videos to VideoData format with channel info and thumbnails
   const myVideosWithMeta: VideoData[] = videos.map(v => {
     const cacheKey = identity?.driveKey ? `${identity.driveKey}:${v.id}` : ''
+    const thumbnailUrl = thumbnailCache[cacheKey] || v.thumbnail || null
+    console.log('[Home] Video:', v.id, 'thumbnail from backend:', v.thumbnail, 'final thumbnailUrl:', thumbnailUrl)
     return {
       ...v,
       channelKey: identity?.driveKey || '',
       channel: identity ? { name: identity.name } : undefined,
-      thumbnailUrl: thumbnailCache[cacheKey] || null
+      thumbnailUrl
     }
   })
 
@@ -258,7 +316,16 @@ export default function HomeScreen() {
     const cacheKey = `${v.channelKey}:${v.id}`
     return {
       ...v,
-      thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || null
+      thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
+    }
+  })
+
+  // Add thumbnails to feed videos from cache
+  const feedVideosWithThumbs: VideoData[] = feedVideos.map(v => {
+    const cacheKey = `${v.channelKey}:${v.id}`
+    return {
+      ...v,
+      thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
     }
   })
 
@@ -356,52 +423,76 @@ export default function HomeScreen() {
               </Pressable>
             </View>
 
-            {feedLoading && feedEntries.length === 0 ? (
+            {/* Category Filter Chips */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginBottom: 12 }}
+              contentContainerStyle={{ gap: 8 }}
+            >
+              {categories.map((cat) => (
+                <Pressable
+                  key={cat}
+                  onPress={() => setActiveCategory(cat)}
+                  style={{
+                    paddingHorizontal: 16,
+                    paddingVertical: 8,
+                    borderRadius: 8,
+                    backgroundColor: activeCategory === cat ? colors.text : colors.bgCard,
+                  }}
+                >
+                  <Text style={{
+                    fontSize: 14,
+                    fontWeight: '500',
+                    color: activeCategory === cat ? colors.bg : colors.text,
+                  }}>
+                    {cat}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            {(feedLoading || loadingFeedVideos) && feedVideos.length === 0 ? (
               <View className="py-8 items-center">
                 <ActivityIndicator color={colors.primary} />
-                <Text className="text-caption text-pear-text-muted mt-2">Discovering channels...</Text>
+                <Text className="text-caption text-pear-text-muted mt-2">Discovering videos...</Text>
               </View>
-            ) : feedEntries.length === 0 ? (
+            ) : feedVideos.length === 0 ? (
               <View className="py-8 items-center bg-pear-bg-elevated rounded-xl">
                 <Globe color={colors.textMuted} size={32} />
-                <Text className="text-label text-pear-text mt-2">No channels discovered yet</Text>
+                <Text className="text-label text-pear-text mt-2">No videos discovered yet</Text>
                 <Text className="text-caption text-pear-text-muted mt-1">Click refresh or wait for peers to connect</Text>
               </View>
             ) : (
-              <ScrollView horizontal={!isDesktop} showsHorizontalScrollIndicator={false} contentContainerStyle={isDesktop ? { flexDirection: 'row', flexWrap: 'wrap', gap: 16 } : { gap: 12 }}>
-                {feedEntries.map((entry) => {
-                  const meta = channelMeta[entry.channelKey]
-                  return (
-                    <View key={entry.channelKey} className="bg-pear-bg-elevated rounded-xl p-4" style={{ width: isDesktop ? 220 : 200 }}>
-                      <View className="w-12 h-12 rounded-full bg-pear-bg-card items-center justify-center mb-2">
-                        <Text className="text-headline text-pear-primary">{(meta?.name || '?')[0].toUpperCase()}</Text>
-                      </View>
-                      <Text className="text-label text-pear-text mb-1" numberOfLines={1}>{meta?.name || 'Loading...'}</Text>
-                      <Text className="text-caption text-pear-text-muted" numberOfLines={1}>
-                        {meta?.videoCount !== undefined ? `${meta.videoCount} videos` : '...'}
-                      </Text>
-                      <Text className="text-caption text-pear-text-muted mt-1">
-                        {formatTimeAgo(entry.lastSeen)} · {entry.peerCount || 0} peers
-                      </Text>
-                      <View className="flex-row mt-3 gap-2">
-                        <Pressable onPress={() => viewChannel(entry.channelKey)} className="flex-1 bg-pear-primary py-2 rounded-lg items-center">
-                          <Text className="text-caption text-white font-semibold">View</Text>
-                        </Pressable>
-                        <Pressable onPress={() => hideChannel(entry.channelKey)} className="p-2 bg-pear-bg-card rounded-lg">
-                          <EyeOff color={colors.textMuted} size={16} />
-                        </Pressable>
-                      </View>
-                    </View>
-                  )
-                })}
-              </ScrollView>
+              <View style={isDesktop ? {
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                gap: 24,
+              } : undefined}>
+                {feedVideosWithThumbs
+                  .filter(v => activeCategory === 'All' || (v as any).category === activeCategory)
+                  .map((video) => (
+                  <View
+                    key={`${video.channelKey}-${video.id}`}
+                    style={isDesktop ? {
+                      width: `calc(${100 / gridColumns}% - ${(gridColumns - 1) * 24 / gridColumns}px)`,
+                    } as any : undefined}
+                  >
+                    <VideoCard
+                      video={video}
+                      onPress={() => playVideo(video)}
+                      showChannelInfo={true}
+                    />
+                  </View>
+                ))}
+              </View>
             )}
           </View>
 
           {/* Your Videos - Responsive Grid on Desktop, List on Mobile */}
           <View style={{ paddingTop: 24, paddingHorizontal: isDesktop ? 24 : 0 }}>
             <Text className="text-headline text-pear-text mb-3" style={{ paddingHorizontal: isDesktop ? 0 : 20 }}>Your Videos</Text>
-
+            {console.log('[Home] Rendering Your Videos section, count:', myVideosWithMeta.length, 'viewingChannel:', viewingChannel)}
             {myVideosWithMeta.length === 0 ? (
               <View className="py-12 items-center bg-pear-bg-elevated rounded-xl" style={{ marginHorizontal: isDesktop ? 0 : 20 }}>
                 <Text className="text-display mb-4">📺</Text>

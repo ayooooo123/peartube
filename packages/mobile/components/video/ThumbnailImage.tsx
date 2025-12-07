@@ -33,13 +33,18 @@ export function ThumbnailImage({
 }: ThumbnailImageProps) {
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
-
-  const showPlaceholder = !thumbnailUrl || imageError
   const durationText = duration ? formatDuration(duration) : null
 
   return (
     <View style={[styles.container, style]}>
-      {/* Actual thumbnail image */}
+      {/* Always show placeholder as background, image overlays on top when loaded */}
+      <View style={styles.placeholder}>
+        <View style={styles.playIconContainer}>
+          <Play color="#9147ff" size={48} fill="#9147ff" />
+        </View>
+      </View>
+
+      {/* Actual thumbnail image - overlays placeholder when loaded */}
       {thumbnailUrl && !imageError && (
         <Image
           source={{ uri: thumbnailUrl }}
@@ -55,15 +60,6 @@ export function ThumbnailImage({
       {imageLoading && thumbnailUrl && !imageError && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator color="#9147ff" size="small" />
-        </View>
-      )}
-
-      {/* Gradient-like placeholder when no thumbnail */}
-      {showPlaceholder && (
-        <View style={styles.placeholder}>
-          <View style={styles.playIconContainer}>
-            <Play color="#9147ff" size={48} fill="#9147ff" />
-          </View>
         </View>
       )}
 
@@ -87,8 +83,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   image: {
-    width: '100%',
-    height: '100%',
+    ...StyleSheet.absoluteFillObject,
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,

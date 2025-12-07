@@ -28,9 +28,20 @@ interface VideoCardProps {
   showChannelInfo?: boolean
 }
 
-// Format time ago
-function formatTimeAgo(timestamp: number): string {
+// Format time ago - handles invalid timestamps gracefully
+function formatTimeAgo(timestamp: number | undefined | null): string {
+  // Handle invalid timestamps
+  if (!timestamp || isNaN(timestamp) || timestamp <= 0) {
+    return 'recently'
+  }
+
   const seconds = Math.floor((Date.now() - timestamp) / 1000)
+
+  // Handle future dates or invalid calculations
+  if (isNaN(seconds) || seconds < 0) {
+    return 'recently'
+  }
+
   if (seconds < 60) return 'just now'
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m ago`
@@ -109,14 +120,14 @@ export function VideoCard({ video, onPress, showChannelInfo = true }: VideoCardP
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    marginBottom: 24,
+    marginBottom: 16,
   },
   pressed: {
     opacity: 0.7,
   },
   infoRow: {
     flexDirection: 'row',
-    marginTop: 12,
+    marginTop: 8,
     paddingHorizontal: 12,
   },
   avatarContainer: {

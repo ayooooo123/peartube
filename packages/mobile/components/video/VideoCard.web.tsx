@@ -70,6 +70,9 @@ export function VideoCardDesktop({
   onPress,
 }: VideoCardProps) {
   const [isHovered, setIsHovered] = useState(false)
+  const [imageError, setImageError] = useState(false)
+
+  console.log('[VideoCard.web] Rendering:', id, 'thumbnailUrl:', thumbnailUrl?.slice(0, 50))
 
   return (
     <article
@@ -91,17 +94,24 @@ export function VideoCardDesktop({
     >
       {/* Thumbnail */}
       <div style={styles.thumbnailContainer}>
-        {thumbnailUrl ? (
+        {thumbnailUrl && !imageError ? (
           <img
             src={thumbnailUrl}
             alt={title}
             style={styles.thumbnail}
             loading="lazy"
+            onError={() => {
+              console.log('[VideoCard.web] Image load error for:', id)
+              setImageError(true)
+            }}
+            onLoad={() => {
+              console.log('[VideoCard.web] Image loaded for:', id)
+            }}
           />
         ) : (
           <div style={styles.thumbnailPlaceholder}>
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={colors.textMuted} strokeWidth="1">
-              <polygon points="5 3 19 12 5 21 5 3" />
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={colors.primary} strokeWidth="1">
+              <polygon points="5 3 19 12 5 21 5 3" fill={colors.primary} />
             </svg>
           </div>
         )}
@@ -206,13 +216,13 @@ const styles: Record<string, React.CSSProperties> = {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: colors.bgHover,
+    backgroundColor: colors.primary,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 14,
     fontWeight: 600,
-    color: colors.textSecondary,
+    color: '#ffffff',
   },
   textContent: {
     flex: 1,

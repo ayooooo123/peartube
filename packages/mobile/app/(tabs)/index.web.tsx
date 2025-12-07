@@ -662,6 +662,14 @@ export default function HomeScreen() {
   const [feedLoading, setFeedLoading] = useState(false)
   const [peerCount, setPeerCount] = useState(0)
 
+  // Aggregated feed videos from discovered channels
+  const [feedVideos, setFeedVideos] = useState<VideoData[]>([])
+  const [feedVideosLoading, setFeedVideosLoading] = useState(false)
+
+  // Category filter state
+  const categories = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
+  const [activeCategory, setActiveCategory] = useState('All')
+
   // Channel viewing state
   const [viewingChannel, setViewingChannel] = useState<string | null>(null)
   const [channelVideos, setChannelVideos] = useState<VideoData[]>([])
@@ -732,12 +740,15 @@ export default function HomeScreen() {
   }, [rpc])
 
   // Convert videos to VideoData format - defined early to avoid reference issues
-  const myVideosWithMeta: VideoData[] = useMemo(() => videos.map(v => ({
-    ...v,
-    channelKey: identity?.driveKey || '',
-    channel: identity?.name ? { name: identity.name } : undefined,
-    thumbnailUrl: null
-  })), [videos, identity])
+  const myVideosWithMeta: VideoData[] = useMemo(() => videos.map(v => {
+    console.log('[Home.web] Video:', v.id, 'thumbnail from backend:', v.thumbnail)
+    return {
+      ...v,
+      channelKey: identity?.driveKey || '',
+      channel: identity?.name ? { name: identity.name } : undefined,
+      thumbnailUrl: v.thumbnail || null  // Use thumbnail URL from backend
+    }
+  }), [videos, identity])
 
   // Convert to VideoCardProps for the grid
   const gridVideos: VideoCardProps[] = useMemo(() => myVideosWithMeta.map(v => ({
@@ -792,6 +803,55 @@ export default function HomeScreen() {
       console.error('[Home] Failed to load channel meta:', err)
     }
   }, [rpc])
+
+  // Load videos from all discovered channels
+  const loadFeedVideos = useCallback(async () => {
+    if (!rpc || feedEntries.length === 0) return
+    setFeedVideosLoading(true)
+    const allVideos: VideoData[] = []
+
+    // Fetch videos from up to 15 channels
+    for (const entry of feedEntries.slice(0, 15)) {
+      const channelKey = (entry as any).channelKey || entry.driveKey
+      if (!channelKey) continue
+
+      try {
+        const result = await rpc.listVideos({ channelKey })
+        const videoList = result?.videos || []
+        if (Array.isArray(videoList)) {
+          const videos = videoList.map((v: any) => {
+            console.log('[Home.web] Feed video:', v.id, 'thumbnail:', v.thumbnail)
+            return {
+              ...v,
+              channelKey,
+              channel: { name: channelMeta[channelKey]?.name || 'Unknown' },
+              channelName: channelMeta[channelKey]?.name || 'Unknown',
+              thumbnailUrl: v.thumbnail || v.thumbnailUrl || null,  // Map backend thumbnail to thumbnailUrl
+            }
+          })
+          allVideos.push(...videos)
+        }
+      } catch (err) {
+        // Silently skip failed channels
+        console.log('[Home] Could not fetch videos from channel:', channelKey)
+      }
+    }
+
+    // Sort by upload time and take top 50
+    const sortedVideos = allVideos
+      .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
+      .slice(0, 50)
+
+    setFeedVideos(sortedVideos)
+    setFeedVideosLoading(false)
+  }, [rpc, feedEntries, channelMeta])
+
+  // Load feed videos when feedEntries change
+  useEffect(() => {
+    if (feedEntries.length > 0 && ready) {
+      loadFeedVideos()
+    }
+  }, [feedEntries, ready, loadFeedVideos])
 
   const refreshFeed = useCallback(async () => {
     if (!rpc) return
@@ -1003,55 +1063,49 @@ export default function HomeScreen() {
               </button>
             </div>
 
-            {feedLoading && feedEntries.length === 0 ? (
+            {/* Category Filter Chips */}
+            <div style={styles.categoryRow}>
+              {categories.map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setActiveCategory(cat)}
+                  style={activeCategory === cat ? styles.categoryChipActive : styles.categoryChip}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+
+            {(feedLoading || feedVideosLoading) && feedVideos.length === 0 ? (
               <div style={styles.loadingSection}>
                 <ActivityIndicator color={colors.primary} />
-                <p style={styles.loadingText}>Discovering channels...</p>
+                <p style={styles.loadingText}>Discovering videos...</p>
               </div>
-            ) : feedEntries.length === 0 ? (
+            ) : feedVideos.length === 0 && feedEntries.length === 0 ? (
               <div style={styles.emptyDiscover}>
                 <GlobeIcon color={colors.textMuted} size={32} />
-                <p style={styles.emptyTitle}>No channels discovered yet</p>
+                <p style={styles.emptyTitle}>No videos discovered yet</p>
                 <p style={styles.emptySubtitle}>
-                  Click refresh or wait for peers to connect
+                  {peerCount === 0 ? 'Waiting for peers to connect...' : 'Click refresh to discover videos'}
                 </p>
               </div>
             ) : (
-              <div style={styles.channelGrid}>
-                {feedEntries.map((entry) => {
-                  const meta = channelMeta[entry.channelKey]
-                  return (
-                    <div key={entry.channelKey} style={styles.channelCard}>
-                      <div style={styles.channelAvatar}>
-                        <span style={styles.channelInitial}>
-                          {(meta?.name || '?')[0].toUpperCase()}
-                        </span>
-                      </div>
-                      <h3 style={styles.channelName}>{meta?.name || 'Loading...'}</h3>
-                      <p style={styles.channelVideos}>
-                        {meta?.videoCount !== undefined ? `${meta.videoCount} videos` : '...'}
-                      </p>
-                      <p style={styles.channelMeta}>
-                        {formatTimeAgo(entry.lastSeen)} · {entry.peerCount || 0} peers
-                      </p>
-                      <div style={styles.channelActions}>
-                        <button
-                          onClick={() => viewChannel(entry.channelKey)}
-                          style={styles.viewButton}
-                        >
-                          View
-                        </button>
-                        <button
-                          onClick={() => hideChannel(entry.channelKey)}
-                          style={styles.hideButton}
-                        >
-                          <EyeOffIcon color={colors.textMuted} size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+              <VideoGrid
+                videos={feedVideos
+                  .filter(v => activeCategory === 'All' || (v as any).category === activeCategory)
+                  .map(v => ({
+                    id: v.id,
+                    title: v.title || 'Untitled',
+                    thumbnailUrl: v.thumbnailUrl || undefined,
+                    channelName: (v as any).channelName || channelMeta[v.channelKey || '']?.name || 'Unknown',
+                    duration: v.duration,
+                    uploadedAt: v.uploadedAt ? new Date(v.uploadedAt).toISOString() : undefined,
+                  }))}
+                onVideoPress={(videoId) => {
+                  const video = feedVideos.find(v => v.id === videoId)
+                  if (video) playVideo(video)
+                }}
+              />
             )}
           </div>
 
@@ -1146,6 +1200,36 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     backgroundColor: 'transparent',
     cursor: 'pointer',
+  },
+  categoryRow: {
+    display: 'flex',
+    gap: 8,
+    marginBottom: 16,
+    overflowX: 'auto',
+    paddingBottom: 4,
+  },
+  categoryChip: {
+    padding: '8px 16px',
+    borderRadius: 8,
+    backgroundColor: colors.bgSecondary,
+    color: colors.text,
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: 14,
+    fontWeight: 500,
+    whiteSpace: 'nowrap',
+    transition: 'background-color 0.2s',
+  },
+  categoryChipActive: {
+    padding: '8px 16px',
+    borderRadius: 8,
+    backgroundColor: colors.text,
+    color: colors.bg,
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: 14,
+    fontWeight: 500,
+    whiteSpace: 'nowrap',
   },
   loadingSection: {
     display: 'flex',

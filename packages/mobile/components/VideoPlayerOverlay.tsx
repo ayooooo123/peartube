@@ -545,6 +545,7 @@ export function VideoPlayerOverlay() {
           <Pressable style={styles.videoBackground} onPress={handleVideoTap}>
             {Platform.OS !== 'web' && videoUrl && VLCPlayer ? (
               <VLCPlayer
+                key={currentVideo?.id || videoUrl}
                 ref={playerRef}
                 source={{ uri: videoUrl }}
                 style={StyleSheet.absoluteFill}

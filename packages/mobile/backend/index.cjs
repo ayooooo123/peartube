@@ -638,38 +638,11 @@ async function init() {
   store = new Corestore(path.join(storageDir, 'corestore'))
   await store.ready()
 
-  // Initialize blob server for video streaming (like desktop)
-  // Wrap store to add timeout to all core.get() calls (prevents indefinite P2P hangs)
-  const blobStore = wrapStoreWithTimeout(store, 30000)
-  blobServer = new BlobServer(blobStore, {
+  // Initialize blob server for video streaming (same as desktop - no custom hooks)
+  blobServer = new BlobServer(store, {
     port: 0, // Random available port
     host: '127.0.0.1'
   })
-
-  // Hook into blob server's _getCore to return sessions optimized for video streaming
-  // Uses wait:false so local blocks return instantly without network delay
-  const originalGetCore = blobServer._getCore.bind(blobServer)
-  let getCoreCallCount = 0
-  blobServer._getCore = async function(k, info, active) {
-    const callNum = ++getCoreCallCount
-    const keyHex = b4a.isBuffer(k) ? b4a.toString(k, 'hex').slice(0, 16) : String(k).slice(0, 16)
-    console.log(`[BlobServer] _getCore #${callNum} called for key=${keyHex}`)
-
-    const core = await originalGetCore(k, info, active)
-    if (!core) {
-      console.log(`[BlobServer] _getCore #${callNum} returned null`)
-      return core
-    }
-
-    // Return a fast session - wait:false means local blocks return instantly
-    const session = core.session({
-      wait: false,
-      timeout: 5000,
-      activeRequests: true
-    })
-    console.log(`[BlobServer] _getCore #${callNum} returning session with wait:false, core.length=${core.length}`)
-    return session
-  }
 
   await blobServer.listen()
   blobServerPort = blobServer.address.port
@@ -1465,7 +1438,49 @@ function registerHRPCHandlers() {
   // Video handlers
   rpc.onListVideos(async (req) => {
     console.log('[HRPC] listVideos:', req.channelKey?.slice(0, 16))
-    const videos = await api.listVideos(req.channelKey || '')
+    const rawVideos = await api.listVideos(req.channelKey || '')
+
+    // Resolve thumbnail paths to blob server URLs
+    const videos = await Promise.all(rawVideos.map(async (v) => {
+      let thumbnailUrl = null
+      const videoChannelKey = v.channelKey || req.channelKey
+
+      // Check for thumbnail file
+      if (videoChannelKey) {
+        try {
+          const drive = drives.get(videoChannelKey)
+          if (drive) {
+            // Try common thumbnail paths
+            const thumbnailPaths = [
+              `/thumbnails/${v.id}.jpg`,
+              `/thumbnails/${v.id}.png`,
+              v.thumbnail // Use existing path if set
+            ].filter(Boolean)
+
+            for (const thumbPath of thumbnailPaths) {
+              const entry = await drive.entry(thumbPath)
+              if (entry && entry.value?.blob) {
+                const blobsCore = await drive.getBlobs()
+                if (blobsCore) {
+                  thumbnailUrl = blobServer.getLink(blobsCore.core.key, {
+                    blob: entry.value.blob,
+                    type: thumbPath.endsWith('.png') ? 'image/png' : 'image/jpeg'
+                  })
+                  console.log('[HRPC] Resolved thumbnail for', v.id, ':', thumbnailUrl?.slice(0, 50))
+                  break
+                }
+              }
+            }
+          }
+        } catch (err) {
+          // Silently continue if thumbnail resolution fails
+          console.log('[HRPC] Thumbnail resolution failed for', v.id, ':', err.message)
+        }
+      }
+
+      return { ...v, thumbnail: thumbnailUrl }
+    }))
+
     return { videos }
   })
 
@@ -1680,6 +1695,16 @@ function registerHRPCHandlers() {
   rpc.onPickVideoFile(async () => {
     console.log('[HRPC] pickVideoFile - not supported on mobile')
     return { filePath: null, cancelled: true }
+  })
+
+  rpc.onPickImageFile(async () => {
+    console.log('[HRPC] pickImageFile - not supported on mobile')
+    return { filePath: null, cancelled: true }
+  })
+
+  rpc.onSetVideoThumbnailFromFile(async (req) => {
+    console.log('[HRPC] setVideoThumbnailFromFile - not supported on mobile')
+    return { success: false }
   })
 
   rpc.onGetBlobServerPort(async () => {

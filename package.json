@@ -4,17 +4,16 @@
   "private": true,
   "description": "PearTube monorepo - P2P video streaming for desktop and mobile",
   "scripts": {
-    "desktop": "npm run build --prefix packages/desktop && npm run preview --prefix packages/desktop",
-    "desktop:dev": "npm run dev --prefix packages/desktop",
-    "desktop:build": "npm run build --prefix packages/desktop",
-    "ios": "npm run ios --prefix packages/mobile",
-    "android": "npm run android --prefix packages/mobile",
-    "mobile": "npm start --prefix packages/mobile",
-    "mobile:bundle": "npm run bundle:backend --prefix packages/mobile",
-    "typecheck": "npm run typecheck --prefix packages/desktop && npm run typecheck --prefix packages/platform",
+    "start": "npm start --prefix packages/app",
+    "ios": "npm run ios --prefix packages/app",
+    "android": "npm run android --prefix packages/app",
+    "pear": "npm run pear:dev --prefix packages/app",
+    "pear:build": "npm run pear:build --prefix packages/app",
+    "bundle:backend": "npm run bundle:backend --prefix packages/app",
+    "typecheck": "npm run typecheck --prefix packages/platform",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx --quiet",
     "lint:fix": "npm run lint -- --fix",
-    "install:all": "npm install && npm install --prefix packages/desktop --legacy-peer-deps && npm install --prefix packages/mobile --legacy-peer-deps"
+    "install:all": "npm install && npm install --prefix packages/app --legacy-peer-deps"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.41.0",

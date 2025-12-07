@@ -1,0 +1,5 @@
+/**
+ * PearTube colors - Re-exports from shared package
+ * All design tokens are centralized in @peartube/core
+ */
+export { colors, spacing, radius, fontSize, theme } from '@peartube/core';

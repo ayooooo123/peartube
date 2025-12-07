@@ -11,6 +11,10 @@
     "./types": "./src/types.js",
     "./detection": "./src/detection.js",
     "./storage": "./src/storage.js",
+    "./rpc": {
+      "react-native": "./src/rpc.native.ts",
+      "default": "./src/rpc.web.ts"
+    },
     "./rpc.native": "./src/rpc.native.ts",
     "./rpc.web": "./src/rpc.web.ts"
   },

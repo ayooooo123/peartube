@@ -7,6 +7,7 @@
   "types": "./src/index.d.ts",
   "exports": {
     ".": "./src/index.js",
+    "./orchestrator": "./src/orchestrator.js",
     "./storage": "./src/storage.js",
     "./swarm": "./src/swarm.js",
     "./public-feed": "./src/public-feed.js",
@@ -21,15 +22,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "b4a": "^1.6.4",
-    "compact-encoding": "^2.12.0",
-    "corestore": "^6.8.4",
-    "hyperbee": "^2.6.5",
-    "hypercore-blob-server": "^1.0.1",
-    "hypercore-crypto": "^3.3.1",
-    "hyperdrive": "^11.5.3",
-    "hyperswarm": "^4.4.1",
-    "protomux": "^3.4.1"
+    "b4a": "^1.6.7",
+    "compact-encoding": "^2.18.0",
+    "corestore": "^7.7.0",
+    "hyperbee": "^2.26.5",
+    "hypercore-blob-server": "^1.12.0",
+    "hypercore-crypto": "^3.6.0",
+    "hyperdrive": "^13.0.2",
+    "hyperswarm": "^4.15.1",
+    "protomux": "^3.10.1"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

@@ -252,6 +252,34 @@ export function createUploadManager({ ctx }) {
     },
 
     /**
+     * Set video thumbnail from a buffer
+     *
+     * @param {import('hyperdrive')} drive - Target Hyperdrive
+     * @param {string} videoId - Video ID
+     * @param {Buffer} buffer - Image data buffer
+     * @param {string} [mimeType='image/jpeg'] - Image MIME type
+     * @returns {Promise<{success: boolean, thumbnailUrl?: string, path?: string, error?: string}>}
+     */
+    async setThumbnailFromBuffer(drive, videoId, buffer, mimeType = 'image/jpeg') {
+      try {
+        const ext = mimeType.includes('png') ? 'png' : 'jpg';
+        const thumbnailPath = `/thumbnails/${videoId}.${ext}`;
+
+        await drive.put(thumbnailPath, buffer);
+
+        console.log('[Upload] Thumbnail saved:', thumbnailPath);
+
+        return {
+          success: true,
+          path: thumbnailPath
+        };
+      } catch (err) {
+        console.error('[Upload] Set thumbnail failed:', err.message);
+        return { success: false, error: err.message };
+      }
+    },
+
+    /**
      * Delete a video from the drive
      *
      * @param {import('hyperdrive')} drive - Target Hyperdrive

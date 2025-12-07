@@ -38,3 +38,6 @@ export { createUploadManager } from './upload.js';
 
 // Types and constants
 export { FEED_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
+
+// Orchestrator - one-shot initialization for all components
+export { createBackendContext } from './orchestrator.js';

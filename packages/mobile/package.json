@@ -9,7 +9,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "web:export": "expo export --platform web",
-    "bundle:backend": "bare-pack --target ios --target android --linked --out backend.bundle.js backend/index.cjs",
+    "bundle:backend": "bare-pack --target ios --target android --linked --out backend.bundle.js backend/index.mjs",
     "bundle:test": "bare-pack --target ios --target android --linked --out test.bundle.js backend/test-minimal.mjs"
   },
   "author": "PearTube",
@@ -25,6 +25,7 @@
     "@gluestack-ui/spinner": "^0.1.15",
     "@gluestack-ui/toast": "^1.0.9",
     "@legendapp/motion": "^2.5.3",
+    "@peartube/backend": "file:../backend",
     "@peartube/core": "file:../core",
     "@peartube/platform": "file:../platform",
     "@peartube/spec": "file:../spec",

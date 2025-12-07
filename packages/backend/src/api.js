@@ -54,6 +54,43 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     },
 
     /**
+     * Update channel metadata
+     * @param {string} driveKey
+     * @param {string} name
+     * @param {string} [description]
+     * @returns {Promise<{success: boolean}>}
+     */
+    async updateChannel(driveKey, name, description) {
+      console.log('[API] UPDATE_CHANNEL:', driveKey?.slice(0, 16));
+      try {
+        const drive = ctx.drives.get(driveKey);
+        if (!drive || !drive.writable) {
+          throw new Error('Channel not found or not writable');
+        }
+
+        // Get existing metadata
+        const metaBuf = await drive.get('/channel.json');
+        let meta = {};
+        if (metaBuf) {
+          meta = JSON.parse(b4a.toString(metaBuf));
+        }
+
+        // Update fields
+        if (name !== undefined) meta.name = name;
+        if (description !== undefined) meta.description = description;
+        meta.updatedAt = Date.now();
+
+        await drive.put('/channel.json', Buffer.from(JSON.stringify(meta)));
+        console.log('[API] Updated channel:', meta.name);
+
+        return { success: true };
+      } catch (err) {
+        console.error('[API] UPDATE_CHANNEL error:', err.message);
+        return { success: false, error: err.message };
+      }
+    },
+
+    /**
      * Get channel metadata with video count (for public feed)
      * @param {string} driveKey
      * @returns {Promise<ChannelMetadata>}
@@ -163,6 +200,81 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      */
     async getVideoUrl(driveKey, videoPath) {
       return getVideoUrl(ctx, driveKey, videoPath);
+    },
+
+    /**
+     * Get video metadata by ID or path
+     * @param {string} driveKey
+     * @param {string} videoId - Video ID or full path
+     * @returns {Promise<VideoMetadata|null>}
+     */
+    async getVideoData(driveKey, videoId) {
+      console.log('[API] GET_VIDEO_DATA:', driveKey?.slice(0, 16), videoId);
+      try {
+        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 5000 });
+
+        // videoId could be a full path like /videos/xxx.mp4 or just the id
+        let metaPath;
+        if (videoId.startsWith('/videos/')) {
+          // Extract ID from path
+          const match = videoId.match(/\/videos\/([^.]+)/);
+          if (match) {
+            metaPath = `/videos/${match[1]}.json`;
+          } else {
+            return null;
+          }
+        } else {
+          metaPath = `/videos/${videoId}.json`;
+        }
+
+        const metaBuf = await drive.get(metaPath);
+        if (metaBuf) {
+          const video = JSON.parse(b4a.toString(metaBuf));
+          video.channelKey = driveKey;
+          return video;
+        }
+        return null;
+      } catch (err) {
+        console.error('[API] GET_VIDEO_DATA error:', err.message);
+        return null;
+      }
+    },
+
+    /**
+     * Get video thumbnail URL
+     * @param {string} driveKey
+     * @param {string} videoId
+     * @returns {Promise<{url?: string, exists: boolean}>}
+     */
+    async getVideoThumbnail(driveKey, videoId) {
+      console.log('[API] GET_VIDEO_THUMBNAIL:', driveKey?.slice(0, 16), videoId);
+      try {
+        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 5000 });
+
+        const thumbnailPaths = [
+          `/thumbnails/${videoId}.jpg`,
+          `/thumbnails/${videoId}.png`
+        ];
+
+        for (const thumbPath of thumbnailPaths) {
+          const entry = await drive.entry(thumbPath);
+          if (entry && entry.value?.blob) {
+            const blobsCore = await drive.getBlobs();
+            if (blobsCore) {
+              const url = ctx.blobServer.getLink(blobsCore.core.key, {
+                blob: entry.value.blob,
+                type: thumbPath.endsWith('.png') ? 'image/png' : 'image/jpeg'
+              });
+              console.log('[API] Thumbnail URL:', url);
+              return { url, exists: true };
+            }
+          }
+        }
+        return { exists: false };
+      } catch (err) {
+        console.error('[API] GET_VIDEO_THUMBNAIL error:', err.message);
+        return { exists: false, error: err.message };
+      }
     },
 
     // ============================================

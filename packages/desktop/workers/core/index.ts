@@ -1,150 +1,52 @@
 /**
- * PearTube - Core Backend Worker
+ * PearTube Desktop Worker - Thin HRPC Handler Layer
  *
- * This worker handles all P2P operations, storage, and networking.
- * It runs in a separate process from the UI for better performance.
- * Uses HRPC (Holepunch RPC) over pear-pipe for typed binary communication.
+ * This worker uses createBackendContext from @peartube/backend to initialize
+ * all P2P components, then registers thin HRPC handlers that delegate to the API.
+ *
+ * Desktop-specific features (file pickers, FFmpeg) are implemented here.
  */
 
-import Hyperswarm from 'hyperswarm';
-import Corestore from 'corestore';
-import Hyperbee from 'hyperbee';
-import Hyperdrive from 'hyperdrive';
-import BlobServer from 'hypercore-blob-server';
-import crypto from 'hypercore-crypto';
-import b4a from 'b4a';
 import fs from 'bare-fs';
 import pipe from 'pear-pipe';
 import { spawn } from 'bare-subprocess';
+import b4a from 'b4a';
 
+// Import the orchestrator from backend
 // @ts-ignore - backend-core is JavaScript
-import { PublicFeedManager } from '@peartube/backend/public-feed';
+import { createBackendContext } from '@peartube/backend/orchestrator';
 // @ts-ignore - Generated HRPC code
 import HRPC from '@peartube/spec';
 
 // Get Pear runtime globals
 declare const Pear: any;
 
-console.log('PearTube Core Worker starting...');
+console.log('[Worker] PearTube Desktop Worker starting...');
 
-// Initialize storage
+// ============================================
+// Initialize Backend using Orchestrator
+// ============================================
+
 const storage = Pear.config.storage || './storage';
-const store = new Corestore(storage);
 
-// Initialize Hyperswarm for P2P networking
-const swarm = new Hyperswarm();
-
-// Initialize PublicFeedManager for P2P channel discovery
-const publicFeed = new PublicFeedManager(swarm);
-
-// Handle swarm connections - replicate corestore AND set up feed protocol
-swarm.on('connection', (conn: any, info: any) => {
-  console.log('Peer connected');
-  store.replicate(conn);
-
-  // Set up feed protocol on every connection
-  publicFeed.handleConnection(conn, info);
+const backend = await createBackendContext({
+  storagePath: storage,
+  onFeedUpdate: () => {
+    // Feed updates will be wired after HRPC init
+  },
+  onStatsUpdate: (driveKey: string, videoPath: string, stats: any) => {
+    // Stats updates will be wired after HRPC init
+  }
 });
 
-// Initialize local database
-const dbCore = store.get({ name: 'peartube-db' });
-const db = new Hyperbee(dbCore, { keyEncoding: 'utf-8', valueEncoding: 'json' });
-await db.ready();
+const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
 
-// Initialize blob server for video streaming
-const blobServer = new BlobServer(store, {
-  port: 0, // Random available port
-  host: '127.0.0.1'
-});
-await blobServer.listen();
-const blobServerPort = blobServer.port;
-console.log('Blob server listening on port:', blobServerPort);
+console.log('[Worker] Backend initialized via orchestrator');
+console.log('[Worker] Blob server port:', ctx.blobServerPort);
 
-console.log('Database initialized');
-
-// In-memory state
-let identities: any[] = [];
-let activeIdentity: string | null = null;
-const channels: Map<string, any> = new Map(); // pubkey -> Hyperdrive
-
-// Video stats tracking - for P2P download progress monitoring
-interface VideoStatsData {
-  driveKey: string;
-  videoPath: string;
-  startTime: number;
-  monitor: any;
-  downloadRequest: any;
-  entry: any;
-}
-const videoMonitors: Map<string, VideoStatsData> = new Map(); // key: `${driveKey}:${videoPath}`
-
-
-// Load identities from database
-async function loadIdentities() {
-  const stored = await db.get('identities');
-  if (stored && stored.value) {
-    identities = stored.value;
-    console.log(`Loaded ${identities.length} identities`);
-    // Debug: show what was loaded
-    for (const id of identities) {
-      console.log(`  - Identity: ${id.name}, publicKey: ${id.publicKey?.slice(0,8)}..., driveKey: ${id.driveKey?.slice(0,8) || 'MISSING'}...`);
-    }
-  }
-}
-
-// Save identities to database
-async function saveIdentities() {
-  await db.put('identities', identities);
-}
-
-// Generate BIP39-like mnemonic (simplified version)
-function generateMnemonic(): string {
-  const words = [];
-  const wordList = [
-    'abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract',
-    'absurd', 'abuse', 'access', 'accident', 'account', 'accuse', 'achieve', 'acid',
-    'acoustic', 'acquire', 'across', 'act', 'action', 'actor', 'actress', 'actual'
-  ]; // Simplified - real BIP39 has 2048 words
-
-  for (let i = 0; i < 12; i++) {
-    const idx = Math.floor(Math.random() * wordList.length);
-    words.push(wordList[idx]);
-  }
-
-  return words.join(' ');
-}
-
-// Derive keypair from mnemonic
-function keypairFromMnemonic(mnemonic: string) {
-  // Simple derivation - in production use proper BIP39
-  const seed = Buffer.from(mnemonic, 'utf-8');
-  return crypto.keyPair(seed.slice(0, 32));
-}
-
-// Get or create a channel's Hyperdrive
-async function getChannelDrive(publicKey: string, writable = false): Promise<any> {
-  // Validate key format (must be 64 hex characters = 32 bytes)
-  if (!/^[a-f0-9]{64}$/i.test(publicKey)) {
-    throw new Error('Invalid channel key: must be 64 hex characters');
-  }
-
-  if (channels.has(publicKey)) {
-    return channels.get(publicKey);
-  }
-
-  const keyBuffer = b4a.from(publicKey, 'hex');
-  const drive = new Hyperdrive(store, writable ? undefined : keyBuffer);
-  await drive.ready();
-
-  // Join swarm to find peers for this channel
-  const discoveryKey = drive.discoveryKey;
-  swarm.join(discoveryKey);
-
-  channels.set(publicKey, drive);
-  console.log('Loaded channel drive:', publicKey.slice(0, 8) + '...');
-
-  return drive;
-}
+// ============================================
+// Desktop-Specific Functions (File Pickers, FFmpeg)
+// ============================================
 
 // FFmpeg availability check (cached)
 let ffmpegAvailable: boolean | null = null;
@@ -162,189 +64,21 @@ async function checkFFmpeg(): Promise<boolean> {
       });
       proc.on('error', () => {
         ffmpegAvailable = false;
-        console.log('[FFmpeg] Not available (spawn error)');
         resolve(false);
       });
     } catch {
       ffmpegAvailable = false;
-      console.log('[FFmpeg] Not available (exception)');
       resolve(false);
     }
   });
 }
 
-// Background thumbnail queue
-interface ThumbnailJob {
-  videoId: string;
-  driveKey: string;
-  videoPath: string;
-  retries: number;
-}
-
-const thumbnailQueue: ThumbnailJob[] = [];
-let processingQueue = false;
-
-function queueThumbnailGeneration(videoId: string, driveKey: string, videoPath: string) {
-  console.log('[Thumbnail Queue] Adding job:', videoId);
-  thumbnailQueue.push({ videoId, driveKey, videoPath, retries: 0 });
-  processThumbnailQueue();
-}
-
-async function processThumbnailQueue() {
-  if (processingQueue || thumbnailQueue.length === 0) return;
-  processingQueue = true;
-
-  while (thumbnailQueue.length > 0) {
-    const job = thumbnailQueue[0];
-
-    // Check FFmpeg availability before each job
-    const hasFFmpeg = await checkFFmpeg();
-    if (!hasFFmpeg) {
-      console.log('[Thumbnail Queue] FFmpeg not available, pausing queue');
-      processingQueue = false;
-      // Retry after 30 seconds
-      setTimeout(() => processThumbnailQueue(), 30000);
-      return;
-    }
-
-    try {
-      const drive = await getChannelDrive(job.driveKey);
-
-      // Get video entry to build file path for ffmpeg
-      // The video is stored in the drive at job.videoPath
-      const videoEntry = await drive.entry(job.videoPath);
-      if (!videoEntry) {
-        console.log('[Thumbnail Queue] Video not found:', job.videoPath);
-        thumbnailQueue.shift();
-        continue;
-      }
-
-      // For background processing, we need to get the video from blob server
-      const keyBuffer = b4a.from(job.driveKey, 'hex');
-      const videoUrl = blobServer.getLink(keyBuffer, {
-        filename: job.videoPath.replace(/^\/+/, '')
-      });
-
-      // Generate thumbnail using the URL (ffmpeg supports http/https input)
-      const thumbnailPath = await generateThumbnailFromUrl(videoUrl, job.videoId, drive);
-
-      if (thumbnailPath) {
-        // Update video metadata with thumbnail
-        const metaPath = `/videos/${job.videoId}/meta.json`;
-        const metaEntry = await drive.entry(metaPath);
-        if (metaEntry) {
-          const metaBuf = await drive.get(metaPath);
-          const meta = JSON.parse(metaBuf.toString());
-          meta.thumbnail = thumbnailPath;
-          await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-          console.log('[Thumbnail Queue] Updated metadata for:', job.videoId);
-        }
-        thumbnailQueue.shift();
-      } else if (job.retries < 3) {
-        job.retries++;
-        console.log('[Thumbnail Queue] Retry', job.retries, 'for:', job.videoId);
-        // Move to end of queue
-        thumbnailQueue.shift();
-        thumbnailQueue.push(job);
-      } else {
-        console.log('[Thumbnail Queue] Max retries reached for:', job.videoId);
-        thumbnailQueue.shift();
-      }
-    } catch (err) {
-      console.error('[Thumbnail Queue] Error processing job:', err);
-      if (job.retries < 3) {
-        job.retries++;
-        thumbnailQueue.shift();
-        thumbnailQueue.push(job);
-      } else {
-        thumbnailQueue.shift();
-      }
-    }
-
-    // Small delay between jobs
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  processingQueue = false;
-}
-
-// Generate thumbnail from URL (for background processing)
-async function generateThumbnailFromUrl(
-  videoUrl: string,
-  videoId: string,
-  drive: any
-): Promise<string | null> {
+// Generate thumbnail from video file using FFmpeg
+async function generateThumbnail(filePath: string, videoId: string, drive: any): Promise<string | null> {
   const thumbnailPath = `/thumbnails/${videoId}.jpg`;
 
-  console.log(`[Thumbnail] Generating from URL for ${videoId}`);
-
   const args = [
-    '-ss', '1',  // Seek to 1 second (safe default for URL input)
-    '-i', videoUrl,
-    '-vframes', '1',
-    '-vf', 'scale=640:-1',
-    '-q:v', '2',
-    '-f', 'image2pipe',
-    '-vcodec', 'mjpeg',
-    'pipe:1'
-  ];
-
-  return new Promise((resolve) => {
-    try {
-      const proc = spawn('ffmpeg', args);
-      const chunks: Buffer[] = [];
-
-      proc.stdout.on('data', (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
-
-      proc.stderr.on('data', () => {
-        // ffmpeg outputs progress to stderr, ignore
-      });
-
-      proc.on('exit', async (code: number) => {
-        if (code === 0 && chunks.length > 0) {
-          try {
-            const thumbBuf = Buffer.concat(chunks);
-            console.log(`[Thumbnail] Generated ${thumbBuf.length} bytes from URL`);
-            await drive.put(thumbnailPath, thumbBuf);
-            resolve(thumbnailPath);
-          } catch (err) {
-            console.error('[Thumbnail] Failed to save from URL:', err);
-            resolve(null);
-          }
-        } else {
-          console.log(`[Thumbnail] ffmpeg (URL) exited with code ${code}`);
-          resolve(null);
-        }
-      });
-
-      proc.on('error', (err: Error) => {
-        console.error('[Thumbnail] ffmpeg error (URL):', err);
-        resolve(null);
-      });
-    } catch (err) {
-      console.error('[Thumbnail] Failed to spawn ffmpeg (URL):', err);
-      resolve(null);
-    }
-  });
-}
-
-// Generate thumbnail from video at 10% using ffmpeg
-async function generateThumbnail(
-  filePath: string,
-  videoId: string,
-  drive: any,
-  duration?: number
-): Promise<string | null> {
-  const thumbnailPath = `/thumbnails/${videoId}.jpg`;
-  // Calculate 10% position (default to 1 second if no duration)
-  const seekTime = duration ? Math.floor(duration * 0.1) : 1;
-
-  console.log(`[Thumbnail] Generating for ${videoId} at ${seekTime}s`);
-
-  const args = [
-    '-ss', String(seekTime),
+    '-ss', '1',
     '-i', filePath,
     '-vframes', '1',
     '-vf', 'scale=640:-1',
@@ -359,1348 +93,515 @@ async function generateThumbnail(
       const proc = spawn('ffmpeg', args);
       const chunks: Buffer[] = [];
 
-      proc.stdout.on('data', (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
-
-      proc.stderr.on('data', (data: Buffer) => {
-        // ffmpeg outputs progress to stderr, ignore
-      });
+      proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+      proc.stderr.on('data', () => {}); // Ignore ffmpeg progress
 
       proc.on('exit', async (code: number) => {
         if (code === 0 && chunks.length > 0) {
           try {
             const thumbBuf = Buffer.concat(chunks);
-            console.log(`[Thumbnail] Generated ${thumbBuf.length} bytes`);
             await drive.put(thumbnailPath, thumbBuf);
-            console.log(`[Thumbnail] Saved to ${thumbnailPath}`);
             resolve(thumbnailPath);
-          } catch (err) {
-            console.error('[Thumbnail] Failed to save:', err);
+          } catch {
             resolve(null);
           }
         } else {
-          console.log(`[Thumbnail] ffmpeg exited with code ${code}`);
           resolve(null);
         }
       });
 
-      proc.on('error', (err: Error) => {
-        console.error('[Thumbnail] ffmpeg error:', err);
-        resolve(null);
-      });
-    } catch (err) {
-      console.error('[Thumbnail] Failed to spawn ffmpeg:', err);
+      proc.on('error', () => resolve(null));
+    } catch {
       resolve(null);
     }
   });
 }
 
-// RPC Methods
-const api: Record<string, (...args: any[]) => Promise<any>> = {
-  // Get backend status
-  async getStatus() {
-    return {
-      connected: true,
-      peers: swarm.connections.size,
-      storage,
-      blobServerPort,
-      version: '0.1.0'
-    };
-  },
-
-  // Create a new identity/channel
-  async createIdentity(name: string, generateMnem = true) {
-    console.log('Creating identity:', name);
-
-    let keypair;
-    let mnemonic: string | undefined;
-
-    if (generateMnem) {
-      mnemonic = generateMnemonic();
-      keypair = keypairFromMnemonic(mnemonic);
-    } else {
-      keypair = crypto.keyPair();
-    }
-
-    const publicKey = b4a.toString(keypair.publicKey, 'hex');
-
-    // Create the channel's Hyperdrive
-    const drive = new Hyperdrive(store);
-    await drive.ready();
-
-    const driveKey = b4a.toString(drive.key, 'hex');
-
-    // Store channel metadata
-    await drive.put('/channel.json', Buffer.from(JSON.stringify({
-      name,
-      publicKey,
-      createdAt: Date.now(),
-      description: '',
-      avatar: null
-    })));
-
-    // Create identity record
-    const identity = {
-      publicKey,
-      driveKey,
-      name,
-      createdAt: Date.now(),
-      secretKey: b4a.toString(keypair.secretKey, 'hex')
-    };
-
-    identities.push(identity);
-    await saveIdentities();
-    channels.set(driveKey, drive);
-
-    // Join swarm for this channel
-    swarm.join(drive.discoveryKey);
-
-    // Set as active if first identity
-    if (identities.length === 1) {
-      activeIdentity = publicKey;
-      await db.put('activeIdentity', publicKey);
-    }
-
-    console.log('Identity created:', publicKey);
-    console.log('Channel drive key:', driveKey);
-
-    return {
-      success: true,
-      publicKey,
-      driveKey,
-      mnemonic
-    };
-  },
-
-  // Recover identity from mnemonic
-  async recoverIdentity(mnemonic: string, name?: string) {
-    console.log('Recovering identity from mnemonic');
-
-    const keypair = keypairFromMnemonic(mnemonic);
-    const publicKey = b4a.toString(keypair.publicKey, 'hex');
-
-    // Check if already exists
-    const existing = identities.find(i => i.publicKey === publicKey);
-    if (existing) {
-      return {
-        success: true,
-        publicKey,
-        driveKey: existing.driveKey,
-        message: 'Identity already exists'
-      };
-    }
-
-    // For recovery, we'd need to find the drive key somehow
-    // For now, create a new drive
-    const drive = new Hyperdrive(store);
-    await drive.ready();
-    const driveKey = b4a.toString(drive.key, 'hex');
-
-    const identity = {
-      publicKey,
-      driveKey,
-      name: name || `Recovered ${Date.now()}`,
-      createdAt: Date.now(),
-      secretKey: b4a.toString(keypair.secretKey, 'hex'),
-      recovered: true
-    };
-
-    identities.push(identity);
-    await saveIdentities();
-    channels.set(driveKey, drive);
-    swarm.join(drive.discoveryKey);
-
-    return {
-      success: true,
-      publicKey,
-      driveKey
-    };
-  },
-
-  // Get list of identities
-  async getIdentities() {
-    // Only return well-formed identities (with driveKey/publicKey)
-    return identities
-      .filter(i => typeof i.publicKey === 'string' && i.publicKey && typeof i.driveKey === 'string' && i.driveKey)
-      .map(i => ({
-        publicKey: i.publicKey || '',
-        driveKey: i.driveKey || '',
-        name: i.name || 'Channel',
-        createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0 ? i.createdAt : Date.now(),
-        isActive: i.publicKey === activeIdentity
-      }));
-  },
-
-  // Set active identity
-  async setActiveIdentity(publicKey: string) {
-    const identity = identities.find(i => i.publicKey === publicKey);
-    if (!identity) {
-      throw new Error('Identity not found');
-    }
-
-    activeIdentity = publicKey;
-    await db.put('activeIdentity', publicKey);
-
-    console.log('Active identity set to:', publicKey);
-  },
-
-  // Get channel info
-  async getChannel(driveKey: string) {
-    const drive = await getChannelDrive(driveKey);
-
-    try {
-      const metaBuffer = await drive.get('/channel.json');
-      if (metaBuffer) {
-        return JSON.parse(b4a.toString(metaBuffer, 'utf-8'));
-      }
-    } catch {
-      // No metadata yet
-    }
-
-    return {
-      driveKey,
-      name: 'Unknown Channel',
-      videos: []
-    };
-  },
-
-  // List videos in a channel
-  async listVideos(driveKey: string) {
-    console.log(`[listVideos] Listing videos for drive: ${driveKey?.slice(0, 8)}...`);
-
-    // First check if we have this drive in memory
-    let drive = channels.get(driveKey);
-    if (!drive) {
-      console.log(`[listVideos] Drive not in cache, loading...`);
-      drive = await getChannelDrive(driveKey);
-    }
-
-    const videos: any[] = [];
-
-    try {
-      // readdir returns a stream, use for-await to iterate
-      for await (const entry of drive.readdir('/videos')) {
-        console.log(`[listVideos] Found entry: ${entry}`);
-        if (entry.endsWith('.json')) {
-          const metaBuffer = await drive.get(`/videos/${entry}`);
-          if (metaBuffer) {
-            const meta = JSON.parse(b4a.toString(metaBuffer, 'utf-8'));
-            videos.push(meta);
-            console.log(`[listVideos] Found video: ${meta.title}`);
-          }
-        }
-      }
-    } catch (err) {
-      console.log(`[listVideos] Error reading /videos:`, err);
-      // No videos directory yet
-    }
-
-    console.log(`[listVideos] Returning ${videos.length} videos`);
-    return videos;
-  },
-
-  // Upload a video using streaming from file path
-  // Takes optional progressCallback for real-time progress updates
-  async uploadVideo(title: string, description: string, filePath: string, mimeType: string, category?: string, progressCallback?: (progress: number, bytesWritten: number, totalBytes: number) => void) {
-    const identity = identities.find(i => i.publicKey === activeIdentity);
-    if (!identity) {
-      throw new Error('No active identity');
-    }
-
-    const drive = channels.get(identity.driveKey);
-    if (!drive) {
-      throw new Error('Channel drive not found');
-    }
-
-    const videoId = crypto.randomBytes(16).toString('hex');
-    const ext = mimeType.includes('webm') ? 'webm' : 'mp4';
-    const videoPath = `/videos/${videoId}.${ext}`;
-    const metaPath = `/videos/${videoId}.json`;
-
-    // Get file size
-    const stat = fs.statSync(filePath);
-    const fileSize = stat.size;
-
-    console.log(`Uploading video: ${filePath} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
-
-    // Read file and write to hyperdrive using createWriteStream
-    const readStream = fs.createReadStream(filePath);
-    const writeStream = drive.createWriteStream(videoPath);
-
-    // Track bytes written for progress
-    let bytesWritten = 0;
-    let lastProgressUpdate = 0;
-
-    // Use streamx pipeline pattern with progress tracking
-    await new Promise<void>((resolve, reject) => {
-      writeStream.on('close', resolve);
-      writeStream.on('error', reject);
-      readStream.on('error', reject);
-
-      // Track progress on data events
-      readStream.on('data', (chunk: Buffer) => {
-        bytesWritten += chunk.length;
-        const now = Date.now();
-        // Throttle progress updates to every 100ms
-        if (now - lastProgressUpdate > 100 || bytesWritten === fileSize) {
-          const progress = Math.round((bytesWritten / fileSize) * 100);
-          if (progressCallback) {
-            progressCallback(progress, bytesWritten, fileSize);
-          }
-          lastProgressUpdate = now;
-        }
-      });
-
-      readStream.pipe(writeStream);
-    });
-
-    // Generate thumbnail at 10% into the video (with FFmpeg check)
-    console.log('[Upload] Checking FFmpeg availability...');
-    const hasFFmpeg = await checkFFmpeg();
-    let thumbnailPath: string | null = null;
-
-    if (hasFFmpeg) {
-      console.log('[Upload] Generating thumbnail...');
-      thumbnailPath = await generateThumbnail(filePath, videoId, drive);
-    } else {
-      console.log('[Upload] FFmpeg not available, will queue for background processing');
-    }
-
-    // Create video metadata (include thumbnail if generated)
-    const metadata: Record<string, any> = {
-      id: videoId,
-      title,
-      description,
-      path: videoPath,
-      mimeType,
-      size: fileSize,
-      uploadedAt: Date.now(),
-      channelKey: identity.driveKey,
-      category: category || 'Other'
-    };
-
-    if (thumbnailPath) {
-      metadata.thumbnail = thumbnailPath;
-    }
-
-    await drive.put(metaPath, Buffer.from(JSON.stringify(metadata)));
-
-    // If thumbnail generation failed or FFmpeg unavailable, queue for background
-    if (!thumbnailPath && identity.driveKey) {
-      queueThumbnailGeneration(videoId, identity.driveKey, videoPath);
-    }
-
-    console.log('Video uploaded:', videoId, thumbnailPath ? 'with thumbnail' : 'queued for thumbnail');
-
-    return {
-      success: true,
-      videoId,
-      metadata
-    };
-  },
-
-  // Get video stream URL (via blob server)
-  async getVideoUrl(driveKey: string, videoPath: string) {
-    const keyBuffer = b4a.from(driveKey, 'hex');
-    // Ensure drive is loaded/joined
-    await getChannelDrive(driveKey);
-
-    // Blob server expects a normalized filename (no leading slash)
-    const filename = videoPath.replace(/^\/+/, '');
-
-    const url = blobServer.getLink(keyBuffer, {
-      filename
-    });
-
-    return { url };
-  },
-
-  // Subscribe to a channel (start replicating)
-  async subscribeChannel(driveKey: string) {
-    const drive = await getChannelDrive(driveKey);
-
-    // Save subscription
-    const subs = (await db.get('subscriptions'))?.value || [];
-    if (!subs.includes(driveKey)) {
-      subs.push(driveKey);
-      await db.put('subscriptions', subs);
-    }
-
-    return { success: true, driveKey };
-  },
-
-  // Get subscribed channels
-  async getSubscriptions() {
-    const subs = (await db.get('subscriptions'))?.value || [];
-    const channels = [];
-
-    for (const driveKey of subs) {
-      try {
-        const channel = await api.getChannel(driveKey);
-        channels.push({ driveKey, ...channel });
-      } catch {
-        channels.push({ driveKey, name: 'Loading...' });
-      }
-    }
-
-    return channels;
-  },
-
-  // Get blob server port for frontend
-  async getBlobServerPort() {
-    return { port: blobServerPort };
-  },
-
-  // Native file picker using osascript (macOS)
-  async pickVideoFile() {
-    console.log('[Worker] Opening native file picker...');
-
-    return new Promise((resolve, reject) => {
-      // AppleScript to open file picker for video files
-      const script = `
-        set theFile to choose file with prompt "Select a video file" of type {"public.movie", "public.video"}
-        return POSIX path of theFile
-      `;
-
-      const proc = spawn('osascript', ['-e', script]);
-
-      let stdout = '';
-      let stderr = '';
-
-      proc.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-
-      proc.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-
-      proc.on('exit', (code: number) => {
-        if (code === 0 && stdout.trim()) {
-          const filePath = stdout.trim();
-          console.log('[Worker] File selected:', filePath);
-
-          // Get file info using bare-fs
-          try {
-            const stat = fs.statSync(filePath);
-            const name = filePath.split('/').pop() || 'video';
-
-            resolve({
-              filePath,
-              name,
-              size: stat.size,
-            });
-          } catch (err: any) {
-            reject(new Error(`Failed to stat file: ${err.message}`));
-          }
-        } else if (code === 1) {
-          // User cancelled
-          resolve({ cancelled: true });
-        } else {
-          reject(new Error(stderr || 'File picker failed'));
-        }
-      });
-
-      proc.on('error', (err: Error) => {
-        reject(err);
-      });
-    });
-  },
-
-  // Native image file picker using osascript (macOS)
-  async pickImageFile() {
-    console.log('[Worker] Opening native image file picker...');
-
-    return new Promise((resolve, reject) => {
-      // AppleScript to open file picker for image files
-      const script = `
-        set theFile to choose file with prompt "Select a thumbnail image" of type {"public.jpeg", "public.png", "public.image"}
-        return POSIX path of theFile
-      `;
-
-      const proc = spawn('osascript', ['-e', script]);
-
-      let stdout = '';
-      let stderr = '';
-
-      proc.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-
-      proc.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-
-      proc.on('exit', (code: number) => {
-        if (code === 0 && stdout.trim()) {
-          const filePath = stdout.trim();
-          console.log('[Worker] Image file selected:', filePath);
-
-          // Get file info using bare-fs
-          try {
-            const stat = fs.statSync(filePath);
-            const name = filePath.split('/').pop() || 'image';
-
-            // Read file and create data URL for preview
-            const fileBuffer = fs.readFileSync(filePath);
-            const base64 = fileBuffer.toString('base64');
-            const ext = filePath.toLowerCase();
-            const mimeType = ext.endsWith('.png') ? 'image/png' : 'image/jpeg';
-            const dataUrl = `data:${mimeType};base64,${base64}`;
-
-            resolve({
-              filePath,
-              name,
-              size: stat.size,
-              dataUrl,
-            });
-          } catch (err: any) {
-            reject(new Error(`Failed to read file: ${err.message}`));
-          }
-        } else if (code === 1) {
-          // User cancelled
-          resolve({ cancelled: true });
-        } else {
-          reject(new Error(stderr || 'File picker failed'));
-        }
-      });
-
-      proc.on('error', (err: Error) => {
-        reject(err);
-      });
-    });
-  },
-
-  // ============================================
-  // Public Feed API Methods
-  // ============================================
-
-  // Get the current public feed
-  async getPublicFeed() {
-    const feed = publicFeed.getFeed();
-    const stats = publicFeed.getStats();
-    console.log(`[PublicFeed API] Returning ${feed.length} entries (${stats.peerCount} peers connected)`);
-    return {
-      entries: feed,
-      stats
-    };
-  },
-
-  // Request fresh feed from peers
-  async refreshFeed() {
-    console.log('[PublicFeed API] Refreshing feed from peers...');
-    const peerCount = publicFeed.requestFeedsFromPeers();
-    return { success: true, peerCount };
-  },
-
-  // Submit a channel to the public feed
-  async submitToFeed(driveKey: string) {
-    console.log('[PublicFeed API] Submitting channel:', driveKey.slice(0, 16));
-    publicFeed.submitChannel(driveKey);
-    return { success: true };
-  },
-
-  // Hide a channel from the feed
-  async hideChannel(driveKey: string) {
-    console.log('[PublicFeed API] Hiding channel:', driveKey.slice(0, 16));
-    publicFeed.hideChannel(driveKey);
-    return { success: true };
-  },
-
-  // Get channel metadata (lazy loaded from drive)
-  async getChannelMeta(driveKey: string) {
-    console.log('[PublicFeed API] Getting metadata for:', driveKey.slice(0, 16));
-    try {
-      const drive = await getChannelDrive(driveKey);
-      const metaBuffer = await drive.get('/channel.json');
-      if (metaBuffer) {
-        const meta = JSON.parse(b4a.toString(metaBuffer, 'utf-8'));
-
-        // Count videos
-        let videoCount = 0;
+// Native video file picker using osascript (macOS)
+async function pickVideoFile(): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const script = `
+      set theFile to choose file with prompt "Select a video file" of type {"public.movie", "public.video"}
+      return POSIX path of theFile
+    `;
+
+    const proc = spawn('osascript', ['-e', script]);
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    proc.on('exit', (code: number) => {
+      if (code === 0 && stdout.trim()) {
+        const filePath = stdout.trim();
         try {
-          for await (const entry of drive.readdir('/videos')) {
-            if (entry.endsWith('.json')) videoCount++;
-          }
-        } catch {}
-
-        return {
-          ...meta,
-          videoCount,
-          driveKey
-        };
-      }
-    } catch (err) {
-      console.error('[PublicFeed API] Failed to get metadata:', err);
-    }
-
-    return {
-      driveKey,
-      name: 'Unknown Channel',
-      description: '',
-      videoCount: 0
-    };
-  },
-
-  // Prefetch a video - start downloading all blocks for smooth seeking
-  async prefetchVideo(driveKey: string, videoPath: string) {
-    console.log('[Worker] Prefetching video:', driveKey.slice(0, 8), videoPath);
-    const monitorKey = `${driveKey}:${videoPath}`;
-
-    // Already monitoring?
-    if (videoMonitors.has(monitorKey)) {
-      return { success: true, message: 'Already prefetching' };
-    }
-
-    try {
-      const drive = await getChannelDrive(driveKey);
-
-      // Get the file entry
-      const entry = await drive.entry(videoPath);
-      if (!entry) {
-        console.error('[Worker] Video file not found:', videoPath);
-        return { success: false, error: 'Video not found' };
-      }
-
-      // Start monitoring the drive for download progress
-      const monitor = drive.monitor();
-      await monitor.ready();
-
-      // Start downloading all blocks for this file
-      const downloadRequest = drive.download(videoPath, { ifAvailable: false });
-
-      // Store monitor data
-      videoMonitors.set(monitorKey, {
-        driveKey,
-        videoPath,
-        startTime: Date.now(),
-        monitor,
-        downloadRequest,
-        entry,
-      });
-
-      console.log('[Worker] Prefetch started for:', videoPath, 'blocks:', entry.value?.blob?.blockLength || 0);
-      return { success: true };
-    } catch (err: any) {
-      console.error('[Worker] Prefetch failed:', err);
-      return { success: false, error: err.message };
-    }
-  },
-
-  // Get real-time P2P stats for a video
-  async getVideoStats(driveKey: string, videoPath: string) {
-    const monitorKey = `${driveKey}:${videoPath}`;
-    const monitorData = videoMonitors.get(monitorKey);
-
-    if (!monitorData) {
-      return {
-        status: 'unknown' as const,
-        progress: 0,
-        totalBlocks: 0,
-        downloadedBlocks: 0,
-        totalBytes: 0,
-        downloadedBytes: 0,
-        peerCount: 0,
-        speedMBps: '0',
-        uploadSpeedMBps: '0',
-        elapsed: 0,
-        isComplete: false,
-      };
-    }
-
-    const { startTime, monitor, entry } = monitorData;
-    const elapsed = Date.now() - startTime;
-
-    // Get download/upload speeds from monitor
-    const downloadSpeed = monitor?.downloadSpeed?.() || 0;
-    const uploadSpeed = monitor?.uploadSpeed?.() || 0;
-
-    // Get blob stats from entry
-    const blob = entry?.value?.blob;
-    const totalBlocks = blob?.blockLength || 0;
-    const totalBytes = blob?.byteLength || 0;
-
-    // Calculate downloaded blocks from the drive's blobs core
-    const drive = await getChannelDrive(driveKey);
-    const blobsCore = drive?.blobs?.core;
-    const contiguousLength = blobsCore?.contiguousLength || 0;
-    const downloadedBlocks = Math.min(contiguousLength, totalBlocks);
-    const progress = totalBlocks > 0 ? Math.round((downloadedBlocks / totalBlocks) * 100) : 0;
-    const downloadedBytes = totalBlocks > 0 ? Math.round((downloadedBlocks / totalBlocks) * totalBytes) : 0;
-    const isComplete = downloadedBlocks >= totalBlocks && totalBlocks > 0;
-
-    // Determine status
-    let status: 'connecting' | 'resolving' | 'downloading' | 'complete' | 'error' | 'unknown';
-    if (isComplete) {
-      status = 'complete';
-    } else if (downloadedBlocks > 0) {
-      status = 'downloading';
-    } else if (swarm.connections.size > 0) {
-      status = 'resolving';
-    } else {
-      status = 'connecting';
-    }
-
-    // If complete, we can mark it as cached
-    if (isComplete && status !== 'complete') {
-      status = 'complete';
-    }
-
-    return {
-      status,
-      progress,
-      totalBlocks,
-      downloadedBlocks,
-      totalBytes,
-      downloadedBytes,
-      peerCount: swarm.connections.size,
-      speedMBps: (downloadSpeed / (1024 * 1024)).toFixed(2),
-      uploadSpeedMBps: (uploadSpeed / (1024 * 1024)).toFixed(2),
-      elapsed,
-      isComplete,
-    };
-  },
-};
-
-// Initialize
-await loadIdentities();
-
-const storedActive = await db.get('activeIdentity');
-if (storedActive && storedActive.value) {
-  activeIdentity = storedActive.value;
-}
-
-// Normalize identities loaded from DB (drop malformed, mark active)
-identities = (identities || [])
-  .filter(i => i && typeof i.publicKey === 'string' && i.publicKey && typeof i.driveKey === 'string' && i.driveKey)
-  .map(i => ({
-    ...i,
-    isActive: i.publicKey === activeIdentity,
-    createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0 ? i.createdAt : Date.now(),
-  }));
-
-// Load existing channel drives
-for (const identity of identities) {
-  if (identity.driveKey) {
-    try {
-      console.log(`[Startup] Loading drive for identity "${identity.name}": ${identity.driveKey.slice(0, 16)}...`);
-      const drive = new Hyperdrive(store, b4a.from(identity.driveKey, 'hex'));
-      await drive.ready();
-      console.log(`[Startup] Drive loaded, writable: ${drive.writable}, key: ${b4a.toString(drive.key, 'hex').slice(0, 16)}...`);
-
-      // List existing videos
-      try {
-        const entries: string[] = [];
-        for await (const entry of drive.readdir('/videos')) {
-          entries.push(entry);
+          const stat = fs.statSync(filePath);
+          resolve({ filePath, name: filePath.split('/').pop() || 'video', size: stat.size });
+        } catch (err: any) {
+          reject(new Error(`Failed to stat file: ${err.message}`));
         }
-        console.log(`[Startup] Found ${entries.length} files in /videos:`, entries);
-      } catch (e) {
-        console.log(`[Startup] No /videos directory yet`);
+      } else if (code === 1) {
+        resolve({ cancelled: true });
+      } else {
+        reject(new Error(stderr || 'File picker failed'));
       }
+    });
 
-      channels.set(identity.driveKey, drive);
-      swarm.join(drive.discoveryKey);
-    } catch (err) {
-      console.error('Failed to load drive:', identity.driveKey, err);
-    }
-  }
+    proc.on('error', (err: Error) => reject(err));
+  });
 }
 
-// Load subscribed channels
-const subs = (await db.get('subscriptions'))?.value || [];
-for (const driveKey of subs) {
-  try {
-    await getChannelDrive(driveKey);
-  } catch (err) {
-    console.error('Failed to load subscription:', driveKey, err);
-  }
+// Native image file picker using osascript (macOS)
+async function pickImageFile(): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const script = `
+      set theFile to choose file with prompt "Select a thumbnail image" of type {"public.jpeg", "public.png", "public.image"}
+      return POSIX path of theFile
+    `;
+
+    const proc = spawn('osascript', ['-e', script]);
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    proc.on('exit', (code: number) => {
+      if (code === 0 && stdout.trim()) {
+        const filePath = stdout.trim();
+        try {
+          const stat = fs.statSync(filePath);
+          const fileBuffer = fs.readFileSync(filePath);
+          const base64 = fileBuffer.toString('base64');
+          const mimeType = filePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+          const dataUrl = `data:${mimeType};base64,${base64}`;
+          resolve({ filePath, name: filePath.split('/').pop() || 'image', size: stat.size, dataUrl });
+        } catch (err: any) {
+          reject(new Error(`Failed to read file: ${err.message}`));
+        }
+      } else if (code === 1) {
+        resolve({ cancelled: true });
+      } else {
+        reject(new Error(stderr || 'File picker failed'));
+      }
+    });
+
+    proc.on('error', (err: Error) => reject(err));
+  });
 }
 
-// Start public feed discovery
-await publicFeed.start();
-console.log('[PublicFeed] Started P2P discovery');
+// ============================================
+// HRPC Setup
+// ============================================
 
-console.log('PearTube Core Worker ready');
-console.log('Storage location:', storage);
-console.log('Identities loaded:', identities.length);
-console.log('Active identity:', activeIdentity || 'none');
-console.log('Blob server port:', blobServerPort);
-
-// Get the pipe for IPC communication using pear-pipe
 const ipcPipe = pipe();
-
 if (!ipcPipe) {
   console.error('[Worker] Failed to get IPC pipe');
-} else {
-  console.log('[Worker] IPC pipe connected via pear-pipe');
-
-  // Create HRPC instance with the pipe
-  const rpc = new HRPC(ipcPipe);
-  console.log('[Worker] HRPC initialized');
-
-  // ============================================
-  // HRPC Handler Registration
-  // ============================================
-
-  // Identity handlers
-  rpc.onCreateIdentity(async (req: any) => {
-    console.log('[HRPC] createIdentity:', req);
-    const result = await api.createIdentity(req.name || 'New Channel', true);
-
-    // Mark active identity
-    activeIdentity = result.publicKey;
-    identities = (identities || []).map(i => ({ ...i, isActive: i.publicKey === result.publicKey }));
-    await db.put('activeIdentity', result.publicKey);
-    await saveIdentities();
-
-    return {
-      identity: {
-        publicKey: result.publicKey,
-        driveKey: result.driveKey,
-        name: req.name || 'New Channel',
-        seedPhrase: result.mnemonic,
-        isActive: true,
-      }
-    };
-  });
-
-  rpc.onGetIdentity(async () => {
-    console.log('[HRPC] getIdentity');
-    const allIdentities = await api.getIdentities();
-    const active = allIdentities.find((i: any) => i.isActive);
-    return {
-      identity: active
-        ? {
-            publicKey: active.publicKey,
-            driveKey: active.driveKey,
-            name: active.name,
-            createdAt: active.createdAt,
-            isActive: true,
-          }
-        : null
-    };
-  });
-
-  rpc.onGetIdentities(async () => {
-    console.log('[HRPC] getIdentities');
-    const allIdentities = await api.getIdentities();
-    return {
-      identities: allIdentities.map((i: any) => ({
-        publicKey: i.publicKey || '',
-        driveKey: i.driveKey || '',
-        name: i.name || '',
-        // Ensure createdAt is a valid positive uint
-        createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0 ? i.createdAt : 0,
-        isActive: Boolean(i.isActive),
-      }))
-    };
-  });
-
-  rpc.onSetActiveIdentity(async (req: any) => {
-    console.log('[HRPC] setActiveIdentity:', req.publicKey);
-    await api.setActiveIdentity(req.publicKey);
-    // Persist active identity
-    activeIdentity = req.publicKey;
-    identities = (identities || []).map(i => ({ ...i, isActive: i.publicKey === req.publicKey }));
-    await saveIdentities();
-    await db.put('activeIdentity', req.publicKey);
-    return { success: true };
-  });
-
-  rpc.onRecoverIdentity(async (req: any) => {
-    console.log('[HRPC] recoverIdentity');
-    const result = await api.recoverIdentity(req.seedPhrase);
-    return {
-      identity: {
-        publicKey: result.publicKey,
-        driveKey: result.driveKey,
-        name: req.name || 'Recovered',
-        isActive: true,
-      }
-    };
-  });
-
-  // Channel handlers
-  rpc.onGetChannel(async (req: any) => {
-    console.log('[HRPC] getChannel:', req.publicKey?.slice(0, 16));
-    const channel = await api.getChannel(req.publicKey || '');
-    return { channel };
-  });
-
-  rpc.onUpdateChannel(async (req: any) => {
-    console.log('[HRPC] updateChannel');
-    // TODO: Implement updateChannel in api
-    return { channel: {} };
-  });
-
-  // Video handlers
-  rpc.onListVideos(async (req: any) => {
-    console.log('[HRPC] listVideos:', req.channelKey?.slice(0, 16));
-    const rawVideos = await api.listVideos(req.channelKey || '');
-    const channelKey = req.channelKey || '';
-
-    // Map stored metadata to HRPC schema format and resolve thumbnail URLs
-    const videos = await Promise.all(rawVideos.map(async (v: any) => {
-      let thumbnailUrl = '';
-      const videoChannelKey = v.channelKey || channelKey;
-
-      // Resolve thumbnail path to blob server URL
-      console.log('[HRPC] listVideos processing:', v.id, 'thumbnail:', v.thumbnail);
-      if (v.thumbnail && videoChannelKey) {
-        try {
-          const drive = await getChannelDrive(videoChannelKey);
-          const entry = await drive.entry(v.thumbnail);
-          console.log('[HRPC] Thumbnail entry for', v.id, ':', entry ? 'found' : 'not found');
-          if (entry) {
-            const keyBuffer = b4a.from(videoChannelKey, 'hex');
-            const filename = v.thumbnail.replace(/^\/+/, '');
-            thumbnailUrl = blobServer.getLink(keyBuffer, { filename });
-            console.log('[HRPC] Generated thumbnail URL:', thumbnailUrl);
-          }
-        } catch (err) {
-          // Thumbnail not available, leave empty
-          console.log('[HRPC] Could not resolve thumbnail:', v.id, err);
-        }
-      }
-
-      return {
-        id: v.id || '',
-        title: v.title || 'Untitled',
-        description: v.description || '',
-        path: v.path || '',
-        duration: typeof v.duration === 'number' && v.duration >= 0 ? v.duration : 0,
-        thumbnail: thumbnailUrl,
-        channelKey: videoChannelKey,
-        channelName: v.channelName || '',
-        createdAt: typeof v.uploadedAt === 'number' && v.uploadedAt >= 0 ? v.uploadedAt : (typeof v.createdAt === 'number' && v.createdAt >= 0 ? v.createdAt : 0),
-        views: typeof v.views === 'number' && v.views >= 0 ? v.views : 0,
-        category: v.category || 'Other',
-      };
-    }));
-    return { videos };
-  });
-
-  rpc.onGetVideoUrl(async (req: any) => {
-    console.log('[HRPC] getVideoUrl:', req.channelKey?.slice(0, 16), req.videoId);
-    // Note: Schema uses channelKey/videoId, api uses driveKey/videoPath
-    const result = await api.getVideoUrl(req.channelKey, req.videoId);
-    return { url: result.url };
-  });
-
-  rpc.onGetVideoData(async (req: any) => {
-    console.log('[HRPC] getVideoData:', req.channelKey?.slice(0, 16), req.videoId);
-    // TODO: Implement getVideoData
-    return { video: { id: req.videoId, title: 'Unknown' } };
-  });
-
-  rpc.onUploadVideo(async (req: any) => {
-    console.log('[HRPC] uploadVideo:', req.title, 'category:', req.category);
-    try {
-      const result = await api.uploadVideo(
-        req.title,
-        req.description || '',
-        req.filePath,
-        'video/mp4',
-        req.category || 'Other',
-        (progress: number, bytesWritten: number, totalBytes: number) => {
-          // Send progress event via HRPC
-          try {
-            rpc.eventUploadProgress({
-              videoId: '',
-              progress,
-              bytesUploaded: bytesWritten,
-              totalBytes,
-            });
-          } catch (e) {
-            console.error('[HRPC] Failed to send progress event:', e);
-          }
-        }
-      );
-      console.log('[HRPC] uploadVideo result:', JSON.stringify(result));
-      const videoId = result?.videoId || '';
-      const channelKey = result?.metadata?.channelKey || '';
-      console.log('[HRPC] uploadVideo returning video id:', videoId, 'channelKey:', channelKey);
-      return {
-        video: {
-          id: videoId,
-          title: req.title || '',
-          description: req.description || '',
-          channelKey: channelKey,
-        }
-      };
-    } catch (err: any) {
-      console.error('[HRPC] uploadVideo error:', err);
-      return {
-        video: {
-          id: '',
-          title: req.title || '',
-          description: '',
-          channelKey: '',
-        }
-      };
-    }
-  });
-
-  // Subscription handlers
-  rpc.onSubscribeChannel(async (req: any) => {
-    console.log('[HRPC] subscribeChannel:', req.channelKey?.slice(0, 16));
-    await api.subscribeChannel(req.channelKey);
-    return { success: true };
-  });
-
-  rpc.onUnsubscribeChannel(async (req: any) => {
-    console.log('[HRPC] unsubscribeChannel:', req.channelKey?.slice(0, 16));
-    // TODO: Implement unsubscribeChannel in api
-    return { success: true };
-  });
-
-  rpc.onGetSubscriptions(async () => {
-    console.log('[HRPC] getSubscriptions');
-    const subs = await api.getSubscriptions();
-    return {
-      subscriptions: subs.map((s: any) => ({
-        channelKey: s.driveKey,
-        channelName: s.name,
-      }))
-    };
-  });
-
-  rpc.onJoinChannel(async (req: any) => {
-    console.log('[HRPC] joinChannel:', req.channelKey?.slice(0, 16));
-    // Join is same as subscribe for now
-    await api.subscribeChannel(req.channelKey);
-    return { success: true };
-  });
-
-  // Public Feed handlers
-  rpc.onGetPublicFeed(async () => {
-    console.log('[HRPC] getPublicFeed');
-    const result = await api.getPublicFeed();
-    return {
-      entries: result.entries.map((e: any) => ({
-        channelKey: e.driveKey || e.channelKey,
-        channelName: e.name,
-        videoCount: e.videoCount || 0,
-        peerCount: e.peerCount || 0,
-        lastSeen: e.lastSeen || 0,
-      }))
-    };
-  });
-
-  rpc.onRefreshFeed(async () => {
-    console.log('[HRPC] refreshFeed');
-    await api.refreshFeed();
-    return { success: true };
-  });
-
-  rpc.onSubmitToFeed(async () => {
-    console.log('[HRPC] submitToFeed');
-    const allIdentities = await api.getIdentities();
-    const active = allIdentities.find((i: any) => i.isActive);
-    if (active?.driveKey) {
-      await api.submitToFeed(active.driveKey);
-    }
-    return { success: true };
-  });
-
-  rpc.onHideChannel(async (req: any) => {
-    console.log('[HRPC] hideChannel:', req.channelKey?.slice(0, 16));
-    await api.hideChannel(req.channelKey);
-    return { success: true };
-  });
-
-  rpc.onGetChannelMeta(async (req: any) => {
-    console.log('[HRPC] getChannelMeta:', req.channelKey?.slice(0, 16));
-    const meta = await api.getChannelMeta(req.channelKey);
-    return {
-      name: meta.name,
-      description: meta.description,
-      videoCount: meta.videoCount || 0,
-    };
-  });
-
-  rpc.onGetSwarmStatus(async () => {
-    console.log('[HRPC] getSwarmStatus');
-    return {
-      connected: swarm.connections.size > 0,
-      peerCount: swarm.connections.size,
-    };
-  });
-
-  // Video prefetch and stats
-  rpc.onPrefetchVideo(async (req: any) => {
-    console.log('[HRPC] prefetchVideo:', req.channelKey?.slice(0, 16), req.videoId);
-    await api.prefetchVideo(req.channelKey, req.videoId);
-    return { success: true };
-  });
-
-  rpc.onGetVideoStats(async (req: any) => {
-    console.log('[HRPC] getVideoStats:', req.channelKey?.slice(0, 16), req.videoId);
-    const stats = await api.getVideoStats(req.channelKey, req.videoId);
-    // Ensure all uint fields are valid positive integers
-    const safeUint = (val: any) => {
-      const num = typeof val === 'number' ? val : parseFloat(val);
-      return isNaN(num) || num < 0 ? 0 : Math.round(num);
-    };
-    return {
-      stats: {
-        videoId: req.videoId || '',
-        channelKey: req.channelKey || '',
-        status: stats.status || 'unknown',
-        progress: safeUint(stats.progress),
-        totalBlocks: safeUint(stats.totalBlocks),
-        downloadedBlocks: safeUint(stats.downloadedBlocks),
-        totalBytes: safeUint(stats.totalBytes),
-        downloadedBytes: safeUint(stats.downloadedBytes),
-        peerCount: safeUint(stats.peerCount),
-        speedMBps: stats.speedMBps || '0',
-        uploadSpeedMBps: stats.uploadSpeedMBps || '0',
-        elapsed: safeUint(stats.elapsed),
-        isComplete: Boolean(stats.isComplete),
-      }
-    };
-  });
-
-  // Seeding handlers (stubs for now)
-  rpc.onGetSeedingStatus(async () => {
-    console.log('[HRPC] getSeedingStatus');
-    return {
-      status: {
-        enabled: false,
-        usedStorage: 0,
-        maxStorage: 0,
-        seedingCount: 0,
-      }
-    };
-  });
-
-  rpc.onSetSeedingConfig(async (req: any) => {
-    console.log('[HRPC] setSeedingConfig');
-    return { success: true };
-  });
-
-  rpc.onPinChannel(async (req: any) => {
-    console.log('[HRPC] pinChannel:', req.channelKey?.slice(0, 16));
-    return { success: true };
-  });
-
-  rpc.onUnpinChannel(async (req: any) => {
-    console.log('[HRPC] unpinChannel:', req.channelKey?.slice(0, 16));
-    return { success: true };
-  });
-
-  rpc.onGetPinnedChannels(async () => {
-    console.log('[HRPC] getPinnedChannels');
-    return { channels: [] };
-  });
-
-  // Thumbnail/Metadata handlers
-  rpc.onGetVideoThumbnail(async (req: any) => {
-    console.log('[HRPC] getVideoThumbnail:', req.channelKey?.slice(0, 16), req.videoId);
-    try {
-      const drive = await getChannelDrive(req.channelKey);
-      // Try jpg first, then png
-      const thumbnailPath = `/thumbnails/${req.videoId}.jpg`;
-      const entry = await drive.entry(thumbnailPath);
-
-      if (entry) {
-        const keyBuffer = b4a.from(req.channelKey, 'hex');
-        const filename = thumbnailPath.replace(/^\/+/, '');
-        const url = blobServer.getLink(keyBuffer, { filename });
-        console.log('[HRPC] Thumbnail URL:', url);
-        return { url, exists: true };
-      }
-    } catch (err) {
-      console.error('[HRPC] getVideoThumbnail error:', err);
-    }
-    return { url: null, exists: false };
-  });
-
-  rpc.onGetVideoMetadata(async (req: any) => {
-    console.log('[HRPC] getVideoMetadata:', req.channelKey?.slice(0, 16), req.videoId);
-    try {
-      const drive = await getChannelDrive(req.channelKey);
-      const metaPath = `/videos/${req.videoId}.json`;
-      const metaBuffer = await drive.get(metaPath);
-      if (metaBuffer) {
-        const meta = JSON.parse(b4a.toString(metaBuffer, 'utf-8'));
-        return { video: meta };
-      }
-    } catch (err) {
-      console.error('[HRPC] getVideoMetadata error:', err);
-    }
-    return { video: { id: req.videoId, title: 'Unknown' } };
-  });
-
-  rpc.onSetVideoThumbnail(async (req: any) => {
-    console.log('[HRPC] setVideoThumbnail:', req.videoId);
-    try {
-      const identity = identities.find(i => i.publicKey === activeIdentity);
-      if (!identity) {
-        return { success: false, error: 'No active identity' };
-      }
-
-      const drive = channels.get(identity.driveKey);
-      if (!drive) {
-        return { success: false, error: 'Channel drive not found' };
-      }
-
-      // Decode base64 image data
-      const imageBuffer = Buffer.from(req.imageData, 'base64');
-      const ext = req.mimeType?.includes('png') ? 'png' : 'jpg';
-      const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
-
-      await drive.put(thumbnailPath, imageBuffer);
-      console.log('[HRPC] Thumbnail saved:', thumbnailPath, imageBuffer.length, 'bytes');
-
-      // Update video metadata with thumbnail path
-      const metaPath = `/videos/${req.videoId}.json`;
-      const metaBuffer = await drive.get(metaPath);
-      if (metaBuffer) {
-        const meta = JSON.parse(b4a.toString(metaBuffer, 'utf-8'));
-        meta.thumbnail = thumbnailPath;
-        await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-      }
-
-      return { success: true, thumbnailPath };
-    } catch (err: any) {
-      console.error('[HRPC] setVideoThumbnail error:', err);
-      return { success: false, error: err.message };
-    }
-  });
-
-  rpc.onSetVideoThumbnailFromFile(async (req: any) => {
-    console.log('[HRPC] setVideoThumbnailFromFile:', req.videoId, req.filePath);
-    try {
-      const identity = identities.find(i => i.publicKey === activeIdentity);
-      if (!identity) {
-        console.log('[HRPC] setVideoThumbnailFromFile: No identity found');
-        return { success: false };
-      }
-
-      const drive = channels.get(identity.driveKey);
-      if (!drive) {
-        console.log('[HRPC] setVideoThumbnailFromFile: No drive found');
-        return { success: false };
-      }
-
-      // Read image file from disk
-      const imageBuffer = fs.readFileSync(req.filePath);
-      const ext = req.filePath.toLowerCase().endsWith('.png') ? 'png' : 'jpg';
-      const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
-
-      await drive.put(thumbnailPath, imageBuffer);
-      console.log('[HRPC] Thumbnail saved from file:', thumbnailPath, imageBuffer.length, 'bytes');
-
-      // Update video metadata with thumbnail path
-      const metaPath = `/videos/${req.videoId}.json`;
-      console.log('[HRPC] Looking for video metadata at:', metaPath);
-      const metaBuffer = await drive.get(metaPath);
-      if (metaBuffer) {
-        const meta = JSON.parse(b4a.toString(metaBuffer, 'utf-8'));
-        meta.thumbnail = thumbnailPath;
-        await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-        console.log('[HRPC] Updated video metadata with thumbnail:', meta.id, thumbnailPath);
-      } else {
-        console.log('[HRPC] Video metadata not found at:', metaPath);
-      }
-
-      // Flush to ensure changes are persisted
-      if (drive.flush) await drive.flush();
-
-      return { success: true };
-    } catch (err: any) {
-      console.error('[HRPC] setVideoThumbnailFromFile error:', err);
-      return { success: false };
-    }
-  });
-
-  // Desktop-specific handlers
-  rpc.onGetStatus(async () => {
-    console.log('[HRPC] getStatus');
-    const status = await api.getStatus();
-    return {
-      status: {
-        ready: true,
-        hasIdentity: identities.length > 0,
-        blobServerPort: status.blobServerPort,
-      }
-    };
-  });
-
-  rpc.onPickVideoFile(async () => {
-    console.log('[HRPC] pickVideoFile');
-    const result = await api.pickVideoFile();
-    return {
-      filePath: result.filePath || null,
-      name: result.name || null,
-      size: result.size || 0,
-      cancelled: result.cancelled || false,
-    };
-  });
-
-  rpc.onPickImageFile(async () => {
-    console.log('[HRPC] pickImageFile');
-    const result = await api.pickImageFile();
-    return {
-      filePath: result.filePath || null,
-      name: result.name || null,
-      size: result.size || 0,
-      dataUrl: result.dataUrl || null,
-      cancelled: result.cancelled || false,
-    };
-  });
-
-  rpc.onGetBlobServerPort(async () => {
-    console.log('[HRPC] getBlobServerPort');
-    return { port: blobServerPort };
-  });
-
-  // Event handlers (client -> server, usually no-ops)
-  rpc.onEventReady(() => {
-    console.log('[HRPC] Client acknowledged ready');
-  });
-
-  rpc.onEventError((data: any) => {
-    console.error('[HRPC] Client reported error:', data?.message);
-  });
-
-  rpc.onEventUploadProgress(() => {
-    // Client shouldn't send this
-  });
-
-  rpc.onEventFeedUpdate(() => {
-    // Client shouldn't send this
-  });
-
-  rpc.onEventLog(() => {
-    // Client shouldn't send this
-  });
-
-  rpc.onEventVideoStats(() => {
-    // Client shouldn't send this
-  });
-
-  // Send ready event to client
-  try {
-    rpc.eventReady({ blobServerPort });
-    console.log('[Worker] Sent eventReady via HRPC');
-  } catch (e) {
-    console.error('[Worker] Failed to send eventReady:', e);
-  }
-
-  ipcPipe.on('error', (err: Error) => {
-    console.error('[Worker] Pipe error:', err);
-  });
-
-  console.log('[Worker] HRPC handlers registered');
+  throw new Error('No IPC pipe');
 }
 
-// Keep worker alive
+const rpc = new HRPC(ipcPipe);
+console.log('[Worker] HRPC initialized');
+
+// Wire up video stats events
+videoStats.setOnStatsUpdate((driveKey: string, videoPath: string, stats: any) => {
+  try {
+    rpc.eventVideoStats({
+      videoId: videoPath,
+      channelKey: driveKey,
+      status: stats.status || 'unknown',
+      progress: stats.progress || 0,
+      totalBlocks: stats.totalBlocks || 0,
+      downloadedBlocks: stats.downloadedBlocks || 0,
+      totalBytes: stats.totalBytes || 0,
+      downloadedBytes: stats.downloadedBytes || 0,
+      peerCount: stats.peerCount || 0,
+      speedMBps: stats.speedMBps || '0',
+      uploadSpeedMBps: stats.uploadSpeedMBps || '0',
+      elapsed: stats.elapsed || 0,
+      isComplete: Boolean(stats.isComplete),
+    });
+  } catch (e) {
+    // Ignore event send errors
+  }
+});
+
+// ============================================
+// HRPC Handlers - Thin Delegation Layer
+// ============================================
+
+// Identity handlers
+rpc.onCreateIdentity(async (req: any) => {
+  const result = await identityManager.createIdentity(req.name || 'New Channel', true);
+  return {
+    identity: {
+      publicKey: result.publicKey,
+      driveKey: result.driveKey,
+      name: req.name || 'New Channel',
+      seedPhrase: result.mnemonic,
+      isActive: true,
+    }
+  };
+});
+
+rpc.onGetIdentity(async () => {
+  const active = identityManager.getActiveIdentity();
+  return { identity: active };
+});
+
+rpc.onGetIdentities(async () => {
+  const all = identityManager.getIdentities();
+  return { identities: all.map((i: any) => ({
+    publicKey: i.publicKey || '',
+    driveKey: i.driveKey || '',
+    name: i.name || '',
+    createdAt: i.createdAt || 0,
+    isActive: Boolean(i.isActive),
+  }))};
+});
+
+rpc.onSetActiveIdentity(async (req: any) => {
+  await identityManager.setActiveIdentity(req.publicKey);
+  return { success: true };
+});
+
+rpc.onRecoverIdentity(async (req: any) => {
+  const result = await identityManager.recoverIdentity(req.seedPhrase, req.name);
+  return {
+    identity: {
+      publicKey: result.publicKey,
+      driveKey: result.driveKey,
+      name: req.name || 'Recovered',
+      isActive: true,
+    }
+  };
+});
+
+// Channel handlers
+rpc.onGetChannel(async (req: any) => {
+  const channel = await api.getChannel(req.publicKey || '');
+  return { channel };
+});
+
+rpc.onGetChannelMeta(async (req: any) => {
+  const meta = await api.getChannelMeta(req.channelKey);
+  return { name: meta.name, description: meta.description, videoCount: meta.videoCount || 0 };
+});
+
+rpc.onUpdateChannel(async () => ({ channel: {} }));
+
+// Video handlers
+rpc.onListVideos(async (req: any) => {
+  const videos = await api.listVideos(req.channelKey || '');
+  // Resolve thumbnail URLs via blob server
+  const enriched = await Promise.all(videos.map(async (v: any) => {
+    let thumbnailUrl = '';
+    const channelKey = v.channelKey || req.channelKey;
+    if (v.thumbnail && channelKey) {
+      try {
+        const drive = ctx.drives.get(channelKey);
+        if (drive) {
+          const entry = await drive.entry(v.thumbnail);
+          if (entry) {
+            thumbnailUrl = ctx.blobServer.getLink(b4a.from(channelKey, 'hex'), {
+              filename: v.thumbnail.replace(/^\/+/, '')
+            });
+          }
+        }
+      } catch {}
+    }
+    return {
+      id: v.id || '',
+      title: v.title || 'Untitled',
+      description: v.description || '',
+      path: v.path || '',
+      duration: v.duration || 0,
+      thumbnail: thumbnailUrl,
+      channelKey,
+      channelName: v.channelName || '',
+      createdAt: v.uploadedAt || v.createdAt || 0,
+      views: v.views || 0,
+      category: v.category || 'Other',
+    };
+  }));
+  return { videos: enriched };
+});
+
+rpc.onGetVideoUrl(async (req: any) => {
+  const result = await api.getVideoUrl(req.channelKey, req.videoId);
+  return { url: result.url };
+});
+
+rpc.onGetVideoData(async (req: any) => ({ video: { id: req.videoId, title: 'Unknown' } }));
+
+rpc.onUploadVideo(async (req: any) => {
+  const drive = identityManager.getActiveDrive();
+  if (!drive) throw new Error('No active identity');
+
+  const result = await uploadManager.uploadFromPath(
+    drive,
+    req.filePath,
+    { title: req.title, description: req.description, mimeType: 'video/mp4' },
+    fs,
+    (progress: number, bytesWritten: number, totalBytes: number) => {
+      try {
+        rpc.eventUploadProgress({ videoId: '', progress, bytesUploaded: bytesWritten, totalBytes });
+      } catch {}
+    }
+  );
+
+  // Generate thumbnail if FFmpeg available
+  if (result.success && result.videoId) {
+    const hasFFmpeg = await checkFFmpeg();
+    if (hasFFmpeg) {
+      const thumbPath = await generateThumbnail(req.filePath, result.videoId, drive);
+      if (thumbPath) {
+        const metaPath = `/videos/${result.videoId}.json`;
+        const metaBuf = await drive.get(metaPath);
+        if (metaBuf) {
+          const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
+          meta.thumbnail = thumbPath;
+          await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
+        }
+      }
+    }
+  }
+
+  return {
+    video: {
+      id: result.videoId || '',
+      title: req.title || '',
+      description: req.description || '',
+      channelKey: b4a.toString(drive.key, 'hex'),
+    }
+  };
+});
+
+// Video stats
+rpc.onPrefetchVideo(async (req: any) => {
+  await api.prefetchVideo(req.channelKey, req.videoId);
+  return { success: true };
+});
+
+rpc.onGetVideoStats(async (req: any) => {
+  const stats = api.getVideoStats(req.channelKey, req.videoId);
+  return { stats: { videoId: req.videoId, channelKey: req.channelKey, ...stats } };
+});
+
+// Subscription handlers
+rpc.onSubscribeChannel(async (req: any) => {
+  await api.subscribeChannel(req.channelKey);
+  return { success: true };
+});
+
+rpc.onUnsubscribeChannel(async (req: any) => {
+  await api.unsubscribeChannel(req.channelKey);
+  return { success: true };
+});
+
+rpc.onGetSubscriptions(async () => {
+  const subs = await api.getSubscriptions();
+  return { subscriptions: subs.map((s: any) => ({ channelKey: s.driveKey, channelName: s.name })) };
+});
+
+rpc.onJoinChannel(async (req: any) => {
+  await api.subscribeChannel(req.channelKey);
+  return { success: true };
+});
+
+// Public Feed handlers
+rpc.onGetPublicFeed(async () => {
+  const result = api.getPublicFeed();
+  return {
+    entries: result.entries.map((e: any) => ({
+      channelKey: e.driveKey,
+      channelName: e.name || '',
+      videoCount: 0,
+      peerCount: 0,
+      lastSeen: 0,
+    }))
+  };
+});
+
+rpc.onRefreshFeed(async () => {
+  api.refreshFeed();
+  return { success: true };
+});
+
+rpc.onSubmitToFeed(async () => {
+  const active = identityManager.getActiveIdentity();
+  if (active?.driveKey) {
+    api.submitToFeed(active.driveKey);
+  }
+  return { success: true };
+});
+
+rpc.onHideChannel(async (req: any) => {
+  api.hideChannel(req.channelKey);
+  return { success: true };
+});
+
+// Seeding handlers
+rpc.onGetSeedingStatus(async () => {
+  const status = await api.getSeedingStatus();
+  return { status: {
+    enabled: status.config?.autoSeedWatched || false,
+    usedStorage: status.storageUsedBytes || 0,
+    maxStorage: (status.maxStorageGB || 10) * 1024 * 1024 * 1024,
+    seedingCount: status.activeSeeds || 0,
+  }};
+});
+
+rpc.onSetSeedingConfig(async (req: any) => {
+  await api.setSeedingConfig(req.config);
+  return { success: true };
+});
+
+rpc.onPinChannel(async (req: any) => {
+  await api.pinChannel(req.channelKey);
+  return { success: true };
+});
+
+rpc.onUnpinChannel(async (req: any) => {
+  await api.unpinChannel(req.channelKey);
+  return { success: true };
+});
+
+rpc.onGetPinnedChannels(async () => {
+  const result = api.getPinnedChannels();
+  return { channels: result.channels || [] };
+});
+
+// Thumbnail handlers
+rpc.onGetVideoThumbnail(async (req: any) => {
+  const drive = ctx.drives.get(req.channelKey);
+  if (drive) {
+    const thumbPath = `/thumbnails/${req.videoId}.jpg`;
+    const entry = await drive.entry(thumbPath);
+    if (entry) {
+      const url = ctx.blobServer.getLink(b4a.from(req.channelKey, 'hex'), {
+        filename: thumbPath.replace(/^\/+/, '')
+      });
+      return { url, exists: true };
+    }
+  }
+  return { url: null, exists: false };
+});
+
+rpc.onGetVideoMetadata(async (req: any) => {
+  const drive = ctx.drives.get(req.channelKey);
+  if (drive) {
+    const metaPath = `/videos/${req.videoId}.json`;
+    const metaBuf = await drive.get(metaPath);
+    if (metaBuf) {
+      return { video: JSON.parse(b4a.toString(metaBuf, 'utf-8')) };
+    }
+  }
+  return { video: { id: req.videoId, title: 'Unknown' } };
+});
+
+rpc.onSetVideoThumbnail(async (req: any) => {
+  const drive = identityManager.getActiveDrive();
+  if (!drive) return { success: false };
+
+  const imageBuffer = Buffer.from(req.imageData, 'base64');
+  const ext = req.mimeType?.includes('png') ? 'png' : 'jpg';
+  const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
+
+  await drive.put(thumbnailPath, imageBuffer);
+
+  // Update metadata
+  const metaPath = `/videos/${req.videoId}.json`;
+  const metaBuf = await drive.get(metaPath);
+  if (metaBuf) {
+    const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
+    meta.thumbnail = thumbnailPath;
+    await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
+  }
+
+  return { success: true, thumbnailPath };
+});
+
+rpc.onSetVideoThumbnailFromFile(async (req: any) => {
+  const drive = identityManager.getActiveDrive();
+  if (!drive) return { success: false };
+
+  const imageBuffer = fs.readFileSync(req.filePath);
+  const ext = req.filePath.toLowerCase().endsWith('.png') ? 'png' : 'jpg';
+  const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
+
+  await drive.put(thumbnailPath, imageBuffer);
+
+  const metaPath = `/videos/${req.videoId}.json`;
+  const metaBuf = await drive.get(metaPath);
+  if (metaBuf) {
+    const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
+    meta.thumbnail = thumbnailPath;
+    await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
+  }
+
+  if (drive.flush) await drive.flush();
+  return { success: true };
+});
+
+// Status handlers
+rpc.onGetStatus(async () => ({
+  status: {
+    ready: true,
+    hasIdentity: identityManager.getIdentities().length > 0,
+    blobServerPort: ctx.blobServerPort,
+  }
+}));
+
+rpc.onGetSwarmStatus(async () => ({
+  connected: ctx.swarm.connections.size > 0,
+  peerCount: ctx.swarm.connections.size,
+}));
+
+rpc.onGetBlobServerPort(async () => ({ port: ctx.blobServerPort }));
+
+// Desktop-specific file pickers
+rpc.onPickVideoFile(async () => {
+  const result = await pickVideoFile();
+  return {
+    filePath: result.filePath || null,
+    name: result.name || null,
+    size: result.size || 0,
+    cancelled: result.cancelled || false,
+  };
+});
+
+rpc.onPickImageFile(async () => {
+  const result = await pickImageFile();
+  return {
+    filePath: result.filePath || null,
+    name: result.name || null,
+    size: result.size || 0,
+    dataUrl: result.dataUrl || null,
+    cancelled: result.cancelled || false,
+  };
+});
+
+// Event handlers (client->server, no-ops)
+rpc.onEventReady(() => {});
+rpc.onEventError((data: any) => console.error('[HRPC] Client error:', data?.message));
+rpc.onEventUploadProgress(() => {});
+rpc.onEventFeedUpdate(() => {});
+rpc.onEventLog(() => {});
+rpc.onEventVideoStats(() => {});
+
+// Send ready event
+rpc.eventReady({ blobServerPort: ctx.blobServerPort });
+console.log('[Worker] HRPC ready, handlers registered');
+
+ipcPipe.on('error', (err: Error) => {
+  console.error('[Worker] Pipe error:', err);
+});
+
+// Cleanup on shutdown
 Pear.teardown(async () => {
-  console.log('Worker shutting down...');
-  await blobServer.close();
-  await swarm.destroy();
+  console.log('[Worker] Shutting down...');
+  await ctx.blobServer.close();
+  await ctx.swarm.destroy();
 });

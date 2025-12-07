@@ -74,7 +74,7 @@ export async function initializeStorage(config) {
   };
 
   await blobServer.listen();
-  const blobServerPort = blobServer.address.port;
+  const blobServerPort = blobServer.port;
   console.log('[Storage] Blob server listening on port:', blobServerPort);
 
   // Initialize metadata database

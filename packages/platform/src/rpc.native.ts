@@ -25,6 +25,7 @@ declare const HRPC: new (stream: any) => {
   prefetchVideo(req: { channelKey: string; videoId: string }): Promise<any>;
   getVideoStats(req: { channelKey: string; videoId: string }): Promise<any>;
   getVideoThumbnail(req: { channelKey: string; videoId: string }): Promise<any>;
+  setVideoThumbnail(req: { videoId: string; imageData: string; mimeType: string }): Promise<any>;
   getChannel(req: { publicKey: string }): Promise<any>;
   subscribeChannel(req: { channelKey: string }): Promise<any>;
   joinChannel(req: { channelKey: string }): Promise<any>;
@@ -262,6 +263,10 @@ export const rpc = {
       ? { channelKey: channelKeyOrReq, videoId: videoId! }
       : channelKeyOrReq;
     return ensureRPC().getVideoThumbnail(req);
+  },
+
+  async setVideoThumbnail(req: { videoId: string; imageData: string; mimeType: string }) {
+    return ensureRPC().setVideoThumbnail(req);
   },
 
   // Channels

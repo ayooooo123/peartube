@@ -159,7 +159,7 @@ rpc.onGetVideoData(async (req) => {
 })
 
 rpc.onUploadVideo(async (req) => {
-  console.log('[HRPC] uploadVideo:', req.title)
+  console.log('[HRPC] uploadVideo:', req.title, 'filePath:', req.filePath)
   const active = identityManager.getActiveIdentity()
   if (!active?.driveKey) {
     throw new Error('No active identity')
@@ -169,15 +169,33 @@ rpc.onUploadVideo(async (req) => {
     throw new Error('No active drive')
   }
 
-  // Mobile uses base64 fileData
-  const ext = (req.fileName || 'video.mp4').split('.').pop() || 'mp4'
-  const result = await uploadManager.uploadFromBuffer(
+  let filePath = req.filePath
+  if (!filePath) {
+    throw new Error('No file path provided')
+  }
+
+  // Handle file:// prefix
+  if (filePath.startsWith('file://')) {
+    filePath = filePath.slice(7)
+  }
+
+  const ext = filePath.split('.').pop() || 'mp4'
+  console.log('[HRPC] Streaming upload from:', filePath)
+
+  // Use streaming upload - file streams directly to hyperdrive
+  const result = await uploadManager.uploadFromPath(
     drive,
-    Buffer.from(req.fileData || '', 'base64'),
+    filePath,
     {
       title: req.title,
       description: req.description || '',
-      mimeType: `video/${ext}`
+      mimeType: `video/${ext}`,
+      category: req.category || ''
+    },
+    fs,  // Pass bare-fs for file reading
+    (progress, bytesWritten, totalBytes) => {
+      // Emit progress event
+      rpc.eventUploadProgress({ progress })
     }
   )
 

@@ -178,7 +178,8 @@ ns.register({
     { name: 'channelKey', type: 'string', required: false },
     { name: 'channelName', type: 'string', required: false },
     { name: 'createdAt', type: 'uint', required: false },
-    { name: 'views', type: 'uint', required: false }
+    { name: 'views', type: 'uint', required: false },
+    { name: 'category', type: 'string', required: false }
   ]
 })
 
@@ -233,7 +234,8 @@ ns.register({
   fields: [
     { name: 'filePath', type: 'string', required: true },
     { name: 'title', type: 'string', required: true },
-    { name: 'description', type: 'string', required: false }
+    { name: 'description', type: 'string', required: false },
+    { name: 'category', type: 'string', required: false }
   ]
 })
 
@@ -566,7 +568,8 @@ ns.register({
   name: 'get-video-thumbnail-response',
   fields: [
     { name: 'url', type: 'string', required: false },
-    { name: 'dataUrl', type: 'string', required: false }
+    { name: 'dataUrl', type: 'string', required: false },
+    { name: 'exists', type: 'bool', required: false }
   ]
 })
 
@@ -589,7 +592,23 @@ ns.register({
   name: 'set-video-thumbnail-request',
   fields: [
     { name: 'videoId', type: 'string', required: true },
-    { name: 'thumbnailPath', type: 'string', required: true }
+    { name: 'imageData', type: 'string', required: true },
+    { name: 'mimeType', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'set-video-thumbnail-from-file-request',
+  fields: [
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'filePath', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-video-thumbnail-from-file-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
   ]
 })
 
@@ -634,6 +653,24 @@ ns.register({
   name: 'pick-video-file-response',
   fields: [
     { name: 'filePath', type: 'string', required: false },
+    { name: 'name', type: 'string', required: false },
+    { name: 'size', type: 'uint', required: false },
+    { name: 'cancelled', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'pick-image-file-request',
+  fields: []
+})
+
+ns.register({
+  name: 'pick-image-file-response',
+  fields: [
+    { name: 'filePath', type: 'string', required: false },
+    { name: 'name', type: 'string', required: false },
+    { name: 'size', type: 'uint', required: false },
+    { name: 'dataUrl', type: 'string', required: false },
     { name: 'cancelled', type: 'bool', required: false }
   ]
 })
@@ -909,6 +946,12 @@ rpcNs.register({
   response: { name: '@peartube/set-video-thumbnail-response', stream: false }
 })
 
+rpcNs.register({
+  name: 'set-video-thumbnail-from-file',
+  request: { name: '@peartube/set-video-thumbnail-from-file-request', stream: false },
+  response: { name: '@peartube/set-video-thumbnail-from-file-response', stream: false }
+})
+
 // Desktop-specific commands
 rpcNs.register({
   name: 'get-status',
@@ -920,6 +963,12 @@ rpcNs.register({
   name: 'pick-video-file',
   request: { name: '@peartube/pick-video-file-request', stream: false },
   response: { name: '@peartube/pick-video-file-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'pick-image-file',
+  request: { name: '@peartube/pick-image-file-request', stream: false },
+  response: { name: '@peartube/pick-image-file-response', stream: false }
 })
 
 rpcNs.register({

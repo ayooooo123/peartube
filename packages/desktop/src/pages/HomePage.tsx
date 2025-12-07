@@ -6,13 +6,7 @@ import React from 'react';
 import { colors, spacing } from '../lib/theme';
 import { type Video, type ChannelMetadata } from '../lib/rpc';
 import { Column, Row, Text, Button } from '../components/ui';
-import { VideoGrid } from '../components/VideoCard';
-
-interface DiscoveredChannel {
-  driveKey: string;
-  name?: string;
-  videoCount?: number;
-}
+import { VideoGrid, VideoCard } from '../components/VideoCard';
 
 interface HomePageProps {
   videos: Video[];
@@ -20,85 +14,22 @@ interface HomePageProps {
   onVideoClick: (video: Video) => void;
   loading?: boolean;
   // Public feed props
-  discoveredChannels?: DiscoveredChannel[];
+  feedVideos?: Video[];
+  feedVideosLoading?: boolean;
   onChannelClick?: (driveKey: string) => void;
   onRefreshFeed?: () => void;
   feedLoading?: boolean;
   peerCount?: number;
 }
 
-// Channel card component for discover section
-const ChannelCard: React.FC<{
-  channel: DiscoveredChannel;
-  onClick: () => void;
-}> = ({ channel, onClick }) => {
-  const initial = channel.name ? channel.name[0].toUpperCase() : '?';
-  const displayName = channel.name || channel.driveKey.slice(0, 8) + '...';
-
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        padding: spacing.md,
-        backgroundColor: colors.surface,
-        borderRadius: 12,
-        cursor: 'pointer',
-        minWidth: 120,
-        transition: 'transform 0.2s, background-color 0.2s',
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.backgroundColor = colors.surfaceHover;
-        e.currentTarget.style.transform = 'scale(1.02)';
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.backgroundColor = colors.surface;
-        e.currentTarget.style.transform = 'scale(1)';
-      }}
-    >
-      {/* Avatar */}
-      <div style={{
-        width: 56,
-        height: 56,
-        borderRadius: '50%',
-        backgroundColor: colors.primary,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: spacing.sm,
-      }}>
-        <Text style={{ fontSize: 24, fontWeight: 'bold', color: '#fff' }}>{initial}</Text>
-      </div>
-      {/* Name */}
-      <Text style={{
-        fontSize: 13,
-        fontWeight: 500,
-        textAlign: 'center',
-        maxWidth: 100,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      }}>
-        {displayName}
-      </Text>
-      {/* Video count */}
-      {channel.videoCount !== undefined && (
-        <Text color="secondary" style={{ fontSize: 11, marginTop: 2 }}>
-          {channel.videoCount} video{channel.videoCount !== 1 ? 's' : ''}
-        </Text>
-      )}
-    </div>
-  );
-};
 
 export const HomePage: React.FC<HomePageProps> = ({
   videos,
   channelNames,
   onVideoClick,
   loading,
-  discoveredChannels = [],
+  feedVideos = [],
+  feedVideosLoading,
   onChannelClick,
   onRefreshFeed,
   feedLoading,
@@ -112,13 +43,18 @@ export const HomePage: React.FC<HomePageProps> = ({
     { id: 'recent', label: 'Recently Uploaded' },
   ];
 
+  // Combine channel names with video's channelName
+  const getChannelName = (video: Video) => {
+    return (video as any).channelName || channelNames[video.channelKey || ''] || 'Unknown';
+  };
+
   return (
     <Column style={{ padding: spacing.xl }}>
-      {/* Discover Section */}
+      {/* Discover Section - Videos from discovered channels */}
       <Column style={{ marginBottom: spacing.xl }}>
         <Row justify="space-between" align="center" style={{ marginBottom: spacing.md }}>
           <Row align="center" gap={spacing.sm}>
-            <Text style={{ fontSize: 18, fontWeight: 600 }}>Discover Channels</Text>
+            <Text style={{ fontSize: 18, fontWeight: 600 }}>Discover</Text>
             <Text color="secondary" style={{ fontSize: 12 }}>
               ({peerCount} peer{peerCount !== 1 ? 's' : ''} connected)
             </Text>
@@ -127,28 +63,37 @@ export const HomePage: React.FC<HomePageProps> = ({
             variant="ghost"
             size="sm"
             onClick={onRefreshFeed}
-            disabled={feedLoading}
+            disabled={feedLoading || feedVideosLoading}
           >
-            {feedLoading ? 'Refreshing...' : '↻ Refresh'}
+            {feedLoading || feedVideosLoading ? 'Refreshing...' : '↻ Refresh'}
           </Button>
         </Row>
 
-        {discoveredChannels.length > 0 ? (
-          <Row
-            gap={spacing.md}
-            style={{
-              overflowX: 'auto',
-              paddingBottom: spacing.sm,
-            }}
-          >
-            {discoveredChannels.map((channel) => (
-              <ChannelCard
-                key={channel.driveKey}
-                channel={channel}
-                onClick={() => onChannelClick?.(channel.driveKey)}
+        {(feedLoading || feedVideosLoading) && feedVideos.length === 0 ? (
+          <div style={{
+            padding: spacing.xl,
+            backgroundColor: colors.surface,
+            borderRadius: 12,
+            textAlign: 'center',
+          }}>
+            <Text color="secondary">Discovering videos...</Text>
+          </div>
+        ) : feedVideos.length > 0 ? (
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, 1fr)',
+            gap: spacing.lg,
+          }}>
+            {feedVideos.map((video) => (
+              <VideoCard
+                key={`${video.channelKey}-${video.id}`}
+                video={video}
+                channelName={getChannelName(video)}
+                onClick={() => onVideoClick(video)}
+                variant="grid"
               />
             ))}
-          </Row>
+          </div>
         ) : (
           <div style={{
             padding: spacing.xl,
@@ -157,11 +102,9 @@ export const HomePage: React.FC<HomePageProps> = ({
             textAlign: 'center',
           }}>
             <Text color="secondary">
-              {feedLoading
-                ? 'Looking for channels...'
-                : peerCount === 0
-                  ? 'No peers connected. Waiting for network...'
-                  : 'No channels discovered yet. Create one in Studio!'}
+              {peerCount === 0
+                ? 'No peers connected. Waiting for network...'
+                : 'No videos discovered yet. Create one in Studio!'}
             </Text>
           </div>
         )}
@@ -181,7 +124,8 @@ export const HomePage: React.FC<HomePageProps> = ({
         ))}
       </Row>
 
-      {/* Video Grid */}
+      {/* Your Videos */}
+      <Text style={{ fontSize: 18, fontWeight: 600, marginBottom: spacing.md }}>Your Videos</Text>
       {loading ? (
         <Column align="center" justify="center" style={{ padding: spacing.xxxl }}>
           <div style={{
@@ -194,6 +138,17 @@ export const HomePage: React.FC<HomePageProps> = ({
           }} />
           <Text color="secondary" style={{ marginTop: spacing.lg }}>Loading videos...</Text>
         </Column>
+      ) : videos.length === 0 ? (
+        <div style={{
+          padding: spacing.xxxl,
+          backgroundColor: colors.surface,
+          borderRadius: 12,
+          textAlign: 'center',
+        }}>
+          <Text style={{ fontSize: 32, marginBottom: spacing.md }}>📺</Text>
+          <Text weight="semibold" style={{ marginBottom: spacing.sm }}>No videos yet</Text>
+          <Text color="secondary">Upload your first video from the Studio tab</Text>
+        </div>
       ) : (
         <VideoGrid
           videos={videos}

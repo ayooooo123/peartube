@@ -146,6 +146,256 @@ async function getChannelDrive(publicKey: string, writable = false): Promise<any
   return drive;
 }
 
+// FFmpeg availability check (cached)
+let ffmpegAvailable: boolean | null = null;
+
+async function checkFFmpeg(): Promise<boolean> {
+  if (ffmpegAvailable !== null) return ffmpegAvailable;
+
+  return new Promise((resolve) => {
+    try {
+      const proc = spawn('ffmpeg', ['-version']);
+      proc.on('exit', (code: number) => {
+        ffmpegAvailable = code === 0;
+        console.log('[FFmpeg] Available:', ffmpegAvailable);
+        resolve(ffmpegAvailable);
+      });
+      proc.on('error', () => {
+        ffmpegAvailable = false;
+        console.log('[FFmpeg] Not available (spawn error)');
+        resolve(false);
+      });
+    } catch {
+      ffmpegAvailable = false;
+      console.log('[FFmpeg] Not available (exception)');
+      resolve(false);
+    }
+  });
+}
+
+// Background thumbnail queue
+interface ThumbnailJob {
+  videoId: string;
+  driveKey: string;
+  videoPath: string;
+  retries: number;
+}
+
+const thumbnailQueue: ThumbnailJob[] = [];
+let processingQueue = false;
+
+function queueThumbnailGeneration(videoId: string, driveKey: string, videoPath: string) {
+  console.log('[Thumbnail Queue] Adding job:', videoId);
+  thumbnailQueue.push({ videoId, driveKey, videoPath, retries: 0 });
+  processThumbnailQueue();
+}
+
+async function processThumbnailQueue() {
+  if (processingQueue || thumbnailQueue.length === 0) return;
+  processingQueue = true;
+
+  while (thumbnailQueue.length > 0) {
+    const job = thumbnailQueue[0];
+
+    // Check FFmpeg availability before each job
+    const hasFFmpeg = await checkFFmpeg();
+    if (!hasFFmpeg) {
+      console.log('[Thumbnail Queue] FFmpeg not available, pausing queue');
+      processingQueue = false;
+      // Retry after 30 seconds
+      setTimeout(() => processThumbnailQueue(), 30000);
+      return;
+    }
+
+    try {
+      const drive = await getChannelDrive(job.driveKey);
+
+      // Get video entry to build file path for ffmpeg
+      // The video is stored in the drive at job.videoPath
+      const videoEntry = await drive.entry(job.videoPath);
+      if (!videoEntry) {
+        console.log('[Thumbnail Queue] Video not found:', job.videoPath);
+        thumbnailQueue.shift();
+        continue;
+      }
+
+      // For background processing, we need to get the video from blob server
+      const keyBuffer = b4a.from(job.driveKey, 'hex');
+      const videoUrl = blobServer.getLink(keyBuffer, {
+        filename: job.videoPath.replace(/^\/+/, '')
+      });
+
+      // Generate thumbnail using the URL (ffmpeg supports http/https input)
+      const thumbnailPath = await generateThumbnailFromUrl(videoUrl, job.videoId, drive);
+
+      if (thumbnailPath) {
+        // Update video metadata with thumbnail
+        const metaPath = `/videos/${job.videoId}/meta.json`;
+        const metaEntry = await drive.entry(metaPath);
+        if (metaEntry) {
+          const metaBuf = await drive.get(metaPath);
+          const meta = JSON.parse(metaBuf.toString());
+          meta.thumbnail = thumbnailPath;
+          await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
+          console.log('[Thumbnail Queue] Updated metadata for:', job.videoId);
+        }
+        thumbnailQueue.shift();
+      } else if (job.retries < 3) {
+        job.retries++;
+        console.log('[Thumbnail Queue] Retry', job.retries, 'for:', job.videoId);
+        // Move to end of queue
+        thumbnailQueue.shift();
+        thumbnailQueue.push(job);
+      } else {
+        console.log('[Thumbnail Queue] Max retries reached for:', job.videoId);
+        thumbnailQueue.shift();
+      }
+    } catch (err) {
+      console.error('[Thumbnail Queue] Error processing job:', err);
+      if (job.retries < 3) {
+        job.retries++;
+        thumbnailQueue.shift();
+        thumbnailQueue.push(job);
+      } else {
+        thumbnailQueue.shift();
+      }
+    }
+
+    // Small delay between jobs
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  processingQueue = false;
+}
+
+// Generate thumbnail from URL (for background processing)
+async function generateThumbnailFromUrl(
+  videoUrl: string,
+  videoId: string,
+  drive: any
+): Promise<string | null> {
+  const thumbnailPath = `/thumbnails/${videoId}.jpg`;
+
+  console.log(`[Thumbnail] Generating from URL for ${videoId}`);
+
+  const args = [
+    '-ss', '1',  // Seek to 1 second (safe default for URL input)
+    '-i', videoUrl,
+    '-vframes', '1',
+    '-vf', 'scale=640:-1',
+    '-q:v', '2',
+    '-f', 'image2pipe',
+    '-vcodec', 'mjpeg',
+    'pipe:1'
+  ];
+
+  return new Promise((resolve) => {
+    try {
+      const proc = spawn('ffmpeg', args);
+      const chunks: Buffer[] = [];
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+
+      proc.stderr.on('data', () => {
+        // ffmpeg outputs progress to stderr, ignore
+      });
+
+      proc.on('exit', async (code: number) => {
+        if (code === 0 && chunks.length > 0) {
+          try {
+            const thumbBuf = Buffer.concat(chunks);
+            console.log(`[Thumbnail] Generated ${thumbBuf.length} bytes from URL`);
+            await drive.put(thumbnailPath, thumbBuf);
+            resolve(thumbnailPath);
+          } catch (err) {
+            console.error('[Thumbnail] Failed to save from URL:', err);
+            resolve(null);
+          }
+        } else {
+          console.log(`[Thumbnail] ffmpeg (URL) exited with code ${code}`);
+          resolve(null);
+        }
+      });
+
+      proc.on('error', (err: Error) => {
+        console.error('[Thumbnail] ffmpeg error (URL):', err);
+        resolve(null);
+      });
+    } catch (err) {
+      console.error('[Thumbnail] Failed to spawn ffmpeg (URL):', err);
+      resolve(null);
+    }
+  });
+}
+
+// Generate thumbnail from video at 10% using ffmpeg
+async function generateThumbnail(
+  filePath: string,
+  videoId: string,
+  drive: any,
+  duration?: number
+): Promise<string | null> {
+  const thumbnailPath = `/thumbnails/${videoId}.jpg`;
+  // Calculate 10% position (default to 1 second if no duration)
+  const seekTime = duration ? Math.floor(duration * 0.1) : 1;
+
+  console.log(`[Thumbnail] Generating for ${videoId} at ${seekTime}s`);
+
+  const args = [
+    '-ss', String(seekTime),
+    '-i', filePath,
+    '-vframes', '1',
+    '-vf', 'scale=640:-1',
+    '-q:v', '2',
+    '-f', 'image2pipe',
+    '-vcodec', 'mjpeg',
+    'pipe:1'
+  ];
+
+  return new Promise((resolve) => {
+    try {
+      const proc = spawn('ffmpeg', args);
+      const chunks: Buffer[] = [];
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+
+      proc.stderr.on('data', (data: Buffer) => {
+        // ffmpeg outputs progress to stderr, ignore
+      });
+
+      proc.on('exit', async (code: number) => {
+        if (code === 0 && chunks.length > 0) {
+          try {
+            const thumbBuf = Buffer.concat(chunks);
+            console.log(`[Thumbnail] Generated ${thumbBuf.length} bytes`);
+            await drive.put(thumbnailPath, thumbBuf);
+            console.log(`[Thumbnail] Saved to ${thumbnailPath}`);
+            resolve(thumbnailPath);
+          } catch (err) {
+            console.error('[Thumbnail] Failed to save:', err);
+            resolve(null);
+          }
+        } else {
+          console.log(`[Thumbnail] ffmpeg exited with code ${code}`);
+          resolve(null);
+        }
+      });
+
+      proc.on('error', (err: Error) => {
+        console.error('[Thumbnail] ffmpeg error:', err);
+        resolve(null);
+      });
+    } catch (err) {
+      console.error('[Thumbnail] Failed to spawn ffmpeg:', err);
+      resolve(null);
+    }
+  });
+}
+
 // RPC Methods
 const api: Record<string, (...args: any[]) => Promise<any>> = {
   // Get backend status
@@ -352,7 +602,7 @@ const api: Record<string, (...args: any[]) => Promise<any>> = {
 
   // Upload a video using streaming from file path
   // Takes optional progressCallback for real-time progress updates
-  async uploadVideo(title: string, description: string, filePath: string, mimeType: string, progressCallback?: (progress: number, bytesWritten: number, totalBytes: number) => void) {
+  async uploadVideo(title: string, description: string, filePath: string, mimeType: string, category?: string, progressCallback?: (progress: number, bytesWritten: number, totalBytes: number) => void) {
     const identity = identities.find(i => i.publicKey === activeIdentity);
     if (!identity) {
       throw new Error('No active identity');
@@ -405,8 +655,20 @@ const api: Record<string, (...args: any[]) => Promise<any>> = {
       readStream.pipe(writeStream);
     });
 
-    // Create video metadata
-    const metadata = {
+    // Generate thumbnail at 10% into the video (with FFmpeg check)
+    console.log('[Upload] Checking FFmpeg availability...');
+    const hasFFmpeg = await checkFFmpeg();
+    let thumbnailPath: string | null = null;
+
+    if (hasFFmpeg) {
+      console.log('[Upload] Generating thumbnail...');
+      thumbnailPath = await generateThumbnail(filePath, videoId, drive);
+    } else {
+      console.log('[Upload] FFmpeg not available, will queue for background processing');
+    }
+
+    // Create video metadata (include thumbnail if generated)
+    const metadata: Record<string, any> = {
       id: videoId,
       title,
       description,
@@ -414,12 +676,22 @@ const api: Record<string, (...args: any[]) => Promise<any>> = {
       mimeType,
       size: fileSize,
       uploadedAt: Date.now(),
-      channelKey: identity.driveKey
+      channelKey: identity.driveKey,
+      category: category || 'Other'
     };
+
+    if (thumbnailPath) {
+      metadata.thumbnail = thumbnailPath;
+    }
 
     await drive.put(metaPath, Buffer.from(JSON.stringify(metadata)));
 
-    console.log('Video uploaded:', videoId);
+    // If thumbnail generation failed or FFmpeg unavailable, queue for background
+    if (!thumbnailPath && identity.driveKey) {
+      queueThumbnailGeneration(videoId, identity.driveKey, videoPath);
+    }
+
+    console.log('Video uploaded:', videoId, thumbnailPath ? 'with thumbnail' : 'queued for thumbnail');
 
     return {
       success: true,
@@ -521,6 +793,70 @@ const api: Record<string, (...args: any[]) => Promise<any>> = {
             });
           } catch (err: any) {
             reject(new Error(`Failed to stat file: ${err.message}`));
+          }
+        } else if (code === 1) {
+          // User cancelled
+          resolve({ cancelled: true });
+        } else {
+          reject(new Error(stderr || 'File picker failed'));
+        }
+      });
+
+      proc.on('error', (err: Error) => {
+        reject(err);
+      });
+    });
+  },
+
+  // Native image file picker using osascript (macOS)
+  async pickImageFile() {
+    console.log('[Worker] Opening native image file picker...');
+
+    return new Promise((resolve, reject) => {
+      // AppleScript to open file picker for image files
+      const script = `
+        set theFile to choose file with prompt "Select a thumbnail image" of type {"public.jpeg", "public.png", "public.image"}
+        return POSIX path of theFile
+      `;
+
+      const proc = spawn('osascript', ['-e', script]);
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      proc.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      proc.on('exit', (code: number) => {
+        if (code === 0 && stdout.trim()) {
+          const filePath = stdout.trim();
+          console.log('[Worker] Image file selected:', filePath);
+
+          // Get file info using bare-fs
+          try {
+            const stat = fs.statSync(filePath);
+            const name = filePath.split('/').pop() || 'image';
+
+            // Read file and create data URL for preview
+            const fileBuffer = fs.readFileSync(filePath);
+            const base64 = fileBuffer.toString('base64');
+            const ext = filePath.toLowerCase();
+            const mimeType = ext.endsWith('.png') ? 'image/png' : 'image/jpeg';
+            const dataUrl = `data:${mimeType};base64,${base64}`;
+
+            resolve({
+              filePath,
+              name,
+              size: stat.size,
+              dataUrl,
+            });
+          } catch (err: any) {
+            reject(new Error(`Failed to read file: ${err.message}`));
           }
         } else if (code === 1) {
           // User cancelled
@@ -903,20 +1239,45 @@ if (!ipcPipe) {
   rpc.onListVideos(async (req: any) => {
     console.log('[HRPC] listVideos:', req.channelKey?.slice(0, 16));
     const rawVideos = await api.listVideos(req.channelKey || '');
-    // Map stored metadata to HRPC schema format
-    // Schema expects: id, title, description, duration, thumbnail, channelKey, channelName, createdAt, views
-    // Stored has: id, title, description, path, mimeType, size, uploadedAt, channelKey
-    const videos = rawVideos.map((v: any) => ({
-      id: v.id || '',
-      title: v.title || 'Untitled',
-      description: v.description || '',
-      path: v.path || '',
-      duration: typeof v.duration === 'number' && v.duration >= 0 ? v.duration : 0,
-      thumbnail: v.thumbnail || '',
-      channelKey: v.channelKey || req.channelKey || '',
-      channelName: v.channelName || '',
-      createdAt: typeof v.uploadedAt === 'number' && v.uploadedAt >= 0 ? v.uploadedAt : (typeof v.createdAt === 'number' && v.createdAt >= 0 ? v.createdAt : 0),
-      views: typeof v.views === 'number' && v.views >= 0 ? v.views : 0,
+    const channelKey = req.channelKey || '';
+
+    // Map stored metadata to HRPC schema format and resolve thumbnail URLs
+    const videos = await Promise.all(rawVideos.map(async (v: any) => {
+      let thumbnailUrl = '';
+      const videoChannelKey = v.channelKey || channelKey;
+
+      // Resolve thumbnail path to blob server URL
+      console.log('[HRPC] listVideos processing:', v.id, 'thumbnail:', v.thumbnail);
+      if (v.thumbnail && videoChannelKey) {
+        try {
+          const drive = await getChannelDrive(videoChannelKey);
+          const entry = await drive.entry(v.thumbnail);
+          console.log('[HRPC] Thumbnail entry for', v.id, ':', entry ? 'found' : 'not found');
+          if (entry) {
+            const keyBuffer = b4a.from(videoChannelKey, 'hex');
+            const filename = v.thumbnail.replace(/^\/+/, '');
+            thumbnailUrl = blobServer.getLink(keyBuffer, { filename });
+            console.log('[HRPC] Generated thumbnail URL:', thumbnailUrl);
+          }
+        } catch (err) {
+          // Thumbnail not available, leave empty
+          console.log('[HRPC] Could not resolve thumbnail:', v.id, err);
+        }
+      }
+
+      return {
+        id: v.id || '',
+        title: v.title || 'Untitled',
+        description: v.description || '',
+        path: v.path || '',
+        duration: typeof v.duration === 'number' && v.duration >= 0 ? v.duration : 0,
+        thumbnail: thumbnailUrl,
+        channelKey: videoChannelKey,
+        channelName: v.channelName || '',
+        createdAt: typeof v.uploadedAt === 'number' && v.uploadedAt >= 0 ? v.uploadedAt : (typeof v.createdAt === 'number' && v.createdAt >= 0 ? v.createdAt : 0),
+        views: typeof v.views === 'number' && v.views >= 0 ? v.views : 0,
+        category: v.category || 'Other',
+      };
     }));
     return { videos };
   });
@@ -935,34 +1296,51 @@ if (!ipcPipe) {
   });
 
   rpc.onUploadVideo(async (req: any) => {
-    console.log('[HRPC] uploadVideo:', req.title);
-    const result = await api.uploadVideo(
-      req.title,
-      req.description || '',
-      req.filePath,
-      'video/mp4',
-      (progress: number, bytesWritten: number, totalBytes: number) => {
-        // Send progress event via HRPC
-        try {
-          rpc.eventUploadProgress({
-            videoId: '',
-            progress,
-            bytesUploaded: bytesWritten,
-            totalBytes,
-          });
-        } catch (e) {
-          console.error('[HRPC] Failed to send progress event:', e);
+    console.log('[HRPC] uploadVideo:', req.title, 'category:', req.category);
+    try {
+      const result = await api.uploadVideo(
+        req.title,
+        req.description || '',
+        req.filePath,
+        'video/mp4',
+        req.category || 'Other',
+        (progress: number, bytesWritten: number, totalBytes: number) => {
+          // Send progress event via HRPC
+          try {
+            rpc.eventUploadProgress({
+              videoId: '',
+              progress,
+              bytesUploaded: bytesWritten,
+              totalBytes,
+            });
+          } catch (e) {
+            console.error('[HRPC] Failed to send progress event:', e);
+          }
         }
-      }
-    );
-    return {
-      video: {
-        id: result.videoId,
-        title: req.title,
-        description: req.description || '',
-        channelKey: result.metadata?.channelKey,
-      }
-    };
+      );
+      console.log('[HRPC] uploadVideo result:', JSON.stringify(result));
+      const videoId = result?.videoId || '';
+      const channelKey = result?.metadata?.channelKey || '';
+      console.log('[HRPC] uploadVideo returning video id:', videoId, 'channelKey:', channelKey);
+      return {
+        video: {
+          id: videoId,
+          title: req.title || '',
+          description: req.description || '',
+          channelKey: channelKey,
+        }
+      };
+    } catch (err: any) {
+      console.error('[HRPC] uploadVideo error:', err);
+      return {
+        video: {
+          id: '',
+          title: req.title || '',
+          description: '',
+          channelKey: '',
+        }
+      };
+    }
   });
 
   // Subscription handlers
@@ -1121,17 +1499,122 @@ if (!ipcPipe) {
   // Thumbnail/Metadata handlers
   rpc.onGetVideoThumbnail(async (req: any) => {
     console.log('[HRPC] getVideoThumbnail:', req.channelKey?.slice(0, 16), req.videoId);
-    return { url: null, dataUrl: null };
+    try {
+      const drive = await getChannelDrive(req.channelKey);
+      // Try jpg first, then png
+      const thumbnailPath = `/thumbnails/${req.videoId}.jpg`;
+      const entry = await drive.entry(thumbnailPath);
+
+      if (entry) {
+        const keyBuffer = b4a.from(req.channelKey, 'hex');
+        const filename = thumbnailPath.replace(/^\/+/, '');
+        const url = blobServer.getLink(keyBuffer, { filename });
+        console.log('[HRPC] Thumbnail URL:', url);
+        return { url, exists: true };
+      }
+    } catch (err) {
+      console.error('[HRPC] getVideoThumbnail error:', err);
+    }
+    return { url: null, exists: false };
   });
 
   rpc.onGetVideoMetadata(async (req: any) => {
     console.log('[HRPC] getVideoMetadata:', req.channelKey?.slice(0, 16), req.videoId);
+    try {
+      const drive = await getChannelDrive(req.channelKey);
+      const metaPath = `/videos/${req.videoId}.json`;
+      const metaBuffer = await drive.get(metaPath);
+      if (metaBuffer) {
+        const meta = JSON.parse(b4a.toString(metaBuffer, 'utf-8'));
+        return { video: meta };
+      }
+    } catch (err) {
+      console.error('[HRPC] getVideoMetadata error:', err);
+    }
     return { video: { id: req.videoId, title: 'Unknown' } };
   });
 
   rpc.onSetVideoThumbnail(async (req: any) => {
-    console.log('[HRPC] setVideoThumbnail');
-    return { success: true };
+    console.log('[HRPC] setVideoThumbnail:', req.videoId);
+    try {
+      const identity = identities.find(i => i.publicKey === activeIdentity);
+      if (!identity) {
+        return { success: false, error: 'No active identity' };
+      }
+
+      const drive = channels.get(identity.driveKey);
+      if (!drive) {
+        return { success: false, error: 'Channel drive not found' };
+      }
+
+      // Decode base64 image data
+      const imageBuffer = Buffer.from(req.imageData, 'base64');
+      const ext = req.mimeType?.includes('png') ? 'png' : 'jpg';
+      const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
+
+      await drive.put(thumbnailPath, imageBuffer);
+      console.log('[HRPC] Thumbnail saved:', thumbnailPath, imageBuffer.length, 'bytes');
+
+      // Update video metadata with thumbnail path
+      const metaPath = `/videos/${req.videoId}.json`;
+      const metaBuffer = await drive.get(metaPath);
+      if (metaBuffer) {
+        const meta = JSON.parse(b4a.toString(metaBuffer, 'utf-8'));
+        meta.thumbnail = thumbnailPath;
+        await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
+      }
+
+      return { success: true, thumbnailPath };
+    } catch (err: any) {
+      console.error('[HRPC] setVideoThumbnail error:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  rpc.onSetVideoThumbnailFromFile(async (req: any) => {
+    console.log('[HRPC] setVideoThumbnailFromFile:', req.videoId, req.filePath);
+    try {
+      const identity = identities.find(i => i.publicKey === activeIdentity);
+      if (!identity) {
+        console.log('[HRPC] setVideoThumbnailFromFile: No identity found');
+        return { success: false };
+      }
+
+      const drive = channels.get(identity.driveKey);
+      if (!drive) {
+        console.log('[HRPC] setVideoThumbnailFromFile: No drive found');
+        return { success: false };
+      }
+
+      // Read image file from disk
+      const imageBuffer = fs.readFileSync(req.filePath);
+      const ext = req.filePath.toLowerCase().endsWith('.png') ? 'png' : 'jpg';
+      const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
+
+      await drive.put(thumbnailPath, imageBuffer);
+      console.log('[HRPC] Thumbnail saved from file:', thumbnailPath, imageBuffer.length, 'bytes');
+
+      // Update video metadata with thumbnail path
+      const metaPath = `/videos/${req.videoId}.json`;
+      console.log('[HRPC] Looking for video metadata at:', metaPath);
+      const metaBuffer = await drive.get(metaPath);
+      if (metaBuffer) {
+        const meta = JSON.parse(b4a.toString(metaBuffer, 'utf-8'));
+        meta.thumbnail = thumbnailPath;
+        await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
+        console.log('[HRPC] Updated video metadata with thumbnail:', meta.id, thumbnailPath);
+      } else {
+        console.log('[HRPC] Video metadata not found at:', metaPath);
+      }
+
+      // Flush to ensure changes are persisted
+      if (drive.flush) await drive.flush();
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('[HRPC] setVideoThumbnailFromFile error:', err);
+      return { success: false };
+    }
   });
 
   // Desktop-specific handlers
@@ -1152,6 +1635,20 @@ if (!ipcPipe) {
     const result = await api.pickVideoFile();
     return {
       filePath: result.filePath || null,
+      name: result.name || null,
+      size: result.size || 0,
+      cancelled: result.cancelled || false,
+    };
+  });
+
+  rpc.onPickImageFile(async () => {
+    console.log('[HRPC] pickImageFile');
+    const result = await api.pickImageFile();
+    return {
+      filePath: result.filePath || null,
+      name: result.name || null,
+      size: result.size || 0,
+      dataUrl: result.dataUrl || null,
       cancelled: result.cancelled || false,
     };
   });

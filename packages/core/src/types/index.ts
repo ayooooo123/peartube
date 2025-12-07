@@ -35,6 +35,7 @@ export interface Video {
   mimeType?: string;
   duration?: number;
   thumbnail?: string;
+  category?: string;
 }
 
 /**

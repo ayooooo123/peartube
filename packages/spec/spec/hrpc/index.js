@@ -68,24 +68,28 @@ const methods = new Map([
   [29, '@peartube/get-video-metadata'],
   ['@peartube/set-video-thumbnail', 30],
   [30, '@peartube/set-video-thumbnail'],
-  ['@peartube/get-status', 31],
-  [31, '@peartube/get-status'],
-  ['@peartube/pick-video-file', 32],
-  [32, '@peartube/pick-video-file'],
-  ['@peartube/get-blob-server-port', 33],
-  [33, '@peartube/get-blob-server-port'],
-  ['@peartube/event-ready', 34],
-  [34, '@peartube/event-ready'],
-  ['@peartube/event-error', 35],
-  [35, '@peartube/event-error'],
-  ['@peartube/event-upload-progress', 36],
-  [36, '@peartube/event-upload-progress'],
-  ['@peartube/event-feed-update', 37],
-  [37, '@peartube/event-feed-update'],
-  ['@peartube/event-log', 38],
-  [38, '@peartube/event-log'],
-  ['@peartube/event-video-stats', 39],
-  [39, '@peartube/event-video-stats']
+  ['@peartube/set-video-thumbnail-from-file', 31],
+  [31, '@peartube/set-video-thumbnail-from-file'],
+  ['@peartube/get-status', 32],
+  [32, '@peartube/get-status'],
+  ['@peartube/pick-video-file', 33],
+  [33, '@peartube/pick-video-file'],
+  ['@peartube/pick-image-file', 34],
+  [34, '@peartube/pick-image-file'],
+  ['@peartube/get-blob-server-port', 35],
+  [35, '@peartube/get-blob-server-port'],
+  ['@peartube/event-ready', 36],
+  [36, '@peartube/event-ready'],
+  ['@peartube/event-error', 37],
+  [37, '@peartube/event-error'],
+  ['@peartube/event-upload-progress', 38],
+  [38, '@peartube/event-upload-progress'],
+  ['@peartube/event-feed-update', 39],
+  [39, '@peartube/event-feed-update'],
+  ['@peartube/event-log', 40],
+  [40, '@peartube/event-log'],
+  ['@peartube/event-video-stats', 41],
+  [41, '@peartube/event-video-stats']
 ])
 
 class HRPC {
@@ -124,8 +128,10 @@ class HRPC {
       ['@peartube/get-video-thumbnail', getEncoding('@peartube/get-video-thumbnail-request')],
       ['@peartube/get-video-metadata', getEncoding('@peartube/get-video-metadata-request')],
       ['@peartube/set-video-thumbnail', getEncoding('@peartube/set-video-thumbnail-request')],
+      ['@peartube/set-video-thumbnail-from-file', getEncoding('@peartube/set-video-thumbnail-from-file-request')],
       ['@peartube/get-status', getEncoding('@peartube/get-status-request')],
       ['@peartube/pick-video-file', getEncoding('@peartube/pick-video-file-request')],
+      ['@peartube/pick-image-file', getEncoding('@peartube/pick-image-file-request')],
       ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-request')],
       ['@peartube/event-ready', getEncoding('@peartube/event-ready')],
       ['@peartube/event-error', getEncoding('@peartube/event-error')],
@@ -166,8 +172,10 @@ class HRPC {
       ['@peartube/get-video-thumbnail', getEncoding('@peartube/get-video-thumbnail-response')],
       ['@peartube/get-video-metadata', getEncoding('@peartube/get-video-metadata-response')],
       ['@peartube/set-video-thumbnail', getEncoding('@peartube/set-video-thumbnail-response')],
+      ['@peartube/set-video-thumbnail-from-file', getEncoding('@peartube/set-video-thumbnail-from-file-response')],
       ['@peartube/get-status', getEncoding('@peartube/get-status-response')],
       ['@peartube/pick-video-file', getEncoding('@peartube/pick-video-file-response')],
+      ['@peartube/pick-image-file', getEncoding('@peartube/pick-image-file-response')],
       ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
@@ -387,12 +395,20 @@ class HRPC {
     return this._call('@peartube/set-video-thumbnail', args)
   }
 
+  async setVideoThumbnailFromFile(args) {
+    return this._call('@peartube/set-video-thumbnail-from-file', args)
+  }
+
   async getStatus(args) {
     return this._call('@peartube/get-status', args)
   }
 
   async pickVideoFile(args) {
     return this._call('@peartube/pick-video-file', args)
+  }
+
+  async pickImageFile(args) {
+    return this._call('@peartube/pick-image-file', args)
   }
 
   async getBlobServerPort(args) {
@@ -547,12 +563,20 @@ class HRPC {
     this._handlers['@peartube/set-video-thumbnail'] = responseFn
   }
 
+  onSetVideoThumbnailFromFile(responseFn) {
+    this._handlers['@peartube/set-video-thumbnail-from-file'] = responseFn
+  }
+
   onGetStatus(responseFn) {
     this._handlers['@peartube/get-status'] = responseFn
   }
 
   onPickVideoFile(responseFn) {
     this._handlers['@peartube/pick-video-file'] = responseFn
+  }
+
+  onPickImageFile(responseFn) {
+    this._handlers['@peartube/pick-image-file'] = responseFn
   }
 
   onGetBlobServerPort(responseFn) {

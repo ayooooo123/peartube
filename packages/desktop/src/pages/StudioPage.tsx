@@ -31,6 +31,8 @@ export const StudioPage: React.FC<StudioPageProps> = ({
   const [uploadFile, setUploadFile] = React.useState<File | null>(null);
   const [uploading, setUploading] = React.useState(false);
   const [uploadError, setUploadError] = React.useState<string | null>(null);
+  const [thumbnailPreview, setThumbnailPreview] = React.useState<string | null>(null);
+  const [customThumbnail, setCustomThumbnail] = React.useState<File | null>(null);
 
   React.useEffect(() => {
     loadData();
@@ -71,6 +73,20 @@ export const StudioPage: React.FC<StudioPageProps> = ({
     handleFile(file);
   };
 
+  const handleChooseThumbnail = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/jpeg,image/png,image/webp';
+    input.onchange = (e: any) => {
+      const file = e.target.files?.[0];
+      if (file) {
+        setCustomThumbnail(file);
+        setThumbnailPreview(URL.createObjectURL(file));
+      }
+    };
+    input.click();
+  };
+
   // Upload progress state
   const [uploadProgress, setUploadProgress] = React.useState(0);
 
@@ -103,11 +119,29 @@ export const StudioPage: React.FC<StudioPageProps> = ({
 
       if (result.success) {
         setUploadProgress(100);
+
+        // If user selected a custom thumbnail, upload it
+        if (customThumbnail && result.videoId) {
+          try {
+            const reader = new FileReader();
+            reader.onload = async () => {
+              const base64 = (reader.result as string).split(',')[1];
+              await rpc.setVideoThumbnail(result.videoId, base64, customThumbnail.type);
+              console.log('[Studio] Custom thumbnail uploaded');
+            };
+            reader.readAsDataURL(customThumbnail);
+          } catch (thumbErr) {
+            console.error('[Studio] Failed to upload custom thumbnail:', thumbErr);
+          }
+        }
+
         setVideos([result.metadata, ...videos]);
         setShowUpload(false);
         setUploadTitle('');
         setUploadDescription('');
         setUploadFile(null);
+        setThumbnailPreview(null);
+        setCustomThumbnail(null);
       }
     } catch (err: any) {
       setUploadError(err.message || 'Failed to upload');
@@ -167,6 +201,50 @@ export const StudioPage: React.FC<StudioPageProps> = ({
             )}
 
             <Column gap={spacing.md}>
+              {/* Thumbnail Preview (shown when file selected) */}
+              {uploadFile && (
+                <div style={{ marginBottom: spacing.md }}>
+                  <Text size="sm" color="secondary" style={{ marginBottom: spacing.sm, display: 'block' }}>
+                    Thumbnail
+                  </Text>
+                  <Row gap={spacing.md} align="center">
+                    <div
+                      style={{
+                        width: 160,
+                        aspectRatio: '16/9',
+                        borderRadius: radius.md,
+                        backgroundColor: colors.bgElevated,
+                        overflow: 'hidden',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      {thumbnailPreview ? (
+                        <img
+                          src={thumbnailPreview}
+                          alt="Thumbnail preview"
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        />
+                      ) : (
+                        <Column align="center" gap={spacing.xs}>
+                          <Text size="xl">🎬</Text>
+                          <Text size="xs" color="muted">Auto-generated</Text>
+                        </Column>
+                      )}
+                    </div>
+                    <Column gap={spacing.xs}>
+                      <Button variant="ghost" size="sm" onClick={handleChooseThumbnail}>
+                        {thumbnailPreview ? 'Change' : 'Upload Custom'}
+                      </Button>
+                      <Text size="xs" color="muted">
+                        {thumbnailPreview ? 'Custom thumbnail' : 'Will be generated from video'}
+                      </Text>
+                    </Column>
+                  </Row>
+                </div>
+              )}
+
               {/* File Drop Zone */}
               <div
                 onClick={handleChooseFile}

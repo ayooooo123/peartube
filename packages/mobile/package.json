@@ -41,6 +41,7 @@
     "expo-router": "^6.0.8",
     "expo-system-ui": "^6.0.7",
     "expo-video": "^3.0.14",
+    "expo-video-thumbnails": "^8.0.0",
     "hrpc": "^4.2.0",
     "lucide-react-native": "^0.555.0",
     "nativewind": "^4.2.1",

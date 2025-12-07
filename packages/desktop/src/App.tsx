@@ -423,11 +423,8 @@ export default function App() {
           channelNames={state.channelNames}
           onVideoClick={handleVideoClick}
           loading={state.loading}
-          discoveredChannels={state.publicFeed.map(e => ({
-            driveKey: e.driveKey,
-            name: state.channelMetadata[e.driveKey]?.name,
-            videoCount: state.channelMetadata[e.driveKey]?.videoCount,
-          }))}
+          feedVideos={state.feedVideos}
+          feedVideosLoading={state.feedVideosLoading}
           onChannelClick={handleChannelClick}
           onRefreshFeed={actions.loadPublicFeed}
           feedLoading={state.feedLoading}

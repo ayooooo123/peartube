@@ -406,6 +406,19 @@
     },
     {
       "id": 31,
+      "name": "@peartube/set-video-thumbnail-from-file",
+      "request": {
+        "name": "@peartube/set-video-thumbnail-from-file-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-video-thumbnail-from-file-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 32,
       "name": "@peartube/get-status",
       "request": {
         "name": "@peartube/get-status-request",
@@ -418,7 +431,7 @@
       "version": 1
     },
     {
-      "id": 32,
+      "id": 33,
       "name": "@peartube/pick-video-file",
       "request": {
         "name": "@peartube/pick-video-file-request",
@@ -431,7 +444,20 @@
       "version": 1
     },
     {
-      "id": 33,
+      "id": 34,
+      "name": "@peartube/pick-image-file",
+      "request": {
+        "name": "@peartube/pick-image-file-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/pick-image-file-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 35,
       "name": "@peartube/get-blob-server-port",
       "request": {
         "name": "@peartube/get-blob-server-port-request",
@@ -444,7 +470,7 @@
       "version": 1
     },
     {
-      "id": 34,
+      "id": 36,
       "name": "@peartube/event-ready",
       "request": {
         "name": "@peartube/event-ready",
@@ -454,7 +480,7 @@
       "version": 1
     },
     {
-      "id": 35,
+      "id": 37,
       "name": "@peartube/event-error",
       "request": {
         "name": "@peartube/event-error",
@@ -464,7 +490,7 @@
       "version": 1
     },
     {
-      "id": 36,
+      "id": 38,
       "name": "@peartube/event-upload-progress",
       "request": {
         "name": "@peartube/event-upload-progress",
@@ -474,7 +500,7 @@
       "version": 1
     },
     {
-      "id": 37,
+      "id": 39,
       "name": "@peartube/event-feed-update",
       "request": {
         "name": "@peartube/event-feed-update",
@@ -484,7 +510,7 @@
       "version": 1
     },
     {
-      "id": 38,
+      "id": 40,
       "name": "@peartube/event-log",
       "request": {
         "name": "@peartube/event-log",
@@ -494,7 +520,7 @@
       "version": 1
     },
     {
-      "id": 39,
+      "id": 41,
       "name": "@peartube/event-video-stats",
       "request": {
         "name": "@peartube/event-video-stats",

@@ -234,6 +234,18 @@ class RPCClient {
     return { url: result.url || '' };
   }
 
+  async setVideoThumbnail(videoId: string, imageData: string, mimeType: string): Promise<{ success: boolean }> {
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.setVideoThumbnail({ videoId, imageData, mimeType });
+    return { success: result.success || false };
+  }
+
+  async getVideoThumbnail(driveKey: string, videoId: string): Promise<{ url: string | null; exists: boolean }> {
+    if (!this.rpc) throw new Error('RPC not initialized');
+    const result = await this.rpc.getVideoThumbnail({ channelKey: driveKey, videoId });
+    return { url: result.url || null, exists: result.exists || false };
+  }
+
   // Subscription methods
   async subscribeChannel(driveKey: string): Promise<{ success: boolean; driveKey: string }> {
     if (!this.rpc) throw new Error('RPC not initialized');

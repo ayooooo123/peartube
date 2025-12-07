@@ -12,6 +12,7 @@ interface VideoCardProps {
   channelName?: string;
   onClick: () => void;
   variant?: 'grid' | 'list' | 'compact';
+  thumbnailUrl?: string;
 }
 
 export const VideoCard: React.FC<VideoCardProps> = ({
@@ -19,8 +20,11 @@ export const VideoCard: React.FC<VideoCardProps> = ({
   channelName,
   onClick,
   variant = 'grid',
+  thumbnailUrl,
 }) => {
   const [hovered, setHovered] = React.useState(false);
+  // Use thumbnailUrl prop or fall back to video.thumbnail
+  const thumbUrl = thumbnailUrl || video.thumbnail;
 
   if (variant === 'list') {
     return (
@@ -40,6 +44,8 @@ export const VideoCard: React.FC<VideoCardProps> = ({
         <Thumbnail
           size="small"
           hovered={hovered}
+          thumbnailUrl={thumbUrl}
+          duration={video.duration}
         />
         <Column gap={spacing.xs} style={{ flex: 1, minWidth: 0 }}>
           <Text weight="medium" truncate>{video.title}</Text>
@@ -68,7 +74,7 @@ export const VideoCard: React.FC<VideoCardProps> = ({
           backgroundColor: hovered ? colors.bgHover : 'transparent',
         }}
       >
-        <Thumbnail size="tiny" hovered={hovered} />
+        <Thumbnail size="tiny" hovered={hovered} thumbnailUrl={thumbUrl} duration={video.duration} />
         <Column gap={2} style={{ flex: 1, minWidth: 0 }}>
           <Text size="sm" weight="medium" truncate>{video.title}</Text>
           <Text size="xs" color="muted">{channelName}</Text>
@@ -90,7 +96,7 @@ export const VideoCard: React.FC<VideoCardProps> = ({
         transform: hovered ? 'scale(1.02)' : 'scale(1)',
       }}
     >
-      <Thumbnail size="large" hovered={hovered} />
+      <Thumbnail size="large" hovered={hovered} thumbnailUrl={thumbUrl} duration={video.duration} />
       <Row gap={spacing.md} style={{ marginTop: spacing.md }}>
         <Avatar name={channelName} size="sm" />
         <Column gap={spacing.xs} style={{ flex: 1, minWidth: 0 }}>
@@ -119,13 +125,33 @@ export const VideoCard: React.FC<VideoCardProps> = ({
 interface ThumbnailProps {
   size: 'tiny' | 'small' | 'large';
   hovered: boolean;
+  thumbnailUrl?: string;
+  duration?: number;
 }
 
-const Thumbnail: React.FC<ThumbnailProps> = ({ size, hovered }) => {
+const Thumbnail: React.FC<ThumbnailProps> = ({ size, hovered, thumbnailUrl, duration }) => {
+  const [imageError, setImageError] = React.useState(false);
+  const [imageLoaded, setImageLoaded] = React.useState(false);
+
   const dimensions = {
     tiny: { width: 120, aspectRatio: '16/9' },
     small: { width: 168, aspectRatio: '16/9' },
     large: { width: '100%', aspectRatio: '16/9' },
+  };
+
+  const showImage = thumbnailUrl && !imageError;
+  const showPlaceholder = !thumbnailUrl || imageError || !imageLoaded;
+
+  // Format duration from seconds to MM:SS or HH:MM:SS
+  const formatDuration = (seconds?: number) => {
+    if (!seconds) return '';
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    if (hrs > 0) {
+      return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -141,26 +167,48 @@ const Thumbnail: React.FC<ThumbnailProps> = ({ size, hovered }) => {
       overflow: 'hidden',
       flexShrink: 0,
     }}>
-      <span style={{
-        fontSize: size === 'large' ? 48 : size === 'small' ? 32 : 24,
-        opacity: 0.3,
-      }}>
-        ▶
-      </span>
+      {/* Actual thumbnail image */}
+      {showImage && (
+        <img
+          src={thumbnailUrl}
+          alt=""
+          style={{
+            position: 'absolute',
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            opacity: imageLoaded ? 1 : 0,
+            transition: 'opacity 0.2s ease',
+          }}
+          onLoad={() => setImageLoaded(true)}
+          onError={() => setImageError(true)}
+        />
+      )}
+      {/* Placeholder when no thumbnail or loading */}
+      {showPlaceholder && (
+        <span style={{
+          fontSize: size === 'large' ? 48 : size === 'small' ? 32 : 24,
+          opacity: 0.3,
+        }}>
+          ▶
+        </span>
+      )}
       {/* Duration badge */}
-      <span style={{
-        position: 'absolute',
-        bottom: spacing.xs,
-        right: spacing.xs,
-        backgroundColor: 'rgba(0, 0, 0, 0.85)',
-        color: colors.textPrimary,
-        fontSize: fontSize.xs,
-        fontWeight: fontWeight.medium,
-        padding: `2px ${spacing.xs}px`,
-        borderRadius: radius.sm,
-      }}>
-        0:00
-      </span>
+      {duration && duration > 0 && (
+        <span style={{
+          position: 'absolute',
+          bottom: spacing.xs,
+          right: spacing.xs,
+          backgroundColor: 'rgba(0, 0, 0, 0.85)',
+          color: colors.textPrimary,
+          fontSize: fontSize.xs,
+          fontWeight: fontWeight.medium,
+          padding: `2px ${spacing.xs}px`,
+          borderRadius: radius.sm,
+        }}>
+          {formatDuration(duration)}
+        </span>
+      )}
       {/* Hover overlay */}
       {hovered && (
         <div style={{

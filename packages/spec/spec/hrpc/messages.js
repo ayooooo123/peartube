@@ -432,7 +432,8 @@ const encoding18 = {
       (m.channelKey ? 16 : 0) |
       (m.channelName ? 32 : 0) |
       (m.createdAt ? 64 : 0) |
-      (m.views ? 128 : 0)
+      (m.views ? 128 : 0) |
+      (m.category ? 256 : 0)
 
     c.string.preencode(state, m.id)
     c.string.preencode(state, m.title)
@@ -446,6 +447,7 @@ const encoding18 = {
     if (m.channelName) c.string.preencode(state, m.channelName)
     if (m.createdAt) c.uint.preencode(state, m.createdAt)
     if (m.views) c.uint.preencode(state, m.views)
+    if (m.category) c.string.preencode(state, m.category)
   },
   encode(state, m) {
     const flags =
@@ -456,7 +458,8 @@ const encoding18 = {
       (m.channelKey ? 16 : 0) |
       (m.channelName ? 32 : 0) |
       (m.createdAt ? 64 : 0) |
-      (m.views ? 128 : 0)
+      (m.views ? 128 : 0) |
+      (m.category ? 256 : 0)
 
     c.string.encode(state, m.id)
     c.string.encode(state, m.title)
@@ -470,6 +473,7 @@ const encoding18 = {
     if (m.channelName) c.string.encode(state, m.channelName)
     if (m.createdAt) c.uint.encode(state, m.createdAt)
     if (m.views) c.uint.encode(state, m.views)
+    if (m.category) c.string.encode(state, m.category)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -486,7 +490,8 @@ const encoding18 = {
       channelKey: (flags & 16) !== 0 ? c.string.decode(state) : null,
       channelName: (flags & 32) !== 0 ? c.string.decode(state) : null,
       createdAt: (flags & 64) !== 0 ? c.uint.decode(state) : 0,
-      views: (flags & 128) !== 0 ? c.uint.decode(state) : 0
+      views: (flags & 128) !== 0 ? c.uint.decode(state) : 0,
+      category: (flags & 256) !== 0 ? c.string.decode(state) : null
     }
   }
 }
@@ -615,18 +620,22 @@ const encoding25 = {
   preencode(state, m) {
     c.string.preencode(state, m.filePath)
     c.string.preencode(state, m.title)
-    state.end++ // max flag is 1 so always one byte
+    state.end++ // max flag is 2 so always one byte
 
     if (m.description) c.string.preencode(state, m.description)
+    if (m.category) c.string.preencode(state, m.category)
   },
   encode(state, m) {
-    const flags = m.description ? 1 : 0
+    const flags =
+      (m.description ? 1 : 0) |
+      (m.category ? 2 : 0)
 
     c.string.encode(state, m.filePath)
     c.string.encode(state, m.title)
     c.uint.encode(state, flags)
 
     if (m.description) c.string.encode(state, m.description)
+    if (m.category) c.string.encode(state, m.category)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -636,7 +645,8 @@ const encoding25 = {
     return {
       filePath: r0,
       title: r1,
-      description: (flags & 1) !== 0 ? c.string.decode(state) : null
+      description: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      category: (flags & 2) !== 0 ? c.string.decode(state) : null
     }
   }
 }
@@ -1206,7 +1216,7 @@ const encoding66 = encoding21
 // @peartube/get-video-thumbnail-response
 const encoding67 = {
   preencode(state, m) {
-    state.end++ // max flag is 2 so always one byte
+    state.end++ // max flag is 4 so always one byte
 
     if (m.url) c.string.preencode(state, m.url)
     if (m.dataUrl) c.string.preencode(state, m.dataUrl)
@@ -1214,7 +1224,8 @@ const encoding67 = {
   encode(state, m) {
     const flags =
       (m.url ? 1 : 0) |
-      (m.dataUrl ? 2 : 0)
+      (m.dataUrl ? 2 : 0) |
+      (m.exists ? 4 : 0)
 
     c.uint.encode(state, flags)
 
@@ -1226,7 +1237,8 @@ const encoding67 = {
 
     return {
       url: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      dataUrl: (flags & 2) !== 0 ? c.string.decode(state) : null
+      dataUrl: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      exists: (flags & 4) !== 0
     }
   }
 }
@@ -1258,11 +1270,42 @@ const encoding69 = {
 const encoding70 = {
   preencode(state, m) {
     c.string.preencode(state, m.videoId)
-    c.string.preencode(state, m.thumbnailPath)
+    c.string.preencode(state, m.imageData)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.mimeType) c.string.preencode(state, m.mimeType)
+  },
+  encode(state, m) {
+    const flags = m.mimeType ? 1 : 0
+
+    c.string.encode(state, m.videoId)
+    c.string.encode(state, m.imageData)
+    c.uint.encode(state, flags)
+
+    if (m.mimeType) c.string.encode(state, m.mimeType)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const r1 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      videoId: r0,
+      imageData: r1,
+      mimeType: (flags & 1) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/set-video-thumbnail-from-file-request
+const encoding71 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.videoId)
+    c.string.preencode(state, m.filePath)
   },
   encode(state, m) {
     c.string.encode(state, m.videoId)
-    c.string.encode(state, m.thumbnailPath)
+    c.string.encode(state, m.filePath)
   },
   decode(state) {
     const r0 = c.string.decode(state)
@@ -1270,16 +1313,19 @@ const encoding70 = {
 
     return {
       videoId: r0,
-      thumbnailPath: r1
+      filePath: r1
     }
   }
 }
 
+// @peartube/set-video-thumbnail-from-file-response
+const encoding72 = encoding10
+
 // @peartube/set-video-thumbnail-response
-const encoding71 = encoding10
+const encoding73 = encoding10
 
 // @peartube/status
-const encoding72 = {
+const encoding74 = {
   preencode(state, m) {
     state.end++ // max flag is 4 so always one byte
 
@@ -1307,21 +1353,21 @@ const encoding72 = {
 }
 
 // @peartube/get-status-request
-const encoding73 = encoding0
+const encoding75 = encoding0
 
 // @peartube/get-status-response.status
-const encoding74_0 = c.frame(encoding72)
+const encoding76_0 = c.frame(encoding74)
 
 // @peartube/get-status-response
-const encoding74 = {
+const encoding76 = {
   preencode(state, m) {
-    encoding74_0.preencode(state, m.status)
+    encoding76_0.preencode(state, m.status)
   },
   encode(state, m) {
-    encoding74_0.encode(state, m.status)
+    encoding76_0.encode(state, m.status)
   },
   decode(state) {
-    const r0 = encoding74_0.decode(state)
+    const r0 = encoding76_0.decode(state)
 
     return {
       status: r0
@@ -1330,39 +1376,88 @@ const encoding74 = {
 }
 
 // @peartube/pick-video-file-request
-const encoding75 = encoding0
+const encoding77 = encoding0
 
 // @peartube/pick-video-file-response
-const encoding76 = {
+const encoding78 = {
   preencode(state, m) {
-    state.end++ // max flag is 2 so always one byte
+    state.end++ // max flag is 8 so always one byte
 
     if (m.filePath) c.string.preencode(state, m.filePath)
+    if (m.name) c.string.preencode(state, m.name)
+    if (m.size) c.uint.preencode(state, m.size)
   },
   encode(state, m) {
     const flags =
       (m.filePath ? 1 : 0) |
-      (m.cancelled ? 2 : 0)
+      (m.name ? 2 : 0) |
+      (m.size ? 4 : 0) |
+      (m.cancelled ? 8 : 0)
 
     c.uint.encode(state, flags)
 
     if (m.filePath) c.string.encode(state, m.filePath)
+    if (m.name) c.string.encode(state, m.name)
+    if (m.size) c.uint.encode(state, m.size)
   },
   decode(state) {
     const flags = c.uint.decode(state)
 
     return {
       filePath: (flags & 1) !== 0 ? c.string.decode(state) : null,
-      cancelled: (flags & 2) !== 0
+      name: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      size: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
+      cancelled: (flags & 8) !== 0
+    }
+  }
+}
+
+// @peartube/pick-image-file-request
+const encoding79 = encoding0
+
+// @peartube/pick-image-file-response
+const encoding80 = {
+  preencode(state, m) {
+    state.end++ // max flag is 16 so always one byte
+
+    if (m.filePath) c.string.preencode(state, m.filePath)
+    if (m.name) c.string.preencode(state, m.name)
+    if (m.size) c.uint.preencode(state, m.size)
+    if (m.dataUrl) c.string.preencode(state, m.dataUrl)
+  },
+  encode(state, m) {
+    const flags =
+      (m.filePath ? 1 : 0) |
+      (m.name ? 2 : 0) |
+      (m.size ? 4 : 0) |
+      (m.dataUrl ? 8 : 0) |
+      (m.cancelled ? 16 : 0)
+
+    c.uint.encode(state, flags)
+
+    if (m.filePath) c.string.encode(state, m.filePath)
+    if (m.name) c.string.encode(state, m.name)
+    if (m.size) c.uint.encode(state, m.size)
+    if (m.dataUrl) c.string.encode(state, m.dataUrl)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+
+    return {
+      filePath: (flags & 1) !== 0 ? c.string.decode(state) : null,
+      name: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      size: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
+      dataUrl: (flags & 8) !== 0 ? c.string.decode(state) : null,
+      cancelled: (flags & 16) !== 0
     }
   }
 }
 
 // @peartube/get-blob-server-port-request
-const encoding77 = encoding0
+const encoding81 = encoding0
 
 // @peartube/get-blob-server-port-response
-const encoding78 = {
+const encoding82 = {
   preencode(state, m) {
     c.uint.preencode(state, m.port)
   },
@@ -1379,7 +1474,7 @@ const encoding78 = {
 }
 
 // @peartube/event-ready
-const encoding79 = {
+const encoding83 = {
   preencode(state, m) {
     state.end++ // max flag is 1 so always one byte
 
@@ -1402,10 +1497,10 @@ const encoding79 = {
 }
 
 // @peartube/event-error
-const encoding80 = encoding1
+const encoding84 = encoding1
 
 // @peartube/event-upload-progress
-const encoding81 = {
+const encoding85 = {
   preencode(state, m) {
     c.string.preencode(state, m.videoId)
     c.uint.preencode(state, m.progress)
@@ -1441,7 +1536,7 @@ const encoding81 = {
 }
 
 // @peartube/event-feed-update
-const encoding82 = {
+const encoding86 = {
   preencode(state, m) {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.action)
@@ -1462,7 +1557,7 @@ const encoding82 = {
 }
 
 // @peartube/event-log
-const encoding83 = {
+const encoding87 = {
   preencode(state, m) {
     c.string.preencode(state, m.level)
     c.string.preencode(state, m.message)
@@ -1493,18 +1588,18 @@ const encoding83 = {
 }
 
 // @peartube/event-video-stats.stats
-const encoding84_0 = encoding53_0
+const encoding88_0 = encoding53_0
 
 // @peartube/event-video-stats
-const encoding84 = {
+const encoding88 = {
   preencode(state, m) {
-    encoding84_0.preencode(state, m.stats)
+    encoding88_0.preencode(state, m.stats)
   },
   encode(state, m) {
-    encoding84_0.encode(state, m.stats)
+    encoding88_0.encode(state, m.stats)
   },
   decode(state) {
-    const r0 = encoding84_0.decode(state)
+    const r0 = encoding88_0.decode(state)
 
     return {
       stats: r0
@@ -1677,34 +1772,42 @@ function getEncoding(name) {
       return encoding69
     case '@peartube/set-video-thumbnail-request':
       return encoding70
-    case '@peartube/set-video-thumbnail-response':
+    case '@peartube/set-video-thumbnail-from-file-request':
       return encoding71
-    case '@peartube/status':
+    case '@peartube/set-video-thumbnail-from-file-response':
       return encoding72
-    case '@peartube/get-status-request':
+    case '@peartube/set-video-thumbnail-response':
       return encoding73
-    case '@peartube/get-status-response':
+    case '@peartube/status':
       return encoding74
-    case '@peartube/pick-video-file-request':
+    case '@peartube/get-status-request':
       return encoding75
-    case '@peartube/pick-video-file-response':
+    case '@peartube/get-status-response':
       return encoding76
-    case '@peartube/get-blob-server-port-request':
+    case '@peartube/pick-video-file-request':
       return encoding77
-    case '@peartube/get-blob-server-port-response':
+    case '@peartube/pick-video-file-response':
       return encoding78
-    case '@peartube/event-ready':
+    case '@peartube/pick-image-file-request':
       return encoding79
-    case '@peartube/event-error':
+    case '@peartube/pick-image-file-response':
       return encoding80
-    case '@peartube/event-upload-progress':
+    case '@peartube/get-blob-server-port-request':
       return encoding81
-    case '@peartube/event-feed-update':
+    case '@peartube/get-blob-server-port-response':
       return encoding82
-    case '@peartube/event-log':
+    case '@peartube/event-ready':
       return encoding83
-    case '@peartube/event-video-stats':
+    case '@peartube/event-error':
       return encoding84
+    case '@peartube/event-upload-progress':
+      return encoding85
+    case '@peartube/event-feed-update':
+      return encoding86
+    case '@peartube/event-log':
+      return encoding87
+    case '@peartube/event-video-stats':
+      return encoding88
     default:
       throw new Error('Encoder not found ' + name)
   }

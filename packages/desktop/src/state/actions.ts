@@ -14,6 +14,7 @@ type Dispatch = React.Dispatch<any>;
 export interface AppActions {
   loadInitialData: () => Promise<void>;
   loadPublicFeed: () => Promise<void>;
+  loadFeedVideos: () => Promise<void>;
   loadVideos: (channelKey: string) => Promise<Video[]>;
   createIdentity: (name: string) => Promise<{ success: boolean; mnemonic?: string }>;
   recoverIdentity: (mnemonic: string, name?: string) => Promise<boolean>;
@@ -118,10 +119,50 @@ export function createActions(
           }
         }
       }
+
+      // Load videos from discovered channels
+      await loadFeedVideos();
     } catch (err: any) {
       console.error('[Actions] Failed to load public feed:', err);
       dispatch({ type: 'setFeedLoading', payload: false });
     }
+  }
+
+  async function loadFeedVideos() {
+    const state = getState();
+    if (state.publicFeed.length === 0) return;
+
+    dispatch({ type: 'setFeedVideosLoading', payload: true });
+    const allVideos: Video[] = [];
+
+    // Limit to first 15 channels to avoid overloading
+    for (const entry of state.publicFeed.slice(0, 15)) {
+      const channelKey = entry.driveKey;
+      if (!channelKey) continue;
+
+      try {
+        const channelVideos = await rpc.listVideos(channelKey);
+        const currentState = getState();
+        const channelName = currentState.channelMetadata[channelKey]?.name || 'Unknown';
+
+        const videosWithChannel = channelVideos.map(v => ({
+          ...v,
+          channelKey,
+          channelName,
+        }));
+        allVideos.push(...videosWithChannel);
+      } catch (err) {
+        console.log('[Actions] Failed to load videos from channel:', channelKey.slice(0, 8));
+      }
+    }
+
+    // Sort by uploadedAt descending, limit to 50 videos
+    const sorted = allVideos
+      .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
+      .slice(0, 50);
+
+    dispatch({ type: 'setFeedVideos', payload: sorted });
+    dispatch({ type: 'setFeedVideosLoading', payload: false });
   }
 
   async function loadVideos(channelKey: string): Promise<Video[]> {
@@ -208,6 +249,7 @@ export function createActions(
   return {
     loadInitialData,
     loadPublicFeed,
+    loadFeedVideos,
     loadVideos,
     createIdentity,
     recoverIdentity,

@@ -387,6 +387,12 @@
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "category",
+          "required": false,
+          "type": "string",
+          "version": 1
         }
       ]
     },
@@ -518,6 +524,12 @@
         },
         {
           "name": "description",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "category",
           "required": false,
           "type": "string",
           "version": 1
@@ -1253,6 +1265,12 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "exists",
+          "required": false,
+          "type": "bool",
+          "version": 1
         }
       ]
     },
@@ -1294,6 +1312,32 @@
       "name": "set-video-thumbnail-request",
       "namespace": "peartube",
       "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "imageData",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mimeType",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-video-thumbnail-from-file-request",
+      "namespace": "peartube",
+      "compact": false,
       "flagsPosition": -1,
       "fields": [
         {
@@ -1303,9 +1347,23 @@
           "version": 1
         },
         {
-          "name": "thumbnailPath",
+          "name": "filePath",
           "required": true,
           "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-video-thumbnail-from-file-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]
@@ -1386,6 +1444,63 @@
       "fields": [
         {
           "name": "filePath",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "name",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "size",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "cancelled",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "pick-image-file-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "pick-image-file-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "filePath",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "name",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "size",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "dataUrl",
           "required": false,
           "type": "string",
           "version": 1

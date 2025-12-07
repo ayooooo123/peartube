@@ -46,8 +46,9 @@ interface AppContextType {
   loading: boolean
   blobServerPort: number | null
   rpc: any // HRPC instance - typed methods available
-  uploadVideo: (filePath: string, title: string, description: string, mimeType?: string, onProgress?: (progress: number) => void) => Promise<any>
+  uploadVideo: (filePath: string, title: string, description: string, mimeType?: string, category?: string, onProgress?: (progress: number) => void) => Promise<any>
   pickVideoFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
+  pickImageFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
   loadIdentity: () => Promise<void>
   createIdentity: (name: string) => Promise<Identity>
   loadVideos: (driveKey: string) => Promise<void>
@@ -262,6 +263,10 @@ export default function RootLayout() {
         if (active?.driveKey) {
           console.log('[App] Loading videos for drive:', active.driveKey)
           const videosResult = await rpc.listVideos({ channelKey: active.driveKey })
+          console.log('[App] Loaded videos:', videosResult?.videos?.length, 'videos')
+          if (videosResult?.videos?.length > 0) {
+            console.log('[App] First video:', videosResult.videos[0].id, 'thumbnail:', videosResult.videos[0].thumbnail)
+          }
           setVideos(videosResult?.videos || [])
         }
       }
@@ -306,6 +311,10 @@ export default function RootLayout() {
     if (!rpcRef.current) return
     try {
       const result = await rpcRef.current.listVideos({ channelKey: driveKey })
+      console.log('[App] Loaded videos:', result?.videos?.length, 'videos')
+      if (result?.videos?.length > 0) {
+        console.log('[App] First video thumbnail:', result.videos[0].thumbnail)
+      }
       setVideos(result?.videos || [])
     } catch (err) {
       console.error('[App] Failed to load videos:', err)
@@ -333,19 +342,21 @@ export default function RootLayout() {
     title: string,
     description: string,
     mimeType: string = 'video/mp4',
+    category: string = 'Other',
     onProgress?: (progress: number) => void
   ): Promise<any> => {
     if (!rpcRef.current) {
       throw new Error('RPC not ready')
     }
 
-    console.log('[App] Uploading video:', filePath)
+    console.log('[App] Uploading video:', filePath, 'category:', category)
 
     // Use HRPC uploadVideo method - progress comes via eventUploadProgress events
     const result = await rpcRef.current.uploadVideo({
       filePath,
       title,
       description,
+      category,
     })
 
     console.log('[App] Upload complete:', result)
@@ -369,6 +380,17 @@ export default function RootLayout() {
     return await rpcRef.current.pickVideoFile({})
   }, [])
 
+  // Pick image file using native file picker (for thumbnails)
+  const pickImageFileHandler = useCallback(async (): Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null> => {
+    if (!rpcRef.current) {
+      console.log('[App] pickImageFile: RPC not ready')
+      return null
+    }
+
+    console.log('[App] Opening native image file picker...')
+    return await rpcRef.current.pickImageFile({})
+  }, [])
+
   const contextValue: AppContextType = {
     ready,
     identity,
@@ -378,6 +400,7 @@ export default function RootLayout() {
     rpc: rpcRef.current, // Direct HRPC instance access
     uploadVideo: uploadVideoHandler,
     pickVideoFile: pickVideoFileHandler,
+    pickImageFile: pickImageFileHandler,
     loadIdentity: loadIdentityFromBackend,
     createIdentity: createIdentityHandler,
     loadVideos: loadVideosFromBackend,

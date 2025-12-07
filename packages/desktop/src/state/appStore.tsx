@@ -21,6 +21,9 @@ export type AppStoreState = {
   channelMetadata: Record<string, ChannelMetadata>;
   feedLoading: boolean;
   peerCount: number;
+  // Aggregated videos from discovered channels
+  feedVideos: Video[];
+  feedVideosLoading: boolean;
   // View-specific state (still kept here for now)
   view: 'home' | 'watch' | 'studio' | 'subscriptions' | 'settings' | 'channel' | 'onboarding';
   currentVideo: Video | null;
@@ -42,6 +45,8 @@ type Action =
   | { type: 'setChannelMetadata'; payload: Record<string, ChannelMetadata> }
   | { type: 'setFeedLoading'; payload: boolean }
   | { type: 'setPeerCount'; payload: number }
+  | { type: 'setFeedVideos'; payload: Video[] }
+  | { type: 'setFeedVideosLoading'; payload: boolean }
   | { type: 'setView'; payload: AppStoreState['view'] }
   | { type: 'setCurrentVideo'; payload: { video: Video | null; driveKey: string | null; related?: Video[] } }
   | { type: 'setViewingChannel'; payload: string | null };
@@ -58,6 +63,8 @@ const initialState: AppStoreState = {
   channelMetadata: {},
   feedLoading: false,
   peerCount: 0,
+  feedVideos: [],
+  feedVideosLoading: false,
   view: 'home',
   currentVideo: null,
   currentVideoKey: null,
@@ -93,6 +100,10 @@ function reducer(state: AppStoreState, action: Action): AppStoreState {
       return { ...state, feedLoading: action.payload };
     case 'setPeerCount':
       return { ...state, peerCount: action.payload };
+    case 'setFeedVideos':
+      return { ...state, feedVideos: action.payload };
+    case 'setFeedVideosLoading':
+      return { ...state, feedVideosLoading: action.payload };
     case 'setView':
       return { ...state, view: action.payload };
     case 'setCurrentVideo':

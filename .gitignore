@@ -47,3 +47,4 @@ coverage/
 # Config
 .mcp.json
 peartube-src.zip
+packages/desktop/_expo/

@@ -2,36 +2,54 @@
 
 A decentralized P2P video streaming platform built on the Pear runtime and Hypercore Protocol.
 
-## Features (Planned)
+## Features
 
 - **Decentralized**: No central servers, pure P2P architecture
 - **Self-sovereign**: Creators own their channels via cryptographic keypairs
+- **Cross-platform**: iOS, Android, and Desktop (Pear) from a single codebase
 - **Scalable**: Popular content automatically gets more seeders
 - **Efficient**: Sparse replication and adaptive streaming
 - **Censorship-resistant**: No single point of control
 
 ## Architecture
 
-PearTube is built with a two-tier architecture:
+PearTube is a monorepo with a unified app that serves both mobile and desktop:
 
-- **Frontend**: React-based UI for browsing, watching, and uploading videos
-- **Backend Worker**: Core P2P engine handling networking, storage, and video delivery
+```
+peartube/
+├── packages/
+│   ├── app/              # Unified app (iOS, Android, Pear Desktop)
+│   │   ├── app/          # Expo Router screens
+│   │   ├── backend/      # Mobile BareKit worklet
+│   │   └── pear-src/     # Desktop Pear assets
+│   ├── backend/          # Backend business logic
+│   ├── backend-core/     # P2P primitives (hypercore, etc)
+│   ├── core/             # Shared types and utilities
+│   ├── platform/         # Platform abstraction layer
+│   ├── rpc/              # RPC client/server layer
+│   ├── spec/             # HRPC schema definitions
+│   └── ui/               # Shared UI components
+└── package.json
+```
 
 ### Tech Stack
 
+- **React Native + Expo**: Cross-platform mobile development
 - **Pear Runtime**: Desktop application framework
+- **BareKit**: Native P2P runtime for mobile
+- **HRPC**: Type-safe RPC over binary streams
 - **Hyperswarm**: P2P networking and peer discovery
 - **Hyperdrive**: Distributed file system for video storage
 - **Hyperbee**: Key-value database for metadata
 - **Autobase**: Multi-writer coordination for discovery
-- **React**: Frontend UI framework
 
-## Development
+## Quick Start
 
 ### Prerequisites
 
 - Node.js 18+
-- Pear CLI (`npm install -g pear`)
+- For iOS: Xcode 15+, CocoaPods
+- For Desktop: Pear CLI (`npm install -g pear`)
 
 ### Setup
 
@@ -39,97 +57,59 @@ PearTube is built with a two-tier architecture:
 # Install dependencies
 npm install
 
-# Run in development mode
-npm run dev
+# Run iOS app
+npm run ios
 
-# Run type checking
-npm run typecheck
-
-# Run linter
-npm run lint
+# Run Pear desktop app
+npm run pear
 ```
 
-### Project Structure
+## Development Commands
 
+```bash
+# Mobile
+npm run ios          # Run iOS app
+npm run android      # Run Android app
+npm start            # Start Expo dev server
+
+# Desktop
+npm run pear         # Build and run Pear desktop app
+npm run pear:build   # Build Pear desktop only
+
+# Backend
+npm run bundle:backend   # Bundle mobile backend worklet
 ```
-peartube/
-├── src/                  # Frontend source code
-│   ├── index.tsx        # Entry point
-│   ├── App.tsx          # Main app component
-│   └── ...
-├── workers/
-│   └── core/            # Backend P2P worker
-│       └── index.ts
-├── build/               # Compiled output
-├── storage/             # P2P data storage (gitignored)
-└── package.json
-```
-
-## Development Roadmap
-
-### Phase 1: Foundation (Current)
-- [x] Project structure
-- [ ] Basic Pear app setup
-- [ ] Identity management
-- [ ] Core backend worker
-- [ ] RPC communication
-
-### Phase 2: Channel & Upload
-- [ ] Channel creation
-- [ ] Video upload
-- [ ] Transcoding pipeline
-- [ ] Metadata management
-
-### Phase 3: Playback & Discovery
-- [ ] Video player
-- [ ] P2P chunk loading
-- [ ] Search & discovery
-- [ ] Subscriptions
-
-### Phase 4: Social Features
-- [ ] Comments
-- [ ] Likes/reactions
-- [ ] Notifications
-- [ ] Playlists
-
-### Phase 5: Performance
-- [ ] Bandwidth optimization
-- [ ] Storage management
-- [ ] Caching strategies
-
-### Phase 6: Advanced
-- [ ] Live streaming
-- [ ] Monetization
-- [ ] Content moderation tools
 
 ## How It Works
 
+### Platform Architecture
+
+- **Mobile (iOS/Android)**: React Native app with BareKit worklet running P2P backend
+- **Desktop (Pear)**: Expo web export served by Pear runtime with pear-run worker
+
+Both platforms share:
+- The same React components (with `.web.tsx` variants for desktop)
+- The same backend business logic (`@peartube/backend`)
+- The same HRPC schema (`@peartube/spec`)
+
 ### Video Storage
 - Each channel has a **Hyperdrive** for storing video files
-- Videos are transcoded to HLS format with multiple qualities
-- Short segments (2-6 seconds) for smooth streaming
+- Videos are stored in HLS format with multiple qualities
 - Sparse replication: only download chunks you watch
 
 ### P2P Networking
 - **Hyperswarm** manages peer connections
 - Videos are discovered via content hashes
 - Multiple peers can serve the same video
-- Automatic load balancing across peers
-
-### Metadata
-- **Hyperbee** stores video metadata (titles, descriptions, tags)
-- **Autobase** provides multi-writer global discovery index
-- Comments stored as tree structures in Hyperbee
 
 ### Identity
 - Self-sovereign keypairs (no central authority)
-- BIP39 mnemonic for recovery
 - Channels are tied to public keys
 
 ## Contributing
 
-This project is in early development. Contributions welcome!
+Contributions welcome! See [ARCHITECTURE.md](./ARCHITECTURE.md) for technical details.
 
 ## License
 
-MIT
+Apache-2.0

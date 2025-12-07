@@ -1,10 +1,10 @@
-# PearTube Quick Start Guide
+# PearTube Quick Start
 
 ## Prerequisites
 
-- Node.js 18+ installed
-- Pear CLI installed (`npm install -g pear`)
-- Pear v2 sidecar running (see below)
+- Node.js 18+
+- For iOS: Xcode 15+, CocoaPods
+- For Desktop: Pear CLI (`npm install -g pear`)
 
 ## Setup
 
@@ -15,112 +15,107 @@ cd /Users/jd/projects/peartube
 npm install
 ```
 
-### 2. Start Pear v2 Sidecar (Required)
+### 2. Run the App
 
-In a separate terminal, start the Pear v2 sidecar:
-
-```bash
-pear sidecar --key pzcjqmpoo6szkoc4bpkw65ib9ctnrq7b6mneeinbhbheihaq6p6o
-```
-
-Keep this running in the background while developing.
-
-### 3. Run Development Mode
+#### iOS (Simulator)
 
 ```bash
-npm run dev
+npm run ios
 ```
 
 This will:
-1. Compile TypeScript → JavaScript
-2. Launch the Pear desktop app
-3. Start the backend P2P worker
-4. Display the React UI
+1. Build the React Native app
+2. Bundle the BareKit worklet
+3. Launch in iOS Simulator
+4. Start the P2P backend
 
-## Available Scripts
-
-### Development
+#### Pear Desktop
 
 ```bash
-npm run dev              # Build + run app
-npm run dev:watch        # Build with watch mode + run
-npm run compile          # Compile once
-npm run compile:watch    # Compile in watch mode
+npm run pear
 ```
 
-### Quality Checks
-
-```bash
-npm run typecheck        # TypeScript type checking
-npm run lint             # ESLint
-npm run lint:fix         # Auto-fix lint issues
-npm test                # Run all checks + tests
-```
-
-### Build
-
-```bash
-npm run build           # Production build
-```
+This will:
+1. Export Expo web build
+2. Compile the worker
+3. Launch Pear runtime
+4. Display the desktop UI
 
 ## Project Structure
 
 ```
 peartube/
-├── src/                    # Frontend React app
-│   ├── index.tsx          # Entry point
-│   ├── App.tsx            # Main component
-│   └── types/pear.d.ts    # TypeScript definitions
-├── workers/
-│   └── core/
-│       └── index.ts       # Backend P2P worker
-├── build/                 # Compiled output (gitignored)
-├── index.html             # HTML entry point
-└── package.json           # Configuration
+├── packages/
+│   ├── app/              # Unified app (mobile + desktop)
+│   │   ├── app/          # Expo Router screens
+│   │   ├── components/   # React components
+│   │   ├── backend/      # Mobile BareKit worklet
+│   │   └── pear-src/     # Desktop Pear assets
+│   ├── backend/          # Backend business logic
+│   ├── backend-core/     # P2P primitives
+│   ├── core/             # Shared types
+│   ├── platform/         # Platform abstraction
+│   ├── rpc/              # RPC layer
+│   ├── spec/             # HRPC schema
+│   └── ui/               # Shared UI
+└── package.json
+```
+
+## Available Commands
+
+### From Root
+
+```bash
+npm run ios            # Run iOS app
+npm run android        # Run Android app
+npm run pear           # Run Pear desktop app
+npm run pear:build     # Build Pear desktop only
+npm run bundle:backend # Bundle mobile backend
+npm start              # Start Expo dev server
+```
+
+### From packages/app
+
+```bash
+npm run ios            # Run iOS
+npm run pear:dev       # Build and run Pear
+npm run pear:build     # Build Pear only
+npm run bundle:backend # Bundle backend worklet
 ```
 
 ## Troubleshooting
 
-### "Cannot find module 'chokidar'"
+### iOS Build Fails
 
-Install dependencies:
 ```bash
-npm install
+cd packages/app/ios
+rm -rf Pods Podfile.lock
+pod install
+cd ..
+npm run ios
 ```
 
-### "UNKNOWN_FLAG: version" or Pear command issues
+### Pear Won't Start
 
-Make sure Pear v2 sidecar is running:
+Make sure Pear CLI is installed:
 ```bash
-pear sidecar --key pzcjqmpoo6szkoc4bpkw65ib9ctnrq7b6mneeinbhbheihaq6p6o
+npm install -g pear
+pear --version
 ```
 
-### "Pear is not defined"
+### Backend Not Connecting
 
-This is expected if you try to run files directly with Node.js. 
-Use `npm run dev` instead, which runs files with the Pear runtime.
-
-### Build errors
-
-Clean and rebuild:
+Check that the worklet bundle exists:
 ```bash
-rm -rf build node_modules
-npm install
-npm run compile
+ls packages/app/backend.bundle.js
 ```
 
-## Current Status
-
-✅ All dependency issues resolved
-✅ Build system working
-✅ TypeScript configured
-✅ Pear v2 runtime ready
-✅ Ready for Phase 1 development
+If missing, rebuild:
+```bash
+npm run bundle:backend
+```
 
 ## What's Next?
 
-See [DEV_STATUS.md](./DEV_STATUS.md) for current development status and next steps.
-
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for technical architecture details.
-
-See [README.md](./README.md) for project overview and roadmap.
+- See [README.md](./README.md) for project overview
+- See [ARCHITECTURE.md](./ARCHITECTURE.md) for technical details

@@ -9,7 +9,7 @@
  *   const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
  */
 
-import { initializeStorage } from './storage.js';
+import { initializeStorage, loadDrive } from './storage.js';
 import { PublicFeedManager } from './public-feed.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
@@ -34,6 +34,19 @@ import { createUploadManager } from './upload.js';
  * @property {ReturnType<typeof createIdentityManager>} identityManager - Identity manager
  * @property {ReturnType<typeof createUploadManager>} uploadManager - Upload manager
  */
+
+async function warmDrives(ctx, driveKeys, label) {
+  const unique = Array.from(new Set((driveKeys || []).filter(Boolean)));
+  if (!unique.length) return;
+  console.log(`[Orchestrator] Warming ${label}:`, unique.length);
+  for (const key of unique) {
+    try {
+      await loadDrive(ctx, key, { waitForSync: false });
+    } catch (e) {
+      console.log('[Orchestrator] Warm failed for', key.slice(0, 16), e?.message);
+    }
+  }
+}
 
 /**
  * Create and initialize the complete backend context.
@@ -90,6 +103,17 @@ export async function createBackendContext(config) {
   await identityManager.loadIdentities();
   await identityManager.loadChannelDrives();
 
+  // Warm subscribed / pinned / seeding drives so they rejoin swarm on restart
+  try {
+    const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || [];
+    const subscriptionKeys = subs.map((s) => s.driveKey).filter(Boolean);
+    const pinnedKeys = seedingManager.getPinnedChannels?.() || [];
+    const seedKeys = seedingManager.getActiveSeeds?.().map((s) => s.driveKey).filter(Boolean) || [];
+    await warmDrives(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds');
+  } catch (e) {
+    console.log('[Orchestrator] Warm-up skipped:', e?.message);
+  }
+
   // Phase 6: Create unified API
   const api = createApi({
     ctx,
@@ -101,6 +125,12 @@ export async function createBackendContext(config) {
   // Phase 7: Start public feed discovery
   console.log('[Orchestrator] Starting public feed...');
   await publicFeed.start();
+  // Immediately request feeds to populate after join
+  try {
+    publicFeed.requestFeedsFromPeers();
+  } catch (e) {
+    console.log('[Orchestrator] Initial feed request failed:', e?.message);
+  }
 
   console.log('[Orchestrator] ===== BACKEND READY =====');
   console.log('[Orchestrator] Identities loaded:', identityManager.getIdentities().length);

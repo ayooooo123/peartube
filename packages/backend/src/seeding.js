@@ -249,6 +249,14 @@ export class SeedingManager {
   }
 
   /**
+   * Get all active seeds (for warmup/rejoin)
+   * @returns {SeedInfo[]}
+   */
+  getActiveSeeds() {
+    return Array.from(this.activeSeeds.values());
+  }
+
+  /**
    * Check if a channel is pinned
    * @param {string} driveKey
    * @returns {boolean}

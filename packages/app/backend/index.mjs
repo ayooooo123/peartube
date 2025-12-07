@@ -109,6 +109,37 @@ if (activeDriveForMigration) {
   migrateThumbnails(activeDriveForMigration)
 }
 
+// Restore cached public feed so restart doesn't start from empty
+async function restoreFeedCache() {
+  try {
+    const cached = await ctx.metaDb.get('public-feed-cache').catch(() => null)
+    const keys = cached?.value || []
+    if (Array.isArray(keys) && keys.length) {
+      console.log('[Backend] Restoring public feed cache, entries:', keys.length)
+      for (const key of keys) {
+        try {
+          publicFeed.addEntry(key, 'peer')
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.log('[Backend] Feed cache restore skipped:', e?.message)
+  }
+}
+
+// Persist feed cache
+async function persistFeedCache() {
+  try {
+    const entries = publicFeed.getFeed().map((e) => e.driveKey)
+    await ctx.metaDb.put('public-feed-cache', entries)
+    console.log('[Backend] Saved public feed cache:', entries.length)
+  } catch (e) {
+    console.log('[Backend] Feed cache save skipped:', e?.message)
+  }
+}
+
+await restoreFeedCache()
+
 // ============================================
 // HRPC Handler Registration - Thin delegation layer
 // ============================================
@@ -190,9 +221,12 @@ rpc.onListVideos(async (req) => {
       try {
         let drive = ctx.drives.get(channelKey)
         if (!drive) {
-          const activeDrive = identityManager.getActiveDrive?.()
-          if (activeDrive && b4a.toString(activeDrive.key, 'hex') === channelKey) {
-            drive = activeDrive
+          drive = await loadDrive(ctx, channelKey, { waitForSync: false, syncTimeout: 4000 }).catch(() => null)
+          if (!drive) {
+            const activeDrive = identityManager.getActiveDrive?.()
+            if (activeDrive && b4a.toString(activeDrive.key, 'hex') === channelKey) {
+              drive = activeDrive
+            }
           }
         }
 
@@ -302,34 +336,48 @@ rpc.onDownloadVideo(async (req) => {
   console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId)
 
   try {
-    // Load drive and get video entry
+    // Load drive and resolve video path
     const drive = await loadDrive(ctx, req.channelKey, { waitForSync: true, syncTimeout: 15000 })
-    const entry = await drive.entry(req.videoId, { wait: true, timeout: 10000 })
-    if (!entry) {
+
+    let videoPath = req.videoId
+    // If an id was passed instead of a path, try to read metadata to find the path
+    if (!videoPath.startsWith('/')) {
+      const metaBuf = await drive.get(`/videos/${req.videoId}.json`).catch(() => null)
+      if (metaBuf) {
+        const meta = JSON.parse(metaBuf.toString('utf-8'))
+        if (meta?.path) videoPath = meta.path
+      } else {
+        videoPath = `/videos/${req.videoId}`
+      }
+    }
+
+    const entry = await drive.entry(videoPath, { wait: true, timeout: 10000 })
+    if (!entry || !entry.value?.blob) {
       return { success: false, error: 'Video not found in drive' }
     }
 
-    const totalBytes = entry.value?.blob?.byteLength || 0
+    const totalBytes = entry.value.blob.byteLength || 0
     console.log('[HRPC] Video size:', totalBytes)
 
-    // Stream into buffer and return as base64
-    const chunks = []
-    const readStream = drive.createReadStream(req.videoId)
+    const blobsCore = await drive.getBlobs()
+    if (!blobsCore) {
+      return { success: false, error: 'Unable to resolve blobs core' }
+    }
 
-    await new Promise((resolve, reject) => {
-      readStream.on('data', chunk => chunks.push(chunk))
-      readStream.on('error', reject)
-      readStream.on('end', resolve)
+    const mime = videoPath.endsWith('.webm') ? 'video/webm' : 'video/mp4'
+    const url = ctx.blobServer.getLink(blobsCore.core.key, {
+      blob: entry.value.blob,
+      type: mime,
+      host: '127.0.0.1',
+      port: ctx.blobServer?.port || ctx.blobServerPort
     })
 
-    const buffer = Buffer.concat(chunks)
-    const base64 = buffer.toString('base64')
-    console.log('[HRPC] Download complete, size:', buffer.length)
+    console.log('[HRPC] Direct blob URL:', url)
 
     return {
       success: true,
-      data: base64,
-      size: buffer.length
+      filePath: url,
+      size: totalBytes
     }
   } catch (err) {
     console.error('[HRPC] downloadVideo failed:', err?.message)
@@ -571,3 +619,21 @@ try {
 } catch (e) {
   console.error('[Backend] Failed to send eventReady:', e.message)
 }
+
+// Keep discovery fresh: ask peers for feeds periodically and persist cache
+setInterval(() => {
+  try {
+    publicFeed.requestFeedsFromPeers()
+    persistFeedCache()
+  } catch (e) {
+    console.log('[Backend] Feed refresh tick failed:', e?.message)
+  }
+}, 30000)
+
+// Persist feed when it changes
+publicFeed.setOnFeedUpdate(() => {
+  persistFeedCache()
+  try {
+    rpc?.eventFeedUpdate?.({})
+  } catch {}
+})

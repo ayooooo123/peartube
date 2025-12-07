@@ -22,6 +22,7 @@ apps/mobile/android/app/build/
 
 # Storage (P2P data)
 storage/
+packages/.peartube/
 
 # Environment
 .env

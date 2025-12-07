@@ -61,6 +61,7 @@ type ReadyCallback = (data: { blobServerPort: number }) => void;
 type ErrorCallback = (data: { message: string }) => void;
 type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
 type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
+type FeedUpdateCallback = (data: { action?: string; channelKey?: string }) => void;
 
 // Event callback storage
 const eventCallbacks = {
@@ -68,6 +69,7 @@ const eventCallbacks = {
   error: [] as ErrorCallback[],
   videoStats: [] as VideoStatsCallback[],
   uploadProgress: [] as UploadProgressCallback[],
+  feedUpdate: [] as FeedUpdateCallback[],
 };
 
 // Helper to remove callback
@@ -95,6 +97,10 @@ export const events = {
   onUploadProgress: (cb: UploadProgressCallback) => {
     eventCallbacks.uploadProgress.push(cb);
     return () => removeCallback(eventCallbacks.uploadProgress, cb);
+  },
+  onFeedUpdate: (cb: FeedUpdateCallback) => {
+    eventCallbacks.feedUpdate.push(cb);
+    return () => removeCallback(eventCallbacks.feedUpdate, cb);
   },
 };
 
@@ -155,6 +161,12 @@ export async function initPlatformRPC(config: {
   hrpc.onEventUploadProgress((data: any) => {
     eventCallbacks.uploadProgress.forEach(cb => cb(data));
   });
+
+  if ((hrpc as any).onEventFeedUpdate) {
+    (hrpc as any).onEventFeedUpdate((data: any) => {
+      eventCallbacks.feedUpdate.forEach(cb => cb(data));
+    });
+  }
 }
 
 /**

@@ -82,6 +82,7 @@ export default function HomeScreen() {
 
   // Thumbnail cache: key = `${driveKey}:${videoId}` -> url
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
+  const { platformEvents } = useApp()
 
   // Fetch thumbnail for a video (non-blocking)
   const fetchThumbnail = useCallback(async (driveKey: string, videoId: string) => {
@@ -123,7 +124,23 @@ export default function HomeScreen() {
     if (ready) {
       loadPublicFeed()
     }
-  }, [ready])
+    // Periodic refresh to keep discovery updated
+    const interval = setInterval(() => {
+      if (ready) {
+        refreshFeed()
+      }
+    }, 30000)
+
+    // Subscribe to feed update events emitted by backend
+    const unsub = platformEvents?.onFeedUpdate?.(() => {
+      loadPublicFeed()
+    })
+
+    return () => {
+      clearInterval(interval)
+      if (typeof unsub === 'function') unsub()
+    }
+  }, [ready, platformEvents, loadPublicFeed, refreshFeed])
 
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {

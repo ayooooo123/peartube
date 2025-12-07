@@ -34,6 +34,7 @@ interface AppContextType {
   loading: boolean
   blobServerPort: number | null
   rpc: any
+  platformEvents?: any
   uploadVideo: (filePath: string, title: string, description: string, mimeType?: string, category?: string, onProgress?: (progress: number) => void) => Promise<any>
   pickVideoFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
   pickImageFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
@@ -294,6 +295,7 @@ export default function RootLayout() {
     loading,
     blobServerPort,
     rpc: platformRPC?.rpc,
+    platformEvents: platformRPC?.events,
     uploadVideo: uploadVideoHandler,
     pickVideoFile: pickVideoFileHandler,
     pickImageFile: pickImageFileHandler,

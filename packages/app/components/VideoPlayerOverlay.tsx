@@ -7,7 +7,6 @@
 import { useCallback, useEffect, useState, useRef } from 'react'
 import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert } from 'react-native'
 import * as FileSystem from 'expo-file-system'
-import * as Sharing from 'expo-sharing'
 import { rpc } from '@peartube/platform/rpc'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
@@ -267,8 +266,11 @@ export function VideoPlayerOverlay() {
       } else {
         showControlsTemporarily()
       }
+    } else if (playerMode === 'mini') {
+      // Tap on video thumbnail in mini mode -> maximize
+      maximizePlayer()
     }
-  }, [playerMode, showControls, showControlsTemporarily])
+  }, [playerMode, showControls, showControlsTemporarily, maximizePlayer])
 
 
   // Animation progress: 0 = mini, 1 = fullscreen
@@ -291,6 +293,7 @@ export function VideoPlayerOverlay() {
 
   // Pan gesture for dragging between states
   const panGesture = Gesture.Pan()
+    .activeOffsetY([-10, 10]) // Require 10px vertical drag before activating (prevents tap from triggering)
     .onStart(() => {
       isGestureActive.value = true
     })
@@ -331,15 +334,8 @@ export function VideoPlayerOverlay() {
       }
     })
 
-  // Tap gesture for mini player -> expand (only active in mini mode)
-  const tapGesture = Gesture.Tap()
-    .enabled(playerMode === 'mini')
-    .onEnd(() => {
-      runOnJS(maximizePlayer)()
-    })
-
-  // Combine gestures - pan for dragging, tap for mini expand
-  const composedGesture = Gesture.Race(panGesture, tapGesture)
+  // Only pan gesture; mini expand is triggered by tapping the mini info row (see render)
+  const composedGesture = panGesture
 
   // Animated styles for the container
   const containerStyle = useAnimatedStyle(() => {
@@ -502,35 +498,34 @@ export function VideoPlayerOverlay() {
 
       console.log('[Download] Starting download via RPC:', currentVideo.title)
 
-      // Stream video data as base64 from backend
+      // Request a direct blob URL from backend
       const result = await rpc.downloadVideo({
         channelKey,
         videoId: currentVideo.path || currentVideo.id,
         destPath: '', // Not used, but required by RPC spec
       })
 
-      if (result?.success && result?.data) {
-        console.log('[Download] Got data, size:', result.size, 'writing to:', destPath)
-
-        // Write base64 to file using expo-file-system
-        await FileSystem.writeAsStringAsync(destPath, result.data, {
-          encoding: FileSystem.EncodingType.Base64,
-        })
-
-        // Open share sheet for "Save to Files" option
-        const isAvailable = await Sharing.isAvailableAsync()
-        if (isAvailable) {
-          await Sharing.shareAsync(destPath, {
-            mimeType: ext === 'webm' ? 'video/webm' : 'video/mp4',
-            dialogTitle: `Save "${currentVideo.title}"`,
-            UTI: ext === 'webm' ? 'org.webmproject.webm' : 'public.mpeg-4',
+      if (result?.success) {
+        if (result?.filePath) {
+          console.log('[Download] Downloading from blob URL:', result.filePath)
+          const downloadRes = await FileSystem.downloadAsync(result.filePath, destPath)
+          if (downloadRes.status !== 200) {
+            throw new Error(`HTTP ${downloadRes.status}`)
+          }
+        } else if (result?.data) {
+          // Fallback for older backends that return base64
+          console.log('[Download] Got base64 payload, size:', result.size, 'writing to:', destPath)
+          await FileSystem.writeAsStringAsync(destPath, result.data, {
+            encoding: FileSystem.EncodingType.Base64,
           })
         } else {
-          Alert.alert(
-            'Download Complete',
-            `"${currentVideo.title}" saved to:\nFiles > On My iPhone > PearTube > Downloads`
-          )
+          throw new Error('Backend did not return a URL or data')
         }
+
+        Alert.alert(
+          'Download Complete',
+          `"${currentVideo.title}" saved to:\nFiles > On My iPhone > PearTube > Downloads`
+        )
       } else {
         Alert.alert('Download Failed', result?.error || 'Unknown error')
       }
@@ -783,14 +778,16 @@ export function VideoPlayerOverlay() {
 
         {/* Mini player info row */}
         <Animated.View style={[styles.miniInfo, miniInfoStyle]}>
-          <View style={styles.miniInfoText}>
-            <Text style={styles.miniTitle} numberOfLines={1}>
-              {currentVideo.title}
-            </Text>
-            <Text style={styles.miniChannel} numberOfLines={1}>
-              {channelName}
-            </Text>
-          </View>
+          <Pressable onPress={maximizePlayer} style={StyleSheet.absoluteFill}>
+            <View style={styles.miniInfoText}>
+              <Text style={styles.miniTitle} numberOfLines={1}>
+                {currentVideo.title}
+              </Text>
+              <Text style={styles.miniChannel} numberOfLines={1}>
+                {channelName}
+              </Text>
+            </View>
+          </Pressable>
         </Animated.View>
 
         {/* Mini player controls */}

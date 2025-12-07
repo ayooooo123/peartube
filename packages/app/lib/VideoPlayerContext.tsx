@@ -4,6 +4,7 @@
  * Uses VLC player for broad codec support
  */
 import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react'
+import { Platform } from 'react-native'
 import type { VideoData, VideoStats } from '@peartube/core'
 
 // Re-export types for backwards compatibility
@@ -173,8 +174,22 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Resume video
   const resumeVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Resuming video')
-    setIsPlaying(true)
-  }, [])
+
+    // On iOS, do a seek while still paused to reinitialize audio, then resume
+    // This avoids visible jitter since video isn't playing during the seek
+    if (Platform.OS === 'ios' && duration > 0) {
+      const seekValue = currentTime / duration
+      setSeekPosition(seekValue)
+
+      // Wait for seek to process, then resume
+      setTimeout(() => {
+        setSeekPosition(undefined)
+        setIsPlaying(true)
+      }, 100)
+    } else {
+      setIsPlaying(true)
+    }
+  }, [currentTime, duration])
 
   // Close video completely
   const closeVideo = useCallback(() => {

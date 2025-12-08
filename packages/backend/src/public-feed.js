@@ -42,8 +42,7 @@ export class PublicFeedManager {
     /** @type {(() => void) | null} */
     this.onFeedUpdate = null;
 
-    console.log('[PublicFeed] ===== INITIALIZED =====');
-    console.log('[PublicFeed] Topic hex:', b4a.toString(this.feedTopic, 'hex'));
+    console.log('[PublicFeed] Initialized (topic:', b4a.toString(this.feedTopic, 'hex'), ')');
   }
 
   /**
@@ -59,30 +58,13 @@ export class PublicFeedManager {
    * NOTE: Connection handling is done via handleConnection() called from main swarm handler
    */
   async start() {
-    console.log('[PublicFeed] ===== STARTING FEED DISCOVERY =====');
-    console.log('[PublicFeed] Topic hex:', b4a.toString(this.feedTopic, 'hex'));
-    console.log('[PublicFeed] Swarm connections before join:', this.swarm.connections.size);
-
     // Join the public feed topic for discovery
     const discovery = this.swarm.join(this.feedTopic, { server: true, client: true });
-    console.log('[PublicFeed] Waiting for topic flush...');
     await discovery.flushed();
-
-    console.log('[PublicFeed] ===== TOPIC JOINED =====');
-    console.log('[PublicFeed] Swarm connections after join:', this.swarm.connections.size);
-
-    // Log status periodically for debugging
-    setInterval(() => {
-      console.log('[PublicFeed] Status: connections=', this.swarm.connections.size,
-        'feedPeers=', this.feedConnections.size,
-        'entries=', this.entries.size);
-    }, 10000);
 
     // Also set up feed protocol on any EXISTING connections
     // (connections that came in before start() was called)
-    console.log('[PublicFeed] Checking existing connections:', this.swarm.connections.size);
     for (const conn of this.swarm.connections) {
-      console.log('[PublicFeed] Setting up feed on existing connection');
       this.handleConnection(conn, {});
     }
   }
@@ -94,16 +76,7 @@ export class PublicFeedManager {
    * @param {any} info - Connection info
    */
   handleConnection(conn, info) {
-    // Skip if we're already handling this connection
-    if (this.peerChannels.has(conn)) {
-      console.log('[PublicFeed] Connection already being handled, skipping');
-      return;
-    }
-
-    const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
-    console.log('[PublicFeed] ===== SETTING UP PROTOMUX FEED PROTOCOL =====');
-    console.log('[PublicFeed] Remote peer:', remoteKey);
-    console.log('[PublicFeed] Current entries:', this.entries.size);
+    if (this.peerChannels.has(conn)) return;
 
     this.setupFeedProtocol(conn);
   }
@@ -118,9 +91,8 @@ export class PublicFeedManager {
 
     // Use mux.pair() to handle when remote opens this protocol
     mux.pair({ protocol: PROTOCOL_NAME }, () => {
-      console.log('[PublicFeed] Remote peer opening feed protocol');
-      this.createFeedChannel(mux, conn);
-    });
+        this.createFeedChannel(mux, conn);
+      });
 
     // Also try to open from our side (one side will succeed first)
     this.createFeedChannel(mux, conn);
@@ -182,7 +154,6 @@ export class PublicFeedManager {
 
     // Open the channel
     channel.open();
-    console.log('[PublicFeed] Feed channel created and opening...');
   }
 
   /**
@@ -201,7 +172,6 @@ export class PublicFeedManager {
 
     try {
       channel.messages[0].send(msg);
-      console.log('[PublicFeed] Sent HAVE_FEED with', keys.length, 'keys');
     } catch (err) {
       console.error('[PublicFeed] Failed to send HAVE_FEED:', err.message);
     }
@@ -215,7 +185,6 @@ export class PublicFeedManager {
   handleMessage(msg, conn) {
     // Handle HAVE_FEED - peer is sharing their known channels
     if (msg.type === 'HAVE_FEED' && msg.keys) {
-      console.log('[PublicFeed] Received HAVE_FEED with', msg.keys.length, 'keys');
       let added = 0;
       for (const key of msg.keys) {
         if (this.addEntry(key, 'peer')) {
@@ -229,9 +198,7 @@ export class PublicFeedManager {
     }
     // Handle SUBMIT_CHANNEL - peer is broadcasting a new channel
     else if (msg.type === 'SUBMIT_CHANNEL' && msg.key) {
-      console.log('[PublicFeed] Received SUBMIT_CHANNEL:', msg.key.slice(0, 16));
       if (this.addEntry(msg.key, 'peer')) {
-        console.log('[PublicFeed] Added new channel, re-gossiping...');
         this.onFeedUpdate?.();
         // Re-gossip to other peers (exclude sender)
         this.broadcastSubmitChannel(msg.key, conn);
@@ -239,21 +206,16 @@ export class PublicFeedManager {
     }
     // Handle legacy NEED_FEED/FEED_RESPONSE for backwards compat
     else if (msg.type === 'NEED_FEED') {
-      console.log('[PublicFeed] Received legacy NEED_FEED, sending HAVE_FEED');
       this.sendHaveFeed(conn);
     }
     else if (msg.type === 'FEED_RESPONSE' && msg.keys) {
-      console.log('[PublicFeed] Received legacy FEED_RESPONSE with', msg.keys.length, 'keys');
       let added = 0;
       for (const key of msg.keys) {
         if (this.addEntry(key, 'peer')) {
           added++;
         }
       }
-      if (added > 0) {
-        console.log('[PublicFeed] Added', added, 'new channels');
-        this.onFeedUpdate?.();
-      }
+      if (added > 0) this.onFeedUpdate?.();
     }
   }
 

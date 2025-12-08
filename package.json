@@ -27,7 +27,8 @@
     "typescript": "^5.9.0"
   },
   "overrides": {
-    "eslint-plugin-react-hooks": "^4.6.2"
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "@peartube/spec": "file:packages/spec"
   },
   "engines": {
     "node": ">=18.0.0"

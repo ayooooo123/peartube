@@ -10,6 +10,21 @@ import Hyperdrive from 'hyperdrive';
 import BlobServer from 'hypercore-blob-server';
 import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
+import crypto from 'hypercore-crypto';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+
+function tryRequire(mod) {
+  try {
+    return require(mod);
+  } catch {
+    return null;
+  }
+}
+
+const fs = tryRequire('bare-fs') || tryRequire('fs');
+const path = tryRequire('bare-path') || tryRequire('path');
 
 /**
  * Wrap a corestore to add default timeout to all get() calls.
@@ -38,10 +53,11 @@ export function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
  * @param {string} config.storagePath - Path to storage directory
  * @param {number} [config.defaultTimeout=30000] - Default timeout for operations
  * @param {boolean} [config.wrapTimeout=true] - Whether to wrap store with timeout
+ * @param {string} [config.swarmKeyPath] - Optional path to persist Hyperswarm keypair
  * @returns {Promise<import('./types.js').StorageContext>}
  */
 export async function initializeStorage(config) {
-  const { storagePath, defaultTimeout = 30000, wrapTimeout = true } = config;
+  const { storagePath, defaultTimeout = 30000, wrapTimeout = true, swarmKeyPath } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
 
@@ -90,8 +106,43 @@ export async function initializeStorage(config) {
   await metaDb.ready();
 
   // Initialize Hyperswarm for P2P networking
+  let keyPair = null;
+  const resolvedSwarmKeyPath = swarmKeyPath || (path && storagePath ? path.join(storagePath, 'swarm-key.json') : null);
+
+  if (resolvedSwarmKeyPath && fs) {
+    try {
+      const raw = fs.readFileSync(resolvedSwarmKeyPath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed?.publicKey && parsed?.secretKey) {
+        keyPair = {
+          publicKey: b4a.from(parsed.publicKey, 'hex'),
+          secretKey: b4a.from(parsed.secretKey, 'hex')
+        };
+        console.log('[Storage] Loaded persisted swarm key:', parsed.publicKey.slice(0, 16));
+      }
+    } catch (e) {
+      // If missing or invalid, we'll generate below
+    }
+  }
+
+  if (!keyPair) {
+    keyPair = crypto.keyPair();
+    if (resolvedSwarmKeyPath && fs) {
+      try {
+        fs.mkdirSync(path.dirname(resolvedSwarmKeyPath), { recursive: true });
+        fs.writeFileSync(resolvedSwarmKeyPath, JSON.stringify({
+          publicKey: b4a.toString(keyPair.publicKey, 'hex'),
+          secretKey: b4a.toString(keyPair.secretKey, 'hex')
+        }));
+        console.log('[Storage] Persisted new swarm key to', resolvedSwarmKeyPath);
+      } catch (e) {
+        console.log('[Storage] Could not persist swarm key:', e.message);
+      }
+    }
+  }
+
   console.log('[Storage] Creating Hyperswarm...');
-  const swarm = new Hyperswarm();
+  const swarm = new Hyperswarm({ keyPair });
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
 
   // Set up replication for all connections

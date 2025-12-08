@@ -1,8 +1,8 @@
 /**
  * Home Tab - YouTube-style Video Feed with P2P Public Feed Discovery
  */
-import { useCallback, useState, useEffect } from 'react'
-import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions } from 'react-native'
+import { useCallback, useState, useEffect, useRef } from 'react'
+import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, AppState, AppStateStatus } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { X, Globe, RefreshCw, Users, EyeOff } from 'lucide-react-native'
@@ -66,6 +66,8 @@ export default function HomeScreen() {
   const [channelMeta, setChannelMeta] = useState<Record<string, ChannelMeta>>({})
   const [feedLoading, setFeedLoading] = useState(false)
   const [peerCount, setPeerCount] = useState(0)
+  const [lastFeedRefresh, setLastFeedRefresh] = useState<number | null>(null)
+  const [swarmStatus, setSwarmStatus] = useState<{ peers: number; feedConnections?: number; drives?: number } | null>(null)
 
   // Channel viewing state
   const [viewingChannel, setViewingChannel] = useState<string | null>(null)
@@ -83,6 +85,7 @@ export default function HomeScreen() {
   // Thumbnail cache: key = `${driveKey}:${videoId}` -> url
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const { platformEvents } = useApp()
+  const appState = useRef<AppStateStatus>(AppState.currentState)
 
   // Fetch thumbnail for a video (non-blocking)
   const fetchThumbnail = useCallback(async (driveKey: string, videoId: string) => {
@@ -142,6 +145,20 @@ export default function HomeScreen() {
     }
   }, [ready, platformEvents, loadPublicFeed, refreshFeed])
 
+  // Refresh discovery when app returns to foreground (mobile)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && appState.current !== 'active' && ready) {
+        refreshFeed()
+        if (feedVideos.length > 0) {
+          fetchThumbnailsForVideos(feedVideos)
+        }
+      }
+      appState.current = state
+    })
+    return () => sub.remove()
+  }, [ready, refreshFeed, feedVideos, fetchThumbnailsForVideos])
+
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {
     if (!rpc) return
@@ -160,6 +177,17 @@ export default function HomeScreen() {
       if (result?.stats) {
         setPeerCount(result.stats.peerCount || 0)
       }
+      setLastFeedRefresh(Date.now())
+      try {
+        const status = await rpc.getSwarmStatus()
+        if (status) {
+          setSwarmStatus({
+            peers: status.peerCount || status.swarmConnections || 0,
+            feedConnections: status.feedConnections,
+            drives: status.drivesLoaded,
+          })
+        }
+      } catch {}
     } catch (err) {
       console.error('[Home] Failed to load public feed:', err)
     } finally {
@@ -437,6 +465,29 @@ export default function HomeScreen() {
               <Pressable onPress={refreshFeed} className="p-2 active:opacity-60" disabled={feedLoading}>
                 <RefreshCw color={feedLoading ? colors.textMuted : colors.primary} size={18} />
               </Pressable>
+            </View>
+
+            {/* P2P status pills */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+                <Text style={{ color: colors.text, fontSize: 12 }}>Peers: {swarmStatus?.peers ?? peerCount}</Text>
+                {swarmStatus?.feedConnections !== undefined && (
+                  <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Feed: {swarmStatus.feedConnections}</Text>
+                )}
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+                <Text style={{ color: colors.text, fontSize: 12 }}>Channels: {feedEntries.length}</Text>
+                {swarmStatus?.drives !== undefined && (
+                  <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Drives: {swarmStatus.drives}</Text>
+                )}
+              </View>
+              {lastFeedRefresh && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                    Updated {formatTimeAgo(lastFeedRefresh)}
+                  </Text>
+                </View>
+              )}
             </View>
 
             {/* Category Filter Chips */}

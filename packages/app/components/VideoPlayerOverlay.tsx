@@ -457,6 +457,8 @@ export function VideoPlayerOverlay() {
 
   // State for download
   const [isDownloading, setIsDownloading] = useState(false)
+  const [downloadBanner, setDownloadBanner] = useState<string | null>(null)
+  const bannerTimeout = useRef<NodeJS.Timeout | null>(null)
 
   // Handle video download - streams from Hyperdrive and opens share sheet
   const handleDownload = useCallback(async () => {
@@ -526,6 +528,10 @@ export function VideoPlayerOverlay() {
           'Download Complete',
           `"${currentVideo.title}" saved to:\nFiles > On My iPhone > PearTube > Downloads`
         )
+        const msg = `Saved to Files > PearTube/Downloads\n${destPath.replace('file://', '')}`
+        setDownloadBanner(msg)
+        if (bannerTimeout.current) clearTimeout(bannerTimeout.current)
+        bannerTimeout.current = setTimeout(() => setDownloadBanner(null), 4000)
       } else {
         Alert.alert('Download Failed', result?.error || 'Unknown error')
       }
@@ -544,6 +550,12 @@ export function VideoPlayerOverlay() {
 
   const channelName = currentVideo.channel?.name || 'Unknown Channel'
   const channelInitial = channelName.charAt(0).toUpperCase()
+
+  useEffect(() => {
+    return () => {
+      if (bannerTimeout.current) clearTimeout(bannerTimeout.current)
+    }
+  }, [])
 
   // Desktop: YouTube-style layout (not fullscreen overlay)
   if (isDesktop && Platform.OS === 'web') {
@@ -846,6 +858,13 @@ export function VideoPlayerOverlay() {
             )}
           </ScrollView>
         </Animated.View>
+
+        {downloadBanner && (
+          <View style={[styles.toast, { bottom: insets.bottom + 24 }]}>
+            <Text style={styles.toastTitle}>Download Complete</Text>
+            <Text style={styles.toastText}>{downloadBanner}</Text>
+          </View>
+        )}
       </Animated.View>
     </GestureDetector>
   )
@@ -1105,6 +1124,27 @@ const styles = StyleSheet.create({
   },
   actionLabelActive: {
     color: colors.primary,
+  },
+  toast: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  toastTitle: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  toastText: {
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 16,
   },
   channelRow: {
     flexDirection: 'row',

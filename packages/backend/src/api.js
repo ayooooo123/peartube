@@ -271,7 +271,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               const url = ctx.blobServer.getLink(blobsCore.core.key, {
                 blob: entry.value.blob,
                 type: mime,
-                host: '127.0.0.1',
+                host: ctx.blobServerHost || '127.0.0.1',
                 port: ctx.blobServer?.port || ctx.blobServerPort
               });
               console.log('[API] Thumbnail URL:', url);
@@ -758,6 +758,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         connected: true,
         peers: ctx.swarm?.connections?.size || 0,
         blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
+        blobServerHost: ctx.blobServerHost || '127.0.0.1',
         version: '0.1.0'
       };
     },

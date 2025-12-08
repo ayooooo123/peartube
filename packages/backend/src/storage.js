@@ -54,10 +54,11 @@ export function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
  * @param {number} [config.defaultTimeout=30000] - Default timeout for operations
  * @param {boolean} [config.wrapTimeout=true] - Whether to wrap store with timeout
  * @param {string} [config.swarmKeyPath] - Optional path to persist Hyperswarm keypair
+ * @param {number} [config.blobServerPort] - Optional fixed blob server port
  * @returns {Promise<import('./types.js').StorageContext>}
  */
 export async function initializeStorage(config) {
-  const { storagePath, defaultTimeout = 30000, wrapTimeout = true, swarmKeyPath } = config;
+  const { storagePath, defaultTimeout = 30000, wrapTimeout = true, swarmKeyPath, blobServerPort: blobServerPortOverride } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
 
@@ -81,11 +82,19 @@ export async function initializeStorage(config) {
   // Initialize blob server for video streaming
   let blobServer = null;
   let blobServerPort = 0;
+  let blobServerHost = '127.0.0.1';
+
+  if (process?.env?.BLOB_SERVER_HOST) {
+    blobServerHost = process.env.BLOB_SERVER_HOST;
+  }
 
   try {
+    const envPort = Number(process?.env?.BLOB_SERVER_PORT);
+    const desiredPort = Number.isFinite(envPort) ? envPort : (blobServerPortOverride || 0);
+
     blobServer = new BlobServer(blobStore, {
-      port: 0, // Random available port
-      host: '127.0.0.1'
+      port: desiredPort || 0, // Use fixed if provided
+      host: blobServerHost
     });
 
     console.log('[Storage] Starting blob server listen...');
@@ -161,6 +170,7 @@ export async function initializeStorage(config) {
     swarm,
     blobServer,
     blobServerPort,
+    blobServerHost,
     drives
   };
 }

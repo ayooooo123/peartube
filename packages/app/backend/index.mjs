@@ -240,7 +240,7 @@ rpc.onListVideos(async (req) => {
               thumbnailUrl = ctx.blobServer.getLink(blobsCore.core.key, {
                 blob: entry.value.blob,
                 type: mime,
-                host: '127.0.0.1',
+                host: ctx.blobServerHost || '127.0.0.1',
                 port: ctx.blobServer?.port || ctx.blobServerPort
               })
             }
@@ -614,8 +614,8 @@ console.log('[Backend] HRPC handlers registered')
 // Send ready event
 try {
   const port = ctx.blobServer?.port || ctx.blobServerPort || 0
-  rpc.eventReady({ blobServerPort: port })
-  console.log('[Backend] Sent eventReady via HRPC, blobServerPort:', port)
+  rpc.eventReady({ blobServerPort: port, blobServerHost: ctx.blobServerHost || '127.0.0.1' })
+  console.log('[Backend] Sent eventReady via HRPC, blobServerPort:', port, 'host:', ctx.blobServerHost || '127.0.0.1')
 } catch (e) {
   console.error('[Backend] Failed to send eventReady:', e.message)
 }

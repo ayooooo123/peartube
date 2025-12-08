@@ -11,20 +11,18 @@ import BlobServer from 'hypercore-blob-server';
 import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
-import { createRequire } from 'module';
 
-const require = createRequire(import.meta.url);
-
-function tryRequire(mod) {
-  try {
-    return require(mod);
-  } catch {
-    return null;
-  }
+// Bare environments may not have Node's module system; require bare-first, fallback to node
+let fs = null;
+let path = null;
+try { fs = (await import('bare-fs')).default || (await import('bare-fs')); } catch {}
+try { path = (await import('bare-path')).default || (await import('bare-path')); } catch {}
+if (!fs) {
+  try { fs = await import('fs'); } catch {}
 }
-
-const fs = tryRequire('bare-fs') || tryRequire('fs');
-const path = tryRequire('bare-path') || tryRequire('path');
+if (!path) {
+  try { path = await import('path'); } catch {}
+}
 
 /**
  * Wrap a corestore to add default timeout to all get() calls.

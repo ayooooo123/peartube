@@ -48,6 +48,30 @@ async function warmDrives(ctx, driveKeys, label) {
   }
 }
 
+async function prefetchDriveMetadata(ctx, driveKeys, videoLimit = 1) {
+  const unique = Array.from(new Set((driveKeys || []).filter(Boolean)));
+  if (!unique.length) return;
+  for (const key of unique) {
+    try {
+      const drive = await loadDrive(ctx, key, { waitForSync: false, syncTimeout: 4000 });
+      // Touch channel metadata to pull first blocks
+      await drive.get('/channel.json').catch(() => null);
+
+      if (videoLimit > 0) {
+        let count = 0;
+        for await (const entry of drive.readdir('/videos').catch(() => [])) {
+          if (!entry.endsWith('.json')) continue;
+          await drive.get(`/videos/${entry}`).catch(() => null);
+          count++;
+          if (count >= videoLimit) break;
+        }
+      }
+    } catch (e) {
+      console.log('[Orchestrator] Prefetch skipped for', key.slice(0, 16), e?.message);
+    }
+  }
+}
+
 /**
  * Create and initialize the complete backend context.
  *
@@ -110,6 +134,8 @@ export async function createBackendContext(config) {
     const pinnedKeys = seedingManager.getPinnedChannels?.() || [];
     const seedKeys = seedingManager.getActiveSeeds?.().map((s) => s.driveKey).filter(Boolean) || [];
     await warmDrives(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds');
+    // Light prefetch: channel.json + first video meta to accelerate UI
+    await prefetchDriveMetadata(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 1);
   } catch (e) {
     console.log('[Orchestrator] Warm-up skipped:', e?.message);
   }

@@ -543,6 +543,14 @@ export function VideoPlayerOverlay() {
     }
   }, [currentVideo, isDownloading])
 
+  // Always register cleanup hooks (even when no video) to avoid changing hook order
+  useEffect(() => {
+    return () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current)
+      if (bannerTimeout.current) clearTimeout(bannerTimeout.current)
+    }
+  }, [])
+
   // Don't render if no video
   if (!currentVideo || playerMode === 'hidden') {
     return null
@@ -550,12 +558,6 @@ export function VideoPlayerOverlay() {
 
   const channelName = currentVideo.channel?.name || 'Unknown Channel'
   const channelInitial = channelName.charAt(0).toUpperCase()
-
-  useEffect(() => {
-    return () => {
-      if (bannerTimeout.current) clearTimeout(bannerTimeout.current)
-    }
-  }, [])
 
   // Desktop: YouTube-style layout (not fullscreen overlay)
   if (isDesktop && Platform.OS === 'web') {

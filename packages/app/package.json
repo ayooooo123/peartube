@@ -92,5 +92,8 @@
     "semver": "^7.7.3",
     "tailwindcss": "^3.4.18",
     "typescript": "^5.3.3"
+  },
+  "overrides": {
+    "@peartube/spec": "file:../spec"
   }
 }

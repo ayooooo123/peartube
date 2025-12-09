@@ -428,6 +428,24 @@ export function VideoPlayerOverlay() {
     return { opacity }
   })
 
+  // Video player style - adds top padding for notch in fullscreen (iOS only)
+  const videoPlayerStyle = useAnimatedStyle(() => {
+    const topPadding = Platform.OS === 'ios' ? interpolate(
+      animProgress.value,
+      [0, 1],
+      [0, insets.top],
+      Extrapolation.CLAMP
+    ) : 0
+
+    return {
+      position: 'absolute',
+      top: topPadding,
+      left: 0,
+      right: 0,
+      bottom: 0,
+    }
+  })
+
   // Handle play/pause
   const handlePlayPause = useCallback(() => {
     if (isPlaying) {
@@ -579,7 +597,7 @@ export function VideoPlayerOverlay() {
                   onPlay={onPlaying}
                   onEnded={onEnded}
                   onError={onError}
-                  style={{ width: '100%', height: '100%', backgroundColor: '#000', borderRadius: 12 }}
+                  style={{ width: '100%', height: '100%', backgroundColor: '#000', borderRadius: 12, outline: 'none' }}
                 />
               ) : (
                 <div style={desktopStyles.placeholder}>
@@ -640,22 +658,24 @@ export function VideoPlayerOverlay() {
           {/* Background */}
           <Pressable style={styles.videoBackground} onPress={handleVideoTap}>
             {Platform.OS !== 'web' && videoUrl && VLCPlayer ? (
-              <VLCPlayer
-                key={currentVideo?.id || videoUrl}
-                ref={playerRef}
-                source={{ uri: videoUrl }}
-                style={StyleSheet.absoluteFill}
-                paused={!isPlaying}
-                rate={playbackRate}
-                seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
-                resizeMode="contain"
-                onProgress={onProgress}
-                onPlaying={onPlaying}
-                onPaused={onPaused}
-                onBuffering={onBuffering}
-                onEnd={onEnded}
-                onError={onError}
-              />
+              <Animated.View style={videoPlayerStyle}>
+                <VLCPlayer
+                  key={currentVideo?.id || videoUrl}
+                  ref={playerRef}
+                  source={{ uri: videoUrl }}
+                  style={StyleSheet.absoluteFill}
+                  paused={!isPlaying}
+                  rate={playbackRate}
+                  seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
+                  resizeMode="contain"
+                  onProgress={onProgress}
+                  onPlaying={onPlaying}
+                  onPaused={onPaused}
+                  onBuffering={onBuffering}
+                  onEnd={onEnded}
+                  onError={onError}
+                />
+              </Animated.View>
             ) : Platform.OS === 'web' && videoUrl ? (
               <video
                 src={videoUrl}
@@ -726,69 +746,87 @@ export function VideoPlayerOverlay() {
             )}
           </Pressable>
 
-          {/* Fullscreen minimize button */}
-          <Animated.View style={[styles.minimizeButton, fullscreenContentStyle]}>
-            <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
-              <ChevronDown color="#fff" size={28} />
-            </Pressable>
-          </Animated.View>
+          {/* Fullscreen minimize button - only show with controls */}
+          {playerMode === 'fullscreen' && showControls && (
+            <Animated.View style={[styles.minimizeButton, fullscreenContentStyle]}>
+              <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
+                <ChevronDown color="#fff" size={28} />
+              </Pressable>
+            </Animated.View>
+          )}
 
-          {/* Speed control button */}
-          <Animated.View style={[styles.speedButton, fullscreenContentStyle]}>
-            <Pressable onPress={cyclePlaybackSpeed} style={styles.speedButtonInner}>
-              <Text style={styles.speedButtonText}>{playbackRate}x</Text>
-            </Pressable>
-          </Animated.View>
+          {/* Speed control button - only show with controls */}
+          {playerMode === 'fullscreen' && showControls && (
+            <Animated.View style={[styles.speedButton, fullscreenContentStyle]}>
+              <Pressable onPress={cyclePlaybackSpeed} style={styles.speedButtonInner}>
+                <Text style={styles.speedButtonText}>{playbackRate}x</Text>
+              </Pressable>
+            </Animated.View>
+          )}
 
-          {/* Fullscreen progress bar */}
-          <Animated.View style={[styles.fullscreenProgressContainer, fullscreenContentStyle]}>
-            <Text style={styles.timeText}>
-              {formatDuration(isSeeking ? seekPosition : currentTime)}
-            </Text>
-            <View
-              ref={progressBarRef}
-              style={styles.fullscreenProgressBar}
-              onLayout={(e) => {
-                progressBarWidth.current = e.nativeEvent.layout.width
-              }}
-              onTouchStart={(e) => {
+          {/* YouTube-style thin progress bar - always visible, seekable */}
+          <Animated.View
+            style={[styles.thinProgressContainer, fullscreenContentStyle]}
+            ref={progressBarRef}
+            onLayout={(e) => {
+              progressBarWidth.current = e.nativeEvent.layout.width
+            }}
+            onTouchStart={(e) => {
+              const locationX = e.nativeEvent.locationX
+              const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
+              setIsSeeking(true)
+              setSeekPosition(progress * duration)
+            }}
+            onTouchMove={(e) => {
+              if (isSeeking) {
                 const locationX = e.nativeEvent.locationX
                 const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
-                setIsSeeking(true)
                 setSeekPosition(progress * duration)
-              }}
-              onTouchMove={(e) => {
-                if (isSeeking) {
-                  const locationX = e.nativeEvent.locationX
-                  const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
-                  setSeekPosition(progress * duration)
-                }
-              }}
-              onTouchEnd={() => {
-                if (isSeeking) {
-                  seekTo(seekPosition)
-                  setIsSeeking(false)
-                }
-              }}
-            >
-              <View style={styles.fullscreenProgressBg}>
-                <View
-                  style={[
-                    styles.fullscreenProgressFill,
-                    { width: `${(isSeeking ? seekPosition / duration : playbackProgress) * 100}%` }
-                  ]}
-                />
-                {/* Seek handle */}
-                <View
-                  style={[
-                    styles.seekHandle,
-                    { left: `${(isSeeking ? seekPosition / duration : playbackProgress) * 100}%` }
-                  ]}
-                />
+              }
+            }}
+            onTouchEnd={() => {
+              if (isSeeking) {
+                seekTo(seekPosition)
+                setIsSeeking(false)
+              }
+            }}
+          >
+            {/* Time preview bubble when seeking */}
+            {isSeeking && (
+              <View style={[
+                styles.seekTimePreview,
+                { left: `${(seekPosition / duration) * 100}%` }
+              ]}>
+                <Text style={styles.seekTimeText}>{formatDuration(seekPosition)}</Text>
               </View>
+            )}
+            {/* Progress bar - expands when seeking */}
+            <View style={[styles.thinProgressBg, isSeeking && styles.thinProgressBgActive]}>
+              <View
+                style={[
+                  styles.thinProgressFill,
+                  isSeeking && styles.thinProgressFillActive,
+                  { width: `${(isSeeking ? seekPosition / duration : playbackProgress) * 100}%` }
+                ]}
+              />
             </View>
-            <Text style={styles.timeText}>{formatDuration(duration)}</Text>
+            {/* Scrubber handle - only visible when seeking */}
+            {isSeeking && (
+              <View style={[
+                styles.scrubberHandle,
+                { left: `${(seekPosition / duration) * 100}%` }
+              ]} />
+            )}
           </Animated.View>
+
+          {/* Time display - only show with controls */}
+          {playerMode === 'fullscreen' && showControls && (
+            <Animated.View style={[styles.timeDisplay, fullscreenContentStyle]}>
+              <Text style={styles.timeText}>
+                {formatDuration(isSeeking ? seekPosition : currentTime)} / {formatDuration(duration)}
+              </Text>
+            </Animated.View>
+          )}
         </Animated.View>
 
         {/* Mini player info row */}
@@ -993,7 +1031,75 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  // Fullscreen progress bar
+  // YouTube-style thin progress bar (always visible, seekable)
+  thinProgressContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 32, // Larger touch target
+    justifyContent: 'flex-end',
+    zIndex: 15,
+  },
+  thinProgressBg: {
+    height: 3,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+  },
+  thinProgressBgActive: {
+    height: 6,
+  },
+  thinProgressFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+  },
+  thinProgressFillActive: {
+    backgroundColor: colors.primary,
+  },
+  // Scrubber handle when seeking
+  scrubberHandle: {
+    position: 'absolute',
+    bottom: 0,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: colors.primary,
+    marginLeft: -8,
+    marginBottom: -5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  // Time preview bubble
+  seekTimePreview: {
+    position: 'absolute',
+    bottom: 20,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 4,
+    marginLeft: -30, // Center the bubble
+  },
+  seekTimeText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+    minWidth: 40,
+  },
+  // Time display (shown with controls)
+  timeDisplay: {
+    position: 'absolute',
+    bottom: 24,
+    left: 12,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    zIndex: 10,
+  },
+  // Fullscreen progress bar (shown with controls)
   fullscreenProgressContainer: {
     position: 'absolute',
     bottom: 12,
@@ -1011,7 +1117,7 @@ const styles = StyleSheet.create({
   },
   fullscreenProgressBg: {
     height: 4,
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'transparent',
     borderRadius: 2,
     overflow: 'hidden',
   },

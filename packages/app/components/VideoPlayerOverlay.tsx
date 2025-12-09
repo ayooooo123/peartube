@@ -279,7 +279,8 @@ export function VideoPlayerOverlay() {
   const isGestureActive = useSharedValue(false)
 
   // Calculate positions
-  const miniPlayerBottom = TAB_BAR_HEIGHT + insets.bottom
+  // Only add insets.bottom on iOS - Android tab bar already accounts for safe area
+  const miniPlayerBottom = TAB_BAR_HEIGHT + (Platform.OS === 'ios' ? insets.bottom : 0)
   const fullscreenTop = insets.top
 
   // Animate when playerMode changes

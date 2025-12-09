@@ -467,7 +467,7 @@ export default function StudioScreen() {
               </Text>
             </View>
           }
-          ItemSeparatorComponent={() => <View className="h-3" />}
+          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
           renderItem={({ item }) => (
             <View className="flex-row bg-pear-bg-elevated rounded-xl overflow-hidden" style={{ minHeight: 72 }}>
               <View className="w-28 bg-pear-bg-card justify-center items-center">

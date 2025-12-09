@@ -573,13 +573,13 @@ export default function HomeScreen() {
                 flexDirection: 'row',
                 flexWrap: 'wrap',
                 gap: 24,
-              } : undefined}>
+              } : { gap: 12 }}>
                 {myVideosWithMeta.map((video) => (
                   <View
                     key={video.id}
                     style={isDesktop ? {
                       width: `calc(${100 / gridColumns}% - ${(gridColumns - 1) * 24 / gridColumns}px)`,
-                    } as any : undefined}
+                    } as any : { marginBottom: 12 }}
                   >
                     <VideoCard
                       video={video}

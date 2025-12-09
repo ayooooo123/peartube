@@ -339,6 +339,9 @@ export function VideoPlayerOverlay() {
   const composedGesture = panGesture
 
   // Animated styles for the container
+  // On Android, add bottom inset to fullscreen height so it covers the navigation bar
+  const fullscreenHeight = Platform.OS === 'android' ? screenHeight + insets.bottom : screenHeight
+
   const containerStyle = useAnimatedStyle(() => {
     // Interpolate position
     const top = interpolate(
@@ -351,7 +354,7 @@ export function VideoPlayerOverlay() {
     const height = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PLAYER_HEIGHT, screenHeight],
+      [MINI_PLAYER_HEIGHT, fullscreenHeight],
       Extrapolation.CLAMP
     )
 
@@ -428,14 +431,14 @@ export function VideoPlayerOverlay() {
     return { opacity }
   })
 
-  // Video player style - adds top padding for notch in fullscreen (iOS only)
+  // Video player style - adds top padding for status bar/notch in fullscreen
   const videoPlayerStyle = useAnimatedStyle(() => {
-    const topPadding = Platform.OS === 'ios' ? interpolate(
+    const topPadding = interpolate(
       animProgress.value,
       [0, 1],
       [0, insets.top],
       Extrapolation.CLAMP
-    ) : 0
+    )
 
     return {
       position: 'absolute',

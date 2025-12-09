@@ -8,7 +8,7 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from 'react'
 import { ActivityIndicator } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useRouter } from 'expo-router'
+import { usePathname } from 'expo-router'
 import { useApp, colors } from '../_layout'
 import { VideoData } from '../../components/video'
 // We navigate to the dedicated video route on web instead of overlay playback
@@ -646,8 +646,8 @@ const watchStyles: Record<string, React.CSSProperties> = {
 }
 
 export default function HomeScreen() {
-  const router = useRouter()
   const { ready, identity, videos, loading, loadVideos, rpc } = useApp()
+  const pathname = usePathname()
 
   // Hash-based routing state (for Pear desktop)
   const [currentRoute, setCurrentRoute] = useState<Route>({ type: 'home' })
@@ -707,6 +707,16 @@ export default function HomeScreen() {
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
   }, [videos, channelVideos])
+
+  // If a path navigation happens to "/", but hash is still on watch, reset hash/state to home
+  useEffect(() => {
+    if (!isPear) return
+    if (pathname === '/' && window.location.hash.startsWith('#/watch')) {
+      window.location.hash = ''
+      setCurrentRoute({ type: 'home' })
+      setWatchVideo(null)
+    }
+  }, [pathname])
 
   // Load video info when navigating directly to a watch URL
   const loadVideoInfo = useCallback(async (driveKey: string, videoId: string) => {

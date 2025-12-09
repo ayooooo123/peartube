@@ -535,7 +535,7 @@ export default function HomeScreen() {
                 flexDirection: 'row',
                 flexWrap: 'wrap',
                 gap: 24,
-              } : undefined}>
+              } : { gap: 12 }}>
                 {feedVideosWithThumbs
                   .filter(v => activeCategory === 'All' || (v as any).category === activeCategory)
                   .map((video) => (
@@ -543,7 +543,7 @@ export default function HomeScreen() {
                     key={`${video.channelKey}-${video.id}`}
                     style={isDesktop ? {
                       width: `calc(${100 / gridColumns}% - ${(gridColumns - 1) * 24 / gridColumns}px)`,
-                    } as any : undefined}
+                    } as any : { marginBottom: 12 }}
                   >
                     <VideoCard
                       video={video}

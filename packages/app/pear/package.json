@@ -34,9 +34,6 @@
     "pear-pipe": "^1.0.6",
     "pear-run": "^1.0.8"
   },
-  "overrides": {
-    "@peartube/spec": "file:../../spec"
-  },
   "pear": {
     "name": "peartube",
     "type": "desktop",

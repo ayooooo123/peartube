@@ -18,7 +18,7 @@
     "pear:worker": "mkdir -p pear/build/workers/core && npx swc pear-src/workers/core/index.ts -o pear/build/workers/core/index.js",
     "pear:inject": "node pear-src/scripts/inject-pear-bar.js pear",
     "pear:build": "npm run pear:export && npm run pear:merge && npm run pear:copy && npm run pear:install && npm run pear:worker && npm run pear:inject",
-    "pear:dev": "npm run pear:build && cd pear && pear run --store=../../.peartube --dev .",
+    "pear:dev": "npm run pear:build && cd pear && pear run --store=~/.peartube --dev .",
     "pear:stage": "npm run pear:build && cd pear && pear stage ."
   },
   "author": "PearTube",

@@ -36,9 +36,9 @@ if (Pear.config.storage) {
   // Without --store, use a more stable path based on home directory
   // Pear.config.storage being null means ephemeral storage which can cause issues
   const homeDir = process.env.HOME || process.env.USERPROFILE || '/tmp';
-  storage = `${homeDir}/.peartube-storage`;
+  storage = `${homeDir}/.peartube`;
   console.log('[Worker] No --store flag, using fallback storage:', storage);
-  console.log('[Worker] For persistent storage, run with: pear run --store ~/.peartube-data --dev .');
+  console.log('[Worker] For persistent storage, run with: pear run --store ~/.peartube --dev .');
 }
 
 console.log('[Worker] Pear.config:', JSON.stringify({

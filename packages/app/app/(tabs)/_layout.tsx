@@ -17,7 +17,7 @@ import { colors } from '../_layout'
 export default function TabLayout() {
   const { isDesktop: platformIsDesktop } = usePlatform()
   const safeInsets = useSafeAreaInsets()
-  const TAB_BAR_HEIGHT = 56
+  const TAB_BAR_HEIGHT = 42
 
   // Use state to avoid hydration mismatch - SSR always renders mobile,
   // then client updates to desktop if needed

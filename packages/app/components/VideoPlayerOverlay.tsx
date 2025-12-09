@@ -34,7 +34,7 @@ import { colors } from '@/lib/colors'
 // Constants
 const MINI_PLAYER_HEIGHT = 64
 const MINI_VIDEO_WIDTH = 120
-const TAB_BAR_HEIGHT = 56
+const TAB_BAR_HEIGHT = 42
 const ANIMATION_DURATION = 300
 
 // Spring config for smooth animations

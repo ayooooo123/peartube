@@ -8,7 +8,7 @@ A decentralized P2P video streaming platform built on the Pear runtime and Hyper
 - **Self-sovereign**: Creators own their channels via cryptographic keypairs
 - **Cross-platform**: iOS, Android, and Desktop (Pear) from a single codebase
 - **Scalable**: Popular content automatically gets more seeders
-- **Efficient**: Sparse replication and adaptive streaming
+- **Efficient**: Sparse replication - only download chunks you watch
 - **Censorship-resistant**: No single point of control
 
 ## Architecture
@@ -21,14 +21,12 @@ peartube/
 │   ├── app/              # Unified app (iOS, Android, Pear Desktop)
 │   │   ├── app/          # Expo Router screens
 │   │   ├── backend/      # Mobile BareKit worklet
-│   │   └── pear-src/     # Desktop Pear assets
-│   ├── backend/          # Backend business logic
-│   ├── backend-core/     # P2P primitives (hypercore, etc)
+│   │   ├── components/   # React Native components
+│   │   └── pear-src/     # Desktop Pear worker & assets
+│   ├── backend/          # Backend business logic (storage, API, P2P)
 │   ├── core/             # Shared types and utilities
 │   ├── platform/         # Platform abstraction layer
-│   ├── rpc/              # RPC client/server layer
-│   ├── spec/             # HRPC schema definitions
-│   └── ui/               # Shared UI components
+│   └── spec/             # HRPC schema definitions
 └── package.json
 ```
 
@@ -41,7 +39,6 @@ peartube/
 - **Hyperswarm**: P2P networking and peer discovery
 - **Hyperdrive**: Distributed file system for video storage
 - **Hyperbee**: Key-value database for metadata
-- **Autobase**: Multi-writer coordination for discovery
 
 ## Quick Start
 
@@ -49,16 +46,20 @@ peartube/
 
 - Node.js 18+
 - For iOS: Xcode 15+, CocoaPods
+- For Android: Android Studio, JDK 17
 - For Desktop: Pear CLI (`npm install -g pear`)
 
 ### Setup
 
 ```bash
-# Install dependencies
-npm install
+# Install all dependencies
+npm run install:all
 
 # Run iOS app
 npm run ios
+
+# Run Android app
+npm run android
 
 # Run Pear desktop app
 npm run pear
@@ -78,6 +79,11 @@ npm run pear:build   # Build Pear desktop only
 
 # Backend
 npm run bundle:backend   # Bundle mobile backend worklet
+
+# Quality
+npm run typecheck    # Run TypeScript checks
+npm run lint         # Run ESLint
+npm run lint:fix     # Fix linting issues
 ```
 
 ## How It Works
@@ -88,27 +94,24 @@ npm run bundle:backend   # Bundle mobile backend worklet
 - **Desktop (Pear)**: Expo web export served by Pear runtime with pear-run worker
 
 Both platforms share:
-- The same React components (with `.web.tsx` variants for desktop)
+- The same React components
 - The same backend business logic (`@peartube/backend`)
 - The same HRPC schema (`@peartube/spec`)
 
 ### Video Storage
 - Each channel has a **Hyperdrive** for storing video files
-- Videos are stored in HLS format with multiple qualities
+- Videos are stored as MP4/WebM with thumbnail images
 - Sparse replication: only download chunks you watch
 
 ### P2P Networking
 - **Hyperswarm** manages peer connections
-- Videos are discovered via content hashes
+- Channels are discovered via a shared public feed
 - Multiple peers can serve the same video
 
 ### Identity
-- Self-sovereign keypairs (no central authority)
-- Channels are tied to public keys
-
-## Contributing
-
-Contributions welcome! See [ARCHITECTURE.md](./ARCHITECTURE.md) for technical details.
+- Self-sovereign keypairs
+- Channels are tied to Hyperdrive keys
+- Data stored locally at `~/.peartube`
 
 ## License
 

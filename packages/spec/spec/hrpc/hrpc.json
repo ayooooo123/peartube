@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "id": 0,
@@ -541,6 +541,19 @@
         "stream": false
       },
       "version": 2
+    },
+    {
+      "id": 12,
+      "name": "@peartube/delete-video",
+      "request": {
+        "name": "@peartube/delete-video-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/delete-video-response",
+        "stream": false
+      },
+      "version": 3
     }
   ]
 }

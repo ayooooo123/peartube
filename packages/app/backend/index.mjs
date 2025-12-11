@@ -385,6 +385,17 @@ rpc.onDownloadVideo(async (req) => {
   }
 })
 
+// Delete video handler
+rpc.onDeleteVideo(async (req) => {
+  console.log('[HRPC] deleteVideo:', req.videoId)
+  const drive = identityManager.getActiveDrive()
+  if (!drive) {
+    return { success: false, error: 'No active identity' }
+  }
+  const result = await api.deleteVideo(drive, req.videoId)
+  return result
+})
+
 // Subscription handlers
 rpc.onSubscribeChannel(async (req) => {
   console.log('[HRPC] subscribeChannel:', req.channelKey?.slice(0, 16))

@@ -263,6 +263,11 @@ export const rpc = {
     return ensureRPC().downloadVideo(req);
   },
 
+  async deleteVideo(videoIdOrReq: string | { videoId: string }): Promise<{ success: boolean; error?: string }> {
+    const req = typeof videoIdOrReq === 'string' ? { videoId: videoIdOrReq } : videoIdOrReq;
+    return ensureRPC().deleteVideo(req);
+  },
+
   async setVideoThumbnail(videoIdOrReq: string | { videoId: string; imageData: string; mimeType: string }, imageData?: string, mimeType?: string) {
     const req = typeof videoIdOrReq === 'string'
       ? { videoId: videoIdOrReq, imageData: imageData!, mimeType: mimeType! }

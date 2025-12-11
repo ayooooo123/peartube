@@ -303,6 +303,58 @@ export default function StudioScreen() {
 
   const myVideos = videos.filter((v) => v.channelKey === identity?.driveKey)
 
+  const handleDeleteVideo = async (videoId: string, videoTitle: string) => {
+    const confirmDelete = () => {
+      return new Promise<boolean>((resolve) => {
+        if (Platform.OS === 'web') {
+          resolve(window.confirm(`Delete "${videoTitle}"?\n\nThis will permanently delete the video from your channel.`))
+        } else {
+          Alert.alert(
+            'Delete Video',
+            `Delete "${videoTitle}"?\n\nThis will permanently delete the video from your channel.`,
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Delete', style: 'destructive', onPress: () => resolve(true) },
+            ]
+          )
+        }
+      })
+    }
+
+    const confirmed = await confirmDelete()
+    if (!confirmed) return
+
+    try {
+      const result = await rpc?.deleteVideo({ videoId })
+      if (result?.success) {
+        // Reload videos after deletion
+        if (identity?.driveKey) {
+          await loadVideos(identity.driveKey)
+        }
+        if (Platform.OS === 'web') {
+          window.alert('Video deleted successfully')
+        } else {
+          Alert.alert('Deleted', 'Video deleted successfully')
+        }
+      } else {
+        const errorMsg = result?.error || 'Failed to delete video'
+        if (Platform.OS === 'web') {
+          window.alert(`Error: ${errorMsg}`)
+        } else {
+          Alert.alert('Error', errorMsg)
+        }
+      }
+    } catch (err: any) {
+      console.error('[Studio] Delete failed:', err)
+      const errorMsg = err.message || 'Failed to delete video'
+      if (Platform.OS === 'web') {
+        window.alert(`Error: ${errorMsg}`)
+      } else {
+        Alert.alert('Error', errorMsg)
+      }
+    }
+  }
+
   return (
     <View className="flex-1 bg-pear-bg">
       {/* Header with safe area */}
@@ -479,6 +531,12 @@ export default function StudioScreen() {
                   {formatSize(item.size)} · {formatDate(item.uploadedAt)}
                 </Text>
               </View>
+              <Pressable
+                onPress={() => handleDeleteVideo(item.id, item.title)}
+                className="w-12 justify-center items-center active:opacity-60"
+              >
+                <Trash2 color={colors.error} size={18} />
+              </Pressable>
             </View>
           )}
         />

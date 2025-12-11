@@ -240,6 +240,77 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       }
     },
 
+/**
+     * Delete a video from a channel drive
+     * @param {import('hyperdrive')} drive - The writable drive
+     * @param {string} videoId - Video ID to delete
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async deleteVideo(drive, videoId) {
+      console.log('[API] DELETE_VIDEO:', videoId);
+
+      if (!drive || !drive.writable) {
+        return { success: false, error: 'Drive not writable' };
+      }
+
+      try {
+        // Delete video metadata
+        const metaPath = `/videos/${videoId}.json`;
+        const metaBuf = await drive.get(metaPath);
+
+        if (!metaBuf) {
+          return { success: false, error: 'Video not found' };
+        }
+
+        const meta = JSON.parse(b4a.toString(metaBuf));
+
+        // Delete the video file
+        if (meta.path) {
+          try {
+            await drive.del(meta.path);
+            console.log('[API] Deleted video file:', meta.path);
+          } catch (e) {
+            console.log('[API] Could not delete video file:', e.message);
+          }
+        }
+
+        // Delete thumbnail if exists
+        if (meta.thumbnail) {
+          try {
+            await drive.del(meta.thumbnail);
+            console.log('[API] Deleted thumbnail:', meta.thumbnail);
+          } catch (e) {
+            console.log('[API] Could not delete thumbnail:', e.message);
+          }
+        }
+
+        // Also try common thumbnail paths
+        const thumbnailPaths = [
+          `/thumbnails/${videoId}.jpg`,
+          `/thumbnails/${videoId}.png`,
+          `/thumbnails/${videoId}.webp`,
+          `/thumbnails/${videoId}.jpeg`
+        ];
+
+        for (const thumbPath of thumbnailPaths) {
+          try {
+            await drive.del(thumbPath);
+          } catch (e) {
+            // Ignore - file might not exist
+          }
+        }
+
+        // Delete the metadata file
+        await drive.del(metaPath);
+        console.log('[API] Deleted video metadata:', metaPath);
+
+        return { success: true };
+      } catch (err) {
+        console.error('[API] DELETE_VIDEO error:', err.message);
+        return { success: false, error: err.message };
+      }
+    },
+
     /**
      * Get video thumbnail URL
      * @param {string} driveKey

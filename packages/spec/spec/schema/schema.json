@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "schema": [
     {
       "name": "empty",
@@ -1727,6 +1727,40 @@
           "required": false,
           "type": "string",
           "version": 4
+        }
+      ]
+    },
+    {
+      "name": "delete-video-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 5
+        }
+      ]
+    },
+    {
+      "name": "delete-video-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 5
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 5
         }
       ]
     }

@@ -501,6 +501,16 @@ rpc.onDownloadVideo(async (req: any) => {
   return result;
 });
 
+// Delete video
+rpc.onDeleteVideo(async (req: any) => {
+  const drive = identityManager.getActiveDrive();
+  if (!drive) {
+    return { success: false, error: 'No active identity' };
+  }
+  const result = await api.deleteVideo(drive, req.videoId);
+  return result;
+});
+
 // Video stats
 rpc.onPrefetchVideo(async (req: any) => {
   await api.prefetchVideo(req.channelKey, req.videoId);

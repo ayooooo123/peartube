@@ -267,6 +267,21 @@ ns.register({
   ]
 })
 
+ns.register({
+  name: 'delete-video-request',
+  fields: [
+    { name: 'videoId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'delete-video-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
 // ============================================
 // Subscription Types
 // ============================================
@@ -846,6 +861,12 @@ rpcNs.register({
   name: 'download-video',
   request: { name: '@peartube/download-video-request', stream: false },
   response: { name: '@peartube/download-video-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'delete-video',
+  request: { name: '@peartube/delete-video-request', stream: false },
+  response: { name: '@peartube/delete-video-response', stream: false }
 })
 
 // Subscription commands

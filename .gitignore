@@ -8,6 +8,8 @@ bun.lock
 build/
 dist/
 *.bundle.js
+packages/app/pear/
+packages/app/.pear-build/
 
 # Expo
 .expo/

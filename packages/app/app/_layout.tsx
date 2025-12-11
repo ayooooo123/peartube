@@ -213,10 +213,12 @@ export default function RootLayout() {
       setLoading(true)
       const result = await platformRPC.rpc.getIdentity()
       const id = result?.identity
-      setIdentity(id)
-
+      // Only update identity if we got a valid one (don't clear existing identity on error)
       if (id?.driveKey) {
+        setIdentity(id)
         await loadVideosFromBackend(id.driveKey)
+      } else {
+        console.warn('[App] getIdentity returned no identity, keeping current state')
       }
     } catch (err) {
       console.error('[App] Failed to load identity:', err)

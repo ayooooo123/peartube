@@ -503,7 +503,7 @@ export function VideoPlayerOverlay() {
 
       // Generate safe filename
       const safeTitle = currentVideo.title.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 50)
-      const ext = currentVideo.mimeType?.includes('webm') ? 'webm' : 'mp4'
+      const ext = currentVideo.mimeType?.includes('webm') ? 'webm' : currentVideo.mimeType?.includes('matroska') ? 'mkv' : 'mp4'
       const filename = `${safeTitle}_${currentVideo.id.slice(0, 8)}.${ext}`
 
       // Write to Documents directory (visible in Files app)

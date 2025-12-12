@@ -302,8 +302,17 @@ rpc.onUploadVideo(async (req) => {
     filePath = filePath.slice(7)
   }
 
-  const ext = filePath.split('.').pop() || 'mp4'
-  console.log('[HRPC] Streaming upload from:', filePath)
+  const ext = filePath.split('.').pop()?.toLowerCase() || 'mp4'
+  const mimeTypes = {
+    'mp4': 'video/mp4',
+    'm4v': 'video/mp4',
+    'webm': 'video/webm',
+    'mkv': 'video/x-matroska',
+    'mov': 'video/quicktime',
+    'avi': 'video/x-msvideo',
+  }
+  const mimeType = mimeTypes[ext] || 'video/mp4'
+  console.log('[HRPC] Streaming upload from:', filePath, 'mime:', mimeType)
 
   // Use streaming upload - file streams directly to hyperdrive
   const result = await uploadManager.uploadFromPath(
@@ -312,7 +321,7 @@ rpc.onUploadVideo(async (req) => {
     {
       title: req.title,
       description: req.description || '',
-      mimeType: `video/${ext}`,
+      mimeType,
       category: req.category || ''
     },
     fs,  // Pass bare-fs for file reading
@@ -364,7 +373,9 @@ rpc.onDownloadVideo(async (req) => {
       return { success: false, error: 'Unable to resolve blobs core' }
     }
 
-    const mime = videoPath.endsWith('.webm') ? 'video/webm' : 'video/mp4'
+    const videoExt = videoPath.split('.').pop()?.toLowerCase() || 'mp4'
+    const videoMimeTypes = { 'mp4': 'video/mp4', 'webm': 'video/webm', 'mkv': 'video/x-matroska', 'mov': 'video/quicktime', 'avi': 'video/x-msvideo' }
+    const mime = videoMimeTypes[videoExt] || 'video/mp4'
     const url = ctx.blobServer.getLink(blobsCore.core.key, {
       blob: entry.value.blob,
       type: mime,

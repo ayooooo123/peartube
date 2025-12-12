@@ -80,6 +80,20 @@ function getMimeType(ext: string): string {
   return types[ext.toLowerCase()] || 'image/jpeg';
 }
 
+// Helper to get video mime type from file path
+function getMimeTypeFromPath(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  const videoTypes: Record<string, string> = {
+    'mp4': 'video/mp4',
+    'm4v': 'video/mp4',
+    'webm': 'video/webm',
+    'mkv': 'video/x-matroska',
+    'mov': 'video/quicktime',
+    'avi': 'video/x-msvideo',
+  };
+  return videoTypes[ext] || 'video/mp4';
+}
+
 // FFmpeg availability check (cached)
 let ffmpegAvailable: boolean | null = null;
 
@@ -159,7 +173,7 @@ async function generateThumbnail(filePath: string, videoId: string, drive: any):
 async function pickVideoFile(): Promise<any> {
   return new Promise((resolve, reject) => {
     const script = `
-      set theFile to choose file with prompt "Select a video file" of type {"public.movie", "public.video"}
+      set theFile to choose file with prompt "Select a video file" of type {"public.movie", "public.video", "org.matroska.mkv"}
       return POSIX path of theFile
     `;
 
@@ -439,7 +453,7 @@ rpc.onUploadVideo(async (req: any) => {
   const result = await uploadManager.uploadFromPath(
     drive,
     req.filePath,
-    { title: req.title, description: req.description, mimeType: 'video/mp4' },
+    { title: req.title, description: req.description, mimeType: getMimeTypeFromPath(req.filePath) },
     fs,
     (progress: number, bytesWritten: number, totalBytes: number) => {
       try {

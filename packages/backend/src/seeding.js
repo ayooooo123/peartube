@@ -24,7 +24,7 @@ export class SeedingManager {
     this.pinnedChannels = new Set();
     /** @type {SeedingConfig} */
     this.config = {
-      maxStorageGB: 10,           // Default 10GB quota for seeded content
+      maxStorageGB: 5,            // Default 5GB quota for seeded peer content
       autoSeedWatched: true,      // Automatically seed videos you watch
       autoSeedSubscribed: false,  // Automatically seed subscribed channels (opt-in)
       maxVideosPerChannel: 10     // Max videos to seed per channel if auto-seeding subscriptions
@@ -263,5 +263,69 @@ export class SeedingManager {
    */
   isChannelPinned(driveKey) {
     return this.pinnedChannels.has(driveKey);
+  }
+
+  /**
+   * Get current storage limit in GB
+   * @returns {number}
+   */
+  getMaxStorageGB() {
+    return this.config.maxStorageGB;
+  }
+
+  /**
+   * Set storage limit in GB
+   * @param {number} gb
+   * @returns {Promise<void>}
+   */
+  async setMaxStorageGB(gb) {
+    if (gb < 1) gb = 1;
+    if (gb > 100) gb = 100;
+    this.config.maxStorageGB = gb;
+    await this.metaDb.put('seeding-config', this.config);
+    console.log('[SeedingManager] Set max storage to', gb, 'GB');
+    // Enforce quota with new limit
+    await this.enforceQuota();
+  }
+
+  /**
+   * Get storage stats for UI display
+   * @returns {{ usedBytes: number, maxBytes: number, usedGB: string, maxGB: number, seedCount: number, pinnedCount: number }}
+   */
+  getStorageStats() {
+    const usedBytes = this.calculateStorage();
+    const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
+    return {
+      usedBytes,
+      maxBytes,
+      usedGB: (usedBytes / (1024 * 1024 * 1024)).toFixed(2),
+      maxGB: this.config.maxStorageGB,
+      seedCount: this.activeSeeds.size,
+      pinnedCount: this.pinnedChannels.size
+    };
+  }
+
+  /**
+   * Clear all non-pinned cached content
+   * @returns {Promise<number>} bytes cleared
+   */
+  async clearCache() {
+    let clearedBytes = 0;
+    const toRemove = [];
+
+    for (const [key, seed] of this.activeSeeds.entries()) {
+      if (seed.reason !== 'pinned') {
+        clearedBytes += seed.bytes || 0;
+        toRemove.push(key);
+      }
+    }
+
+    for (const key of toRemove) {
+      this.activeSeeds.delete(key);
+    }
+
+    await this.persistSeeds();
+    console.log('[SeedingManager] Cleared cache:', clearedBytes, 'bytes from', toRemove.length, 'seeds');
+    return clearedBytes;
   }
 }

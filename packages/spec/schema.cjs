@@ -589,6 +589,54 @@ ns.register({
 })
 
 // ============================================
+// Storage Management Types
+// ============================================
+
+ns.register({
+  name: 'get-storage-stats-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-storage-stats-response',
+  fields: [
+    { name: 'usedBytes', type: 'uint', required: true },
+    { name: 'maxBytes', type: 'uint', required: true },
+    { name: 'usedGB', type: 'string', required: true },
+    { name: 'maxGB', type: 'uint', required: true },
+    { name: 'seedCount', type: 'uint', required: true },
+    { name: 'pinnedCount', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-storage-limit-request',
+  fields: [
+    { name: 'maxGB', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-storage-limit-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'clear-cache-request',
+  fields: []
+})
+
+ns.register({
+  name: 'clear-cache-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'clearedBytes', type: 'uint', required: false }
+  ]
+})
+
+// ============================================
 // Thumbnail/Metadata Types
 // ============================================
 
@@ -973,6 +1021,25 @@ rpcNs.register({
   name: 'get-pinned-channels',
   request: { name: '@peartube/get-pinned-channels-request', stream: false },
   response: { name: '@peartube/get-pinned-channels-response', stream: false }
+})
+
+// Storage management commands
+rpcNs.register({
+  name: 'get-storage-stats',
+  request: { name: '@peartube/get-storage-stats-request', stream: false },
+  response: { name: '@peartube/get-storage-stats-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'set-storage-limit',
+  request: { name: '@peartube/set-storage-limit-request', stream: false },
+  response: { name: '@peartube/set-storage-limit-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'clear-cache',
+  request: { name: '@peartube/clear-cache-request', stream: false },
+  response: { name: '@peartube/clear-cache-response', stream: false }
 })
 
 // Thumbnail/Metadata commands

@@ -346,6 +346,20 @@ export const rpc = {
   async pickImageFile() {
     return ensureRPC().pickImageFile({});
   },
+
+  // Storage management
+  async getStorageStats(): Promise<{ usedBytes: number; maxBytes: number; usedGB: string; maxGB: number; seedCount: number; pinnedCount: number }> {
+    return ensureRPC().getStorageStats({});
+  },
+
+  async setStorageLimit(maxGBOrReq: number | { maxGB: number }): Promise<{ success: boolean }> {
+    const req = typeof maxGBOrReq === 'number' ? { maxGB: maxGBOrReq } : maxGBOrReq;
+    return ensureRPC().setStorageLimit(req);
+  },
+
+  async clearCache(): Promise<{ success: boolean; clearedBytes?: number }> {
+    return ensureRPC().clearCache({});
+  },
 };
 
 export type RPCClient = typeof rpc;

@@ -85,8 +85,7 @@ const mainNavItems: NavItem[] = [
 ]
 
 const yourContentItems: NavItem[] = [
-  { path: '/channel', icon: PlaySquareIcon, label: 'Your channel' },
-  { path: '/studio', icon: FilmIcon, label: 'Studio' },
+  { path: '/studio', icon: FilmIcon, label: 'Your videos' },
 ]
 
 const bottomItems: NavItem[] = [

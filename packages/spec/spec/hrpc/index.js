@@ -93,7 +93,13 @@ const methods = new Map([
   ['@peartube/download-video', 42],
   [42, '@peartube/download-video'],
   ['@peartube/delete-video', 43],
-  [43, '@peartube/delete-video']
+  [43, '@peartube/delete-video'],
+  ['@peartube/get-storage-stats', 44],
+  [44, '@peartube/get-storage-stats'],
+  ['@peartube/set-storage-limit', 45],
+  [45, '@peartube/set-storage-limit'],
+  ['@peartube/clear-cache', 46],
+  [46, '@peartube/clear-cache']
 ])
 
 class HRPC {
@@ -144,7 +150,10 @@ class HRPC {
       ['@peartube/event-log', getEncoding('@peartube/event-log')],
       ['@peartube/event-video-stats', getEncoding('@peartube/event-video-stats')],
       ['@peartube/download-video', getEncoding('@peartube/download-video-request')],
-      ['@peartube/delete-video', getEncoding('@peartube/delete-video-request')]
+      ['@peartube/delete-video', getEncoding('@peartube/delete-video-request')],
+      ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-request')],
+      ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-request')],
+      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -184,7 +193,10 @@ class HRPC {
       ['@peartube/pick-image-file', getEncoding('@peartube/pick-image-file-response')],
       ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-response')],
       ['@peartube/download-video', getEncoding('@peartube/download-video-response')],
-      ['@peartube/delete-video', getEncoding('@peartube/delete-video-response')]
+      ['@peartube/delete-video', getEncoding('@peartube/delete-video-response')],
+      ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-response')],
+      ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-response')],
+      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -455,6 +467,18 @@ class HRPC {
     return this._call('@peartube/delete-video', args)
   }
 
+  async getStorageStats(args) {
+    return this._call('@peartube/get-storage-stats', args)
+  }
+
+  async setStorageLimit(args) {
+    return this._call('@peartube/set-storage-limit', args)
+  }
+
+  async clearCache(args) {
+    return this._call('@peartube/clear-cache', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -629,6 +653,18 @@ class HRPC {
 
   onDeleteVideo(responseFn) {
     this._handlers['@peartube/delete-video'] = responseFn
+  }
+
+  onGetStorageStats(responseFn) {
+    this._handlers['@peartube/get-storage-stats'] = responseFn
+  }
+
+  onSetStorageLimit(responseFn) {
+    this._handlers['@peartube/set-storage-limit'] = responseFn
+  }
+
+  onClearCache(responseFn) {
+    this._handlers['@peartube/clear-cache'] = responseFn
   }
 
   _requestIsStream(command) {

@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "schema": [
     {
       "name": "empty",
@@ -1761,6 +1761,112 @@
           "required": false,
           "type": "string",
           "version": 5
+        }
+      ]
+    },
+    {
+      "name": "get-storage-stats-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-storage-stats-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "usedBytes",
+          "required": true,
+          "type": "uint",
+          "version": 6
+        },
+        {
+          "name": "maxBytes",
+          "required": true,
+          "type": "uint",
+          "version": 6
+        },
+        {
+          "name": "usedGB",
+          "required": true,
+          "type": "string",
+          "version": 6
+        },
+        {
+          "name": "maxGB",
+          "required": true,
+          "type": "uint",
+          "version": 6
+        },
+        {
+          "name": "seedCount",
+          "required": true,
+          "type": "uint",
+          "version": 6
+        },
+        {
+          "name": "pinnedCount",
+          "required": true,
+          "type": "uint",
+          "version": 6
+        }
+      ]
+    },
+    {
+      "name": "set-storage-limit-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "maxGB",
+          "required": true,
+          "type": "uint",
+          "version": 6
+        }
+      ]
+    },
+    {
+      "name": "set-storage-limit-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 6
+        }
+      ]
+    },
+    {
+      "name": "clear-cache-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "clear-cache-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 6
+        },
+        {
+          "name": "clearedBytes",
+          "required": false,
+          "type": "uint",
+          "version": 6
         }
       ]
     }

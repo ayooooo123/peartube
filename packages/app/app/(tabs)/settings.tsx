@@ -1,17 +1,98 @@
 /**
  * Settings Tab - App and channel settings
  */
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { View, Text, ScrollView, Alert, Share, Clipboard, Pressable, TextInput, Platform } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Copy, Share2, User, Key, Info, ExternalLink, Globe } from 'lucide-react-native'
+import { Copy, Share2, User, Key, Info, ExternalLink, Globe, HardDrive, Trash2 } from 'lucide-react-native'
 import { useApp, colors } from '../_layout'
+
+interface StorageStats {
+  usedBytes: number
+  maxBytes: number
+  usedGB: string
+  maxGB: number
+  seedCount: number
+  pinnedCount: number
+}
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets()
   const { identity, createIdentity, rpc } = useApp()
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
+  const [storageLimit, setStorageLimit] = useState(5)
+  const [clearingCache, setClearingCache] = useState(false)
+
+  // Load storage stats
+  const loadStorageStats = useCallback(async () => {
+    if (!rpc) return
+    try {
+      const stats = await rpc.getStorageStats()
+      setStorageStats(stats)
+      setStorageLimit(stats.maxGB)
+    } catch (err) {
+      console.error('[Settings] Failed to load storage stats:', err)
+    }
+  }, [rpc])
+
+  useEffect(() => {
+    loadStorageStats()
+  }, [loadStorageStats])
+
+  const handleStorageLimitChange = async (newLimit: number) => {
+    if (!rpc) return
+    setStorageLimit(newLimit)
+    try {
+      await rpc.setStorageLimit(newLimit)
+      await loadStorageStats()
+    } catch (err) {
+      console.error('[Settings] Failed to set storage limit:', err)
+    }
+  }
+
+  const handleClearCache = async () => {
+    if (!rpc) return
+
+    const confirmClear = () => {
+      return new Promise<boolean>((resolve) => {
+        if (Platform.OS === 'web') {
+          resolve(window.confirm('Clear all cached peer content?\n\nThis will remove all downloaded videos from other channels (except pinned content). Your own videos are not affected.'))
+        } else {
+          Alert.alert(
+            'Clear Cache',
+            'This will remove all downloaded videos from other channels (except pinned content). Your own videos are not affected.',
+            [
+              { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Clear', style: 'destructive', onPress: () => resolve(true) },
+            ]
+          )
+        }
+      })
+    }
+
+    const confirmed = await confirmClear()
+    if (!confirmed) return
+
+    setClearingCache(true)
+    try {
+      const result = await rpc.clearCache()
+      if (result.success) {
+        const clearedMB = ((result.clearedBytes || 0) / (1024 * 1024)).toFixed(1)
+        if (Platform.OS === 'web') {
+          window.alert(`Cache cleared! Freed ${clearedMB} MB`)
+        } else {
+          Alert.alert('Cache Cleared', `Freed ${clearedMB} MB of storage`)
+        }
+        await loadStorageStats()
+      }
+    } catch (err) {
+      console.error('[Settings] Failed to clear cache:', err)
+    } finally {
+      setClearingCache(false)
+    }
+  }
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
@@ -188,7 +269,7 @@ export default function SettingsScreen() {
             </Text>
             <View className="flex-row gap-3">
               <Pressable
-                onPress={() => copyToClipboard(identity.driveKey, 'Channel key')}
+                onPress={() => identity.driveKey && copyToClipboard(identity.driveKey, 'Channel key')}
                 className="flex-1 flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5"
               >
                 <Copy color={colors.text} size={16} />
@@ -232,6 +313,78 @@ export default function SettingsScreen() {
           </Pressable>
           <Text className="text-caption text-pear-text-muted text-center mt-2">
             Make your channel discoverable by other peers
+          </Text>
+        </View>
+
+        {/* Divider */}
+        <View className="h-2 bg-pear-bg-card" />
+
+        {/* Storage Section */}
+        <View className="px-5 py-5">
+          <Text className="text-caption-medium text-pear-text-muted mb-4 uppercase tracking-wide">Storage</Text>
+
+          {/* Storage Usage */}
+          <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
+            <View className="flex-row items-center mb-3">
+              <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
+                <HardDrive color={colors.primary} size={20} />
+              </View>
+              <View className="flex-1 ml-4">
+                <Text className="text-label text-pear-text">Peer Content Cache</Text>
+                <Text className="text-caption text-pear-text-muted mt-0.5">
+                  {storageStats ? `${storageStats.usedGB} GB / ${storageStats.maxGB} GB used` : 'Loading...'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Progress bar */}
+            {storageStats && (
+              <View className="mb-4">
+                <View className="h-2 bg-pear-bg-card rounded-full overflow-hidden">
+                  <View
+                    className="h-full bg-pear-primary rounded-full"
+                    style={{ width: `${Math.min(100, (storageStats.usedBytes / storageStats.maxBytes) * 100)}%` }}
+                  />
+                </View>
+                <Text className="text-caption text-pear-text-muted mt-2">
+                  {storageStats.seedCount} cached videos • {storageStats.pinnedCount} pinned channels
+                </Text>
+              </View>
+            )}
+
+            {/* Storage limit selector */}
+            <View className="mb-4">
+              <Text className="text-caption text-pear-text-muted mb-2">Storage Limit</Text>
+              <View className="flex-row gap-2">
+                {[5, 10, 20, 50].map((gb) => (
+                  <Pressable
+                    key={gb}
+                    onPress={() => handleStorageLimitChange(gb)}
+                    className={`flex-1 py-2 rounded-lg items-center ${storageLimit === gb ? 'bg-pear-primary' : 'bg-pear-bg-card border border-pear-border'}`}
+                  >
+                    <Text className={`text-label ${storageLimit === gb ? 'text-white' : 'text-pear-text'}`}>
+                      {gb} GB
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
+            {/* Clear cache button */}
+            <Pressable
+              onPress={handleClearCache}
+              disabled={clearingCache}
+              className={`flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5 ${clearingCache ? 'opacity-50' : ''}`}
+            >
+              <Trash2 color={colors.text} size={16} />
+              <Text className="text-pear-text text-label">
+                {clearingCache ? 'Clearing...' : 'Clear Cache'}
+              </Text>
+            </Pressable>
+          </View>
+
+          <Text className="text-caption text-pear-text-muted">
+            Cached content from other channels. Higher limits help the network by seeding more content to other peers. Your own videos are stored separately and don't count toward this limit.
           </Text>
         </View>
 

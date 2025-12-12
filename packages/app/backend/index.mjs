@@ -543,6 +543,22 @@ rpc.onGetPinnedChannels(async () => {
   return { channels: result.channels || [] }
 })
 
+// Storage management handlers
+rpc.onGetStorageStats(async () => {
+  console.log('[HRPC] getStorageStats')
+  return api.getStorageStats()
+})
+
+rpc.onSetStorageLimit(async (req) => {
+  console.log('[HRPC] setStorageLimit:', req.maxGB)
+  return await api.setStorageLimit(req.maxGB)
+})
+
+rpc.onClearCache(async () => {
+  console.log('[HRPC] clearCache')
+  return await api.clearCache()
+})
+
 // Thumbnail handlers
 rpc.onGetVideoThumbnail(async (req) => {
   console.log('[HRPC] getVideoThumbnail:', req.channelKey?.slice(0, 16), req.videoId)

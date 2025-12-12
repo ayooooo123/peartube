@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "schema": [
     {
       "id": 0,
@@ -554,6 +554,45 @@
         "stream": false
       },
       "version": 3
+    },
+    {
+      "id": 30,
+      "name": "@peartube/get-storage-stats",
+      "request": {
+        "name": "@peartube/get-storage-stats-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-storage-stats-response",
+        "stream": false
+      },
+      "version": 4
+    },
+    {
+      "id": 31,
+      "name": "@peartube/set-storage-limit",
+      "request": {
+        "name": "@peartube/set-storage-limit-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-storage-limit-response",
+        "stream": false
+      },
+      "version": 4
+    },
+    {
+      "id": 32,
+      "name": "@peartube/clear-cache",
+      "request": {
+        "name": "@peartube/clear-cache-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/clear-cache-response",
+        "stream": false
+      },
+      "version": 4
     }
   ]
 }

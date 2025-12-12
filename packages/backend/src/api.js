@@ -817,6 +817,55 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     },
 
     // ============================================
+    // Storage Management Operations
+    // ============================================
+
+    /**
+     * Get storage stats for peer content
+     * @returns {{ usedBytes: number, maxBytes: number, usedGB: string, maxGB: number, seedCount: number, pinnedCount: number }}
+     */
+    getStorageStats() {
+      if (seedingManager) {
+        return seedingManager.getStorageStats();
+      }
+      return {
+        usedBytes: 0,
+        maxBytes: 5 * 1024 * 1024 * 1024,
+        usedGB: '0.00',
+        maxGB: 5,
+        seedCount: 0,
+        pinnedCount: 0
+      };
+    },
+
+    /**
+     * Set storage limit in GB
+     * @param {number} maxGB
+     * @returns {Promise<{ success: boolean }>}
+     */
+    async setStorageLimit(maxGB) {
+      console.log('[API] SET_STORAGE_LIMIT:', maxGB, 'GB');
+      if (seedingManager) {
+        await seedingManager.setMaxStorageGB(maxGB);
+        return { success: true };
+      }
+      return { success: false };
+    },
+
+    /**
+     * Clear all cached peer content (non-pinned)
+     * @returns {Promise<{ success: boolean, clearedBytes: number }>}
+     */
+    async clearCache() {
+      console.log('[API] CLEAR_CACHE');
+      if (seedingManager) {
+        const clearedBytes = await seedingManager.clearCache();
+        return { success: true, clearedBytes };
+      }
+      return { success: false, clearedBytes: 0 };
+    },
+
+    // ============================================
     // Status Operations
     // ============================================
 

@@ -606,6 +606,19 @@ rpc.onGetPinnedChannels(async () => {
   return { channels: result.channels || [] };
 });
 
+// Storage management handlers
+rpc.onGetStorageStats(async () => {
+  return api.getStorageStats();
+});
+
+rpc.onSetStorageLimit(async (req: any) => {
+  return await api.setStorageLimit(req.maxGB);
+});
+
+rpc.onClearCache(async () => {
+  return await api.clearCache();
+});
+
 // Thumbnail handlers
 rpc.onGetVideoThumbnail(async (req: any) => {
   const drive = ctx.drives.get(req.channelKey);

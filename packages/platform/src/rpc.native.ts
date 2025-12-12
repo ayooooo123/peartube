@@ -32,6 +32,9 @@ declare const HRPC: new (stream: any) => {
   getSubscriptions(req: {}): Promise<any>;
   getPublicFeed(req: {}): Promise<any>;
   refreshFeed(req: {}): Promise<any>;
+  submitToFeed(req: {}): Promise<any>;
+  unpublishFromFeed(req: {}): Promise<any>;
+  isChannelPublished(req: {}): Promise<any>;
   getChannelMeta(req: { channelKey: string }): Promise<any>;
   getStatus(req: {}): Promise<any>;
   getSwarmStatus(req: {}): Promise<any>;
@@ -322,6 +325,18 @@ export const rpc = {
 
   async refreshFeed() {
     return ensureRPC().refreshFeed({});
+  },
+
+  async submitToFeed(): Promise<{ success: boolean }> {
+    return ensureRPC().submitToFeed({});
+  },
+
+  async unpublishFromFeed(): Promise<{ success: boolean }> {
+    return ensureRPC().unpublishFromFeed({});
+  },
+
+  async isChannelPublished(): Promise<{ published: boolean }> {
+    return ensureRPC().isChannelPublished({});
   },
 
   async getChannelMeta(channelKeyOrReq: string | { channelKey: string }) {

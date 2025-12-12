@@ -328,6 +328,14 @@ export const rpc = {
     return ensureRPC().submitToFeed({});
   },
 
+  async unpublishFromFeed(): Promise<{ success: boolean }> {
+    return ensureRPC().unpublishFromFeed({});
+  },
+
+  async isChannelPublished(): Promise<{ published: boolean }> {
+    return ensureRPC().isChannelPublished({});
+  },
+
   async hideChannel(channelKeyOrReq: string | { channelKey: string }) {
     const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
     return ensureRPC().hideChannel(req);

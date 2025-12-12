@@ -96,7 +96,7 @@ export async function createBackendContext(config) {
   console.log('[Orchestrator] Storage initialized, blob server port:', ctx.blobServerPort);
 
   // Phase 2: Create managers (synchronous, fast)
-  const publicFeed = new PublicFeedManager(ctx.swarm);
+  const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb);
   const videoStats = new VideoStatsTracker();
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb);
   const identityManager = createIdentityManager({ ctx });

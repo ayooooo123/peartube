@@ -467,6 +467,24 @@ rpc.onSubmitToFeed(async () => {
   return { success: true }
 })
 
+rpc.onUnpublishFromFeed(async () => {
+  console.log('[HRPC] unpublishFromFeed')
+  const active = identityManager.getActiveIdentity()
+  if (active?.driveKey) {
+    await api.unpublishFromFeed(active.driveKey)
+  }
+  return { success: true }
+})
+
+rpc.onIsChannelPublished(async () => {
+  console.log('[HRPC] isChannelPublished')
+  const active = identityManager.getActiveIdentity()
+  if (active?.driveKey) {
+    return api.isChannelPublished(active.driveKey)
+  }
+  return { published: false }
+})
+
 rpc.onHideChannel(async (req) => {
   console.log('[HRPC] hideChannel:', req.channelKey?.slice(0, 16))
   await api.hideChannel(req.channelKey)

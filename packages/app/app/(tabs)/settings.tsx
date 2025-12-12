@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { View, Text, ScrollView, Alert, Share, Clipboard, Pressable, TextInput, Platform } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Copy, Share2, User, Key, Info, ExternalLink, Globe, HardDrive, Trash2 } from 'lucide-react-native'
+import { Copy, Share2, User, Key, Info, ExternalLink, Globe, X, HardDrive, Trash2 } from 'lucide-react-native'
 import { useApp, colors } from '../_layout'
 
 interface StorageStats {
@@ -24,6 +24,23 @@ export default function SettingsScreen() {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [storageLimit, setStorageLimit] = useState(5)
   const [clearingCache, setClearingCache] = useState(false)
+  const [isPublished, setIsPublished] = useState(false)
+  const [publishLoading, setPublishLoading] = useState(false)
+
+  // Check if channel is published
+  const checkPublishStatus = useCallback(async () => {
+    if (!rpc || !identity?.driveKey) return
+    try {
+      const result = await rpc.isChannelPublished()
+      setIsPublished(result.published)
+    } catch (err) {
+      console.error('[Settings] Failed to check publish status:', err)
+    }
+  }, [rpc, identity?.driveKey])
+
+  useEffect(() => {
+    checkPublishStatus()
+  }, [checkPublishStatus])
 
   // Load storage stats
   const loadStorageStats = useCallback(async () => {
@@ -159,13 +176,15 @@ export default function SettingsScreen() {
   const publishToFeed = async () => {
     if (!identity?.driveKey || !rpc) return
 
+    setPublishLoading(true)
     // Use window.confirm on web (Pear desktop), Alert.alert on native
     if (Platform.OS === 'web') {
       const confirmed = window.confirm('Publish Channel?\n\nThis will add your channel to the public feed so others can discover it.')
       if (confirmed) {
         try {
           console.log('[Settings] Publishing to feed, driveKey:', identity.driveKey)
-          await rpc.submitToFeed({})
+          await rpc.submitToFeed()
+          setIsPublished(true)
           window.alert('Published! Your channel is now visible on the public feed.')
         } catch (err) {
           console.error('Failed to publish:', err)
@@ -182,7 +201,8 @@ export default function SettingsScreen() {
             text: 'Publish',
             onPress: async () => {
               try {
-                await rpc.submitToFeed({})
+                await rpc.submitToFeed()
+                setIsPublished(true)
                 Alert.alert('Published!', 'Your channel is now visible on the public feed.')
               } catch (err) {
                 console.error('Failed to publish:', err)
@@ -193,6 +213,51 @@ export default function SettingsScreen() {
         ]
       )
     }
+    setPublishLoading(false)
+  }
+
+  // Unpublish channel from public feed
+  const unpublishFromFeed = async () => {
+    if (!identity?.driveKey || !rpc) return
+
+    setPublishLoading(true)
+    if (Platform.OS === 'web') {
+      const confirmed = window.confirm('Unpublish Channel?\n\nThis will remove your channel from the public feed. Others will no longer discover it through the feed.')
+      if (confirmed) {
+        try {
+          console.log('[Settings] Unpublishing from feed, driveKey:', identity.driveKey)
+          await rpc.unpublishFromFeed()
+          setIsPublished(false)
+          window.alert('Unpublished! Your channel is no longer on the public feed.')
+        } catch (err) {
+          console.error('Failed to unpublish:', err)
+          window.alert('Error: Failed to unpublish channel')
+        }
+      }
+    } else {
+      Alert.alert(
+        'Unpublish Channel?',
+        'This will remove your channel from the public feed. Others will no longer discover it through the feed.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Unpublish',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await rpc.unpublishFromFeed()
+                setIsPublished(false)
+                Alert.alert('Unpublished!', 'Your channel is no longer on the public feed.')
+              } catch (err) {
+                console.error('Failed to unpublish:', err)
+                Alert.alert('Error', 'Failed to unpublish channel')
+              }
+            },
+          },
+        ]
+      )
+    }
+    setPublishLoading(false)
   }
 
   // Onboarding - no identity yet
@@ -303,17 +368,44 @@ export default function SettingsScreen() {
             </Pressable>
           </View>
 
-          {/* Publish to Public Feed */}
-          <Pressable
-            onPress={publishToFeed}
-            className="flex-row items-center justify-center gap-2 bg-pear-primary rounded-xl py-4"
-          >
-            <Globe color="white" size={18} />
-            <Text className="text-white text-label font-semibold">Publish to Public Feed</Text>
-          </Pressable>
-          <Text className="text-caption text-pear-text-muted text-center mt-2">
-            Make your channel discoverable by other peers
-          </Text>
+          {/* Publish/Unpublish to Public Feed */}
+          {isPublished ? (
+            <>
+              <View className="flex-row items-center justify-center gap-2 bg-pear-bg-elevated rounded-xl py-4 mb-2">
+                <Globe color={colors.primary} size={18} />
+                <Text className="text-pear-primary text-label font-semibold">Published to Public Feed</Text>
+              </View>
+              <Pressable
+                onPress={unpublishFromFeed}
+                disabled={publishLoading}
+                className={`flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-xl py-3 ${publishLoading ? 'opacity-50' : ''}`}
+              >
+                <X color={colors.textMuted} size={16} />
+                <Text className="text-pear-text-muted text-label">
+                  {publishLoading ? 'Updating...' : 'Unpublish from Feed'}
+                </Text>
+              </Pressable>
+              <Text className="text-caption text-pear-text-muted text-center mt-2">
+                Your channel is discoverable by other peers
+              </Text>
+            </>
+          ) : (
+            <>
+              <Pressable
+                onPress={publishToFeed}
+                disabled={publishLoading}
+                className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-xl py-4 ${publishLoading ? 'opacity-50' : ''}`}
+              >
+                <Globe color="white" size={18} />
+                <Text className="text-white text-label font-semibold">
+                  {publishLoading ? 'Publishing...' : 'Publish to Public Feed'}
+                </Text>
+              </Pressable>
+              <Text className="text-caption text-pear-text-muted text-center mt-2">
+                Make your channel discoverable by other peers
+              </Text>
+            </>
+          )}
         </View>
 
         {/* Divider */}

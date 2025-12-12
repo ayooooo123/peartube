@@ -465,14 +465,39 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     /**
      * Submit channel to public feed
      * @param {string} driveKey
-     * @returns {{success: boolean}}
+     * @returns {Promise<{success: boolean}>}
      */
-    submitToFeed(driveKey) {
+    async submitToFeed(driveKey) {
       console.log('[API] Submitting channel to feed:', driveKey?.slice(0, 16));
       if (publicFeed && driveKey) {
-        publicFeed.submitChannel(driveKey);
+        await publicFeed.submitChannel(driveKey);
       }
       return { success: true };
+    },
+
+    /**
+     * Unpublish channel from public feed
+     * @param {string} driveKey
+     * @returns {Promise<{success: boolean}>}
+     */
+    async unpublishFromFeed(driveKey) {
+      console.log('[API] Unpublishing channel from feed:', driveKey?.slice(0, 16));
+      if (publicFeed && driveKey) {
+        await publicFeed.unpublishChannel(driveKey);
+      }
+      return { success: true };
+    },
+
+    /**
+     * Check if channel is published to feed
+     * @param {string} driveKey
+     * @returns {{published: boolean}}
+     */
+    isChannelPublished(driveKey) {
+      if (publicFeed && driveKey) {
+        return { published: publicFeed.isChannelPublished(driveKey) };
+      }
+      return { published: false };
     },
 
     /**

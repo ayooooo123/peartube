@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "schema": [
     {
       "name": "empty",
@@ -1867,6 +1867,48 @@
           "required": false,
           "type": "uint",
           "version": 6
+        }
+      ]
+    },
+    {
+      "name": "unpublish-from-feed-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "unpublish-from-feed-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 7
+        }
+      ]
+    },
+    {
+      "name": "is-channel-published-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "is-channel-published-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "published",
+          "required": false,
+          "type": "bool",
+          "version": 7
         }
       ]
     }

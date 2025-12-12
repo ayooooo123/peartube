@@ -8,6 +8,9 @@
  */
 
 import fs from 'bare-fs';
+import path from 'bare-path';
+import os from 'bare-os';
+import env from 'bare-env';
 import pipe from 'pear-pipe';
 import { spawn } from 'bare-subprocess';
 import b4a from 'b4a';
@@ -35,8 +38,8 @@ if (Pear.config.storage) {
 } else {
   // Without --store, use a more stable path based on home directory
   // Pear.config.storage being null means ephemeral storage which can cause issues
-  const homeDir = process.env.HOME || process.env.USERPROFILE || '/tmp';
-  storage = `${homeDir}/.peartube`;
+  const homeDir = os.homedir();
+  storage = path.join(homeDir, '.peartube');
   console.log('[Worker] No --store flag, using fallback storage:', storage);
   console.log('[Worker] For persistent storage, run with: pear run --store ~/.peartube --dev .');
 }
@@ -115,6 +118,149 @@ async function checkFFmpeg(): Promise<boolean> {
     } catch {
       ffmpegAvailable = false;
       resolve(false);
+    }
+  });
+}
+
+// Check if file is MKV and needs audio transcoding
+function needsAudioTranscode(filePath: string): boolean {
+  return filePath.toLowerCase().endsWith('.mkv');
+}
+
+// Check if MKV has browser-incompatible audio codec using ffprobe
+async function hasIncompatibleAudio(filePath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      // Use ffprobe to get audio codec info
+      const args = [
+        '-v', 'quiet',
+        '-select_streams', 'a:0',
+        '-show_entries', 'stream=codec_name',
+        '-of', 'csv=p=0',
+        filePath
+      ];
+
+      const proc = spawn('ffprobe', args);
+      let stdout = '';
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      proc.on('exit', (code: number) => {
+        if (code === 0) {
+          const codec = stdout.trim().toLowerCase();
+          console.log('[FFprobe] Audio codec:', codec);
+
+          // Browser-compatible audio codecs (no transcode needed)
+          const compatibleCodecs = ['aac', 'mp3', 'opus', 'vorbis', 'flac'];
+          const needsTranscode = !compatibleCodecs.includes(codec);
+
+          if (!needsTranscode) {
+            console.log('[FFprobe] Audio codec is browser-compatible, skipping transcode');
+          } else {
+            console.log('[FFprobe] Audio codec needs transcoding:', codec);
+          }
+
+          resolve(needsTranscode);
+        } else {
+          // If ffprobe fails, assume we need transcoding to be safe
+          console.log('[FFprobe] Failed to detect codec, assuming transcode needed');
+          resolve(true);
+        }
+      });
+
+      proc.on('error', () => {
+        // ffprobe not available, assume transcode needed
+        resolve(true);
+      });
+    } catch {
+      resolve(true);
+    }
+  });
+}
+
+// Transcode MKV audio to AAC using native FFmpeg
+// Returns path to transcoded file, or original path if no transcoding needed/failed
+async function transcodeAudioToAAC(filePath: string): Promise<{ path: string; transcoded: boolean }> {
+  if (!needsAudioTranscode(filePath)) {
+    return { path: filePath, transcoded: false };
+  }
+
+  const hasFFmpeg = await checkFFmpeg();
+  if (!hasFFmpeg) {
+    console.log('[FFmpeg] Not available, skipping audio transcode');
+    return { path: filePath, transcoded: false };
+  }
+
+  // Check if audio actually needs transcoding (skip if already AAC/MP3/etc)
+  const needsTranscode = await hasIncompatibleAudio(filePath);
+  if (!needsTranscode) {
+    console.log('[FFmpeg] Audio is already browser-compatible, skipping transcode');
+    return { path: filePath, transcoded: false };
+  }
+
+  // Create temp output path in storage directory (avoids permission issues on external drives)
+  // Uses the same storage path as the backend
+  const tempDir = path.join(storage, 'tmp');
+
+  // Ensure temp directory exists
+  try {
+    fs.mkdirSync(tempDir, { recursive: true });
+  } catch {}
+
+  // Extract filename and create temp path
+  const filename = path.basename(filePath);
+  const tempPath = path.join(tempDir, filename.replace(/\.mkv$/i, '_aac.mkv'));
+
+  const args = [
+    '-i', filePath,
+    '-c:v', 'copy',      // Copy video stream (no re-encode)
+    '-c:a', 'aac',       // Convert audio to AAC
+    '-b:a', '192k',      // Audio bitrate
+    '-y',                // Overwrite output
+    tempPath
+  ];
+
+  console.log('[FFmpeg] Transcoding MKV audio to AAC:', filePath);
+  console.log('[FFmpeg] Output path:', tempPath);
+
+  return new Promise((resolve) => {
+    try {
+      const proc = spawn('ffmpeg', args);
+      let stderr = '';
+      let lastProgress = '';
+
+      proc.stderr.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderr += text;
+
+        // Parse FFmpeg progress (time=00:01:23.45)
+        const timeMatch = text.match(/time=(\d+:\d+:\d+\.\d+)/);
+        if (timeMatch && timeMatch[1] !== lastProgress) {
+          lastProgress = timeMatch[1];
+          console.log('[FFmpeg] Transcoding progress:', lastProgress);
+        }
+      });
+
+      proc.on('exit', (code: number) => {
+        if (code === 0) {
+          console.log('[FFmpeg] Audio transcode complete:', tempPath);
+          resolve({ path: tempPath, transcoded: true });
+        } else {
+          console.error('[FFmpeg] Audio transcode failed, code:', code);
+          console.error('[FFmpeg] stderr:', stderr.slice(-500));
+          resolve({ path: filePath, transcoded: false });
+        }
+      });
+
+      proc.on('error', (err: Error) => {
+        console.error('[FFmpeg] Audio transcode error:', err);
+        resolve({ path: filePath, transcoded: false });
+      });
+    } catch (err) {
+      console.error('[FFmpeg] Failed to spawn transcode process:', err);
+      resolve({ path: filePath, transcoded: false });
     }
   });
 }
@@ -459,10 +605,29 @@ rpc.onUploadVideo(async (req: any) => {
   const drive = identityManager.getActiveDrive();
   if (!drive) throw new Error('No active identity');
 
+  // For MKV files, transcode audio to AAC for browser compatibility
+  let uploadFilePath = req.filePath;
+  let wasTranscoded = false;
+
+  if (needsAudioTranscode(req.filePath)) {
+    console.log('[Worker] MKV detected, transcoding audio to AAC...');
+    try {
+      rpc.eventUploadProgress({ videoId: '', progress: 0, bytesUploaded: 0, totalBytes: 0 });
+    } catch {}
+
+    const transcodeResult = await transcodeAudioToAAC(req.filePath);
+    uploadFilePath = transcodeResult.path;
+    wasTranscoded = transcodeResult.transcoded;
+
+    if (wasTranscoded) {
+      console.log('[Worker] Audio transcoded successfully, uploading:', uploadFilePath);
+    }
+  }
+
   const result = await uploadManager.uploadFromPath(
     drive,
-    req.filePath,
-    { title: req.title, description: req.description, mimeType: getMimeTypeFromPath(req.filePath) },
+    uploadFilePath,
+    { title: req.title, description: req.description, mimeType: getMimeTypeFromPath(uploadFilePath) },
     fs,
     (progress: number, bytesWritten: number, totalBytes: number) => {
       try {
@@ -471,12 +636,23 @@ rpc.onUploadVideo(async (req: any) => {
     }
   );
 
+  // Clean up transcoded temp file
+  if (wasTranscoded && uploadFilePath !== req.filePath) {
+    try {
+      fs.unlinkSync(uploadFilePath);
+      console.log('[Worker] Cleaned up temp transcoded file');
+    } catch (err) {
+      console.warn('[Worker] Failed to clean up temp file:', err);
+    }
+  }
+
   // Generate thumbnail if FFmpeg available AND no custom thumbnail will be provided
   // skipThumbnailGeneration is true when user has selected a custom thumbnail
   if (result.success && result.videoId && !req.skipThumbnailGeneration) {
     console.log('[Worker] Generating FFmpeg thumbnail (no custom thumbnail provided)');
     const hasFFmpeg = await checkFFmpeg();
     if (hasFFmpeg) {
+      // Use original file for thumbnail (better quality, no transcode artifacts)
       const thumbPath = await generateThumbnail(req.filePath, result.videoId, drive);
       if (thumbPath) {
         const metaPath = `/videos/${result.videoId}.json`;
@@ -588,9 +764,25 @@ rpc.onRefreshFeed(async () => {
 rpc.onSubmitToFeed(async () => {
   const active = identityManager.getActiveIdentity();
   if (active?.driveKey) {
-    api.submitToFeed(active.driveKey);
+    await api.submitToFeed(active.driveKey);
   }
   return { success: true };
+});
+
+rpc.onUnpublishFromFeed(async () => {
+  const active = identityManager.getActiveIdentity();
+  if (active?.driveKey) {
+    await api.unpublishFromFeed(active.driveKey);
+  }
+  return { success: true };
+});
+
+rpc.onIsChannelPublished(async () => {
+  const active = identityManager.getActiveIdentity();
+  if (active?.driveKey) {
+    return api.isChannelPublished(active.driveKey);
+  }
+  return { published: false };
 });
 
 rpc.onHideChannel(async (req: any) => {

@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "schema": [
     {
       "id": 0,
@@ -593,6 +593,32 @@
         "stream": false
       },
       "version": 4
+    },
+    {
+      "id": 20,
+      "name": "@peartube/unpublish-from-feed",
+      "request": {
+        "name": "@peartube/unpublish-from-feed-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/unpublish-from-feed-response",
+        "stream": false
+      },
+      "version": 5
+    },
+    {
+      "id": 21,
+      "name": "@peartube/is-channel-published",
+      "request": {
+        "name": "@peartube/is-channel-published-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/is-channel-published-response",
+        "stream": false
+      },
+      "version": 5
     }
   ]
 }

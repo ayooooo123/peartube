@@ -99,7 +99,11 @@ const methods = new Map([
   ['@peartube/set-storage-limit', 45],
   [45, '@peartube/set-storage-limit'],
   ['@peartube/clear-cache', 46],
-  [46, '@peartube/clear-cache']
+  [46, '@peartube/clear-cache'],
+  ['@peartube/unpublish-from-feed', 47],
+  [47, '@peartube/unpublish-from-feed'],
+  ['@peartube/is-channel-published', 48],
+  [48, '@peartube/is-channel-published']
 ])
 
 class HRPC {
@@ -153,7 +157,9 @@ class HRPC {
       ['@peartube/delete-video', getEncoding('@peartube/delete-video-request')],
       ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-request')],
       ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-request')],
-      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-request')]
+      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-request')],
+      ['@peartube/unpublish-from-feed', getEncoding('@peartube/unpublish-from-feed-request')],
+      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -196,7 +202,9 @@ class HRPC {
       ['@peartube/delete-video', getEncoding('@peartube/delete-video-response')],
       ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-response')],
       ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-response')],
-      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-response')]
+      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-response')],
+      ['@peartube/unpublish-from-feed', getEncoding('@peartube/unpublish-from-feed-response')],
+      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -479,6 +487,14 @@ class HRPC {
     return this._call('@peartube/clear-cache', args)
   }
 
+  async unpublishFromFeed(args) {
+    return this._call('@peartube/unpublish-from-feed', args)
+  }
+
+  async isChannelPublished(args) {
+    return this._call('@peartube/is-channel-published', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -665,6 +681,14 @@ class HRPC {
 
   onClearCache(responseFn) {
     this._handlers['@peartube/clear-cache'] = responseFn
+  }
+
+  onUnpublishFromFeed(responseFn) {
+    this._handlers['@peartube/unpublish-from-feed'] = responseFn
+  }
+
+  onIsChannelPublished(responseFn) {
+    this._handlers['@peartube/is-channel-published'] = responseFn
   }
 
   _requestIsStream(command) {

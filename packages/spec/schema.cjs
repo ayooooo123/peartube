@@ -404,6 +404,30 @@ ns.register({
 })
 
 ns.register({
+  name: 'unpublish-from-feed-request',
+  fields: []
+})
+
+ns.register({
+  name: 'unpublish-from-feed-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'is-channel-published-request',
+  fields: []
+})
+
+ns.register({
+  name: 'is-channel-published-response',
+  fields: [
+    { name: 'published', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
   name: 'hide-channel-request',
   fields: [
     { name: 'channelKey', type: 'string', required: true }
@@ -959,6 +983,18 @@ rpcNs.register({
   name: 'submit-to-feed',
   request: { name: '@peartube/submit-to-feed-request', stream: false },
   response: { name: '@peartube/submit-to-feed-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'unpublish-from-feed',
+  request: { name: '@peartube/unpublish-from-feed-request', stream: false },
+  response: { name: '@peartube/unpublish-from-feed-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'is-channel-published',
+  request: { name: '@peartube/is-channel-published-request', stream: false },
+  response: { name: '@peartube/is-channel-published-response', stream: false }
 })
 
 rpcNs.register({

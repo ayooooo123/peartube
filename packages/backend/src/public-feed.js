@@ -26,15 +26,19 @@ import { FEED_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 export class PublicFeedManager {
   /**
    * @param {import('hyperswarm')} swarm - Hyperswarm instance
+   * @param {import('hyperbee')} [metaDb] - Metadata database for persistence
    */
-  constructor(swarm) {
+  constructor(swarm, metaDb) {
     this.swarm = swarm;
+    this.metaDb = metaDb;
     // Generate deterministic topic from string
     this.feedTopic = crypto.data(b4a.from(FEED_TOPIC_STRING, 'utf-8'));
     /** @type {Map<string, PublicFeedEntry>} */
     this.entries = new Map();
     /** @type {Set<string>} */
     this.hiddenKeys = new Set();
+    /** @type {Set<string>} Channels the user has published (persisted) */
+    this.publishedChannels = new Set();
     /** @type {Map<any, any>} conn → protomux channel */
     this.peerChannels = new Map();
     /** @type {Set<any>} Active feed connections */
@@ -58,6 +62,23 @@ export class PublicFeedManager {
    * NOTE: Connection handling is done via handleConnection() called from main swarm handler
    */
   async start() {
+    // Load persisted published channels from database
+    if (this.metaDb) {
+      try {
+        const data = await this.metaDb.get('published-channels');
+        if (data?.value) {
+          for (const key of data.value) {
+            this.publishedChannels.add(key);
+            // Add to entries so they appear in the feed
+            this.addEntry(key, 'local');
+          }
+          console.log('[PublicFeed] Loaded', this.publishedChannels.size, 'published channels from db');
+        }
+      } catch (err) {
+        console.error('[PublicFeed] Failed to load published channels:', err.message);
+      }
+    }
+
     // Join the public feed topic for discovery
     const discovery = this.swarm.join(this.feedTopic, { server: true, client: true });
     await discovery.flushed();
@@ -250,14 +271,60 @@ export class PublicFeedManager {
    * Submit a channel to the public feed
    * @param {string} driveKey
    */
-  submitChannel(driveKey) {
+  async submitChannel(driveKey) {
     if (this.addEntry(driveKey, 'local')) {
       console.log('[PublicFeed] Submitted local channel:', driveKey.slice(0, 16));
       this.onFeedUpdate?.();
     }
 
+    // Persist to database so it survives restart
+    if (!this.publishedChannels.has(driveKey)) {
+      this.publishedChannels.add(driveKey);
+      if (this.metaDb) {
+        try {
+          await this.metaDb.put('published-channels', Array.from(this.publishedChannels));
+          console.log('[PublicFeed] Persisted published channel to db');
+        } catch (err) {
+          console.error('[PublicFeed] Failed to persist published channel:', err.message);
+        }
+      }
+    }
+
     // Broadcast to all peers
     this.broadcastSubmitChannel(driveKey);
+  }
+
+  /**
+   * Unpublish a channel from the public feed
+   * @param {string} driveKey
+   */
+  async unpublishChannel(driveKey) {
+    // Remove from published set
+    this.publishedChannels.delete(driveKey);
+
+    // Remove from entries (so it doesn't appear in local feed)
+    this.entries.delete(driveKey);
+
+    // Persist to database
+    if (this.metaDb) {
+      try {
+        await this.metaDb.put('published-channels', Array.from(this.publishedChannels));
+        console.log('[PublicFeed] Unpublished channel:', driveKey.slice(0, 16));
+      } catch (err) {
+        console.error('[PublicFeed] Failed to persist unpublish:', err.message);
+      }
+    }
+
+    this.onFeedUpdate?.();
+  }
+
+  /**
+   * Check if a channel is published by the user
+   * @param {string} driveKey
+   * @returns {boolean}
+   */
+  isChannelPublished(driveKey) {
+    return this.publishedChannels.has(driveKey);
   }
 
   /**

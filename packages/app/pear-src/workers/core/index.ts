@@ -169,11 +169,14 @@ async function generateThumbnail(filePath: string, videoId: string, drive: any):
   });
 }
 
+// Allowed video file extensions
+const ALLOWED_VIDEO_EXTENSIONS = ['mp4', 'm4v', 'webm', 'mkv', 'mov', 'avi'];
+
 // Native video file picker using osascript (macOS)
 async function pickVideoFile(): Promise<any> {
   return new Promise((resolve, reject) => {
     const script = `
-      set theFile to choose file with prompt "Select a video file" of type {"public.movie", "public.video", "org.matroska.mkv"}
+      set theFile to choose file with prompt "Select a video file"
       return POSIX path of theFile
     `;
 
@@ -188,6 +191,12 @@ async function pickVideoFile(): Promise<any> {
       if (code === 0 && stdout.trim()) {
         const filePath = stdout.trim();
         try {
+          // Check file extension against whitelist
+          const ext = filePath.split('.').pop()?.toLowerCase() || '';
+          if (!ALLOWED_VIDEO_EXTENSIONS.includes(ext)) {
+            reject(new Error(`Unsupported video format: .${ext}. Allowed formats: ${ALLOWED_VIDEO_EXTENSIONS.join(', ')}`));
+            return;
+          }
           const stat = fs.statSync(filePath);
           resolve({ filePath, name: filePath.split('/').pop() || 'video', size: stat.size });
         } catch (err: any) {

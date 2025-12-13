@@ -820,7 +820,9 @@ ns.register({
     { name: 'videoId', type: 'string', required: true },
     { name: 'progress', type: 'uint', required: true },
     { name: 'bytesUploaded', type: 'uint', required: false },
-    { name: 'totalBytes', type: 'uint', required: false }
+    { name: 'totalBytes', type: 'uint', required: false },
+    { name: 'speed', type: 'uint', required: false },  // bytes/sec
+    { name: 'eta', type: 'uint', required: false }     // seconds remaining
   ]
 })
 

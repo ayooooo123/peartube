@@ -665,7 +665,18 @@ export function VideoPlayerOverlay() {
                 <VLCPlayer
                   key={currentVideo?.id || videoUrl}
                   ref={playerRef}
-                  source={{ uri: videoUrl }}
+                  source={{
+                    uri: videoUrl,
+                    initType: 2,
+                    initOptions: [
+                      '--network-caching=15000',     // 15 seconds of network buffer for 4K
+                      '--file-caching=5000',         // 5 seconds of file buffer
+                      '--live-caching=5000',         // 5 seconds for live streams
+                      '--disc-caching=5000',         // Disc caching
+                      '--avcodec-hw=any',            // Use hardware decoding when available
+                      '--avcodec-threads=0',         // Auto thread count
+                    ],
+                  }}
                   style={StyleSheet.absoluteFill}
                   paused={!isPlaying}
                   rate={playbackRate}

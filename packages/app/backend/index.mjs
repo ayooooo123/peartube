@@ -12,6 +12,7 @@ import { createBackendContext } from '@peartube/backend/orchestrator'
 import { loadDrive } from '@peartube/backend/storage'
 import path from 'bare-path'
 import fs from 'bare-fs'
+import b4a from 'b4a'
 
 // Get IPC from BareKit, args from Bare
 const { IPC } = BareKit

@@ -15,6 +15,15 @@ import pipe from 'pear-pipe';
 import { spawn } from 'bare-subprocess';
 import b4a from 'b4a';
 
+// bare-ffmpeg for fast native transcoding
+let ffmpeg: any = null;
+try {
+  ffmpeg = require('bare-ffmpeg');
+  console.log('[Worker] bare-ffmpeg loaded');
+} catch (err: any) {
+  console.warn('[Worker] bare-ffmpeg not available:', err?.message);
+}
+
 // Import the orchestrator from backend
 // @ts-ignore - backend-core is JavaScript
 import { createBackendContext } from '@peartube/backend/orchestrator';
@@ -66,6 +75,7 @@ console.log('[Worker] Backend initialized via orchestrator');
 // Use dynamic port from blobServer object (more reliable than captured value)
 const getBlobPort = () => (ctx.blobServer as any)?.port || ctx.blobServerPort || 0;
 console.log('[Worker] Blob server port:', getBlobPort());
+
 
 // ============================================
 // Desktop-Specific Functions (File Pickers, FFmpeg)
@@ -122,149 +132,6 @@ async function checkFFmpeg(): Promise<boolean> {
   });
 }
 
-// Check if file is MKV and needs audio transcoding
-function needsAudioTranscode(filePath: string): boolean {
-  return filePath.toLowerCase().endsWith('.mkv');
-}
-
-// Check if MKV has browser-incompatible audio codec using ffprobe
-async function hasIncompatibleAudio(filePath: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      // Use ffprobe to get audio codec info
-      const args = [
-        '-v', 'quiet',
-        '-select_streams', 'a:0',
-        '-show_entries', 'stream=codec_name',
-        '-of', 'csv=p=0',
-        filePath
-      ];
-
-      const proc = spawn('ffprobe', args);
-      let stdout = '';
-
-      proc.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-
-      proc.on('exit', (code: number) => {
-        if (code === 0) {
-          const codec = stdout.trim().toLowerCase();
-          console.log('[FFprobe] Audio codec:', codec);
-
-          // Browser-compatible audio codecs (no transcode needed)
-          const compatibleCodecs = ['aac', 'mp3', 'opus', 'vorbis', 'flac'];
-          const needsTranscode = !compatibleCodecs.includes(codec);
-
-          if (!needsTranscode) {
-            console.log('[FFprobe] Audio codec is browser-compatible, skipping transcode');
-          } else {
-            console.log('[FFprobe] Audio codec needs transcoding:', codec);
-          }
-
-          resolve(needsTranscode);
-        } else {
-          // If ffprobe fails, assume we need transcoding to be safe
-          console.log('[FFprobe] Failed to detect codec, assuming transcode needed');
-          resolve(true);
-        }
-      });
-
-      proc.on('error', () => {
-        // ffprobe not available, assume transcode needed
-        resolve(true);
-      });
-    } catch {
-      resolve(true);
-    }
-  });
-}
-
-// Transcode MKV audio to AAC using native FFmpeg
-// Returns path to transcoded file, or original path if no transcoding needed/failed
-async function transcodeAudioToAAC(filePath: string): Promise<{ path: string; transcoded: boolean }> {
-  if (!needsAudioTranscode(filePath)) {
-    return { path: filePath, transcoded: false };
-  }
-
-  const hasFFmpeg = await checkFFmpeg();
-  if (!hasFFmpeg) {
-    console.log('[FFmpeg] Not available, skipping audio transcode');
-    return { path: filePath, transcoded: false };
-  }
-
-  // Check if audio actually needs transcoding (skip if already AAC/MP3/etc)
-  const needsTranscode = await hasIncompatibleAudio(filePath);
-  if (!needsTranscode) {
-    console.log('[FFmpeg] Audio is already browser-compatible, skipping transcode');
-    return { path: filePath, transcoded: false };
-  }
-
-  // Create temp output path in storage directory (avoids permission issues on external drives)
-  // Uses the same storage path as the backend
-  const tempDir = path.join(storage, 'tmp');
-
-  // Ensure temp directory exists
-  try {
-    fs.mkdirSync(tempDir, { recursive: true });
-  } catch {}
-
-  // Extract filename and create temp path
-  const filename = path.basename(filePath);
-  const tempPath = path.join(tempDir, filename.replace(/\.mkv$/i, '_aac.mkv'));
-
-  const args = [
-    '-i', filePath,
-    '-c:v', 'copy',      // Copy video stream (no re-encode)
-    '-c:a', 'aac',       // Convert audio to AAC
-    '-b:a', '192k',      // Audio bitrate
-    '-y',                // Overwrite output
-    tempPath
-  ];
-
-  console.log('[FFmpeg] Transcoding MKV audio to AAC:', filePath);
-  console.log('[FFmpeg] Output path:', tempPath);
-
-  return new Promise((resolve) => {
-    try {
-      const proc = spawn('ffmpeg', args);
-      let stderr = '';
-      let lastProgress = '';
-
-      proc.stderr.on('data', (chunk: Buffer) => {
-        const text = chunk.toString();
-        stderr += text;
-
-        // Parse FFmpeg progress (time=00:01:23.45)
-        const timeMatch = text.match(/time=(\d+:\d+:\d+\.\d+)/);
-        if (timeMatch && timeMatch[1] !== lastProgress) {
-          lastProgress = timeMatch[1];
-          console.log('[FFmpeg] Transcoding progress:', lastProgress);
-        }
-      });
-
-      proc.on('exit', (code: number) => {
-        if (code === 0) {
-          console.log('[FFmpeg] Audio transcode complete:', tempPath);
-          resolve({ path: tempPath, transcoded: true });
-        } else {
-          console.error('[FFmpeg] Audio transcode failed, code:', code);
-          console.error('[FFmpeg] stderr:', stderr.slice(-500));
-          resolve({ path: filePath, transcoded: false });
-        }
-      });
-
-      proc.on('error', (err: Error) => {
-        console.error('[FFmpeg] Audio transcode error:', err);
-        resolve({ path: filePath, transcoded: false });
-      });
-    } catch (err) {
-      console.error('[FFmpeg] Failed to spawn transcode process:', err);
-      resolve({ path: filePath, transcoded: false });
-    }
-  });
-}
-
 // Generate thumbnail from video file using FFmpeg
 async function generateThumbnail(filePath: string, videoId: string, drive: any): Promise<string | null> {
   const thumbnailPath = `/thumbnails/${videoId}.jpg`;
@@ -312,6 +179,307 @@ async function generateThumbnail(filePath: string, videoId: string, drive: any):
     } catch {
       resolve(null);
     }
+  });
+}
+
+/**
+ * Check if video has audio codec that browsers can't play (AC3, DTS, etc.)
+ * Returns the codec name if transcoding is needed, null otherwise
+ */
+async function getAudioCodec(filePath: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      const args = [
+        '-v', 'quiet',
+        '-select_streams', 'a:0',
+        '-show_entries', 'stream=codec_name',
+        '-of', 'csv=p=0',
+        filePath
+      ];
+
+      const proc = spawn('ffprobe', args);
+      let stdout = '';
+
+      proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      proc.stderr.on('data', () => {}); // Ignore
+
+      proc.on('exit', (code: number) => {
+        if (code === 0) {
+          const codec = stdout.trim().toLowerCase();
+          resolve(codec || null);
+        } else {
+          resolve(null);
+        }
+      });
+
+      proc.on('error', () => resolve(null));
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+/**
+ * Check if audio codec needs transcoding for browser playback
+ */
+function needsAudioTranscode(codec: string | null): boolean {
+  if (!codec) return false;
+  // Codecs that browsers can't play
+  const unsupportedCodecs = ['ac3', 'eac3', 'dts', 'dca', 'truehd', 'mlp'];
+  return unsupportedCodecs.includes(codec.toLowerCase());
+}
+
+/**
+ * Transcode video to MP4 with AAC audio using bare-ffmpeg (native, fast)
+ * Falls back to ffmpeg subprocess if bare-ffmpeg unavailable
+ * Returns path to transcoded file, or null on failure
+ */
+async function transcodeToMP4(inputPath: string, onProgress?: (percent: number) => void): Promise<string | null> {
+  const tempDir = os.tmpdir();
+  const baseName = path.basename(inputPath, path.extname(inputPath));
+  const timestamp = Date.now();
+  const outputPath = path.join(tempDir, `${baseName}_transcoded_${timestamp}.mp4`);
+
+  console.log('[Worker] Transcoding audio to AAC:', inputPath);
+
+  // Try bare-ffmpeg first (native, faster)
+  if (ffmpeg) {
+    try {
+      const result = await transcodeWithBareFFmpeg(inputPath, outputPath, onProgress);
+      if (result) return result;
+    } catch (err: any) {
+      console.warn('[Worker] bare-ffmpeg transcode failed, falling back to subprocess:', err?.message);
+    }
+  }
+
+  // Fallback to ffmpeg subprocess
+  return transcodeWithSubprocess(inputPath, outputPath, onProgress);
+}
+
+/**
+ * Transcode using bare-ffmpeg native bindings
+ */
+async function transcodeWithBareFFmpeg(inputPath: string, outputPath: string, onProgress?: (percent: number) => void): Promise<string | null> {
+  console.log('[Worker] Using bare-ffmpeg native transcode');
+
+  const inputData = fs.readFileSync(inputPath);
+  const inputIO = new ffmpeg.IOContext(inputData);
+  const inputFormat = new ffmpeg.InputFormatContext(inputIO);
+
+  const videoStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.VIDEO);
+  const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO);
+
+  if (!videoStream) {
+    throw new Error('No video stream found');
+  }
+
+  console.log('[Worker] Video codec:', videoStream.codecParameters.id);
+  console.log('[Worker] Audio codec:', audioStream?.codecParameters?.id || 'none');
+
+  // Prepare output buffer
+  const outputChunks: Buffer[] = [];
+  const outputIO = new ffmpeg.IOContext(1024 * 1024, {
+    onwrite: (chunk: Buffer) => {
+      outputChunks.push(Buffer.from(chunk));
+      return chunk.length;
+    }
+  });
+
+  const outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO);
+
+  // Copy video stream directly
+  const outVideoStream = outputFormat.createStream();
+  outVideoStream.codecParameters.copyFrom(videoStream.codecParameters);
+  outVideoStream.timeBase = videoStream.timeBase;
+
+  // Set up audio transcoding to AAC
+  let audioDecoder: any = null;
+  let audioEncoder: any = null;
+  let resampler: any = null;
+  let outAudioStream: any = null;
+
+  if (audioStream) {
+    outAudioStream = outputFormat.createStream();
+    outAudioStream.codecParameters.type = ffmpeg.constants.mediaTypes.AUDIO;
+    outAudioStream.codecParameters.id = ffmpeg.constants.codecs.AAC;
+    outAudioStream.codecParameters.sampleRate = audioStream.codecParameters.sampleRate || 48000;
+    outAudioStream.codecParameters.channelLayout = ffmpeg.constants.channelLayouts.STEREO;
+    outAudioStream.codecParameters.format = ffmpeg.constants.sampleFormats.FLTP;
+    outAudioStream.timeBase = { numerator: 1, denominator: outAudioStream.codecParameters.sampleRate };
+
+    // Decoder for input audio
+    const decoderCodec = new ffmpeg.Codec(audioStream.codecParameters.id);
+    audioDecoder = new ffmpeg.CodecContext(decoderCodec);
+    audioDecoder.sampleRate = audioStream.codecParameters.sampleRate;
+    audioDecoder.channelLayout = audioStream.codecParameters.channelLayout;
+    audioDecoder.sampleFormat = audioStream.codecParameters.format;
+    audioDecoder.timeBase = audioStream.timeBase;
+    audioDecoder.open();
+
+    // Encoder for AAC output
+    const encoderCodec = new ffmpeg.Codec(ffmpeg.constants.codecs.AAC);
+    audioEncoder = new ffmpeg.CodecContext(encoderCodec);
+    audioEncoder.sampleRate = outAudioStream.codecParameters.sampleRate;
+    audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO;
+    audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP;
+    audioEncoder.timeBase = outAudioStream.timeBase;
+    audioEncoder.open();
+
+    // Resampler for format conversion
+    resampler = new ffmpeg.Resampler(
+      audioDecoder.sampleRate,
+      audioDecoder.channelLayout,
+      audioDecoder.sampleFormat,
+      audioEncoder.sampleRate,
+      audioEncoder.channelLayout,
+      audioEncoder.sampleFormat
+    );
+  }
+
+  // Write header
+  outputFormat.writeHeader();
+
+  // Process packets
+  const packet = new ffmpeg.Packet();
+  const frame = new ffmpeg.Frame();
+  const resampledFrame = new ffmpeg.Frame();
+  const outputPacket = new ffmpeg.Packet();
+
+  if (outAudioStream) {
+    resampledFrame.format = ffmpeg.constants.sampleFormats.FLTP;
+    resampledFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO;
+    resampledFrame.sampleRate = audioEncoder.sampleRate;
+    resampledFrame.nbSamples = 1024;
+    resampledFrame.alloc();
+  }
+
+  let packetCount = 0;
+  let totalPackets = 0;
+
+  // First pass to count packets for progress
+  while (inputFormat.readFrame(packet)) {
+    totalPackets++;
+    packet.unref();
+  }
+
+  // Reset to beginning
+  inputIO.destroy();
+  inputFormat.destroy();
+
+  const inputData2 = fs.readFileSync(inputPath);
+  const inputIO2 = new ffmpeg.IOContext(inputData2);
+  const inputFormat2 = new ffmpeg.InputFormatContext(inputIO2);
+  const videoStream2 = inputFormat2.getBestStream(ffmpeg.constants.mediaTypes.VIDEO);
+  const audioStream2 = inputFormat2.getBestStream(ffmpeg.constants.mediaTypes.AUDIO);
+
+  // Process packets
+  while (inputFormat2.readFrame(packet)) {
+    packetCount++;
+
+    if (packet.streamIndex === videoStream2.index) {
+      packet.streamIndex = outVideoStream.index;
+      outputFormat.writeFrame(packet);
+    } else if (audioStream2 && packet.streamIndex === audioStream2.index && outAudioStream && audioDecoder && audioEncoder) {
+      packet.timeBase = audioStream2.timeBase;
+
+      if (audioDecoder.sendPacket(packet)) {
+        while (audioDecoder.receiveFrame(frame)) {
+          const samplesConverted = resampler.convert(frame, resampledFrame);
+          resampledFrame.nbSamples = samplesConverted;
+          resampledFrame.pts = frame.pts;
+          resampledFrame.timeBase = frame.timeBase;
+
+          if (audioEncoder.sendFrame(resampledFrame)) {
+            while (audioEncoder.receivePacket(outputPacket)) {
+              outputPacket.streamIndex = outAudioStream.index;
+              outputFormat.writeFrame(outputPacket);
+              outputPacket.unref();
+            }
+          }
+        }
+      }
+    }
+    packet.unref();
+
+    // Report progress
+    if (totalPackets > 0 && packetCount % 100 === 0) {
+      const percent = Math.round((packetCount / totalPackets) * 100);
+      onProgress?.(percent);
+    }
+  }
+
+  // Flush encoder
+  if (audioEncoder) {
+    audioEncoder.sendFrame(null);
+    while (audioEncoder.receivePacket(outputPacket)) {
+      outputPacket.streamIndex = outAudioStream.index;
+      outputFormat.writeFrame(outputPacket);
+      outputPacket.unref();
+    }
+  }
+
+  outputFormat.writeTrailer();
+  onProgress?.(100);
+
+  // Write output file
+  const outputBuffer = Buffer.concat(outputChunks);
+  fs.writeFileSync(outputPath, outputBuffer);
+
+  // Cleanup
+  inputFormat2.destroy();
+  outputFormat.destroy();
+  if (audioDecoder) audioDecoder.destroy();
+  if (audioEncoder) audioEncoder.destroy();
+  if (resampler) resampler.destroy();
+  frame.destroy();
+  resampledFrame.destroy();
+  inputIO2.destroy();
+  outputIO.destroy();
+
+  console.log('[Worker] bare-ffmpeg transcode complete:', outputPath);
+  return outputPath;
+}
+
+/**
+ * Fallback: Transcode using ffmpeg subprocess
+ */
+async function transcodeWithSubprocess(inputPath: string, outputPath: string, onProgress?: (percent: number) => void): Promise<string | null> {
+  console.log('[Worker] Using ffmpeg subprocess transcode');
+
+  // Get duration for progress
+  const duration = await new Promise<number>((resolve) => {
+    const proc = spawn('ffprobe', ['-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', inputPath]);
+    let stdout = '';
+    proc.stdout.on('data', (c: Buffer) => { stdout += c.toString(); });
+    proc.on('exit', () => resolve(parseFloat(stdout.trim()) || 0));
+    proc.on('error', () => resolve(0));
+  });
+
+  return new Promise((resolve) => {
+    const args = [
+      '-y', '-i', inputPath,
+      '-c:v', 'copy',
+      '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
+      '-movflags', '+faststart',
+      outputPath
+    ];
+
+    const proc = spawn('ffmpeg', args);
+
+    proc.stderr.on('data', (chunk: Buffer) => {
+      const msg = chunk.toString();
+      const timeMatch = msg.match(/time=(\d+):(\d+):(\d+)/);
+      if (timeMatch && duration > 0 && onProgress) {
+        const secs = parseInt(timeMatch[1]) * 3600 + parseInt(timeMatch[2]) * 60 + parseInt(timeMatch[3]);
+        onProgress(Math.min(99, Math.round((secs / duration) * 100)));
+      }
+    });
+
+    proc.on('exit', (code: number) => {
+      onProgress?.(100);
+      resolve(code === 0 ? outputPath : null);
+    });
+    proc.on('error', () => resolve(null));
   });
 }
 
@@ -595,7 +763,10 @@ rpc.onListVideos(async (req: any) => {
 });
 
 rpc.onGetVideoUrl(async (req: any) => {
-  const result = await api.getVideoUrl(req.channelKey, req.videoId);
+  const videoPath = req.videoId;
+  console.log('[Worker] getVideoUrl request:', req.channelKey?.slice(0, 8), videoPath);
+  const result = await api.getVideoUrl(req.channelKey, videoPath);
+  console.log('[Worker] Blob URL:', result.url);
   return { url: result.url };
 });
 
@@ -605,52 +776,83 @@ rpc.onUploadVideo(async (req: any) => {
   const drive = identityManager.getActiveDrive();
   if (!drive) throw new Error('No active identity');
 
-  // For MKV files, transcode audio to AAC for browser compatibility
-  let uploadFilePath = req.filePath;
-  let wasTranscoded = false;
+  let uploadPath = req.filePath;
+  let transcodedPath: string | null = null;
+  let mimeType = getMimeTypeFromPath(req.filePath);
 
-  if (needsAudioTranscode(req.filePath)) {
-    console.log('[Worker] MKV detected, transcoding audio to AAC...');
-    try {
-      rpc.eventUploadProgress({ videoId: '', progress: 0, bytesUploaded: 0, totalBytes: 0 });
-    } catch {}
+  // Check if audio needs transcoding (AC3, DTS, etc. -> AAC)
+  const hasFFmpeg = await checkFFmpeg();
+  if (hasFFmpeg) {
+    const audioCodec = await getAudioCodec(req.filePath);
+    console.log('[Worker] Audio codec detected:', audioCodec);
 
-    const transcodeResult = await transcodeAudioToAAC(req.filePath);
-    uploadFilePath = transcodeResult.path;
-    wasTranscoded = transcodeResult.transcoded;
+    if (needsAudioTranscode(audioCodec)) {
+      console.log('[Worker] Audio codec', audioCodec, 'needs transcoding to AAC');
 
-    if (wasTranscoded) {
-      console.log('[Worker] Audio transcoded successfully, uploading:', uploadFilePath);
+      // Send initial "transcoding" status (negative progress indicates transcoding phase)
+      rpc.eventUploadProgress({
+        videoId: 'transcoding',
+        progress: 0,
+        bytesUploaded: 0,
+        totalBytes: 0,
+        speed: 0,
+        eta: 0
+      });
+
+      transcodedPath = await transcodeToMP4(req.filePath, (percent) => {
+        // Send transcode progress (videoId='transcoding' signals transcode phase to UI)
+        rpc.eventUploadProgress({
+          videoId: 'transcoding',
+          progress: percent,
+          bytesUploaded: 0,
+          totalBytes: 0,
+          speed: 0,
+          eta: 0
+        });
+      });
+
+      if (transcodedPath) {
+        uploadPath = transcodedPath;
+        mimeType = 'video/mp4';
+        console.log('[Worker] Using transcoded file for upload:', uploadPath);
+      } else {
+        console.warn('[Worker] Transcoding failed, uploading original file');
+      }
     }
   }
 
+  // Upload the file
   const result = await uploadManager.uploadFromPath(
     drive,
-    uploadFilePath,
-    { title: req.title, description: req.description, mimeType: getMimeTypeFromPath(uploadFilePath) },
+    uploadPath,
+    { title: req.title, description: req.description, mimeType },
     fs,
-    (progress: number, bytesWritten: number, totalBytes: number) => {
+    (progress: number, bytesWritten: number, totalBytes: number, stats?: { speed?: number; eta?: number }) => {
       try {
-        rpc.eventUploadProgress({ videoId: '', progress, bytesUploaded: bytesWritten, totalBytes });
+        rpc.eventUploadProgress({
+          videoId: '',
+          progress,
+          bytesUploaded: bytesWritten,
+          totalBytes,
+          speed: stats?.speed || 0,
+          eta: stats?.eta || 0
+        });
       } catch {}
     }
   );
 
   // Clean up transcoded temp file
-  if (wasTranscoded && uploadFilePath !== req.filePath) {
+  if (transcodedPath) {
     try {
-      fs.unlinkSync(uploadFilePath);
-      console.log('[Worker] Cleaned up temp transcoded file');
-    } catch (err) {
-      console.warn('[Worker] Failed to clean up temp file:', err);
-    }
+      fs.unlinkSync(transcodedPath);
+      console.log('[Worker] Cleaned up transcoded temp file');
+    } catch {}
   }
 
   // Generate thumbnail if FFmpeg available AND no custom thumbnail will be provided
   // skipThumbnailGeneration is true when user has selected a custom thumbnail
   if (result.success && result.videoId && !req.skipThumbnailGeneration) {
     console.log('[Worker] Generating FFmpeg thumbnail (no custom thumbnail provided)');
-    const hasFFmpeg = await checkFFmpeg();
     if (hasFFmpeg) {
       // Use original file for thumbnail (better quality, no transcode artifacts)
       const thumbPath = await generateThumbnail(req.filePath, result.videoId, drive);

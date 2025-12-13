@@ -23,11 +23,26 @@ function formatDate(timestamp: number): string {
   return date.toLocaleDateString()
 }
 
+function formatSpeed(bytesPerSec: number): string {
+  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(0)} KB/s`
+  return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`
+}
+
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+}
+
 export default function StudioScreen() {
   const insets = useSafeAreaInsets()
   const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos } = useApp()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadSpeed, setUploadSpeed] = useState(0)  // bytes/sec
+  const [uploadEta, setUploadEta] = useState(0)      // seconds remaining
+  const [isTranscoding, setIsTranscoding] = useState(false)  // true during audio transcode phase
   const [title, setTitle] = useState('')
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null)
   const [selectedCategory, setSelectedCategory] = useState('Other')
@@ -213,8 +228,11 @@ export default function StudioScreen() {
         // Skip FFmpeg thumbnail generation if user selected a custom thumbnail
         const skipThumbnail = !!thumbnailFilePath
         console.log('[Studio] Uploading via Pear:', filePath, 'category:', selectedCategory, 'skipThumbnail:', skipThumbnail)
-        const video = await uploadVideo(filePath, title.trim(), '', mimeType, selectedCategory, (progress) => {
+        const video = await uploadVideo(filePath, title.trim(), '', mimeType, selectedCategory, (progress, speed, eta, transcoding) => {
           setUploadProgress(progress)
+          if (speed !== undefined) setUploadSpeed(speed)
+          if (eta !== undefined) setUploadEta(eta)
+          setIsTranscoding(!!transcoding)
         }, skipThumbnail)
         videoId = video?.id
 
@@ -298,6 +316,9 @@ export default function StudioScreen() {
     } finally {
       setUploading(false)
       setUploadProgress(0)
+      setUploadSpeed(0)
+      setUploadEta(0)
+      setIsTranscoding(false)
     }
   }
 
@@ -469,7 +490,15 @@ export default function StudioScreen() {
                 <View className="flex-row items-center justify-center gap-2">
                   <ActivityIndicator color={colors.primary} size="small" />
                   <Text className="text-pear-text-muted text-caption">
-                    Uploading... {uploadProgress}%
+                    {isTranscoding ? (
+                      `Transcoding audio... ${uploadProgress}%`
+                    ) : (
+                      <>
+                        Uploading... {uploadProgress}%
+                        {uploadSpeed > 0 && ` · ${formatSpeed(uploadSpeed)}`}
+                        {uploadEta > 0 && ` · ${formatEta(uploadEta)} left`}
+                      </>
+                    )}
                   </Text>
                 </View>
               </View>

@@ -35,7 +35,7 @@ interface AppContextType {
   blobServerPort: number | null
   rpc: any
   platformEvents?: any
-  uploadVideo: (filePath: string, title: string, description: string, mimeType?: string, category?: string, onProgress?: (progress: number) => void) => Promise<any>
+  uploadVideo: (filePath: string, title: string, description: string, mimeType?: string, category?: string, onProgress?: (progress: number, speed?: number, eta?: number, isTranscoding?: boolean) => void, skipThumbnailGeneration?: boolean) => Promise<any>
   pickVideoFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
   pickImageFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
   loadIdentity: () => Promise<void>
@@ -256,28 +256,49 @@ export default function RootLayout() {
     description: string,
     mimeType: string = 'video/mp4',
     category: string = 'Other',
-    onProgress?: (progress: number) => void,
+    onProgress?: (progress: number, speed?: number, eta?: number, isTranscoding?: boolean) => void,
     skipThumbnailGeneration: boolean = false
   ): Promise<any> => {
     if (!platformRPC) throw new Error('RPC not ready')
 
     console.log('[App] Uploading video:', filePath, 'category:', category, 'skipThumbnailGeneration:', skipThumbnailGeneration)
 
-    const result = await platformRPC.rpc.uploadVideo({
-      filePath,
-      title,
-      description,
-      category,
-      skipThumbnailGeneration,
-    })
-    console.log('[App] Upload complete:', result)
-
-    // Reload videos
-    if (identity?.driveKey) {
-      await loadVideosFromBackend(identity.driveKey)
+    // Listen for progress events during upload (Pear desktop)
+    let progressHandler: ((e: Event) => void) | null = null
+    if (onProgress && isPear && typeof window !== 'undefined') {
+      progressHandler = (e: Event) => {
+        const detail = (e as CustomEvent).detail
+        if (detail?.progress !== undefined) {
+          // videoId='transcoding' indicates transcode phase
+          const isTranscoding = detail.videoId === 'transcoding'
+          onProgress(detail.progress, detail.speed, detail.eta, isTranscoding)
+        }
+      }
+      window.addEventListener('pearUploadProgress', progressHandler)
     }
 
-    return result?.video
+    try {
+      const result = await platformRPC.rpc.uploadVideo({
+        filePath,
+        title,
+        description,
+        category,
+        skipThumbnailGeneration,
+      })
+      console.log('[App] Upload complete:', result)
+
+      // Reload videos
+      if (identity?.driveKey) {
+        await loadVideosFromBackend(identity.driveKey)
+      }
+
+      return result?.video
+    } finally {
+      // Clean up event listener
+      if (progressHandler && typeof window !== 'undefined') {
+        window.removeEventListener('pearUploadProgress', progressHandler)
+      }
+    }
   }, [identity, loadVideosFromBackend])
 
   const pickVideoFileHandler = useCallback(async () => {

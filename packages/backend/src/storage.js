@@ -12,17 +12,12 @@ import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 
-// Bare environments may not have Node's module system; require bare-first, fallback to node
+// Import bare-fs and bare-path for Bare runtime environments (mobile/desktop)
+// Note: These are only available in Bare runtime, guards below handle when they're not
 let fs = null;
 let path = null;
 try { fs = (await import('bare-fs')).default || (await import('bare-fs')); } catch {}
 try { path = (await import('bare-path')).default || (await import('bare-path')); } catch {}
-if (!fs) {
-  try { fs = await import('fs'); } catch {}
-}
-if (!path) {
-  try { path = await import('path'); } catch {}
-}
 
 /**
  * Wrap a corestore to add default timeout to all get() calls.
@@ -294,10 +289,30 @@ export async function getVideoUrl(ctx, driveKey, videoPath) {
   }
   const blobsKey = blobsCore.core.key;
 
+  // Try to get MIME type from video metadata (detected during upload)
+  let mimeType = 'video/mp4'; // Default fallback
+  try {
+    // Extract videoId from path like /videos/{id}.ext
+    const match = videoPath.match(/\/videos\/([^.]+)\./);
+    if (match) {
+      const metaPath = `/videos/${match[1]}.json`;
+      const metaBuf = await drive.get(metaPath);
+      if (metaBuf) {
+        const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
+        if (meta.mimeType) {
+          mimeType = meta.mimeType;
+          console.log('[Storage] Got MIME type from metadata:', mimeType);
+        }
+      }
+    }
+  } catch (err) {
+    console.log('[Storage] Could not read video metadata, using default MIME type');
+  }
+
   // Generate direct blob URL (no redirect needed)
   const url = ctx.blobServer.getLink(blobsKey, {
     blob: blob,
-    type: videoPath.endsWith('.webm') ? 'video/webm' : 'video/mp4'
+    type: mimeType
   });
 
   console.log('[Storage] Direct blob URL:', url);

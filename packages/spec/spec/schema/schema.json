@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "schema": [
     {
       "name": "empty",
@@ -1603,6 +1603,18 @@
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "speed",
+          "required": false,
+          "type": "uint",
+          "version": 8
+        },
+        {
+          "name": "eta",
+          "required": false,
+          "type": "uint",
+          "version": 8
         }
       ]
     },

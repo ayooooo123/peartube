@@ -9,7 +9,17 @@
     "android": "npm run android --prefix packages/app",
     "pear": "npm run pear:dev --prefix packages/app",
     "pear:build": "npm run pear:build --prefix packages/app",
+    "pear:stage": "npm run pear:stage --prefix packages/app",
+    "pear:release": "npm run pear:release --prefix packages/app",
     "bundle:backend": "npm run bundle:backend --prefix packages/app",
+    "build:ios": "npm run build:ios --prefix packages/app",
+    "build:ios:device": "npm run build:ios:device --prefix packages/app",
+    "build:android": "npm run build:android --prefix packages/app",
+    "build:android:apk": "npm run build:android:apk --prefix packages/app",
+    "build:android:aab": "npm run build:android:aab --prefix packages/app",
+    "build:eas:ios": "npm run build:eas:ios --prefix packages/app",
+    "build:eas:android": "npm run build:eas:android --prefix packages/app",
+    "build:eas:all": "npm run build:eas:all --prefix packages/app",
     "typecheck": "npm run typecheck --prefix packages/platform",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx --quiet",
     "lint:fix": "npm run lint -- --fix",
@@ -34,7 +44,6 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "bare-ffmpeg": "^1.0.0",
-    "expo-media-library": "^18.2.1"
+    "bare-ffmpeg": "^1.0.0"
   }
 }

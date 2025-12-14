@@ -19,8 +19,13 @@ config.resolver.nodeModulesPaths = [
   path.resolve(monorepoRoot, 'node_modules'),
 ]
 
-// Disable hierarchical lookup for pnpm compatibility
-config.resolver.disableHierarchicalLookup = true
+// Enable hierarchical lookup for proper module resolution
+config.resolver.disableHierarchicalLookup = false
+
+// Force lucide-react-native to use CJS instead of ESM (ESM has import resolution issues)
+config.resolver.extraNodeModules = {
+  'lucide-react-native': path.resolve(projectRoot, 'node_modules/lucide-react-native/dist/cjs/lucide-react-native.js'),
+}
 
 // Add .bundle.js extension to source extensions so Metro can resolve it
 // The backend.bundle.js file is a CommonJS module that exports a string

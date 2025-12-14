@@ -3,7 +3,7 @@
  * Shows at bottom of screen when video is minimized
  * Uses SHARED player from context for continuous playback
  */
-import { View, Text, Pressable, StyleSheet, Animated, PanResponder } from 'react-native'
+import { View, Text, Pressable, StyleSheet, Animated, PanResponder, Platform } from 'react-native'
 import { useRef } from 'react'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Play, Pause, X } from 'lucide-react-native'
@@ -96,15 +96,22 @@ export function MiniPlayer() {
     }
   }
 
-  // Tab bar height (approximate)
-  const TAB_BAR_HEIGHT = 49
+  // Tab bar height from _layout.tsx: height = 42 + insets.bottom, paddingBottom = max(8, insets.bottom)
+  // On Android with gesture nav, insets.bottom can be small/0 but tab bar still has visual height
+  // Use a minimum that accounts for the tab bar's actual rendered height
+  const TAB_BAR_BASE_HEIGHT = 42
+  const minBottomPadding = Math.max(8, insets.bottom)
+
+  // On Android, add extra padding for gesture navigation area
+  const androidExtraPadding = Platform.OS === 'android' ? 8 : 0
+  const totalTabBarHeight = TAB_BAR_BASE_HEIGHT + minBottomPadding + androidExtraPadding
 
   return (
     <Animated.View
       style={[
         styles.container,
         {
-          bottom: TAB_BAR_HEIGHT + insets.bottom,
+          bottom: totalTabBarHeight,
           transform: [{ translateY: swipeY }],
         },
       ]}

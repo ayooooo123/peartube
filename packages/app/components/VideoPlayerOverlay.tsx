@@ -30,6 +30,7 @@ import Animated, {
 import { Play, Pause, X, ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Users, RotateCcw, RotateCw } from 'lucide-react-native'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { colors } from '@/lib/colors'
+import { useTabBarMetrics } from '@/lib/tabBarHeight'
 
 // Constants
 const MINI_PLAYER_HEIGHT = 64
@@ -231,6 +232,8 @@ export function VideoPlayerOverlay() {
     onError,
   } = useVideoPlayerContext()
 
+  const { height: reportedTabBarHeight, paddingBottom: reportedTabBarPadding } = useTabBarMetrics()
+
   // State for showing seek feedback
   const [seekFeedback, setSeekFeedback] = useState<'left' | 'right' | null>(null)
 
@@ -278,9 +281,9 @@ export function VideoPlayerOverlay() {
   const translateY = useSharedValue(0)
   const isGestureActive = useSharedValue(false)
 
-  // Calculate positions
-  // Only add insets.bottom on iOS - Android tab bar already accounts for safe area
-  const miniPlayerBottom = TAB_BAR_HEIGHT + (Platform.OS === 'ios' ? insets.bottom : 0)
+  // Calculate positions using the tab bar height reported by the tabs layout (includes safe area)
+  // Place the mini player above the entire tab bar height (includes safe area).
+  const miniPlayerBottom = reportedTabBarHeight || (TAB_BAR_HEIGHT + (Platform.OS === 'ios' ? insets.bottom : 0))
   const fullscreenTop = insets.top
 
   // Animate when playerMode changes

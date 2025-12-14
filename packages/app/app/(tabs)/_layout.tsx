@@ -5,13 +5,15 @@
  * - Desktop (Pear): DesktopLayout with header, collapsible sidebar, and content area
  * - Mobile (iOS/Android): Bottom tab bar
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Tabs, Slot } from 'expo-router'
 import { Home, Film, Users, Settings } from 'lucide-react-native'
 import { View, Platform } from 'react-native'
+import { BottomTabBar, type BottomTabBarProps } from '@react-navigation/bottom-tabs'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { DesktopLayout } from '@/components/desktop/DesktopLayout'
+import { setTabBarMetrics } from '@/lib/tabBarHeight'
 import { colors } from '../_layout'
 
 export default function TabLayout() {
@@ -26,6 +28,21 @@ export default function TabLayout() {
   useEffect(() => {
     setIsDesktop(platformIsDesktop)
   }, [platformIsDesktop])
+
+  // Custom tab bar that measures its rendered height and stores it for the mini player
+  const MeasuredTabBar = (props: BottomTabBarProps) => {
+    const onLayout = useCallback((e: any) => {
+      const height = e?.nativeEvent?.layout?.height
+      const paddingBottom = props.safeAreaInsets?.bottom ?? 0
+      setTabBarMetrics(height, paddingBottom)
+    }, [props.safeAreaInsets?.bottom])
+
+    return (
+      <View onLayout={onLayout}>
+        <BottomTabBar {...props} />
+      </View>
+    )
+  }
 
   // Desktop: Full desktop layout with header, sidebar, and content
   if (isDesktop) {
@@ -47,7 +64,7 @@ export default function TabLayout() {
             borderTopColor: colors.border,
             borderTopWidth: 0,
             height: TAB_BAR_HEIGHT + safeInsets.bottom,
-            paddingBottom: Math.max(8, safeInsets.bottom),
+            paddingBottom: safeInsets.bottom,
             paddingTop: 0,
           },
           tabBarActiveTintColor: colors.primary,
@@ -63,6 +80,7 @@ export default function TabLayout() {
             backgroundColor: colors.bg,
           },
         }}
+        tabBar={(props) => <MeasuredTabBar {...props} />}
       >
         <Tabs.Screen
           name="index"

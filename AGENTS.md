@@ -6,12 +6,11 @@ This document provides everything needed to understand and develop the PearTube 
 
 - [Project Overview](#project-overview)
 - [Monorepo Structure](#monorepo-structure)
-- [Desktop App](#desktop-app)
-- [Mobile App](#mobile-app)
-- [Shared Packages](#shared-packages)
+- [Packages](#packages)
+- [App Package (Mobile + Desktop)](#app-package)
+- [Backend Package](#backend-package)
+- [Platform Package](#platform-package)
 - [Hypercore Protocol Stack](#hypercore-protocol-stack)
-- [Worker Architecture](#worker-architecture)
-- [P2P Discovery Protocol](#p2p-discovery-protocol)
 - [Build System](#build-system)
 - [Development Workflow](#development-workflow)
 - [Design System](#design-system)
@@ -37,75 +36,201 @@ This document provides everything needed to understand and develop the PearTube 
 
 ```
 peartube/
-├── apps/
-│   ├── desktop/          # Pear Runtime desktop app
-│   └── mobile/           # Expo/React Native mobile app
 ├── packages/
-│   ├── shared/           # Shared types and constants
-│   └── ui/               # Cross-platform UI components
-├── pnpm-workspace.yaml   # Workspace configuration
+│   ├── app/              # Main app (Expo mobile + Pear desktop)
+│   ├── backend/          # P2P backend logic (Hypercore, Hyperdrive, etc.)
+│   ├── core/             # Shared UI components, hooks, types, stores
+│   ├── platform/         # Platform abstraction (RPC, detection, storage)
+│   └── spec/             # HRPC schema and generated code
 ├── package.json          # Root scripts
-└── .npmrc                # Critical: hoisting config for Pear
+└── pnpm-workspace.yaml   # Workspace configuration
 ```
 
-### Package Manager Setup
+### Package Dependencies
 
-- **Root + Mobile**: Use `pnpm` with hoisted node_modules
-- **Desktop**: Uses separate `npm install` for Pear's Bare module resolver
-
-**Critical `.npmrc` settings:**
-```ini
-shamefully-hoist=true
-node-linker=hoisted
-public-hoist-pattern[]=*
 ```
-
-> **Why?** Pear's Bare runtime cannot resolve pnpm symlinks. All dependencies must be hoisted to root node_modules.
+@peartube/app
+  └── @peartube/core
+      └── @peartube/platform
+          └── @peartube/spec
+  └── @peartube/backend (via bundle)
+```
 
 ---
 
-## Desktop App
+## Packages
 
-**Location:** `apps/desktop/`
+### `@peartube/app` - Main Application
 
-**Framework:** Pear Runtime with pear-electron bridge
+**Location:** `packages/app/`
 
-### Directory Structure
+The unified app package that builds for both mobile (iOS/Android via Expo) and desktop (Pear Runtime).
 
 ```
-apps/desktop/
-├── src/
-│   ├── App.tsx                 # Main React component
-│   ├── index.tsx               # React entry point
-│   ├── worker-client.js        # Worker IPC client (no ES imports!)
-│   ├── pages/                  # Page components
-│   ├── components/             # UI components
-│   └── lib/
-│       ├── rpc.ts              # RPC client interface
-│       └── theme.ts            # Design tokens
-├── workers/
-│   └── core/
-│       ├── index.ts            # P2P backend (TypeScript)
-│       └── public-feed.ts      # P2P discovery protocol
-├── scripts/
-│   └── inject-pear-bar.js      # Post-build HTML injection
-├── build/
-│   └── workers/core/           # Compiled workers (SWC output)
-├── index.html                  # Entry point (from Expo web export)
+packages/app/
+├── app/                        # Expo Router (file-based routing)
+│   ├── _layout.tsx             # Root layout + backend init
+│   └── (tabs)/                 # Tab navigation
+│       ├── index.tsx           # Home
+│       ├── subscriptions.tsx   # Subscriptions
+│       ├── studio.tsx          # Studio/Upload
+│       └── settings.tsx        # Settings
+├── backend/
+│   └── index.mjs               # P2P backend entry (bundled for mobile)
+├── components/
+│   ├── VideoPlayerOverlay.tsx  # Global video player overlay
+│   ├── video/                  # Video components
+│   ├── ui/                     # Gluestack UI components
+│   └── desktop/                # Desktop-specific components
+├── lib/
+│   ├── VideoPlayerContext.tsx  # Global video state
+│   ├── PlatformProvider.tsx    # Platform detection
+│   └── colors.ts               # Design tokens
+├── pear/                       # Built Pear desktop app
+├── pear-src/                   # Pear desktop source
+│   ├── package.json            # Pear app manifest
+│   ├── index.js                # Pear entry point
+│   ├── worker-client.js        # Worker IPC client
+│   └── workers/core/index.ts   # Pear backend worker
+├── Frameworks/                 # iOS XCFrameworks (native addons)
+├── backend.bundle.js           # Compiled Bare backend for mobile
+├── ios/                        # iOS native project
+├── android/                    # Android native project
 └── package.json
 ```
+
+### `@peartube/backend` - P2P Backend
+
+**Location:** `packages/backend/`
+
+Core P2P logic shared between mobile and desktop.
+
+```
+packages/backend/
+└── src/
+    ├── index.js            # Main exports
+    ├── orchestrator.js     # Backend orchestration
+    ├── storage.js          # Corestore/Hyperdrive management
+    ├── swarm.js            # Hyperswarm networking
+    ├── public-feed.js      # P2P discovery protocol
+    ├── video-stats.js      # Video streaming stats
+    ├── seeding.js          # Content seeding
+    ├── api.js              # RPC API handlers
+    ├── identity.js         # User identity management
+    └── upload.js           # Video upload handling
+```
+
+### `@peartube/platform` - Platform Abstraction
+
+**Location:** `packages/platform/`
+
+Abstracts platform differences between mobile (Bare Kit) and desktop (Pear).
+
+```
+packages/platform/
+└── src/
+    ├── index.js            # Main exports
+    ├── detection.js        # Platform detection
+    ├── storage.js          # Platform-specific storage
+    ├── rpc.native.ts       # Mobile RPC (Bare Kit IPC)
+    └── rpc.web.ts          # Desktop RPC (Pear worker pipe)
+```
+
+**Conditional Exports:**
+```json
+{
+  "./rpc": {
+    "react-native": "./src/rpc.native.ts",
+    "default": "./src/rpc.web.ts"
+  }
+}
+```
+
+### `@peartube/core` - Shared Core
+
+**Location:** `packages/core/`
+
+Shared UI components, hooks, types, and stores.
+
+```
+packages/core/
+└── src/
+    ├── components/         # Shared UI components
+    ├── hooks/              # Shared hooks
+    ├── types/              # TypeScript types
+    ├── utils/              # Utility functions
+    └── stores/             # State stores
+```
+
+### `@peartube/spec` - HRPC Schema
+
+**Location:** `packages/spec/`
+
+HRPC schema definitions and generated code for RPC communication.
+
+```
+packages/spec/
+├── schema.cjs              # Schema generator script
+└── spec/
+    ├── hrpc/
+    │   ├── index.js        # HRPC exports
+    │   └── messages.js     # Generated message types
+    └── schema/
+        ├── index.js        # Schema exports
+        └── schema.json     # JSON schema
+```
+
+---
+
+## App Package
 
 ### Key Scripts
 
 ```bash
-npm run dev        # Build + run with pear
-npm run build      # Full build pipeline
-npm run preview    # Run without rebuilding
-npm run typecheck  # TypeScript validation
+# Mobile Development
+npm start              # Start Metro dev server
+npm run ios            # Build + run on iOS simulator
+npm run android        # Build + run on Android
+npm run bundle:backend # Compile Bare backend for mobile
+
+# Desktop Development
+npm run pear:dev       # Build + run Pear desktop app
+npm run pear:build     # Full Pear build pipeline
+npm run pear:stage     # Stage for release
+npm run pear:release   # Release to Pear network
 ```
+
+### Build Pipelines
+
+**Mobile Build:**
+```bash
+npm run bundle:backend  # bare-pack -> backend.bundle.js
+npm run ios             # expo run:ios
+```
+
+**Desktop Build (pear:build):**
+```bash
+npm run pear:export     # expo export --platform web
+npm run pear:merge      # Copy web assets to pear/
+npm run pear:copy       # Copy pear-src files
+npm run pear:install    # npm install in pear/
+npm run pear:worker     # Compile worker with SWC
+npm run pear:inject     # Inject Pear bar into HTML
+```
+
+### Platform-Specific Files
+
+Metro bundler resolves platform-specific extensions:
+- `Component.tsx` - Native iOS/Android
+- `Component.web.tsx` - Web/Desktop (Pear)
+- `Component.ios.tsx` - iOS only
+- `Component.android.tsx` - Android only
+
+**Important:** When debugging desktop issues, check for `.web.tsx` versions!
 
 ### Pear Configuration
 
+**`pear-src/package.json`:**
 ```json
 {
   "pear": {
@@ -116,196 +241,56 @@ npm run typecheck  # TypeScript validation
       "width": 1280,
       "height": 800,
       "backgroundColor": "#000000"
-    },
-    "stage": {
-      "ignore": [".git", "src", "workers", "scripts", "build/src"]
     }
   }
 }
 ```
 
-### Worker Communication
+### Worker Architecture
 
-The desktop app uses a **newline-delimited JSON protocol** for renderer-worker IPC:
-
+**Desktop (Pear):**
 ```
-Frontend (React) ←→ Pipe (JSON + newline) ←→ Core Worker (Bare runtime)
-```
-
-**Message Format:**
-```typescript
-// Request
-{ id: "1", command: "LIST_VIDEOS", data: { channelKey: "..." } }
-
-// Response
-{ id: "1", success: true, data: [...] }
+React UI <-> Pipe (JSON) <-> Core Worker (pear-src/workers/core/index.ts)
 ```
 
-### Important: worker-client.js
-
-This file **must not use ES module imports** - Pear's DependencyStream cannot resolve them:
-
-```javascript
-// WRONG - will break pear
-import path from 'path'
-
-// CORRECT - use globals
-const config = Pear.config
-this.pipe = Pear.worker.run(workerPath, [])
+**Mobile (Bare Kit):**
+```
+React Native <-> BareKit.IPC <-> Bare Worklet (backend/index.mjs)
 ```
 
 ---
 
-## Mobile App
+## Backend Package
 
-**Location:** `apps/mobile/`
+### Architecture
 
-**Framework:** Expo 54 + React Native 0.81 with Bare Kit for P2P
-
-### Directory Structure
-
-```
-apps/mobile/
-├── app/                        # Expo Router (file-based routing)
-│   ├── _layout.tsx             # Root layout + backend init
-│   └── (tabs)/                 # Tab navigation
-│       ├── index.tsx           # Home
-│       ├── subscriptions.tsx
-│       ├── studio.tsx
-│       └── settings.tsx
-├── backend/
-│   └── index.mjs               # P2P backend source
-├── components/
-│   ├── video/                  # Video player components
-│   ├── ui/                     # Gluestack UI components
-│   └── desktop/                # Desktop-specific (web export)
-├── lib/
-│   ├── VideoPlayerContext.tsx  # Global video state
-│   ├── PlatformProvider.tsx    # Platform detection
-│   └── colors.ts               # Design tokens
-├── Frameworks/                 # iOS XCFrameworks (native addons)
-├── backend.bundle.js           # Compiled Bare backend
-├── ios/                        # iOS native project
-├── android/                    # Android native project
-└── package.json
-```
-
-### Platform-Specific Files (.web.tsx)
-
-Metro bundler automatically resolves platform-specific extensions:
-- `Component.tsx` - Native iOS/Android
-- `Component.web.tsx` - Web/Desktop (used by Pear desktop)
-- `Component.ios.tsx` - iOS only
-- `Component.android.tsx` - Android only
-
-**Important files with web-specific versions:**
-```
-app/(tabs)/index.tsx          # Mobile home screen
-app/(tabs)/index.web.tsx      # Desktop home screen (different implementation!)
-
-components/video/VideoCard.tsx      # Mobile video card
-components/video/VideoCard.web.tsx  # Desktop video card with hover effects
-
-components/desktop/             # Desktop-only components
-  DesktopLayout.web.tsx
-  DesktopHeader.web.tsx
-  DesktopSidebar.web.tsx
-```
-
-> **Warning:** When debugging desktop issues, always check for `.web.tsx` versions! Changes to `index.tsx` won't affect desktop if `index.web.tsx` exists.
-
-### Key Scripts
-
-```bash
-pnpm start           # Start Metro dev server
-pnpm ios             # Build + run on iOS
-pnpm android         # Build + run on Android
-pnpm web:export      # Export for desktop (Expo web)
-pnpm bundle:backend  # Compile Bare backend
-```
-
-### Backend Architecture
-
-The mobile backend runs in a **Bare worklet thread** separate from React Native:
-
-```
-React Native JS Thread ←→ BareKit.IPC ←→ Bare Worklet Thread
-```
-
-**Bundle Command:**
-```bash
-bare-pack --target ios --target android --linked --out backend.bundle.js backend/index.mjs
-```
-
-### Native Modules (iOS)
-
-Pre-built XCFrameworks in `Frameworks/` directory:
-- sodium-native
-- rocksdb-native
-- udx-native
-- And others...
-
-Build with: `./scripts/build-addons.sh`
-
----
-
-## Shared Packages
-
-### `packages/shared/`
-
-Shared types and constants between desktop and mobile.
-
-**Key Types:**
-```typescript
-interface Identity {
-  publicKey: string
-  driveKey: string
-  name: string
-  secretKey?: string
-}
-
-interface Video {
-  id: string
-  title: string
-  path: string
-  size: number
-  channelKey: string
-  duration?: number
-}
-
-interface Channel {
-  driveKey: string
-  name: string
-  description?: string
-  avatar?: string
-}
-```
-
-**RPC Commands:**
-```typescript
-export const RPC = {
-  GET_STATUS: 1,
-  CREATE_IDENTITY: 2,
-  GET_IDENTITIES: 3,
-  LIST_VIDEOS: 5,
-  GET_VIDEO_URL: 6,
-  SUBSCRIBE_CHANNEL: 7,
-  UPLOAD_VIDEO: 10,
-  // ...
-}
-
-export const PUBLIC_FEED_TOPIC = 'peartube-public-feed-v1'
-```
-
-### `packages/ui/`
-
-Cross-platform UI components with conditional exports:
+The backend orchestrates all P2P functionality:
 
 ```typescript
-// Exports React components for web, React Native for mobile
-export { Button } from './web/Button'     // Desktop
-export { Button } from './native/Button'  // Mobile
+// Main initialization flow
+import { createOrchestrator } from '@peartube/backend/orchestrator'
+
+const backend = await createOrchestrator({
+  storagePath: '/path/to/storage',
+  onReady: (data) => { /* blob server port, etc */ },
+  onVideoStats: (stats) => { /* streaming progress */ },
+  onError: (err) => { /* handle errors */ }
+})
 ```
+
+### Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `orchestrator.js` | Main backend lifecycle management |
+| `storage.js` | Corestore, Hyperdrive, Hyperbee setup |
+| `swarm.js` | Hyperswarm P2P networking |
+| `public-feed.js` | Channel discovery gossip protocol |
+| `video-stats.js` | Real-time streaming stats |
+| `seeding.js` | Background content seeding |
+| `api.js` | RPC request handlers |
+| `identity.js` | User keypair management |
+| `upload.js` | Video upload + transcoding |
 
 ---
 
@@ -317,113 +302,52 @@ export { Button } from './native/Button'  // Mobile
 | `hyperdrive` | ^13.0.0 | Distributed file storage (videos) |
 | `hyperbee` | ^2.26.0 | Key-value metadata database |
 | `hyperswarm` | ^4.15.0 | P2P networking and discovery |
-| `corestore` | ^6.18.0 | Storage management |
+| `corestore` | ^7.7.0 | Storage management |
 | `hypercore-crypto` | ^3.6.0 | Ed25519 cryptography |
-| `hypercore-blob-server` | ^1.12.0 | HLS video streaming |
+| `hypercore-blob-server` | ^1.12.0 | Video streaming server |
 
 ### Data Model
 
 **Per-Channel Hyperdrive:**
 ```
-/channel.json           # Channel metadata
-/videos/{id}/
-  ├── manifest.m3u8     # HLS manifest
-  ├── segment-0.ts      # Video segments
-  ├── segment-1.ts
-  └── metadata.json     # Video metadata
+/videos/{id}.mp4          # Video file
+/videos/{id}.json         # Video metadata
+/thumbnails/{id}.jpg      # Thumbnail
+/channel.json             # Channel metadata
 ```
 
-**Per-Channel Hyperbee:**
-```
-/channel/info           # Channel details
-/videos/{id}/metadata   # Video metadata index
-```
+### P2P Discovery Protocol
 
----
-
-## Worker Architecture
-
-### Desktop Worker (`workers/core/index.ts`)
-
-**Responsibilities:**
-- Initialize Hyperswarm P2P networking
-- Manage Hyperdrive channels (create, subscribe, sync)
-- Handle RPC calls from frontend
-- Stream video via HLS blob server
-- Manage user identities and keypairs
-- Track video download progress
-
-**Key Components:**
-```typescript
-const swarm = new Hyperswarm()
-const store = new Corestore(storagePath)
-const blobServer = new BlobServer(store)
-const publicFeed = new PublicFeedManager(swarm)
-```
-
-### Mobile Backend (`backend/index.mjs`)
-
-Same responsibilities but uses:
-- `bare-rpc` instead of newline-delimited JSON
-- `BareKit.IPC` for thread communication
-- XCFrameworks for native modules
-
----
-
-## P2P Discovery Protocol
-
-### Public Feed Manager
-
-Gossip protocol using Protomux over Hyperswarm for channel discovery.
-
-**Topic:** `peartube-public-feed-v1` (hardcoded)
+**Topic:** `peartube-public-feed-v1`
 
 **Flow:**
-1. Join hardcoded discovery topic
-2. On peer connect: Exchange `HAVE_FEED` (list of known channels)
-3. New channel added: Send `SUBMIT_CHANNEL` to all peers
+1. Join hardcoded discovery topic via Hyperswarm
+2. On peer connect: Exchange known channel keys
+3. New channel: Gossip to all connected peers
 4. Peers re-gossip to their neighbors
-
-**Messages:**
-```typescript
-{ type: 'HAVE_FEED', keys: ['key1', 'key2', ...] }
-{ type: 'SUBMIT_CHANNEL', key: 'newChannelKey' }
-```
 
 ---
 
 ## Build System
 
-### Desktop Build Pipeline
+### Root Scripts
 
 ```bash
-# 1. Compile TypeScript workers with SWC
-npx swc workers/core/*.ts -d build/workers/core/
-
-# 2. Build Expo web export from mobile
-cd ../mobile && expo export --platform web
-
-# 3. Copy web assets to desktop
-cp -r ../mobile/dist/* .
-
-# 4. Inject Pear bar into HTML
-node scripts/inject-pear-bar.js .
-
-# 5. Run with Pear
-pear run --dev .
+npm run build           # Build all packages
+npm run dev             # Development mode
+npm run typecheck       # TypeScript validation
+npm run gen:schema      # Regenerate HRPC schema
 ```
 
-### Mobile Build Pipeline
+### Package-Specific Scripts
 
 ```bash
-# Development
-expo start          # Metro dev server
+# In packages/app
+npm run bundle:backend  # bare-pack for mobile
+npm run pear:dev        # Pear desktop dev
 
-# iOS Build
-expo run:ios        # Build + deploy
-
-# Bundle backend (required before native build)
-bare-pack --target ios --target android --linked --out backend.bundle.js backend/index.mjs
+# In packages/spec
+npm run gen:schema      # Generate HRPC messages
 ```
 
 ---
@@ -433,51 +357,39 @@ bare-pack --target ios --target android --linked --out backend.bundle.js backend
 ### Initial Setup
 
 ```bash
-# Clone and install root dependencies
 git clone <repo>
 cd peartube
-pnpm install
+npm install
 
-# Install desktop dependencies (uses npm, not pnpm)
-cd apps/desktop
-npm install --legacy-peer-deps
+# Mobile (iOS)
+cd packages/app
+npm run bundle:backend
+npx pod-install
+npm run ios
 
-# Install iOS pods (if developing mobile)
-cd ../mobile
-pod install
-```
-
-### Running Apps
-
-```bash
-# Desktop
-cd apps/desktop
-npm run dev
-
-# Mobile iOS
-cd apps/mobile
-pnpm ios
-
-# Mobile Android
-pnpm android
+# Desktop (Pear)
+npm run pear:dev
 ```
 
 ### Making Changes
 
-**Desktop worker changes:**
+**Frontend changes:** Hot reload works automatically
+
+**Backend changes:**
 ```bash
-npm run build:worker  # Recompile TypeScript
-npm run preview       # Run without full rebuild
+# Mobile
+npm run bundle:backend
+npm run ios  # Rebuild required
+
+# Desktop
+npm run pear:dev  # Rebuilds worker automatically
 ```
 
-**Mobile backend changes:**
+**Schema changes:**
 ```bash
-pnpm bundle:backend   # Recompile Bare bundle
-pnpm ios              # Rebuild native app
+cd packages/spec
+npm run gen:schema
 ```
-
-**Shared package changes:**
-- Changes reflect immediately (symlinked)
 
 ---
 
@@ -488,77 +400,48 @@ pnpm ios              # Rebuild native app
 ```typescript
 const colors = {
   primary: '#9147ff',      // Vibrant purple
-  background: '#0e0e10',   // Almost black
-  card: '#1f1f23',         // Card background
+  bg: '#0e0e10',           // Almost black
+  bgHover: '#1f1f23',      // Card background
   border: '#303035',       // Borders
   text: '#efeff1',         // Primary text
   textMuted: '#7a7a85',    // Secondary text
 }
 ```
 
-### Spacing
+### Video Player
 
-```typescript
-const spacing = {
-  xs: 4,
-  sm: 8,
-  md: 12,
-  lg: 16,
-  xl: 24,
-  xxl: 32,
-  xxxl: 48,
-}
+The video player uses a global overlay pattern:
+
+```
+RootLayout
+  └── VideoPlayerProvider (context)
+      └── App Content
+      └── VideoPlayerOverlay (fixed position, animated)
 ```
 
-### Typography
+**Key States:**
+- `hidden` - No video playing
+- `mini` - Mini player at bottom
+- `fullscreen` - Full screen portrait
+- `landscape` - Landscape fullscreen (mobile only)
 
-```typescript
-const fontSize = {
-  xs: 11,
-  sm: 12,
-  md: 14,
-  lg: 16,
-  xl: 18,
-  xxl: 24,
-  xxxl: 32,
-}
-```
+**Important Notes:**
+- Uses VLC player on mobile for broad codec support
+- Animated with react-native-reanimated
+- Shared values (`isLandscapeFullscreenShared`) used for smooth transitions
 
 ---
 
 ## Troubleshooting
 
-### "Cannot find module '/'"
+### "Cannot find module"
 
 **Cause:** Pear's DependencyStream failing to resolve paths
 
 **Solutions:**
-1. Delete stale `build/src/` folder
-2. Ensure `/_expo/` paths are converted to `./_expo/` in HTML
-3. Remove `type="module"` from script tags
-4. Rebuild: `npm run build`
-
-### "ADDON_NOT_FOUND" (iOS)
-
-**Cause:** Native modules not linked
-
-**Solution:**
-```bash
-cd apps/mobile
-./scripts/build-addons.sh
-npm run bundle:backend
-pod install
-```
-
-### Pear module resolution fails
-
-**Cause:** pnpm symlinks incompatible with Bare
-
-**Solution:** Use npm for desktop, ensure `.npmrc` has:
-```ini
-shamefully-hoist=true
-node-linker=hoisted
-```
+1. Ensure relative paths in HTML (`./_expo/` not `/_expo/`)
+2. Remove `type="module"` from script tags
+3. Rebuild: `npm run pear:build`
 
 ### Worker not responding
 
@@ -567,63 +450,31 @@ node-linker=hoisted
 **Debug:**
 1. Check worker console logs
 2. Verify worker path in `worker-client.js`
-3. Ensure `build/workers/core/index.js` exists
-
-### React Error #130 (Element type undefined)
-
-**Cause:** Platform-specific file exports don't match
-
-**Example:** `VideoCard.web.tsx` exports `VideoCardDesktop` but `index.ts` imports `VideoCard`
-
-**Solution:**
-1. Check if there's a `.web.tsx` version of the component
-2. Ensure exported function/component names match between platform versions
-3. Ensure `VideoCardProps` interface is exported if imported elsewhere
+3. Ensure `pear/build/workers/core/index.js` exists
 
 ### Desktop changes not working
 
 **Cause:** Editing wrong file - `.web.tsx` version exists
 
 **Solution:**
-1. Check for `app/(tabs)/index.web.tsx` - this is used on desktop, not `index.tsx`
-2. Check for `Component.web.tsx` files that override the base component
-3. Desktop uses the web export, which loads `.web.tsx` files via Metro bundler
-
-### Desktop UI overlapping/z-index issues
-
-**Cause:** Fixed position elements with conflicting z-index
-
-**Solution:**
-Use these z-index values:
-- Sidebar: 50
-- Header: 100
-- Modal overlays: 1000+
+1. Check for `Component.web.tsx` files
+2. Desktop uses web export which loads `.web.tsx` via Metro
 
 ---
 
-## Worker IPC Architecture
+## Key Files Reference
 
-### Worker Communication
-
-**Client side (`lib/worker-client.js`):**
-```javascript
-// Uses IPC API (preferred) or falls back to Pear.worker.run (deprecated)
-function runWorker(path, args) {
-  if (typeof Pear[Pear.constructor.IPC]?.run === 'function') {
-    return Pear[Pear.constructor.IPC].run(path, args)
-  }
-  return Pear.worker.run(path, args)
-}
-this.pipe = runWorker(workerPath, [])
-```
-
-**Worker side (`workers/core/index.ts`):**
-```javascript
-import pipe from 'pear-pipe'
-const ipcPipe = pipe()
-```
-
-Communication uses newline-delimited JSON (qvac pattern).
+| File | Purpose |
+|------|---------|
+| `packages/app/app/_layout.tsx` | Root layout + backend init |
+| `packages/app/components/VideoPlayerOverlay.tsx` | Global video player |
+| `packages/app/lib/VideoPlayerContext.tsx` | Video player state |
+| `packages/app/pear-src/workers/core/index.ts` | Desktop P2P backend |
+| `packages/app/backend/index.mjs` | Mobile P2P backend entry |
+| `packages/backend/src/orchestrator.js` | Backend orchestration |
+| `packages/platform/src/rpc.native.ts` | Mobile RPC |
+| `packages/platform/src/rpc.web.ts` | Desktop RPC |
+| `packages/spec/spec/hrpc/messages.js` | Generated RPC messages |
 
 ---
 
@@ -635,8 +486,6 @@ Communication uses newline-delimited JSON (qvac pattern).
 |----------|-----|
 | **Pear Runtime Docs** | https://docs.pears.com |
 | **Pear Runtime GitHub** | https://github.com/holepunchto/pear |
-| **Pear Desktop App Guide** | https://docs.pears.com/guides/making-a-pear-desktop-app |
-| **Pear Terminal App Guide** | https://docs.pears.com/guides/making-a-pear-terminal-app |
 
 ### Bare Runtime
 
@@ -645,173 +494,21 @@ Communication uses newline-delimited JSON (qvac pattern).
 | **Bare Runtime** | https://github.com/holepunchto/bare |
 | **Bare Kit (React Native)** | https://github.com/holepunchto/bare-kit |
 | **Bare Pack (Bundler)** | https://github.com/holepunchto/bare-pack |
-| **Bare RPC** | https://github.com/holepunchto/bare-rpc |
 
 ### Hypercore Protocol
 
 | Resource | URL |
 |----------|-----|
-| **Hypercore Protocol Org** | https://github.com/holepunchto |
 | **Hypercore** | https://github.com/holepunchto/hypercore |
 | **Hyperdrive** | https://github.com/holepunchto/hyperdrive |
 | **Hyperbee** | https://github.com/holepunchto/hyperbee |
 | **Hyperswarm** | https://github.com/holepunchto/hyperswarm |
-| **Corestore** | https://github.com/holepunchto/corestore |
-| **Autobase** | https://github.com/holepunchto/autobase |
 
-### Video & Streaming
-
-| Resource | URL |
-|----------|-----|
-| **Hypercore Blob Server** | https://github.com/holepunchto/hypercore-blob-server |
-| **Hypervision (Video Example)** | https://github.com/mafintosh/hypervision |
-
-### Sample Apps & Examples
-
-| Resource | URL |
-|----------|-----|
-| **Keet (P2P Chat App)** | https://keet.io |
-| **Pear Examples** | https://github.com/holepunchto/pear-examples |
-| **Bare Examples** | https://github.com/holepunchto/bare-examples |
-| **Hyperswarm Examples** | https://github.com/holepunchto/hyperswarm#examples |
-
-### Utilities & Tools
-
-| Resource | URL |
-|----------|-----|
-| **Protomux** | https://github.com/holepunchto/protomux |
-| **Secret Stream** | https://github.com/holepunchto/secret-stream |
-| **Compact Encoding** | https://github.com/holepunchto/compact-encoding |
-| **B4A (Buffer Utils)** | https://github.com/holepunchto/b4a |
-| **Pear Electron** | https://github.com/holepunchto/pear-electron |
-| **Pear Bridge** | https://github.com/holepunchto/pear-bridge |
-
-### Reference Apps (Pear v2 Compliant)
-
-| Resource | URL | Description |
-|----------|-----|-------------|
-| **Pearl Notes** | https://github.com/sayf-t/pearl-notes | React + Pear notes app with P2P sync - excellent reference |
-| **Keet** | https://keet.io | Production P2P chat/video app by Holepunch |
-
-### Community & Support
+### Community
 
 | Resource | URL |
 |----------|-----|
 | **Holepunch Discord** | https://discord.gg/holepunch |
-| **Hypercore Protocol Discord** | https://chat.hypercore-protocol.org |
-
----
-
-## Reference: Pearl Notes Architecture
-
-Pearl Notes (https://github.com/sayf-t/pearl-notes) is a Pear v2 compliant React app that demonstrates clean patterns for integrating React with Pear. Key learnings:
-
-### Architecture Pattern
-
-```
-React UI → window.Pearl (Core API) → Pear Backend Modules
-```
-
-**Key Files:**
-- `index.js` - Pear main process (Bridge + Runtime setup)
-- `ui.js` - UI initialization, exposes `window.Pearl`
-- `src/core/pearlCore.js` - Core API facade (exposed to React)
-- `src/pear-end/vault/hyperdriveClient.js` - Hyperdrive/Hyperswarm setup
-
-### Build System (esbuild instead of Expo)
-
-```json
-{
-  "scripts": {
-    "build:ui": "node scripts/build-ui.mjs",
-    "watch:ui": "node scripts/build-ui.mjs --watch",
-    "dev": "pear run --dev .",
-    "predev": "npm run build:ui"
-  }
-}
-```
-
-Uses esbuild to bundle React, avoiding Metro/Expo complexity for desktop-only apps.
-
-### Core API Pattern
-
-```javascript
-// src/core/pearlCore.js - Facade pattern
-import { ensureVaultConfig } from '../pear-end/vault/vaultConfig.js'
-import { listNotes, getNote, saveNote, deleteNote } from '../pear-end/notes/notesStore.js'
-
-export async function initializeCore() {
-  await ensureVaultConfig()
-  startBackgroundSync()
-}
-
-// Exposed to UI via window.Pearl
-export { listNotes, getNote, saveNote, deleteNote, getVaultStatus, ... }
-```
-
-### Hyperdrive Client Pattern
-
-```javascript
-// src/pear-end/vault/hyperdriveClient.js
-import Corestore from 'corestore'
-import Hyperdrive from 'hyperdrive'
-import Hyperswarm from 'hyperswarm'
-
-const storagePath = global.Pear?.config?.storage || process.env.STORAGE || '.'
-const store = new Corestore(storagePath)
-const swarm = new Hyperswarm()
-
-let drive = null
-let driveKey = null
-
-export async function ensureDrive(key) {
-  if (!drive || key !== driveKey) {
-    drive = key ? new Hyperdrive(store, Buffer.from(key, 'hex')) : new Hyperdrive(store)
-    await drive.ready()
-    driveKey = drive.key.toString('hex')
-
-    // Join swarm for replication
-    swarm.on('connection', conn => store.replicate(conn))
-    swarm.join(drive.discoveryKey)
-  }
-  return drive
-}
-
-export function getPeerCount() { return swarm.connections.size }
-export function getCurrentDriveKey() { return driveKey }
-```
-
-### Key Differences from PearTube
-
-| Aspect | Pearl Notes | PearTube |
-|--------|-------------|----------|
-| Build | esbuild (simple) | Expo web export (complex) |
-| UI-Backend | `window.Pearl` global | Worker IPC (pipe) |
-| React | Direct in renderer | Expo/Metro bundled |
-| Complexity | Single app | Monorepo (mobile + desktop) |
-
-### Lessons for PearTube
-
-1. **Simpler build**: Consider esbuild for desktop-only builds instead of Expo web export
-2. **Global API**: `window.Pearl` pattern is cleaner than IPC for simple cases
-3. **No workers**: Pearl Notes runs Hypercore in renderer process directly
-4. **CSS Modules**: Uses `.module.css` for scoped styling
-
----
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `apps/desktop/workers/core/index.ts` | Main P2P backend logic |
-| `apps/desktop/workers/core/public-feed.ts` | Gossip discovery protocol |
-| `apps/desktop/src/worker-client.js` | Renderer-worker IPC |
-| `apps/desktop/scripts/inject-pear-bar.js` | Post-build HTML processing |
-| `apps/mobile/backend/index.mjs` | Mobile P2P backend |
-| `apps/mobile/app/_layout.tsx` | Root layout + initialization |
-| `apps/mobile/components/desktop/DesktopLayout.web.tsx` | Desktop web layout |
-| `packages/shared/src/types/index.ts` | Domain types |
-| `packages/shared/src/constants/index.ts` | RPC commands |
 
 ---
 
@@ -829,11 +526,16 @@ export function getCurrentDriveKey() { return driveKey }
 │           │                                  │                   │
 │           ▼                                  ▼                   │
 │  ┌──────────────────┐              ┌──────────────────┐         │
-│  │   Core Worker    │              │  Bare Backend    │         │
-│  │   (Bare JS)      │              │  (Bare Worklet)  │         │
+│  │  @peartube/platform (rpc.web)   │  @peartube/platform (rpc.native)
 │  └────────┬─────────┘              └────────┬─────────┘         │
 │           │                                  │                   │
 │           └──────────────┬───────────────────┘                   │
+│                          ▼                                       │
+│           ┌──────────────────────────────┐                      │
+│           │       @peartube/backend      │                      │
+│           │  (orchestrator, storage,     │                      │
+│           │   swarm, api, upload, etc)   │                      │
+│           └──────────────┬───────────────┘                      │
 │                          ▼                                       │
 │           ┌──────────────────────────────┐                      │
 │           │     Hypercore Protocol       │                      │

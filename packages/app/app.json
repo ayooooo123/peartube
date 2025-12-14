@@ -4,7 +4,7 @@
     "slug": "peartube",
     "version": "1.0.0",
     "newArchEnabled": true,
-    "orientation": "portrait",
+    "orientation": "default",
     "scheme": "peartube",
     "icon": "./assets/images/icon.png",
     "userInterfaceStyle": "dark",

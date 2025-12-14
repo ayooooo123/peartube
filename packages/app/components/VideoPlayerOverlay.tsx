@@ -5,7 +5,7 @@
  * Uses VLC player for broad codec support
  */
 import { useCallback, useEffect, useState, useRef } from 'react'
-import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions } from 'react-native'
 import * as FileSystem from 'expo-file-system'
 import { rpc } from '@peartube/platform/rpc'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -27,7 +27,8 @@ import Animated, {
   runOnJS,
   Extrapolation,
 } from 'react-native-reanimated'
-import { Play, Pause, X, ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Users, RotateCcw, RotateCw } from 'lucide-react-native'
+import { Play, Pause, X, ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Users, RotateCcw, RotateCw, Maximize, Minimize } from 'lucide-react-native'
+import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { colors } from '@/lib/colors'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
@@ -194,6 +195,22 @@ export function VideoPlayerOverlay() {
   const { isDesktop, isPear } = usePlatform()
   const { isCollapsed } = useSidebar()
 
+  // For landscape fullscreen, track screen dimensions as shared values
+  // This allows animated styles to use current screen size without React re-renders
+  const landscapeWidth = useSharedValue(Dimensions.get('screen').width)
+  const landscapeHeight = useSharedValue(Dimensions.get('screen').height)
+
+  useEffect(() => {
+    const updateDims = () => {
+      const screen = Dimensions.get('screen')
+      landscapeWidth.value = screen.width
+      landscapeHeight.value = screen.height
+    }
+    updateDims()
+    const subscription = Dimensions.addEventListener('change', updateDims)
+    return () => subscription.remove()
+  }, [])
+
   // Dynamic sidebar width for desktop overlay positioning
   const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH
 
@@ -246,6 +263,9 @@ export function VideoPlayerOverlay() {
   // State for showing custom controls overlay
   const [showControls, setShowControls] = useState(false)
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  // State for true fullscreen (landscape, hidden UI)
+  const [isLandscapeFullscreen, setIsLandscapeFullscreen] = useState(false)
+  const isLandscapeFullscreenShared = useSharedValue(false)
 
   // Show controls temporarily
   const showControlsTemporarily = useCallback(() => {
@@ -260,7 +280,7 @@ export function VideoPlayerOverlay() {
 
   // Toggle controls on tap
   const handleVideoTap = useCallback(() => {
-    if (playerMode === 'fullscreen') {
+    if (playerMode === 'fullscreen' || isLandscapeFullscreen) {
       if (showControls) {
         setShowControls(false)
         if (controlsTimeoutRef.current) {
@@ -273,7 +293,7 @@ export function VideoPlayerOverlay() {
       // Tap on video thumbnail in mini mode -> maximize
       maximizePlayer()
     }
-  }, [playerMode, showControls, showControlsTemporarily, maximizePlayer])
+  }, [playerMode, isLandscapeFullscreen, showControls, showControlsTemporarily, maximizePlayer])
 
 
   // Animation progress: 0 = mini, 1 = fullscreen
@@ -296,7 +316,9 @@ export function VideoPlayerOverlay() {
   }, [playerMode])
 
   // Pan gesture for dragging between states
+  // Disabled in landscape mode to prevent interfering with video controls
   const panGesture = Gesture.Pan()
+    .enabled(!isLandscapeFullscreen)
     .activeOffsetY([-10, 10]) // Require 10px vertical drag before activating (prevents tap from triggering)
     .onStart(() => {
       isGestureActive.value = true
@@ -346,7 +368,20 @@ export function VideoPlayerOverlay() {
   const fullscreenHeight = Platform.OS === 'android' ? screenHeight + insets.bottom : screenHeight
 
   const containerStyle = useAnimatedStyle(() => {
-    // Interpolate position
+    // In landscape fullscreen, fill the entire screen
+    if (isLandscapeFullscreenShared.value) {
+      return {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: landscapeWidth.value,
+        height: landscapeHeight.value,
+        zIndex: 9999,
+        backgroundColor: '#000',
+      }
+    }
+
+    // Interpolate position for portrait mode (mini <-> fullscreen)
     const top = interpolate(
       animProgress.value,
       [0, 1],
@@ -373,6 +408,17 @@ export function VideoPlayerOverlay() {
 
   // Animated styles for the video
   const videoStyle = useAnimatedStyle(() => {
+    // In landscape fullscreen, fill the container
+    if (isLandscapeFullscreenShared.value) {
+      return {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: landscapeWidth.value,
+        height: landscapeHeight.value,
+      }
+    }
+
     const width = interpolate(
       animProgress.value,
       [0, 1],
@@ -434,8 +480,19 @@ export function VideoPlayerOverlay() {
     return { opacity }
   })
 
-  // Video player style - adds top padding for status bar/notch in fullscreen
+  // Video player style - adds top padding for status bar/notch in fullscreen (portrait only)
   const videoPlayerStyle = useAnimatedStyle(() => {
+    // In landscape, fill the container (no top padding - status bar hidden)
+    if (isLandscapeFullscreenShared.value) {
+      return {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+      }
+    }
+
     const topPadding = interpolate(
       animProgress.value,
       [0, 1],
@@ -449,6 +506,96 @@ export function VideoPlayerOverlay() {
       left: 0,
       right: 0,
       bottom: 0,
+    }
+  })
+
+  // Progress bar style - positions at bottom, adjusts for landscape
+  const progressBarStyle = useAnimatedStyle(() => {
+    if (isLandscapeFullscreenShared.value) {
+      return {
+        position: 'absolute',
+        bottom: 16,
+        left: 16,
+        right: 16,
+        height: 32,
+        justifyContent: 'flex-end',
+        zIndex: 15,
+        opacity: 1,
+      }
+    }
+
+    // In portrait, use fullscreenContentStyle opacity
+    const opacity = interpolate(
+      animProgress.value,
+      [0.5, 1],
+      [0, 1],
+      Extrapolation.CLAMP
+    )
+
+    return {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      height: 32,
+      justifyContent: 'flex-end',
+      zIndex: 15,
+      opacity,
+    }
+  })
+
+  // Time display style - positions above progress bar
+  const timeDisplayStyle = useAnimatedStyle(() => {
+    if (isLandscapeFullscreenShared.value) {
+      return {
+        position: 'absolute',
+        bottom: 56,
+        left: 16,
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 4,
+        zIndex: 10,
+      }
+    }
+
+    return {
+      position: 'absolute',
+      bottom: 24,
+      left: 12,
+      backgroundColor: 'rgba(0,0,0,0.6)',
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
+      zIndex: 10,
+    }
+  })
+
+  // Fullscreen button style
+  const fullscreenButtonStyle = useAnimatedStyle(() => {
+    const opacity = interpolate(
+      animProgress.value,
+      [0.5, 1],
+      [0, 1],
+      Extrapolation.CLAMP
+    )
+
+    if (isLandscapeFullscreenShared.value) {
+      return {
+        position: 'absolute',
+        bottom: 56,
+        right: 16,
+        zIndex: 10,
+        opacity: 1,
+      }
+    }
+
+    return {
+      position: 'absolute',
+      bottom: 44,
+      right: 12,
+      zIndex: 10,
+      opacity,
     }
   })
 
@@ -479,6 +626,51 @@ export function VideoPlayerOverlay() {
     const nextIndex = (currentIndex + 1) % PLAYBACK_SPEEDS.length
     setPlaybackRate(PLAYBACK_SPEEDS[nextIndex])
   }, [playbackRate, setPlaybackRate])
+
+  // Toggle true fullscreen (landscape mode)
+  // Uses shared values so VLC doesn't remount - position should be preserved
+  const toggleLandscapeFullscreen = useCallback(async () => {
+    if (Platform.OS === 'web') return
+
+    try {
+      if (isLandscapeFullscreen) {
+        // Exit fullscreen - return to portrait
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+        isLandscapeFullscreenShared.value = false
+        setIsLandscapeFullscreen(false)
+        StatusBar.setHidden(false)
+      } else {
+        // Enter fullscreen - force landscape
+        StatusBar.setHidden(true)
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
+        isLandscapeFullscreenShared.value = true
+        setIsLandscapeFullscreen(true)
+        showControlsTemporarily()
+      }
+    } catch (err) {
+      console.error('[VideoPlayer] Failed to change orientation:', err)
+    }
+  }, [isLandscapeFullscreen, showControlsTemporarily])
+
+  // Clean up orientation on unmount or video close
+  useEffect(() => {
+    return () => {
+      if (isLandscapeFullscreenShared.value) {
+        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+        StatusBar.setHidden(false)
+      }
+    }
+  }, [])
+
+  // Exit landscape fullscreen when player mode changes to mini or hidden
+  useEffect(() => {
+    if ((playerMode === 'mini' || playerMode === 'hidden') && isLandscapeFullscreen) {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
+      StatusBar.setHidden(false)
+      isLandscapeFullscreenShared.value = false
+      setIsLandscapeFullscreen(false)
+    }
+  }, [playerMode, isLandscapeFullscreen])
 
   // State for download
   const [isDownloading, setIsDownloading] = useState(false)
@@ -655,65 +847,77 @@ export function VideoPlayerOverlay() {
     )
   }
 
-  // Mobile: Animated overlay
-  return (
-    <GestureDetector gesture={composedGesture}>
-      <Animated.View style={[styles.container, containerStyle]}>
-        {/* Video area */}
-        <Animated.View style={[styles.videoWrapper, videoStyle]}>
-          {/* Background */}
-          <Pressable style={styles.videoBackground} onPress={handleVideoTap}>
-            {Platform.OS !== 'web' && videoUrl && VLCPlayer ? (
-              <Animated.View style={videoPlayerStyle}>
-                <VLCPlayer
-                  key={currentVideo?.id || videoUrl}
-                  ref={playerRef}
-                  source={{
-                    uri: videoUrl,
-                    initType: 2,
-                    initOptions: [
-                      '--network-caching=15000',     // 15 seconds of network buffer for 4K
-                      '--file-caching=5000',         // 5 seconds of file buffer
-                      '--live-caching=5000',         // 5 seconds for live streams
-                      '--disc-caching=5000',         // Disc caching
-                      '--avcodec-hw=any',            // Use hardware decoding when available
-                      '--avcodec-threads=0',         // Auto thread count
-                    ],
-                  }}
-                  style={StyleSheet.absoluteFill}
-                  paused={!isPlaying}
-                  rate={playbackRate}
-                  seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
-                  resizeMode="contain"
-                  onProgress={onProgress}
-                  onPlaying={onPlaying}
-                  onPaused={onPaused}
-                  onBuffering={onBuffering}
-                  onEnd={onEnded}
-                  onError={onError}
-                />
-              </Animated.View>
-            ) : Platform.OS === 'web' && videoUrl ? (
-              <video
-                src={videoUrl}
-                controls
-                autoPlay
-                onCanPlay={onPlaying}
-                onPause={onPaused}
-                onPlay={onPlaying}
-                onEnded={onEnded}
-                onError={onError}
-                style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
-              />
-            ) : (
-              <View style={styles.videoPlaceholder}>
-                <Text style={styles.placeholderText}>
-                  {currentVideo.title.charAt(0).toUpperCase()}
-                </Text>
-              </View>
-            )}
+  // Mobile: Single render path - landscape uses View wrapper, portrait uses Animated.View
+  // The VLCPlayer stays mounted across orientation changes for smooth transitions
+  const renderVideoPlayer = () => (
+    <>
+      {Platform.OS !== 'web' && videoUrl && VLCPlayer && (
+        <VLCPlayer
+          key={currentVideo?.id || videoUrl}
+          ref={playerRef}
+          source={{
+            uri: videoUrl,
+            initType: 2,
+            initOptions: [
+              '--network-caching=15000',
+              '--file-caching=5000',
+              '--live-caching=5000',
+              '--disc-caching=5000',
+              '--avcodec-hw=any',
+              '--avcodec-threads=0',
+            ],
+          }}
+          style={StyleSheet.absoluteFill}
+          paused={!isPlaying}
+          rate={playbackRate}
+          seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
+          resizeMode="contain"
+          onProgress={onProgress}
+          onPlaying={onPlaying}
+          onPaused={onPaused}
+          onBuffering={onBuffering}
+          onEnd={onEnded}
+          onError={onError}
+        />
+      )}
+      {Platform.OS === 'web' && videoUrl && (
+        <video
+          src={videoUrl}
+          controls
+          autoPlay
+          onCanPlay={onPlaying}
+          onPause={onPaused}
+          onPlay={onPlaying}
+          onEnded={onEnded}
+          onError={onError}
+          style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
+        />
+      )}
+      {!videoUrl && (
+        <View style={styles.videoPlaceholder}>
+          <Text style={styles.placeholderText}>
+            {currentVideo.title.charAt(0).toUpperCase()}
+          </Text>
+        </View>
+      )}
+    </>
+  )
 
-            {/* Loading overlay */}
+  // Render - all styles are animated, no React state conditionals in JSX to prevent VLC remounting
+  const content = (
+    <Animated.View style={[styles.container, containerStyle]}>
+          {/* Video area */}
+          <Animated.View style={[styles.videoWrapper, videoStyle]}>
+            {/* Background - fills the parent container */}
+            <Pressable
+              style={styles.videoBackground}
+              onPress={handleVideoTap}
+            >
+              <Animated.View style={videoPlayerStyle}>
+                {renderVideoPlayer()}
+              </Animated.View>
+
+              {/* Loading overlay */}
             {isLoading && (
               <View style={styles.loadingOverlay}>
                 <ActivityIndicator color="white" size="large" />
@@ -721,8 +925,8 @@ export function VideoPlayerOverlay() {
               </View>
             )}
 
-            {/* Custom controls overlay - shown on tap in fullscreen */}
-            {playerMode === 'fullscreen' && showControls && (
+            {/* Custom controls overlay - shown on tap in fullscreen or landscape */}
+            {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && (
               <View style={styles.controlsOverlay}>
                 {/* Seek backward */}
                 <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('left')}>
@@ -763,8 +967,8 @@ export function VideoPlayerOverlay() {
             )}
           </Pressable>
 
-          {/* Fullscreen minimize button - only show with controls */}
-          {playerMode === 'fullscreen' && showControls && (
+          {/* Fullscreen minimize button - only show with controls, not in landscape */}
+          {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && (
             <Animated.View style={[styles.minimizeButton, fullscreenContentStyle]}>
               <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
                 <ChevronDown color="#fff" size={28} />
@@ -773,7 +977,7 @@ export function VideoPlayerOverlay() {
           )}
 
           {/* Speed control button - only show with controls */}
-          {playerMode === 'fullscreen' && showControls && (
+          {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && (
             <Animated.View style={[styles.speedButton, fullscreenContentStyle]}>
               <Pressable onPress={cyclePlaybackSpeed} style={styles.speedButtonInner}>
                 <Text style={styles.speedButtonText}>{playbackRate}x</Text>
@@ -781,9 +985,23 @@ export function VideoPlayerOverlay() {
             </Animated.View>
           )}
 
+          {/* Fullscreen button - only show with controls */}
+          {playerMode === 'fullscreen' && showControls && (
+            <Animated.View style={fullscreenButtonStyle}>
+              <Pressable onPress={toggleLandscapeFullscreen} style={styles.fullscreenButtonInner}>
+                {/* Icon changes based on state but doesn't affect VLC */}
+                {isLandscapeFullscreen ? (
+                  <Minimize color="#fff" size={22} />
+                ) : (
+                  <Maximize color="#fff" size={22} />
+                )}
+              </Pressable>
+            </Animated.View>
+          )}
+
           {/* YouTube-style thin progress bar - always visible, seekable */}
           <Animated.View
-            style={[styles.thinProgressContainer, fullscreenContentStyle]}
+            style={progressBarStyle}
             ref={progressBarRef}
             onLayout={(e) => {
               progressBarWidth.current = e.nativeEvent.layout.width
@@ -837,8 +1055,8 @@ export function VideoPlayerOverlay() {
           </Animated.View>
 
           {/* Time display - only show with controls */}
-          {playerMode === 'fullscreen' && showControls && (
-            <Animated.View style={[styles.timeDisplay, fullscreenContentStyle]}>
+          {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && (
+            <Animated.View style={timeDisplayStyle}>
               <Text style={styles.timeText}>
                 {formatDuration(isSeeking ? seekPosition : currentTime)} / {formatDuration(duration)}
               </Text>
@@ -846,41 +1064,48 @@ export function VideoPlayerOverlay() {
           )}
         </Animated.View>
 
-        {/* Mini player info row */}
-        <Animated.View style={[styles.miniInfo, miniInfoStyle]}>
-          <Pressable onPress={maximizePlayer} style={StyleSheet.absoluteFill}>
-            <View style={styles.miniInfoText}>
-              <Text style={styles.miniTitle} numberOfLines={1}>
-                {currentVideo.title}
-              </Text>
-              <Text style={styles.miniChannel} numberOfLines={1}>
-                {channelName}
-              </Text>
-            </View>
-          </Pressable>
-        </Animated.View>
+        {/* Mini player info row - hidden in landscape */}
+        {!isLandscapeFullscreen && (
+          <Animated.View style={[styles.miniInfo, miniInfoStyle]}>
+            <Pressable onPress={maximizePlayer} style={StyleSheet.absoluteFill}>
+              <View style={styles.miniInfoText}>
+                <Text style={styles.miniTitle} numberOfLines={1}>
+                  {currentVideo.title}
+                </Text>
+                <Text style={styles.miniChannel} numberOfLines={1}>
+                  {channelName}
+                </Text>
+              </View>
+            </Pressable>
+          </Animated.View>
+        )}
 
-        {/* Mini player controls */}
-        <Animated.View style={[styles.miniControls, miniControlsStyle]}>
-          <Pressable style={styles.miniControlButton} onPress={handlePlayPause}>
-            {isPlaying ? (
-              <Pause color={colors.text} size={24} fill={colors.text} />
-            ) : (
-              <Play color={colors.text} size={24} fill={colors.text} />
-            )}
-          </Pressable>
-          <Pressable style={styles.miniControlButton} onPress={closeVideo}>
-            <X color={colors.text} size={24} />
-          </Pressable>
-        </Animated.View>
+        {/* Mini player controls - hidden in landscape */}
+        {!isLandscapeFullscreen && (
+          <Animated.View style={[styles.miniControls, miniControlsStyle]}>
+            <Pressable style={styles.miniControlButton} onPress={handlePlayPause}>
+              {isPlaying ? (
+                <Pause color={colors.text} size={24} fill={colors.text} />
+              ) : (
+                <Play color={colors.text} size={24} fill={colors.text} />
+              )}
+            </Pressable>
+            <Pressable style={styles.miniControlButton} onPress={closeVideo}>
+              <X color={colors.text} size={24} />
+            </Pressable>
+          </Animated.View>
+        )}
 
-        {/* Mini player progress bar */}
-        <Animated.View style={[styles.miniProgressBar, miniInfoStyle]}>
-          <View style={[styles.miniProgressFill, { width: `${playbackProgress * 100}%` }]} />
-        </Animated.View>
+        {/* Mini player progress bar - hidden in landscape */}
+        {!isLandscapeFullscreen && (
+          <Animated.View style={[styles.miniProgressBar, miniInfoStyle]}>
+            <View style={[styles.miniProgressFill, { width: `${playbackProgress * 100}%` }]} />
+          </Animated.View>
+        )}
 
-        {/* Fullscreen content */}
-        <Animated.View style={[styles.fullscreenContent, fullscreenContentStyle]}>
+        {/* Fullscreen content - hidden in landscape */}
+        {!isLandscapeFullscreen && (
+          <Animated.View style={[styles.fullscreenContent, fullscreenContentStyle]}>
           <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
             {/* P2P Stats */}
             {Platform.OS !== 'web' && <P2PStatsBar stats={videoStats} />}
@@ -916,6 +1141,7 @@ export function VideoPlayerOverlay() {
             )}
           </ScrollView>
         </Animated.View>
+        )}
 
         {downloadBanner && (
           <View style={[styles.toast, { bottom: insets.bottom + 24 }]}>
@@ -923,7 +1149,14 @@ export function VideoPlayerOverlay() {
             <Text style={styles.toastText}>{downloadBanner}</Text>
           </View>
         )}
-      </Animated.View>
+    </Animated.View>
+  )
+
+  // Always use same structure to prevent remounting
+  // GestureDetector is disabled in landscape via the enabled property on the gesture
+  return (
+    <GestureDetector gesture={composedGesture}>
+      {content}
     </GestureDetector>
   )
 }
@@ -933,12 +1166,62 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
     overflow: 'hidden',
   },
+  // Landscape fullscreen styles
+  landscapeContainer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+    zIndex: 9999,
+  },
+  landscapeAnimatedContainer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+  },
+  landscapeExitButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 20,
+  },
+  landscapeTimeDisplay: {
+    position: 'absolute',
+    bottom: 40,
+    left: 16,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 4,
+    zIndex: 20,
+  },
+  landscapeProgressContainer: {
+    position: 'absolute',
+    bottom: 16,
+    left: 16,
+    right: 16,
+    height: 24,
+    justifyContent: 'center',
+    zIndex: 20,
+  },
+  landscapeVideoWrapper: {
+    ...StyleSheet.absoluteFillObject,
+    flex: 1,
+    backgroundColor: '#000',
+  },
   videoWrapper: {
     backgroundColor: '#000',
     overflow: 'hidden',
   },
   videoBackground: {
     flex: 1,
+    backgroundColor: '#000',
+  },
+  landscapeVideoBackground: {
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
   },
   videoPlaceholder: {
@@ -1048,6 +1331,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  fullscreenButton: {
+    position: 'absolute',
+    bottom: 44,
+    right: 12,
+    zIndex: 10,
+  },
+  fullscreenButtonLandscape: {
+    bottom: 16,
+    right: 16,
+  },
+  fullscreenButtonInner: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   // YouTube-style thin progress bar (always visible, seekable)
   thinProgressContainer: {
     position: 'absolute',
@@ -1055,6 +1356,15 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 32, // Larger touch target
+    justifyContent: 'flex-end',
+    zIndex: 15,
+  },
+  thinProgressContainerLandscape: {
+    position: 'absolute',
+    bottom: 0,
+    left: 16,
+    right: 16,
+    height: 32,
     justifyContent: 'flex-end',
     zIndex: 15,
   },
@@ -1115,6 +1425,10 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 4,
     zIndex: 10,
+  },
+  timeDisplayLandscape: {
+    bottom: 16,
+    left: 16,
   },
   // Fullscreen progress bar (shown with controls)
   fullscreenProgressContainer: {

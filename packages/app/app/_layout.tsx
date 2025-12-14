@@ -341,8 +341,8 @@ export default function RootLayout() {
                     contentStyle: { backgroundColor: colors.bg },
                   }}
                 />
-                <VideoPlayerOverlay />
               </View>
+              <VideoPlayerOverlay />
             </VideoPlayerProvider>
           </AppContext.Provider>
         </PlatformProvider>

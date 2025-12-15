@@ -194,6 +194,11 @@ export function VideoPlayerOverlay() {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions()
   const { isDesktop, isPear } = usePlatform()
   const { isCollapsed } = useSidebar()
+  const isWindowLandscape = screenWidth > screenHeight
+  const exitGateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const exitGateLastSnapshotRef = useRef<string | null>(null)
+  const exitGateStableCountRef = useRef(0)
+  const exitGateAttemptsRef = useRef(0)
 
   // For landscape fullscreen, track screen dimensions as shared values
   // This allows animated styles to use current screen size without React re-renders
@@ -265,7 +270,9 @@ export function VideoPlayerOverlay() {
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   // State for true fullscreen (landscape, hidden UI)
   const [isLandscapeFullscreen, setIsLandscapeFullscreen] = useState(false)
+  const [pendingLandscapeExit, setPendingLandscapeExit] = useState(false)
   const isLandscapeFullscreenShared = useSharedValue(false)
+  const [channelMetaName, setChannelMetaName] = useState<string | null>(null)
 
   // Show controls temporarily
   const showControlsTemporarily = useCallback(() => {
@@ -301,10 +308,107 @@ export function VideoPlayerOverlay() {
   const translateY = useSharedValue(0)
   const isGestureActive = useSharedValue(false)
 
-  // Calculate positions using the tab bar height reported by the tabs layout (includes safe area)
-  // Place the mini player above the entire tab bar height (includes safe area).
-  const miniPlayerBottom = reportedTabBarHeight || (TAB_BAR_HEIGHT + (Platform.OS === 'ios' ? insets.bottom : 0))
+  // Calculate positions using measured tab bar metrics (preferred) with a safe fallback.
+  // Pixel/Android gesture nav can report a non-zero bottom inset; never ignore it.
+  const expectedTabBarHeight = TAB_BAR_HEIGHT + Math.max(insets.bottom, reportedTabBarPadding || 0)
+  const miniPlayerBottom = Math.max(reportedTabBarHeight || 0, expectedTabBarHeight)
   const fullscreenTop = insets.top
+
+  // When exiting landscape fullscreen, keep rendering the fullscreen container until window dimensions AND insets settle.
+  // The tricky part: StatusBar visibility + safe area insets can lag behind the orientation lock by a few frames.
+  // If we show portrait info/actions too early, it lays out against transient dimensions/insets and visibly jumps.
+  useEffect(() => {
+    if (!pendingLandscapeExit) return
+    if (isWindowLandscape) return
+
+    // Ensure status bar is restored *before* we reveal portrait content.
+    StatusBar.setHidden(false)
+
+    // Wait for a stable snapshot of layout inputs before clearing landscape flags.
+    // This avoids the portrait info/actions rendering against a transient (stale) top inset / window size.
+    if (exitGateTimeoutRef.current) clearTimeout(exitGateTimeoutRef.current)
+    exitGateLastSnapshotRef.current = null
+    exitGateStableCountRef.current = 0
+    exitGateAttemptsRef.current = 0
+
+    const tick = () => {
+      exitGateAttemptsRef.current += 1
+
+      const snapshot = JSON.stringify({
+        screenWidth,
+        screenHeight,
+        insetTop: insets.top,
+        insetBottom: insets.bottom,
+        tabBarHeight: reportedTabBarHeight,
+        tabBarPadding: reportedTabBarPadding,
+      })
+
+      if (exitGateLastSnapshotRef.current === snapshot) {
+        exitGateStableCountRef.current += 1
+      } else {
+        exitGateLastSnapshotRef.current = snapshot
+        exitGateStableCountRef.current = 0
+      }
+
+      // Require 2 consecutive stable ticks, but also cap total wait to ~400ms to avoid getting stuck.
+      if (exitGateStableCountRef.current >= 2 || exitGateAttemptsRef.current >= 8) {
+        isLandscapeFullscreenShared.value = false
+        setIsLandscapeFullscreen(false)
+        setPendingLandscapeExit(false)
+        exitGateTimeoutRef.current = null
+        return
+      }
+
+      exitGateTimeoutRef.current = setTimeout(tick, 50)
+    }
+
+    // Kick off on next tick.
+    exitGateTimeoutRef.current = setTimeout(tick, 0)
+
+    return () => {
+      if (exitGateTimeoutRef.current) {
+        clearTimeout(exitGateTimeoutRef.current)
+        exitGateTimeoutRef.current = null
+      }
+    }
+  }, [
+    pendingLandscapeExit,
+    isWindowLandscape,
+    screenWidth,
+    screenHeight,
+    insets.top,
+    insets.bottom,
+    reportedTabBarHeight,
+    reportedTabBarPadding,
+  ])
+
+  // Fetch channel metadata so the channel row remains stable even when currentVideo lacks embedded channel info.
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadChannelMeta() {
+      const channelKey = currentVideo?.channelKey || currentVideo?.channel?.key
+      if (!channelKey || !rpc?.getChannelMeta) {
+        setChannelMetaName(null)
+        return
+      }
+
+      try {
+        const result = await rpc.getChannelMeta({ channelKey })
+        if (cancelled) return
+        setChannelMetaName(result?.name || null)
+      } catch (err) {
+        if (cancelled) return
+        console.warn('[VideoPlayerOverlay] Failed to load channel meta:', err)
+        setChannelMetaName(null)
+      }
+    }
+
+    loadChannelMeta()
+    return () => {
+      cancelled = true
+    }
+  }, [currentVideo?.channelKey])
 
   // Animate when playerMode changes
   useEffect(() => {
@@ -411,9 +515,6 @@ export function VideoPlayerOverlay() {
     // In landscape fullscreen, fill the container
     if (isLandscapeFullscreenShared.value) {
       return {
-        position: 'absolute',
-        left: 0,
-        top: 0,
         width: landscapeWidth.value,
         height: landscapeHeight.value,
       }
@@ -633,24 +734,31 @@ export function VideoPlayerOverlay() {
     if (Platform.OS === 'web') return
 
     try {
+      if (pendingLandscapeExit) return
+
       if (isLandscapeFullscreen) {
-        // Exit fullscreen - return to portrait
+        // Exit fullscreen - return to portrait.
+        // Important: don't flip the React/Shared flags until the window has remeasured to portrait.
+        setPendingLandscapeExit(true)
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
-        isLandscapeFullscreenShared.value = false
-        setIsLandscapeFullscreen(false)
-        StatusBar.setHidden(false)
       } else {
         // Enter fullscreen - force landscape
         StatusBar.setHidden(true)
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE)
         isLandscapeFullscreenShared.value = true
         setIsLandscapeFullscreen(true)
+        setPendingLandscapeExit(false)
         showControlsTemporarily()
       }
     } catch (err) {
       console.error('[VideoPlayer] Failed to change orientation:', err)
+      // If the orientation lock failed, force state to a consistent "not landscape" config.
+      isLandscapeFullscreenShared.value = false
+      setIsLandscapeFullscreen(false)
+      setPendingLandscapeExit(false)
+      StatusBar.setHidden(false)
     }
-  }, [isLandscapeFullscreen, showControlsTemporarily])
+  }, [isLandscapeFullscreen, pendingLandscapeExit, showControlsTemporarily])
 
   // Clean up orientation on unmount or video close
   useEffect(() => {
@@ -665,12 +773,18 @@ export function VideoPlayerOverlay() {
   // Exit landscape fullscreen when player mode changes to mini or hidden
   useEffect(() => {
     if ((playerMode === 'mini' || playerMode === 'hidden') && isLandscapeFullscreen) {
-      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
-      StatusBar.setHidden(false)
-      isLandscapeFullscreenShared.value = false
-      setIsLandscapeFullscreen(false)
+      if (!pendingLandscapeExit) {
+        setPendingLandscapeExit(true)
+        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch((err) => {
+          console.error('[VideoPlayer] Failed to lock portrait on mode change:', err)
+          isLandscapeFullscreenShared.value = false
+          setIsLandscapeFullscreen(false)
+          setPendingLandscapeExit(false)
+          StatusBar.setHidden(false)
+        })
+      }
     }
-  }, [playerMode, isLandscapeFullscreen])
+  }, [playerMode, isLandscapeFullscreen, pendingLandscapeExit])
 
   // State for download
   const [isDownloading, setIsDownloading] = useState(false)
@@ -773,7 +887,10 @@ export function VideoPlayerOverlay() {
     return null
   }
 
-  const channelName = currentVideo.channel?.name || 'Unknown Channel'
+  const channelName =
+    channelMetaName ||
+    currentVideo.channel?.name ||
+    `Channel ${currentVideo.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
 
   // Desktop: YouTube-style layout (not fullscreen overlay)
@@ -1064,8 +1181,8 @@ export function VideoPlayerOverlay() {
           )}
         </Animated.View>
 
-        {/* Mini player info row - hidden in landscape */}
-        {!isLandscapeFullscreen && (
+        {/* Mini player info row - hidden in landscape (and during landscape exit gating) */}
+        {!isLandscapeFullscreen && !pendingLandscapeExit && (
           <Animated.View style={[styles.miniInfo, miniInfoStyle]}>
             <Pressable onPress={maximizePlayer} style={StyleSheet.absoluteFill}>
               <View style={styles.miniInfoText}>
@@ -1080,8 +1197,8 @@ export function VideoPlayerOverlay() {
           </Animated.View>
         )}
 
-        {/* Mini player controls - hidden in landscape */}
-        {!isLandscapeFullscreen && (
+        {/* Mini player controls - hidden in landscape (and during landscape exit gating) */}
+        {!isLandscapeFullscreen && !pendingLandscapeExit && (
           <Animated.View style={[styles.miniControls, miniControlsStyle]}>
             <Pressable style={styles.miniControlButton} onPress={handlePlayPause}>
               {isPlaying ? (
@@ -1096,15 +1213,15 @@ export function VideoPlayerOverlay() {
           </Animated.View>
         )}
 
-        {/* Mini player progress bar - hidden in landscape */}
-        {!isLandscapeFullscreen && (
+        {/* Mini player progress bar - hidden in landscape (and during landscape exit gating) */}
+        {!isLandscapeFullscreen && !pendingLandscapeExit && (
           <Animated.View style={[styles.miniProgressBar, miniInfoStyle]}>
             <View style={[styles.miniProgressFill, { width: `${playbackProgress * 100}%` }]} />
           </Animated.View>
         )}
 
-        {/* Fullscreen content - hidden in landscape */}
-        {!isLandscapeFullscreen && (
+        {/* Fullscreen content - hidden in landscape (and during landscape exit gating) */}
+        {!isLandscapeFullscreen && !pendingLandscapeExit && (
           <Animated.View style={[styles.fullscreenContent, fullscreenContentStyle]}>
           <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
             {/* P2P Stats */}

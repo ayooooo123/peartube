@@ -158,7 +158,17 @@ export async function initPlatformRPC(config: {
   });
 
   hrpc.onEventVideoStats((data: any) => {
-    eventCallbacks.videoStats.forEach(cb => cb(data));
+    // HRPC payload is `{ stats: VideoStats }` (see spec). Normalize to the callback shape.
+    const stats = data?.stats ?? data;
+    const channelKey = data?.channelKey ?? stats?.channelKey;
+    const videoId = data?.videoId ?? stats?.videoId;
+
+    if (channelKey && videoId && stats) {
+      eventCallbacks.videoStats.forEach(cb => cb({ channelKey, videoId, stats }));
+    } else {
+      // Fallback: forward raw data for debugging rather than dropping it.
+      eventCallbacks.videoStats.forEach(cb => cb(data));
+    }
   });
 
   hrpc.onEventUploadProgress((data: any) => {

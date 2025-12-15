@@ -84,7 +84,16 @@ function setupEventListeners() {
   eventListenersSetup = true;
 
   window.addEventListener('pearVideoStats', ((e: CustomEvent) => {
-    eventCallbacks.videoStats.forEach(cb => cb(e.detail));
+    const data: any = e.detail;
+    const stats = data?.stats ?? data;
+    const channelKey = data?.channelKey ?? stats?.channelKey;
+    const videoId = data?.videoId ?? stats?.videoId;
+
+    if (channelKey && videoId && stats) {
+      eventCallbacks.videoStats.forEach(cb => cb({ channelKey, videoId, stats }));
+    } else {
+      eventCallbacks.videoStats.forEach(cb => cb(data));
+    }
   }) as EventListener);
 
   window.addEventListener('pearUploadProgress', ((e: CustomEvent) => {

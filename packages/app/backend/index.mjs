@@ -47,15 +47,16 @@ const backend = await createBackendContext({
   onStatsUpdate: (driveKey, videoPath, stats) => {
     if (rpc) {
       try {
+        // HRPC `event-video-stats` expects `{ stats: VideoStats }` where VideoStats matches the schema:
+        // status/progress/totalBlocks/downloadedBlocks/totalBytes/downloadedBytes/peerCount/speedMBps/uploadSpeedMBps/elapsed/isComplete
         rpc.eventVideoStats({
-          videoId: videoPath,
-          channelKey: driveKey,
-          downloadedBytes: stats.downloadedBytes || 0,
-          totalBytes: stats.totalBytes || 0,
-          downloadProgress: stats.progress || 0,
-          peerCount: stats.peerCount || 0,
-          downloadSpeed: stats.speed || 0,
-          uploadSpeed: stats.uploadSpeed || 0
+          stats: {
+            // Ensure identifiers are always present for routing on the client side.
+            videoId: videoPath,
+            channelKey: driveKey,
+            // The backend VideoStatsTracker already produces schema-compatible fields.
+            ...stats
+          }
         })
       } catch (e) {
         console.log('[Backend] Failed to send video stats:', e.message)
@@ -523,14 +524,11 @@ rpc.onGetVideoStats(async (req) => {
   const stats = await api.getVideoStats(req.channelKey, req.videoId)
   return {
     stats: {
+      // Ensure identifiers exist (schema supports these fields too)
       videoId: req.videoId,
       channelKey: req.channelKey,
-      downloadedBytes: stats.downloadedBytes || 0,
-      totalBytes: stats.totalBytes || 0,
-      downloadProgress: stats.progress || 0,
-      peerCount: stats.peerCount || 0,
-      downloadSpeed: stats.speed || 0,
-      uploadSpeed: stats.uploadSpeed || 0
+      // Prefer the backend's schema-shaped stats object.
+      ...(stats || {})
     }
   }
 })

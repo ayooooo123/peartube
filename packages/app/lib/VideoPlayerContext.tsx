@@ -139,8 +139,32 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         currentPath: video?.path,
         currentKey: video?.channelKey
       })
-      // Only update if this is for the current video
-      if (video && video.path === videoPath && video.channelKey === driveKey) {
+      // Only update if this is for the current video.
+      // Some layers identify a video by full drive path (`/videos/<id>.<ext>`) while others may use an id.
+      // Normalize both before comparison so mobile/desktop stay consistent.
+      const extractVideoId = (idOrPath?: string | null) => {
+        if (!idOrPath) return null
+        // Path case: /videos/<id>.<ext>
+        const m = idOrPath.match(/\/videos\/([^.\/]+)(?:\.[^\/]+)?$/)
+        if (m?.[1]) return m[1]
+        // Fallback: strip extension if present (e.g. abc.mp4)
+        return idOrPath.replace(/\.[^./]+$/, '')
+      }
+
+      const currentId = extractVideoId(video?.path) ?? extractVideoId((video as any)?.id)
+      const incomingId = extractVideoId(videoPath)
+
+      const sameVideo =
+        Boolean(video) &&
+        video?.channelKey === driveKey &&
+        (
+          // Exact path match
+          video?.path === videoPath ||
+          // Id-based match
+          (currentId && incomingId && currentId === incomingId)
+        )
+
+      if (sameVideo) {
         console.log('[VideoPlayerContext] Received stats event:', stats.progress + '%')
         setVideoStats(stats)
       }

@@ -592,19 +592,21 @@ console.log('[Worker] HRPC initialized');
 videoStats.setOnStatsUpdate((driveKey: string, videoPath: string, stats: any) => {
   try {
     rpc.eventVideoStats({
-      videoId: videoPath,
-      channelKey: driveKey,
-      status: stats.status || 'unknown',
-      progress: stats.progress || 0,
-      totalBlocks: stats.totalBlocks || 0,
-      downloadedBlocks: stats.downloadedBlocks || 0,
-      totalBytes: stats.totalBytes || 0,
-      downloadedBytes: stats.downloadedBytes || 0,
-      peerCount: stats.peerCount || 0,
-      speedMBps: stats.speedMBps || '0',
-      uploadSpeedMBps: stats.uploadSpeedMBps || '0',
-      elapsed: stats.elapsed || 0,
-      isComplete: Boolean(stats.isComplete),
+      stats: {
+        videoId: videoPath,
+        channelKey: driveKey,
+        status: stats.status || 'unknown',
+        progress: stats.progress || 0,
+        totalBlocks: stats.totalBlocks || 0,
+        downloadedBlocks: stats.downloadedBlocks || 0,
+        totalBytes: stats.totalBytes || 0,
+        downloadedBytes: stats.downloadedBytes || 0,
+        peerCount: stats.peerCount || 0,
+        speedMBps: stats.speedMBps || '0',
+        uploadSpeedMBps: stats.uploadSpeedMBps || '0',
+        elapsed: stats.elapsed || 0,
+        isComplete: Boolean(stats.isComplete),
+      }
     });
   } catch (e) {
     // Ignore event send errors

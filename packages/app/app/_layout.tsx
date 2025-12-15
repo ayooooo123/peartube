@@ -4,7 +4,7 @@
  * Uses @peartube/platform/rpc for unified backend communication.
  */
 import '../global.css'
-import { useEffect, useState, createContext, useContext, useCallback } from 'react'
+import { useEffect, useState, createContext, useContext, useCallback, useRef } from 'react'
 import { Stack } from 'expo-router'
 import { StatusBar, View, Platform, AppState, AppStateStatus } from 'react-native'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
@@ -57,6 +57,7 @@ export default function RootLayout() {
   const [videos, setVideos] = useState<Video[]>([])
   const [loading, setLoading] = useState(true)
   const [blobServerPort, setBlobServerPort] = useState<number | null>(null)
+  const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
 
   useEffect(() => {
     if (isNative) {
@@ -87,6 +88,45 @@ export default function RootLayout() {
       try {
         await platformRPC.rpc.prefetchVideo(video.channelKey, video.path)
         console.log('[App] prefetchVideo sent for:', video.path)
+
+        // Fallback: poll getVideoStats and feed into the context emitter.
+        // Some mobile runtimes can be flaky with push events (eventVideoStats) over BareKit IPC.
+        // Polling keeps the UI stats bar updated regardless.
+        const pollKey = `${video.channelKey}:${video.path}`
+        if (!statsPollersRef.current.has(pollKey)) {
+          let attempts = 0
+          const poll = async () => {
+            attempts++
+            try {
+              const res = await platformRPC.rpc.getVideoStats({ channelKey: video.channelKey, videoId: video.path })
+              const stats = res?.stats
+              if (stats) {
+                // Normalize identifiers (some backends include them in stats, some don't)
+                videoStatsEventEmitter.emit(video.channelKey, video.path, {
+                  ...stats,
+                  channelKey: stats.channelKey || video.channelKey,
+                  videoId: stats.videoId || video.path,
+                })
+                if (stats.isComplete) return true
+              }
+            } catch (err) {
+              // Ignore polling errors
+            }
+            // Stop after ~60s to avoid background polling forever.
+            if (attempts >= 60) return true
+            return false
+          }
+
+          const interval = setInterval(async () => {
+            const done = await poll()
+            if (done) {
+              const t = statsPollersRef.current.get(pollKey)
+              if (t) clearInterval(t)
+              statsPollersRef.current.delete(pollKey)
+            }
+          }, 1000)
+          statsPollersRef.current.set(pollKey, interval)
+        }
       } catch (err) {
         console.error('[App] Failed to start prefetch:', err)
       }
@@ -94,6 +134,14 @@ export default function RootLayout() {
 
     return unsubscribe
   }, [ready])
+
+  // Cleanup any running pollers on unmount
+  useEffect(() => {
+    return () => {
+      for (const t of statsPollersRef.current.values()) clearInterval(t)
+      statsPollersRef.current.clear()
+    }
+  }, [])
 
   function handleAppStateChange(nextState: AppStateStatus) {
     if (!platformRPC) return
@@ -129,8 +177,15 @@ export default function RootLayout() {
     })
 
     platformRPC.events.onVideoStats((data: any) => {
-      if (data?.channelKey && data?.videoId && data?.stats) {
-        videoStatsEventEmitter.emit(data.channelKey, data.videoId, data.stats)
+      // HRPC `event-video-stats` payload is `{ stats: VideoStats }`.
+      // Some layers historically forwarded a legacy `{ channelKey, videoId, stats }` shape.
+      // Normalize both to the context emitter signature.
+      const stats = data?.stats ?? data
+      const channelKey = data?.channelKey ?? stats?.channelKey
+      const videoId = data?.videoId ?? stats?.videoId
+
+      if (channelKey && videoId && stats) {
+        videoStatsEventEmitter.emit(channelKey, videoId, stats)
       }
     })
 
@@ -164,8 +219,12 @@ export default function RootLayout() {
       })
 
       platformRPC.events.onVideoStats((data: any) => {
-        if (data?.channelKey && data?.videoId && data?.stats) {
-          videoStatsEventEmitter.emit(data.channelKey, data.videoId, data.stats)
+        const stats = data?.stats ?? data
+        const channelKey = data?.channelKey ?? stats?.channelKey
+        const videoId = data?.videoId ?? stats?.videoId
+
+        if (channelKey && videoId && stats) {
+          videoStatsEventEmitter.emit(channelKey, videoId, stats)
         }
       })
 

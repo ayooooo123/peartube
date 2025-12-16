@@ -4,7 +4,7 @@
  * Uses ES modules - load with <script type="module" src="./worker-client.js">
  */
 import HRPC from '@peartube/spec'
-import run from 'pear-run'
+import pipe from 'pear-pipe'
 
 class WorkerClient {
   constructor() {
@@ -32,21 +32,13 @@ class WorkerClient {
   }
 
   async _doInitialize() {
-    const config = Pear.config
-
-    // Build worker path
-    const workerPath = Pear.key
-      ? `${config.applink || ''}/build/workers/core/index.js`
-      : `${config.dir || ''}/build/workers/core/index.js`.replace(/\/+/g, '/')
-
-    console.log('[WorkerClient] Starting worker:', workerPath)
-
-    // Spawn worker using pear-run
-    this.pipe = run(workerPath)
-
+    console.log('[WorkerClient] Connecting to main-process backend via pear-pipe...')
+    this.pipe = (typeof Pear !== 'undefined' && typeof Pear.pipe === 'function')
+      ? Pear.pipe()
+      : pipe()
     if (!this.pipe) {
       this._initPromise = null
-      throw new Error('Failed to create worker pipe')
+      throw new Error('Failed to create pear pipe')
     }
 
     // Create HRPC instance with the pipe
@@ -61,30 +53,9 @@ class WorkerClient {
       })
     }
 
-    // Wait for eventReady from worker
-    const readyPromise = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this._readyResolve = null
-        reject(new Error('Worker init timeout'))
-      }, 30000)
-
-      this._readyResolve = (data) => {
-        clearTimeout(timeout)
-        this._readyResolve = null
-        this.isConnected = true
-        this.blobServerPort = data?.blobServerPort
-        console.log('[WorkerClient] Worker ready, blobServerPort:', this.blobServerPort)
-        resolve()
-      }
-    })
-
-    // Register event handlers
-    console.log('[WorkerClient] Registering onEventReady handler...')
-    this.rpc.onEventReady((data) => {
+    // Register event handlers (best-effort; do not rely on eventReady)
+    this.rpc.onEventReady?.((data) => {
       console.log('[WorkerClient] Received eventReady:', data)
-      if (this._readyResolve) {
-        this._readyResolve(data)
-      }
     })
 
     this.rpc.onEventError((data) => {
@@ -114,8 +85,16 @@ class WorkerClient {
       console.error('[WorkerClient] Pipe error:', err)
     })
 
-    // Wait for ready event
-    await readyPromise
+    // Handshake: request status to confirm readiness (and get blob server port).
+    const statusPromise = this.rpc.getStatus({})
+    const status = await Promise.race([
+      statusPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('RPC init timeout')), 15000))
+    ])
+    const blobServerPort = status?.status?.blobServerPort || null
+    this.isConnected = true
+    this.blobServerPort = blobServerPort
+    console.log('[WorkerClient] Connected. blobServerPort:', this.blobServerPort)
     this._initPromise = null
   }
 

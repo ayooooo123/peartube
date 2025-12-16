@@ -584,7 +584,10 @@ async function pickImageFile(): Promise<any> {
 // HRPC Setup
 // ============================================
 
-const ipcPipe = pipe();
+// When running under Pear v2, the main process can inject the runtime pipe so we don't
+// need to spawn a separate process. Fall back to pear-pipe() for legacy/standalone usage.
+const injectedPipe = (globalThis as any).__PEARTUBE_HRPC_PIPE__ as any
+const ipcPipe = injectedPipe || pipe();
 if (!ipcPipe) {
   console.error('[Worker] Failed to get IPC pipe');
   throw new Error('No IPC pipe');

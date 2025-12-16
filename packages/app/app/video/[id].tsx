@@ -277,10 +277,14 @@ export default function VideoPlayerScreen() {
     setIsLoading(true)
 
     try {
+      const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
+        ? videoData.path
+        : videoData.id
+
       // Get video URL from backend
       const result = await rpc.getVideoUrl({
         channelKey: videoData.channelKey,
-        videoId: videoData.path
+        videoId: videoRef
       })
 
       if (result?.url) {
@@ -314,9 +318,12 @@ export default function VideoPlayerScreen() {
   const startPrefetch = async () => {
     if (!videoData || !rpc) return
     try {
+      const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
+        ? videoData.path
+        : videoData.id
       await rpc.prefetchVideo({
         channelKey: videoData.channelKey,
-        videoId: videoData.path
+        videoId: videoRef
       })
     } catch (err) {
       console.error('[VideoPlayer] Prefetch failed:', err)
@@ -326,13 +333,16 @@ export default function VideoPlayerScreen() {
   const startStatsPolling = () => {
     if (!videoData || !rpc) return
     if (statsPollingRef.current) clearInterval(statsPollingRef.current)
-    console.log('[VideoPlayer] Starting stats polling for', videoData.path)
+    const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
+      ? videoData.path
+      : videoData.id
+    console.log('[VideoPlayer] Starting stats polling for', videoRef)
 
     const pollStats = async () => {
       try {
         const result = await rpc.getVideoStats({
           channelKey: videoData.channelKey,
-          videoId: videoData.path
+          videoId: videoRef
         })
         const stats = result?.stats
         console.log('[VideoPlayer] Got stats:', stats ? `${stats.progress}%` : 'null')

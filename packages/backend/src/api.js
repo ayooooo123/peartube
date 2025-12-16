@@ -6,7 +6,7 @@
  */
 
 import b4a from 'b4a';
-import { loadDrive, createDrive, getVideoUrl, waitForDriveSync } from './storage.js';
+import { loadDrive, createDrive, getVideoUrl, waitForDriveSync, loadChannel, pairDevice as pairChannelDevice } from './storage.js';
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -26,6 +26,66 @@ import { loadDrive, createDrive, getVideoUrl, waitForDriveSync } from './storage
  * @returns {Object}
  */
 export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
+  async function isMultiWriterChannelKey(channelKey) {
+    try {
+      const res = await ctx.metaDb.get(`mw-channel:${channelKey}`)
+      return Boolean(res?.value)
+    } catch {
+      // Fall through to other checks
+    }
+
+    // Fallback: if channel is already loaded in-memory, treat it as multi-writer.
+    if (ctx.channels && ctx.channels.has(channelKey)) return true
+
+    // Fallback: if this channel key exists in identities as a channelKey, treat as multi-writer.
+    try {
+      const stored = await ctx.metaDb.get('identities')
+      const identities = stored?.value || []
+      if (identities.some((i) => i?.channelKey === channelKey || i?.driveKey === channelKey)) {
+        // Backfill marker so future checks are fast
+        try { await ctx.metaDb.put(`mw-channel:${channelKey}`, { kind: 'autobase', backfilledAt: Date.now() }) } catch {}
+        return true
+      }
+    } catch {}
+
+    return false
+  }
+
+  function isHyperdriveDecodeError(err) {
+    const msg = (err && err.message) ? String(err.message) : ''
+    // hypercore / hyperbee / hyperdrive tend to surface this exact message for schema mismatch or corruption
+    return msg.includes('DECODING_ERROR') || msg.includes('Decoded message is not valid')
+  }
+
+  async function markAsMultiWriterChannel(channelKey) {
+    try {
+      await ctx.metaDb.put(`mw-channel:${channelKey}`, { kind: 'autobase', discoveredAt: Date.now() })
+    } catch {}
+  }
+
+  // ------------------------------------------------------------
+  // Lightweight in-memory caching (worker-local)
+  // ------------------------------------------------------------
+  // The app UI (home tab) re-mounts on navigation and calls getChannelMeta/listVideos each time.
+  // Cache recent results in the backend worker so back-navigation is instant.
+  const LIST_VIDEOS_CACHE_TTL_MS = 15_000
+  const CHANNEL_META_CACHE_TTL_MS = 30_000
+
+  /** @type {Map<string, { ts: number, value: any[] }>} */
+  const listVideosCache = new Map()
+  /** @type {Map<string, { ts: number, value: any }>} */
+  const channelMetaCache = new Map()
+
+  function cloneArrayOfObjects(arr) {
+    if (!Array.isArray(arr)) return []
+    return arr.map((v) => (v && typeof v === 'object') ? { ...v } : v)
+  }
+
+  function cloneObject(obj) {
+    if (!obj || typeof obj !== 'object') return obj
+    return { ...obj }
+  }
+
   return {
     // ============================================
     // Channel Operations
@@ -39,14 +99,46 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async getChannel(driveKey) {
       console.log('[API] GET_CHANNEL:', driveKey?.slice(0, 16));
       try {
-        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 8000 });
-        const metaBuf = await drive.get('/channel.json');
-        if (metaBuf) {
-          const result = JSON.parse(b4a.toString(metaBuf));
-          console.log('[API] Got channel:', result.name);
-          return result;
+        if (await isMultiWriterChannelKey(driveKey)) {
+          const channel = await loadChannel(ctx, driveKey)
+          const meta = await channel.getMetadata()
+          return {
+            name: meta?.name || 'Channel',
+            description: meta?.description || '',
+            avatar: meta?.avatar || null,
+            createdAt: meta?.createdAt || Date.now(),
+            publicKey: meta?.createdBy || null
+          }
         }
-        return { name: 'Unknown Channel' };
+
+        try {
+          const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 8000 });
+          const metaBuf = await drive.get('/channel.json');
+          if (metaBuf) {
+            const result = JSON.parse(b4a.toString(metaBuf));
+            console.log('[API] Got channel:', result.name);
+            return result;
+          }
+          return { name: 'Unknown Channel' };
+        } catch (err) {
+          // If the key is actually an Autobase (multi-writer) channel key, Hyperdrive will throw a decoding error.
+          if (isHyperdriveDecodeError(err)) {
+            console.log('[API] GET_CHANNEL: Hyperdrive decode error; retrying as multi-writer channel')
+            const channel = await loadChannel(ctx, driveKey).catch(() => null)
+            if (channel) {
+              await markAsMultiWriterChannel(driveKey)
+              const meta = await channel.getMetadata().catch(() => null)
+              return {
+                name: meta?.name || 'Channel',
+                description: meta?.description || '',
+                avatar: meta?.avatar || null,
+                createdAt: meta?.createdAt || Date.now(),
+                publicKey: meta?.createdBy || null
+              }
+            }
+          }
+          throw err
+        }
       } catch (err) {
         console.error('[API] GET_CHANNEL error:', err.message);
         return { name: 'Unknown Channel', error: err.message };
@@ -63,6 +155,12 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async updateChannel(driveKey, name, description) {
       console.log('[API] UPDATE_CHANNEL:', driveKey?.slice(0, 16));
       try {
+        if (await isMultiWriterChannelKey(driveKey)) {
+          const channel = await loadChannel(ctx, driveKey)
+          await channel.updateMetadata({ name, description: description || '', avatar: null })
+          return { success: true }
+        }
+
         const drive = ctx.drives.get(driveKey);
         if (!drive || !drive.writable) {
           throw new Error('Channel not found or not writable');
@@ -98,6 +196,29 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async getChannelMeta(driveKey) {
       console.log('[API] GET_CHANNEL_META:', driveKey?.slice(0, 16));
       try {
+        const cached = channelMetaCache.get(driveKey)
+        if (cached && (Date.now() - cached.ts) < CHANNEL_META_CACHE_TTL_MS) {
+          return cloneObject(cached.value)
+        }
+
+        // Fast path for known multi-writer channels.
+        if (await isMultiWriterChannelKey(driveKey)) {
+          const channel = await loadChannel(ctx, driveKey)
+          const meta = await channel.getMetadata().catch(() => null)
+          const videos = await channel.listVideos().catch(() => [])
+          const result = {
+            driveKey,
+            name: meta?.name || 'Channel',
+            description: meta?.description || '',
+            avatar: meta?.avatar || null,
+            createdAt: meta?.createdAt || Date.now(),
+            publicKey: meta?.createdBy || null,
+            videoCount: videos?.length || 0
+          }
+          channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
+          return cloneObject(result)
+        }
+
         const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 8000 });
 
         let metaBuf = null;
@@ -127,21 +248,47 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           } catch {}
 
           console.log('[API] Got channel meta:', meta.name, 'videos:', videoCount);
-          return {
+          const result = {
             ...meta,
             videoCount,
             driveKey
           };
+          channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
+          return cloneObject(result)
         }
 
         console.log('[API] No channel.json found for:', driveKey?.slice(0, 16));
-        return {
+        const result = {
           driveKey,
           name: 'Unknown Channel',
           description: '',
           videoCount: 0
         };
+        channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
+        return cloneObject(result)
       } catch (err) {
+        // If this key is actually an Autobase (multi-writer) channel key, treating it like a Hyperdrive
+        // will surface as a decoding error. Retry as multi-writer and persist the marker.
+        if (isHyperdriveDecodeError(err)) {
+          console.log('[API] GET_CHANNEL_META: Hyperdrive decode error; retrying as multi-writer channel')
+          const channel = await loadChannel(ctx, driveKey).catch(() => null)
+          if (channel) {
+            await markAsMultiWriterChannel(driveKey)
+            const meta = await channel.getMetadata().catch(() => null)
+            const videos = await channel.listVideos().catch(() => [])
+            const result = {
+              driveKey,
+              name: meta?.name || 'Channel',
+              description: meta?.description || '',
+              avatar: meta?.avatar || null,
+              createdAt: meta?.createdAt || Date.now(),
+              publicKey: meta?.createdBy || null,
+              videoCount: videos?.length || 0
+            }
+            channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
+            return cloneObject(result)
+          }
+        }
         console.error('[API] GET_CHANNEL_META error:', err.message);
         return {
           driveKey,
@@ -165,6 +312,27 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async listVideos(driveKey) {
       console.log('[API] LIST_VIDEOS for:', driveKey?.slice(0, 16));
       try {
+        const cached = listVideosCache.get(driveKey)
+        if (cached && (Date.now() - cached.ts) < LIST_VIDEOS_CACHE_TTL_MS) {
+          return cloneArrayOfObjects(cached.value)
+        }
+
+        const isMW = await isMultiWriterChannelKey(driveKey)
+        console.log('[API] LIST_VIDEOS isMultiWriterChannel:', isMW, 'cached:', ctx.channels?.has(driveKey))
+        if (isMW) {
+          const channel = await loadChannel(ctx, driveKey)
+          console.log('[API] LIST_VIDEOS channel loaded, calling listVideos...')
+
+          // IMPORTANT: Never block listVideos on network sync.
+          // Mobile has a 30s init timeout, and pairing/DHT discovery can exceed that.
+          // Return current materialized view immediately; the UI already retries.
+          const videos = await channel.listVideos()
+          console.log('[API] LIST_VIDEOS returning', videos?.length, 'videos from channel')
+          const result = (videos || []).map(v => ({ ...v, channelKey: driveKey }))
+          listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+          return cloneArrayOfObjects(result)
+        }
+
         const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 8000 });
         const videos = [];
 
@@ -181,11 +349,26 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           }
         } catch (e) {
           console.log('[API] Error listing videos:', e.message);
+          // If the key we got from discovery is actually an Autobase channel key, Hyperdrive will throw a decoding error.
+          // Retry as multi-writer channel and persist the marker so later calls (e.g. getVideoUrl) use the correct path.
+          if (isHyperdriveDecodeError(e)) {
+            console.log('[API] LIST_VIDEOS: Hyperdrive decode error; retrying as multi-writer channel')
+            const channel = await loadChannel(ctx, driveKey).catch(() => null)
+            if (channel) {
+              await markAsMultiWriterChannel(driveKey)
+              const mwVideos = await channel.listVideos().catch(() => [])
+              console.log('[API] LIST_VIDEOS: multi-writer retry returned', mwVideos?.length || 0, 'videos')
+              const result = (mwVideos || []).map(v => ({ ...v, channelKey: driveKey }))
+              listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+              return cloneArrayOfObjects(result)
+            }
+          }
         }
 
         const result = videos.sort((a, b) => b.uploadedAt - a.uploadedAt);
         console.log('[API] Found', result.length, 'videos');
-        return result;
+        listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+        return cloneArrayOfObjects(result)
       } catch (err) {
         console.error('[API] LIST_VIDEOS error:', err.message);
         return [];
@@ -199,7 +382,48 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @returns {Promise<{url: string}>}
      */
     async getVideoUrl(driveKey, videoPath) {
-      return getVideoUrl(ctx, driveKey, videoPath);
+      console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath);
+
+      if (await isMultiWriterChannelKey(driveKey)) {
+        console.log('[API] getVideoUrl: is multi-writer channel');
+        const meta = await this.getVideoData(driveKey, videoPath)
+        console.log('[API] getVideoUrl meta:', meta?.id, 'blobDriveKey:', meta?.blobDriveKey?.slice(0, 16), 'path:', meta?.path)
+        if (!meta) {
+          console.log('[API] getVideoUrl: no metadata found');
+          throw new Error('Video metadata not found')
+        }
+        const blobDriveKey = meta.blobDriveKey || meta.blobDrive || null
+        if (!blobDriveKey || !meta.path) {
+          console.log('[API] getVideoUrl: missing blobDriveKey or path');
+          throw new Error('Video is missing blob location (not synced yet)')
+        }
+
+        // Get blob drive from channel (uses channel's corestore and blobDrives cache)
+        const channel = await loadChannel(ctx, driveKey)
+        if (!channel) {
+          console.log('[API] getVideoUrl: failed to load channel');
+          throw new Error('Failed to load channel')
+        }
+
+        // Join swarm for blob drive if it's from another device
+        if (channel.joinBlobDrive) {
+          await channel.joinBlobDrive(blobDriveKey).catch(() => {})
+        }
+
+        // Get the blob drive from the channel's cache
+        const blobDrive = await channel.getBlobDrive(blobDriveKey)
+        console.log('[API] getVideoUrl: got blob drive from channel, calling storage.getVideoUrl with blobDriveKey:', blobDriveKey?.slice(0, 16), 'path:', meta.path);
+        return getVideoUrl(ctx, blobDriveKey, meta.path, { drive: blobDrive })
+      }
+      // Legacy Hyperdrive channels: accept either a full path (/videos/{id}.ext) or a video id.
+      let resolvedPath = videoPath
+      try {
+        if (typeof resolvedPath === 'string' && resolvedPath && !resolvedPath.startsWith('/')) {
+          const meta = await this.getVideoData(driveKey, resolvedPath)
+          if (meta?.path) resolvedPath = meta.path
+        }
+      } catch {}
+      return getVideoUrl(ctx, driveKey, resolvedPath);
     },
 
     /**
@@ -211,6 +435,25 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async getVideoData(driveKey, videoId) {
       console.log('[API] GET_VIDEO_DATA:', driveKey?.slice(0, 16), videoId);
       try {
+        const isMW = await isMultiWriterChannelKey(driveKey)
+        console.log('[API] GET_VIDEO_DATA isMultiWriter:', isMW)
+        if (isMW) {
+          const channel = await loadChannel(ctx, driveKey)
+          console.log('[API] GET_VIDEO_DATA channel loaded')
+
+          let id = videoId
+          if (typeof videoId === 'string' && videoId.startsWith('/videos/')) {
+            const match = videoId.match(/\/videos\/([^.]+)/)
+            if (match) id = match[1]
+          }
+          console.log('[API] GET_VIDEO_DATA looking up id:', id)
+
+          const v = await channel.getVideo(id)
+          console.log('[API] GET_VIDEO_DATA result:', v?.id, 'blobDriveKey:', v?.blobDriveKey?.slice(0, 16), 'path:', v?.path)
+          if (!v) return null
+          return { ...v, channelKey: driveKey }
+        }
+
         const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 5000 });
 
         // videoId could be a full path like /videos/xxx.mp4 or just the id
@@ -320,14 +563,31 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async getVideoThumbnail(driveKey, videoId) {
       console.log('[API] GET_VIDEO_THUMBNAIL:', driveKey?.slice(0, 16), videoId);
       try {
-        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 5000 });
+        let sourceDriveKey = driveKey
+        let resolvedId = videoId
+        let preferredThumbPath = null
+
+        if (await isMultiWriterChannelKey(driveKey)) {
+          const meta = await this.getVideoData(driveKey, videoId)
+          if (meta?.blobDriveKey) sourceDriveKey = meta.blobDriveKey
+          if (meta?.id) resolvedId = meta.id
+          if (typeof meta?.thumbnail === 'string' && meta.thumbnail.startsWith('/')) {
+            preferredThumbPath = meta.thumbnail
+          }
+        } else if (typeof videoId === 'string' && videoId.startsWith('/videos/')) {
+          const match = videoId.match(/\/videos\/([^.]+)/)
+          if (match) resolvedId = match[1]
+        }
+
+        const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 5000 });
 
         const thumbnailPaths = [
-          `/thumbnails/${videoId}.jpg`,
-          `/thumbnails/${videoId}.png`,
-          `/thumbnails/${videoId}.webp`,
-          `/thumbnails/${videoId}.jpeg`,
-          `/thumbnails/${videoId}.gif`
+          ...(preferredThumbPath ? [preferredThumbPath] : []),
+          `/thumbnails/${resolvedId}.jpg`,
+          `/thumbnails/${resolvedId}.png`,
+          `/thumbnails/${resolvedId}.webp`,
+          `/thumbnails/${resolvedId}.jpeg`,
+          `/thumbnails/${resolvedId}.gif`
         ];
 
         for (const thumbPath of thumbnailPaths) {
@@ -374,7 +634,16 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @returns {Promise<{success: boolean}>}
      */
     async subscribeChannel(driveKey) {
-      await loadDrive(ctx, driveKey);
+      // Don't let loadDrive hang forever - use a 5s timeout
+      // If it times out, we still add to subscriptions (data will sync later when peers are found)
+      try {
+        await Promise.race([
+          loadDrive(ctx, driveKey),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Drive load timeout')), 5000))
+        ]);
+      } catch (err) {
+        console.log('[API] subscribeChannel: drive load warning:', err.message, '- continuing anyway');
+      }
 
       const existing = await ctx.metaDb.get('subscriptions');
       const subs = existing?.value || [];
@@ -530,6 +799,32 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       console.log('[API] Drive:', driveKey?.slice(0, 16));
       console.log('[API] Path:', videoPath);
 
+      // Check if corestore is still open
+      if (ctx.store.closed) {
+        console.log('[API] Corestore is closed, skipping prefetch');
+        return { success: false, error: 'Corestore is closed' };
+      }
+
+      // Multi-writer channels: resolve the blob source drive+path (per-writer Hyperdrive)
+      let resolvedDriveKey = driveKey
+      let resolvedPath = videoPath
+      let isMultiWriter = await isMultiWriterChannelKey(driveKey)
+      let channel = null
+      if (isMultiWriter) {
+        const v = await this.getVideoData(driveKey, videoPath)
+        if (v?.blobDriveKey && v?.path) {
+          resolvedDriveKey = v.blobDriveKey
+          resolvedPath = v.path
+
+          // Get channel for blob drive access
+          channel = await loadChannel(ctx, driveKey)
+          // Join swarm for blob drive if it's from another device
+          if (channel?.joinBlobDrive) {
+            await channel.joinBlobDrive(resolvedDriveKey).catch(() => {})
+          }
+        }
+      }
+
       // Clean up any existing monitor
       if (videoStats) {
         videoStats.cleanupMonitor(driveKey, videoPath);
@@ -540,7 +835,15 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       }
 
       try {
-        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 10000 });
+        // For multi-writer channels, get blob drive from channel's cache
+        // For legacy drives, use loadDrive from storage
+        let drive;
+        if (isMultiWriter && channel) {
+          drive = await channel.getBlobDrive(resolvedDriveKey);
+          console.log('[API] Prefetch: using blob drive from channel');
+        } else {
+          drive = await loadDrive(ctx, resolvedDriveKey, { waitForSync: true, syncTimeout: 10000 });
+        }
         const peerCount = ctx.swarm?.connections?.size || 0;
         console.log('[API] Active swarm connections:', peerCount);
 
@@ -549,7 +852,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         }
 
         // Get the blob entry
-        const entry = await drive.entry(videoPath);
+        const entry = await drive.entry(resolvedPath);
         if (!entry || !entry.value?.blob) {
           throw new Error('Video not found in drive');
         }
@@ -590,7 +893,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         if (initialAvailable === totalBlocks) {
           console.log('[API] Already fully cached');
           if (seedingManager) {
-            await seedingManager.addSeed(driveKey, videoPath, 'watched', blob);
+            await seedingManager.addSeed(resolvedDriveKey, resolvedPath, 'watched', blob);
           }
           return {
             success: true,
@@ -603,7 +906,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         }
 
         // Create monitor for progress tracking
-        const monitor = drive.monitor(videoPath);
+        const monitor = drive.monitor(resolvedPath);
         await monitor.ready();
 
         let lastLoggedProgress = Math.round((initialAvailable / totalBlocks) * 100);
@@ -636,7 +939,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               markedAsCached = true;
               console.log('[API] 100% complete');
               if (seedingManager) {
-                await seedingManager.addSeed(driveKey, videoPath, 'watched', blob);
+                await seedingManager.addSeed(resolvedDriveKey, resolvedPath, 'watched', blob);
               }
             }
           } catch (e) {
@@ -662,9 +965,14 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             setTimeout(() => videoStats.cleanupMonitor(driveKey, videoPath), 30000);
           }
         }).catch(err => {
-          console.error('[API] Prefetch error:', err.message);
+          // Don't log as error if corestore was closed (expected during app shutdown)
+          if (err.message?.includes('closed') || ctx.store.closed) {
+            console.log('[API] Prefetch cancelled (corestore closed)');
+          } else {
+            console.error('[API] Prefetch error:', err.message);
+          }
           if (videoStats) {
-            videoStats.updateStats(driveKey, videoPath, { status: 'error', error: err.message });
+            videoStats.updateStats(driveKey, videoPath, { status: 'cancelled' });
             videoStats.cleanupMonitor(driveKey, videoPath);
           }
         });
@@ -715,62 +1023,6 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         elapsed: 0,
         isComplete: false
       };
-    },
-
-    /**
-     * Get video data as base64 for download
-     * Reads from Hyperdrive and returns base64-encoded content
-     * @param {string} driveKey - Channel drive key
-     * @param {string} videoPath - Video path in drive (e.g., /videos/xxx.mp4)
-     * @returns {Promise<{success: boolean, data?: string, size?: number, error?: string}>}
-     */
-    async getVideoData(driveKey, videoPath) {
-      console.log('[API] GET_VIDEO_DATA:', driveKey?.slice(0, 16), videoPath);
-
-      try {
-        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 15000 });
-
-        // Get the video entry
-        const entry = await drive.entry(videoPath, { wait: true, timeout: 10000 });
-        if (!entry) {
-          throw new Error('Video not found in drive');
-        }
-
-        const totalBytes = entry.value?.blob?.byteLength || 0;
-        console.log('[API] Video size:', totalBytes, 'bytes');
-
-        // Read entire file into buffer
-        const chunks = [];
-        const readStream = drive.createReadStream(videoPath);
-
-        return new Promise((resolve, reject) => {
-          readStream.on('data', (chunk) => {
-            chunks.push(chunk);
-          });
-
-          readStream.on('error', (err) => {
-            console.error('[API] Read stream error:', err.message);
-            reject(err);
-          });
-
-          readStream.on('end', () => {
-            const buffer = Buffer.concat(chunks);
-            const base64 = buffer.toString('base64');
-            console.log('[API] Video data ready, size:', buffer.length, 'base64 length:', base64.length);
-            resolve({
-              success: true,
-              data: base64,
-              size: buffer.length
-            });
-          });
-        });
-      } catch (err) {
-        console.error('[API] GET_VIDEO_DATA error:', err.message);
-        return {
-          success: false,
-          error: err.message
-        };
-      }
     },
 
     // ============================================
@@ -925,6 +1177,86 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           : 'unknown',
         drivesLoaded: ctx.drives.size,
       };
+    }
+
+    ,
+    // ============================================
+    // Multi-device pairing (Multi-writer channels)
+    // ============================================
+
+    /**
+     * Create a device invite code for a multi-writer channel.
+     * @param {string} channelKey
+     * @returns {Promise<{inviteCode: string}>}
+     */
+    async createDeviceInvite(channelKey) {
+      const channel = await loadChannel(ctx, channelKey)
+      const inviteCode = await channel.createInvite({})
+      return { inviteCode }
+    },
+
+    /**
+     * Pair this device to an existing channel using an invite code.
+     * @param {string} inviteCode
+     * @param {string} [deviceName]
+     * @returns {Promise<{success: boolean, channelKey: string, syncState?: string, videoCount?: number}>}
+     */
+    async pairDevice(inviteCode, deviceName = '') {
+      const { channel, channelKeyHex } = await pairChannelDevice(ctx, inviteCode, { deviceName })
+
+      // Use smart sync - waits for peer connection first, then polls for data
+      console.log('[API] pairDevice: starting smart sync...')
+      const syncResult = await channel.waitForInitialSync({
+        peerTimeout: 30000,  // 30s for DHT discovery
+        dataTimeout: 20000,  // 20s for data sync after connected
+        onProgress: (state, detail) => {
+          console.log('[API] pairDevice sync progress:', state, detail)
+        }
+      })
+
+      console.log('[API] pairDevice: sync result:', syncResult)
+
+      return {
+        success: true,
+        channelKey: channelKeyHex,
+        syncState: syncResult.state,
+        videoCount: syncResult.videoCount
+      }
+    },
+
+    /**
+     * Retry syncing a channel that may have failed initial sync.
+     * @param {string} channelKey
+     * @returns {Promise<{success: boolean, state: string, videoCount: number}>}
+     */
+    async retrySyncChannel(channelKey) {
+      const channel = await loadChannel(ctx, channelKey)
+
+      console.log('[API] retrySyncChannel: starting sync for', channelKey?.slice(0, 16))
+      const result = await channel.waitForInitialSync({
+        peerTimeout: 30000,
+        dataTimeout: 20000,
+        onProgress: (state, detail) => {
+          console.log('[API] retrySyncChannel progress:', state, detail)
+        }
+      })
+
+      return {
+        success: result.success,
+        state: result.state,
+        videoCount: result.videoCount
+      }
+    },
+
+    /**
+     * List known devices/writers for a channel.
+     * @param {string} channelKey
+     * @returns {Promise<{devices: Array<{keyHex: string, role?: string, deviceName?: string, addedAt?: number, blobDriveKey?: string|null}>}>}
+     */
+    async listDevices(channelKey) {
+      const channel = await loadChannel(ctx, channelKey)
+      const devices = await channel.listWriters()
+      return { devices }
     }
   };
 }

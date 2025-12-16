@@ -10,7 +10,10 @@ export {
   initializeStorage,
   waitForDriveSync,
   loadDrive,
+  loadChannel,
   createDrive,
+  createChannel,
+  pairDevice,
   getVideoUrl
 } from './storage.js';
 
@@ -35,6 +38,9 @@ export {
 
 // Video Upload
 export { createUploadManager } from './upload.js';
+
+// Multi-writer channels (Autobase)
+export { MultiWriterChannel, ChannelPairer } from './channel/index.js';
 
 // Types and constants
 export { FEED_TOPIC_STRING, PROTOCOL_NAME } from './types.js';

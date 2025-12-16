@@ -18,7 +18,7 @@ interface StorageStats {
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets()
-  const { identity, createIdentity, rpc } = useApp()
+  const { identity, createIdentity, rpc, loadIdentity } = useApp()
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
@@ -26,6 +26,15 @@ export default function SettingsScreen() {
   const [clearingCache, setClearingCache] = useState(false)
   const [isPublished, setIsPublished] = useState(false)
   const [publishLoading, setPublishLoading] = useState(false)
+
+  // Multi-device (multi-writer) channel
+  const [devices, setDevices] = useState<any[]>([])
+  const [devicesLoading, setDevicesLoading] = useState(false)
+  const [inviteCode, setInviteCode] = useState<string | null>(null)
+  const [inviteLoading, setInviteLoading] = useState(false)
+  const [pairInviteCode, setPairInviteCode] = useState('')
+  const [pairDeviceName, setPairDeviceName] = useState('')
+  const [pairing, setPairing] = useState(false)
 
   // Check if channel is published
   const checkPublishStatus = useCallback(async () => {
@@ -57,6 +66,70 @@ export default function SettingsScreen() {
   useEffect(() => {
     loadStorageStats()
   }, [loadStorageStats])
+
+  const loadDevices = useCallback(async () => {
+    if (!rpc || !identity?.driveKey) return
+    setDevicesLoading(true)
+    try {
+      const res = await (rpc as any).listDevices(identity.driveKey)
+      setDevices(res?.devices || [])
+    } catch (err) {
+      console.error('[Settings] Failed to load devices:', err)
+    } finally {
+      setDevicesLoading(false)
+    }
+  }, [rpc, identity?.driveKey])
+
+  useEffect(() => {
+    loadDevices()
+  }, [loadDevices])
+
+  const createInvite = async () => {
+    if (!rpc || !identity?.driveKey) return
+    setInviteLoading(true)
+    try {
+      const res = await (rpc as any).createDeviceInvite(identity.driveKey)
+      if (res?.inviteCode) {
+        setInviteCode(res.inviteCode)
+        if (Platform.OS === 'web') window.alert('Invite code created')
+        else Alert.alert('Invite Created', 'Share this invite code with your other device.')
+      }
+    } catch (err: any) {
+      console.error('[Settings] Failed to create invite:', err)
+      if (Platform.OS === 'web') window.alert('Failed to create invite')
+      else Alert.alert('Error', err?.message || 'Failed to create invite')
+    } finally {
+      setInviteLoading(false)
+    }
+  }
+
+  const pairDevice = async () => {
+    if (!rpc) return
+    const code = pairInviteCode.trim()
+    if (!code) return
+    setPairing(true)
+    try {
+      const res = await (rpc as any).pairDevice({
+        inviteCode: code,
+        deviceName: pairDeviceName.trim() || undefined,
+      })
+      if (res?.success) {
+        setPairInviteCode('')
+        setPairDeviceName('')
+        if (Platform.OS === 'web') window.alert('Device paired!')
+        else Alert.alert('Paired', 'This device is now linked to your channel.')
+        await loadDevices()
+      } else {
+        throw new Error('Pair failed')
+      }
+    } catch (err: any) {
+      console.error('[Settings] Pair device failed:', err)
+      if (Platform.OS === 'web') window.alert(err?.message || 'Failed to pair device')
+      else Alert.alert('Error', err?.message || 'Failed to pair device')
+    } finally {
+      setPairing(false)
+    }
+  }
 
   const handleStorageLimitChange = async (newLimit: number) => {
     if (!rpc) return
@@ -270,6 +343,41 @@ export default function SettingsScreen() {
         </View>
 
         <View className="w-full max-w-sm gap-4">
+          <View className="bg-pear-bg-elevated border border-pear-border rounded-xl p-4">
+            <Text className="text-label text-pear-text mb-2">Already have an invite code?</Text>
+            <Text className="text-caption text-pear-text-muted mb-3">
+              Pair this device to an existing channel so it can sync and upload from multiple devices.
+            </Text>
+            <TextInput
+              placeholder="Paste invite code"
+              value={pairInviteCode}
+              onChangeText={setPairInviteCode}
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
+            />
+            <TextInput
+              placeholder="Optional device name"
+              value={pairDeviceName}
+              onChangeText={setPairDeviceName}
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
+            />
+            <Pressable
+              onPress={async () => {
+                await pairDevice()
+                await loadIdentity()
+              }}
+              disabled={pairing || !pairInviteCode.trim()}
+              className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(pairing || !pairInviteCode.trim()) ? 'opacity-50' : ''}`}
+            >
+              <Text className="text-white text-label">
+                {pairing ? 'Pairing...' : 'Pair & Continue'}
+              </Text>
+            </Pressable>
+          </View>
+
           <TextInput
             placeholder="Enter your channel name"
             value={newName}
@@ -406,6 +514,112 @@ export default function SettingsScreen() {
               </Text>
             </>
           )}
+        </View>
+
+        {/* Divider */}
+        <View className="h-2 bg-pear-bg-card" />
+
+        {/* Devices Section */}
+        <View className="px-5 py-5">
+          <Text className="text-caption-medium text-pear-text-muted mb-4 uppercase tracking-wide">Devices</Text>
+
+          {/* Invite */}
+          <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
+            <Text className="text-label text-pear-text mb-2">Add another device</Text>
+            <Text className="text-caption text-pear-text-muted mb-3">
+              Generate an invite code on one device, then paste it into the other device to sync this channel.
+            </Text>
+
+            {inviteCode ? (
+              <View className="bg-pear-bg-card border border-pear-border rounded-lg p-3 mb-3">
+                <Text className="text-caption text-pear-text-muted mb-1">Invite Code</Text>
+                <Text className="text-caption text-pear-text font-mono" selectable>
+                  {inviteCode}
+                </Text>
+              </View>
+            ) : null}
+
+            <View className="flex-row gap-3">
+              <Pressable
+                onPress={createInvite}
+                disabled={inviteLoading}
+                className={`flex-1 flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-2.5 ${inviteLoading ? 'opacity-50' : ''}`}
+              >
+                <Key color="white" size={16} />
+                <Text className="text-white text-label">{inviteLoading ? 'Creating...' : 'Create Invite'}</Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => inviteCode && copyToClipboard(inviteCode, 'Invite code')}
+                disabled={!inviteCode}
+                className={`flex-1 flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5 ${!inviteCode ? 'opacity-50' : ''}`}
+              >
+                <Copy color={colors.text} size={16} />
+                <Text className="text-pear-text text-label">Copy</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          {/* Pair */}
+          <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
+            <Text className="text-label text-pear-text mb-2">Join with invite code</Text>
+            <TextInput
+              placeholder="Paste invite code"
+              value={pairInviteCode}
+              onChangeText={setPairInviteCode}
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
+            />
+            <TextInput
+              placeholder="Optional device name (e.g. Studio MacBook)"
+              value={pairDeviceName}
+              onChangeText={setPairDeviceName}
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
+            />
+            <Pressable
+              onPress={pairDevice}
+              disabled={pairing || !pairInviteCode.trim()}
+              className={`flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5 ${(pairing || !pairInviteCode.trim()) ? 'opacity-50' : ''}`}
+            >
+              <User color={colors.text} size={16} />
+              <Text className="text-pear-text text-label">{pairing ? 'Pairing...' : 'Pair Device'}</Text>
+            </Pressable>
+          </View>
+
+          {/* Device list */}
+          <View className="bg-pear-bg-elevated rounded-xl p-4">
+            <View className="flex-row items-center justify-between mb-3">
+              <Text className="text-label text-pear-text">Linked devices</Text>
+              <Pressable onPress={loadDevices} className="px-3 py-1 rounded-lg bg-pear-bg-card border border-pear-border">
+                <Text className="text-pear-text text-caption">{devicesLoading ? 'Loading...' : 'Refresh'}</Text>
+              </Pressable>
+            </View>
+
+            {devices?.length ? (
+              <View className="gap-2">
+                {devices.map((d, idx) => (
+                  <View key={`${d?.keyHex || idx}`} className="bg-pear-bg-card border border-pear-border rounded-lg p-3">
+                    <Text className="text-label text-pear-text">{d?.deviceName || 'Device'}</Text>
+                    <Text className="text-caption text-pear-text-muted font-mono" numberOfLines={1}>
+                      {d?.keyHex || ''}
+                    </Text>
+                    {d?.blobDriveKey ? (
+                      <Text className="text-caption text-pear-text-muted font-mono" numberOfLines={1}>
+                        blob: {d.blobDriveKey}
+                      </Text>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text className="text-caption text-pear-text-muted">
+                {devicesLoading ? 'Loading devices…' : 'No linked devices yet.'}
+              </Text>
+            )}
+          </View>
         </View>
 
         {/* Divider */}

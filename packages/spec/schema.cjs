@@ -796,6 +796,83 @@ ns.register({
 })
 
 // ============================================
+// Multi-device channel pairing
+// ============================================
+
+ns.register({
+  name: 'device',
+  fields: [
+    { name: 'keyHex', type: 'string', required: true },
+    { name: 'role', type: 'string', required: false },
+    { name: 'deviceName', type: 'string', required: false },
+    { name: 'addedAt', type: 'uint', required: false },
+    { name: 'blobDriveKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'create-device-invite-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'create-device-invite-response',
+  fields: [
+    { name: 'inviteCode', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'pair-device-request',
+  fields: [
+    { name: 'inviteCode', type: 'string', required: true },
+    { name: 'deviceName', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'pair-device-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'syncState', type: 'string', required: false },
+    { name: 'videoCount', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'retry-sync-channel-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'retry-sync-channel-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'state', type: 'string', required: false },
+    { name: 'videoCount', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-devices-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'list-devices-response',
+  fields: [
+    { name: 'devices', type: '@peartube/device', array: true, required: true }
+  ]
+})
+
+// ============================================
 // Event Types (for streaming/push notifications)
 // ============================================
 
@@ -1015,6 +1092,31 @@ rpcNs.register({
   name: 'get-swarm-status',
   request: { name: '@peartube/get-swarm-status-request', stream: false },
   response: { name: '@peartube/get-swarm-status-response', stream: false }
+})
+
+// Multi-device pairing commands
+rpcNs.register({
+  name: 'create-device-invite',
+  request: { name: '@peartube/create-device-invite-request', stream: false },
+  response: { name: '@peartube/create-device-invite-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'pair-device',
+  request: { name: '@peartube/pair-device-request', stream: false },
+  response: { name: '@peartube/pair-device-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'list-devices',
+  request: { name: '@peartube/list-devices-request', stream: false },
+  response: { name: '@peartube/list-devices-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'retry-sync-channel',
+  request: { name: '@peartube/retry-sync-channel-request', stream: false },
+  response: { name: '@peartube/retry-sync-channel-response', stream: false }
 })
 
 // Video prefetch & stats commands

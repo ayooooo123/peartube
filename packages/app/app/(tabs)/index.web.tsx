@@ -154,7 +154,7 @@ function WatchPageView({
 
   // Load video URL
   useEffect(() => {
-    if (!video?.path || !rpc) return
+    if (!video || !rpc) return
 
     let cancelled = false
     setIsLoading(true)
@@ -162,10 +162,13 @@ function WatchPageView({
 
     async function loadVideo() {
       try {
+        const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
+          ? video.path
+          : video.id
         // Get video URL from backend
         const result = await rpc.getVideoUrl({
           channelKey: channelKey,
-          videoId: video!.path,
+          videoId: videoRef,
         })
 
         if (cancelled) return
@@ -188,7 +191,7 @@ function WatchPageView({
 
     loadVideo()
     return () => { cancelled = true }
-  }, [channelKey, video?.path, rpc])
+  }, [channelKey, video?.path, video?.id, rpc])
 
   // Load channel info
   useEffect(() => {
@@ -205,22 +208,26 @@ function WatchPageView({
 
   // Start prefetch and poll for video stats
   useEffect(() => {
-    if (!video?.path || !channelKey || !rpc) return
+    if (!video || !channelKey || !rpc) return
 
     let cancelled = false
     let interval: NodeJS.Timeout | null = null
 
+    const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
+      ? video.path
+      : video.id
+
     // Start prefetch first
     rpc.prefetchVideo({
       channelKey: channelKey,
-      videoId: video.path,
+      videoId: videoRef,
     }).catch((err: any) => console.log('[WatchPage] Prefetch already running or failed:', err))
 
     async function pollStats() {
       try {
         const result = await rpc.getVideoStats({
           channelKey: channelKey,
-          videoId: video!.path,
+          videoId: videoRef,
         })
         const stats = result?.stats
         if (!cancelled && stats) {
@@ -244,7 +251,7 @@ function WatchPageView({
       cancelled = true
       if (interval) clearInterval(interval)
     }
-  }, [channelKey, video?.path, rpc])
+  }, [channelKey, video?.path, video?.id, rpc])
 
   if (!video) {
     return (
@@ -655,6 +662,7 @@ export default function HomeScreen() {
 
   // UI state
   const [refreshing, setRefreshing] = useState(false)
+  const [refreshingMyVideos, setRefreshingMyVideos] = useState(false)
 
   // Public feed state
   const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([])
@@ -782,7 +790,11 @@ export default function HomeScreen() {
     if (!rpc) return
     try {
       setFeedLoading(true)
-      const result = await rpc.getPublicFeed({})
+      // Add timeout to prevent infinite spinner if RPC hangs
+      const feedPromise = rpc.getPublicFeed({})
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000))
+      const result = await Promise.race([feedPromise, timeoutPromise])
+
       if (result?.entries) {
         setFeedEntries(result.entries)
         for (const entry of result.entries) {
@@ -818,34 +830,45 @@ export default function HomeScreen() {
   const loadFeedVideos = useCallback(async () => {
     if (!rpc || feedEntries.length === 0) return
     setFeedVideosLoading(true)
-    const allVideos: VideoData[] = []
 
-    // Fetch videos from up to 15 channels
-    for (const entry of feedEntries.slice(0, 15)) {
+    // Helper: wrap a promise with a timeout so one hung channel doesn't block the whole feed
+    const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+      Promise.race([
+        promise,
+        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))
+      ])
+
+    // Fetch videos from channels IN PARALLEL with per-channel timeout (8s each)
+    const PER_CHANNEL_TIMEOUT = 8000
+    const channelPromises = feedEntries.slice(0, 15).map(async (entry) => {
       const channelKey = (entry as any).channelKey || entry.driveKey
-      if (!channelKey) continue
+      if (!channelKey) return []
 
       try {
-        const result = await rpc.listVideos({ channelKey })
+        const result = await withTimeout(rpc.listVideos({ channelKey }), PER_CHANNEL_TIMEOUT, { videos: [] })
         const videoList = result?.videos || []
         if (Array.isArray(videoList)) {
-          const videos = videoList.map((v: any) => {
+          return videoList.map((v: any) => {
             console.log('[Home.web] Feed video:', v.id, 'thumbnail:', v.thumbnail)
             return {
               ...v,
               channelKey,
               channel: { name: channelMeta[channelKey]?.name || 'Unknown' },
               channelName: channelMeta[channelKey]?.name || 'Unknown',
-              thumbnailUrl: v.thumbnail || v.thumbnailUrl || null,  // Map backend thumbnail to thumbnailUrl
+              thumbnailUrl: v.thumbnail || v.thumbnailUrl || null,
             }
           })
-          allVideos.push(...videos)
         }
+        return []
       } catch (err) {
         // Silently skip failed channels
         console.log('[Home] Could not fetch videos from channel:', channelKey)
+        return []
       }
-    }
+    })
+
+    const results = await Promise.all(channelPromises)
+    const allVideos: VideoData[] = results.flat()
 
     // Sort by upload time and take top 50
     const sortedVideos = allVideos
@@ -940,12 +963,20 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
-    await Promise.all([
-      refreshFeed(),
-      identity?.driveKey ? loadVideos(identity.driveKey) : Promise.resolve()
-    ])
+    // Keep refresh focused on Discover/public feed.
+    await refreshFeed()
     setRefreshing(false)
   }, [identity, loadVideos, refreshFeed])
+
+  const refreshMyVideos = useCallback(async () => {
+    if (!identity?.driveKey) return
+    setRefreshingMyVideos(true)
+    try {
+      await loadVideos(identity.driveKey)
+    } finally {
+      setRefreshingMyVideos(false)
+    }
+  }, [identity?.driveKey, loadVideos])
 
   // Handle video press from grid
   const handleVideoPress = useCallback((videoId: string) => {
@@ -1121,7 +1152,17 @@ export default function HomeScreen() {
 
           {/* Your Videos Section */}
           <div style={styles.videosSection}>
-            <h2 style={styles.sectionTitle}>Your Videos</h2>
+            <div style={styles.sectionHeader}>
+              <h2 style={styles.sectionTitle}>Your Videos</h2>
+              <button
+                onClick={refreshMyVideos}
+                style={styles.refreshButton}
+                disabled={refreshingMyVideos || !identity?.driveKey}
+                aria-label="Refresh your videos"
+              >
+                <RefreshIcon color={refreshingMyVideos ? colors.textMuted : colors.primary} size={18} />
+              </button>
+            </div>
 
             {gridVideos.length === 0 ? (
               <div style={styles.emptyVideos}>

@@ -59,11 +59,15 @@ async function prefetchDriveMetadata(ctx, driveKeys, videoLimit = 1) {
 
       if (videoLimit > 0) {
         let count = 0;
-        for await (const entry of drive.readdir('/videos').catch(() => [])) {
-          if (!entry.endsWith('.json')) continue;
-          await drive.get(`/videos/${entry}`).catch(() => null);
-          count++;
-          if (count >= videoLimit) break;
+        try {
+          for await (const entry of drive.readdir('/videos')) {
+            if (!entry.endsWith('.json')) continue;
+            await drive.get(`/videos/${entry}`).catch(() => null);
+            count++;
+            if (count >= videoLimit) break;
+          }
+        } catch {
+          // /videos may not exist on some drives
         }
       }
     } catch (e) {
@@ -122,7 +126,6 @@ export async function createBackendContext(config) {
   // Phase 6: Load identities (fast - reads from disk, needed before eventReady)
   console.log('[Orchestrator] Loading identities...');
   await identityManager.loadIdentities();
-  await identityManager.loadChannelDrives();
 
   // Phase 7: Create unified API
   const api = createApi({
@@ -148,8 +151,22 @@ export async function createBackendContext(config) {
 
   // Phase 8: Heavy initialization in background (non-blocking)
   // Drive warming and feed discovery can happen after UI is ready
-  setImmediate(async () => {
+  const defer =
+    typeof setImmediate === 'function'
+      ? setImmediate
+      : (fn) => setTimeout(fn, 0)
+
+  defer(async () => {
     try {
+      // Load channels/drives and run legacy migration in the background.
+      // This can be slow (sync + readdir + metadata replay) and should NOT block worker init.
+      try {
+        await identityManager.loadChannelDrives();
+        await identityManager.migrateLegacyIdentities?.();
+      } catch (e) {
+        console.error('[Orchestrator] Identity background init error:', e?.message);
+      }
+
       // Start public feed discovery
       await publicFeed.start();
       try {

@@ -32,6 +32,10 @@ try {
 // HRPC instance (initialized after backend)
 let rpc = null
 
+// Helps confirm which backend bundle is actually running on device.
+const BACKEND_BUNDLE_VERSION = 'mw-sync-debug-2025-12-15'
+console.log('[Backend] Bundle version:', BACKEND_BUNDLE_VERSION)
+
 // Initialize backend
 const backend = await createBackendContext({
   storagePath: storageDir,
@@ -74,6 +78,15 @@ console.log('[Backend] Backend initialized, blob server port:', blobPort, '(from
 rpc = new HRPC(IPC)
 console.log('[Backend] HRPC initialized')
 
+function emitLog(level, message) {
+  if (!rpc) return
+  try {
+    rpc.eventLog({ level, message, timestamp: Date.now() })
+  } catch {}
+}
+
+emitLog('info', `[Backend] Bundle version: ${BACKEND_BUNDLE_VERSION}`)
+
 function getThumbnailMime(thumbPath) {
   const ext = thumbPath.split('.').pop()?.toLowerCase() || 'jpg'
   if (ext === 'png') return 'image/png'
@@ -85,21 +98,25 @@ function getThumbnailMime(thumbPath) {
 // Migrate existing thumbnails to blob-backed entries (so URLs persist across restarts)
 async function migrateThumbnails(drive) {
   try {
-    for await (const name of drive.readdir('/thumbnails').catch(() => [])) {
-      const thumbPath = `/thumbnails/${name}`
-      const entry = await drive.entry(thumbPath).catch(() => null)
-      if (entry && entry.value?.blob) continue
+    try {
+      for await (const name of drive.readdir('/thumbnails')) {
+        const thumbPath = `/thumbnails/${name}`
+        const entry = await drive.entry(thumbPath).catch(() => null)
+        if (entry && entry.value?.blob) continue
 
-      const buf = await drive.get(thumbPath, { wait: true, timeout: 3000 }).catch(() => null)
-      if (!buf) continue
+        const buf = await drive.get(thumbPath, { wait: true, timeout: 3000 }).catch(() => null)
+        if (!buf) continue
 
-      console.log('[Backend] Migrating inline thumbnail to blob:', thumbPath)
-      await new Promise((resolve, reject) => {
-        const ws = drive.createWriteStream(thumbPath)
-        ws.on('error', reject)
-        ws.on('close', resolve)
-        ws.end(buf)
-      })
+        console.log('[Backend] Migrating inline thumbnail to blob:', thumbPath)
+        await new Promise((resolve, reject) => {
+          const ws = drive.createWriteStream(thumbPath)
+          ws.on('error', reject)
+          ws.on('close', resolve)
+          ws.end(buf)
+        })
+      }
+    } catch (e) {
+      // /thumbnails may not exist
     }
   } catch (e) {
     console.log('[Backend] Thumbnail migration skipped:', e?.message)
@@ -212,62 +229,51 @@ rpc.onUpdateChannel(async (req) => {
 
 // Video handlers
 rpc.onListVideos(async (req) => {
-  console.log('[HRPC] listVideos:', req.channelKey?.slice(0, 16))
-  const rawVideos = await api.listVideos(req.channelKey || '')
+  const channelKey = req?.channelKey || ''
+  console.log('[HRPC] listVideos:', channelKey?.slice(0, 16))
+  emitLog('info', `[HRPC] listVideos start ${channelKey?.slice(0, 16)}`)
 
-  const videos = await Promise.all(rawVideos.map(async (v) => {
-    const channelKey = v.channelKey || req.channelKey
-    let thumbnailUrl = ''
+  // Always respond quickly; never let listVideos hang the client.
+  if (!channelKey) return { videos: [] }
 
-    if (v.thumbnail && channelKey) {
-      try {
-        let drive = ctx.drives.get(channelKey)
-        if (!drive) {
-          drive = await loadDrive(ctx, channelKey, { waitForSync: false, syncTimeout: 4000 }).catch(() => null)
-          if (!drive) {
-            const activeDrive = identityManager.getActiveDrive?.()
-            if (activeDrive && b4a.toString(activeDrive.key, 'hex') === channelKey) {
-              drive = activeDrive
-            }
-          }
-        }
+  let rawVideos = []
+  try {
+    rawVideos = await api.listVideos(channelKey)
+  } catch (e) {
+    console.log('[HRPC] listVideos failed:', e?.message)
+    emitLog('error', `[HRPC] listVideos api.listVideos failed: ${e?.message || e}`)
+    return { videos: [] }
+  }
 
-        if (drive) {
-          const entry = await drive.entry(v.thumbnail).catch(() => null)
-          const mime = getThumbnailMime(v.thumbnail)
+  // IMPORTANT: Keep listVideos fast. Thumbnails are fetched lazily by the UI via getVideoThumbnail.
+  // Doing per-video thumbnail resolution here can easily trigger the app-side listVideos timeout on mobile.
+  // IMPORTANT: HRPC encoding expects `id` and `title` as strings. If we return malformed items,
+  // HRPC can fail to encode and the request will never resolve on the client (leading to timeouts).
+  const videos = (rawVideos || [])
+    .map((v) => {
+      const id = v?.id ? String(v.id) : ''
+      if (!id) return null
 
-          if (entry && entry.value?.blob) {
-            const blobsCore = await drive.getBlobs()
-            if (blobsCore) {
-              thumbnailUrl = ctx.blobServer.getLink(blobsCore.core.key, {
-                blob: entry.value.blob,
-                type: mime,
-                host: ctx.blobServerHost || '127.0.0.1',
-                port: ctx.blobServer?.port || ctx.blobServerPort
-              })
-            }
-          } else {
-            // Inline thumbnail (no blob) - fall back to data URL so we don't mutate foreign drives
-            const buf = await drive.get(v.thumbnail, { wait: true, timeout: 2000 }).catch(() => null)
-            if (buf) {
-              const base64 = b4a.from(buf).toString('base64')
-              thumbnailUrl = `data:${mime};base64,${base64}`
-            }
-          }
-        }
-      } catch (e) {
-        console.log('[HRPC] listVideos thumbnail resolve failed:', e?.message)
+      const title = v?.title ? String(v.title) : 'Untitled'
+      const createdAt = Number(v?.createdAt || v?.uploadedAt || Date.now()) || 0
+
+      return {
+        id,
+        title,
+        description: v?.description ? String(v.description) : null,
+        path: v?.path ? String(v.path) : null,
+        duration: Number(v?.duration || 0) || 0,
+        thumbnail: v?.thumbnail ? String(v.thumbnail) : null,
+        channelKey: v?.channelKey || channelKey,
+        channelName: v?.channelName ? String(v.channelName) : '',
+        createdAt,
+        views: Number(v?.views || 0) || 0,
+        category: v?.category ? String(v.category) : null
       }
-    }
+    })
+    .filter(Boolean)
 
-    return {
-      ...v,
-      thumbnail: thumbnailUrl,
-      channelKey,
-      channelName: v.channelName || ''
-    }
-  }))
-
+  emitLog('info', `[HRPC] listVideos done ${channelKey?.slice(0, 16)} count=${videos.length}`)
   return { videos }
 })
 
@@ -289,10 +295,10 @@ rpc.onUploadVideo(async (req) => {
   if (!active?.driveKey) {
     throw new Error('No active identity')
   }
-  const drive = identityManager.getActiveDrive()
-  if (!drive) {
-    throw new Error('No active drive')
-  }
+  const channel = await identityManager.getActiveChannel?.()
+  if (!channel) throw new Error('No active channel')
+  const blobDriveKey = await channel.ensureLocalBlobDrive({ deviceName: active.name || '' })
+  const blobDrive = await channel.getBlobDrive(blobDriveKey)
 
   let filePath = req.filePath
   if (!filePath) {
@@ -318,7 +324,7 @@ rpc.onUploadVideo(async (req) => {
 
   // Use streaming upload - file streams directly to hyperdrive
   const result = await uploadManager.uploadFromPath(
-    drive,
+    blobDrive,
     filePath,
     {
       title: req.title,
@@ -333,9 +339,36 @@ rpc.onUploadVideo(async (req) => {
     }
   )
 
+  console.log('[HRPC] Upload result:', JSON.stringify({ success: result?.success, videoId: result?.videoId, hasMetadata: !!result?.metadata }))
+
+  // Record the video in the channel's multi-writer metadata log
+  if (result?.success && result?.metadata) {
+    console.log('[HRPC] Adding video to channel metadata log...')
+    try {
+      await channel.addVideo({
+        id: result.videoId,
+        title: req.title,
+        description: req.description || '',
+        path: result.metadata.path,
+        mimeType: result.metadata.mimeType,
+        size: result.metadata.size,
+        uploadedAt: result.metadata.uploadedAt,
+        category: req.category || '',
+        thumbnail: result.metadata.thumbnail,
+        blobDriveKey
+      })
+      console.log('[HRPC] Video added to channel successfully')
+    } catch (addErr) {
+      console.error('[HRPC] Failed to add video to channel:', addErr?.message, addErr?.stack)
+    }
+  } else {
+    console.error('[HRPC] Upload failed or no metadata:', result?.error)
+  }
+
+  console.log('[HRPC] Returning upload response')
   return {
     video: {
-      id: result.videoId,
+      id: result?.videoId || '',
       title: req.title,
       description: req.description || '',
       channelKey: active.driveKey
@@ -347,20 +380,11 @@ rpc.onDownloadVideo(async (req) => {
   console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId)
 
   try {
-    // Load drive and resolve video path
-    const drive = await loadDrive(ctx, req.channelKey, { waitForSync: true, syncTimeout: 15000 })
-
-    let videoPath = req.videoId
-    // If an id was passed instead of a path, try to read metadata to find the path
-    if (!videoPath.startsWith('/')) {
-      const metaBuf = await drive.get(`/videos/${req.videoId}.json`).catch(() => null)
-      if (metaBuf) {
-        const meta = JSON.parse(metaBuf.toString('utf-8'))
-        if (meta?.path) videoPath = meta.path
-      } else {
-        videoPath = `/videos/${req.videoId}`
-      }
-    }
+    // Resolve to correct blob source for multi-writer channels (or legacy drive)
+    const meta = await api.getVideoData(req.channelKey, req.videoId)
+    const sourceDriveKey = meta?.blobDriveKey || req.channelKey
+    const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 15000 })
+    const videoPath = meta?.path || req.videoId
 
     const entry = await drive.entry(videoPath, { wait: true, timeout: 10000 })
     if (!entry || !entry.value?.blob) {
@@ -401,12 +425,14 @@ rpc.onDownloadVideo(async (req) => {
 // Delete video handler
 rpc.onDeleteVideo(async (req) => {
   console.log('[HRPC] deleteVideo:', req.videoId)
-  const drive = identityManager.getActiveDrive()
-  if (!drive) {
-    return { success: false, error: 'No active identity' }
+  const channel = await identityManager.getActiveChannel?.()
+  if (!channel) return { success: false, error: 'No active channel' }
+  try {
+    await channel.deleteVideo(req.videoId)
+    return { success: true }
+  } catch (e) {
+    return { success: false, error: e?.message || 'Delete failed' }
   }
-  const result = await api.deleteVideo(drive, req.videoId)
-  return result
 })
 
 // Subscription handlers
@@ -512,6 +538,35 @@ rpc.onGetSwarmStatus(async () => {
   }
 })
 
+// Multi-device pairing
+rpc.onCreateDeviceInvite(async (req) => {
+  console.log('[HRPC] createDeviceInvite:', req.channelKey?.slice(0, 16))
+  const res = await api.createDeviceInvite(req.channelKey)
+  return { inviteCode: res.inviteCode }
+})
+
+rpc.onPairDevice(async (req) => {
+  console.log('[HRPC] pairDevice')
+  const res = await api.pairDevice(req.inviteCode, req.deviceName || '')
+  // If this device doesn't have an identity yet, create one that points at the paired channel.
+  try {
+    const existing = identityManager.getIdentities?.() || []
+    if (existing.length === 0 && res?.channelKey) {
+      await identityManager.addPairedChannelIdentity?.(res.channelKey, 'Paired Channel')
+    }
+  } catch (e) {
+    console.log('[HRPC] addPairedChannelIdentity skipped:', e?.message)
+  }
+  return { success: Boolean(res.success), channelKey: res.channelKey }
+})
+
+rpc.onListDevices(async (req) => {
+  console.log('[HRPC] listDevices:', req.channelKey?.slice(0, 16))
+  const res = await api.listDevices(req.channelKey)
+  // HRPC schema expects Device[]; backend returns writer records (keyHex, role, deviceName...)
+  return { devices: res.devices || [] }
+})
+
 // Video prefetch and stats
 rpc.onPrefetchVideo(async (req) => {
   console.log('[HRPC] prefetchVideo:', req.channelKey?.slice(0, 16), req.videoId)
@@ -602,10 +657,17 @@ rpc.onGetVideoMetadata(async (req) => {
 
 rpc.onSetVideoThumbnail(async (req) => {
   console.log('[HRPC] setVideoThumbnail')
-  const drive = identityManager.getActiveDrive()
-  if (!drive) {
-    return { success: false }
-  }
+  const active = identityManager.getActiveIdentity()
+  if (!active?.driveKey) return { success: false }
+
+  const channel = await identityManager.getActiveChannel?.()
+  if (!channel) return { success: false }
+
+  const meta = await api.getVideoData(active.driveKey, req.videoId)
+  const sourceDriveKey = meta?.blobDriveKey || null
+  if (!sourceDriveKey) return { success: false }
+
+  const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 8000 })
 
   const result = await uploadManager.setThumbnailFromBuffer(
     drive,
@@ -613,6 +675,16 @@ rpc.onSetVideoThumbnail(async (req) => {
     Buffer.from(req.imageData || '', 'base64'),
     req.mimeType
   )
+
+  // Keep channel metadata in sync by re-reading blob-drive metadata
+  if (result.success && meta?.id) {
+    const metaBuf = await drive.get(`/videos/${meta.id}.json`).catch(() => null)
+    if (metaBuf) {
+      const updated = JSON.parse(metaBuf.toString('utf-8'))
+      await channel.addVideo({ ...updated, channelKey: active.driveKey, blobDriveKey: sourceDriveKey })
+    }
+  }
+
   return { success: result.success }
 })
 

@@ -27,6 +27,8 @@ try {
 // Import the orchestrator from backend
 // @ts-ignore - backend-core is JavaScript
 import { createBackendContext } from '@peartube/backend/orchestrator';
+// @ts-ignore - backend-core is JavaScript
+import { loadDrive } from '@peartube/backend/storage';
 // @ts-ignore - Generated HRPC code
 import HRPC from '@peartube/spec';
 
@@ -70,6 +72,9 @@ const backend = await createBackendContext({
 });
 
 const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
+
+// Shutdown flag to prevent RPC handlers from running during cleanup
+let isShuttingDown = false;
 
 console.log('[Worker] Backend initialized via orchestrator');
 // Use dynamic port from blobServer object (more reliable than captured value)
@@ -684,7 +689,13 @@ rpc.onGetChannelMeta(async (req: any) => {
   return { name: meta.name, description: meta.description, videoCount: meta.videoCount || 0 };
 });
 
-rpc.onUpdateChannel(async () => ({ channel: {} }));
+rpc.onUpdateChannel(async (req: any) => {
+  const active = identityManager.getActiveIdentity();
+  if (active?.driveKey) {
+    await api.updateChannel(active.driveKey, req.name, req.description);
+  }
+  return { channel: {} };
+});
 
 // Video handlers
 rpc.onListVideos(async (req: any) => {
@@ -692,59 +703,24 @@ rpc.onListVideos(async (req: any) => {
   const videos = await api.listVideos(req.channelKey || '');
   console.log('[Worker] Got', videos.length, 'videos from API');
 
-  // Resolve thumbnail URLs via blob server
+  // Resolve thumbnail URLs via blob server with timeout
   const enriched = await Promise.all(videos.map(async (v: any) => {
     let thumbnailUrl = '';
     const channelKey = v.channelKey || req.channelKey;
-    console.log('[Worker] Processing video:', v.id, 'thumbnail field:', v.thumbnail);
 
-    if (v.thumbnail && channelKey) {
+    if ((v.thumbnail || v.id) && channelKey) {
       try {
-        // Try ctx.drives first, then fall back to identity drive if it's the user's own channel
-        let drive = ctx.drives.get(channelKey);
-        if (!drive) {
-          // Check if this is the user's own identity drive
-          const activeDrive = identityManager.getActiveDrive();
-          if (activeDrive && b4a.toString(activeDrive.key, 'hex') === channelKey) {
-            drive = activeDrive;
-          }
-        }
-        console.log('[Worker] Drive found for', channelKey?.slice(0, 16), ':', !!drive);
-
-        if (drive) {
-          const entry = await drive.entry(v.thumbnail);
-          console.log('[Worker] Entry for', v.thumbnail, ':', entry ? 'found' : 'not found');
-
-          if (entry) {
-            console.log('[Worker] Entry value:', JSON.stringify(entry.value));
-          }
-
-          if (entry && entry.value?.blob) {
-            // Use blob reference for proper blob server URL
-            const blobsCore = await drive.getBlobs();
-            console.log('[Worker] BlobsCore:', blobsCore ? 'found' : 'not found');
-
-            if (blobsCore) {
-              // Detect mime type from thumbnail path extension
-              const thumbExt = v.thumbnail.split('.').pop()?.toLowerCase() || 'jpg';
-              thumbnailUrl = ctx.blobServer.getLink(blobsCore.core.key, {
-                blob: entry.value.blob,
-                type: getMimeType(thumbExt)
-              });
-              console.log('[Worker] Resolved thumbnail URL for', v.id, ':', thumbnailUrl?.slice(0, 80));
-            }
-          } else {
-            console.log('[Worker] No blob entry found for thumbnail:', v.thumbnail, 'entry.value:', entry?.value);
-          }
-        } else {
-          console.log('[Worker] No drive in ctx.drives for:', channelKey?.slice(0, 16));
-          console.log('[Worker] Available drives:', Array.from(ctx.drives.keys()).map(k => k.slice(0, 16)));
-        }
+        // Add 3 second timeout for thumbnail resolution
+        const thumbPromise = api.getVideoThumbnail(channelKey, v.id || '');
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Thumbnail timeout')), 3000)
+        );
+        const thumb = await Promise.race([thumbPromise, timeoutPromise]) as any;
+        if (thumb?.exists && thumb.url) thumbnailUrl = thumb.url;
       } catch (e: any) {
-        console.error('[Worker] Failed to resolve thumbnail URL:', e.message, e.stack);
+        // Silently skip thumbnail errors - don't block video listing
+        console.log('[Worker] Thumbnail skipped for', v.id?.slice(0, 8), ':', e.message);
       }
-    } else {
-      console.log('[Worker] Skipping thumbnail - thumbnail:', v.thumbnail, 'channelKey:', channelKey?.slice(0, 16));
     }
 
     return {
@@ -761,6 +737,7 @@ rpc.onListVideos(async (req: any) => {
       category: v.category || 'Other',
     };
   }));
+  console.log('[Worker] onListVideos returning', enriched.length, 'videos');
   return { videos: enriched };
 });
 
@@ -772,11 +749,21 @@ rpc.onGetVideoUrl(async (req: any) => {
   return { url: result.url };
 });
 
-rpc.onGetVideoData(async (req: any) => ({ video: { id: req.videoId, title: 'Unknown' } }));
+rpc.onGetVideoData(async (req: any) => {
+  if (isShuttingDown) return { video: { id: req.videoId, title: 'Unknown' } };
+  const video = await api.getVideoData(req.channelKey, req.videoId);
+  return { video: video || { id: req.videoId, title: 'Unknown' } };
+});
 
 rpc.onUploadVideo(async (req: any) => {
-  const drive = identityManager.getActiveDrive();
-  if (!drive) throw new Error('No active identity');
+  const active = identityManager.getActiveIdentity();
+  if (!active?.driveKey) throw new Error('No active identity');
+
+  const channel = await identityManager.getActiveChannel?.();
+  if (!channel) throw new Error('No active channel');
+
+  const blobDriveKey = await channel.ensureLocalBlobDrive({ deviceName: active.name || '' });
+  const drive = await channel.getBlobDrive(blobDriveKey);
 
   let uploadPath = req.filePath;
   let transcodedPath: string | null = null;
@@ -872,12 +859,36 @@ rpc.onUploadVideo(async (req: any) => {
     console.log('[Worker] Skipping FFmpeg thumbnail - custom thumbnail will be uploaded');
   }
 
+  // Record/refresh the video in the channel's multi-writer metadata log
+  console.log('[Worker] Upload result:', JSON.stringify({ success: result.success, videoId: result.videoId }));
+  if (result.success && result.videoId) {
+    const metaBuf = await drive.get(`/videos/${result.videoId}.json`).catch(() => null);
+    console.log('[Worker] Got metadata from drive:', !!metaBuf);
+    if (metaBuf) {
+      const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
+      console.log('[Worker] Adding video to channel metadata log...');
+      try {
+        await channel.addVideo({
+          ...meta,
+          channelKey: active.driveKey,
+          blobDriveKey,
+        });
+        console.log('[Worker] Video added to channel successfully');
+      } catch (addErr: any) {
+        console.error('[Worker] Failed to add video to channel:', addErr?.message, addErr?.stack);
+      }
+    }
+  } else {
+    console.error('[Worker] Upload failed:', result.error);
+  }
+
+  console.log('[Worker] Returning upload response');
   return {
     video: {
       id: result.videoId || '',
       title: req.title || '',
       description: req.description || '',
-      channelKey: b4a.toString(drive.key, 'hex'),
+      channelKey: active.driveKey,
     }
   };
 });
@@ -906,12 +917,14 @@ rpc.onDownloadVideo(async (req: any) => {
 
 // Delete video
 rpc.onDeleteVideo(async (req: any) => {
-  const drive = identityManager.getActiveDrive();
-  if (!drive) {
-    return { success: false, error: 'No active identity' };
+  const channel = await identityManager.getActiveChannel?.();
+  if (!channel) return { success: false, error: 'No active channel' };
+  try {
+    await channel.deleteVideo(req.videoId);
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'Delete failed' };
   }
-  const result = await api.deleteVideo(drive, req.videoId);
-  return result;
 });
 
 // Video stats
@@ -1040,6 +1053,8 @@ rpc.onClearCache(async () => {
 
 // Thumbnail handlers
 rpc.onGetVideoThumbnail(async (req: any) => {
+  if (isShuttingDown) return { url: null, exists: false };
+
   const drive = ctx.drives.get(req.channelKey);
   if (drive) {
     // Try all supported formats
@@ -1064,20 +1079,23 @@ rpc.onGetVideoThumbnail(async (req: any) => {
 });
 
 rpc.onGetVideoMetadata(async (req: any) => {
-  const drive = ctx.drives.get(req.channelKey);
-  if (drive) {
-    const metaPath = `/videos/${req.videoId}.json`;
-    const metaBuf = await drive.get(metaPath);
-    if (metaBuf) {
-      return { video: JSON.parse(b4a.toString(metaBuf, 'utf-8')) };
-    }
-  }
-  return { video: { id: req.videoId, title: 'Unknown' } };
+  if (isShuttingDown) return { video: { id: req.videoId, title: 'Unknown' } };
+  const video = await api.getVideoData(req.channelKey, req.videoId);
+  return { video: video || { id: req.videoId, title: 'Unknown' } };
 });
 
 rpc.onSetVideoThumbnail(async (req: any) => {
-  const drive = identityManager.getActiveDrive();
-  if (!drive) return { success: false };
+  const active = identityManager.getActiveIdentity();
+  if (!active?.driveKey) return { success: false };
+
+  const channel = await identityManager.getActiveChannel?.();
+  if (!channel) return { success: false };
+
+  const meta = await api.getVideoData(active.driveKey, req.videoId);
+  const sourceDriveKey = meta?.blobDriveKey;
+  if (!sourceDriveKey) return { success: false };
+
+  const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 8000 });
 
   const imageBuffer = Buffer.from(req.imageData, 'base64');
   const ext = req.mimeType?.includes('png') ? 'png' : 'jpg';
@@ -1098,6 +1116,7 @@ rpc.onSetVideoThumbnail(async (req: any) => {
     const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
     meta.thumbnail = thumbnailPath;
     await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
+    await channel.addVideo({ ...meta, channelKey: active.driveKey, blobDriveKey: sourceDriveKey });
   }
 
   return { success: true, thumbnailPath };
@@ -1105,12 +1124,20 @@ rpc.onSetVideoThumbnail(async (req: any) => {
 
 rpc.onSetVideoThumbnailFromFile(async (req: any) => {
   console.log('[Worker] setVideoThumbnailFromFile called:', req.videoId, req.filePath);
-  const drive = identityManager.getActiveDrive();
-  if (!drive) {
-    console.error('[Worker] No active drive for thumbnail upload');
+  const active = identityManager.getActiveIdentity();
+  if (!active?.driveKey) return { success: false };
+  const channel = await identityManager.getActiveChannel?.();
+  if (!channel) return { success: false };
+
+  const meta = await api.getVideoData(active.driveKey, req.videoId);
+  const sourceDriveKey = meta?.blobDriveKey;
+  if (!sourceDriveKey) {
+    console.error('[Worker] No blobDriveKey for thumbnail upload');
     return { success: false };
   }
-  console.log('[Worker] Active drive key:', b4a.toString(drive.key, 'hex').slice(0, 16));
+
+  const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 8000 });
+  console.log('[Worker] Blob drive key:', sourceDriveKey.slice(0, 16));
 
   const imageBuffer = fs.readFileSync(req.filePath);
   console.log('[Worker] Read image file, size:', imageBuffer.length);
@@ -1147,6 +1174,7 @@ rpc.onSetVideoThumbnailFromFile(async (req: any) => {
     meta.thumbnail = thumbnailPath;
     await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
     console.log('[Worker] Updated metadata with thumbnail:', thumbnailPath);
+    await channel.addVideo({ ...meta, channelKey: active.driveKey, blobDriveKey: sourceDriveKey });
 
     // Verify the update
     const verifyBuf = await drive.get(metaPath);
@@ -1183,6 +1211,34 @@ rpc.onGetSwarmStatus(async () => ({
   connected: ctx.swarm.connections.size > 0,
   peerCount: ctx.swarm.connections.size,
 }));
+
+// Multi-device pairing
+rpc.onCreateDeviceInvite(async (req: any) => {
+  console.log('[Worker] createDeviceInvite:', req.channelKey?.slice(0, 16));
+  const res = await api.createDeviceInvite(req.channelKey);
+  return { inviteCode: res.inviteCode };
+});
+
+rpc.onPairDevice(async (req: any) => {
+  console.log('[Worker] pairDevice');
+  const res = await api.pairDevice(req.inviteCode, req.deviceName || '');
+  // If this device doesn't have an identity yet, create one that points at the paired channel.
+  try {
+    const existing = identityManager.getIdentities?.() || [];
+    if (existing.length === 0 && res?.channelKey) {
+      await identityManager.addPairedChannelIdentity?.(res.channelKey, 'Paired Channel');
+    }
+  } catch (e: any) {
+    console.log('[Worker] addPairedChannelIdentity skipped:', e?.message);
+  }
+  return { success: Boolean(res.success), channelKey: res.channelKey };
+});
+
+rpc.onListDevices(async (req: any) => {
+  console.log('[Worker] listDevices:', req.channelKey?.slice(0, 16));
+  const res = await api.listDevices(req.channelKey);
+  return { devices: res.devices || [] };
+});
 
 rpc.onGetBlobServerPort(async () => ({ port: getBlobPort() }));
 
@@ -1227,6 +1283,19 @@ ipcPipe.on('error', (err: Error) => {
 // Cleanup on shutdown
 Pear.teardown(async () => {
   console.log('[Worker] Shutting down...');
-  await ctx.blobServer.close();
-  await ctx.swarm.destroy();
+  isShuttingDown = true;
+
+  // Give in-flight RPC handlers a moment to finish
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  try {
+    await ctx.blobServer?.close();
+  } catch (e) {
+    // Ignore close errors during shutdown
+  }
+  try {
+    await ctx.swarm?.destroy();
+  } catch (e) {
+    // Ignore close errors during shutdown
+  }
 });

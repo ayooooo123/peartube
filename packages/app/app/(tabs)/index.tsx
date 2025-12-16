@@ -60,6 +60,7 @@ export default function HomeScreen() {
 
   // UI state
   const [refreshing, setRefreshing] = useState(false)
+  const [refreshingMyVideos, setRefreshingMyVideos] = useState(false)
 
   // Public feed state
   const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([])
@@ -164,7 +165,11 @@ export default function HomeScreen() {
     if (!rpc) return
     try {
       setFeedLoading(true)
-      const result = await rpc.getPublicFeed({})
+      // Add timeout to prevent infinite spinner if RPC hangs
+      const feedPromise = rpc.getPublicFeed({})
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000))
+      const result = await Promise.race([feedPromise, timeoutPromise])
+
       if (result?.entries) {
         setFeedEntries(result.entries)
         for (const entry of result.entries) {
@@ -179,12 +184,13 @@ export default function HomeScreen() {
       }
       setLastFeedRefresh(Date.now())
       try {
-        const status = await rpc.getSwarmStatus()
+        const statusPromise = rpc.getSwarmStatus()
+        const status = await Promise.race([statusPromise, new Promise((r) => setTimeout(() => r(null), 3000))])
         if (status) {
           setSwarmStatus({
-            peers: status.peerCount || status.swarmConnections || 0,
-            feedConnections: status.feedConnections,
-            drives: status.drivesLoaded,
+            peers: (status as any).peerCount || (status as any).swarmConnections || 0,
+            feedConnections: (status as any).feedConnections,
+            drives: (status as any).drivesLoaded,
           })
         }
       } catch {}
@@ -234,27 +240,38 @@ export default function HomeScreen() {
     if (!rpc || feedEntries.length === 0) return
 
     setLoadingFeedVideos(true)
-    const allVideos: VideoData[] = []
 
-    // Limit to first 15 channels to avoid overloading
-    for (const entry of feedEntries.slice(0, 15)) {
+    // Helper: wrap a promise with a timeout so one hung channel doesn't block the whole feed
+    const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+      Promise.race([
+        promise,
+        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))
+      ])
+
+    // Fetch videos from channels IN PARALLEL with per-channel timeout (8s each)
+    const PER_CHANNEL_TIMEOUT = 8000
+    const channelPromises = feedEntries.slice(0, 15).map(async (entry) => {
       const channelKey = entry.channelKey || entry.driveKey
-      if (!channelKey) continue
+      if (!channelKey) return []
 
       try {
-        await rpc.joinChannel({ channelKey })
-        const result = await rpc.listVideos({ channelKey })
-        const videos = (result?.videos || []).map((v: any) => ({
+        // Join + list with combined timeout
+        await withTimeout(rpc.joinChannel({ channelKey }), PER_CHANNEL_TIMEOUT, { success: false })
+        const result = await withTimeout(rpc.listVideos({ channelKey }), PER_CHANNEL_TIMEOUT, { videos: [] })
+        return (result?.videos || []).map((v: any) => ({
           ...v,
           channelKey,
           channel: { name: channelMeta[channelKey]?.name || 'Unknown' }
         }))
-        allVideos.push(...videos)
       } catch (err: any) {
         // Continue with other channels - this is expected for channels that haven't synced yet
         console.log('[Home] Failed to load videos from channel:', channelKey, '-', err?.message || err)
+        return []
       }
-    }
+    })
+
+    const results = await Promise.all(channelPromises)
+    const allVideos: VideoData[] = results.flat()
 
     // Sort by uploadedAt descending, limit to 50 videos
     const sorted = allVideos
@@ -319,10 +336,17 @@ export default function HomeScreen() {
       setViewingChannel(null)
       setChannelVideos([])
 
+      // Prefer stable identifier for RPC calls:
+      // - Legacy channels expect a path
+      // - Multi-writer/public-feed channels can resolve from id as well
+      const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
+        ? video.path
+        : video.id
+
       // Get video URL from backend
       const result = await rpc.getVideoUrl({
         channelKey: video.channelKey,
-        videoId: video.path
+        videoId: videoRef
       })
 
       if (result?.url) {
@@ -336,12 +360,20 @@ export default function HomeScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
-    await Promise.all([
-      refreshFeed(),
-      identity?.driveKey ? loadVideos(identity.driveKey) : Promise.resolve()
-    ])
+    // Keep pull-to-refresh focused on Discover/public feed.
+    await refreshFeed()
     setRefreshing(false)
   }, [identity, loadVideos, refreshFeed])
+
+  const refreshMyVideos = useCallback(async () => {
+    if (!identity?.driveKey) return
+    setRefreshingMyVideos(true)
+    try {
+      await loadVideos(identity.driveKey)
+    } finally {
+      setRefreshingMyVideos(false)
+    }
+  }, [identity?.driveKey, loadVideos])
 
   // Convert videos to VideoData format with channel info and thumbnails
   const myVideosWithMeta: VideoData[] = videos.map(v => {
@@ -558,7 +590,16 @@ export default function HomeScreen() {
 
           {/* Your Videos - Responsive Grid on Desktop, List on Mobile */}
           <View style={{ paddingTop: 24, paddingHorizontal: isDesktop ? 24 : 0 }}>
-            <Text className="text-headline text-pear-text mb-3" style={{ paddingHorizontal: isDesktop ? 0 : 20 }}>Your Videos</Text>
+            <View className="flex-row items-center justify-between mb-3" style={{ paddingHorizontal: isDesktop ? 0 : 20 }}>
+              <Text className="text-headline text-pear-text">Your Videos</Text>
+              <Pressable
+                onPress={refreshMyVideos}
+                className="p-2 active:opacity-60"
+                disabled={refreshingMyVideos || !identity?.driveKey}
+              >
+                <RefreshCw color={refreshingMyVideos ? colors.textMuted : colors.primary} size={18} />
+              </Pressable>
+            </View>
             {console.log('[Home] Rendering Your Videos section, count:', myVideosWithMeta.length, 'viewingChannel:', viewingChannel)}
             {myVideosWithMeta.length === 0 ? (
               <View className="py-12 items-center bg-pear-bg-elevated rounded-xl" style={{ marginHorizontal: isDesktop ? 0 : 20 }}>

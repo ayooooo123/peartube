@@ -36,6 +36,9 @@ declare const HRPC: new (stream: any) => {
   unpublishFromFeed(req: {}): Promise<any>;
   isChannelPublished(req: {}): Promise<any>;
   getChannelMeta(req: { channelKey: string }): Promise<any>;
+  createDeviceInvite(req: { channelKey: string }): Promise<any>;
+  pairDevice(req: { inviteCode: string; deviceName?: string }): Promise<any>;
+  listDevices(req: { channelKey: string }): Promise<any>;
   getStatus(req: {}): Promise<any>;
   getSwarmStatus(req: {}): Promise<any>;
   uploadVideo(req: { filePath: string; title: string; description: string; category?: string }): Promise<any>;
@@ -65,6 +68,7 @@ type ErrorCallback = (data: { message: string }) => void;
 type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
 type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
 type FeedUpdateCallback = (data: { action?: string; channelKey?: string }) => void;
+type LogCallback = (data: { level: string; message: string; timestamp?: number }) => void;
 
 // Event callback storage
 const eventCallbacks = {
@@ -73,6 +77,7 @@ const eventCallbacks = {
   videoStats: [] as VideoStatsCallback[],
   uploadProgress: [] as UploadProgressCallback[],
   feedUpdate: [] as FeedUpdateCallback[],
+  log: [] as LogCallback[],
 };
 
 // Helper to remove callback
@@ -104,6 +109,10 @@ export const events = {
   onFeedUpdate: (cb: FeedUpdateCallback) => {
     eventCallbacks.feedUpdate.push(cb);
     return () => removeCallback(eventCallbacks.feedUpdate, cb);
+  },
+  onLog: (cb: LogCallback) => {
+    eventCallbacks.log.push(cb);
+    return () => removeCallback(eventCallbacks.log, cb);
   },
 };
 
@@ -174,6 +183,16 @@ export async function initPlatformRPC(config: {
   hrpc.onEventUploadProgress((data: any) => {
     eventCallbacks.uploadProgress.forEach(cb => cb(data));
   });
+
+  if ((hrpc as any).onEventLog) {
+    (hrpc as any).onEventLog((data: any) => {
+      // Always print backend logs on mobile for debugging, even if no subscribers are attached.
+      try {
+        console.log('[Platform RPC] event-log:', data?.level, data?.message)
+      } catch {}
+      eventCallbacks.log.forEach(cb => cb(data));
+    });
+  }
 
   if ((hrpc as any).onEventFeedUpdate) {
     (hrpc as any).onEventFeedUpdate((data: any) => {
@@ -352,6 +371,24 @@ export const rpc = {
   async getChannelMeta(channelKeyOrReq: string | { channelKey: string }) {
     const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
     return ensureRPC().getChannelMeta(req);
+  },
+
+  // Multi-device pairing
+  async createDeviceInvite(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().createDeviceInvite(req);
+  },
+
+  async pairDevice(inviteCodeOrReq: string | { inviteCode: string; deviceName?: string }, deviceName?: string) {
+    const req = typeof inviteCodeOrReq === 'string'
+      ? { inviteCode: inviteCodeOrReq, deviceName }
+      : inviteCodeOrReq;
+    return ensureRPC().pairDevice(req);
+  },
+
+  async listDevices(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().listDevices(req);
   },
 
   // Status

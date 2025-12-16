@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 7,
   "schema": [
     {
       "id": 0,
@@ -619,6 +619,58 @@
         "stream": false
       },
       "version": 5
+    },
+    {
+      "id": 25,
+      "name": "@peartube/create-device-invite",
+      "request": {
+        "name": "@peartube/create-device-invite-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/create-device-invite-response",
+        "stream": false
+      },
+      "version": 6
+    },
+    {
+      "id": 26,
+      "name": "@peartube/pair-device",
+      "request": {
+        "name": "@peartube/pair-device-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/pair-device-response",
+        "stream": false
+      },
+      "version": 6
+    },
+    {
+      "id": 27,
+      "name": "@peartube/list-devices",
+      "request": {
+        "name": "@peartube/list-devices-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/list-devices-response",
+        "stream": false
+      },
+      "version": 6
+    },
+    {
+      "id": 28,
+      "name": "@peartube/retry-sync-channel",
+      "request": {
+        "name": "@peartube/retry-sync-channel-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/retry-sync-channel-response",
+        "stream": false
+      },
+      "version": 7
     }
   ]
 }

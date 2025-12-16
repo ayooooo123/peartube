@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 10,
   "schema": [
     {
       "name": "empty",
@@ -1921,6 +1921,193 @@
           "required": false,
           "type": "bool",
           "version": 7
+        }
+      ]
+    },
+    {
+      "name": "device",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "keyHex",
+          "required": true,
+          "type": "string",
+          "version": 9
+        },
+        {
+          "name": "role",
+          "required": false,
+          "type": "string",
+          "version": 9
+        },
+        {
+          "name": "deviceName",
+          "required": false,
+          "type": "string",
+          "version": 9
+        },
+        {
+          "name": "addedAt",
+          "required": false,
+          "type": "uint",
+          "version": 9
+        },
+        {
+          "name": "blobDriveKey",
+          "required": false,
+          "type": "string",
+          "version": 9
+        }
+      ]
+    },
+    {
+      "name": "create-device-invite-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 9
+        }
+      ]
+    },
+    {
+      "name": "create-device-invite-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "inviteCode",
+          "required": true,
+          "type": "string",
+          "version": 9
+        }
+      ]
+    },
+    {
+      "name": "pair-device-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "inviteCode",
+          "required": true,
+          "type": "string",
+          "version": 9
+        },
+        {
+          "name": "deviceName",
+          "required": false,
+          "type": "string",
+          "version": 9
+        }
+      ]
+    },
+    {
+      "name": "pair-device-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 9
+        },
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 9
+        },
+        {
+          "name": "syncState",
+          "required": false,
+          "type": "string",
+          "version": 10
+        },
+        {
+          "name": "videoCount",
+          "required": false,
+          "type": "uint",
+          "version": 10
+        }
+      ]
+    },
+    {
+      "name": "list-devices-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 9
+        }
+      ]
+    },
+    {
+      "name": "list-devices-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "devices",
+          "required": true,
+          "array": true,
+          "type": "@peartube/device",
+          "version": 9
+        }
+      ]
+    },
+    {
+      "name": "retry-sync-channel-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 10
+        }
+      ]
+    },
+    {
+      "name": "retry-sync-channel-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 10
+        },
+        {
+          "name": "state",
+          "required": false,
+          "type": "string",
+          "version": 10
+        },
+        {
+          "name": "videoCount",
+          "required": false,
+          "type": "uint",
+          "version": 10
         }
       ]
     }

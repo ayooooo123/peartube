@@ -355,6 +355,24 @@ export const rpc = {
     return ensureRPC().getChannelMeta(req);
   },
 
+  // Multi-device pairing
+  async createDeviceInvite(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().createDeviceInvite(req);
+  },
+
+  async pairDevice(inviteCodeOrReq: string | { inviteCode: string; deviceName?: string }, deviceName?: string) {
+    const req = typeof inviteCodeOrReq === 'string'
+      ? { inviteCode: inviteCodeOrReq, deviceName }
+      : inviteCodeOrReq;
+    return ensureRPC().pairDevice(req);
+  },
+
+  async listDevices(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().listDevices(req);
+  },
+
   // Status
   async getStatus() {
     return ensureRPC().getStatus({});

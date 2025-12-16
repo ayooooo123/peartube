@@ -103,7 +103,15 @@ const methods = new Map([
   ['@peartube/unpublish-from-feed', 47],
   [47, '@peartube/unpublish-from-feed'],
   ['@peartube/is-channel-published', 48],
-  [48, '@peartube/is-channel-published']
+  [48, '@peartube/is-channel-published'],
+  ['@peartube/create-device-invite', 49],
+  [49, '@peartube/create-device-invite'],
+  ['@peartube/pair-device', 50],
+  [50, '@peartube/pair-device'],
+  ['@peartube/list-devices', 51],
+  [51, '@peartube/list-devices'],
+  ['@peartube/retry-sync-channel', 52],
+  [52, '@peartube/retry-sync-channel']
 ])
 
 class HRPC {
@@ -159,7 +167,11 @@ class HRPC {
       ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-request')],
       ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-request')],
       ['@peartube/unpublish-from-feed', getEncoding('@peartube/unpublish-from-feed-request')],
-      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-request')]
+      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-request')],
+      ['@peartube/create-device-invite', getEncoding('@peartube/create-device-invite-request')],
+      ['@peartube/pair-device', getEncoding('@peartube/pair-device-request')],
+      ['@peartube/list-devices', getEncoding('@peartube/list-devices-request')],
+      ['@peartube/retry-sync-channel', getEncoding('@peartube/retry-sync-channel-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -204,7 +216,11 @@ class HRPC {
       ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-response')],
       ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-response')],
       ['@peartube/unpublish-from-feed', getEncoding('@peartube/unpublish-from-feed-response')],
-      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-response')]
+      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-response')],
+      ['@peartube/create-device-invite', getEncoding('@peartube/create-device-invite-response')],
+      ['@peartube/pair-device', getEncoding('@peartube/pair-device-response')],
+      ['@peartube/list-devices', getEncoding('@peartube/list-devices-response')],
+      ['@peartube/retry-sync-channel', getEncoding('@peartube/retry-sync-channel-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -495,6 +511,22 @@ class HRPC {
     return this._call('@peartube/is-channel-published', args)
   }
 
+  async createDeviceInvite(args) {
+    return this._call('@peartube/create-device-invite', args)
+  }
+
+  async pairDevice(args) {
+    return this._call('@peartube/pair-device', args)
+  }
+
+  async listDevices(args) {
+    return this._call('@peartube/list-devices', args)
+  }
+
+  async retrySyncChannel(args) {
+    return this._call('@peartube/retry-sync-channel', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -689,6 +721,22 @@ class HRPC {
 
   onIsChannelPublished(responseFn) {
     this._handlers['@peartube/is-channel-published'] = responseFn
+  }
+
+  onCreateDeviceInvite(responseFn) {
+    this._handlers['@peartube/create-device-invite'] = responseFn
+  }
+
+  onPairDevice(responseFn) {
+    this._handlers['@peartube/pair-device'] = responseFn
+  }
+
+  onListDevices(responseFn) {
+    this._handlers['@peartube/list-devices'] = responseFn
+  }
+
+  onRetrySyncChannel(responseFn) {
+    this._handlers['@peartube/retry-sync-channel'] = responseFn
   }
 
   _requestIsStream(command) {

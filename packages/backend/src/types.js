@@ -18,7 +18,9 @@
  * @property {import('hyperswarm')} swarm - Hyperswarm instance
  * @property {import('hypercore-blob-server')} blobServer - Blob server instance
  * @property {number} blobServerPort - Blob server port
+ * @property {string} [blobServerHost] - Blob server host
  * @property {Map<string, import('hyperdrive')>} drives - Loaded drives cache
+ * @property {Map<string, any>} [channels] - Loaded multi-writer channels cache (keyed by channelKey hex)
  */
 
 /**

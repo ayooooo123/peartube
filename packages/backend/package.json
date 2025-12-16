@@ -9,6 +9,7 @@
     ".": "./src/index.js",
     "./orchestrator": "./src/orchestrator.js",
     "./storage": "./src/storage.js",
+    "./channel": "./src/channel/index.js",
     "./swarm": "./src/swarm.js",
     "./public-feed": "./src/public-feed.js",
     "./video-stats": "./src/video-stats.js",
@@ -19,7 +20,8 @@
     "./types": "./src/types.js"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:multiwriter": "node test/multiwriter-channel-harness.mjs"
   },
   "dependencies": {
     "autobase": "^7.22.0",

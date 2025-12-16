@@ -11,6 +11,7 @@ import BlobServer from 'hypercore-blob-server';
 import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
+import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 
 // Import bare-fs and bare-path for Bare runtime environments (mobile/desktop)
 // Note: These are only available in Bare runtime, guards below handle when they're not
@@ -152,6 +153,7 @@ export async function initializeStorage(config) {
 
   // Drive cache
   const drives = new Map();
+  const channels = new Map();
 
   return {
     store,
@@ -160,8 +162,173 @@ export async function initializeStorage(config) {
     blobServer,
     blobServerPort,
     blobServerHost,
-    drives
+    drives,
+    channels
   };
+}
+
+/**
+ * Load or create a multi-writer channel by Autobase key.
+ *
+ * @param {import('./types.js').StorageContext} ctx
+ * @param {string} channelKeyHex
+ * @param {Object} [options]
+ * @param {string} [options.encryptionKeyHex]
+ * @returns {Promise<import('./channel/multi-writer-channel.js').MultiWriterChannel>}
+ */
+// Track in-progress channel loads to prevent duplicate concurrent loads
+const loadingChannels = new Map()
+
+export async function loadChannel(ctx, channelKeyHex, options = {}) {
+  if (!ctx.channels) ctx.channels = new Map()
+  if (ctx.channels.has(channelKeyHex)) {
+    console.log('[Storage] loadChannel: returning cached channel:', channelKeyHex.slice(0, 16))
+    return ctx.channels.get(channelKeyHex)
+  }
+
+  // Check if already loading - wait for existing load to complete
+  if (loadingChannels.has(channelKeyHex)) {
+    console.log('[Storage] loadChannel: already loading, waiting...:', channelKeyHex.slice(0, 16))
+    return loadingChannels.get(channelKeyHex)
+  }
+
+  console.log('[Storage] loadChannel: cache miss, loading new:', channelKeyHex.slice(0, 16))
+
+  // Create loading promise and store it to prevent duplicate loads
+  const loadPromise = (async () => {
+    // Check if corestore is still open
+    if (ctx.store.closed) {
+      console.error('[Storage] ERROR: Corestore is closed! Cannot load channel:', channelKeyHex.slice(0, 16));
+      throw new Error('Corestore is closed');
+    }
+
+    console.log('[Storage] Loading channel:', channelKeyHex.slice(0, 16));
+    const ch = new MultiWriterChannel(ctx.store, {
+      key: b4a.from(channelKeyHex, 'hex'),
+      encryptionKey: options.encryptionKeyHex ? b4a.from(options.encryptionKeyHex, 'hex') : null
+    })
+
+    // Add timeout to prevent hanging on channel ready
+    const readyStart = Date.now()
+    try {
+      await Promise.race([
+        ch.ready(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Channel ready timeout')), 10000))
+      ])
+    } catch (err) {
+      console.error('[Storage] Channel ready failed:', err.message)
+      throw err
+    }
+    console.log('[Storage] Channel ready in', Date.now() - readyStart, 'ms:', channelKeyHex.slice(0, 16));
+    ctx.channels.set(channelKeyHex, ch)
+
+    // Ensure we join the channel topic so this device can FIND peers and replicate Autobase cores.
+    // (Even non-writable peers must join; pairing setup is only for writable "members".)
+    if (ctx.swarm) {
+      try {
+        if (ch.discoveryKey) ctx.swarm.join(ch.discoveryKey)
+        // Non-blocking: setupPairing may wait on swarm internals; don't let this stall API calls.
+        ch.setupPairing(ctx.swarm).catch((err) => {
+          console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
+        })
+      } catch (err) {
+        console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
+      }
+    }
+
+    return ch
+  })()
+
+  // Store the promise so concurrent callers can wait on the same load
+  loadingChannels.set(channelKeyHex, loadPromise)
+
+  try {
+    const ch = await loadPromise
+    return ch
+  } finally {
+    // Clean up loading state
+    loadingChannels.delete(channelKeyHex)
+  }
+}
+
+/**
+ * Create a new multi-writer channel and join it on the swarm.
+ *
+ * @param {import('./types.js').StorageContext} ctx
+ * @param {Object} [options]
+ * @returns {Promise<{channel: import('./channel/multi-writer-channel.js').MultiWriterChannel, channelKeyHex: string, encryptionKeyHex: string|null}>}
+ */
+export async function createChannel(ctx, options = {}) {
+  if (!ctx.channels) ctx.channels = new Map()
+
+  const ch = new MultiWriterChannel(ctx.store, { encrypt: Boolean(options.encrypt) })
+  await ch.ready()
+
+  const channelKeyHex = ch.keyHex
+  const encryptionKeyHex = ch.encryptionKey ? b4a.toString(ch.encryptionKey, 'hex') : null
+
+  ctx.channels.set(channelKeyHex, ch)
+
+  // Persist a marker so we can reliably distinguish multi-writer channels from legacy Hyperdrives.
+  try {
+    await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'autobase', createdAt: Date.now() })
+  } catch {}
+
+  // Set up pairing and replication in background (non-blocking)
+  if (ctx.swarm) {
+    try {
+      if (ch.discoveryKey) ctx.swarm.join(ch.discoveryKey)
+    } catch {}
+
+    ch.setupPairing(ctx.swarm).catch(err => {
+      console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
+    })
+  }
+
+  return { channel: ch, channelKeyHex, encryptionKeyHex }
+}
+
+/**
+ * Pair a new device into an existing channel using an invite code.
+ *
+ * @param {import('./types.js').StorageContext} ctx
+ * @param {string} inviteCode
+ * @param {Object} [options]
+ * @param {string} [options.deviceName]
+ * @returns {Promise<{channel: import('./channel/multi-writer-channel.js').MultiWriterChannel, channelKeyHex: string}>}
+ */
+export async function pairDevice(ctx, inviteCode, options = {}) {
+  const pairer = new ChannelPairer(ctx.store, inviteCode, {
+    swarm: ctx.swarm,
+    deviceName: options.deviceName || ''
+  })
+  await pairer.ready()
+  const channel = await pairer.finished()
+  const channelKeyHex = channel.keyHex
+  if (!ctx.channels) ctx.channels = new Map()
+  ctx.channels.set(channelKeyHex, channel)
+
+  // Persist marker for multi-writer channel
+  try {
+    await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'autobase', createdAt: Date.now() })
+  } catch {}
+
+  // Set up pairing and replication - MUST await to ensure base.replicate(conn) handler is wired up
+  // before waitForInitialSync() is called in the API layer.
+  // NOTE: API no longer blocks on waitForInitialSync in listVideos; keep this non-blocking to
+  // avoid mobile hangs while still joining replication.
+  if (ctx.swarm) {
+    try {
+      if (channel.discoveryKey) ctx.swarm.join(channel.discoveryKey)
+      channel.setupPairing(ctx.swarm).catch((err) => {
+        console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
+      })
+    } catch (err) {
+      console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
+    }
+  }
+
+  return { channel, channelKeyHex }
 }
 
 /**
@@ -207,6 +374,12 @@ export async function loadDrive(ctx, keyHex, options = {}) {
     throw new Error('Invalid channel key: must be 64 hex characters');
   }
 
+  // Check if corestore is still open
+  if (ctx.store.closed) {
+    console.error('[Storage] ERROR: Corestore is closed! Cannot load drive:', keyHex.slice(0, 16));
+    throw new Error('Corestore is closed');
+  }
+
   // Return cached drive if exists
   if (ctx.drives.has(keyHex)) {
     const existingDrive = ctx.drives.get(keyHex);
@@ -225,7 +398,16 @@ export async function loadDrive(ctx, keyHex, options = {}) {
 
   // Join swarm for this drive
   const discovery = ctx.swarm.join(drive.discoveryKey);
-  await discovery.flushed();
+  // IMPORTANT: On some runtimes (notably mobile/Bare), `flushed()` can take a long time or never resolve
+  // (e.g. after app resume/restart while the network stack is still warming up). Never block callers on it.
+  try {
+    await Promise.race([
+      discovery.flushed(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('swarm join flush timeout')), 3000))
+    ])
+  } catch (err) {
+    console.log('[Storage] Swarm join flush warning:', err?.message)
+  }
 
   console.log('[Storage] Loaded drive:', keyHex.slice(0, 8));
 
@@ -252,7 +434,14 @@ export async function createDrive(ctx) {
 
   // Join swarm
   const discovery = ctx.swarm.join(drive.discoveryKey);
-  await discovery.flushed();
+  try {
+    await Promise.race([
+      discovery.flushed(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('swarm join flush timeout')), 3000))
+    ])
+  } catch (err) {
+    console.log('[Storage] Swarm join flush warning:', err?.message)
+  }
 
   console.log('[Storage] Created drive:', keyHex.slice(0, 8));
   return { drive, keyHex };
@@ -264,19 +453,46 @@ export async function createDrive(ctx) {
  * @param {import('./types.js').StorageContext} ctx - Storage context
  * @param {string} driveKey - Drive key
  * @param {string} videoPath - Path to video in drive
+ * @param {Object} [options]
+ * @param {import('hyperdrive')} [options.drive] - Pre-loaded drive (for multi-writer blob drives)
  * @returns {Promise<{url: string}>}
  */
-export async function getVideoUrl(ctx, driveKey, videoPath) {
+export async function getVideoUrl(ctx, driveKey, videoPath, options = {}) {
   console.log('[Storage] GET_VIDEO_URL:', driveKey?.slice(0, 16), videoPath);
 
-  // Make sure the drive is loaded and synced
-  const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 15000 });
+  // Use pre-loaded drive if provided (for multi-writer blob drives)
+  // Otherwise load the drive and sync
+  let drive;
+  if (options.drive) {
+    console.log('[Storage] GET_VIDEO_URL: using pre-loaded drive');
+    drive = options.drive;
+  } else {
+    drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 15000 });
+  }
 
-  // Resolve the filename to get blob info directly
-  // This avoids HTTP 307 redirect which can break VLC seeking
-  const entry = await drive.entry(videoPath);
+  // Best-effort: pull latest blocks for remote drives with a bounded wait.
+  // This helps public-feed playback where the blob drive is remote and has just been joined.
+  try {
+    await Promise.race([
+      drive.core.update({ wait: true }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('drive update timeout')), 15000))
+    ])
+  } catch {}
+
+  // Resolve the filename to get blob info directly.
+  // This avoids HTTP 307 redirect which can break VLC seeking.
+  //
+  // NOTE: For public-feed playback, the blob drive is often remote and metadata may not be
+  // available immediately. Use a bounded wait here so "play" works once peers are connected.
+  let entry = null
+  try {
+    entry = await drive.entry(videoPath, { wait: true, timeout: 15000 })
+  } catch (err) {
+    // Fall back to non-waiting lookup (helps on older hyperdrive builds that may not support opts)
+    try { entry = await drive.entry(videoPath) } catch {}
+  }
   if (!entry || !entry.value?.blob) {
-    throw new Error('Video not found in drive');
+    throw new Error('Video not found in drive (not synced yet)');
   }
 
   const blob = entry.value.blob;

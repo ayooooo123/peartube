@@ -66,7 +66,7 @@ class WorkerClient {
       const timeout = setTimeout(() => {
         this._readyResolve = null
         reject(new Error('Worker init timeout'))
-      }, 30000)
+      }, 60000)
 
       this._readyResolve = (data) => {
         clearTimeout(timeout)

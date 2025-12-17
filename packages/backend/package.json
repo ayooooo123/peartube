@@ -24,6 +24,7 @@
     "test:multiwriter": "node test/multiwriter-channel-harness.mjs"
   },
   "dependencies": {
+    "@xenova/transformers": "^3.8.1",
     "autobase": "^7.22.0",
     "b4a": "^1.6.7",
     "blind-pairing": "^2.3.1",

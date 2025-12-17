@@ -8,6 +8,13 @@ import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
 
 import { fromHex, toHex, prefixedKey } from './util.js'
+import { validateOp } from './op-schemas.js'
+import { CommentsChannel } from './comments-channel.js'
+import { ReactionsManager } from './reactions.js'
+import { WatchEventLogger } from '../recommendations/watch-events.js'
+import { applyMigrations } from './migrations.js'
+
+const CURRENT_SCHEMA_VERSION = 1
 
 /**
  * MultiWriterChannel
@@ -44,6 +51,19 @@ export class MultiWriterChannel extends ReadyResource {
 
     /** @type {any} */
     this.pairingMember = null
+
+    /** @type {CommentsChannel|null} */
+    this.comments = null
+
+    /** @type {ReactionsManager|null} */
+    this.reactions = null
+
+    /** @type {WatchEventLogger|null} */
+    this.watchLogger = null
+
+    // Local-only rate limiting (must NOT affect deterministic view application).
+    /** @type {Map<string, {count: number, windowStartMs: number}>} */
+    this._localRateLimits = new Map()
 
     this.ready().catch(() => {})
   }
@@ -127,6 +147,11 @@ export class MultiWriterChannel extends ReadyResource {
     console.log('[Channel] _open: base.update() took', Date.now() - updateStart, 'ms')
 
     console.log('[Channel] _open complete: key:', this.keyHex?.slice(0, 16), 'writable:', this.writable, 'local length:', this.base.local?.length, 'view length:', this.view?.core?.length)
+
+    // Initialize comments, reactions, and watch logger
+    this.comments = new CommentsChannel(this)
+    this.reactions = new ReactionsManager(this)
+    this.watchLogger = new WatchEventLogger(this)
   }
 
   async _close() {
@@ -155,19 +180,101 @@ export class MultiWriterChannel extends ReadyResource {
   }
 
   async _applyOp(op, view, host, node) {
+    // Set default schema version for backward compatibility
+    const opSchemaVersion = op.schemaVersion !== undefined && op.schemaVersion !== null
+      ? op.schemaVersion
+      : 0 // Legacy ops have version 0
+
+    // Migrate op if needed
+    if (opSchemaVersion < CURRENT_SCHEMA_VERSION) {
+      op = applyMigrations(op, opSchemaVersion, CURRENT_SCHEMA_VERSION)
+    }
+
+    // Validate op schema (after migration)
+    const validation = validateOp(op)
+    if (!validation.valid) {
+      console.warn('[Channel] Invalid op:', validation.error, 'op:', op.type, 'skipping')
+      return // Skip invalid ops to maintain forward compatibility
+    }
+
+    // ACL Enforcement: Verify op is from an authorized writer
+    // Autobase already enforces this at the core level, but we can add additional checks
+    const writerKeyHex = op.updatedBy || op.uploadedBy || op.authorKeyHex || op.moderatorKeyHex || null
+    if (writerKeyHex) {
+      const writer = await view.get(prefixedKey('writers', writerKeyHex)).catch(() => null)
+      if (!writer?.value && op.type !== 'add-writer') {
+        // Allow add-writer ops even if writer doesn't exist yet (for initial setup)
+        console.warn('[Channel] Op from unauthorized writer:', writerKeyHex?.slice(0, 16), 'type:', op.type)
+        // Note: Autobase will reject ops from non-writers, so this is mostly for logging
+      }
+    }
+
+    // IMPORTANT: View application must be deterministic with respect to the op stream.
+    // Do NOT use Date.now(), Math.random(), or local clocks here, and do NOT skip ops based on local time.
+    // Rate limiting must happen on the mutator path (before append) or be derived purely from op data.
+
+    // Content validation: Additional checks beyond schema validation
+    if (op.type === 'add-video' || op.type === 'update-video') {
+      // Validate blob pointers
+      if (op.blobDriveKey && typeof op.blobDriveKey !== 'string') {
+        console.warn('[Channel] Invalid blobDriveKey in op:', op.type)
+        return
+      }
+      // Validate metadata size (prevent DoS)
+      const metaSize = JSON.stringify(op).length
+      if (metaSize > 100 * 1024) { // 100KB max
+        console.warn('[Channel] Op metadata too large:', metaSize, 'bytes')
+        return
+      }
+    }
+
+    // Set default logical clock (Lamport timestamp) for conflict resolution
+    // Use node index as logical clock (Autobase provides deterministic ordering)
+    if (op.logicalClock === undefined || op.logicalClock === null) {
+      op.logicalClock = node?.index || 0
+    }
+
     switch (op.type) {
       case 'update-channel': {
         const key = prefixedKey('channel-meta', op.key || 'meta')
-        await view.put(key, {
+        const existing = await view.get(key).catch(() => null)
+        const prev = existing?.value || {}
+
+        // Conflict resolution: merge intelligently
+        const merged = {
           key: op.key || 'meta',
-          name: op.name,
-          description: op.description || '',
-          avatar: op.avatar || null,
-          updatedAt: op.updatedAt || Date.now(),
-          updatedBy: op.updatedBy || null,
-          createdAt: op.createdAt || op.updatedAt || Date.now(),
-          createdBy: op.createdBy || op.updatedBy || null
-        })
+          name: op.name !== undefined ? op.name : prev.name,
+          description: op.description !== undefined ? op.description : (prev.description || ''),
+          avatar: op.avatar !== undefined ? op.avatar : prev.avatar,
+          updatedAt: op.updatedAt || prev.updatedAt || 0,
+          updatedBy: op.updatedBy || prev.updatedBy || null,
+          createdAt: prev.createdAt || op.createdAt || op.updatedAt || 0,
+          createdBy: prev.createdBy || op.createdBy || op.updatedBy || null,
+          logicalClock: op.logicalClock || 0
+        }
+
+        // Get writer priorities for conflict resolution
+        const prevWriter = prev.updatedBy ? await view.get(prefixedKey('writers', prev.updatedBy)).catch(() => null) : null
+        const currentWriter = op.updatedBy ? await view.get(prefixedKey('writers', op.updatedBy)).catch(() => null) : null
+
+        const prevPriority = prevWriter?.value?.role === 'owner' ? 3 : prevWriter?.value?.role === 'moderator' ? 2 : 1
+        const currentPriority = currentWriter?.value?.role === 'owner' ? 3 : currentWriter?.value?.role === 'moderator' ? 2 : 1
+
+        // Prefer higher priority writer, then higher logical clock
+        const shouldUseNew = currentPriority > prevPriority || 
+          (currentPriority === prevPriority && (op.logicalClock || 0) > (prev.logicalClock || 0))
+
+        if (!shouldUseNew && prev.name) {
+          merged.name = prev.name
+        }
+        if (!shouldUseNew && prev.description) {
+          merged.description = prev.description
+        }
+        if (!shouldUseNew && prev.avatar) {
+          merged.avatar = prev.avatar
+        }
+
+        await view.put(key, merged)
         return
       }
 
@@ -181,10 +288,41 @@ export class MultiWriterChannel extends ReadyResource {
 
       case 'update-video': {
         const key = prefixedKey('videos', op.id)
-        const { type, ...rest } = op
+        const { type, logicalClock, schemaVersion, ...rest } = op
         const existing = await view.get(key).catch(() => null)
         const prev = existing?.value || {}
-        await view.put(key, { ...prev, ...rest })
+
+        // Conflict resolution: merge fields intelligently instead of overwriting
+        // Prefer newer values (higher logical clock) but merge arrays/objects
+        const merged = { ...prev }
+
+        // Get writer priority for conflict resolution
+        const prevWriter = prev.updatedBy ? await view.get(prefixedKey('writers', prev.updatedBy)).catch(() => null) : null
+        const currentWriter = op.updatedBy ? await view.get(prefixedKey('writers', op.updatedBy)).catch(() => null) : null
+
+        const prevPriority = prevWriter?.value?.role === 'owner' ? 3 : prevWriter?.value?.role === 'moderator' ? 2 : 1
+        const currentPriority = currentWriter?.value?.role === 'owner' ? 3 : currentWriter?.value?.role === 'moderator' ? 2 : 1
+
+        // Merge strategy: prefer higher priority writer, then higher logical clock
+        const shouldUseNew = currentPriority > prevPriority || 
+          (currentPriority === prevPriority && (op.logicalClock || 0) > (prev.logicalClock || 0))
+
+        if (shouldUseNew) {
+          // Use new values, but merge description intelligently
+          if (rest.description && prev.description && rest.description !== prev.description) {
+            // Keep both descriptions separated (or use newer)
+            merged.description = rest.description
+          }
+          Object.assign(merged, rest)
+          merged.logicalClock = op.logicalClock
+          merged.updatedAt = op.updatedAt || prev.updatedAt || 0
+          merged.updatedBy = op.updatedBy
+        } else {
+          // Keep existing, but update timestamp
+          merged.updatedAt = Math.max(prev.updatedAt || 0, op.updatedAt || 0)
+        }
+
+        await view.put(key, merged)
         return
       }
 
@@ -204,7 +342,7 @@ export class MultiWriterChannel extends ReadyResource {
           keyHex,
           role: op.role || 'device',
           deviceName: op.deviceName || '',
-          addedAt: op.addedAt || Date.now(),
+          addedAt: op.addedAt || 0,
           blobDriveKey: op.blobDriveKey || null
         })
         return
@@ -218,7 +356,7 @@ export class MultiWriterChannel extends ReadyResource {
           keyHex,
           role: op.role || prev?.role || 'device',
           deviceName: op.deviceName ?? prev?.deviceName ?? '',
-          addedAt: prev?.addedAt || op.addedAt || Date.now(),
+          addedAt: prev?.addedAt || op.addedAt || 0,
           blobDriveKey: op.blobDriveKey ?? prev?.blobDriveKey ?? null
         })
         return
@@ -240,7 +378,7 @@ export class MultiWriterChannel extends ReadyResource {
           inviteZ32: op.inviteZ32,
           publicKeyHex: op.publicKeyHex,
           expires: op.expires || 0,
-          createdAt: op.createdAt || Date.now()
+          createdAt: op.createdAt || 0
         })
         // Single active invite pointer (deterministic, derived from log)
         await view.put('invites/current', { idHex })
@@ -253,6 +391,108 @@ export class MultiWriterChannel extends ReadyResource {
         const cur = await view.get('invites/current').catch(() => null)
         if (cur?.value?.idHex === idHex) {
           await view.del('invites/current')
+        }
+        return
+      }
+
+      // Placeholder handlers for future phases (will be implemented in later phases)
+      case 'add-vector-index': {
+        const key = prefixedKey('vectors', op.videoId)
+        await view.put(key, {
+          videoId: op.videoId,
+          vector: op.vector || null, // Base64 encoded vector
+          text: op.text || '',
+          metadata: op.metadata || null,
+          indexedAt: op.indexedAt || 0
+        })
+        return
+      }
+
+      case 'add-comment': {
+        const key = prefixedKey('comments', `${op.videoId}/${op.commentId}`)
+        await view.put(key, {
+          videoId: op.videoId,
+          commentId: op.commentId,
+          text: op.text,
+          authorKeyHex: op.authorKeyHex,
+          timestamp: op.timestamp || 0,
+          parentId: op.parentId || null,
+          hidden: false
+        })
+        return
+      }
+
+      case 'hide-comment': {
+        const key = prefixedKey('comments', `${op.videoId}/${op.commentId}`)
+        const existing = await view.get(key).catch(() => null)
+        if (existing?.value) {
+          await view.put(key, {
+            ...existing.value,
+            hidden: true,
+            hiddenBy: op.moderatorKeyHex,
+            hiddenAt: op.timestamp || 0
+          })
+        }
+        return
+      }
+
+      case 'remove-comment': {
+        const key = prefixedKey('comments', `${op.videoId}/${op.commentId}`)
+        await view.del(key)
+        return
+      }
+
+      case 'add-reaction': {
+        const key = prefixedKey('reactions', `${op.videoId}/${op.authorKeyHex}`)
+        await view.put(key, {
+          videoId: op.videoId,
+          reactionType: op.reactionType,
+          authorKeyHex: op.authorKeyHex,
+          timestamp: op.timestamp || 0
+        })
+        return
+      }
+
+      case 'remove-reaction': {
+        const key = prefixedKey('reactions', `${op.videoId}/${op.authorKeyHex}`)
+        await view.del(key)
+        return
+      }
+
+      case 'log-watch-event': {
+        // Deterministic key derived from op payload. Prefer eventId (unique, generated at append time).
+        const eventId = op.eventId || String(op.timestamp || op.logicalClock || node?.index || 0)
+        const key = prefixedKey('watch-events', `${op.videoId}/${eventId}`)
+        await view.put(key, {
+          videoId: op.videoId,
+          channelKey: op.channelKey || null,
+          watcherKeyHex: op.watcherKeyHex || null, // May be null for privacy
+          duration: op.duration || 0,
+          completed: op.completed || false,
+          timestamp: op.timestamp || 0,
+          eventId
+        })
+        return
+      }
+
+      case 'migrate-schema': {
+        // Record schema migration in view
+        const key = prefixedKey('schema-migrations', `${op.fromVersion}-${op.toVersion}`)
+        await view.put(key, {
+          fromVersion: op.fromVersion,
+          toVersion: op.toVersion,
+          migratedAt: op.migratedAt || 0,
+          schemaVersion: op.schemaVersion
+        })
+
+        // Update current schema version in channel metadata
+        const metaKey = prefixedKey('channel-meta', 'meta')
+        const meta = await view.get(metaKey).catch(() => null)
+        if (meta?.value) {
+          await view.put(metaKey, {
+            ...meta.value,
+            schemaVersion: op.toVersion
+          })
         }
         return
       }
@@ -270,12 +510,23 @@ export class MultiWriterChannel extends ReadyResource {
 
   async getMetadata() {
     const res = await this.view.get('channel-meta/meta').catch(() => null)
-    return res?.value || null
+    const meta = res?.value || null
+    // Ensure schema version is set
+    if (meta && !meta.schemaVersion) {
+      meta.schemaVersion = CURRENT_SCHEMA_VERSION
+    }
+    return meta
   }
 
   async updateMetadata({ name, description = '', avatar = null }) {
-    await this.base.append({
+    // Get current logical clock from view
+    const currentMeta = await this.getMetadata().catch(() => null)
+    const nextClock = (currentMeta?.logicalClock || 0) + 1
+
+    await this.appendOp({
       type: 'update-channel',
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      logicalClock: nextClock,
       key: 'meta',
       name,
       description,
@@ -316,8 +567,9 @@ export class MultiWriterChannel extends ReadyResource {
     this.blobDrives.set(driveKeyHex, drive)
 
     // Persist writer record (does not affect membership, only metadata)
-    await this.base.append({
+    await this.appendOp({
       type: 'upsert-writer',
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       keyHex: this.localWriterKeyHex,
       deviceName,
       blobDriveKey: driveKeyHex
@@ -327,8 +579,23 @@ export class MultiWriterChannel extends ReadyResource {
   }
 
   async addWriter({ keyHex, role = 'device', deviceName = '' }) {
-    await this.base.append({
+    // Validate role
+    const validRoles = ['device', 'moderator', 'owner']
+    if (!validRoles.includes(role)) {
+      throw new Error(`Invalid role: ${role}. Must be one of: ${validRoles.join(', ')}`)
+    }
+
+    // Only owners can add moderators or other owners
+    if (role === 'moderator' || role === 'owner') {
+      const localWriter = await this.view.get(prefixedKey('writers', this.localWriterKeyHex)).catch(() => null)
+      if (localWriter?.value?.role !== 'owner') {
+        throw new Error('Only owners can add moderators or owners')
+      }
+    }
+
+    await this.appendOp({
       type: 'add-writer',
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       keyHex,
       role,
       deviceName,
@@ -336,8 +603,24 @@ export class MultiWriterChannel extends ReadyResource {
     })
   }
 
-  async removeWriter({ keyHex }) {
-    await this.base.append({ type: 'remove-writer', keyHex })
+  async removeWriter({ keyHex, ban = false }) {
+    // Only owners can remove writers
+    const localWriter = await this.view.get(prefixedKey('writers', this.localWriterKeyHex)).catch(() => null)
+    if (localWriter?.value?.role !== 'owner') {
+      throw new Error('Only owners can remove writers')
+    }
+
+    // Prevent removing yourself
+    if (keyHex === this.localWriterKeyHex) {
+      throw new Error('Cannot remove yourself')
+    }
+
+    await this.appendOp({
+      type: 'remove-writer',
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      keyHex,
+      ban: Boolean(ban)
+    })
   }
 
   // ----------------------------
@@ -391,8 +674,16 @@ export class MultiWriterChannel extends ReadyResource {
     const id = meta.id
     if (!id) throw new Error('Video id required')
     console.log('[Channel] addVideo:', id, 'blobDriveKey:', meta.blobDriveKey?.slice(0, 16))
-    await this.base.append({
+
+    // Get next logical clock
+    const videos = await this.listVideos().catch(() => [])
+    const maxClock = Math.max(...videos.map(v => v.logicalClock || 0), 0)
+    const nextClock = maxClock + 1
+
+    await this.appendOp({
       type: 'add-video',
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      logicalClock: nextClock,
       ...meta,
       uploadedAt: meta.uploadedAt || Date.now(),
       uploadedBy: meta.uploadedBy || this.localWriterKeyHex
@@ -405,7 +696,11 @@ export class MultiWriterChannel extends ReadyResource {
   async deleteVideo(id) {
     // Blob deletion is best-effort; the blob store may belong to another device.
     const v = await this.getVideo(id)
-    await this.base.append({ type: 'delete-video', id })
+    await this.appendOp({
+      type: 'delete-video',
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      id
+    })
     if (v?.blobDriveKey && v?.path) {
       const d = await this._loadBlobDrive(v.blobDriveKey).catch(() => null)
       if (d) {
@@ -459,8 +754,9 @@ export class MultiWriterChannel extends ReadyResource {
     const inv = BlindPairing.createInvite(this.key, { expires })
     const inviteZ32 = z32.encode(inv.invite)
 
-    await this.base.append({
+    await this.appendOp({
       type: 'add-invite',
+      schemaVersion: CURRENT_SCHEMA_VERSION,
       idHex: b4a.toString(inv.id, 'hex'),
       inviteZ32,
       publicKeyHex: b4a.toString(inv.publicKey, 'hex'),
@@ -475,7 +771,11 @@ export class MultiWriterChannel extends ReadyResource {
     for await (const { key, value } of this.view.createReadStream({ gt: 'invites/', lt: 'invites/\xff' })) {
       if (!key.startsWith('invites/')) continue
       const idHex = value?.idHex
-      if (idHex) await this.base.append({ type: 'delete-invite', idHex })
+      if (idHex) await this.appendOp({
+        type: 'delete-invite',
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        idHex
+      })
     }
   }
 
@@ -602,7 +902,11 @@ export class MultiWriterChannel extends ReadyResource {
           })
 
           // Clear the used invite
-          await this.base.append({ type: 'delete-invite', idHex: inv.value.idHex })
+          await this.appendOp({
+            type: 'delete-invite',
+            schemaVersion: CURRENT_SCHEMA_VERSION,
+            idHex: inv.value.idHex
+          })
 
           console.log('[Channel] Writer added and pairing confirmed:', newWriterKeyHex.slice(0, 16))
         } catch (err) {
@@ -763,6 +1067,33 @@ export class MultiWriterChannel extends ReadyResource {
     console.log('[Channel] waitForInitialSync: timeout with no videos')
     onProgress('failed', { message: 'Sync timeout - no videos received yet' })
     return { success: false, videoCount: 0, state: 'failed' }
+  }
+
+  /**
+   * Append an op with local-only rate limiting (deterministic view safety).
+   * This MUST NOT influence apply() determinism because rejected ops are never appended.
+   * @param {any} op
+   */
+  async appendOp(op) {
+    const writerKeyHex =
+      op?.updatedBy || op?.uploadedBy || op?.authorKeyHex || op?.moderatorKeyHex || this.localWriterKeyHex || null
+    if (writerKeyHex) this._checkLocalRateLimit(writerKeyHex)
+    return this.base.append(op)
+  }
+
+  _checkLocalRateLimit(writerKeyHex) {
+    const now = Date.now()
+    const windowMs = 60 * 1000
+    const maxOpsPerWindow = 100
+    const prev = this._localRateLimits.get(writerKeyHex)
+    if (!prev || now - prev.windowStartMs >= windowMs) {
+      this._localRateLimits.set(writerKeyHex, { count: 1, windowStartMs: now })
+      return
+    }
+    if (prev.count >= maxOpsPerWindow) {
+      throw new Error('Rate limit exceeded (local)')
+    }
+    prev.count++
   }
 }
 

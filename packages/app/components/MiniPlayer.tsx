@@ -8,7 +8,6 @@ import { useRef } from 'react'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Play, Pause, X } from 'lucide-react-native'
 
-import { useRouter } from 'expo-router'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { colors } from '@/lib/colors'
 
@@ -17,7 +16,6 @@ const MINI_VIDEO_WIDTH = 120
 
 export function MiniPlayer() {
   const insets = useSafeAreaInsets()
-  const router = useRouter()
   const {
     currentVideo,
     isPlaying,
@@ -76,16 +74,8 @@ export function MiniPlayer() {
   }
 
   const handlePress = () => {
-    // Navigate to full screen video player
+    // Expand the global overlay player back to fullscreen
     maximizePlayer()
-    router.push({
-      pathname: '/video/[id]',
-      params: {
-        id: currentVideo.id,
-        videoData: JSON.stringify(currentVideo),
-        fromMiniPlayer: 'true',
-      },
-    })
   }
 
   const handlePlayPause = () => {

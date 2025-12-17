@@ -4,14 +4,15 @@
  * Uses react-native-reanimated for smooth 60fps animations
  * Uses VLC player for broad codec support
  */
-import { useCallback, useEffect, useState, useRef } from 'react'
-import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions } from 'react-native'
+import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
+import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput } from 'react-native'
 import * as FileSystem from 'expo-file-system'
 import { rpc } from '@peartube/platform/rpc'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from './desktop/constants'
+import { useApp } from '../app/_layout'
 
 // VLC player for iOS/Android
 let VLCPlayer: any = null
@@ -27,7 +28,7 @@ import Animated, {
   runOnJS,
   Extrapolation,
 } from 'react-native-reanimated'
-import { Play, Pause, X, ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Users, RotateCcw, RotateCw, Maximize, Minimize } from 'lucide-react-native'
+import { Play, Pause, X, ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Users, RotateCcw, RotateCw, Maximize, Minimize, Reply, Trash2 } from 'lucide-react-native'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { colors } from '@/lib/colors'
@@ -194,6 +195,7 @@ export function VideoPlayerOverlay() {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions()
   const { isDesktop, isPear } = usePlatform()
   const { isCollapsed } = useSidebar()
+  const { identity } = useApp()
   const isWindowLandscape = screenWidth > screenHeight
   const exitGateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const exitGateLastSnapshotRef = useRef<string | null>(null)
@@ -273,6 +275,233 @@ export function VideoPlayerOverlay() {
   const [pendingLandscapeExit, setPendingLandscapeExit] = useState(false)
   const isLandscapeFullscreenShared = useSharedValue(false)
   const [channelMetaName, setChannelMetaName] = useState<string | null>(null)
+
+  // ---------------------------------------
+  // Social (comments + reactions) state
+  // Lives in the overlay so it persists across minimize/maximize/fullscreen.
+  // ---------------------------------------
+  const [comments, setComments] = useState<any[]>([])
+  const [commentText, setCommentText] = useState('')
+  const [replyToComment, setReplyToComment] = useState<any>(null)
+  const [commentsLoading, setCommentsLoading] = useState(false)
+  const [postingComment, setPostingComment] = useState(false)
+  const [commentsPage, setCommentsPage] = useState(0)
+  const [hasMoreComments, setHasMoreComments] = useState(false)
+  const [loadingMoreComments, setLoadingMoreComments] = useState(false)
+  const [refreshingComments, setRefreshingComments] = useState(false)
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null)
+
+  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({})
+  const [userReaction, setUserReaction] = useState<string | null>(null)
+
+  const COMMENTS_PER_PAGE = 25
+
+  const currentVideoKey = useMemo(() => {
+    if (!currentVideo?.channelKey || !currentVideo?.id) return null
+    return `${currentVideo.channelKey}:${currentVideo.id}`
+  }, [currentVideo?.channelKey, currentVideo?.id])
+
+  const organizedComments = useMemo(() => {
+    const byParent = new Map<string, any[]>()
+    for (const c of comments) {
+      const parentId = c?.parentId || ''
+      if (!parentId) continue
+      if (!byParent.has(parentId)) byParent.set(parentId, [])
+      byParent.get(parentId)!.push(c)
+    }
+    const out: any[] = []
+    for (const c of comments) {
+      const parentId = c?.parentId || ''
+      if (parentId) continue
+      out.push({ ...c, replies: byParent.get(c.commentId) || [] })
+    }
+    return out
+  }, [comments])
+
+  const isOwnComment = useCallback((c: any) => {
+    if (!identity?.driveKey) return false
+    return c?.authorKeyHex === identity.driveKey
+  }, [identity?.driveKey])
+
+  const loadSocial = useCallback(async (page = 0, append = false, forceRefresh = false) => {
+    if (!currentVideo?.channelKey || !currentVideo?.id) return
+    if (!rpc?.listComments || !rpc?.getReactions) return
+
+    const ch = currentVideo.channelKey
+    const primaryVid = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
+      ? currentVideo.path
+      : currentVideo.id
+    const altVid = (currentVideo.path && currentVideo.path !== primaryVid) ? currentVideo.path : null
+
+    const isInitialLoad = comments.length === 0
+    if (!append && (isInitialLoad || forceRefresh)) {
+      setCommentsLoading(true)
+    }
+
+    try {
+      const [commentsRes, reactionsRes] = await Promise.all([
+        rpc.listComments?.({ channelKey: ch, videoId: primaryVid, page, limit: COMMENTS_PER_PAGE }).catch(() => null),
+        !append ? rpc.getReactions?.({ channelKey: ch, videoId: primaryVid }).catch(() => null) : Promise.resolve(null),
+      ])
+
+      // Safety: if some peers used a different videoId key (id vs path), merge both.
+      let altCommentsRes: any = null
+      if (!append && altVid && rpc.listComments) {
+        altCommentsRes = await rpc.listComments?.({ channelKey: ch, videoId: altVid, page: 0, limit: COMMENTS_PER_PAGE }).catch(() => null)
+      }
+
+      if (commentsRes?.success && Array.isArray(commentsRes.comments)) {
+        if (append) {
+          setComments(prev => [...prev, ...commentsRes.comments])
+        } else {
+          const merged = new Map<string, any>()
+          for (const c of commentsRes.comments) merged.set(c.commentId, c)
+          if (altCommentsRes?.success && Array.isArray(altCommentsRes.comments)) {
+            for (const c of altCommentsRes.comments) merged.set(c.commentId, c)
+          }
+          setComments(Array.from(merged.values()))
+        }
+        setHasMoreComments(commentsRes.comments.length >= COMMENTS_PER_PAGE)
+        setCommentsPage(page)
+      } else if (!append && isInitialLoad) {
+        setComments([])
+        setHasMoreComments(false)
+      }
+
+      if (reactionsRes?.success) {
+        const countsData = reactionsRes.counts || {}
+        const counts: Record<string, number> = {}
+        if (Array.isArray(countsData)) {
+          for (const c of countsData) {
+            if (c?.reactionType) counts[c.reactionType] = c.count || 0
+          }
+        } else if (typeof countsData === 'object') {
+          for (const [k, v] of Object.entries(countsData)) {
+            counts[k] = typeof v === 'number' ? v : 0
+          }
+        }
+        setReactionCounts(counts)
+        setUserReaction(reactionsRes.userReaction || null)
+      }
+    } finally {
+      setCommentsLoading(false)
+      setLoadingMoreComments(false)
+      setRefreshingComments(false)
+    }
+  }, [currentVideo?.channelKey, currentVideo?.id, comments.length])
+
+  // Reload social when the current video changes
+  useEffect(() => {
+    if (!currentVideoKey) return
+    setComments([])
+    setCommentText('')
+    setReplyToComment(null)
+    setCommentsPage(0)
+    setHasMoreComments(false)
+    setReactionCounts({})
+    setUserReaction(null)
+    // Best-effort load
+    loadSocial(0, false, true).catch(() => {})
+    // Best-effort index vectors (enables semantic search)
+    rpc?.indexVideoVectors?.({ channelKey: currentVideo!.channelKey, videoId: currentVideo!.id }).catch(() => {})
+  }, [currentVideoKey])
+
+  // Keep comments/reactions reasonably fresh while the overlay is open.
+  // This ensures comments posted on another device (e.g. desktop) show up on mobile without manual refresh.
+  useEffect(() => {
+    if (!currentVideoKey) return
+    // Only poll when the player is visible; avoid work when hidden.
+    if (playerMode === 'hidden') return
+    // If in true landscape fullscreen we hide the scroll content; skip polling to reduce churn.
+    if (isLandscapeFullscreen || pendingLandscapeExit) return
+
+    const interval = setInterval(() => {
+      // Best-effort refresh without forcing loading spinners
+      loadSocial(0, false, false).catch(() => {})
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [currentVideoKey, playerMode, isLandscapeFullscreen, pendingLandscapeExit, loadSocial])
+
+  const refreshComments = useCallback(async () => {
+    setRefreshingComments(true)
+    await loadSocial(0, false, true)
+  }, [loadSocial])
+
+  const loadMoreComments = useCallback(async () => {
+    if (loadingMoreComments || !hasMoreComments) return
+    setLoadingMoreComments(true)
+    await loadSocial(commentsPage + 1, true, false)
+  }, [loadingMoreComments, hasMoreComments, commentsPage, loadSocial])
+
+  const postComment = useCallback(async () => {
+    if (!currentVideo?.channelKey || !currentVideo?.id) return
+    const text = commentText.trim()
+    if (!text) return
+    setPostingComment(true)
+    try {
+      const vid = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
+        ? currentVideo.path
+        : currentVideo.id
+      const res = await rpc.addComment?.({
+        channelKey: currentVideo.channelKey,
+        videoId: vid,
+        text,
+        parentId: replyToComment?.commentId || null
+      })
+      if (res?.success) {
+        setCommentText('')
+        setReplyToComment(null)
+        await loadSocial(0, false, true)
+      }
+    } finally {
+      setPostingComment(false)
+    }
+  }, [currentVideoKey, commentText, replyToComment, loadSocial])
+
+  const deleteComment = useCallback(async (commentId: string) => {
+    if (!currentVideo?.channelKey || !currentVideo?.id) return
+    const vid = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
+      ? currentVideo.path
+      : currentVideo.id
+    Alert.alert(
+      'Delete Comment',
+      'Are you sure you want to delete this comment?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setDeletingCommentId(commentId)
+            try {
+              const res = await rpc.removeComment?.({ channelKey: currentVideo.channelKey, videoId: vid, commentId })
+              if (res?.success) {
+                setComments(prev => prev.filter(c => c.commentId !== commentId))
+              }
+            } finally {
+              setDeletingCommentId(null)
+            }
+          }
+        }
+      ]
+    )
+  }, [currentVideoKey])
+
+  const toggleReaction = useCallback(async (type: string) => {
+    if (!currentVideo?.channelKey || !currentVideo?.id) return
+    const vid = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
+      ? currentVideo.path
+      : currentVideo.id
+    try {
+      if (userReaction === type) {
+        await rpc.removeReaction?.({ channelKey: currentVideo.channelKey, videoId: vid })
+      } else {
+        await rpc.addReaction?.({ channelKey: currentVideo.channelKey, videoId: vid, reactionType: type })
+      }
+      await loadSocial(0, false, true)
+    } catch {}
+  }, [currentVideoKey, userReaction, loadSocial])
 
   // Show controls temporarily
   const showControlsTemporarily = useCallback(() => {
@@ -738,7 +967,7 @@ export function VideoPlayerOverlay() {
 
       if (isLandscapeFullscreen) {
         // Exit fullscreen - return to portrait.
-        // Important: don't flip the React/Shared flags until the window has remeasured to portrait.
+        // Important: don't flip the React/Shared flags until the window has remeasured.
         setPendingLandscapeExit(true)
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
       } else {
@@ -764,6 +993,7 @@ export function VideoPlayerOverlay() {
   useEffect(() => {
     return () => {
       if (isLandscapeFullscreenShared.value) {
+        // Return to portrait when video player unmounts
         ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP)
         StatusBar.setHidden(false)
       }
@@ -775,6 +1005,7 @@ export function VideoPlayerOverlay() {
     if ((playerMode === 'mini' || playerMode === 'hidden') && isLandscapeFullscreen) {
       if (!pendingLandscapeExit) {
         setPendingLandscapeExit(true)
+        // Return to portrait when exiting fullscreen
         ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch((err) => {
           console.error('[VideoPlayer] Failed to lock portrait on mode change:', err)
           isLandscapeFullscreenShared.value = false
@@ -1237,8 +1468,18 @@ export function VideoPlayerOverlay() {
 
             {/* Action Buttons */}
             <View style={styles.actions}>
-              <ActionButton icon={ThumbsUp} label="Like" />
-              <ActionButton icon={ThumbsDown} label="Dislike" />
+              <ActionButton
+                icon={ThumbsUp}
+                label={`Like${reactionCounts.like ? ` (${reactionCounts.like})` : ''}`}
+                active={userReaction === 'like'}
+                onPress={() => toggleReaction('like')}
+              />
+              <ActionButton
+                icon={ThumbsDown}
+                label={`Dislike${reactionCounts.dislike ? ` (${reactionCounts.dislike})` : ''}`}
+                active={userReaction === 'dislike'}
+                onPress={() => toggleReaction('dislike')}
+              />
               <ActionButton icon={Share2} label="Share" />
               <ActionButton icon={Download} label={isDownloading ? "Downloading..." : "Download"} onPress={handleDownload} />
               <ActionButton icon={MoreHorizontal} label="More" />
@@ -1256,6 +1497,139 @@ export function VideoPlayerOverlay() {
                 <Text style={styles.descriptionText}>{currentVideo.description}</Text>
               </View>
             )}
+
+            {/* Comments */}
+            <View style={styles.commentsSection}>
+              <View style={styles.commentsHeader}>
+                <Text style={styles.commentsTitle}>
+                  {comments.length > 0 ? `${comments.length} Comment${comments.length !== 1 ? 's' : ''}` : 'Comments'}
+                </Text>
+                <Pressable
+                  onPress={refreshComments}
+                  disabled={refreshingComments}
+                  style={[styles.refreshButton, refreshingComments && { opacity: 0.5 }]}
+                >
+                  {refreshingComments ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <RotateCcw color={colors.primary} size={16} />
+                  )}
+                  <Text style={styles.refreshButtonText}>Refresh</Text>
+                </Pressable>
+              </View>
+
+              {replyToComment && (
+                <View style={styles.replyIndicator}>
+                  <Text style={styles.replyIndicatorText}>
+                    Replying to {(replyToComment.authorKeyHex || '').slice(0, 8)}…
+                  </Text>
+                  <Pressable onPress={() => { setReplyToComment(null); setCommentText('') }} style={styles.cancelReplyButton}>
+                    <X color={colors.textMuted} size={16} />
+                  </Pressable>
+                </View>
+              )}
+
+              <View style={styles.commentComposer}>
+                <TextInput
+                  value={commentText}
+                  onChangeText={setCommentText}
+                  placeholder={replyToComment ? 'Write a reply…' : 'Add a comment…'}
+                  placeholderTextColor={colors.textMuted}
+                  style={styles.commentInput}
+                  multiline
+                />
+                <Pressable
+                  onPress={postComment}
+                  disabled={postingComment || !commentText.trim()}
+                  style={[styles.commentButton, (postingComment || !commentText.trim()) && { opacity: 0.5 }]}
+                >
+                  <Text style={styles.commentButtonText}>{postingComment ? 'Posting…' : 'Post'}</Text>
+                </Pressable>
+              </View>
+
+              {commentsLoading ? (
+                <View style={{ paddingVertical: 12 }}>
+                  <ActivityIndicator color={colors.primary} />
+                </View>
+              ) : comments.length === 0 ? (
+                <Text style={styles.commentsEmpty}>No comments yet. Be the first to comment!</Text>
+              ) : (
+                <View style={{ gap: 12, paddingBottom: 24 }}>
+                  {organizedComments.map((c: any) => (
+                    <View key={c.commentId}>
+                      <View style={styles.commentItem}>
+                        <View style={styles.commentHeader}>
+                          <Text style={styles.commentAuthor}>
+                            {(c.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(c.timestamp || Date.now())}
+                          </Text>
+                          <View style={styles.commentActions}>
+                            <Pressable onPress={() => setReplyToComment(c)} style={styles.commentActionButton}>
+                              <Reply color={colors.textMuted} size={14} />
+                            </Pressable>
+                            {isOwnComment(c) && (
+                              <Pressable
+                                onPress={() => deleteComment(c.commentId)}
+                                disabled={deletingCommentId === c.commentId}
+                                style={styles.commentActionButton}
+                              >
+                                {deletingCommentId === c.commentId ? (
+                                  <ActivityIndicator size="small" color={colors.textMuted} />
+                                ) : (
+                                  <Trash2 color="#f87171" size={14} />
+                                )}
+                              </Pressable>
+                            )}
+                          </View>
+                        </View>
+                        <Text style={styles.commentText}>{c.text}</Text>
+                      </View>
+
+                      {c.replies && c.replies.length > 0 && (
+                        <View style={styles.repliesContainer}>
+                          {c.replies.map((reply: any) => (
+                            <View key={reply.commentId} style={styles.replyItem}>
+                              <View style={styles.commentHeader}>
+                                <Text style={styles.commentAuthor}>
+                                  {(reply.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(reply.timestamp || Date.now())}
+                                </Text>
+                                {isOwnComment(reply) && (
+                                  <Pressable
+                                    onPress={() => deleteComment(reply.commentId)}
+                                    disabled={deletingCommentId === reply.commentId}
+                                    style={styles.commentActionButton}
+                                  >
+                                    {deletingCommentId === reply.commentId ? (
+                                      <ActivityIndicator size="small" color={colors.textMuted} />
+                                    ) : (
+                                      <Trash2 color="#f87171" size={14} />
+                                    )}
+                                  </Pressable>
+                                )}
+                              </View>
+                              <Text style={styles.commentText}>{reply.text}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  ))}
+
+                  {hasMoreComments && (
+                    <Pressable
+                      onPress={loadMoreComments}
+                      disabled={loadingMoreComments}
+                      style={styles.loadMoreButton}
+                    >
+                      {loadingMoreComments ? (
+                        <ActivityIndicator size="small" color={colors.primary} />
+                      ) : (
+                        <Text style={styles.loadMoreText}>Load more comments</Text>
+                      )}
+                    </Pressable>
+                  )}
+                </View>
+              )}
+            </View>
           </ScrollView>
         </Animated.View>
         )}
@@ -1758,6 +2132,147 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 14,
     lineHeight: 20,
+  },
+  // Comments styles
+  commentsSection: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 16,
+  },
+  commentsTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  commentsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  refreshButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.bgSecondary,
+  },
+  refreshButtonText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  replyIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.primary + '20',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  replyIndicatorText: {
+    color: colors.primary,
+    fontSize: 13,
+  },
+  cancelReplyButton: {
+    padding: 4,
+  },
+  commentComposer: {
+    backgroundColor: colors.bgSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+  },
+  commentInput: {
+    color: colors.text,
+    minHeight: 44,
+    fontSize: 14,
+    padding: 0,
+  },
+  commentButton: {
+    alignSelf: 'flex-end',
+    marginTop: 10,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  commentButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  commentsEmpty: {
+    color: colors.textMuted,
+    fontSize: 13,
+    paddingVertical: 8,
+  },
+  commentItem: {
+    backgroundColor: colors.bgSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    padding: 10,
+  },
+  commentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  commentAuthor: {
+    color: colors.textMuted,
+    fontSize: 12,
+    flex: 1,
+  },
+  commentActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  commentActionButton: {
+    padding: 4,
+  },
+  commentText: {
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  repliesContainer: {
+    marginLeft: 20,
+    marginTop: 8,
+    gap: 8,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border,
+    paddingLeft: 12,
+  },
+  replyItem: {
+    backgroundColor: colors.bgSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    padding: 8,
+  },
+  loadMoreButton: {
+    alignItems: 'center',
+    paddingVertical: 12,
+    backgroundColor: colors.bgSecondary,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  loadMoreText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: '500',
   },
   // P2P Stats Bar styles
   statsBar: {

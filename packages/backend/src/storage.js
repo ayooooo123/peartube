@@ -148,7 +148,26 @@ export async function initializeStorage(config) {
   swarm.on('connection', (conn, info) => {
     const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
     console.log('[Storage] Peer connected:', remoteKey);
+
+    // Replicate Hypercore/Hyperdrive storage
     store.replicate(conn);
+
+    // CRITICAL: Also replicate all loaded Autobase channels
+    // This ensures comments, reactions, and other Autobase ops sync between devices
+    // Without this, only Hypercore data syncs but Autobase linearization doesn't happen
+    if (channels && channels.size > 0) {
+      console.log('[Storage] Replicating', channels.size, 'Autobase channel(s) on new connection');
+      for (const [keyHex, channel] of channels) {
+        if (channel.base) {
+          try {
+            channel.base.replicate(conn)
+            console.log('[Storage] Replicated Autobase for channel:', keyHex.slice(0, 16))
+          } catch (err) {
+            console.log('[Storage] Error replicating channel', keyHex.slice(0, 16), ':', err?.message)
+          }
+        }
+      }
+    }
   });
 
   // Drive cache

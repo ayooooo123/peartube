@@ -1243,6 +1243,113 @@ rpc.onListDevices(async (req: any) => {
   return { devices: res.devices || [] };
 });
 
+// Search
+rpc.onSearchVideos(async (req: any) => {
+  const channelKey = req.channelKey;
+  const query = req.query || '';
+  const topK = typeof req.topK === 'number' ? req.topK : 10;
+  const federated = req.federated !== false;
+  const results = await api.searchVideos(channelKey, query, { topK, federated });
+
+  return {
+    results: (results || []).map((r: any) => ({
+      id: r.id,
+      score: typeof r.score === 'number' ? String(r.score) : (r.score ? String(r.score) : ''),
+      metadata: r.metadata ? JSON.stringify(r.metadata) : ''
+    }))
+  };
+});
+
+rpc.onIndexVideoVectors(async (req: any) => {
+  const res = await api.indexVideoVectors(req.channelKey, req.videoId);
+  return { success: Boolean(res?.success), error: res?.error || '' };
+});
+
+// Comments
+rpc.onAddComment(async (req: any) => {
+  const res = await api.addComment(req.channelKey, req.videoId, req.text, req.parentId || null);
+  return { success: Boolean(res?.success), commentId: res?.commentId || '', error: res?.error || '' };
+});
+
+rpc.onListComments(async (req: any) => {
+  const res = await api.listComments(req.channelKey, req.videoId, { page: req.page || 0, limit: req.limit || 50 });
+  const comments = (res?.comments || []).map((c: any) => ({
+    videoId: c.videoId,
+    commentId: c.commentId,
+    text: c.text,
+    authorKeyHex: c.authorKeyHex,
+    timestamp: c.timestamp || 0,
+    parentId: c.parentId || ''
+  }));
+  return { success: Boolean(res?.success), comments, error: res?.error || '' };
+});
+
+rpc.onHideComment(async (req: any) => {
+  const res = await api.hideComment(req.channelKey, req.videoId, req.commentId);
+  return { success: Boolean(res?.success), error: res?.error || '' };
+});
+
+rpc.onRemoveComment(async (req: any) => {
+  const res = await api.removeComment(req.channelKey, req.videoId, req.commentId);
+  return { success: Boolean(res?.success), error: res?.error || '' };
+});
+
+// Reactions
+rpc.onAddReaction(async (req: any) => {
+  const res = await api.addReaction(req.channelKey, req.videoId, req.reactionType);
+  return { success: Boolean(res?.success), error: res?.error || '' };
+});
+
+rpc.onRemoveReaction(async (req: any) => {
+  const res = await api.removeReaction(req.channelKey, req.videoId);
+  return { success: Boolean(res?.success), error: res?.error || '' };
+});
+
+rpc.onGetReactions(async (req: any) => {
+  const res = await api.getReactions(req.channelKey, req.videoId);
+  const countsObj = res?.counts || {};
+  const counts = Object.entries(countsObj).map(([reactionType, count]) => ({
+    reactionType,
+    count: typeof count === 'number' ? count : 0
+  }));
+  return {
+    success: Boolean(res?.success),
+    counts,
+    userReaction: res?.userReaction || '',
+    error: res?.error || ''
+  };
+});
+
+// Recommendations
+rpc.onLogWatchEvent(async (req: any) => {
+  const res = await api.logWatchEvent(req.channelKey, req.videoId, {
+    duration: req.duration || 0,
+    completed: Boolean(req.completed),
+    share: Boolean(req.share)
+  });
+  return { success: Boolean(res?.success), error: res?.error || '' };
+});
+
+rpc.onGetRecommendations(async (req: any) => {
+  const res = await api.getRecommendations(req.channelKey, { limit: req.limit || 10 });
+  const recommendations = (res?.recommendations || []).map((r: any) => ({
+    videoId: r.videoId,
+    score: typeof r.score === 'number' ? String(r.score) : (r.score ? String(r.score) : ''),
+    reason: r.reason || ''
+  }));
+  return { success: Boolean(res?.success), recommendations, error: res?.error || '' };
+});
+
+rpc.onGetVideoRecommendations(async (req: any) => {
+  const res = await api.getVideoRecommendations(req.channelKey, req.videoId, req.limit || 5);
+  const recommendations = (res?.recommendations || []).map((r: any) => ({
+    videoId: r.videoId,
+    score: typeof r.score === 'number' ? String(r.score) : (r.score ? String(r.score) : ''),
+    reason: r.reason || ''
+  }));
+  return { success: Boolean(res?.success), recommendations, error: res?.error || '' };
+});
+
 rpc.onGetBlobServerPort(async () => ({ port: getBlobPort() }));
 
 // Desktop-specific file pickers

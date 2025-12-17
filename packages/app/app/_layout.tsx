@@ -12,6 +12,7 @@ import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData } from '@/lib/VideoPlayerContext'
 import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
+import * as ScreenOrientation from 'expo-screen-orientation'
 import { colors } from '@/lib/colors'
 
 // Re-export colors for backward compatibility
@@ -67,6 +68,16 @@ export default function RootLayout() {
   const [loading, setLoading] = useState(() => cachedAppState === null)
   const [blobServerPort, setBlobServerPort] = useState<number | null>(() => cachedAppState?.blobServerPort ?? null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
+
+  // Lock to portrait on app startup (mobile only)
+  // Fullscreen video player will temporarily override this to landscape
+  useEffect(() => {
+    if (isNative) {
+      ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {
+        // Ignore errors - some devices may not support orientation locking
+      })
+    }
+  }, [])
 
   useEffect(() => {
     if (isNative) {

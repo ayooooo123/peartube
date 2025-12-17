@@ -39,6 +39,18 @@ declare const HRPC: new (stream: any) => {
   createDeviceInvite(req: { channelKey: string }): Promise<any>;
   pairDevice(req: { inviteCode: string; deviceName?: string }): Promise<any>;
   listDevices(req: { channelKey: string }): Promise<any>;
+  searchVideos(req: { channelKey: string; query: string; topK?: number; federated?: boolean }): Promise<any>;
+  indexVideoVectors(req: { channelKey: string; videoId: string }): Promise<any>;
+  addComment(req: { channelKey: string; videoId: string; text: string; parentId?: string }): Promise<any>;
+  listComments(req: { channelKey: string; videoId: string; page?: number; limit?: number }): Promise<any>;
+  hideComment(req: { channelKey: string; videoId: string; commentId: string }): Promise<any>;
+  removeComment(req: { channelKey: string; videoId: string; commentId: string }): Promise<any>;
+  addReaction(req: { channelKey: string; videoId: string; reactionType: string }): Promise<any>;
+  removeReaction(req: { channelKey: string; videoId: string }): Promise<any>;
+  getReactions(req: { channelKey: string; videoId: string }): Promise<any>;
+  logWatchEvent(req: { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }): Promise<any>;
+  getRecommendations(req: { channelKey: string; limit?: number }): Promise<any>;
+  getVideoRecommendations(req: { channelKey: string; videoId: string; limit?: number }): Promise<any>;
   getStatus(req: {}): Promise<any>;
   getSwarmStatus(req: {}): Promise<any>;
   uploadVideo(req: { filePath: string; title: string; description: string; category?: string }): Promise<any>;
@@ -389,6 +401,94 @@ export const rpc = {
   async listDevices(channelKeyOrReq: string | { channelKey: string }) {
     const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
     return ensureRPC().listDevices(req);
+  },
+
+  // Search
+  async searchVideos(channelKeyOrReq: string | { channelKey: string; query: string; topK?: number; federated?: boolean }, query?: string, options?: { topK?: number; federated?: boolean }) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, query: query || '', topK: options?.topK, federated: options?.federated }
+      : channelKeyOrReq;
+    return ensureRPC().searchVideos(req);
+  },
+
+  async indexVideoVectors(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().indexVideoVectors(req);
+  },
+
+  // Comments
+  async addComment(channelKeyOrReq: string | { channelKey: string; videoId: string; text: string; parentId?: string }, videoId?: string, text?: string, parentId?: string | null) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId!, text: text || '', parentId: parentId || undefined }
+      : channelKeyOrReq;
+    return ensureRPC().addComment(req);
+  },
+
+  async listComments(channelKeyOrReq: string | { channelKey: string; videoId: string; page?: number; limit?: number }, videoId?: string, options?: { page?: number; limit?: number }) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId!, page: options?.page, limit: options?.limit }
+      : channelKeyOrReq;
+    return ensureRPC().listComments(req);
+  },
+
+  async hideComment(channelKeyOrReq: string | { channelKey: string; videoId: string; commentId: string }, videoId?: string, commentId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId!, commentId: commentId! }
+      : channelKeyOrReq;
+    return ensureRPC().hideComment(req);
+  },
+
+  async removeComment(channelKeyOrReq: string | { channelKey: string; videoId: string; commentId: string }, videoId?: string, commentId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId!, commentId: commentId! }
+      : channelKeyOrReq;
+    return ensureRPC().removeComment(req);
+  },
+
+  // Reactions
+  async addReaction(channelKeyOrReq: string | { channelKey: string; videoId: string; reactionType: string }, videoId?: string, reactionType?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId!, reactionType: reactionType || 'like' }
+      : channelKeyOrReq;
+    return ensureRPC().addReaction(req);
+  },
+
+  async removeReaction(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().removeReaction(req);
+  },
+
+  async getReactions(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().getReactions(req);
+  },
+
+  // Recommendations / watch events
+  async logWatchEvent(channelKeyOrReq: string | { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }, videoId?: string, options?: { duration?: number; completed?: boolean; share?: boolean }) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId!, duration: options?.duration, completed: options?.completed, share: options?.share }
+      : channelKeyOrReq;
+    return ensureRPC().logWatchEvent(req);
+  },
+
+  async getRecommendations(channelKeyOrReq: string | { channelKey: string; limit?: number }, limit?: number) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, limit }
+      : channelKeyOrReq;
+    return ensureRPC().getRecommendations(req);
+  },
+
+  async getVideoRecommendations(channelKeyOrReq: string | { channelKey: string; videoId: string; limit?: number }, videoId?: string, limit?: number) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId!, limit }
+      : channelKeyOrReq;
+    return ensureRPC().getVideoRecommendations(req);
   },
 
   // Status

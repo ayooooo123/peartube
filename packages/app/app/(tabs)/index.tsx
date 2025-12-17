@@ -2,7 +2,7 @@
  * Home Tab - YouTube-style Video Feed with P2P Public Feed Discovery
  */
 import { useCallback, useState, useEffect, useRef } from 'react'
-import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, AppState, AppStateStatus } from 'react-native'
+import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, AppState, AppStateStatus, TextInput } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { X, Globe, RefreshCw, Users, EyeOff } from 'lucide-react-native'
@@ -78,6 +78,11 @@ export default function HomeScreen() {
   // Aggregated feed videos from all discovered channels
   const [feedVideos, setFeedVideos] = useState<VideoData[]>([])
   const [loadingFeedVideos, setLoadingFeedVideos] = useState(false)
+
+  // Search (local + federated)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [searchResults, setSearchResults] = useState<VideoData[]>([])
 
   // Category filter state
   const categories = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
@@ -200,6 +205,38 @@ export default function HomeScreen() {
       setFeedLoading(false)
     }
   }, [rpc, channelMeta])
+
+  const runSearch = useCallback(async () => {
+    if (!rpc || !identity?.driveKey) return
+    const q = searchQuery.trim()
+    if (!q) {
+      setSearchResults([])
+      return
+    }
+
+    setSearching(true)
+    try {
+      const res = await (rpc as any).searchVideos?.({ channelKey: identity.driveKey, query: q, topK: 10, federated: true })
+      const results = res?.results || []
+      const vids = await Promise.all(
+        results.map(async (r: any) => {
+          try {
+            const vd = await rpc.getVideoData({ channelKey: identity.driveKey, videoId: r.id })
+            if (vd?.video) {
+              return { ...vd.video, channelKey: identity.driveKey } as VideoData
+            }
+          } catch {}
+          return null
+        })
+      )
+      setSearchResults(vids.filter(Boolean) as VideoData[])
+    } catch (err) {
+      console.error('[Home] searchVideos failed:', err)
+      setSearchResults([])
+    } finally {
+      setSearching(false)
+    }
+  }, [rpc, identity?.driveKey, searchQuery])
 
   const loadChannelMeta = useCallback(async (driveKey: string) => {
     if (!rpc) return
@@ -326,13 +363,39 @@ export default function HomeScreen() {
     setChannelVideos([])
   }, [])
 
-  // Play video - load into animated overlay player
+  // Play video - load into the global VideoPlayerOverlay (single player path on mobile + desktop)
   const playVideo = useCallback(async (video: VideoData) => {
     if (!rpc) return
     try {
       // Always close channel view when playing video
-      // On desktop: video overlay takes over the main content area
-      // On mobile: video overlay animates over everything anyway
+      setViewingChannel(null)
+      setChannelVideos([])
+
+      // Prefer stable identifier for RPC calls:
+      // - Legacy channels expect a path
+      // - Multi-writer/public-feed channels can resolve from id as well
+      const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
+        ? video.path
+        : video.id
+
+      const result = await rpc.getVideoUrl({
+        channelKey: video.channelKey,
+        videoId: videoRef
+      })
+
+      if (result?.url) {
+        loadAndPlayVideo(video, result.url)
+      }
+    } catch (err) {
+      console.error('[Home] Failed to play video:', err)
+    }
+  }, [rpc, loadAndPlayVideo])
+
+  // Legacy: Play video in overlay only (used by mini player expansion)
+  const playVideoInOverlay = useCallback(async (video: VideoData) => {
+    if (!rpc) return
+    try {
+      // For overlay-only playback (no comments)
       setViewingChannel(null)
       setChannelVideos([])
 
@@ -498,6 +561,64 @@ export default function HomeScreen() {
                 <RefreshCw color={feedLoading ? colors.textMuted : colors.primary} size={18} />
               </Pressable>
             </View>
+
+            {/* Search (your channel) */}
+            {identity?.driveKey && (
+              <View style={{ marginBottom: 12 }}>
+                <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 6 }}>Search your channel</Text>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TextInput
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    placeholder="Search videos…"
+                    placeholderTextColor={colors.textMuted}
+                    style={{
+                      flex: 1,
+                      color: colors.text,
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      backgroundColor: colors.bgSecondary,
+                      borderRadius: 10,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      fontSize: 14,
+                    }}
+                    autoCapitalize="none"
+                    returnKeyType="search"
+                    onSubmitEditing={runSearch}
+                  />
+                  <Pressable
+                    onPress={runSearch}
+                    disabled={searching || !searchQuery.trim()}
+                    style={{
+                      paddingHorizontal: 14,
+                      justifyContent: 'center',
+                      borderRadius: 10,
+                      backgroundColor: colors.primary,
+                      opacity: (searching || !searchQuery.trim()) ? 0.5 : 1,
+                    }}
+                  >
+                    <Text style={{ color: 'white', fontWeight: '600' }}>{searching ? '…' : 'Search'}</Text>
+                  </Pressable>
+                </View>
+
+                {searchResults.length > 0 && (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 6 }}>Results</Text>
+                    <View style={{ gap: 12 }}>
+                      {searchResults.map((video) => (
+                        <VideoCard
+                          key={`search-${video.id}`}
+                          video={video}
+                          onPress={() => playVideo(video)}
+                          showChannelInfo={false}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* P2P status pills */}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 }}>

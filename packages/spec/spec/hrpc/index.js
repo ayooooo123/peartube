@@ -111,7 +111,31 @@ const methods = new Map([
   ['@peartube/list-devices', 51],
   [51, '@peartube/list-devices'],
   ['@peartube/retry-sync-channel', 52],
-  [52, '@peartube/retry-sync-channel']
+  [52, '@peartube/retry-sync-channel'],
+  ['@peartube/search-videos', 53],
+  [53, '@peartube/search-videos'],
+  ['@peartube/index-video-vectors', 54],
+  [54, '@peartube/index-video-vectors'],
+  ['@peartube/add-comment', 55],
+  [55, '@peartube/add-comment'],
+  ['@peartube/list-comments', 56],
+  [56, '@peartube/list-comments'],
+  ['@peartube/hide-comment', 57],
+  [57, '@peartube/hide-comment'],
+  ['@peartube/remove-comment', 58],
+  [58, '@peartube/remove-comment'],
+  ['@peartube/add-reaction', 59],
+  [59, '@peartube/add-reaction'],
+  ['@peartube/remove-reaction', 60],
+  [60, '@peartube/remove-reaction'],
+  ['@peartube/get-reactions', 61],
+  [61, '@peartube/get-reactions'],
+  ['@peartube/log-watch-event', 62],
+  [62, '@peartube/log-watch-event'],
+  ['@peartube/get-recommendations', 63],
+  [63, '@peartube/get-recommendations'],
+  ['@peartube/get-video-recommendations', 64],
+  [64, '@peartube/get-video-recommendations']
 ])
 
 class HRPC {
@@ -171,7 +195,19 @@ class HRPC {
       ['@peartube/create-device-invite', getEncoding('@peartube/create-device-invite-request')],
       ['@peartube/pair-device', getEncoding('@peartube/pair-device-request')],
       ['@peartube/list-devices', getEncoding('@peartube/list-devices-request')],
-      ['@peartube/retry-sync-channel', getEncoding('@peartube/retry-sync-channel-request')]
+      ['@peartube/retry-sync-channel', getEncoding('@peartube/retry-sync-channel-request')],
+      ['@peartube/search-videos', getEncoding('@peartube/search-videos-request')],
+      ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-request')],
+      ['@peartube/add-comment', getEncoding('@peartube/add-comment-request')],
+      ['@peartube/list-comments', getEncoding('@peartube/list-comments-request')],
+      ['@peartube/hide-comment', getEncoding('@peartube/hide-comment-request')],
+      ['@peartube/remove-comment', getEncoding('@peartube/remove-comment-request')],
+      ['@peartube/add-reaction', getEncoding('@peartube/add-reaction-request')],
+      ['@peartube/remove-reaction', getEncoding('@peartube/remove-reaction-request')],
+      ['@peartube/get-reactions', getEncoding('@peartube/get-reactions-request')],
+      ['@peartube/log-watch-event', getEncoding('@peartube/log-watch-event-request')],
+      ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-request')],
+      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -220,7 +256,19 @@ class HRPC {
       ['@peartube/create-device-invite', getEncoding('@peartube/create-device-invite-response')],
       ['@peartube/pair-device', getEncoding('@peartube/pair-device-response')],
       ['@peartube/list-devices', getEncoding('@peartube/list-devices-response')],
-      ['@peartube/retry-sync-channel', getEncoding('@peartube/retry-sync-channel-response')]
+      ['@peartube/retry-sync-channel', getEncoding('@peartube/retry-sync-channel-response')],
+      ['@peartube/search-videos', getEncoding('@peartube/search-videos-response')],
+      ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-response')],
+      ['@peartube/add-comment', getEncoding('@peartube/add-comment-response')],
+      ['@peartube/list-comments', getEncoding('@peartube/list-comments-response')],
+      ['@peartube/hide-comment', getEncoding('@peartube/hide-comment-response')],
+      ['@peartube/remove-comment', getEncoding('@peartube/remove-comment-response')],
+      ['@peartube/add-reaction', getEncoding('@peartube/add-reaction-response')],
+      ['@peartube/remove-reaction', getEncoding('@peartube/remove-reaction-response')],
+      ['@peartube/get-reactions', getEncoding('@peartube/get-reactions-response')],
+      ['@peartube/log-watch-event', getEncoding('@peartube/log-watch-event-response')],
+      ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-response')],
+      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -527,6 +575,54 @@ class HRPC {
     return this._call('@peartube/retry-sync-channel', args)
   }
 
+  async searchVideos(args) {
+    return this._call('@peartube/search-videos', args)
+  }
+
+  async indexVideoVectors(args) {
+    return this._call('@peartube/index-video-vectors', args)
+  }
+
+  async addComment(args) {
+    return this._call('@peartube/add-comment', args)
+  }
+
+  async listComments(args) {
+    return this._call('@peartube/list-comments', args)
+  }
+
+  async hideComment(args) {
+    return this._call('@peartube/hide-comment', args)
+  }
+
+  async removeComment(args) {
+    return this._call('@peartube/remove-comment', args)
+  }
+
+  async addReaction(args) {
+    return this._call('@peartube/add-reaction', args)
+  }
+
+  async removeReaction(args) {
+    return this._call('@peartube/remove-reaction', args)
+  }
+
+  async getReactions(args) {
+    return this._call('@peartube/get-reactions', args)
+  }
+
+  async logWatchEvent(args) {
+    return this._call('@peartube/log-watch-event', args)
+  }
+
+  async getRecommendations(args) {
+    return this._call('@peartube/get-recommendations', args)
+  }
+
+  async getVideoRecommendations(args) {
+    return this._call('@peartube/get-video-recommendations', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -737,6 +833,54 @@ class HRPC {
 
   onRetrySyncChannel(responseFn) {
     this._handlers['@peartube/retry-sync-channel'] = responseFn
+  }
+
+  onSearchVideos(responseFn) {
+    this._handlers['@peartube/search-videos'] = responseFn
+  }
+
+  onIndexVideoVectors(responseFn) {
+    this._handlers['@peartube/index-video-vectors'] = responseFn
+  }
+
+  onAddComment(responseFn) {
+    this._handlers['@peartube/add-comment'] = responseFn
+  }
+
+  onListComments(responseFn) {
+    this._handlers['@peartube/list-comments'] = responseFn
+  }
+
+  onHideComment(responseFn) {
+    this._handlers['@peartube/hide-comment'] = responseFn
+  }
+
+  onRemoveComment(responseFn) {
+    this._handlers['@peartube/remove-comment'] = responseFn
+  }
+
+  onAddReaction(responseFn) {
+    this._handlers['@peartube/add-reaction'] = responseFn
+  }
+
+  onRemoveReaction(responseFn) {
+    this._handlers['@peartube/remove-reaction'] = responseFn
+  }
+
+  onGetReactions(responseFn) {
+    this._handlers['@peartube/get-reactions'] = responseFn
+  }
+
+  onLogWatchEvent(responseFn) {
+    this._handlers['@peartube/log-watch-event'] = responseFn
+  }
+
+  onGetRecommendations(responseFn) {
+    this._handlers['@peartube/get-recommendations'] = responseFn
+  }
+
+  onGetVideoRecommendations(responseFn) {
+    this._handlers['@peartube/get-video-recommendations'] = responseFn
   }
 
   _requestIsStream(command) {

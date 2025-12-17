@@ -172,7 +172,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     return unsubscribe
   }, []) // No dependencies - ref is used for synchronous access
 
-  // Load and play a new video
+  // Load and play a new video (triggers overlay to fullscreen)
   const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {
     console.log('[VideoPlayerContext] Loading video:', video.title, 'URL:', url)
     // Update ref synchronously FIRST (before emitting event)

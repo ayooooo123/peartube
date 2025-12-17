@@ -69,6 +69,24 @@ function CloseIcon({ color, size }: { color: string; size: number }) {
   )
 }
 
+function ReplyIcon({ color, size }: { color: string; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+      <polyline points="9 17 4 12 9 7" />
+      <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+    </svg>
+  )
+}
+
+function TrashIcon({ color, size }: { color: string; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </svg>
+  )
+}
+
 // Public feed types
 interface FeedEntry {
   driveKey: string
@@ -151,6 +169,21 @@ function WatchPageView({
   const [channel, setChannel] = useState<ChannelMeta | null>(null)
   const [videoStats, setVideoStats] = useState<any>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+
+  // Social state
+  const [comments, setComments] = useState<any[]>([])
+  const [commentText, setCommentText] = useState('')
+  const [commentsLoading, setCommentsLoading] = useState(false)
+  const [postingComment, setPostingComment] = useState(false)
+  const [replyToComment, setReplyToComment] = useState<any>(null)
+  const [commentsPage, setCommentsPage] = useState(0)
+  const [hasMoreComments, setHasMoreComments] = useState(false)
+  const [loadingMoreComments, setLoadingMoreComments] = useState(false)
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null)
+  const COMMENTS_PER_PAGE = 25
+
+  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({})
+  const [userReaction, setUserReaction] = useState<string | null>(null)
 
   // Load video URL
   useEffect(() => {
@@ -252,6 +285,160 @@ function WatchPageView({
       if (interval) clearInterval(interval)
     }
   }, [channelKey, video?.path, video?.id, rpc])
+
+  // Load comments/reactions (best-effort)
+  const loadSocialData = useCallback(async (page = 0, append = false) => {
+    if (!rpc || !video) return
+    if (!append) setCommentsLoading(true)
+    try {
+      const primaryVid = (video.path && typeof video.path === 'string' && video.path.startsWith('/')) ? video.path : video.id
+      const [cRes, rRes] = await Promise.all([
+        rpc.listComments?.({ channelKey, videoId: primaryVid, page, limit: COMMENTS_PER_PAGE }).catch(() => null),
+        !append ? rpc.getReactions?.({ channelKey, videoId: primaryVid }).catch(() => null) : Promise.resolve(null),
+      ])
+
+      if (cRes?.success && Array.isArray(cRes.comments)) {
+        if (append) {
+          setComments(prev => [...prev, ...cRes.comments])
+        } else {
+          setComments(cRes.comments)
+        }
+        setHasMoreComments(cRes.comments.length >= COMMENTS_PER_PAGE)
+        setCommentsPage(page)
+      } else if (!append) {
+        setComments([])
+        setHasMoreComments(false)
+      }
+
+      if (rRes?.success) {
+        // Backend returns counts as object map { like: 3, dislike: 1 } not array
+        const countsData = rRes.counts || {}
+        const counts: Record<string, number> = {}
+        if (Array.isArray(countsData)) {
+          // Handle legacy array format: [{ reactionType, count }]
+          for (const c of countsData) {
+            if (c?.reactionType) counts[c.reactionType] = c.count || 0
+          }
+        } else if (typeof countsData === 'object') {
+          // Handle object map format: { like: 3, dislike: 1 }
+          for (const [key, value] of Object.entries(countsData)) {
+            counts[key] = typeof value === 'number' ? value : 0
+          }
+        }
+        setReactionCounts(counts)
+        setUserReaction(rRes.userReaction || null)
+      } else if (!append) {
+        setReactionCounts({})
+        setUserReaction(null)
+      }
+    } finally {
+      setCommentsLoading(false)
+      setLoadingMoreComments(false)
+    }
+  }, [rpc, channelKey, video?.id])
+
+  useEffect(() => {
+    if (!rpc || !video) return
+    loadSocialData(0, false)
+    // Best-effort index vectors (enables semantic search)
+    rpc.indexVideoVectors?.({ channelKey, videoId: video.id }).catch(() => {})
+  }, [rpc, channelKey, video?.id, loadSocialData])
+
+  const loadMoreComments = useCallback(async () => {
+    if (loadingMoreComments || !hasMoreComments) return
+    setLoadingMoreComments(true)
+    await loadSocialData(commentsPage + 1, true)
+  }, [loadingMoreComments, hasMoreComments, commentsPage, loadSocialData])
+
+  const deleteComment = async (commentId: string) => {
+    if (!rpc || !video) return
+    if (!window.confirm('Are you sure you want to delete this comment?')) return
+    setDeletingCommentId(commentId)
+    try {
+      const res = await rpc.removeComment?.({ channelKey, videoId: video.id, commentId })
+      if (res?.success) {
+        setComments(prev => prev.filter(c => c.commentId !== commentId))
+      }
+    } catch (err) {
+      console.error('[WatchPage] Delete comment failed:', err)
+      alert('Failed to delete comment')
+    } finally {
+      setDeletingCommentId(null)
+    }
+  }
+
+  async function toggleReaction(type: string) {
+    if (!rpc || !video) return
+    try {
+      const primaryVid = (video.path && typeof video.path === 'string' && video.path.startsWith('/')) ? video.path : video.id
+      if (userReaction === type) {
+        await rpc.removeReaction?.({ channelKey, videoId: primaryVid })
+      } else {
+        await rpc.addReaction?.({ channelKey, videoId: primaryVid, reactionType: type })
+      }
+      // refresh
+      const rRes = await rpc.getReactions?.({ channelKey, videoId: primaryVid })
+      if (rRes?.success) {
+        // Backend returns counts as object map { like: 3, dislike: 1 } not array
+        const countsData = rRes.counts || {}
+        const counts: Record<string, number> = {}
+        if (Array.isArray(countsData)) {
+          for (const c of countsData) {
+            if (c?.reactionType) counts[c.reactionType] = c.count || 0
+          }
+        } else if (typeof countsData === 'object') {
+          for (const [key, value] of Object.entries(countsData)) {
+            counts[key] = typeof value === 'number' ? value : 0
+          }
+        }
+        setReactionCounts(counts)
+        setUserReaction(rRes.userReaction || null)
+      }
+    } catch {}
+  }
+
+  async function postComment() {
+    if (!rpc || !video) return
+    const text = commentText.trim()
+    if (!text) return
+    setPostingComment(true)
+    try {
+      const primaryVid = (video.path && typeof video.path === 'string' && video.path.startsWith('/')) ? video.path : video.id
+      const res = await rpc.addComment?.({
+        channelKey,
+        videoId: primaryVid,
+        text,
+        parentId: replyToComment?.commentId || null
+      })
+      if (res?.success) {
+        setCommentText('')
+        setReplyToComment(null)
+        await loadSocialData(0, false)
+      }
+    } finally {
+      setPostingComment(false)
+    }
+  }
+
+  const cancelReply = () => {
+    setReplyToComment(null)
+    setCommentText('')
+  }
+
+  // Organize comments into threads (top-level + replies)
+  const organizedComments = comments.reduce((acc, c) => {
+    if (!c.parentId) {
+      acc.push({ ...c, replies: comments.filter((r: any) => r.parentId === c.commentId) })
+    }
+    return acc
+  }, [] as any[])
+
+  // Check if user owns a comment (using channel's local writer key)
+  const isOwnComment = (comment: any) => {
+    // For web, we'd need to get the local writer key from the channel
+    // For now, this is a simplified check - the backend also validates
+    return false // Will be updated when we have user context
+  }
 
   if (!video) {
     return (
@@ -356,12 +543,144 @@ function WatchPageView({
               </div>
             </div>
 
+            {/* Reactions */}
+            <div style={watchStyles.actionsRow}>
+              <button
+                style={{ ...watchStyles.actionButton, ...(userReaction === 'like' ? watchStyles.actionButtonActive : {}) }}
+                onClick={() => toggleReaction('like')}
+              >
+                Like{reactionCounts.like ? ` (${reactionCounts.like})` : ''}
+              </button>
+              <button
+                style={{ ...watchStyles.actionButton, ...(userReaction === 'dislike' ? watchStyles.actionButtonActive : {}) }}
+                onClick={() => toggleReaction('dislike')}
+              >
+                Dislike{reactionCounts.dislike ? ` (${reactionCounts.dislike})` : ''}
+              </button>
+            </div>
+
             {/* Description */}
             {video.description && (
               <div style={watchStyles.description}>
                 <p style={watchStyles.descriptionText}>{video.description}</p>
               </div>
             )}
+
+            {/* Comments */}
+            <div style={watchStyles.commentsSection}>
+              <h3 style={watchStyles.commentsTitle}>
+                {comments.length > 0 ? `${comments.length} Comment${comments.length !== 1 ? 's' : ''}` : 'Comments'}
+              </h3>
+
+              {/* Reply indicator */}
+              {replyToComment && (
+                <div style={watchStyles.replyIndicator}>
+                  <span style={watchStyles.replyIndicatorText}>
+                    Replying to {(replyToComment.authorKeyHex || '').slice(0, 8)}…
+                  </span>
+                  <button onClick={cancelReply} style={watchStyles.cancelReplyButton}>
+                    <CloseIcon color={colors.textMuted} size={14} />
+                  </button>
+                </div>
+              )}
+
+              <div style={watchStyles.commentComposer}>
+                <textarea
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  placeholder={replyToComment ? 'Write a reply…' : 'Add a comment…'}
+                  style={watchStyles.commentInput}
+                />
+                <button
+                  onClick={postComment}
+                  disabled={postingComment || !commentText.trim()}
+                  style={{ ...watchStyles.commentButton, opacity: (postingComment || !commentText.trim()) ? 0.5 : 1 }}
+                >
+                  {postingComment ? 'Posting…' : 'Post'}
+                </button>
+              </div>
+              {commentsLoading ? (
+                <p style={{ color: colors.textMuted, fontSize: 13, margin: 0 }}>Loading…</p>
+              ) : comments.length === 0 ? (
+                <p style={{ color: colors.textMuted, fontSize: 13, margin: 0 }}>No comments yet. Be the first to comment!</p>
+              ) : (
+                <div style={watchStyles.commentList}>
+                  {organizedComments.map((c: any) => (
+                    <div key={c.commentId}>
+                      {/* Main comment */}
+                      <div style={watchStyles.commentItem}>
+                        <div style={watchStyles.commentHeader}>
+                          <span style={watchStyles.commentAuthor}>
+                            {(c.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(c.timestamp || Date.now())}
+                          </span>
+                          <div style={watchStyles.commentActions}>
+                            <button
+                              onClick={() => setReplyToComment(c)}
+                              style={watchStyles.commentActionButton}
+                              title="Reply"
+                            >
+                              <ReplyIcon color={colors.textMuted} size={14} />
+                            </button>
+                            <button
+                              onClick={() => deleteComment(c.commentId)}
+                              disabled={deletingCommentId === c.commentId}
+                              style={watchStyles.commentActionButton}
+                              title="Delete"
+                            >
+                              {deletingCommentId === c.commentId ? (
+                                <ActivityIndicator size="small" color={colors.textMuted} />
+                              ) : (
+                                <TrashIcon color="#f87171" size={14} />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        <div style={watchStyles.commentBody}>{c.text}</div>
+                      </div>
+
+                      {/* Replies */}
+                      {c.replies && c.replies.length > 0 && (
+                        <div style={watchStyles.repliesContainer}>
+                          {c.replies.map((reply: any) => (
+                            <div key={reply.commentId} style={watchStyles.replyItem}>
+                              <div style={watchStyles.commentHeader}>
+                                <span style={watchStyles.commentAuthor}>
+                                  {(reply.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(reply.timestamp || Date.now())}
+                                </span>
+                                <button
+                                  onClick={() => deleteComment(reply.commentId)}
+                                  disabled={deletingCommentId === reply.commentId}
+                                  style={watchStyles.commentActionButton}
+                                  title="Delete"
+                                >
+                                  {deletingCommentId === reply.commentId ? (
+                                    <ActivityIndicator size="small" color={colors.textMuted} />
+                                  ) : (
+                                    <TrashIcon color="#f87171" size={14} />
+                                  )}
+                                </button>
+                              </div>
+                              <div style={watchStyles.commentBody}>{reply.text}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* Load more button */}
+                  {hasMoreComments && (
+                    <button
+                      onClick={loadMoreComments}
+                      disabled={loadingMoreComments}
+                      style={watchStyles.loadMoreButton}
+                    >
+                      {loadingMoreComments ? 'Loading…' : 'Load more comments'}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -540,6 +859,27 @@ const watchStyles: Record<string, React.CSSProperties> = {
     paddingTop: 16,
     borderTop: `1px solid ${colors.border}`,
   },
+  actionsRow: {
+    display: 'flex',
+    gap: 10,
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  actionButton: {
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    color: colors.text,
+    padding: '8px 12px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 600,
+  },
+  actionButtonActive: {
+    backgroundColor: colors.primary,
+    border: `1px solid ${colors.primary}`,
+    color: 'white',
+  },
   avatar: {
     width: 44,
     height: 44,
@@ -578,6 +918,140 @@ const watchStyles: Record<string, React.CSSProperties> = {
     lineHeight: 1.6,
     margin: 0,
     whiteSpace: 'pre-wrap',
+  },
+  commentsSection: {
+    marginTop: 16,
+  },
+  commentsTitle: {
+    margin: '0 0 10px',
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: 600,
+  },
+  commentComposer: {
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+  },
+  commentInput: {
+    width: '100%',
+    minHeight: 70,
+    resize: 'vertical',
+    borderRadius: 10,
+    border: `1px solid ${colors.border}`,
+    backgroundColor: colors.bg,
+    color: colors.text,
+    padding: 10,
+    fontSize: 13,
+    fontFamily: 'inherit',
+  },
+  commentButton: {
+    alignSelf: 'flex-end',
+    backgroundColor: colors.primary,
+    border: 'none',
+    color: 'white',
+    padding: '8px 12px',
+    borderRadius: 10,
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 600,
+  },
+  commentList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+    paddingBottom: 16,
+  },
+  commentItem: {
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 12,
+    padding: 10,
+  },
+  commentHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  commentAuthor: {
+    color: colors.textMuted,
+    fontSize: 12,
+    flex: 1,
+  },
+  commentActions: {
+    display: 'flex',
+    gap: 8,
+  },
+  commentActionButton: {
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    padding: 4,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.7,
+    transition: 'opacity 0.2s',
+  },
+  commentBody: {
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: '20px',
+    whiteSpace: 'pre-wrap',
+  },
+  repliesContainer: {
+    marginLeft: 20,
+    marginTop: 8,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    borderLeft: `2px solid ${colors.border}`,
+    paddingLeft: 12,
+  },
+  replyItem: {
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 10,
+    padding: 8,
+  },
+  replyIndicator: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.primary + '20',
+    padding: '8px 12px',
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  replyIndicatorText: {
+    color: colors.primary,
+    fontSize: 13,
+  },
+  cancelReplyButton: {
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    padding: 4,
+    display: 'flex',
+    alignItems: 'center',
+  },
+  loadMoreButton: {
+    width: '100%',
+    padding: 12,
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 10,
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: 500,
+    cursor: 'pointer',
+    textAlign: 'center',
   },
   sidebar: {
     width: 360,

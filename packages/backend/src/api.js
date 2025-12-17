@@ -7,6 +7,9 @@
 
 import b4a from 'b4a';
 import { loadDrive, createDrive, getVideoUrl, waitForDriveSync, loadChannel, pairDevice as pairChannelDevice } from './storage.js';
+import { SemanticFinder } from './search/semantic-finder.js';
+import { FederatedSearch } from './search/federated-search.js';
+import { Recommender } from './recommendations/recommender.js';
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -1257,6 +1260,432 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       const channel = await loadChannel(ctx, channelKey)
       const devices = await channel.listWriters()
       return { devices }
+    },
+
+    // ============================================
+    // Search Operations
+    // ============================================
+
+    /**
+     * Search videos in a channel using semantic search
+     * @param {string} channelKey
+     * @param {string} query
+     * @param {Object} [options]
+     * @param {number} [options.topK=10]
+     * @param {boolean} [options.federated=true]
+     * @returns {Promise<Array<{id: string, score: number, metadata: any}>>}
+     */
+    async searchVideos(channelKey, query, options = {}) {
+      const { topK = 10, federated = true } = options
+
+      // Initialize semantic finder if not already done
+      if (!ctx.semanticFinder) {
+        ctx.semanticFinder = new SemanticFinder()
+        await ctx.semanticFinder.init()
+      }
+
+      // Ensure channel vectors are loaded into the local index (multi-writer channels persist vectors in the view)
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (isMW) {
+          const channel = await loadChannel(ctx, channelKey)
+          await ctx.semanticFinder.ensureIndexedFromChannelView(channelKey, channel)
+
+          // Backfill missing vector records (writable peers only), limited per call to avoid DoS.
+          // Read-only peers will still be able to search whatever vectors exist in the view.
+          if (channel?.writable) {
+            try {
+              const videos = await channel.listVideos().catch(() => [])
+              let backfilled = 0
+              for (const v of videos) {
+                if (!v?.id) continue
+                if (backfilled >= 3) break
+                const existing = await channel.view.get(`vectors/${v.id}`).catch(() => null)
+                if (existing?.value?.vector) continue
+                const res = await this.indexVideoVectors(channelKey, v.id)
+                if (res?.success) backfilled++
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+
+      // Initialize federated search if not already done
+      if (!ctx.federatedSearch && ctx.swarm) {
+        ctx.federatedSearch = new FederatedSearch(ctx.swarm, ctx.semanticFinder, {
+          ensureIndexed: async (ck) => {
+            try {
+              const ch = await loadChannel(ctx, ck)
+              await ctx.semanticFinder.ensureIndexedFromChannelView(ck, ch)
+            } catch {}
+          }
+        })
+        const channelKeyBuf = b4a.from(channelKey, 'hex')
+        ctx.federatedSearch.setupTopic(channelKeyBuf)
+      }
+
+      // Use federated search if available, otherwise local only
+      if (ctx.federatedSearch && federated) {
+        return await ctx.federatedSearch.search(query, { topK, federated, timeout: 5000, channelKey })
+      } else {
+        return await ctx.semanticFinder.search(query, topK, { channelKey })
+      }
+    },
+
+    /**
+     * Index a video for semantic search
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @returns {Promise<{success: boolean}>}
+     */
+    async indexVideoVectors(channelKey, videoId) {
+      try {
+        // Get video data
+        const video = await this.getVideoData(channelKey, videoId)
+        if (!video) {
+          return { success: false, error: 'Video not found' }
+        }
+
+        // Initialize semantic finder if not already done
+        if (!ctx.semanticFinder) {
+          ctx.semanticFinder = new SemanticFinder()
+          await ctx.semanticFinder.init()
+        }
+
+        // Index the video
+        await ctx.semanticFinder.indexVideo(
+          videoId,
+          video.title || '',
+          video.description || '',
+          { channelKey, ...video }
+        )
+
+        // Store vector index op in Autobase (for replication)
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (isMW) {
+          const channel = await loadChannel(ctx, channelKey)
+          const embedding = await ctx.semanticFinder.embed(`${video.title || ''} ${video.description || ''}`)
+          const vectorBase64 = b4a.toString(Buffer.from(embedding.buffer), 'base64')
+
+          await channel.appendOp({
+            type: 'add-vector-index',
+            schemaVersion: 1,
+            videoId,
+            vector: vectorBase64,
+            text: `${video.title || ''} ${video.description || ''}`,
+            metadata: JSON.stringify({ channelKey, title: video.title }),
+            indexedAt: Date.now()
+          })
+        }
+
+        return { success: true }
+      } catch (err) {
+        console.error('[API] indexVideoVectors error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ============================================
+    // Comments Operations
+    // ============================================
+
+    /**
+     * Add a comment to a video
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @param {string} text
+     * @param {string} [parentId]
+     * @returns {Promise<{success: boolean, commentId?: string, error?: string}>}
+     */
+    async addComment(channelKey, videoId, text, parentId = null) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, error: 'Comments only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel.comments) {
+          return { success: false, error: 'Comments not initialized' }
+        }
+
+        const result = await channel.comments.addComment(videoId, text, parentId)
+        return { success: true, commentId: result.commentId }
+      } catch (err) {
+        console.error('[API] addComment error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * List comments for a video
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @param {Object} [options]
+     * @param {number} [options.page=0]
+     * @param {number} [options.limit=50]
+     * @returns {Promise<{comments: Array, success: boolean, error?: string}>}
+     */
+    async listComments(channelKey, videoId, options = {}) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, comments: [], error: 'Comments only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel.comments) {
+          return { success: false, comments: [], error: 'Comments not initialized' }
+        }
+
+        const comments = await channel.comments.listComments(videoId, options)
+        return { success: true, comments }
+      } catch (err) {
+        console.error('[API] listComments error:', err.message)
+        return { success: false, comments: [], error: err.message }
+      }
+    },
+
+    /**
+     * Hide a comment (moderator action)
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @param {string} commentId
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async hideComment(channelKey, videoId, commentId) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, error: 'Comments only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel.comments) {
+          return { success: false, error: 'Comments not initialized' }
+        }
+
+        await channel.comments.hideComment(videoId, commentId)
+        return { success: true }
+      } catch (err) {
+        console.error('[API] hideComment error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Remove a comment (moderator or author)
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @param {string} commentId
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async removeComment(channelKey, videoId, commentId) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, error: 'Comments only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel.comments) {
+          return { success: false, error: 'Comments not initialized' }
+        }
+
+        await channel.comments.removeComment(videoId, commentId)
+        return { success: true }
+      } catch (err) {
+        console.error('[API] removeComment error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    // ============================================
+    // Reactions Operations
+    // ============================================
+
+    /**
+     * Add a reaction to a video
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @param {string} reactionType
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async addReaction(channelKey, videoId, reactionType) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, error: 'Reactions only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel.reactions) {
+          return { success: false, error: 'Reactions not initialized' }
+        }
+
+        await channel.reactions.addReaction(videoId, reactionType)
+        return { success: true }
+      } catch (err) {
+        console.error('[API] addReaction error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Remove a reaction from a video
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async removeReaction(channelKey, videoId) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, error: 'Reactions only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel.reactions) {
+          return { success: false, error: 'Reactions not initialized' }
+        }
+
+        await channel.reactions.removeReaction(videoId)
+        return { success: true }
+      } catch (err) {
+        console.error('[API] removeReaction error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Get reactions for a video
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @returns {Promise<{counts: Record<string, number>, userReaction: string|null, success: boolean, error?: string}>}
+     */
+    async getReactions(channelKey, videoId) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, counts: {}, userReaction: null, error: 'Reactions only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel.reactions) {
+          return { success: false, counts: {}, userReaction: null, error: 'Reactions not initialized' }
+        }
+
+        const result = await channel.reactions.getReactions(videoId)
+        return { success: true, ...result }
+      } catch (err) {
+        console.error('[API] getReactions error:', err.message)
+        return { success: false, counts: {}, userReaction: null, error: err.message }
+      }
+    },
+
+    // ============================================
+    // Recommendations Operations
+    // ============================================
+
+    /**
+     * Log a watch event for recommendations
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @param {Object} [options]
+     * @param {number} [options.duration]
+     * @param {boolean} [options.completed]
+     * @param {boolean} [options.share=false]
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async logWatchEvent(channelKey, videoId, options = {}) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, error: 'Watch events only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel.watchLogger) {
+          return { success: false, error: 'Watch logger not initialized' }
+        }
+
+        await channel.watchLogger.logWatchEvent(videoId, options)
+        return { success: true }
+      } catch (err) {
+        console.error('[API] logWatchEvent error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Get video recommendations
+     * @param {string} channelKey
+     * @param {Object} [options]
+     * @param {number} [options.limit=10]
+     * @param {string[]} [options.excludeVideoIds]
+     * @returns {Promise<{recommendations: Array, success: boolean, error?: string}>}
+     */
+    async getRecommendations(channelKey, options = {}) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, recommendations: [], error: 'Recommendations only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel.watchLogger) {
+          return { success: false, recommendations: [], error: 'Watch logger not initialized' }
+        }
+
+        // Initialize semantic finder if needed
+        if (!ctx.semanticFinder) {
+          ctx.semanticFinder = new SemanticFinder()
+          await ctx.semanticFinder.init()
+        }
+
+        // Initialize recommender
+        const recommender = new Recommender(channel, ctx.semanticFinder, channel.watchLogger)
+        const recommendations = await recommender.generateRecommendations(options)
+
+        return { success: true, recommendations }
+      } catch (err) {
+        console.error('[API] getRecommendations error:', err.message)
+        return { success: false, recommendations: [], error: err.message }
+      }
+    },
+
+    /**
+     * Get recommendations for a specific video
+     * @param {string} channelKey
+     * @param {string} videoId
+     * @param {number} [limit=5]
+     * @returns {Promise<{recommendations: Array, success: boolean, error?: string}>}
+     */
+    async getVideoRecommendations(channelKey, videoId, limit = 5) {
+      try {
+        const isMW = await isMultiWriterChannelKey(channelKey)
+        if (!isMW) {
+          return { success: false, recommendations: [], error: 'Recommendations only supported for multi-writer channels' }
+        }
+
+        const channel = await loadChannel(ctx, channelKey)
+
+        // Initialize semantic finder if needed
+        if (!ctx.semanticFinder) {
+          ctx.semanticFinder = new SemanticFinder()
+          await ctx.semanticFinder.init()
+        }
+
+        // Initialize recommender (watch logger may be null, that's ok)
+        const watchLogger = channel.watchLogger || null
+        const recommender = new Recommender(channel, ctx.semanticFinder, watchLogger)
+        const recommendations = await recommender.getVideoRecommendations(videoId, limit)
+
+        return { success: true, recommendations }
+      } catch (err) {
+        console.error('[API] getVideoRecommendations error:', err.message)
+        return { success: false, recommendations: [], error: err.message }
+      }
     }
   };
 }

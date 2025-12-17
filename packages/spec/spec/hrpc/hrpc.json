@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "schema": [
     {
       "id": 0,
@@ -671,6 +671,162 @@
         "stream": false
       },
       "version": 7
+    },
+    {
+      "id": 29,
+      "name": "@peartube/search-videos",
+      "request": {
+        "name": "@peartube/search-videos-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/search-videos-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 30,
+      "name": "@peartube/index-video-vectors",
+      "request": {
+        "name": "@peartube/index-video-vectors-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/index-video-vectors-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 31,
+      "name": "@peartube/add-comment",
+      "request": {
+        "name": "@peartube/add-comment-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/add-comment-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 32,
+      "name": "@peartube/list-comments",
+      "request": {
+        "name": "@peartube/list-comments-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/list-comments-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 33,
+      "name": "@peartube/hide-comment",
+      "request": {
+        "name": "@peartube/hide-comment-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/hide-comment-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 34,
+      "name": "@peartube/remove-comment",
+      "request": {
+        "name": "@peartube/remove-comment-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/remove-comment-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 35,
+      "name": "@peartube/add-reaction",
+      "request": {
+        "name": "@peartube/add-reaction-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/add-reaction-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 36,
+      "name": "@peartube/remove-reaction",
+      "request": {
+        "name": "@peartube/remove-reaction-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/remove-reaction-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 37,
+      "name": "@peartube/get-reactions",
+      "request": {
+        "name": "@peartube/get-reactions-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-reactions-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 38,
+      "name": "@peartube/log-watch-event",
+      "request": {
+        "name": "@peartube/log-watch-event-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/log-watch-event-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 39,
+      "name": "@peartube/get-recommendations",
+      "request": {
+        "name": "@peartube/get-recommendations-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-recommendations-response",
+        "stream": false
+      },
+      "version": 8
+    },
+    {
+      "id": 40,
+      "name": "@peartube/get-video-recommendations",
+      "request": {
+        "name": "@peartube/get-video-recommendations-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-video-recommendations-response",
+        "stream": false
+      },
+      "version": 8
     }
   ]
 }

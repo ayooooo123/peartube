@@ -873,6 +873,258 @@ ns.register({
 })
 
 // ============================================
+// Search, Comments, Reactions, Recommendations
+// ============================================
+
+ns.register({
+  name: 'search-result',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'score', type: 'string', required: false }, // float encoded as string for portability
+    { name: 'metadata', type: 'string', required: false } // JSON string
+  ]
+})
+
+ns.register({
+  name: 'search-videos-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'query', type: 'string', required: true },
+    { name: 'topK', type: 'uint', required: false },
+    { name: 'federated', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'search-videos-response',
+  fields: [
+    { name: 'results', type: '@peartube/search-result', array: true, required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-video-vectors-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-video-vectors-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'comment',
+  fields: [
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'commentId', type: 'string', required: true },
+    { name: 'text', type: 'string', required: true },
+    { name: 'authorKeyHex', type: 'string', required: true },
+    { name: 'timestamp', type: 'uint', required: false },
+    { name: 'parentId', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'add-comment-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'text', type: 'string', required: true },
+    { name: 'parentId', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'add-comment-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'commentId', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-comments-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'page', type: 'uint', required: false },
+    { name: 'limit', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-comments-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'comments', type: '@peartube/comment', array: true, required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'hide-comment-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'commentId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'hide-comment-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'remove-comment-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'commentId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'remove-comment-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'reaction-count',
+  fields: [
+    { name: 'reactionType', type: 'string', required: true },
+    { name: 'count', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'add-reaction-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'reactionType', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'add-reaction-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'remove-reaction-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'remove-reaction-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-reactions-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'get-reactions-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'counts', type: '@peartube/reaction-count', array: true, required: true },
+    { name: 'userReaction', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'log-watch-event-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'completed', type: 'bool', required: false },
+    { name: 'share', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'log-watch-event-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'recommendation',
+  fields: [
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'score', type: 'string', required: false }, // float encoded as string
+    { name: 'reason', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-recommendations-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'limit', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-recommendations-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'recommendations', type: '@peartube/recommendation', array: true, required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-video-recommendations-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'limit', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-video-recommendations-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'recommendations', type: '@peartube/recommendation', array: true, required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// ============================================
 // Event Types (for streaming/push notifications)
 // ============================================
 
@@ -924,6 +1176,234 @@ ns.register({
   name: 'event-video-stats',
   fields: [
     { name: 'stats', type: '@peartube/video-stats', required: true }
+  ]
+})
+
+// ============================================
+// Channel Operation Types (for Autobase ops)
+// ============================================
+
+ns.register({
+  name: 'channel-op-base',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false } // Default: 1
+  ]
+})
+
+ns.register({
+  name: 'channel-op-update-channel',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'key', type: 'string', required: false },
+    { name: 'name', type: 'string', required: false },
+    { name: 'description', type: 'string', required: false },
+    { name: 'avatar', type: 'string', required: false },
+    { name: 'updatedAt', type: 'uint', required: false },
+    { name: 'updatedBy', type: 'string', required: false },
+    { name: 'createdAt', type: 'uint', required: false },
+    { name: 'createdBy', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-add-video',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'id', type: 'string', required: true },
+    { name: 'title', type: 'string', required: true },
+    { name: 'description', type: 'string', required: false },
+    { name: 'path', type: 'string', required: false },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'thumbnail', type: 'string', required: false },
+    { name: 'blobDriveKey', type: 'string', required: false },
+    { name: 'mimeType', type: 'string', required: false },
+    { name: 'size', type: 'uint', required: false },
+    { name: 'uploadedAt', type: 'uint', required: false },
+    { name: 'uploadedBy', type: 'string', required: false },
+    { name: 'category', type: 'string', required: false },
+    { name: 'views', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-update-video',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'id', type: 'string', required: true },
+    { name: 'title', type: 'string', required: false },
+    { name: 'description', type: 'string', required: false },
+    { name: 'thumbnail', type: 'string', required: false },
+    { name: 'category', type: 'string', required: false },
+    { name: 'updatedAt', type: 'uint', required: false },
+    { name: 'updatedBy', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-delete-video',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'id', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-add-writer',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'keyHex', type: 'string', required: true },
+    { name: 'role', type: 'string', required: false },
+    { name: 'deviceName', type: 'string', required: false },
+    { name: 'addedAt', type: 'uint', required: false },
+    { name: 'blobDriveKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-upsert-writer',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'keyHex', type: 'string', required: true },
+    { name: 'role', type: 'string', required: false },
+    { name: 'deviceName', type: 'string', required: false },
+    { name: 'addedAt', type: 'uint', required: false },
+    { name: 'blobDriveKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-remove-writer',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'keyHex', type: 'string', required: true },
+    { name: 'ban', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-add-invite',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'idHex', type: 'string', required: true },
+    { name: 'inviteZ32', type: 'string', required: true },
+    { name: 'publicKeyHex', type: 'string', required: false },
+    { name: 'expires', type: 'uint', required: false },
+    { name: 'createdAt', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-delete-invite',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'idHex', type: 'string', required: true }
+  ]
+})
+
+// Placeholder for future phases
+ns.register({
+  name: 'channel-op-add-comment',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'commentId', type: 'string', required: true },
+    { name: 'text', type: 'string', required: true },
+    { name: 'authorKeyHex', type: 'string', required: true },
+    { name: 'timestamp', type: 'uint', required: false },
+    { name: 'parentId', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-add-reaction',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'reactionType', type: 'string', required: true },
+    { name: 'authorKeyHex', type: 'string', required: true },
+    { name: 'timestamp', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-remove-reaction',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'authorKeyHex', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-hide-comment',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'commentId', type: 'string', required: true },
+    { name: 'moderatorKeyHex', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-remove-comment',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'commentId', type: 'string', required: true },
+    { name: 'moderatorKeyHex', type: 'string', required: false },
+    { name: 'authorKeyHex', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-add-vector-index',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'vector', type: 'string', required: false }, // Base64 encoded vector
+    { name: 'text', type: 'string', required: false },
+    { name: 'metadata', type: 'string', required: false } // JSON string
+  ]
+})
+
+ns.register({
+  name: 'channel-op-log-watch-event',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: false },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'watcherKeyHex', type: 'string', required: false },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'completed', type: 'bool', required: false },
+    { name: 'timestamp', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'channel-op-migrate-schema',
+  fields: [
+    { name: 'type', type: 'string', required: true },
+    { name: 'schemaVersion', type: 'uint', required: true },
+    { name: 'fromVersion', type: 'uint', required: true },
+    { name: 'toVersion', type: 'uint', required: true },
+    { name: 'migratedAt', type: 'uint', required: false }
   ]
 })
 
@@ -1117,6 +1597,82 @@ rpcNs.register({
   name: 'retry-sync-channel',
   request: { name: '@peartube/retry-sync-channel-request', stream: false },
   response: { name: '@peartube/retry-sync-channel-response', stream: false }
+})
+
+// Search commands
+rpcNs.register({
+  name: 'search-videos',
+  request: { name: '@peartube/search-videos-request', stream: false },
+  response: { name: '@peartube/search-videos-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'index-video-vectors',
+  request: { name: '@peartube/index-video-vectors-request', stream: false },
+  response: { name: '@peartube/index-video-vectors-response', stream: false }
+})
+
+// Comments commands
+rpcNs.register({
+  name: 'add-comment',
+  request: { name: '@peartube/add-comment-request', stream: false },
+  response: { name: '@peartube/add-comment-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'list-comments',
+  request: { name: '@peartube/list-comments-request', stream: false },
+  response: { name: '@peartube/list-comments-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'hide-comment',
+  request: { name: '@peartube/hide-comment-request', stream: false },
+  response: { name: '@peartube/hide-comment-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'remove-comment',
+  request: { name: '@peartube/remove-comment-request', stream: false },
+  response: { name: '@peartube/remove-comment-response', stream: false }
+})
+
+// Reactions commands
+rpcNs.register({
+  name: 'add-reaction',
+  request: { name: '@peartube/add-reaction-request', stream: false },
+  response: { name: '@peartube/add-reaction-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'remove-reaction',
+  request: { name: '@peartube/remove-reaction-request', stream: false },
+  response: { name: '@peartube/remove-reaction-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-reactions',
+  request: { name: '@peartube/get-reactions-request', stream: false },
+  response: { name: '@peartube/get-reactions-response', stream: false }
+})
+
+// Recommendations commands
+rpcNs.register({
+  name: 'log-watch-event',
+  request: { name: '@peartube/log-watch-event-request', stream: false },
+  response: { name: '@peartube/log-watch-event-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-recommendations',
+  request: { name: '@peartube/get-recommendations-request', stream: false },
+  response: { name: '@peartube/get-recommendations-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-video-recommendations',
+  request: { name: '@peartube/get-video-recommendations-request', stream: false },
+  response: { name: '@peartube/get-video-recommendations-response', stream: false }
 })
 
 // Video prefetch & stats commands

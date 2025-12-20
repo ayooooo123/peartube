@@ -28,114 +28,114 @@ const methods = new Map([
   [9, '@peartube/get-video-data'],
   ['@peartube/upload-video', 10],
   [10, '@peartube/upload-video'],
-  ['@peartube/subscribe-channel', 11],
-  [11, '@peartube/subscribe-channel'],
-  ['@peartube/unsubscribe-channel', 12],
-  [12, '@peartube/unsubscribe-channel'],
-  ['@peartube/get-subscriptions', 13],
-  [13, '@peartube/get-subscriptions'],
-  ['@peartube/join-channel', 14],
-  [14, '@peartube/join-channel'],
-  ['@peartube/get-public-feed', 15],
-  [15, '@peartube/get-public-feed'],
-  ['@peartube/refresh-feed', 16],
-  [16, '@peartube/refresh-feed'],
-  ['@peartube/submit-to-feed', 17],
-  [17, '@peartube/submit-to-feed'],
-  ['@peartube/hide-channel', 18],
-  [18, '@peartube/hide-channel'],
-  ['@peartube/get-channel-meta', 19],
-  [19, '@peartube/get-channel-meta'],
-  ['@peartube/get-swarm-status', 20],
-  [20, '@peartube/get-swarm-status'],
-  ['@peartube/prefetch-video', 21],
-  [21, '@peartube/prefetch-video'],
-  ['@peartube/get-video-stats', 22],
-  [22, '@peartube/get-video-stats'],
-  ['@peartube/get-seeding-status', 23],
-  [23, '@peartube/get-seeding-status'],
-  ['@peartube/set-seeding-config', 24],
-  [24, '@peartube/set-seeding-config'],
-  ['@peartube/pin-channel', 25],
-  [25, '@peartube/pin-channel'],
-  ['@peartube/unpin-channel', 26],
-  [26, '@peartube/unpin-channel'],
-  ['@peartube/get-pinned-channels', 27],
-  [27, '@peartube/get-pinned-channels'],
-  ['@peartube/get-video-thumbnail', 28],
-  [28, '@peartube/get-video-thumbnail'],
-  ['@peartube/get-video-metadata', 29],
-  [29, '@peartube/get-video-metadata'],
-  ['@peartube/set-video-thumbnail', 30],
-  [30, '@peartube/set-video-thumbnail'],
-  ['@peartube/set-video-thumbnail-from-file', 31],
-  [31, '@peartube/set-video-thumbnail-from-file'],
-  ['@peartube/get-status', 32],
-  [32, '@peartube/get-status'],
-  ['@peartube/pick-video-file', 33],
-  [33, '@peartube/pick-video-file'],
-  ['@peartube/pick-image-file', 34],
-  [34, '@peartube/pick-image-file'],
-  ['@peartube/get-blob-server-port', 35],
-  [35, '@peartube/get-blob-server-port'],
-  ['@peartube/event-ready', 36],
-  [36, '@peartube/event-ready'],
-  ['@peartube/event-error', 37],
-  [37, '@peartube/event-error'],
-  ['@peartube/event-upload-progress', 38],
-  [38, '@peartube/event-upload-progress'],
-  ['@peartube/event-feed-update', 39],
-  [39, '@peartube/event-feed-update'],
-  ['@peartube/event-log', 40],
-  [40, '@peartube/event-log'],
-  ['@peartube/event-video-stats', 41],
-  [41, '@peartube/event-video-stats'],
-  ['@peartube/download-video', 42],
-  [42, '@peartube/download-video'],
-  ['@peartube/delete-video', 43],
-  [43, '@peartube/delete-video'],
-  ['@peartube/get-storage-stats', 44],
-  [44, '@peartube/get-storage-stats'],
-  ['@peartube/set-storage-limit', 45],
-  [45, '@peartube/set-storage-limit'],
-  ['@peartube/clear-cache', 46],
-  [46, '@peartube/clear-cache'],
-  ['@peartube/unpublish-from-feed', 47],
-  [47, '@peartube/unpublish-from-feed'],
-  ['@peartube/is-channel-published', 48],
-  [48, '@peartube/is-channel-published'],
-  ['@peartube/create-device-invite', 49],
-  [49, '@peartube/create-device-invite'],
-  ['@peartube/pair-device', 50],
-  [50, '@peartube/pair-device'],
-  ['@peartube/list-devices', 51],
-  [51, '@peartube/list-devices'],
-  ['@peartube/retry-sync-channel', 52],
-  [52, '@peartube/retry-sync-channel'],
-  ['@peartube/search-videos', 53],
-  [53, '@peartube/search-videos'],
-  ['@peartube/index-video-vectors', 54],
-  [54, '@peartube/index-video-vectors'],
-  ['@peartube/add-comment', 55],
-  [55, '@peartube/add-comment'],
-  ['@peartube/list-comments', 56],
-  [56, '@peartube/list-comments'],
-  ['@peartube/hide-comment', 57],
-  [57, '@peartube/hide-comment'],
-  ['@peartube/remove-comment', 58],
-  [58, '@peartube/remove-comment'],
-  ['@peartube/add-reaction', 59],
-  [59, '@peartube/add-reaction'],
-  ['@peartube/remove-reaction', 60],
-  [60, '@peartube/remove-reaction'],
-  ['@peartube/get-reactions', 61],
-  [61, '@peartube/get-reactions'],
-  ['@peartube/log-watch-event', 62],
-  [62, '@peartube/log-watch-event'],
-  ['@peartube/get-recommendations', 63],
-  [63, '@peartube/get-recommendations'],
-  ['@peartube/get-video-recommendations', 64],
-  [64, '@peartube/get-video-recommendations']
+  ['@peartube/download-video', 11],
+  [11, '@peartube/download-video'],
+  ['@peartube/delete-video', 12],
+  [12, '@peartube/delete-video'],
+  ['@peartube/subscribe-channel', 13],
+  [13, '@peartube/subscribe-channel'],
+  ['@peartube/unsubscribe-channel', 14],
+  [14, '@peartube/unsubscribe-channel'],
+  ['@peartube/get-subscriptions', 15],
+  [15, '@peartube/get-subscriptions'],
+  ['@peartube/join-channel', 16],
+  [16, '@peartube/join-channel'],
+  ['@peartube/get-public-feed', 17],
+  [17, '@peartube/get-public-feed'],
+  ['@peartube/refresh-feed', 18],
+  [18, '@peartube/refresh-feed'],
+  ['@peartube/submit-to-feed', 19],
+  [19, '@peartube/submit-to-feed'],
+  ['@peartube/unpublish-from-feed', 20],
+  [20, '@peartube/unpublish-from-feed'],
+  ['@peartube/is-channel-published', 21],
+  [21, '@peartube/is-channel-published'],
+  ['@peartube/hide-channel', 22],
+  [22, '@peartube/hide-channel'],
+  ['@peartube/get-channel-meta', 23],
+  [23, '@peartube/get-channel-meta'],
+  ['@peartube/get-swarm-status', 24],
+  [24, '@peartube/get-swarm-status'],
+  ['@peartube/create-device-invite', 25],
+  [25, '@peartube/create-device-invite'],
+  ['@peartube/pair-device', 26],
+  [26, '@peartube/pair-device'],
+  ['@peartube/list-devices', 27],
+  [27, '@peartube/list-devices'],
+  ['@peartube/retry-sync-channel', 28],
+  [28, '@peartube/retry-sync-channel'],
+  ['@peartube/search-videos', 29],
+  [29, '@peartube/search-videos'],
+  ['@peartube/index-video-vectors', 30],
+  [30, '@peartube/index-video-vectors'],
+  ['@peartube/add-comment', 31],
+  [31, '@peartube/add-comment'],
+  ['@peartube/list-comments', 32],
+  [32, '@peartube/list-comments'],
+  ['@peartube/hide-comment', 33],
+  [33, '@peartube/hide-comment'],
+  ['@peartube/remove-comment', 34],
+  [34, '@peartube/remove-comment'],
+  ['@peartube/add-reaction', 35],
+  [35, '@peartube/add-reaction'],
+  ['@peartube/remove-reaction', 36],
+  [36, '@peartube/remove-reaction'],
+  ['@peartube/get-reactions', 37],
+  [37, '@peartube/get-reactions'],
+  ['@peartube/log-watch-event', 38],
+  [38, '@peartube/log-watch-event'],
+  ['@peartube/get-recommendations', 39],
+  [39, '@peartube/get-recommendations'],
+  ['@peartube/get-video-recommendations', 40],
+  [40, '@peartube/get-video-recommendations'],
+  ['@peartube/prefetch-video', 41],
+  [41, '@peartube/prefetch-video'],
+  ['@peartube/get-video-stats', 42],
+  [42, '@peartube/get-video-stats'],
+  ['@peartube/get-seeding-status', 43],
+  [43, '@peartube/get-seeding-status'],
+  ['@peartube/set-seeding-config', 44],
+  [44, '@peartube/set-seeding-config'],
+  ['@peartube/pin-channel', 45],
+  [45, '@peartube/pin-channel'],
+  ['@peartube/unpin-channel', 46],
+  [46, '@peartube/unpin-channel'],
+  ['@peartube/get-pinned-channels', 47],
+  [47, '@peartube/get-pinned-channels'],
+  ['@peartube/get-storage-stats', 48],
+  [48, '@peartube/get-storage-stats'],
+  ['@peartube/set-storage-limit', 49],
+  [49, '@peartube/set-storage-limit'],
+  ['@peartube/clear-cache', 50],
+  [50, '@peartube/clear-cache'],
+  ['@peartube/get-video-thumbnail', 51],
+  [51, '@peartube/get-video-thumbnail'],
+  ['@peartube/get-video-metadata', 52],
+  [52, '@peartube/get-video-metadata'],
+  ['@peartube/set-video-thumbnail', 53],
+  [53, '@peartube/set-video-thumbnail'],
+  ['@peartube/set-video-thumbnail-from-file', 54],
+  [54, '@peartube/set-video-thumbnail-from-file'],
+  ['@peartube/get-status', 55],
+  [55, '@peartube/get-status'],
+  ['@peartube/pick-video-file', 56],
+  [56, '@peartube/pick-video-file'],
+  ['@peartube/pick-image-file', 57],
+  [57, '@peartube/pick-image-file'],
+  ['@peartube/get-blob-server-port', 58],
+  [58, '@peartube/get-blob-server-port'],
+  ['@peartube/event-ready', 59],
+  [59, '@peartube/event-ready'],
+  ['@peartube/event-error', 60],
+  [60, '@peartube/event-error'],
+  ['@peartube/event-upload-progress', 61],
+  [61, '@peartube/event-upload-progress'],
+  ['@peartube/event-feed-update', 62],
+  [62, '@peartube/event-feed-update'],
+  ['@peartube/event-log', 63],
+  [63, '@peartube/event-log'],
+  ['@peartube/event-video-stats', 64],
+  [64, '@peartube/event-video-stats']
 ])
 
 class HRPC {
@@ -154,6 +154,8 @@ class HRPC {
       ['@peartube/get-video-url', getEncoding('@peartube/get-video-url-request')],
       ['@peartube/get-video-data', getEncoding('@peartube/get-video-data-request')],
       ['@peartube/upload-video', getEncoding('@peartube/upload-video-request')],
+      ['@peartube/download-video', getEncoding('@peartube/download-video-request')],
+      ['@peartube/delete-video', getEncoding('@peartube/delete-video-request')],
       ['@peartube/subscribe-channel', getEncoding('@peartube/subscribe-channel-request')],
       ['@peartube/unsubscribe-channel', getEncoding('@peartube/unsubscribe-channel-request')],
       ['@peartube/get-subscriptions', getEncoding('@peartube/get-subscriptions-request')],
@@ -161,37 +163,11 @@ class HRPC {
       ['@peartube/get-public-feed', getEncoding('@peartube/get-public-feed-request')],
       ['@peartube/refresh-feed', getEncoding('@peartube/refresh-feed-request')],
       ['@peartube/submit-to-feed', getEncoding('@peartube/submit-to-feed-request')],
+      ['@peartube/unpublish-from-feed', getEncoding('@peartube/unpublish-from-feed-request')],
+      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-request')],
       ['@peartube/hide-channel', getEncoding('@peartube/hide-channel-request')],
       ['@peartube/get-channel-meta', getEncoding('@peartube/get-channel-meta-request')],
       ['@peartube/get-swarm-status', getEncoding('@peartube/get-swarm-status-request')],
-      ['@peartube/prefetch-video', getEncoding('@peartube/prefetch-video-request')],
-      ['@peartube/get-video-stats', getEncoding('@peartube/get-video-stats-request')],
-      ['@peartube/get-seeding-status', getEncoding('@peartube/get-seeding-status-request')],
-      ['@peartube/set-seeding-config', getEncoding('@peartube/set-seeding-config-request')],
-      ['@peartube/pin-channel', getEncoding('@peartube/pin-channel-request')],
-      ['@peartube/unpin-channel', getEncoding('@peartube/unpin-channel-request')],
-      ['@peartube/get-pinned-channels', getEncoding('@peartube/get-pinned-channels-request')],
-      ['@peartube/get-video-thumbnail', getEncoding('@peartube/get-video-thumbnail-request')],
-      ['@peartube/get-video-metadata', getEncoding('@peartube/get-video-metadata-request')],
-      ['@peartube/set-video-thumbnail', getEncoding('@peartube/set-video-thumbnail-request')],
-      ['@peartube/set-video-thumbnail-from-file', getEncoding('@peartube/set-video-thumbnail-from-file-request')],
-      ['@peartube/get-status', getEncoding('@peartube/get-status-request')],
-      ['@peartube/pick-video-file', getEncoding('@peartube/pick-video-file-request')],
-      ['@peartube/pick-image-file', getEncoding('@peartube/pick-image-file-request')],
-      ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-request')],
-      ['@peartube/event-ready', getEncoding('@peartube/event-ready')],
-      ['@peartube/event-error', getEncoding('@peartube/event-error')],
-      ['@peartube/event-upload-progress', getEncoding('@peartube/event-upload-progress')],
-      ['@peartube/event-feed-update', getEncoding('@peartube/event-feed-update')],
-      ['@peartube/event-log', getEncoding('@peartube/event-log')],
-      ['@peartube/event-video-stats', getEncoding('@peartube/event-video-stats')],
-      ['@peartube/download-video', getEncoding('@peartube/download-video-request')],
-      ['@peartube/delete-video', getEncoding('@peartube/delete-video-request')],
-      ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-request')],
-      ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-request')],
-      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-request')],
-      ['@peartube/unpublish-from-feed', getEncoding('@peartube/unpublish-from-feed-request')],
-      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-request')],
       ['@peartube/create-device-invite', getEncoding('@peartube/create-device-invite-request')],
       ['@peartube/pair-device', getEncoding('@peartube/pair-device-request')],
       ['@peartube/list-devices', getEncoding('@peartube/list-devices-request')],
@@ -207,7 +183,31 @@ class HRPC {
       ['@peartube/get-reactions', getEncoding('@peartube/get-reactions-request')],
       ['@peartube/log-watch-event', getEncoding('@peartube/log-watch-event-request')],
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-request')],
-      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-request')]
+      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-request')],
+      ['@peartube/prefetch-video', getEncoding('@peartube/prefetch-video-request')],
+      ['@peartube/get-video-stats', getEncoding('@peartube/get-video-stats-request')],
+      ['@peartube/get-seeding-status', getEncoding('@peartube/get-seeding-status-request')],
+      ['@peartube/set-seeding-config', getEncoding('@peartube/set-seeding-config-request')],
+      ['@peartube/pin-channel', getEncoding('@peartube/pin-channel-request')],
+      ['@peartube/unpin-channel', getEncoding('@peartube/unpin-channel-request')],
+      ['@peartube/get-pinned-channels', getEncoding('@peartube/get-pinned-channels-request')],
+      ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-request')],
+      ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-request')],
+      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-request')],
+      ['@peartube/get-video-thumbnail', getEncoding('@peartube/get-video-thumbnail-request')],
+      ['@peartube/get-video-metadata', getEncoding('@peartube/get-video-metadata-request')],
+      ['@peartube/set-video-thumbnail', getEncoding('@peartube/set-video-thumbnail-request')],
+      ['@peartube/set-video-thumbnail-from-file', getEncoding('@peartube/set-video-thumbnail-from-file-request')],
+      ['@peartube/get-status', getEncoding('@peartube/get-status-request')],
+      ['@peartube/pick-video-file', getEncoding('@peartube/pick-video-file-request')],
+      ['@peartube/pick-image-file', getEncoding('@peartube/pick-image-file-request')],
+      ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-request')],
+      ['@peartube/event-ready', getEncoding('@peartube/event-ready')],
+      ['@peartube/event-error', getEncoding('@peartube/event-error')],
+      ['@peartube/event-upload-progress', getEncoding('@peartube/event-upload-progress')],
+      ['@peartube/event-feed-update', getEncoding('@peartube/event-feed-update')],
+      ['@peartube/event-log', getEncoding('@peartube/event-log')],
+      ['@peartube/event-video-stats', getEncoding('@peartube/event-video-stats')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -221,6 +221,8 @@ class HRPC {
       ['@peartube/get-video-url', getEncoding('@peartube/get-video-url-response')],
       ['@peartube/get-video-data', getEncoding('@peartube/get-video-data-response')],
       ['@peartube/upload-video', getEncoding('@peartube/upload-video-response')],
+      ['@peartube/download-video', getEncoding('@peartube/download-video-response')],
+      ['@peartube/delete-video', getEncoding('@peartube/delete-video-response')],
       ['@peartube/subscribe-channel', getEncoding('@peartube/subscribe-channel-response')],
       ['@peartube/unsubscribe-channel', getEncoding('@peartube/unsubscribe-channel-response')],
       ['@peartube/get-subscriptions', getEncoding('@peartube/get-subscriptions-response')],
@@ -228,31 +230,11 @@ class HRPC {
       ['@peartube/get-public-feed', getEncoding('@peartube/get-public-feed-response')],
       ['@peartube/refresh-feed', getEncoding('@peartube/refresh-feed-response')],
       ['@peartube/submit-to-feed', getEncoding('@peartube/submit-to-feed-response')],
+      ['@peartube/unpublish-from-feed', getEncoding('@peartube/unpublish-from-feed-response')],
+      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-response')],
       ['@peartube/hide-channel', getEncoding('@peartube/hide-channel-response')],
       ['@peartube/get-channel-meta', getEncoding('@peartube/get-channel-meta-response')],
       ['@peartube/get-swarm-status', getEncoding('@peartube/get-swarm-status-response')],
-      ['@peartube/prefetch-video', getEncoding('@peartube/prefetch-video-response')],
-      ['@peartube/get-video-stats', getEncoding('@peartube/get-video-stats-response')],
-      ['@peartube/get-seeding-status', getEncoding('@peartube/get-seeding-status-response')],
-      ['@peartube/set-seeding-config', getEncoding('@peartube/set-seeding-config-response')],
-      ['@peartube/pin-channel', getEncoding('@peartube/pin-channel-response')],
-      ['@peartube/unpin-channel', getEncoding('@peartube/unpin-channel-response')],
-      ['@peartube/get-pinned-channels', getEncoding('@peartube/get-pinned-channels-response')],
-      ['@peartube/get-video-thumbnail', getEncoding('@peartube/get-video-thumbnail-response')],
-      ['@peartube/get-video-metadata', getEncoding('@peartube/get-video-metadata-response')],
-      ['@peartube/set-video-thumbnail', getEncoding('@peartube/set-video-thumbnail-response')],
-      ['@peartube/set-video-thumbnail-from-file', getEncoding('@peartube/set-video-thumbnail-from-file-response')],
-      ['@peartube/get-status', getEncoding('@peartube/get-status-response')],
-      ['@peartube/pick-video-file', getEncoding('@peartube/pick-video-file-response')],
-      ['@peartube/pick-image-file', getEncoding('@peartube/pick-image-file-response')],
-      ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-response')],
-      ['@peartube/download-video', getEncoding('@peartube/download-video-response')],
-      ['@peartube/delete-video', getEncoding('@peartube/delete-video-response')],
-      ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-response')],
-      ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-response')],
-      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-response')],
-      ['@peartube/unpublish-from-feed', getEncoding('@peartube/unpublish-from-feed-response')],
-      ['@peartube/is-channel-published', getEncoding('@peartube/is-channel-published-response')],
       ['@peartube/create-device-invite', getEncoding('@peartube/create-device-invite-response')],
       ['@peartube/pair-device', getEncoding('@peartube/pair-device-response')],
       ['@peartube/list-devices', getEncoding('@peartube/list-devices-response')],
@@ -268,20 +250,47 @@ class HRPC {
       ['@peartube/get-reactions', getEncoding('@peartube/get-reactions-response')],
       ['@peartube/log-watch-event', getEncoding('@peartube/log-watch-event-response')],
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-response')],
-      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-response')]
+      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-response')],
+      ['@peartube/prefetch-video', getEncoding('@peartube/prefetch-video-response')],
+      ['@peartube/get-video-stats', getEncoding('@peartube/get-video-stats-response')],
+      ['@peartube/get-seeding-status', getEncoding('@peartube/get-seeding-status-response')],
+      ['@peartube/set-seeding-config', getEncoding('@peartube/set-seeding-config-response')],
+      ['@peartube/pin-channel', getEncoding('@peartube/pin-channel-response')],
+      ['@peartube/unpin-channel', getEncoding('@peartube/unpin-channel-response')],
+      ['@peartube/get-pinned-channels', getEncoding('@peartube/get-pinned-channels-response')],
+      ['@peartube/get-storage-stats', getEncoding('@peartube/get-storage-stats-response')],
+      ['@peartube/set-storage-limit', getEncoding('@peartube/set-storage-limit-response')],
+      ['@peartube/clear-cache', getEncoding('@peartube/clear-cache-response')],
+      ['@peartube/get-video-thumbnail', getEncoding('@peartube/get-video-thumbnail-response')],
+      ['@peartube/get-video-metadata', getEncoding('@peartube/get-video-metadata-response')],
+      ['@peartube/set-video-thumbnail', getEncoding('@peartube/set-video-thumbnail-response')],
+      ['@peartube/set-video-thumbnail-from-file', getEncoding('@peartube/set-video-thumbnail-from-file-response')],
+      ['@peartube/get-status', getEncoding('@peartube/get-status-response')],
+      ['@peartube/pick-video-file', getEncoding('@peartube/pick-video-file-response')],
+      ['@peartube/pick-image-file', getEncoding('@peartube/pick-image-file-response')],
+      ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
+      if (!command) {
+        console.error('[HRPC] Unknown command:', req.command)
+        return
+      }
+      const handler = this._handlers[command]
+      if (typeof handler !== 'function') {
+        console.error('[HRPC] Missing handler:', command, 'raw:', req.command)
+        return
+      }
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
       if (this._requestIsSend(command)) {
         const request = req.data ? c.decode(requestEncoding, req.data) : null
-        await this._handlers[command](request)
+        await handler(request)
         return
       }
       if (!this._requestIsStream(command) && !this._responseIsStream(command)) {
         const request = req.data ? c.decode(requestEncoding, req.data) : null
-        const response = await this._handlers[command](request)
+        const response = await handler(request)
         req.reply(c.encode(responseEncoding, response))
       }
       if (!this._requestIsStream(command) && this._responseIsStream(command)) {
@@ -293,7 +302,7 @@ class HRPC {
           responseEncoding
         )
         responseStream.data = request
-        await this._handlers[command](responseStream)
+        await handler(responseStream)
       }
       if (this._requestIsStream(command) && !this._responseIsStream(command)) {
         const requestStream = new RPCRequestStream(
@@ -302,7 +311,7 @@ class HRPC {
           req.createRequestStream(),
           requestEncoding
         )
-        const response = await this._handlers[command](requestStream)
+        const response = await handler(requestStream)
         req.reply(c.encode(responseEncoding, response))
       }
       if (this._requestIsStream(command) && this._responseIsStream(command)) {
@@ -314,7 +323,7 @@ class HRPC {
           req.createResponseStream(),
           responseEncoding
         )
-        await this._handlers[command](requestStream)
+        await handler(requestStream)
       }
     })
   }
@@ -407,6 +416,14 @@ class HRPC {
     return this._call('@peartube/upload-video', args)
   }
 
+  async downloadVideo(args) {
+    return this._call('@peartube/download-video', args)
+  }
+
+  async deleteVideo(args) {
+    return this._call('@peartube/delete-video', args)
+  }
+
   async subscribeChannel(args) {
     return this._call('@peartube/subscribe-channel', args)
   }
@@ -435,6 +452,14 @@ class HRPC {
     return this._call('@peartube/submit-to-feed', args)
   }
 
+  async unpublishFromFeed(args) {
+    return this._call('@peartube/unpublish-from-feed', args)
+  }
+
+  async isChannelPublished(args) {
+    return this._call('@peartube/is-channel-published', args)
+  }
+
   async hideChannel(args) {
     return this._call('@peartube/hide-channel', args)
   }
@@ -445,118 +470,6 @@ class HRPC {
 
   async getSwarmStatus(args) {
     return this._call('@peartube/get-swarm-status', args)
-  }
-
-  async prefetchVideo(args) {
-    return this._call('@peartube/prefetch-video', args)
-  }
-
-  async getVideoStats(args) {
-    return this._call('@peartube/get-video-stats', args)
-  }
-
-  async getSeedingStatus(args) {
-    return this._call('@peartube/get-seeding-status', args)
-  }
-
-  async setSeedingConfig(args) {
-    return this._call('@peartube/set-seeding-config', args)
-  }
-
-  async pinChannel(args) {
-    return this._call('@peartube/pin-channel', args)
-  }
-
-  async unpinChannel(args) {
-    return this._call('@peartube/unpin-channel', args)
-  }
-
-  async getPinnedChannels(args) {
-    return this._call('@peartube/get-pinned-channels', args)
-  }
-
-  async getVideoThumbnail(args) {
-    return this._call('@peartube/get-video-thumbnail', args)
-  }
-
-  async getVideoMetadata(args) {
-    return this._call('@peartube/get-video-metadata', args)
-  }
-
-  async setVideoThumbnail(args) {
-    return this._call('@peartube/set-video-thumbnail', args)
-  }
-
-  async setVideoThumbnailFromFile(args) {
-    return this._call('@peartube/set-video-thumbnail-from-file', args)
-  }
-
-  async getStatus(args) {
-    return this._call('@peartube/get-status', args)
-  }
-
-  async pickVideoFile(args) {
-    return this._call('@peartube/pick-video-file', args)
-  }
-
-  async pickImageFile(args) {
-    return this._call('@peartube/pick-image-file', args)
-  }
-
-  async getBlobServerPort(args) {
-    return this._call('@peartube/get-blob-server-port', args)
-  }
-
-  eventReady(args) {
-    return this._callSync('@peartube/event-ready', args)
-  }
-
-  eventError(args) {
-    return this._callSync('@peartube/event-error', args)
-  }
-
-  eventUploadProgress(args) {
-    return this._callSync('@peartube/event-upload-progress', args)
-  }
-
-  eventFeedUpdate(args) {
-    return this._callSync('@peartube/event-feed-update', args)
-  }
-
-  eventLog(args) {
-    return this._callSync('@peartube/event-log', args)
-  }
-
-  eventVideoStats(args) {
-    return this._callSync('@peartube/event-video-stats', args)
-  }
-
-  async downloadVideo(args) {
-    return this._call('@peartube/download-video', args)
-  }
-
-  async deleteVideo(args) {
-    return this._call('@peartube/delete-video', args)
-  }
-
-  async getStorageStats(args) {
-    return this._call('@peartube/get-storage-stats', args)
-  }
-
-  async setStorageLimit(args) {
-    return this._call('@peartube/set-storage-limit', args)
-  }
-
-  async clearCache(args) {
-    return this._call('@peartube/clear-cache', args)
-  }
-
-  async unpublishFromFeed(args) {
-    return this._call('@peartube/unpublish-from-feed', args)
-  }
-
-  async isChannelPublished(args) {
-    return this._call('@peartube/is-channel-published', args)
   }
 
   async createDeviceInvite(args) {
@@ -623,6 +536,102 @@ class HRPC {
     return this._call('@peartube/get-video-recommendations', args)
   }
 
+  async prefetchVideo(args) {
+    return this._call('@peartube/prefetch-video', args)
+  }
+
+  async getVideoStats(args) {
+    return this._call('@peartube/get-video-stats', args)
+  }
+
+  async getSeedingStatus(args) {
+    return this._call('@peartube/get-seeding-status', args)
+  }
+
+  async setSeedingConfig(args) {
+    return this._call('@peartube/set-seeding-config', args)
+  }
+
+  async pinChannel(args) {
+    return this._call('@peartube/pin-channel', args)
+  }
+
+  async unpinChannel(args) {
+    return this._call('@peartube/unpin-channel', args)
+  }
+
+  async getPinnedChannels(args) {
+    return this._call('@peartube/get-pinned-channels', args)
+  }
+
+  async getStorageStats(args) {
+    return this._call('@peartube/get-storage-stats', args)
+  }
+
+  async setStorageLimit(args) {
+    return this._call('@peartube/set-storage-limit', args)
+  }
+
+  async clearCache(args) {
+    return this._call('@peartube/clear-cache', args)
+  }
+
+  async getVideoThumbnail(args) {
+    return this._call('@peartube/get-video-thumbnail', args)
+  }
+
+  async getVideoMetadata(args) {
+    return this._call('@peartube/get-video-metadata', args)
+  }
+
+  async setVideoThumbnail(args) {
+    return this._call('@peartube/set-video-thumbnail', args)
+  }
+
+  async setVideoThumbnailFromFile(args) {
+    return this._call('@peartube/set-video-thumbnail-from-file', args)
+  }
+
+  async getStatus(args) {
+    return this._call('@peartube/get-status', args)
+  }
+
+  async pickVideoFile(args) {
+    return this._call('@peartube/pick-video-file', args)
+  }
+
+  async pickImageFile(args) {
+    return this._call('@peartube/pick-image-file', args)
+  }
+
+  async getBlobServerPort(args) {
+    return this._call('@peartube/get-blob-server-port', args)
+  }
+
+  eventReady(args) {
+    return this._callSync('@peartube/event-ready', args)
+  }
+
+  eventError(args) {
+    return this._callSync('@peartube/event-error', args)
+  }
+
+  eventUploadProgress(args) {
+    return this._callSync('@peartube/event-upload-progress', args)
+  }
+
+  eventFeedUpdate(args) {
+    return this._callSync('@peartube/event-feed-update', args)
+  }
+
+  eventLog(args) {
+    return this._callSync('@peartube/event-log', args)
+  }
+
+  eventVideoStats(args) {
+    return this._callSync('@peartube/event-video-stats', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -667,6 +676,14 @@ class HRPC {
     this._handlers['@peartube/upload-video'] = responseFn
   }
 
+  onDownloadVideo(responseFn) {
+    this._handlers['@peartube/download-video'] = responseFn
+  }
+
+  onDeleteVideo(responseFn) {
+    this._handlers['@peartube/delete-video'] = responseFn
+  }
+
   onSubscribeChannel(responseFn) {
     this._handlers['@peartube/subscribe-channel'] = responseFn
   }
@@ -695,6 +712,14 @@ class HRPC {
     this._handlers['@peartube/submit-to-feed'] = responseFn
   }
 
+  onUnpublishFromFeed(responseFn) {
+    this._handlers['@peartube/unpublish-from-feed'] = responseFn
+  }
+
+  onIsChannelPublished(responseFn) {
+    this._handlers['@peartube/is-channel-published'] = responseFn
+  }
+
   onHideChannel(responseFn) {
     this._handlers['@peartube/hide-channel'] = responseFn
   }
@@ -705,118 +730,6 @@ class HRPC {
 
   onGetSwarmStatus(responseFn) {
     this._handlers['@peartube/get-swarm-status'] = responseFn
-  }
-
-  onPrefetchVideo(responseFn) {
-    this._handlers['@peartube/prefetch-video'] = responseFn
-  }
-
-  onGetVideoStats(responseFn) {
-    this._handlers['@peartube/get-video-stats'] = responseFn
-  }
-
-  onGetSeedingStatus(responseFn) {
-    this._handlers['@peartube/get-seeding-status'] = responseFn
-  }
-
-  onSetSeedingConfig(responseFn) {
-    this._handlers['@peartube/set-seeding-config'] = responseFn
-  }
-
-  onPinChannel(responseFn) {
-    this._handlers['@peartube/pin-channel'] = responseFn
-  }
-
-  onUnpinChannel(responseFn) {
-    this._handlers['@peartube/unpin-channel'] = responseFn
-  }
-
-  onGetPinnedChannels(responseFn) {
-    this._handlers['@peartube/get-pinned-channels'] = responseFn
-  }
-
-  onGetVideoThumbnail(responseFn) {
-    this._handlers['@peartube/get-video-thumbnail'] = responseFn
-  }
-
-  onGetVideoMetadata(responseFn) {
-    this._handlers['@peartube/get-video-metadata'] = responseFn
-  }
-
-  onSetVideoThumbnail(responseFn) {
-    this._handlers['@peartube/set-video-thumbnail'] = responseFn
-  }
-
-  onSetVideoThumbnailFromFile(responseFn) {
-    this._handlers['@peartube/set-video-thumbnail-from-file'] = responseFn
-  }
-
-  onGetStatus(responseFn) {
-    this._handlers['@peartube/get-status'] = responseFn
-  }
-
-  onPickVideoFile(responseFn) {
-    this._handlers['@peartube/pick-video-file'] = responseFn
-  }
-
-  onPickImageFile(responseFn) {
-    this._handlers['@peartube/pick-image-file'] = responseFn
-  }
-
-  onGetBlobServerPort(responseFn) {
-    this._handlers['@peartube/get-blob-server-port'] = responseFn
-  }
-
-  onEventReady(responseFn) {
-    this._handlers['@peartube/event-ready'] = responseFn
-  }
-
-  onEventError(responseFn) {
-    this._handlers['@peartube/event-error'] = responseFn
-  }
-
-  onEventUploadProgress(responseFn) {
-    this._handlers['@peartube/event-upload-progress'] = responseFn
-  }
-
-  onEventFeedUpdate(responseFn) {
-    this._handlers['@peartube/event-feed-update'] = responseFn
-  }
-
-  onEventLog(responseFn) {
-    this._handlers['@peartube/event-log'] = responseFn
-  }
-
-  onEventVideoStats(responseFn) {
-    this._handlers['@peartube/event-video-stats'] = responseFn
-  }
-
-  onDownloadVideo(responseFn) {
-    this._handlers['@peartube/download-video'] = responseFn
-  }
-
-  onDeleteVideo(responseFn) {
-    this._handlers['@peartube/delete-video'] = responseFn
-  }
-
-  onGetStorageStats(responseFn) {
-    this._handlers['@peartube/get-storage-stats'] = responseFn
-  }
-
-  onSetStorageLimit(responseFn) {
-    this._handlers['@peartube/set-storage-limit'] = responseFn
-  }
-
-  onClearCache(responseFn) {
-    this._handlers['@peartube/clear-cache'] = responseFn
-  }
-
-  onUnpublishFromFeed(responseFn) {
-    this._handlers['@peartube/unpublish-from-feed'] = responseFn
-  }
-
-  onIsChannelPublished(responseFn) {
-    this._handlers['@peartube/is-channel-published'] = responseFn
   }
 
   onCreateDeviceInvite(responseFn) {
@@ -881,6 +794,102 @@ class HRPC {
 
   onGetVideoRecommendations(responseFn) {
     this._handlers['@peartube/get-video-recommendations'] = responseFn
+  }
+
+  onPrefetchVideo(responseFn) {
+    this._handlers['@peartube/prefetch-video'] = responseFn
+  }
+
+  onGetVideoStats(responseFn) {
+    this._handlers['@peartube/get-video-stats'] = responseFn
+  }
+
+  onGetSeedingStatus(responseFn) {
+    this._handlers['@peartube/get-seeding-status'] = responseFn
+  }
+
+  onSetSeedingConfig(responseFn) {
+    this._handlers['@peartube/set-seeding-config'] = responseFn
+  }
+
+  onPinChannel(responseFn) {
+    this._handlers['@peartube/pin-channel'] = responseFn
+  }
+
+  onUnpinChannel(responseFn) {
+    this._handlers['@peartube/unpin-channel'] = responseFn
+  }
+
+  onGetPinnedChannels(responseFn) {
+    this._handlers['@peartube/get-pinned-channels'] = responseFn
+  }
+
+  onGetStorageStats(responseFn) {
+    this._handlers['@peartube/get-storage-stats'] = responseFn
+  }
+
+  onSetStorageLimit(responseFn) {
+    this._handlers['@peartube/set-storage-limit'] = responseFn
+  }
+
+  onClearCache(responseFn) {
+    this._handlers['@peartube/clear-cache'] = responseFn
+  }
+
+  onGetVideoThumbnail(responseFn) {
+    this._handlers['@peartube/get-video-thumbnail'] = responseFn
+  }
+
+  onGetVideoMetadata(responseFn) {
+    this._handlers['@peartube/get-video-metadata'] = responseFn
+  }
+
+  onSetVideoThumbnail(responseFn) {
+    this._handlers['@peartube/set-video-thumbnail'] = responseFn
+  }
+
+  onSetVideoThumbnailFromFile(responseFn) {
+    this._handlers['@peartube/set-video-thumbnail-from-file'] = responseFn
+  }
+
+  onGetStatus(responseFn) {
+    this._handlers['@peartube/get-status'] = responseFn
+  }
+
+  onPickVideoFile(responseFn) {
+    this._handlers['@peartube/pick-video-file'] = responseFn
+  }
+
+  onPickImageFile(responseFn) {
+    this._handlers['@peartube/pick-image-file'] = responseFn
+  }
+
+  onGetBlobServerPort(responseFn) {
+    this._handlers['@peartube/get-blob-server-port'] = responseFn
+  }
+
+  onEventReady(responseFn) {
+    this._handlers['@peartube/event-ready'] = responseFn
+  }
+
+  onEventError(responseFn) {
+    this._handlers['@peartube/event-error'] = responseFn
+  }
+
+  onEventUploadProgress(responseFn) {
+    this._handlers['@peartube/event-upload-progress'] = responseFn
+  }
+
+  onEventFeedUpdate(responseFn) {
+    this._handlers['@peartube/event-feed-update'] = responseFn
+  }
+
+  onEventLog(responseFn) {
+    this._handlers['@peartube/event-log'] = responseFn
+  }
+
+  onEventVideoStats(responseFn) {
+    this._handlers['@peartube/event-video-stats'] = responseFn
   }
 
   _requestIsStream(command) {

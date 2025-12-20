@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ES2022",
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -9,7 +13,6 @@
     "allowJs": true,
     "noEmit": true,
     "isolatedModules": true,
-
     "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": true,
@@ -18,13 +21,23 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
-
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ]
     }
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "build"],
-  "typeRoots": ["./node_modules/@types", "./src/types"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "build"
+  ],
+  "typeRoots": [
+    "./node_modules/@types",
+    "./src/types"
+  ],
+  "extends": "expo/tsconfig.base"
 }

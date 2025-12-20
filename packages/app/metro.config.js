@@ -23,9 +23,18 @@ config.resolver.nodeModulesPaths = [
 config.resolver.disableHierarchicalLookup = false
 
 // Force lucide-react-native to use CJS instead of ESM (ESM has import resolution issues)
+const specRoot = path.resolve(monorepoRoot, 'packages/spec')
 config.resolver.extraNodeModules = {
   'lucide-react-native': path.resolve(projectRoot, 'node_modules/lucide-react-native/dist/cjs/lucide-react-native.js'),
+  '@peartube/spec': path.resolve(specRoot, 'spec/hrpc/index.js'),
+  '@peartube/spec/messages': path.resolve(specRoot, 'spec/hrpc/messages.js'),
+  '@peartube/spec/schema': path.resolve(specRoot, 'spec/schema/index.js'),
 }
+
+// Force Metro to ignore the hoisted spec in the monorepo root.
+const escapeForRegex = value => value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')
+const rootSpecPath = path.resolve(monorepoRoot, 'node_modules/@peartube/spec')
+config.resolver.blockList = [new RegExp(`${escapeForRegex(rootSpecPath)}\\/.*`)]
 
 // Add .bundle.js extension to source extensions so Metro can resolve it
 // The backend.bundle.js file is a CommonJS module that exports a string

@@ -41,13 +41,13 @@ declare const HRPC: new (stream: any) => {
   listDevices(req: { channelKey: string }): Promise<any>;
   searchVideos(req: { channelKey: string; query: string; topK?: number; federated?: boolean }): Promise<any>;
   indexVideoVectors(req: { channelKey: string; videoId: string }): Promise<any>;
-  addComment(req: { channelKey: string; videoId: string; text: string; parentId?: string }): Promise<any>;
-  listComments(req: { channelKey: string; videoId: string; page?: number; limit?: number }): Promise<any>;
-  hideComment(req: { channelKey: string; videoId: string; commentId: string }): Promise<any>;
-  removeComment(req: { channelKey: string; videoId: string; commentId: string }): Promise<any>;
-  addReaction(req: { channelKey: string; videoId: string; reactionType: string }): Promise<any>;
-  removeReaction(req: { channelKey: string; videoId: string }): Promise<any>;
-  getReactions(req: { channelKey: string; videoId: string }): Promise<any>;
+  addComment(req: { channelKey: string; videoId: string; text: string; parentId?: string | null; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
+  listComments(req: { channelKey: string; videoId: string; page?: number; limit?: number; publicBeeKey?: string | null }): Promise<any>;
+  hideComment(req: { channelKey: string; videoId: string; commentId: string; publicBeeKey?: string | null }): Promise<any>;
+  removeComment(req: { channelKey: string; videoId: string; commentId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
+  addReaction(req: { channelKey: string; videoId: string; reactionType: string; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
+  removeReaction(req: { channelKey: string; videoId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
+  getReactions(req: { channelKey: string; videoId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
   logWatchEvent(req: { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }): Promise<any>;
   getRecommendations(req: { channelKey: string; limit?: number }): Promise<any>;
   getVideoRecommendations(req: { channelKey: string; videoId: string; limit?: number }): Promise<any>;
@@ -55,12 +55,23 @@ declare const HRPC: new (stream: any) => {
   getSwarmStatus(req: {}): Promise<any>;
   uploadVideo(req: { filePath: string; title: string; description: string; category?: string }): Promise<any>;
   downloadVideo(req: { channelKey: string; videoId: string; destPath: string }): Promise<any>;
+  deleteVideo(req: { videoId: string }): Promise<any>;
+  getVideoData(req: { channelKey: string; videoId: string }): Promise<any>;
   pickVideoFile(req: {}): Promise<any>;
   pickImageFile(req: {}): Promise<any>;
+  recoverIdentity(req: { seedPhrase: string; name?: string }): Promise<any>;
+  hideChannel(req: { channelKey: string }): Promise<any>;
+  unsubscribeChannel(req: { channelKey: string }): Promise<any>;
+  setVideoThumbnailFromFile(req: { videoId: string; filePath: string }): Promise<any>;
+  getStorageStats(req: {}): Promise<any>;
+  setStorageLimit(req: { maxGB: number }): Promise<any>;
+  clearCache(req: {}): Promise<any>;
   onEventReady(handler: (data: any) => void): void;
   onEventError(handler: (data: any) => void): void;
   onEventVideoStats(handler: (data: any) => void): void;
   onEventUploadProgress(handler: (data: any) => void): void;
+  onEventFeedUpdate(handler: (data: any) => void): void;
+  onEventLog(handler: (data: any) => void): void;
 };
 
 // FileSystem from expo-file-system
@@ -80,7 +91,6 @@ type ErrorCallback = (data: { message: string }) => void;
 type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
 type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
 type FeedUpdateCallback = (data: { action?: string; channelKey?: string }) => void;
-type LogCallback = (data: { level: string; message: string; timestamp?: number }) => void;
 
 // Event callback storage
 const eventCallbacks = {
@@ -89,7 +99,6 @@ const eventCallbacks = {
   videoStats: [] as VideoStatsCallback[],
   uploadProgress: [] as UploadProgressCallback[],
   feedUpdate: [] as FeedUpdateCallback[],
-  log: [] as LogCallback[],
 };
 
 // Helper to remove callback
@@ -122,10 +131,6 @@ export const events = {
     eventCallbacks.feedUpdate.push(cb);
     return () => removeCallback(eventCallbacks.feedUpdate, cb);
   },
-  onLog: (cb: LogCallback) => {
-    eventCallbacks.log.push(cb);
-    return () => removeCallback(eventCallbacks.log, cb);
-  },
 };
 
 /**
@@ -156,29 +161,43 @@ export async function initPlatformRPC(config: {
 
   console.log('[Platform RPC] Initializing with storage:', storagePath);
 
-  // Create and start worklet
+  // Create worklet and HRPC client before starting to avoid missing early events.
   worklet = new WorkletClass();
-  worklet.start('/backend.bundle', config.backendSource, [storagePath]);
-  console.log('[Platform RPC] Worklet started');
-
-  // Setup HRPC client
   hrpc = new HRPCClass(worklet.IPC);
   console.log('[Platform RPC] HRPC client initialized');
 
-  // Wire event handlers
-  hrpc.onEventReady((data: any) => {
+  // Debug: Log IPC stream state and intercept data
+  console.log('[Platform RPC] IPC type:', worklet.IPC?.constructor?.name);
+  const ipcOnData = worklet.IPC.on.bind(worklet.IPC);
+  worklet.IPC.on = (event: string, handler: (...args: any[]) => void) => {
+    if (event === 'data') {
+      return ipcOnData(event, (data: any) => {
+        const len = data?.length || data?.byteLength || 0;
+        const type = data?.constructor?.name || typeof data;
+        const isBuffer = Buffer.isBuffer(data);
+        const first4 = data?.slice?.(0, 4);
+        console.log('[Platform RPC] IPC data received:', len, 'bytes, type:', type, 'isBuffer:', isBuffer, 'first4:', first4 ? Array.from(first4) : 'N/A');
+        handler(data);
+      });
+    }
+    return ipcOnData(event, handler);
+  };
+
+  const { decode: decodeHrpcMessage } = require('@peartube/spec/messages');
+
+  const handleReady = (data: any) => {
     console.log('[Platform RPC] Backend ready, blobServerPort:', data?.blobServerPort);
     _blobServerPort = data?.blobServerPort || null;
     _isInitialized = true;
     eventCallbacks.ready.forEach(cb => cb(data));
-  });
+  };
 
-  hrpc.onEventError((data: any) => {
+  const handleError = (data: any) => {
     console.error('[Platform RPC] Backend error:', data?.message);
     eventCallbacks.error.forEach(cb => cb(data));
-  });
+  };
 
-  hrpc.onEventVideoStats((data: any) => {
+  const handleVideoStats = (data: any) => {
     // HRPC payload is `{ stats: VideoStats }` (see spec). Normalize to the callback shape.
     const stats = data?.stats ?? data;
     const channelKey = data?.channelKey ?? stats?.channelKey;
@@ -190,27 +209,89 @@ export async function initPlatformRPC(config: {
       // Fallback: forward raw data for debugging rather than dropping it.
       eventCallbacks.videoStats.forEach(cb => cb(data));
     }
-  });
+  };
 
-  hrpc.onEventUploadProgress((data: any) => {
+  const handleUploadProgress = (data: any) => {
     eventCallbacks.uploadProgress.forEach(cb => cb(data));
-  });
+  };
 
-  if ((hrpc as any).onEventLog) {
-    (hrpc as any).onEventLog((data: any) => {
-      // Always print backend logs on mobile for debugging, even if no subscribers are attached.
+  const handleFeedUpdate = (data: any) => {
+    eventCallbacks.feedUpdate.forEach(cb => cb(data));
+  };
+
+  const handleLog = (data: any) => {
+    if (data?.message) {
+      console.log('[Platform RPC] Backend log:', data.message);
+    } else {
+      console.log('[Platform RPC] Backend log:', data);
+    }
+  };
+
+  const fallbackEventCommands: Record<number, string> = {
+    59: '@peartube/event-ready',
+    60: '@peartube/event-error',
+    61: '@peartube/event-upload-progress',
+    62: '@peartube/event-feed-update',
+    63: '@peartube/event-log',
+    64: '@peartube/event-video-stats',
+  };
+
+  const rawRpc = (hrpc as any)?._rpc;
+  if (rawRpc && !rawRpc._peartubePatched) {
+    const originalOnRequest = rawRpc._onrequest;
+    rawRpc._onrequest = async (req: any) => {
       try {
-        console.log('[Platform RPC] event-log:', data?.level, data?.message)
-      } catch {}
-      eventCallbacks.log.forEach(cb => cb(data));
-    });
+        const fallbackEvent = fallbackEventCommands[req?.command];
+        if (fallbackEvent) {
+          let payload = null;
+          try {
+            payload = req?.data ? decodeHrpcMessage(fallbackEvent, req.data) : null;
+          } catch (decodeErr: any) {
+            console.error('[Platform RPC] Fallback decode failed:', decodeErr?.message || decodeErr, 'command:', req?.command);
+          }
+
+          switch (fallbackEvent) {
+            case '@peartube/event-ready':
+              handleReady(payload || {});
+              break;
+            case '@peartube/event-error':
+              handleError(payload || {});
+              break;
+            case '@peartube/event-upload-progress':
+              handleUploadProgress(payload || {});
+              break;
+            case '@peartube/event-feed-update':
+              handleFeedUpdate(payload || {});
+              break;
+            case '@peartube/event-log':
+              handleLog(payload || {});
+              break;
+            case '@peartube/event-video-stats':
+              handleVideoStats(payload || {});
+              break;
+          }
+          return;
+        }
+        return await originalOnRequest(req);
+      } catch (err: any) {
+        console.error('[Platform RPC] HRPC handler error:', err?.message || err, 'command:', req?.command);
+        return;
+      }
+    };
+    rawRpc._peartubePatched = true;
   }
 
-  if ((hrpc as any).onEventFeedUpdate) {
-    (hrpc as any).onEventFeedUpdate((data: any) => {
-      eventCallbacks.feedUpdate.forEach(cb => cb(data));
-    });
-  }
+  // Wire event handlers before starting the worklet.
+  hrpc.onEventReady(handleReady);
+  hrpc.onEventError(handleError);
+  hrpc.onEventVideoStats(handleVideoStats);
+  hrpc.onEventUploadProgress(handleUploadProgress);
+  hrpc.onEventFeedUpdate(handleFeedUpdate);
+  hrpc.onEventLog(handleLog);
+
+  // Start worklet after handlers are registered.
+  worklet.start('/backend.bundle', config.backendSource, [storagePath]);
+  console.log('[Platform RPC] Worklet started');
 }
 
 /**
@@ -404,90 +485,54 @@ export const rpc = {
   },
 
   // Search
-  async searchVideos(channelKeyOrReq: string | { channelKey: string; query: string; topK?: number; federated?: boolean }, query?: string, options?: { topK?: number; federated?: boolean }) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, query: query || '', topK: options?.topK, federated: options?.federated }
-      : channelKeyOrReq;
+  async searchVideos(req: { channelKey: string; query: string; topK?: number; federated?: boolean }) {
     return ensureRPC().searchVideos(req);
   },
 
-  async indexVideoVectors(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId! }
-      : channelKeyOrReq;
+  async indexVideoVectors(req: { channelKey: string; videoId: string }) {
     return ensureRPC().indexVideoVectors(req);
   },
 
   // Comments
-  async addComment(channelKeyOrReq: string | { channelKey: string; videoId: string; text: string; parentId?: string }, videoId?: string, text?: string, parentId?: string | null) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId!, text: text || '', parentId: parentId || undefined }
-      : channelKeyOrReq;
+  async addComment(req: { channelKey: string; videoId: string; text: string; parentId?: string | null; authorChannelKey?: string | null; publicBeeKey?: string | null }) {
     return ensureRPC().addComment(req);
   },
 
-  async listComments(channelKeyOrReq: string | { channelKey: string; videoId: string; page?: number; limit?: number }, videoId?: string, options?: { page?: number; limit?: number }) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId!, page: options?.page, limit: options?.limit }
-      : channelKeyOrReq;
+  async listComments(req: { channelKey: string; videoId: string; page?: number; limit?: number; publicBeeKey?: string | null }) {
     return ensureRPC().listComments(req);
   },
 
-  async hideComment(channelKeyOrReq: string | { channelKey: string; videoId: string; commentId: string }, videoId?: string, commentId?: string) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId!, commentId: commentId! }
-      : channelKeyOrReq;
+  async hideComment(req: { channelKey: string; videoId: string; commentId: string; publicBeeKey?: string | null }) {
     return ensureRPC().hideComment(req);
   },
 
-  async removeComment(channelKeyOrReq: string | { channelKey: string; videoId: string; commentId: string }, videoId?: string, commentId?: string) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId!, commentId: commentId! }
-      : channelKeyOrReq;
+  async removeComment(req: { channelKey: string; videoId: string; commentId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }) {
     return ensureRPC().removeComment(req);
   },
 
   // Reactions
-  async addReaction(channelKeyOrReq: string | { channelKey: string; videoId: string; reactionType: string }, videoId?: string, reactionType?: string) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId!, reactionType: reactionType || 'like' }
-      : channelKeyOrReq;
+  async addReaction(req: { channelKey: string; videoId: string; reactionType: string; authorChannelKey?: string | null; publicBeeKey?: string | null }) {
     return ensureRPC().addReaction(req);
   },
 
-  async removeReaction(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId! }
-      : channelKeyOrReq;
+  async removeReaction(req: { channelKey: string; videoId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }) {
     return ensureRPC().removeReaction(req);
   },
 
-  async getReactions(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId! }
-      : channelKeyOrReq;
+  async getReactions(req: { channelKey: string; videoId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }) {
     return ensureRPC().getReactions(req);
   },
 
   // Recommendations / watch events
-  async logWatchEvent(channelKeyOrReq: string | { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }, videoId?: string, options?: { duration?: number; completed?: boolean; share?: boolean }) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId!, duration: options?.duration, completed: options?.completed, share: options?.share }
-      : channelKeyOrReq;
+  async logWatchEvent(req: { channelKey: string; videoId: string; duration?: number; completed?: boolean; share?: boolean }) {
     return ensureRPC().logWatchEvent(req);
   },
 
-  async getRecommendations(channelKeyOrReq: string | { channelKey: string; limit?: number }, limit?: number) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, limit }
-      : channelKeyOrReq;
+  async getRecommendations(req: { channelKey: string; limit?: number }) {
     return ensureRPC().getRecommendations(req);
   },
 
-  async getVideoRecommendations(channelKeyOrReq: string | { channelKey: string; videoId: string; limit?: number }, videoId?: string, limit?: number) {
-    const req = typeof channelKeyOrReq === 'string'
-      ? { channelKey: channelKeyOrReq, videoId: videoId!, limit }
-      : channelKeyOrReq;
+  async getVideoRecommendations(req: { channelKey: string; videoId: string; limit?: number }) {
     return ensureRPC().getVideoRecommendations(req);
   },
 
@@ -521,6 +566,41 @@ export const rpc = {
 
   async clearCache(): Promise<{ success: boolean; clearedBytes?: number }> {
     return ensureRPC().clearCache({});
+  },
+
+  // Identity - recovery
+  async recoverIdentity(seedPhraseOrReq: string | { seedPhrase: string; name?: string }, name?: string) {
+    const req = typeof seedPhraseOrReq === 'string'
+      ? { seedPhrase: seedPhraseOrReq, name }
+      : seedPhraseOrReq;
+    return ensureRPC().recoverIdentity(req);
+  },
+
+  // Channel management
+  async hideChannel(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().hideChannel(req);
+  },
+
+  async unsubscribeChannel(channelKeyOrReq: string | { channelKey: string }) {
+    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+    return ensureRPC().unsubscribeChannel(req);
+  },
+
+  // Video data
+  async getVideoData(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().getVideoData(req);
+  },
+
+  // Thumbnail from file
+  async setVideoThumbnailFromFile(videoIdOrReq: string | { videoId: string; filePath: string }, filePath?: string) {
+    const req = typeof videoIdOrReq === 'string'
+      ? { videoId: videoIdOrReq, filePath: filePath! }
+      : videoIdOrReq;
+    return ensureRPC().setVideoThumbnailFromFile(req);
   },
 };
 

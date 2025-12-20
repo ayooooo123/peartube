@@ -1,5 +1,5 @@
 {
-  "version": 11,
+  "version": 1,
   "schema": [
     {
       "name": "empty",
@@ -409,6 +409,12 @@
           "version": 1
         },
         {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
           "name": "limit",
           "required": false,
           "type": "uint",
@@ -440,7 +446,7 @@
       "name": "get-video-url-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": -1,
+      "flagsPosition": 2,
       "fields": [
         {
           "name": "channelKey",
@@ -451,6 +457,12 @@
         {
           "name": "videoId",
           "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
           "type": "string",
           "version": 1
         }
@@ -474,7 +486,7 @@
       "name": "get-video-data-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": -1,
+      "flagsPosition": 2,
       "fields": [
         {
           "name": "channelKey",
@@ -485,6 +497,12 @@
         {
           "name": "videoId",
           "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
           "type": "string",
           "version": 1
         }
@@ -538,7 +556,7 @@
           "name": "skipThumbnailGeneration",
           "required": false,
           "type": "bool",
-          "version": 3
+          "version": 1
         }
       ]
     },
@@ -552,6 +570,104 @@
           "name": "video",
           "required": true,
           "type": "@peartube/video",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "download-video-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "destPath",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "download-video-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "filePath",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "size",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "data",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "delete-video-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "delete-video-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
           "version": 1
         }
       ]
@@ -706,6 +822,12 @@
           "version": 1
         },
         {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
           "name": "channelName",
           "required": false,
           "type": "string",
@@ -802,6 +924,48 @@
       ]
     },
     {
+      "name": "unpublish-from-feed-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "unpublish-from-feed-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "is-channel-published-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "is-channel-published-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "published",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "hide-channel-request",
       "namespace": "peartube",
       "compact": false,
@@ -833,11 +997,17 @@
       "name": "get-channel-meta-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": -1,
+      "flagsPosition": 1,
       "fields": [
         {
           "name": "channelKey",
           "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
           "type": "string",
           "version": 1
         }
@@ -900,7 +1070,7 @@
       "name": "prefetch-video-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": -1,
+      "flagsPosition": 2,
       "fields": [
         {
           "name": "channelKey",
@@ -911,6 +1081,12 @@
         {
           "name": "videoId",
           "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
           "type": "string",
           "version": 1
         }
@@ -1235,6 +1411,112 @@
       ]
     },
     {
+      "name": "get-storage-stats-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-storage-stats-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "usedBytes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "maxBytes",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "usedGB",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "maxGB",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "seedCount",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "pinnedCount",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-storage-limit-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "maxGB",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "set-storage-limit-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "clear-cache-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "clear-cache-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "clearedBytes",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "get-video-thumbnail-request",
       "namespace": "peartube",
       "compact": false,
@@ -1541,6 +1823,998 @@
       ]
     },
     {
+      "name": "device",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "keyHex",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "role",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "deviceName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "addedAt",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "blobDriveKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "create-device-invite-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "create-device-invite-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "inviteCode",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "pair-device-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "inviteCode",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "deviceName",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "pair-device-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "syncState",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "retry-sync-channel-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "retry-sync-channel-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "state",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoCount",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "list-devices-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "list-devices-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "devices",
+          "required": true,
+          "array": true,
+          "type": "@peartube/device",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "search-result",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "score",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "metadata",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "search-videos-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "query",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "topK",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "federated",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "search-videos-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "results",
+          "required": true,
+          "array": true,
+          "type": "@peartube/search-result",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-video-vectors-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "index-video-vectors-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "comment",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 4,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "commentId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "text",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "authorKeyHex",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "timestamp",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "parentId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "add-comment-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "text",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "parentId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "authorChannelKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "add-comment-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "commentId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "queued",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "list-comments-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "page",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "list-comments-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "comments",
+          "required": true,
+          "array": true,
+          "type": "@peartube/comment",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "hide-comment-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "commentId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "hide-comment-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "remove-comment-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "commentId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "authorChannelKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "remove-comment-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "queued",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "reaction-count",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "reactionType",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "count",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "add-reaction-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 3,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "reactionType",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "authorChannelKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "add-reaction-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "queued",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "remove-reaction-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "authorChannelKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "remove-reaction-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "queued",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-reactions-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "authorChannelKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-reactions-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "counts",
+          "required": true,
+          "array": true,
+          "type": "@peartube/reaction-count",
+          "version": 1
+        },
+        {
+          "name": "userReaction",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "log-watch-event-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "duration",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "completed",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "share",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "log-watch-event-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "recommendation",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "score",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "reason",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-recommendations-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-recommendations-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "recommendations",
+          "required": true,
+          "array": true,
+          "type": "@peartube/recommendation",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-video-recommendations-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "get-video-recommendations-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "recommendations",
+          "required": true,
+          "array": true,
+          "type": "@peartube/recommendation",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "event-ready",
       "namespace": "peartube",
       "compact": false,
@@ -1608,13 +2882,13 @@
           "name": "speed",
           "required": false,
           "type": "uint",
-          "version": 8
+          "version": 1
         },
         {
           "name": "eta",
           "required": false,
           "type": "uint",
-          "version": 8
+          "version": 1
         }
       ]
     },
@@ -1679,1148 +2953,6 @@
       ]
     },
     {
-      "name": "download-video-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "destPath",
-          "required": true,
-          "type": "string",
-          "version": 2
-        }
-      ]
-    },
-    {
-      "name": "download-video-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 2
-        },
-        {
-          "name": "filePath",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "size",
-          "required": false,
-          "type": "uint",
-          "version": 2
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "data",
-          "required": false,
-          "type": "string",
-          "version": 4
-        }
-      ]
-    },
-    {
-      "name": "delete-video-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 5
-        }
-      ]
-    },
-    {
-      "name": "delete-video-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 5
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 5
-        }
-      ]
-    },
-    {
-      "name": "get-storage-stats-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": []
-    },
-    {
-      "name": "get-storage-stats-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "usedBytes",
-          "required": true,
-          "type": "uint",
-          "version": 6
-        },
-        {
-          "name": "maxBytes",
-          "required": true,
-          "type": "uint",
-          "version": 6
-        },
-        {
-          "name": "usedGB",
-          "required": true,
-          "type": "string",
-          "version": 6
-        },
-        {
-          "name": "maxGB",
-          "required": true,
-          "type": "uint",
-          "version": 6
-        },
-        {
-          "name": "seedCount",
-          "required": true,
-          "type": "uint",
-          "version": 6
-        },
-        {
-          "name": "pinnedCount",
-          "required": true,
-          "type": "uint",
-          "version": 6
-        }
-      ]
-    },
-    {
-      "name": "set-storage-limit-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "maxGB",
-          "required": true,
-          "type": "uint",
-          "version": 6
-        }
-      ]
-    },
-    {
-      "name": "set-storage-limit-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 6
-        }
-      ]
-    },
-    {
-      "name": "clear-cache-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": []
-    },
-    {
-      "name": "clear-cache-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 6
-        },
-        {
-          "name": "clearedBytes",
-          "required": false,
-          "type": "uint",
-          "version": 6
-        }
-      ]
-    },
-    {
-      "name": "unpublish-from-feed-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": []
-    },
-    {
-      "name": "unpublish-from-feed-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 7
-        }
-      ]
-    },
-    {
-      "name": "is-channel-published-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": []
-    },
-    {
-      "name": "is-channel-published-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "published",
-          "required": false,
-          "type": "bool",
-          "version": 7
-        }
-      ]
-    },
-    {
-      "name": "device",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "keyHex",
-          "required": true,
-          "type": "string",
-          "version": 9
-        },
-        {
-          "name": "role",
-          "required": false,
-          "type": "string",
-          "version": 9
-        },
-        {
-          "name": "deviceName",
-          "required": false,
-          "type": "string",
-          "version": 9
-        },
-        {
-          "name": "addedAt",
-          "required": false,
-          "type": "uint",
-          "version": 9
-        },
-        {
-          "name": "blobDriveKey",
-          "required": false,
-          "type": "string",
-          "version": 9
-        }
-      ]
-    },
-    {
-      "name": "create-device-invite-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 9
-        }
-      ]
-    },
-    {
-      "name": "create-device-invite-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "inviteCode",
-          "required": true,
-          "type": "string",
-          "version": 9
-        }
-      ]
-    },
-    {
-      "name": "pair-device-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "inviteCode",
-          "required": true,
-          "type": "string",
-          "version": 9
-        },
-        {
-          "name": "deviceName",
-          "required": false,
-          "type": "string",
-          "version": 9
-        }
-      ]
-    },
-    {
-      "name": "pair-device-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 9
-        },
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 9
-        },
-        {
-          "name": "syncState",
-          "required": false,
-          "type": "string",
-          "version": 10
-        },
-        {
-          "name": "videoCount",
-          "required": false,
-          "type": "uint",
-          "version": 10
-        }
-      ]
-    },
-    {
-      "name": "list-devices-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 9
-        }
-      ]
-    },
-    {
-      "name": "list-devices-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "devices",
-          "required": true,
-          "array": true,
-          "type": "@peartube/device",
-          "version": 9
-        }
-      ]
-    },
-    {
-      "name": "retry-sync-channel-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 10
-        }
-      ]
-    },
-    {
-      "name": "retry-sync-channel-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 10
-        },
-        {
-          "name": "state",
-          "required": false,
-          "type": "string",
-          "version": 10
-        },
-        {
-          "name": "videoCount",
-          "required": false,
-          "type": "uint",
-          "version": 10
-        }
-      ]
-    },
-    {
-      "name": "search-result",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "id",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "score",
-          "required": false,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "metadata",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "search-videos-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 2,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "query",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "topK",
-          "required": false,
-          "type": "uint",
-          "version": 11
-        },
-        {
-          "name": "federated",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "search-videos-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "results",
-          "required": true,
-          "array": true,
-          "type": "@peartube/search-result",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "index-video-vectors-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "index-video-vectors-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "comment",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 4,
-      "fields": [
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "commentId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "text",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "authorKeyHex",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "timestamp",
-          "required": false,
-          "type": "uint",
-          "version": 11
-        },
-        {
-          "name": "parentId",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "add-comment-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 3,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "text",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "parentId",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "add-comment-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "commentId",
-          "required": false,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "list-comments-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 2,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "page",
-          "required": false,
-          "type": "uint",
-          "version": 11
-        },
-        {
-          "name": "limit",
-          "required": false,
-          "type": "uint",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "list-comments-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "comments",
-          "required": true,
-          "array": true,
-          "type": "@peartube/comment",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "hide-comment-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "commentId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "hide-comment-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "remove-comment-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "commentId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "remove-comment-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "reaction-count",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "reactionType",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "count",
-          "required": true,
-          "type": "uint",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "add-reaction-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "reactionType",
-          "required": true,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "add-reaction-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "remove-reaction-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "remove-reaction-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "get-reactions-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "get-reactions-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "counts",
-          "required": true,
-          "array": true,
-          "type": "@peartube/reaction-count",
-          "version": 11
-        },
-        {
-          "name": "userReaction",
-          "required": false,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "log-watch-event-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 2,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "duration",
-          "required": false,
-          "type": "uint",
-          "version": 11
-        },
-        {
-          "name": "completed",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "share",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "log-watch-event-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "recommendation",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "score",
-          "required": false,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "reason",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "get-recommendations-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "limit",
-          "required": false,
-          "type": "uint",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "get-recommendations-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "recommendations",
-          "required": true,
-          "array": true,
-          "type": "@peartube/recommendation",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "get-video-recommendations-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 2,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 11
-        },
-        {
-          "name": "limit",
-          "required": false,
-          "type": "uint",
-          "version": 11
-        }
-      ]
-    },
-    {
-      "name": "get-video-recommendations-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 11
-        },
-        {
-          "name": "recommendations",
-          "required": true,
-          "array": true,
-          "type": "@peartube/recommendation",
-          "version": 11
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 11
-        }
-      ]
-    },
-    {
       "name": "channel-op-base",
       "namespace": "peartube",
       "compact": false,
@@ -2830,13 +2962,13 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -2850,61 +2982,61 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "key",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "name",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "description",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "avatar",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "updatedAt",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "updatedBy",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "createdAt",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "createdBy",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -2918,91 +3050,91 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "id",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "title",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "description",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "path",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "duration",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "thumbnail",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "blobDriveKey",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "mimeType",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "size",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "uploadedAt",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "uploadedBy",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "category",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "views",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3016,55 +3148,55 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "id",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "title",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "description",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "thumbnail",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "category",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "updatedAt",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "updatedBy",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3078,19 +3210,19 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "id",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3104,43 +3236,43 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "keyHex",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "role",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "deviceName",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "addedAt",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "blobDriveKey",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3154,43 +3286,43 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "keyHex",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "role",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "deviceName",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "addedAt",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "blobDriveKey",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3204,25 +3336,25 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "keyHex",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "ban",
           "required": false,
           "type": "bool",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3236,43 +3368,43 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "idHex",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "inviteZ32",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "publicKeyHex",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "expires",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "createdAt",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3286,19 +3418,19 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "idHex",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3312,49 +3444,49 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "videoId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "commentId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "text",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "authorKeyHex",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "timestamp",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "parentId",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3368,37 +3500,37 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "videoId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "reactionType",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "authorKeyHex",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "timestamp",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3412,25 +3544,25 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "videoId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "authorKeyHex",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3444,31 +3576,31 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "videoId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "commentId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "moderatorKeyHex",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3482,37 +3614,37 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "videoId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "commentId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "moderatorKeyHex",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "authorKeyHex",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3526,37 +3658,37 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "videoId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "vector",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "text",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "metadata",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3570,49 +3702,49 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "videoId",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "channelKey",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "watcherKeyHex",
           "required": false,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "duration",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "completed",
           "required": false,
           "type": "bool",
-          "version": 11
+          "version": 1
         },
         {
           "name": "timestamp",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         }
       ]
     },
@@ -3626,31 +3758,31 @@
           "name": "type",
           "required": true,
           "type": "string",
-          "version": 11
+          "version": 1
         },
         {
           "name": "schemaVersion",
           "required": true,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "fromVersion",
           "required": true,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "toVersion",
           "required": true,
           "type": "uint",
-          "version": 11
+          "version": 1
         },
         {
           "name": "migratedAt",
           "required": false,
           "type": "uint",
-          "version": 11
+          "version": 1
         }
       ]
     }

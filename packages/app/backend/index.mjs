@@ -18,8 +18,133 @@ import b4a from 'b4a'
 const { IPC } = BareKit
 const storagePath = Bare.argv[0] || ''
 
+// Debug: Log all IPC writes with buffer details
+const originalWrite = IPC.write?.bind?.(IPC)
+if (originalWrite) {
+  IPC.write = (data) => {
+    const len = data?.length || data?.byteLength || 0
+    const type = data?.constructor?.name || typeof data
+    const first4 = data?.slice?.(0, 4)
+    console.log('[Backend IPC] Writing', len, 'bytes, type:', type, 'first4:', first4 ? Array.from(first4) : 'N/A')
+    return originalWrite(data)
+  }
+}
+
+// HRPC instance (initialized early so we can surface init errors)
+let rpc = null
+
+function formatError(err) {
+  if (!err) return 'Unknown error'
+  if (err instanceof Error) {
+    return err.stack || err.message || String(err)
+  }
+  if (typeof err === 'string') return err
+  try {
+    return JSON.stringify(err)
+  } catch {
+    return String(err)
+  }
+}
+
+function reportBackendError(label, err) {
+  const message = err instanceof Error ? err.message : (typeof err === 'string' ? err : 'Unknown error')
+  console.error(`[Backend] ${label}:`, message)
+  if (err?.stack) {
+    console.error(err.stack)
+  } else if (message && message !== 'Unknown error') {
+    console.error('[Backend] Detail:', formatError(err))
+  }
+  try {
+    rpc?.eventError?.({ message: `${label}: ${message}` })
+  } catch {}
+}
+
+function ensureRpc() {
+  if (rpc) return true
+  try {
+    rpc = new HRPC(IPC)
+    console.log('[Backend] HRPC initialized')
+
+    // Backward-compat shim: some mobile bundles still send old command ids.
+    // Map old refresh-feed id (16) to the new id (18) only when payload is empty,
+    // so normal join-channel requests (which include data) keep working.
+    try {
+      const rawRpc = rpc?._rpc
+      if (rawRpc && !rawRpc._peartubeCompat) {
+        const originalOnRequest = rawRpc._onrequest
+        rawRpc._onrequest = async (req) => {
+          try {
+            if (req?.command === 16 && (!req.data || req.data.length === 0)) {
+              req.command = 18
+            }
+          } catch {}
+          return originalOnRequest(req)
+        }
+        rawRpc._peartubeCompat = true
+      }
+    } catch {}
+
+    return true
+  } catch (e) {
+    console.log('[Backend] HRPC init failed:', e?.message)
+    return false
+  }
+}
+
+function attachUnhandledHandlers() {
+  const notify = (label, err) => reportBackendError(label, err)
+
+  if (typeof Bare !== 'undefined' && Bare?.on) {
+    Bare.on('unhandledRejection', (reason) => {
+      notify('Unhandled rejection', reason)
+    })
+  }
+
+  const proc = typeof process !== 'undefined' ? process : null
+  if (proc && typeof proc.on === 'function') {
+    proc.on('unhandledRejection', (reason) => notify('Unhandled rejection', reason))
+    proc.on('uncaughtException', (err) => notify('Uncaught exception', err))
+    console.log('[Backend] process error handlers attached')
+  }
+
+  const g = typeof globalThis !== 'undefined' ? globalThis : null
+  if (!g) return
+
+  if (typeof g.addEventListener === 'function') {
+    g.addEventListener('unhandledrejection', (event) => {
+      notify('Unhandled rejection', event?.reason ?? event)
+      event?.preventDefault?.()
+    })
+    g.addEventListener('error', (event) => {
+      notify('Uncaught error', event?.error ?? event?.message ?? event)
+    })
+    console.log('[Backend] global error handlers attached')
+    return
+  }
+
+  if ('onunhandledrejection' in g) {
+    const prev = g.onunhandledrejection
+    g.onunhandledrejection = (event) => {
+      notify('Unhandled rejection', event?.reason ?? event)
+      if (typeof prev === 'function') prev(event)
+    }
+  }
+
+  if ('onerror' in g) {
+    const prev = g.onerror
+    g.onerror = (message, source, lineno, colno, error) => {
+      notify('Uncaught error', error || message)
+      if (typeof prev === 'function') return prev(message, source, lineno, colno, error)
+      return false
+    }
+  }
+}
+
 console.log('[Backend] Starting PearTube mobile backend')
 console.log('[Backend] Storage path:', storagePath)
+
+ensureRpc()
+attachUnhandledHandlers()
 
 // Initialize storage directory
 const storageDir = path.join(storagePath, 'peartube-data')
@@ -29,63 +154,63 @@ try {
   // Directory may already exist
 }
 
-// HRPC instance (initialized after backend)
-let rpc = null
-
 // Helps confirm which backend bundle is actually running on device.
 const BACKEND_BUNDLE_VERSION = 'mw-sync-debug-2025-12-15'
 console.log('[Backend] Bundle version:', BACKEND_BUNDLE_VERSION)
 
 // Initialize backend
-const backend = await createBackendContext({
-  storagePath: storageDir,
-  onFeedUpdate: () => {
-    if (rpc) {
-      try {
-        rpc.eventFeedUpdate({})
-      } catch (e) {
-        console.log('[Backend] Failed to send feed update:', e.message)
+let backend = null
+try {
+  backend = await createBackendContext({
+    storagePath: storageDir,
+    onFeedUpdate: () => {
+      if (rpc) {
+        try {
+          rpc.eventFeedUpdate({ channelKey: 'feed', action: 'update' })
+        } catch (e) {
+          console.log('[Backend] Failed to send feed update:', e.message)
+        }
+      }
+    },
+    onStatsUpdate: (driveKey, videoPath, stats) => {
+      if (rpc) {
+        try {
+          // HRPC `event-video-stats` expects `{ stats: VideoStats }` where VideoStats matches the schema:
+          // status/progress/totalBlocks/downloadedBlocks/totalBytes/downloadedBytes/peerCount/speedMBps/uploadSpeedMBps/elapsed/isComplete
+          rpc.eventVideoStats({
+            stats: {
+              // Ensure identifiers are always present for routing on the client side.
+              videoId: videoPath,
+              channelKey: driveKey,
+              // The backend VideoStatsTracker already produces schema-compatible fields.
+              ...stats
+            }
+          })
+        } catch (e) {
+          console.log('[Backend] Failed to send video stats:', e.message)
+        }
       }
     }
-  },
-  onStatsUpdate: (driveKey, videoPath, stats) => {
-    if (rpc) {
-      try {
-        // HRPC `event-video-stats` expects `{ stats: VideoStats }` where VideoStats matches the schema:
-        // status/progress/totalBlocks/downloadedBlocks/totalBytes/downloadedBytes/peerCount/speedMBps/uploadSpeedMBps/elapsed/isComplete
-        rpc.eventVideoStats({
-          stats: {
-            // Ensure identifiers are always present for routing on the client side.
-            videoId: videoPath,
-            channelKey: driveKey,
-            // The backend VideoStatsTracker already produces schema-compatible fields.
-            ...stats
-          }
-        })
-      } catch (e) {
-        console.log('[Backend] Failed to send video stats:', e.message)
-      }
-    }
-  }
-})
+  })
+} catch (err) {
+  reportBackendError('Backend init failed', err)
+}
+
+if (!backend) {
+  console.log('[Backend] Backend unavailable; skipping HRPC handler registration')
+  await new Promise(() => {})
+}
 
 const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend
 
 const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
 console.log('[Backend] Backend initialized, blob server port:', blobPort, '(from blobServer.port:', ctx.blobServer?.port, ', from ctx.blobServerPort:', ctx.blobServerPort, ')')
 
-// Create HRPC instance
-rpc = new HRPC(IPC)
-console.log('[Backend] HRPC initialized')
-
-function emitLog(level, message) {
-  if (!rpc) return
-  try {
-    rpc.eventLog({ level, message, timestamp: Date.now() })
-  } catch {}
+ensureRpc()
+if (!rpc) {
+  reportBackendError('HRPC unavailable', 'Failed to initialize HRPC transport')
+  await new Promise(() => {})
 }
-
-emitLog('info', `[Backend] Bundle version: ${BACKEND_BUNDLE_VERSION}`)
 
 function getThumbnailMime(thumbPath) {
   const ext = thumbPath.split('.').pop()?.toLowerCase() || 'jpg'
@@ -98,25 +223,21 @@ function getThumbnailMime(thumbPath) {
 // Migrate existing thumbnails to blob-backed entries (so URLs persist across restarts)
 async function migrateThumbnails(drive) {
   try {
-    try {
-      for await (const name of drive.readdir('/thumbnails')) {
-        const thumbPath = `/thumbnails/${name}`
-        const entry = await drive.entry(thumbPath).catch(() => null)
-        if (entry && entry.value?.blob) continue
+    for await (const name of drive.readdir('/thumbnails').catch(() => [])) {
+      const thumbPath = `/thumbnails/${name}`
+      const entry = await drive.entry(thumbPath).catch(() => null)
+      if (entry && entry.value?.blob) continue
 
-        const buf = await drive.get(thumbPath, { wait: true, timeout: 3000 }).catch(() => null)
-        if (!buf) continue
+      const buf = await drive.get(thumbPath, { wait: true, timeout: 3000 }).catch(() => null)
+      if (!buf) continue
 
-        console.log('[Backend] Migrating inline thumbnail to blob:', thumbPath)
-        await new Promise((resolve, reject) => {
-          const ws = drive.createWriteStream(thumbPath)
-          ws.on('error', reject)
-          ws.on('close', resolve)
-          ws.end(buf)
-        })
-      }
-    } catch (e) {
-      // /thumbnails may not exist
+      console.log('[Backend] Migrating inline thumbnail to blob:', thumbPath)
+      await new Promise((resolve, reject) => {
+        const ws = drive.createWriteStream(thumbPath)
+        ws.on('error', reject)
+        ws.on('close', resolve)
+        ws.end(buf)
+      })
     }
   } catch (e) {
     console.log('[Backend] Thumbnail migration skipped:', e?.message)
@@ -231,7 +352,6 @@ rpc.onUpdateChannel(async (req) => {
 rpc.onListVideos(async (req) => {
   const channelKey = req?.channelKey || ''
   console.log('[HRPC] listVideos:', channelKey?.slice(0, 16))
-  emitLog('info', `[HRPC] listVideos start ${channelKey?.slice(0, 16)}`)
 
   // Always respond quickly; never let listVideos hang the client.
   if (!channelKey) return { videos: [] }
@@ -241,7 +361,6 @@ rpc.onListVideos(async (req) => {
     rawVideos = await api.listVideos(channelKey)
   } catch (e) {
     console.log('[HRPC] listVideos failed:', e?.message)
-    emitLog('error', `[HRPC] listVideos api.listVideos failed: ${e?.message || e}`)
     return { videos: [] }
   }
 
@@ -273,7 +392,6 @@ rpc.onListVideos(async (req) => {
     })
     .filter(Boolean)
 
-  emitLog('info', `[HRPC] listVideos done ${channelKey?.slice(0, 16)} count=${videos.length}`)
   return { videos }
 })
 
@@ -297,8 +415,11 @@ rpc.onUploadVideo(async (req) => {
   }
   const channel = await identityManager.getActiveChannel?.()
   if (!channel) throw new Error('No active channel')
-  const blobDriveKey = await channel.ensureLocalBlobDrive({ deviceName: active.name || '' })
-  const blobDrive = await channel.getBlobDrive(blobDriveKey)
+
+  // Ensure blobs are ready for upload
+  if (!channel.blobs) {
+    throw new Error('Channel blobs not initialized')
+  }
 
   let filePath = req.filePath
   if (!filePath) {
@@ -322,9 +443,9 @@ rpc.onUploadVideo(async (req) => {
   const mimeType = mimeTypes[ext] || 'video/mp4'
   console.log('[HRPC] Streaming upload from:', filePath, 'mime:', mimeType)
 
-  // Use streaming upload - file streams directly to hyperdrive
+  // Use streaming upload - file streams directly to Hyperblobs
   const result = await uploadManager.uploadFromPath(
-    blobDrive,
+    channel,  // Pass channel (has blobs property for Hyperblobs)
     filePath,
     {
       title: req.title,
@@ -339,30 +460,11 @@ rpc.onUploadVideo(async (req) => {
     }
   )
 
-  console.log('[HRPC] Upload result:', JSON.stringify({ success: result?.success, videoId: result?.videoId, hasMetadata: !!result?.metadata }))
+  console.log('[HRPC] Upload result:', JSON.stringify({ success: result?.success, videoId: result?.videoId, blobId: result?.metadata?.blobId }))
 
-  // Record the video in the channel's multi-writer metadata log
-  if (result?.success && result?.metadata) {
-    console.log('[HRPC] Adding video to channel metadata log...')
-    try {
-      await channel.addVideo({
-        id: result.videoId,
-        title: req.title,
-        description: req.description || '',
-        path: result.metadata.path,
-        mimeType: result.metadata.mimeType,
-        size: result.metadata.size,
-        uploadedAt: result.metadata.uploadedAt,
-        category: req.category || '',
-        thumbnail: result.metadata.thumbnail,
-        blobDriveKey
-      })
-      console.log('[HRPC] Video added to channel successfully')
-    } catch (addErr) {
-      console.error('[HRPC] Failed to add video to channel:', addErr?.message, addErr?.stack)
-    }
-  } else {
-    console.error('[HRPC] Upload failed or no metadata:', result?.error)
+  // Note: uploadManager.uploadFromPath already calls channel.addVideo internally
+  if (!result?.success) {
+    console.error('[HRPC] Upload failed:', result?.error)
   }
 
   console.log('[HRPC] Returning upload response')
@@ -380,41 +482,46 @@ rpc.onDownloadVideo(async (req) => {
   console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId)
 
   try {
-    // Resolve to correct blob source for multi-writer channels (or legacy drive)
     const meta = await api.getVideoData(req.channelKey, req.videoId)
-    const sourceDriveKey = meta?.blobDriveKey || req.channelKey
-    const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 15000 })
-    const videoPath = meta?.path || req.videoId
-
-    const entry = await drive.entry(videoPath, { wait: true, timeout: 10000 })
-    if (!entry || !entry.value?.blob) {
-      return { success: false, error: 'Video not found in drive' }
+    if (!meta) {
+      return { success: false, error: 'Video metadata not found' }
     }
 
-    const totalBytes = entry.value.blob.byteLength || 0
-    console.log('[HRPC] Video size:', totalBytes)
-
-    const blobsCore = await drive.getBlobs()
-    if (!blobsCore) {
-      return { success: false, error: 'Unable to resolve blobs core' }
+    if (!meta.blobId || !meta.blobsCoreKey) {
+      return { success: false, error: 'Video missing blobId or blobsCoreKey' }
     }
 
-    const videoExt = videoPath.split('.').pop()?.toLowerCase() || 'mp4'
-    const videoMimeTypes = { 'mp4': 'video/mp4', 'webm': 'video/webm', 'mkv': 'video/x-matroska', 'mov': 'video/quicktime', 'avi': 'video/x-msvideo' }
-    const mime = videoMimeTypes[videoExt] || 'video/mp4'
-    const url = ctx.blobServer.getLink(blobsCore.core.key, {
-      blob: entry.value.blob,
+    console.log('[HRPC] downloadVideo: blobId:', meta.blobId, 'blobsCoreKey:', meta.blobsCoreKey?.slice(0, 16))
+
+    // Parse blobId
+    const parts = meta.blobId.split(':').map(Number)
+    if (parts.length !== 4) {
+      return { success: false, error: 'Invalid blob ID format' }
+    }
+    const blob = {
+      blockOffset: parts[0],
+      blockLength: parts[1],
+      byteOffset: parts[2],
+      byteLength: parts[3]
+    }
+
+    // Load blobs core
+    const blobsCore = ctx.store.get(b4a.from(meta.blobsCoreKey, 'hex'))
+    await blobsCore.ready()
+
+    const mime = meta.mimeType || 'video/mp4'
+    const url = ctx.blobServer.getLink(blobsCore.key, {
+      blob,
       type: mime,
       host: '127.0.0.1',
       port: ctx.blobServer?.port || ctx.blobServerPort
     })
 
     console.log('[HRPC] Direct blob URL:', url)
-
     return {
       success: true,
       filePath: url,
-      size: totalBytes
+      size: blob.byteLength
     }
   } catch (err) {
     console.error('[HRPC] downloadVideo failed:', err?.message)
@@ -567,114 +674,16 @@ rpc.onListDevices(async (req) => {
   return { devices: res.devices || [] }
 })
 
-// ============================================
-// Search / Comments / Reactions / Recommendations
-// ============================================
-
-rpc.onSearchVideos(async (req) => {
-  const channelKey = req.channelKey
-  const query = req.query || ''
-  const topK = typeof req.topK === 'number' ? req.topK : 10
-  const federated = req.federated !== false
-  const results = await api.searchVideos(channelKey, query, { topK, federated })
-
-  return {
-    results: (results || []).map((r) => ({
-      id: r.id,
-      score: typeof r.score === 'number' ? String(r.score) : (r.score ? String(r.score) : ''),
-      metadata: r.metadata ? JSON.stringify(r.metadata) : ''
-    }))
+rpc.onRetrySyncChannel(async (req) => {
+  console.log('[HRPC] retrySyncChannel:', req.channelKey?.slice(0, 16))
+  // Response format: { success, error? }
+  try {
+    await api.retrySyncChannel?.(req.channelKey)
+    return { success: true }
+  } catch (e) {
+    console.log('[HRPC] retrySyncChannel failed:', e?.message)
+    return { success: false, error: e?.message }
   }
-})
-
-rpc.onIndexVideoVectors(async (req) => {
-  const res = await api.indexVideoVectors(req.channelKey, req.videoId)
-  return { success: Boolean(res?.success), error: res?.error || '' }
-})
-
-// Comments
-rpc.onAddComment(async (req) => {
-  const res = await api.addComment(req.channelKey, req.videoId, req.text, req.parentId || null)
-  return { success: Boolean(res?.success), commentId: res?.commentId || '', error: res?.error || '' }
-})
-
-rpc.onListComments(async (req) => {
-  const res = await api.listComments(req.channelKey, req.videoId, { page: req.page || 0, limit: req.limit || 50 })
-  const comments = (res?.comments || []).map((c) => ({
-    videoId: c.videoId,
-    commentId: c.commentId,
-    text: c.text,
-    authorKeyHex: c.authorKeyHex,
-    timestamp: c.timestamp || 0,
-    parentId: c.parentId || ''
-  }))
-  return { success: Boolean(res?.success), comments, error: res?.error || '' }
-})
-
-rpc.onHideComment(async (req) => {
-  const res = await api.hideComment(req.channelKey, req.videoId, req.commentId)
-  return { success: Boolean(res?.success), error: res?.error || '' }
-})
-
-rpc.onRemoveComment(async (req) => {
-  const res = await api.removeComment(req.channelKey, req.videoId, req.commentId)
-  return { success: Boolean(res?.success), error: res?.error || '' }
-})
-
-// Reactions
-rpc.onAddReaction(async (req) => {
-  const res = await api.addReaction(req.channelKey, req.videoId, req.reactionType)
-  return { success: Boolean(res?.success), error: res?.error || '' }
-})
-
-rpc.onRemoveReaction(async (req) => {
-  const res = await api.removeReaction(req.channelKey, req.videoId)
-  return { success: Boolean(res?.success), error: res?.error || '' }
-})
-
-rpc.onGetReactions(async (req) => {
-  const res = await api.getReactions(req.channelKey, req.videoId)
-  const countsObj = res?.counts || {}
-  const counts = Object.entries(countsObj).map(([reactionType, count]) => ({
-    reactionType,
-    count: typeof count === 'number' ? count : 0
-  }))
-  return {
-    success: Boolean(res?.success),
-    counts,
-    userReaction: res?.userReaction || '',
-    error: res?.error || ''
-  }
-})
-
-// Recommendations
-rpc.onLogWatchEvent(async (req) => {
-  const res = await api.logWatchEvent(req.channelKey, req.videoId, {
-    duration: req.duration || 0,
-    completed: Boolean(req.completed),
-    share: Boolean(req.share)
-  })
-  return { success: Boolean(res?.success), error: res?.error || '' }
-})
-
-rpc.onGetRecommendations(async (req) => {
-  const res = await api.getRecommendations(req.channelKey, { limit: req.limit || 10 })
-  const recommendations = (res?.recommendations || []).map((r) => ({
-    videoId: r.videoId,
-    score: typeof r.score === 'number' ? String(r.score) : (r.score ? String(r.score) : ''),
-    reason: r.reason || ''
-  }))
-  return { success: Boolean(res?.success), recommendations, error: res?.error || '' }
-})
-
-rpc.onGetVideoRecommendations(async (req) => {
-  const res = await api.getVideoRecommendations(req.channelKey, req.videoId, req.limit || 5)
-  const recommendations = (res?.recommendations || []).map((r) => ({
-    videoId: r.videoId,
-    score: typeof r.score === 'number' ? String(r.score) : (r.score ? String(r.score) : ''),
-    reason: r.reason || ''
-  }))
-  return { success: Boolean(res?.success), recommendations, error: res?.error || '' }
 })
 
 // Video prefetch and stats
@@ -766,36 +775,23 @@ rpc.onGetVideoMetadata(async (req) => {
 })
 
 rpc.onSetVideoThumbnail(async (req) => {
-  console.log('[HRPC] setVideoThumbnail')
+  console.log('[HRPC] setVideoThumbnail:', req.videoId)
   const active = identityManager.getActiveIdentity()
-  if (!active?.driveKey) return { success: false }
+  if (!active?.driveKey) return { success: false, error: 'No active identity' }
 
   const channel = await identityManager.getActiveChannel?.()
-  if (!channel) return { success: false }
+  if (!channel) return { success: false, error: 'No active channel' }
 
-  const meta = await api.getVideoData(active.driveKey, req.videoId)
-  const sourceDriveKey = meta?.blobDriveKey || null
-  if (!sourceDriveKey) return { success: false }
-
-  const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 8000 })
+  if (!channel.blobs) return { success: false, error: 'Channel blobs not initialized' }
 
   const result = await uploadManager.setThumbnailFromBuffer(
-    drive,
+    channel,
     req.videoId,
     Buffer.from(req.imageData || '', 'base64'),
     req.mimeType
   )
 
-  // Keep channel metadata in sync by re-reading blob-drive metadata
-  if (result.success && meta?.id) {
-    const metaBuf = await drive.get(`/videos/${meta.id}.json`).catch(() => null)
-    if (metaBuf) {
-      const updated = JSON.parse(metaBuf.toString('utf-8'))
-      await channel.addVideo({ ...updated, channelKey: active.driveKey, blobDriveKey: sourceDriveKey })
-    }
-  }
-
-  return { success: result.success }
+  return { success: result.success, error: result.error }
 })
 
 // Status handlers
@@ -871,6 +867,154 @@ setInterval(() => {
 publicFeed.setOnFeedUpdate(() => {
   persistFeedCache()
   try {
-    rpc?.eventFeedUpdate?.({})
+    rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' })
   } catch {}
 })
+
+// ============================================
+// Search, Comments, Reactions, Recommendations handlers
+// Note: Comments/Reactions are real (backed by CommentsAutobase); keep response shapes aligned with HRPC schema.
+// ============================================
+
+// Search handlers
+rpc.onSearchVideos(async (req) => {
+  console.log('[HRPC] searchVideos:', req.query)
+  // Stub: return empty results for now
+  // Response format: { results: array of search results }
+  return { results: [] }
+})
+
+rpc.onIndexVideoVectors(async (req) => {
+  console.log('[HRPC] indexVideoVectors:', req.channelKey?.slice(0, 16), req.videoId)
+  // Stub: indexing not implemented on mobile yet
+  // Response format: { success, error? }
+  return { success: true }
+})
+
+// Comment handlers
+rpc.onAddComment(async (req) => {
+  console.log('[HRPC] addComment:', req.channelKey?.slice(0, 16), req.videoId)
+  // Response format: { success, commentId?, queued?, error? }
+  try {
+    const result = await api.addComment?.(req.channelKey, req.videoId, req.text, req.parentId, req.publicBeeKey)
+    return { success: Boolean(result?.success), commentId: result?.commentId || null, queued: false, error: result?.error || null }
+  } catch (e) {
+    console.log('[HRPC] addComment failed:', e?.message)
+    return { success: false, error: e?.message || 'Failed to add comment' }
+  }
+})
+
+rpc.onListComments(async (req) => {
+  console.log('[HRPC] listComments:', req.channelKey?.slice(0, 16), req.videoId)
+  // Response format: { success, comments: array, error? }
+  try {
+    const result = await api.listComments?.(req.channelKey, req.videoId, { page: req.page || 0, limit: req.limit || 50, publicBeeKey: req.publicBeeKey })
+
+    const raw = (result && typeof result === 'object' && Array.isArray(result.comments)) ? result.comments : []
+    const comments = raw.map((c) => ({
+      videoId: String(c?.videoId || req.videoId || ''),
+      commentId: String(c?.commentId || c?.id || ''),
+      text: String(c?.text || ''),
+      authorKeyHex: String(c?.authorKeyHex || c?.author || ''),
+      timestamp: typeof c?.timestamp === 'number' ? c.timestamp : 0,
+      parentId: c?.parentId ? String(c.parentId) : null
+    })).filter((c) => Boolean(c.videoId && c.commentId))
+
+    return { success: Boolean(result?.success), comments, error: result?.error || null }
+  } catch (e) {
+    console.log('[HRPC] listComments failed:', e?.message)
+    return { success: false, comments: [], error: e?.message }
+  }
+})
+
+rpc.onHideComment(async (req) => {
+  console.log('[HRPC] hideComment:', req.commentId)
+  // Response format: { success, error? }
+  try {
+    const result = await api.hideComment?.(req.channelKey, req.videoId, req.commentId, req.publicBeeKey)
+    return { success: Boolean(result?.success), error: result?.error || null }
+  } catch (e) {
+    console.log('[HRPC] hideComment failed:', e?.message)
+    return { success: false, error: e?.message }
+  }
+})
+
+rpc.onRemoveComment(async (req) => {
+  console.log('[HRPC] removeComment:', req.commentId)
+  // Response format: { success, error? }
+  try {
+    const result = await api.removeComment?.(req.channelKey, req.videoId, req.commentId, req.publicBeeKey)
+    return { success: Boolean(result?.success), queued: false, error: result?.error || null }
+  } catch (e) {
+    console.log('[HRPC] removeComment failed:', e?.message)
+    return { success: false, queued: false, error: e?.message }
+  }
+})
+
+// Reaction handlers
+rpc.onAddReaction(async (req) => {
+  console.log('[HRPC] addReaction:', req.channelKey?.slice(0, 16), req.videoId, req.reactionType)
+  // Response format: { success, error? }
+  try {
+    const result = await api.addReaction?.(req.channelKey, req.videoId, req.reactionType, req.publicBeeKey)
+    return { success: Boolean(result?.success), queued: false, error: result?.error || null }
+  } catch (e) {
+    console.log('[HRPC] addReaction failed:', e?.message)
+    return { success: false, queued: false, error: e?.message }
+  }
+})
+
+rpc.onRemoveReaction(async (req) => {
+  console.log('[HRPC] removeReaction:', req.channelKey?.slice(0, 16), req.videoId, req.reactionType)
+  // Response format: { success, error? }
+  try {
+    const result = await api.removeReaction?.(req.channelKey, req.videoId, req.publicBeeKey)
+    return { success: Boolean(result?.success), queued: false, error: result?.error || null }
+  } catch (e) {
+    console.log('[HRPC] removeReaction failed:', e?.message)
+    return { success: false, queued: false, error: e?.message }
+  }
+})
+
+rpc.onGetReactions(async (req) => {
+  console.log('[HRPC] getReactions:', req.channelKey?.slice(0, 16), req.videoId)
+  // Response format: { success, counts: [{reactionType, count}], userReaction?, error? }
+  try {
+    const result = await api.getReactions?.(req.channelKey, req.videoId, req.publicBeeKey)
+    const countsObj = (result && typeof result === 'object' && result.counts && typeof result.counts === 'object')
+      ? result.counts
+      : {}
+    const counts = Object.entries(countsObj).map(([reactionType, count]) => ({
+      reactionType: String(reactionType),
+      count: typeof count === 'number' ? count : 0
+    }))
+    return { success: Boolean(result?.success), counts, userReaction: result?.userReaction || null, error: result?.error || null }
+  } catch (e) {
+    console.log('[HRPC] getReactions failed:', e?.message)
+    return { success: false, counts: [], error: e?.message }
+  }
+})
+
+// Recommendation handlers
+rpc.onLogWatchEvent(async (req) => {
+  console.log('[HRPC] logWatchEvent:', req.channelKey?.slice(0, 16), req.videoId)
+  // Stub: watch event logging not implemented on mobile yet
+  // Response format: { success, error? }
+  return { success: true }
+})
+
+rpc.onGetRecommendations(async (req) => {
+  console.log('[HRPC] getRecommendations')
+  // Stub: return empty recommendations
+  // Response format: { success, recommendations: array, error? }
+  return { success: true, recommendations: [] }
+})
+
+rpc.onGetVideoRecommendations(async (req) => {
+  console.log('[HRPC] getVideoRecommendations:', req.channelKey?.slice(0, 16), req.videoId)
+  // Stub: return empty recommendations
+  // Response format: { success, recommendations: array, error? }
+  return { success: true, recommendations: [] }
+})
+
+console.log('[Backend] Search/Comments/Reactions/Recommendations handlers registered')

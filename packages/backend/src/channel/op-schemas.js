@@ -67,7 +67,8 @@ function validateUpdateChannel(op) {
   if (op.description !== undefined && typeof op.description !== 'string') {
     return { valid: false, error: 'update-channel.description must be a string' }
   }
-  if (op.avatar !== undefined && typeof op.avatar !== 'string') {
+  // Avatar may be a string path/URL, or null when unset.
+  if (op.avatar !== undefined && op.avatar !== null && typeof op.avatar !== 'string') {
     return { valid: false, error: 'update-channel.avatar must be a string' }
   }
   if (op.updatedAt !== undefined && typeof op.updatedAt !== 'number') {

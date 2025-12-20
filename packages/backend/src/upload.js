@@ -1,8 +1,13 @@
 /**
  * Video Upload Module
  *
- * Handles video uploads to Hyperdrive with progress tracking.
+ * Handles video uploads to Hyperblobs with progress tracking.
  * Works with both file paths (desktop) and buffers/streams (mobile).
+ *
+ * Architecture:
+ * - Video bytes are stored in the channel's shared Hyperblobs instance
+ * - Video metadata is stored in Autobase via channel.addVideo()
+ * - Blob IDs (4 numbers: blockOffset, blockLength, byteOffset, byteLength) are stored in metadata
  */
 
 import crypto from 'hypercore-crypto';
@@ -126,6 +131,7 @@ function getExtensionForMime(mimeType) {
 }
 
 /**
+ * @typedef {import('./channel/multi-writer-channel.js').MultiWriterChannel} MultiWriterChannel
  * @typedef {import('./types.js').StorageContext} StorageContext
  * @typedef {import('./types.js').VideoMetadata} VideoMetadata
  */
@@ -136,7 +142,8 @@ function getExtensionForMime(mimeType) {
  * @property {string} [description] - Video description
  * @property {string} [mimeType] - MIME type (defaults to video/mp4)
  * @property {number} [duration] - Video duration in seconds
- * @property {string} [thumbnail] - Thumbnail path in drive
+ * @property {string} [thumbnail] - Thumbnail blob ID
+ * @property {string} [category] - Video category
  */
 
 /**
@@ -170,17 +177,21 @@ export function createUploadManager({ ctx }) {
      * Upload video from a file path (desktop)
      * Requires fs module to be passed in for platform compatibility
      *
-     * @param {import('hyperdrive')} drive - Target Hyperdrive
+     * @param {MultiWriterChannel} channel - Target channel
      * @param {string} filePath - Path to video file
      * @param {UploadOptions} options - Upload options
      * @param {Object} fs - File system module (bare-fs or node fs)
      * @param {ProgressCallback} [onProgress] - Progress callback
      * @returns {Promise<UploadResult>}
      */
-    async uploadFromPath(drive, filePath, options, fs, onProgress) {
+    async uploadFromPath(channel, filePath, options, fs, onProgress) {
       const { title, description = '', mimeType: providedMimeType, duration, thumbnail, category = '' } = options;
 
       try {
+        if (!channel.blobs) {
+          throw new Error('Channel blobs not initialized');
+        }
+
         const videoId = b4a.toString(crypto.randomBytes(16), 'hex');
 
         // Get file size
@@ -188,90 +199,101 @@ export function createUploadManager({ ctx }) {
         const fileSize = stat.size;
 
         // Detect MIME type from file magic bytes (first 4KB is enough)
+        // Use chunked read to avoid issues with large files in bare runtime
         const headerSize = Math.min(4100, fileSize);
-        const fd = fs.openSync(filePath, 'r');
-        const headerBuffer = b4a.alloc(headerSize);
-        fs.readSync(fd, headerBuffer, 0, headerSize, 0);
-        fs.closeSync(fd);
+        let headerBuffer;
+
+        if (fs.createReadStream) {
+          // Use streaming for header detection
+          headerBuffer = await new Promise((resolve, reject) => {
+            const chunks = [];
+            let bytesRead = 0;
+            const stream = fs.createReadStream(filePath, { start: 0, end: headerSize - 1 });
+            stream.on('data', chunk => {
+              chunks.push(chunk);
+              bytesRead += chunk.length;
+            });
+            stream.on('end', () => resolve(b4a.concat(chunks)));
+            stream.on('error', reject);
+          });
+        } else {
+          // Fallback for environments without createReadStream
+          const fd = fs.openSync(filePath, 'r');
+          headerBuffer = b4a.alloc(headerSize);
+          fs.readSync(fd, headerBuffer, 0, headerSize, 0);
+          fs.closeSync(fd);
+        }
 
         const detectedMimeType = detectMimeType(headerBuffer);
         const mimeType = detectedMimeType || providedMimeType || 'video/mp4';
-        const ext = getExtensionForMime(mimeType);
-
-        const videoPath = `/videos/${videoId}.${ext}`;
-        const metaPath = `/videos/${videoId}.json`;
 
         console.log(`[Upload] Starting: ${filePath} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
 
-        // Stream file to hyperdrive with larger buffer for network drives
-        // Higher highWaterMark helps with slow network sources by buffering more data
-        const readStream = fs.createReadStream(filePath, { highWaterMark: 1024 * 1024 }); // 1MB buffer
-        const writeStream = drive.createWriteStream(videoPath);
-
-        let bytesWritten = 0;
-        let lastProgressUpdate = 0;
         const startTime = Date.now();
-        let lastBytes = 0;
-        let lastSpeedCheck = startTime;
-        let currentSpeed = 0;
+        let bytesWritten = 0;
+        let lastProgressUpdate = Date.now();
 
-        await new Promise((resolve, reject) => {
-          writeStream.on('close', resolve);
-          writeStream.on('error', reject);
-          readStream.on('error', reject);
+        // Use streaming upload for large files
+        const blobResult = await new Promise((resolve, reject) => {
+          const writeStream = channel.blobs.createWriteStream();
+          const readStream = fs.createReadStream(filePath);
 
           readStream.on('data', (chunk) => {
             bytesWritten += chunk.length;
             const now = Date.now();
-
-            // Calculate speed every 500ms for smoother estimates
-            const timeSinceLastSpeed = now - lastSpeedCheck;
-            if (timeSinceLastSpeed >= 500) {
-              const bytesSinceLastSpeed = bytesWritten - lastBytes;
-              currentSpeed = (bytesSinceLastSpeed / timeSinceLastSpeed) * 1000; // bytes/sec
-              lastBytes = bytesWritten;
-              lastSpeedCheck = now;
-            }
-
-            // Throttle progress updates to every 100ms
-            if (onProgress && (now - lastProgressUpdate > 100 || bytesWritten === fileSize)) {
+            // Update progress every 500ms to avoid flooding
+            if (onProgress && (now - lastProgressUpdate > 500 || bytesWritten === fileSize)) {
               const progress = Math.round((bytesWritten / fileSize) * 100);
-              const remainingBytes = fileSize - bytesWritten;
-              const eta = currentSpeed > 0 ? Math.round(remainingBytes / currentSpeed) : 0;
-
-              onProgress(progress, bytesWritten, fileSize, {
-                speed: currentSpeed,
-                eta: eta
-              });
+              const elapsed = (now - startTime) / 1000;
+              const speed = elapsed > 0 ? bytesWritten / elapsed : 0;
+              const remaining = fileSize - bytesWritten;
+              const eta = speed > 0 ? remaining / speed : 0;
+              onProgress(progress, bytesWritten, fileSize, { speed, eta });
               lastProgressUpdate = now;
             }
+          });
+
+          readStream.on('error', reject);
+          writeStream.on('error', reject);
+          writeStream.on('close', () => {
+            // Format blob ID as string like putBlob does
+            const id = writeStream.id;
+            const idStr = `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`;
+            resolve({ id: idStr, ...id });
           });
 
           readStream.pipe(writeStream);
         });
 
+        if (onProgress) {
+          onProgress(100, fileSize, fileSize, { speed: 0, eta: 0 });
+        }
+
         const totalTime = (Date.now() - startTime) / 1000;
         const avgSpeed = fileSize / totalTime;
         console.log(`[Upload] Transfer complete in ${totalTime.toFixed(1)}s (avg ${(avgSpeed / 1024 / 1024).toFixed(2)} MB/s)`);
 
-        // Create video metadata with detected MIME type
+        // Create video metadata and store in Autobase
+        // Ensure all string fields are actually strings to pass validation
         const metadata = {
           id: videoId,
-          title,
-          description,
-          path: videoPath,
-          mimeType,  // Detected from magic bytes
+          title: String(title || ''),
+          description: String(description || ''),
+          mimeType: String(mimeType || 'video/mp4'),
           size: fileSize,
           uploadedAt: Date.now(),
-          channelKey: b4a.toString(drive.key, 'hex'),
+          uploadedBy: channel.localWriterKeyHex,
+          blobId: blobResult.id,
+          blobsCoreKey: channel.blobsKeyHex, // Which device's blobs core has this video
           duration,
           thumbnail,
-          category
+          category: String(category || '')
         };
 
-        await drive.put(metaPath, Buffer.from(JSON.stringify(metadata)));
+        // Store metadata in Autobase
+        await channel.addVideo(metadata);
 
-        console.log('[Upload] Complete:', videoId, 'MIME:', mimeType);
+        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
 
         return {
           success: true,
@@ -290,16 +312,20 @@ export function createUploadManager({ ctx }) {
     /**
      * Upload video from a buffer (mobile)
      *
-     * @param {import('hyperdrive')} drive - Target Hyperdrive
+     * @param {MultiWriterChannel} channel - Target channel
      * @param {Buffer} buffer - Video data buffer
      * @param {UploadOptions} options - Upload options
      * @param {ProgressCallback} [onProgress] - Progress callback
      * @returns {Promise<UploadResult>}
      */
-    async uploadFromBuffer(drive, buffer, options, onProgress) {
+    async uploadFromBuffer(channel, buffer, options, onProgress) {
       const { title, description = '', mimeType: providedMimeType, duration, thumbnail, category = '' } = options;
 
       try {
+        if (!channel.blobs) {
+          throw new Error('Channel blobs not initialized');
+        }
+
         const videoId = b4a.toString(crypto.randomBytes(16), 'hex');
         const fileSize = buffer.length;
 
@@ -307,38 +333,37 @@ export function createUploadManager({ ctx }) {
         const headerBuffer = buffer.subarray(0, Math.min(4100, fileSize));
         const detectedMimeType = detectMimeType(headerBuffer);
         const mimeType = detectedMimeType || providedMimeType || 'video/mp4';
-        const ext = getExtensionForMime(mimeType);
-
-        const videoPath = `/videos/${videoId}.${ext}`;
-        const metaPath = `/videos/${videoId}.json`;
 
         console.log(`[Upload] Starting buffer upload (${(fileSize / 1024 / 1024).toFixed(2)} MB), MIME: ${mimeType}`);
 
-        // Write buffer to hyperdrive
-        await drive.put(videoPath, buffer);
+        // Store video bytes in Hyperblobs
+        const blobResult = await channel.putBlob(buffer);
 
         if (onProgress) {
           onProgress(100, fileSize, fileSize);
         }
 
-        // Create video metadata with detected MIME type
+        // Create video metadata and store in Autobase
+        // Ensure all string fields are actually strings to pass validation
         const metadata = {
           id: videoId,
-          title,
-          description,
-          path: videoPath,
-          mimeType,  // Detected from magic bytes
+          title: String(title || ''),
+          description: String(description || ''),
+          mimeType: String(mimeType || 'video/mp4'),
           size: fileSize,
           uploadedAt: Date.now(),
-          channelKey: b4a.toString(drive.key, 'hex'),
+          uploadedBy: channel.localWriterKeyHex,
+          blobId: blobResult.id,
+          blobsCoreKey: channel.blobsKeyHex, // Which device's blobs core has this video
           duration,
           thumbnail,
-          category
+          category: String(category || '')
         };
 
-        await drive.put(metaPath, Buffer.from(JSON.stringify(metadata)));
+        // Store metadata in Autobase
+        await channel.addVideo(metadata);
 
-        console.log('[Upload] Complete:', videoId, 'MIME:', mimeType);
+        console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
 
         return {
           success: true,
@@ -355,117 +380,34 @@ export function createUploadManager({ ctx }) {
     },
 
     /**
-     * Upload video using streaming writes (for large files)
-     *
-     * @param {import('hyperdrive')} drive - Target Hyperdrive
-     * @param {UploadOptions} options - Upload options
-     * @param {number} totalSize - Expected total size in bytes
-     * @returns {{writeStream: any, videoId: string, videoPath: string, finalize: () => Promise<UploadResult>}}
-     */
-    createUploadStream(drive, options, totalSize) {
-      const { title, description = '', mimeType = 'video/mp4', duration, thumbnail } = options;
-
-      const videoId = b4a.toString(crypto.randomBytes(16), 'hex');
-      // Preserve original format extension for proper codec handling
-      const ext = mimeType.includes('webm') ? 'webm' :
-                  mimeType.includes('matroska') ? 'mkv' :
-                  mimeType.includes('quicktime') ? 'mov' :
-                  mimeType.includes('x-msvideo') ? 'avi' : 'mp4';
-      const videoPath = `/videos/${videoId}.${ext}`;
-      const metaPath = `/videos/${videoId}.json`;
-
-      const writeStream = drive.createWriteStream(videoPath);
-
-      const finalize = async () => {
-        try {
-          // Create video metadata
-          const metadata = {
-            id: videoId,
-            title,
-            description,
-            path: videoPath,
-            mimeType,
-            size: totalSize,
-            uploadedAt: Date.now(),
-            channelKey: b4a.toString(drive.key, 'hex'),
-            duration,
-            thumbnail
-          };
-
-          await drive.put(metaPath, Buffer.from(JSON.stringify(metadata)));
-
-          console.log('[Upload] Finalized:', videoId);
-
-          return {
-            success: true,
-            videoId,
-            metadata
-          };
-        } catch (err) {
-          console.error('[Upload] Finalize failed:', err.message);
-          return {
-            success: false,
-            error: err.message
-          };
-        }
-      };
-
-      return {
-        writeStream,
-        videoId,
-        videoPath,
-        finalize
-      };
-    },
-
-    /**
      * Set video thumbnail from a buffer
      *
-     * @param {import('hyperdrive')} drive - Target Hyperdrive
+     * @param {MultiWriterChannel} channel - Target channel
      * @param {string} videoId - Video ID
      * @param {Buffer} buffer - Image data buffer
      * @param {string} [mimeType='image/jpeg'] - Image MIME type
-     * @returns {Promise<{success: boolean, thumbnailUrl?: string, path?: string, error?: string}>}
+     * @returns {Promise<{success: boolean, thumbnailBlobId?: string, error?: string}>}
      */
-    async setThumbnailFromBuffer(drive, videoId, buffer, mimeType = 'image/jpeg') {
+    async setThumbnailFromBuffer(channel, videoId, buffer, mimeType = 'image/jpeg') {
       try {
-        const ext = mimeType.includes('png') ? 'png' :
-                    mimeType.includes('webp') ? 'webp' :
-                    mimeType.includes('gif') ? 'gif' : 'jpg';
-        const thumbnailPath = `/thumbnails/${videoId}.${ext}`;
+        if (!channel.blobs) {
+          throw new Error('Channel blobs not initialized');
+        }
 
-        // Write via createWriteStream to ensure a blob entry (avoids inline values that break URL resolution)
-        await new Promise((resolve, reject) => {
-          const ws = drive.createWriteStream(thumbnailPath);
-          ws.on('error', reject);
-          ws.on('close', resolve);
-          ws.end(buffer);
+        // Store thumbnail in Hyperblobs
+        const blobResult = await channel.putBlob(buffer);
+        console.log('[Upload] Thumbnail saved, blobId:', blobResult.id);
+
+        // Update video metadata with thumbnail info using updateVideo method
+        await channel.updateVideo(videoId, {
+          thumbnailBlobId: blobResult.id,
+          thumbnailBlobsCoreKey: channel.blobsKeyHex
         });
-        console.log('[Upload] Thumbnail saved:', thumbnailPath);
-
-        // Update video metadata with thumbnail path
-        const metaPath = `/videos/${videoId}.json`;
-        const metaBuf = await drive.get(metaPath);
-        if (metaBuf) {
-          const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
-          meta.thumbnail = thumbnailPath;
-          await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-          console.log('[Upload] Updated video metadata with thumbnail:', thumbnailPath);
-        }
-
-        // Flush drive to persist to disk
-        try {
-          if (drive.flush) {
-            await drive.flush();
-            console.log('[Upload] Drive flushed after thumbnail save');
-          }
-        } catch (flushErr) {
-          console.log('[Upload] Drive flush warning:', flushErr.message);
-        }
+        console.log('[Upload] Updated video metadata with thumbnail');
 
         return {
           success: true,
-          path: thumbnailPath
+          thumbnailBlobId: blobResult.id
         };
       } catch (err) {
         console.error('[Upload] Set thumbnail failed:', err.message);
@@ -474,39 +416,18 @@ export function createUploadManager({ ctx }) {
     },
 
     /**
-     * Delete a video from the drive
+     * Delete a video from the channel
+     * Note: In Hyperblobs, the actual blob data cannot be deleted (it's content-addressed),
+     * but removing the metadata makes the blob unreferenced.
      *
-     * @param {import('hyperdrive')} drive - Target Hyperdrive
+     * @param {MultiWriterChannel} channel - Target channel
      * @param {string} videoId - Video ID to delete
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async deleteVideo(drive, videoId) {
+    async deleteVideo(channel, videoId) {
       try {
-        // Find the video metadata to get the path
-        const metaPath = `/videos/${videoId}.json`;
-        const metaBuf = await drive.get(metaPath);
-
-        if (!metaBuf) {
-          return { success: false, error: 'Video not found' };
-        }
-
-        const metadata = JSON.parse(b4a.toString(metaBuf));
-
-        // Delete video file and metadata
-        await drive.del(metadata.path);
-        await drive.del(metaPath);
-
-        // Delete thumbnail if exists
-        if (metadata.thumbnail) {
-          try {
-            await drive.del(metadata.thumbnail);
-          } catch (e) {
-            // Thumbnail may not exist
-          }
-        }
-
+        await channel.deleteVideo(videoId);
         console.log('[Upload] Deleted:', videoId);
-
         return { success: true };
       } catch (err) {
         console.error('[Upload] Delete failed:', err.message);

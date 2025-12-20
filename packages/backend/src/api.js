@@ -6,7 +6,8 @@
  */
 
 import b4a from 'b4a';
-import { loadDrive, createDrive, getVideoUrl, waitForDriveSync, loadChannel, pairDevice as pairChannelDevice } from './storage.js';
+import crypto from 'hypercore-crypto';
+import { loadDrive, createDrive, getVideoUrl, getVideoUrlFromBlob, waitForDriveSync, loadChannel, loadPublicBee, pairDevice as pairChannelDevice } from './storage.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
@@ -103,7 +104,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       console.log('[API] GET_CHANNEL:', driveKey?.slice(0, 16));
       try {
         if (await isMultiWriterChannelKey(driveKey)) {
-          const channel = await loadChannel(ctx, driveKey)
+        const channel = await loadChannel(ctx, driveKey)
           const meta = await channel.getMetadata()
           return {
             name: meta?.name || 'Channel',
@@ -130,13 +131,13 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             const channel = await loadChannel(ctx, driveKey).catch(() => null)
             if (channel) {
               await markAsMultiWriterChannel(driveKey)
-              const meta = await channel.getMetadata().catch(() => null)
-              return {
-                name: meta?.name || 'Channel',
-                description: meta?.description || '',
-                avatar: meta?.avatar || null,
+        const meta = await channel.getMetadata().catch(() => null)
+        return {
+          name: meta?.name || 'Channel',
+          description: meta?.description || '',
+          avatar: meta?.avatar || null,
                 createdAt: meta?.createdAt || Date.now(),
-                publicKey: meta?.createdBy || null
+          publicKey: meta?.createdBy || null
               }
             }
           }
@@ -159,9 +160,9 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       console.log('[API] UPDATE_CHANNEL:', driveKey?.slice(0, 16));
       try {
         if (await isMultiWriterChannelKey(driveKey)) {
-          const channel = await loadChannel(ctx, driveKey)
-          await channel.updateMetadata({ name, description: description || '', avatar: null })
-          return { success: true }
+        const channel = await loadChannel(ctx, driveKey)
+        await channel.updateMetadata({ name, description: description || '', avatar: null })
+        return { success: true }
         }
 
         const drive = ctx.drives.get(driveKey);
@@ -234,7 +235,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           if (entry) {
             metaBuf = await drive.get('/channel.json');
           }
-        } catch (err) {
+          } catch (err) {
           console.log('[API] Entry wait error:', err.message, 'trying direct get...');
           metaBuf = await drive.get('/channel.json');
         }
@@ -281,15 +282,15 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             const videos = await channel.listVideos().catch(() => [])
             const result = {
               driveKey,
-              name: meta?.name || 'Channel',
-              description: meta?.description || '',
-              avatar: meta?.avatar || null,
+          name: meta?.name || 'Channel',
+          description: meta?.description || '',
+          avatar: meta?.avatar || null,
               createdAt: meta?.createdAt || Date.now(),
-              publicKey: meta?.createdBy || null,
-              videoCount: videos?.length || 0
-            }
+          publicKey: meta?.createdBy || null,
+          videoCount: videos?.length || 0
+        }
             channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
-            return cloneObject(result)
+        return cloneObject(result)
           }
         }
         console.error('[API] GET_CHANNEL_META error:', err.message);
@@ -310,14 +311,48 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     /**
      * List videos in a channel
      * @param {string} driveKey
+     * @param {string} [publicBeeKey] - Optional PublicBee key for fast viewer access
      * @returns {Promise<VideoMetadata[]>}
      */
-    async listVideos(driveKey) {
-      console.log('[API] LIST_VIDEOS for:', driveKey?.slice(0, 16));
+    async listVideos(driveKey, publicBeeKey) {
+      console.log('[API] LIST_VIDEOS for:', driveKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16));
       try {
         const cached = listVideosCache.get(driveKey)
         if (cached && (Date.now() - cached.ts) < LIST_VIDEOS_CACHE_TTL_MS) {
           return cloneArrayOfObjects(cached.value)
+        }
+
+        // FAST PATH: If publicBeeKey is provided, read directly from PublicBee
+        // This is the preferred path for public feed viewers - no Autobase sync needed
+        // IMPORTANT: If publicBeeKey is provided, this is definitely a multi-writer channel,
+        // so we should NEVER fall through to the Hyperdrive path.
+        if (publicBeeKey) {
+          console.log('[API] LIST_VIDEOS: using PublicBee fast path')
+          // Mark as multi-writer since PublicBee is only used with multi-writer channels
+          await markAsMultiWriterChannel(driveKey)
+          try {
+            const publicBee = await loadPublicBee(ctx, publicBeeKey)
+            const videos = await publicBee.listVideos()
+            console.log('[API] LIST_VIDEOS: PublicBee returned', videos?.length, 'videos')
+            const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
+            listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+            return cloneArrayOfObjects(result)
+          } catch (err) {
+            console.log('[API] LIST_VIDEOS: PublicBee fast path failed:', err.message, '- trying channel directly')
+            // If PublicBee fails, try loading the channel directly (for paired devices or when PublicBee isn't synced)
+            try {
+              const channel = await loadChannel(ctx, driveKey)
+              const videos = await channel.listVideos()
+              console.log('[API] LIST_VIDEOS: channel fallback returned', videos?.length, 'videos')
+              const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
+              listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+              return cloneArrayOfObjects(result)
+            } catch (channelErr) {
+              console.log('[API] LIST_VIDEOS: channel fallback also failed:', channelErr.message)
+              // Return empty - do NOT fall through to Hyperdrive since this is a multi-writer channel
+              return []
+            }
+          }
         }
 
         const isMW = await isMultiWriterChannelKey(driveKey)
@@ -336,10 +371,11 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           return cloneArrayOfObjects(result)
         }
 
-        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 8000 });
-        const videos = [];
-
+        // Try loading as Hyperdrive (legacy channels)
         try {
+          const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 8000 });
+          const videos = [];
+
           for await (const entry of drive.readdir('/videos')) {
             if (entry.endsWith('.json')) {
               const metaBuf = await drive.get(`/videos/${entry}`);
@@ -350,6 +386,11 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               }
             }
           }
+
+          const result = videos.sort((a, b) => b.uploadedAt - a.uploadedAt);
+          console.log('[API] Found', result.length, 'videos');
+          listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+          return cloneArrayOfObjects(result)
         } catch (e) {
           console.log('[API] Error listing videos:', e.message);
           // If the key we got from discovery is actually an Autobase channel key, Hyperdrive will throw a decoding error.
@@ -366,12 +407,9 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               return cloneArrayOfObjects(result)
             }
           }
+          // Return empty if all methods fail
+          return []
         }
-
-        const result = videos.sort((a, b) => b.uploadedAt - a.uploadedAt);
-        console.log('[API] Found', result.length, 'videos');
-        listVideosCache.set(driveKey, { ts: Date.now(), value: result })
-        return cloneArrayOfObjects(result)
       } catch (err) {
         console.error('[API] LIST_VIDEOS error:', err.message);
         return [];
@@ -382,41 +420,73 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * Get video stream URL
      * @param {string} driveKey
      * @param {string} videoPath
+     * @param {string} [publicBeeKey] - PublicBee key for fast viewer access
      * @returns {Promise<{url: string}>}
      */
-    async getVideoUrl(driveKey, videoPath) {
-      console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath);
+    async getVideoUrl(driveKey, videoPath, publicBeeKey) {
+      console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath, 'publicBeeKey:', publicBeeKey?.slice(0, 16));
 
-      if (await isMultiWriterChannelKey(driveKey)) {
+      // Use PublicBee fast path if available (for viewers)
+      if (publicBeeKey || await isMultiWriterChannelKey(driveKey)) {
         console.log('[API] getVideoUrl: is multi-writer channel');
-        const meta = await this.getVideoData(driveKey, videoPath)
-        console.log('[API] getVideoUrl meta:', meta?.id, 'blobDriveKey:', meta?.blobDriveKey?.slice(0, 16), 'path:', meta?.path)
+      const meta = await this.getVideoData(driveKey, videoPath, publicBeeKey)
+        console.log('[API] getVideoUrl meta:', meta?.id, 'blobId:', meta?.blobId, 'blobsCoreKey:', meta?.blobsCoreKey?.slice(0, 16))
         if (!meta) {
           console.log('[API] getVideoUrl: no metadata found');
           throw new Error('Video metadata not found')
         }
-        const blobDriveKey = meta.blobDriveKey || meta.blobDrive || null
-        if (!blobDriveKey || !meta.path) {
-          console.log('[API] getVideoUrl: missing blobDriveKey or path');
-          throw new Error('Video is missing blob location (not synced yet)')
+
+      if (!meta.blobId) {
+          console.log('[API] getVideoUrl: missing blobId');
+          throw new Error('Video is missing blobId (not synced yet)')
         }
 
-        // Get blob drive from channel (uses channel's corestore and blobDrives cache)
+        // Fast path: if we have blobsCoreKey from PublicBee, use it directly
+        if (meta.blobsCoreKey) {
+          console.log('[API] getVideoUrl: using blobsCoreKey directly from metadata');
+          const blobsKeyHex = meta.blobsCoreKey;
+          
+          // Join swarm for blobs core to ensure we can download from peers
+          if (ctx.swarm) {
+            try {
+              const keyBuf = b4a.from(blobsKeyHex, 'hex')
+              const discoveryKey = crypto.discoveryKey(keyBuf)
+              ctx.swarm.join(discoveryKey)
+              console.log('[API] getVideoUrl: joined swarm for blobs core:', blobsKeyHex.slice(0, 16));
+            } catch (err) {
+              console.log('[API] getVideoUrl: swarm join error:', err?.message);
+            }
+          }
+          
+          console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
+          return getVideoUrlFromBlob(ctx, blobsKeyHex, meta.blobId, { mimeType: meta.mimeType })
+        }
+
+        // Fallback: load channel to get blob entry (slower)
+        console.log('[API] getVideoUrl: loading channel for blob entry (slow path)');
         const channel = await loadChannel(ctx, driveKey)
         if (!channel) {
           console.log('[API] getVideoUrl: failed to load channel');
           throw new Error('Failed to load channel')
         }
 
-        // Join swarm for blob drive if it's from another device
-        if (channel.joinBlobDrive) {
-          await channel.joinBlobDrive(blobDriveKey).catch(() => {})
+        const blobEntry = await channel.getBlobEntry(meta)
+        if (!blobEntry?.blobsKey) {
+          console.log('[API] getVideoUrl: failed to get blob entry');
+          throw new Error('Video blob not accessible (not synced yet)')
         }
 
-        // Get the blob drive from the channel's cache
-        const blobDrive = await channel.getBlobDrive(blobDriveKey)
-        console.log('[API] getVideoUrl: got blob drive from channel, calling storage.getVideoUrl with blobDriveKey:', blobDriveKey?.slice(0, 16), 'path:', meta.path);
-        return getVideoUrl(ctx, blobDriveKey, meta.path, { drive: blobDrive })
+        // Join swarm for blobs core to ensure we can download from peers
+        if (ctx.swarm && blobEntry.blobsKey) {
+          try {
+            const discoveryKey = crypto.discoveryKey(blobEntry.blobsKey)
+            ctx.swarm.join(discoveryKey)
+          } catch {}
+        }
+
+        const blobsKeyHex = b4a.toString(blobEntry.blobsKey, 'hex')
+        console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
+        return getVideoUrlFromBlob(ctx, blobsKeyHex, blobEntry.blobId, { mimeType: meta.mimeType })
       }
       // Legacy Hyperdrive channels: accept either a full path (/videos/{id}.ext) or a video id.
       let resolvedPath = videoPath
@@ -430,31 +500,125 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     },
 
     /**
+     * Download video to a local file path
+     * @param {string} channelKey - Channel key (hex)
+     * @param {string} videoId - Video ID
+     * @param {string} destPath - Destination file path
+     * @param {Object} fsModule - File system module (bare-fs or node:fs)
+     * @param {Function} [onProgress] - Progress callback (progress, bytesWritten, totalBytes)
+     * @returns {Promise<{success: boolean, filePath?: string, error?: string}>}
+     */
+    async downloadVideo(channelKey, videoId, destPath, fsModule, onProgress) {
+      console.log('[API] downloadVideo:', channelKey?.slice(0, 16), videoId, 'to:', destPath);
+      try {
+        const meta = await this.getVideoData(channelKey, videoId);
+        if (!meta) {
+          return { success: false, error: 'Video metadata not found' };
+        }
+
+        if (!meta.blobId || !meta.blobsCoreKey) {
+          return { success: false, error: 'Video missing blobId or blobsCoreKey' };
+        }
+
+        // Parse blobId
+        const parts = meta.blobId.split(':').map(Number);
+        if (parts.length !== 4) {
+          return { success: false, error: 'Invalid blob ID format' };
+        }
+        const blob = {
+          blockOffset: parts[0],
+          blockLength: parts[1],
+          byteOffset: parts[2],
+          byteLength: parts[3]
+        };
+
+        // Load channel and get blobs core
+        const channel = await loadChannel(ctx, channelKey);
+        if (!channel) {
+          return { success: false, error: 'Failed to load channel' };
+        }
+
+        const blobEntry = await channel.getBlobEntry(meta);
+        if (!blobEntry?.blobsKey) {
+          return { success: false, error: 'Video blob not accessible (not synced yet)' };
+        }
+
+        // Load the blobs Hypercore
+        const blobsCore = ctx.store.get(blobEntry.blobsKey);
+        await blobsCore.ready();
+
+        // Create Hyperblobs reader
+        const Hyperblobs = (await import('hyperblobs')).default;
+        const blobs = new Hyperblobs(blobsCore);
+        await blobs.ready();
+
+        // Stream the blob to the destination file
+        const totalBytes = blob.byteLength;
+        let bytesWritten = 0;
+
+        const readStream = blobs.createReadStream(blob);
+        const writeStream = fsModule.createWriteStream(destPath);
+
+        await new Promise((resolve, reject) => {
+          readStream.on('data', (chunk) => {
+            bytesWritten += chunk.length;
+            if (onProgress) {
+              const progress = Math.round((bytesWritten / totalBytes) * 100);
+              onProgress(progress, bytesWritten, totalBytes);
+            }
+          });
+          readStream.on('error', reject);
+          writeStream.on('error', reject);
+          writeStream.on('close', resolve);
+          readStream.pipe(writeStream);
+        });
+
+        console.log('[API] downloadVideo complete:', destPath);
+        return { success: true, filePath: destPath, size: totalBytes };
+      } catch (err) {
+        console.error('[API] downloadVideo failed:', err?.message);
+        return { success: false, error: err?.message || 'Download failed' };
+      }
+    },
+
+    /**
      * Get video metadata by ID or path
      * @param {string} driveKey
      * @param {string} videoId - Video ID or full path
+     * @param {string} [publicBeeKey] - PublicBee key for fast viewer access
      * @returns {Promise<VideoMetadata|null>}
      */
-    async getVideoData(driveKey, videoId) {
-      console.log('[API] GET_VIDEO_DATA:', driveKey?.slice(0, 16), videoId);
+    async getVideoData(driveKey, videoId, publicBeeKey) {
+      console.log('[API] GET_VIDEO_DATA:', driveKey?.slice(0, 16), videoId, 'publicBeeKey:', publicBeeKey?.slice(0, 16));
       try {
+        // Parse videoId to extract the actual ID
+        let id = videoId
+        if (typeof videoId === 'string' && videoId.startsWith('/videos/')) {
+          const match = videoId.match(/\/videos\/([^.]+)/)
+          if (match) id = match[1]
+        }
+
+        // Fast path: use PublicBee if we have the key (for viewers)
+        if (publicBeeKey) {
+          console.log('[API] GET_VIDEO_DATA: using PublicBee fast path')
+          const publicBee = await loadPublicBee(ctx, publicBeeKey)
+          const v = await publicBee.getVideo(id)
+          console.log('[API] GET_VIDEO_DATA PublicBee result:', v?.id, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
+          if (v) return { ...v, channelKey: driveKey }
+          // Fall through to other methods if not found
+        }
+
         const isMW = await isMultiWriterChannelKey(driveKey)
         console.log('[API] GET_VIDEO_DATA isMultiWriter:', isMW)
         if (isMW) {
           const channel = await loadChannel(ctx, driveKey)
           console.log('[API] GET_VIDEO_DATA channel loaded')
-
-          let id = videoId
-          if (typeof videoId === 'string' && videoId.startsWith('/videos/')) {
-            const match = videoId.match(/\/videos\/([^.]+)/)
-            if (match) id = match[1]
-          }
           console.log('[API] GET_VIDEO_DATA looking up id:', id)
 
           const v = await channel.getVideo(id)
-          console.log('[API] GET_VIDEO_DATA result:', v?.id, 'blobDriveKey:', v?.blobDriveKey?.slice(0, 16), 'path:', v?.path)
-          if (!v) return null
-          return { ...v, channelKey: driveKey }
+          console.log('[API] GET_VIDEO_DATA result:', v?.id, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
+        if (!v) return null
+        return { ...v, channelKey: driveKey }
         }
 
         const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 5000 });
@@ -566,60 +730,57 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async getVideoThumbnail(driveKey, videoId) {
       console.log('[API] GET_VIDEO_THUMBNAIL:', driveKey?.slice(0, 16), videoId);
       try {
-        let sourceDriveKey = driveKey
-        let resolvedId = videoId
-        let preferredThumbPath = null
-
-        if (await isMultiWriterChannelKey(driveKey)) {
-          const meta = await this.getVideoData(driveKey, videoId)
-          if (meta?.blobDriveKey) sourceDriveKey = meta.blobDriveKey
-          if (meta?.id) resolvedId = meta.id
-          if (typeof meta?.thumbnail === 'string' && meta.thumbnail.startsWith('/')) {
-            preferredThumbPath = meta.thumbnail
-          }
-        } else if (typeof videoId === 'string' && videoId.startsWith('/videos/')) {
-          const match = videoId.match(/\/videos\/([^.]+)/)
-          if (match) resolvedId = match[1]
+        // Get video metadata to find thumbnail blob info
+        const meta = await this.getVideoData(driveKey, videoId);
+        if (!meta) {
+          return { exists: false };
         }
 
-        const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 5000 });
-
-        const thumbnailPaths = [
-          ...(preferredThumbPath ? [preferredThumbPath] : []),
-          `/thumbnails/${resolvedId}.jpg`,
-          `/thumbnails/${resolvedId}.png`,
-          `/thumbnails/${resolvedId}.webp`,
-          `/thumbnails/${resolvedId}.jpeg`,
-          `/thumbnails/${resolvedId}.gif`
-        ];
-
-        for (const thumbPath of thumbnailPaths) {
-          const entry = await drive.entry(thumbPath).catch(() => null);
-          const mime = thumbPath.endsWith('.png') ? 'image/png' :
-                       thumbPath.endsWith('.webp') ? 'image/webp' :
-                       thumbPath.endsWith('.gif') ? 'image/gif' : 'image/jpeg';
-
-          if (entry && entry.value?.blob) {
-            const blobsCore = await drive.getBlobs();
-            if (blobsCore) {
-              const url = ctx.blobServer.getLink(blobsCore.core.key, {
-                blob: entry.value.blob,
-                type: mime,
-                host: ctx.blobServerHost || '127.0.0.1',
-                port: ctx.blobServer?.port || ctx.blobServerPort
-              });
-              console.log('[API] Thumbnail URL:', url);
-              return { url, exists: true };
-            }
-          } else if (entry) {
-            // Inline entry - return data URL without mutating the drive
-            const buf = await drive.get(thumbPath).catch(() => null);
-            if (buf) {
-              const dataUrl = `data:${mime};base64,${b4a.from(buf).toString('base64')}`;
-              return { url: dataUrl, dataUrl, exists: true };
-            }
+        // New Hyperblobs-based thumbnail
+        if (meta.thumbnailBlobId && meta.thumbnailBlobsCoreKey) {
+          console.log('[API] GET_VIDEO_THUMBNAIL: thumbnailBlobsCoreKey length:', meta.thumbnailBlobsCoreKey?.length);
+          console.log('[API] GET_VIDEO_THUMBNAIL: thumbnailBlobsCoreKey value:', meta.thumbnailBlobsCoreKey);
+          const keyBuffer = b4a.from(meta.thumbnailBlobsCoreKey, 'hex');
+          console.log('[API] GET_VIDEO_THUMBNAIL: keyBuffer length:', keyBuffer.length, 'bytes, isBuffer:', b4a.isBuffer(keyBuffer));
+          console.log('[API] GET_VIDEO_THUMBNAIL: calling store.get...');
+          
+          let blobsCore;
+          try {
+            blobsCore = ctx.store.get(keyBuffer);
+            console.log('[API] GET_VIDEO_THUMBNAIL: store.get returned, calling ready...');
+            await blobsCore.ready();
+            console.log('[API] GET_VIDEO_THUMBNAIL: ready done, blobsCore.key length:', blobsCore.key?.length, 'bytes');
+          } catch (storeErr) {
+            console.error('[API] GET_VIDEO_THUMBNAIL: store.get or ready FAILED:', storeErr.message, storeErr.stack);
+            throw storeErr;
           }
+
+          // Join swarm for thumbnail core
+          if (ctx.swarm && blobsCore.discoveryKey) {
+            try { ctx.swarm.join(blobsCore.discoveryKey) } catch {}
+          }
+
+          // Parse blobId string to blob object
+          const parts = meta.thumbnailBlobId.split(':').map(Number);
+          const blob = {
+            blockOffset: parts[0],
+            blockLength: parts[1],
+            byteOffset: parts[2],
+            byteLength: parts[3]
+          };
+
+          console.log('[API] GET_VIDEO_THUMBNAIL: blobsCore.key hex:', blobsCore.key ? b4a.toString(blobsCore.key, 'hex') : 'NULL');
+          console.log('[API] GET_VIDEO_THUMBNAIL: ctx.blobServer exists:', !!ctx.blobServer);
+          const url = ctx.blobServer.getLink(blobsCore.key, {
+            blob,
+          type: 'image/jpeg',
+          host: ctx.blobServerHost || '127.0.0.1',
+          port: ctx.blobServer?.port || ctx.blobServerPort
+          });
+          console.log('[API] Thumbnail URL (Hyperblobs):', url);
+          return { url, exists: true };
         }
+
         return { exists: false };
       } catch (err) {
         console.error('[API] GET_VIDEO_THUMBNAIL error:', err.message);
@@ -640,7 +801,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       // Don't let loadDrive hang forever - use a 5s timeout
       // If it times out, we still add to subscriptions (data will sync later when peers are found)
       try {
-        await Promise.race([
+            await Promise.race([
           loadDrive(ctx, driveKey),
           new Promise((_, reject) => setTimeout(() => reject(new Error('Drive load timeout')), 5000))
         ]);
@@ -742,7 +903,35 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async submitToFeed(driveKey) {
       console.log('[API] Submitting channel to feed:', driveKey?.slice(0, 16));
       if (publicFeed && driveKey) {
-        await publicFeed.submitChannel(driveKey);
+        // Get publicBeeKey from the channel for fast viewer access
+        let publicBeeKey = null;
+        try {
+          const channel = await loadChannel(ctx, driveKey);
+          publicBeeKey = channel?.publicBeeKey || await channel?.getPublicBeeKey();
+          console.log('[API] submitToFeed: got publicBeeKey:', publicBeeKey?.slice(0, 16));
+
+          // Use channel's CommentsAutobase directly - it's already initialized in _open()
+          // and has the key stored in channel metadata + synced to PublicBee
+          const commentsBase = await channel.getCommentsAutobase();
+          if (commentsBase?.keyHex) {
+            console.log('[API] submitToFeed: CommentsAutobase key:', commentsBase.keyHex.slice(0, 16));
+
+            // Ensure PublicBee has the commentsAutobaseKey synced
+            if (channel.publicBee?.writable) {
+              const pubMeta = await channel.publicBee.getMetadata().catch(() => ({}));
+              if (!pubMeta?.commentsAutobaseKey) {
+                await channel.publicBee.setMetadata({
+                  ...pubMeta,
+                  commentsAutobaseKey: commentsBase.keyHex
+                });
+                console.log('[API] submitToFeed: synced commentsAutobaseKey to PublicBee');
+              }
+            }
+          }
+        } catch (err) {
+          console.log('[API] submitToFeed: channel/comments init error:', err?.message);
+        }
+        await publicFeed.submitChannel(driveKey, publicBeeKey);
       }
       return { success: true };
     },
@@ -1284,51 +1473,18 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         await ctx.semanticFinder.init()
       }
 
-      // Ensure channel vectors are loaded into the local index (multi-writer channels persist vectors in the view)
-      try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (isMW) {
-          const channel = await loadChannel(ctx, channelKey)
-          await ctx.semanticFinder.ensureIndexedFromChannelView(channelKey, channel)
-
-          // Backfill missing vector records (writable peers only), limited per call to avoid DoS.
-          // Read-only peers will still be able to search whatever vectors exist in the view.
-          if (channel?.writable) {
-            try {
-              const videos = await channel.listVideos().catch(() => [])
-              let backfilled = 0
-              for (const v of videos) {
-                if (!v?.id) continue
-                if (backfilled >= 3) break
-                const existing = await channel.view.get(`vectors/${v.id}`).catch(() => null)
-                if (existing?.value?.vector) continue
-                const res = await this.indexVideoVectors(channelKey, v.id)
-                if (res?.success) backfilled++
-              }
-            } catch {}
-          }
-        }
-      } catch {}
-
       // Initialize federated search if not already done
       if (!ctx.federatedSearch && ctx.swarm) {
-        ctx.federatedSearch = new FederatedSearch(ctx.swarm, ctx.semanticFinder, {
-          ensureIndexed: async (ck) => {
-            try {
-              const ch = await loadChannel(ctx, ck)
-              await ctx.semanticFinder.ensureIndexedFromChannelView(ck, ch)
-            } catch {}
-          }
-        })
+        ctx.federatedSearch = new FederatedSearch(ctx.swarm, ctx.semanticFinder)
         const channelKeyBuf = b4a.from(channelKey, 'hex')
         ctx.federatedSearch.setupTopic(channelKeyBuf)
       }
 
       // Use federated search if available, otherwise local only
       if (ctx.federatedSearch && federated) {
-        return await ctx.federatedSearch.search(query, { topK, federated, timeout: 5000, channelKey })
+        return await ctx.federatedSearch.search(query, { topK, federated, timeout: 5000 })
       } else {
-        return await ctx.semanticFinder.search(query, topK, { channelKey })
+        return await ctx.semanticFinder.search(query, topK)
       }
     },
 
@@ -1363,19 +1519,19 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         // Store vector index op in Autobase (for replication)
         const isMW = await isMultiWriterChannelKey(channelKey)
         if (isMW) {
-          const channel = await loadChannel(ctx, channelKey)
-          const embedding = await ctx.semanticFinder.embed(`${video.title || ''} ${video.description || ''}`)
-          const vectorBase64 = b4a.toString(Buffer.from(embedding.buffer), 'base64')
+        const channel = await loadChannel(ctx, channelKey)
+        const embedding = await ctx.semanticFinder.embed(`${video.title || ''} ${video.description || ''}`)
+        const vectorBase64 = b4a.toString(Buffer.from(embedding.buffer), 'base64')
 
-          await channel.appendOp({
-            type: 'add-vector-index',
-            schemaVersion: 1,
-            videoId,
-            vector: vectorBase64,
-            text: `${video.title || ''} ${video.description || ''}`,
-            metadata: JSON.stringify({ channelKey, title: video.title }),
-            indexedAt: Date.now()
-          })
+          await channel.base.append({
+          type: 'add-vector-index',
+          schemaVersion: 1,
+          videoId,
+          vector: vectorBase64,
+          text: `${video.title || ''} ${video.description || ''}`,
+          metadata: JSON.stringify({ channelKey, title: video.title }),
+          indexedAt: Date.now()
+        })
         }
 
         return { success: true }
@@ -1386,8 +1542,215 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     },
 
     // ============================================
-    // Comments Operations
+    // Comments Operations (using separate CommentsAutobase)
     // ============================================
+
+    /**
+     * Get or create CommentsAutobase for a channel
+     * @param {string} channelKey
+     * @param {string} [publicBeeKey] - PublicBee key for looking up commentsAutobaseKey
+     * @returns {Promise<import('./channel/comments-autobase.js').CommentsAutobase>}
+     */
+    async _getCommentsAutobase(channelKey, publicBeeKey = null) {
+      console.log('[API] _getCommentsAutobase: START channelKey:', channelKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16) || 'null')
+
+      // Lazy import to avoid circular deps
+      console.log('[API] _getCommentsAutobase: importing comments-autobase...')
+      const { getOrCreateCommentsAutobase } = await import('./channel/comments-autobase.js')
+      console.log('[API] _getCommentsAutobase: import complete')
+
+      // Cache key
+      const cacheKey = `comments:${channelKey}`
+      if (!ctx._commentsCache) ctx._commentsCache = new Map()
+
+      // IMPORTANT: listComments + getReactions are commonly called in parallel.
+      // If we don't cache the in-flight open, we'll instantiate multiple Autobase
+      // instances for the same key on the same Corestore, which can lead to flaky
+      // replication / empty reads.
+      const cached = ctx._commentsCache.get(cacheKey)
+      if (cached) {
+        console.log('[API] _getCommentsAutobase: found cached promise, waiting with 12s timeout...')
+        // Add timeout to prevent hanging forever on a stuck promise
+        // Must be longer than CommentsAutobase internal timeout (8s for viewer ready)
+        const result = await Promise.race([
+          cached,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cached CommentsAutobase promise timed out after 12s')), 12000))
+        ]).catch(err => {
+          console.log('[API] _getCommentsAutobase: cached promise failed:', err?.message)
+          // Clear the bad cache entry so next call can retry
+          ctx._commentsCache.delete(cacheKey)
+          throw err
+        })
+        console.log('[API] _getCommentsAutobase: cached promise resolved')
+        return result
+      }
+
+      const openPromise = (async () => {
+        console.log('[API] _getCommentsAutobase: openPromise STARTED')
+        let resolvedPublicBeeKey = (typeof publicBeeKey === 'string' && publicBeeKey.length > 0) ? publicBeeKey : null
+        let commentsAutobaseKey = null
+        /** @type {any|null} */
+        let pubBee = null
+
+        // FIRST: Try to get publicBeeKey from public feed (fastest path for viewers)
+        // Do this BEFORE trying to load any channels to avoid hangs
+        console.log('[API] _getCommentsAutobase: checking public feed for publicBeeKey...')
+        if (!resolvedPublicBeeKey && publicFeed) {
+          console.log('[API] _getCommentsAutobase: publicFeed exists, calling getFeed()...')
+          try {
+            const feed = publicFeed.getFeed()
+            console.log('[API] _getCommentsAutobase: got feed with', feed?.length, 'entries')
+            const entry = feed.find(e => e.channelKey === channelKey || e.driveKey === channelKey)
+            if (entry?.publicBeeKey) {
+              resolvedPublicBeeKey = entry.publicBeeKey
+              console.log('[API] _getCommentsAutobase: found publicBeeKey in feed:', resolvedPublicBeeKey?.slice(0, 16))
+            } else {
+              console.log('[API] _getCommentsAutobase: channel not found in feed or no publicBeeKey')
+            }
+          } catch (err) {
+            console.log('[API] _getCommentsAutobase: feed lookup error:', err?.message)
+          }
+        } else if (!publicFeed) {
+          console.log('[API] _getCommentsAutobase: publicFeed is not available')
+        }
+
+        // Check if we have a local identity for this channel (owner/paired device)
+        console.log('[API] _getCommentsAutobase: checking local identity...')
+        let hasLocalIdentity = false
+        try {
+          const identities = await ctx.metaDb?.get('identities').catch(() => null)
+          hasLocalIdentity = identities?.value?.some(i =>
+            i.channelKey === channelKey || i.driveKey === channelKey
+          ) || false
+        } catch (err) {
+          console.log('[API] _getCommentsAutobase: identity check error:', err?.message)
+        }
+        console.log('[API] _getCommentsAutobase: hasLocalIdentity:', hasLocalIdentity)
+
+        // Only try loading the full channel Autobase when we have a local identity (owner/paired device)
+        // Do NOT load channel just because it's in ctx.channels - that could be a stale/incomplete viewer load
+        /** @type {any|null} */
+        let localChannel = null
+        if (hasLocalIdentity) {
+          console.log('[API] _getCommentsAutobase: loading local channel (owner/paired device)...')
+          try {
+            // Don't block forever: if the channel is slow to open, fall back to PublicBee.
+            localChannel = await Promise.race([
+              loadChannel(ctx, channelKey),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('loadChannel timeout')), 3000))
+            ])
+            console.log('[API] _getCommentsAutobase: local channel loaded')
+
+            // If the channel already has a CommentsAutobase instance, use it (fast path for owners).
+            if (localChannel?.commentsAutobase) {
+              console.log('[API] _getCommentsAutobase: using channel.commentsAutobase')
+              return localChannel.commentsAutobase
+            }
+
+            // Prefer canonical keys from channel metadata / PublicBee if available.
+            const meta = await Promise.race([
+              localChannel?.getMetadata?.(),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('getMetadata timeout')), 2000))
+            ]).catch(() => null)
+            commentsAutobaseKey = meta?.commentsAutobaseKey || null
+            resolvedPublicBeeKey = resolvedPublicBeeKey ||
+              localChannel?.publicBeeKey ||
+              null
+
+            // Only try getPublicBeeKey if we still don't have it
+            if (!resolvedPublicBeeKey) {
+              resolvedPublicBeeKey = await Promise.race([
+                localChannel?.getPublicBeeKey?.(),
+                new Promise((resolve) => setTimeout(() => resolve(null), 1000))
+              ]).catch(() => null)
+            }
+            console.log('[API] _getCommentsAutobase: from local channel - commentsAutobaseKey:', commentsAutobaseKey?.slice(0, 16) || 'null')
+          } catch (err) {
+            console.log('[API] _getCommentsAutobase: local channel lookup failed:', err?.message)
+          }
+        }
+
+        // Without a PublicBee key, viewers cannot discover comments.
+        console.log('[API] _getCommentsAutobase: resolvedPublicBeeKey is:', resolvedPublicBeeKey?.slice(0, 16) || 'null')
+        if (!resolvedPublicBeeKey) {
+          console.log('[API] _getCommentsAutobase: no publicBeeKey found, throwing error')
+          throw new Error('Comments unavailable (missing publicBeeKey)')
+        }
+
+        // Load the PublicBee and read the published commentsAutobaseKey.
+        // The PublicBee writer (single device) is also the only device allowed to create/publish the comments key.
+        let isPublishingDevice = false
+        console.log('[API] _getCommentsAutobase: about to load PublicBee:', resolvedPublicBeeKey?.slice(0, 16))
+        try {
+          console.log('[API] _getCommentsAutobase: calling loadPublicBee with 5s timeout...')
+          pubBee = await Promise.race([
+            loadPublicBee(ctx, resolvedPublicBeeKey),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('loadPublicBee timeout after 5s')), 5000))
+          ])
+          console.log('[API] _getCommentsAutobase: loadPublicBee completed')
+          isPublishingDevice = Boolean(pubBee?.writable)
+          console.log('[API] _getCommentsAutobase: PublicBee loaded, writable:', isPublishingDevice)
+
+          if (!commentsAutobaseKey) {
+            console.log('[API] _getCommentsAutobase: getting metadata from PublicBee...')
+            const meta = await Promise.race([
+              pubBee.getMetadata(),
+              new Promise((resolve) => setTimeout(() => resolve(null), 2000))
+            ]).catch(() => null)
+            commentsAutobaseKey = meta?.commentsAutobaseKey || null
+            console.log('[API] _getCommentsAutobase: commentsAutobaseKey from PublicBee:', commentsAutobaseKey?.slice(0, 16) || 'null')
+          }
+        } catch (err) {
+          console.log('[API] _getCommentsAutobase: PublicBee lookup failed:', err?.message)
+        }
+
+        // IMPORTANT: non-publishing devices must never create a new CommentsAutobase implicitly.
+        // Creating by `{ name }` is deterministic per-device (not globally) and will fork comments.
+        if (!isPublishingDevice && !commentsAutobaseKey) {
+          throw new Error('Comments unavailable (commentsAutobaseKey not published yet)')
+        }
+
+        console.log('[API] _getCommentsAutobase: creating CommentsAutobase, isOwner:', isPublishingDevice, 'key:', commentsAutobaseKey?.slice(0, 16) || 'new')
+        console.log('[API] _getCommentsAutobase: swarm connections:', ctx.swarm?.connections?.size || 0)
+
+        let commentsBase
+        try {
+          commentsBase = await getOrCreateCommentsAutobase(ctx.store, {
+            channelKey,
+            commentsAutobaseKey,
+            isChannelOwner: isPublishingDevice,
+            swarm: ctx.swarm
+          })
+        } catch (err) {
+          // Provide a user-friendly error for viewers when owner is offline
+          if (err?.message?.includes('timeout') && !isPublishingDevice) {
+            throw new Error('Comments unavailable - channel owner may be offline. Try again later.')
+          }
+          throw err
+        }
+        console.log('[API] _getCommentsAutobase: CommentsAutobase ready, key:', commentsBase.keyHex?.slice(0, 16))
+
+        // Publishing device: publish the key to PublicBee if it wasn't there yet.
+        if (isPublishingDevice && pubBee?.writable && commentsBase.keyHex && !commentsAutobaseKey) {
+          try {
+            await pubBee.setMetadata({ commentsAutobaseKey: commentsBase.keyHex })
+            console.log('[API] _getCommentsAutobase: published commentsAutobaseKey to PublicBee')
+          } catch (err) {
+            console.log('[API] _getCommentsAutobase: could not publish key to PublicBee:', err?.message)
+          }
+        }
+
+        return commentsBase
+      })()
+
+      ctx._commentsCache.set(cacheKey, openPromise)
+      try {
+        return await openPromise
+      } catch (err) {
+        ctx._commentsCache.delete(cacheKey)
+        throw err
+      }
+    },
 
     /**
      * Add a comment to a video
@@ -1395,22 +1758,25 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {string} videoId
      * @param {string} text
      * @param {string} [parentId]
+     * @param {string} [publicBeeKey]
      * @returns {Promise<{success: boolean, commentId?: string, error?: string}>}
      */
-    async addComment(channelKey, videoId, text, parentId = null) {
+    async addComment(channelKey, videoId, text, parentId = null, publicBeeKey = null) {
+      // SYNC LOG - this should ALWAYS appear immediately
+      console.log('[API] ====== addComment ENTERED ======')
+      console.log('[API] addComment: channelKey:', channelKey?.slice(0, 16), 'videoId:', videoId?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16) || 'null')
+
       try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, error: 'Comments only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-        if (!channel.comments) {
-          return { success: false, error: 'Comments not initialized' }
-        }
-
-        const result = await channel.comments.addComment(videoId, text, parentId)
-        return { success: true, commentId: result.commentId }
+        console.log('[API] addComment: getting CommentsAutobase...')
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        console.log('[API] addComment: got CommentsAutobase, adding comment...')
+        const result = await commentsBase.addComment(videoId, text, parentId)
+        const peerCount = commentsBase?.swarm?.connections?.size || 0
+        const queued = typeof result?.queued === 'boolean'
+          ? result.queued
+          : (!commentsBase?.writable && peerCount === 0)
+        console.log('[API] addComment: comment added:', result.commentId?.slice(0, 8))
+        return { success: true, commentId: result.commentId, queued }
       } catch (err) {
         console.error('[API] addComment error:', err.message)
         return { success: false, error: err.message }
@@ -1424,21 +1790,13 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {Object} [options]
      * @param {number} [options.page=0]
      * @param {number} [options.limit=50]
+     * @param {string} [options.publicBeeKey]
      * @returns {Promise<{comments: Array, success: boolean, error?: string}>}
      */
     async listComments(channelKey, videoId, options = {}) {
       try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, comments: [], error: 'Comments only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-        if (!channel.comments) {
-          return { success: false, comments: [], error: 'Comments not initialized' }
-        }
-
-        const comments = await channel.comments.listComments(videoId, options)
+        const commentsBase = await this._getCommentsAutobase(channelKey, options.publicBeeKey)
+        const comments = await commentsBase.listComments(videoId, options)
         return { success: true, comments }
       } catch (err) {
         console.error('[API] listComments error:', err.message)
@@ -1453,19 +1811,10 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {string} commentId
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async hideComment(channelKey, videoId, commentId) {
+    async hideComment(channelKey, videoId, commentId, publicBeeKey = null) {
       try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, error: 'Comments only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-        if (!channel.comments) {
-          return { success: false, error: 'Comments not initialized' }
-        }
-
-        await channel.comments.hideComment(videoId, commentId)
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        await commentsBase.hideComment(videoId, commentId)
         return { success: true }
       } catch (err) {
         console.error('[API] hideComment error:', err.message)
@@ -1480,19 +1829,10 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {string} commentId
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async removeComment(channelKey, videoId, commentId) {
+    async removeComment(channelKey, videoId, commentId, publicBeeKey = null) {
       try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, error: 'Comments only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-        if (!channel.comments) {
-          return { success: false, error: 'Comments not initialized' }
-        }
-
-        await channel.comments.removeComment(videoId, commentId)
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        await commentsBase.removeComment(videoId, commentId)
         return { success: true }
       } catch (err) {
         console.error('[API] removeComment error:', err.message)
@@ -1501,7 +1841,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     },
 
     // ============================================
-    // Reactions Operations
+    // Reactions Operations (using separate CommentsAutobase)
     // ============================================
 
     /**
@@ -1511,19 +1851,10 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {string} reactionType
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async addReaction(channelKey, videoId, reactionType) {
+    async addReaction(channelKey, videoId, reactionType, publicBeeKey = null) {
       try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, error: 'Reactions only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-        if (!channel.reactions) {
-          return { success: false, error: 'Reactions not initialized' }
-        }
-
-        await channel.reactions.addReaction(videoId, reactionType)
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        await commentsBase.addReaction(videoId, reactionType)
         return { success: true }
       } catch (err) {
         console.error('[API] addReaction error:', err.message)
@@ -1537,19 +1868,10 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {string} videoId
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async removeReaction(channelKey, videoId) {
+    async removeReaction(channelKey, videoId, publicBeeKey = null) {
       try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, error: 'Reactions only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-        if (!channel.reactions) {
-          return { success: false, error: 'Reactions not initialized' }
-        }
-
-        await channel.reactions.removeReaction(videoId)
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        await commentsBase.removeReaction(videoId)
         return { success: true }
       } catch (err) {
         console.error('[API] removeReaction error:', err.message)
@@ -1563,24 +1885,94 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {string} videoId
      * @returns {Promise<{counts: Record<string, number>, userReaction: string|null, success: boolean, error?: string}>}
      */
-    async getReactions(channelKey, videoId) {
+    async getReactions(channelKey, videoId, publicBeeKey = null) {
       try {
-        const isMW = await isMultiWriterChannelKey(channelKey)
-        if (!isMW) {
-          return { success: false, counts: {}, userReaction: null, error: 'Reactions only supported for multi-writer channels' }
-        }
-
-        const channel = await loadChannel(ctx, channelKey)
-        if (!channel.reactions) {
-          return { success: false, counts: {}, userReaction: null, error: 'Reactions not initialized' }
-        }
-
-        const result = await channel.reactions.getReactions(videoId)
-        return { success: true, ...result }
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        const result = await commentsBase.getReactionCounts(videoId)
+        return { success: true, counts: { like: result.likes, dislike: result.dislikes }, userReaction: result.userReaction }
       } catch (err) {
         console.error('[API] getReactions error:', err.message)
         return { success: false, counts: {}, userReaction: null, error: err.message }
       }
+    },
+
+    /**
+     * Get debug info about the comments system for a channel
+     * @param {string} channelKey
+     * @param {string} [publicBeeKey]
+     * @returns {Promise<Object>}
+     */
+    async getCommentsDebugInfo(channelKey, publicBeeKey = null) {
+      const debugInfo = {
+        success: false,
+        // Connection
+        swarmPeers: ctx.swarm?.connections?.size || 0,
+        commentsConnected: false,
+
+        // CommentsAutobase
+        commentsAutobaseKey: null,
+        isWriter: false,
+        isChannelOwner: false,
+        localWriterKey: null,
+
+        // Channel info
+        channelKey: channelKey?.slice(0, 16) || null,
+        publicBeeKey: publicBeeKey?.slice(0, 16) || null,
+        hasPublicBee: false,
+        publicBeeHasCommentsKey: false,
+
+        // Data
+        viewLength: 0,
+
+        // Errors
+        lastError: null
+      }
+
+      try {
+        // Try to load channel first
+        let channel = null
+        try {
+          channel = await loadChannel(ctx, channelKey)
+          debugInfo.hasChannel = true
+          debugInfo.channelWritable = channel.writable
+
+          // Check if channel has PublicBee
+          if (channel.publicBee) {
+            debugInfo.hasPublicBee = true
+            const pubMeta = await channel.publicBee.getMetadata().catch(() => ({}))
+            debugInfo.publicBeeHasCommentsKey = Boolean(pubMeta?.commentsAutobaseKey)
+          }
+
+          // Check if channel has CommentsAutobase
+          if (channel.commentsAutobase) {
+            const ca = channel.commentsAutobase
+            debugInfo.commentsAutobaseKey = ca.keyHex?.slice(0, 16) || null
+            debugInfo.isWriter = ca.writable
+            debugInfo.isChannelOwner = ca.isChannelOwner()
+            debugInfo.localWriterKey = ca.localWriterKeyHex?.slice(0, 16) || null
+            debugInfo.viewLength = ca.view?.core?.length || 0
+            debugInfo.commentsConnected = true
+            debugInfo.success = true
+            return debugInfo
+          }
+        } catch (err) {
+          debugInfo.channelError = err?.message
+        }
+
+        // Try to get CommentsAutobase via API method
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        debugInfo.commentsAutobaseKey = commentsBase?.keyHex?.slice(0, 16) || null
+        debugInfo.isWriter = commentsBase?.writable || false
+        debugInfo.isChannelOwner = commentsBase?.isChannelOwner?.() || false
+        debugInfo.localWriterKey = commentsBase?.localWriterKeyHex?.slice(0, 16) || null
+        debugInfo.viewLength = commentsBase?.view?.core?.length || 0
+        debugInfo.commentsConnected = true
+        debugInfo.success = true
+      } catch (err) {
+        debugInfo.lastError = err?.message || 'Unknown error'
+      }
+
+      return debugInfo
     },
 
     // ============================================

@@ -1,7 +1,8 @@
 import ReadyResource from 'ready-resource'
 import Autobase from 'autobase'
 import Hyperbee from 'hyperbee'
-import Hyperdrive from 'hyperdrive'
+import Hyperblobs from 'hyperblobs'
+import BeeDiffStreamImport from 'hyperbee-diff-stream'
 import BlindPairing from 'blind-pairing'
 import z32 from 'z32'
 import crypto from 'hypercore-crypto'
@@ -13,15 +14,19 @@ import { CommentsChannel } from './comments-channel.js'
 import { ReactionsManager } from './reactions.js'
 import { WatchEventLogger } from '../recommendations/watch-events.js'
 import { applyMigrations } from './migrations.js'
+import { PublicChannelBee } from './public-channel-bee.js'
 
+const BeeDiffStream = BeeDiffStreamImport?.default || BeeDiffStreamImport
 const CURRENT_SCHEMA_VERSION = 1
 
 /**
  * MultiWriterChannel
  *
- * - Metadata is stored in Autobase (multi-writer)
- * - A deterministic Hyperbee view is derived from Autobase.apply()
- * - Each writer/device has its own blob Hyperdrive; videos reference blob locations in metadata.
+ * Unified Autobase + Hyperblobs architecture:
+ * - Metadata is stored in Autobase (multi-writer, linearized view)
+ * - Video blobs are stored in a shared Hyperblobs instance (same Corestore)
+ * - Single discovery key, single replication stream
+ * - Blob pointers (4 numbers) stored in Autobase metadata
  */
 export class MultiWriterChannel extends ReadyResource {
   /**
@@ -40,8 +45,14 @@ export class MultiWriterChannel extends ReadyResource {
     this.base = null
     this.view = null
 
-    /** @type {Map<string, import('hyperdrive')>} */
-    this.blobDrives = new Map()
+    /** @type {Hyperblobs|null} Shared blob storage for all videos in this channel */
+    this.blobs = null
+    /** @type {any} The Hypercore backing the blobs */
+    this._blobsCore = null
+
+    // Keep strong ref to swarm.join() discovery handle so it isn't GC'd on mobile/Bare.
+    /** @type {any | null} */
+    this._channelDiscovery = null
 
     /** @type {import('hyperswarm')|null} */
     this.swarm = opts.swarm || null
@@ -60,6 +71,20 @@ export class MultiWriterChannel extends ReadyResource {
 
     /** @type {WatchEventLogger|null} */
     this.watchLogger = null
+
+    /** @type {import('./comments-autobase.js').CommentsAutobase|null} */
+    this.commentsAutobase = null
+
+    /**
+     * Public Hyperbee for auto-replicating channel data to viewers.
+     * This is the simple, instant-sync layer that public feed uses.
+     * Owner syncs Autobase changes here; viewers only load this.
+     * @type {PublicChannelBee|null}
+     */
+    this.publicBee = null
+
+    /** @type {WeakSet<any>} Track connections we've already replicated to prevent duplicates */
+    this._replicatedConns = new WeakSet()
 
     // Local-only rate limiting (must NOT affect deterministic view application).
     /** @type {Map<string, {count: number, windowStartMs: number}>} */
@@ -96,6 +121,198 @@ export class MultiWriterChannel extends ReadyResource {
     return this.localWriterKey ? b4a.toString(this.localWriterKey, 'hex') : null
   }
 
+  /** @returns {Buffer|null} The key of the blobs Hypercore */
+  get blobsKey() {
+    return this._blobsCore?.key || null
+  }
+
+  /** @returns {string|null} The hex-encoded key of the blobs Hypercore */
+  get blobsKeyHex() {
+    return this.blobsKey ? b4a.toString(this.blobsKey, 'hex') : null
+  }
+
+  /** @returns {string|null} The public Hyperbee key (for public feed discovery) */
+  get publicBeeKey() {
+    return this.publicBee?.keyHex || null
+  }
+
+  /**
+   * Get the public bee key from metadata (for paired devices that don't have the bee loaded)
+   * @returns {Promise<string|null>}
+   */
+  async getPublicBeeKey() {
+    if (this.publicBee?.keyHex) return this.publicBee.keyHex
+    const meta = await this.getMetadata()
+    return meta?.publicBeeKey || null
+  }
+
+  /**
+   * Sync all Autobase data to the public Hyperbee.
+   * Call this to backfill existing videos that were added before public sync was implemented.
+   */
+  async syncToPublicBee() {
+    if (!this.publicBee?.writable) {
+      console.log('[Channel] syncToPublicBee: not writable, skipping')
+      return
+    }
+
+    try {
+      console.log('[Channel] syncToPublicBee: starting full sync...')
+      await this.publicBee.syncFromChannel(this)
+      console.log('[Channel] syncToPublicBee: complete')
+    } catch (err) {
+      console.error('[Channel] syncToPublicBee error:', err.message)
+    }
+  }
+
+  async _safeUpdate(opts = {}) {
+    const { syncPublicBee = true, ...updateOpts } = opts || {}
+    const channelId = this.keyHex?.slice(0, 16) || 'unknown'
+    const connsBefore = this.swarm?.connections?.size || 0
+
+    // Wait for channel discovery to flush if we just joined the topic.
+    // This gives time for peers with this channel's data to connect.
+    if (this._channelDiscovery && !this._discoveryFlushed) {
+      console.log(`[Channel:${channelId}] _safeUpdate: waiting for discovery flush... (conns=${connsBefore})`)
+      try {
+        await Promise.race([
+          this._channelDiscovery.flushed(),
+          new Promise(resolve => setTimeout(resolve, 5000))  // 5s max wait
+        ])
+        this._discoveryFlushed = true
+        const connsAfter = this.swarm?.connections?.size || 0
+        console.log(`[Channel:${channelId}] _safeUpdate: discovery flushed (conns: ${connsBefore} -> ${connsAfter})`)
+      } catch (err) {
+        console.log(`[Channel:${channelId}] _safeUpdate: discovery flush timeout (continuing)`)
+      }
+    }
+
+    // Wait briefly for peer connections if swarm is available but no peers yet.
+    if (this.swarm && this.swarm.connections?.size === 0) {
+      console.log(`[Channel:${channelId}] _safeUpdate: no connections, waiting 2s...`)
+      await new Promise(resolve => setTimeout(resolve, 2000))
+    }
+
+    // If we can, snapshot the view so we can diff after update and cheaply sync PublicBee.
+    // This is especially useful when OTHER writers changed the Autobase while this device was offline.
+    const shouldDiffSyncPublicBee = Boolean(
+      syncPublicBee &&
+      this.publicBee?.writable &&
+      BeeDiffStream &&
+      typeof this.view?.snapshot === 'function'
+    )
+    const beforeSnapshot = shouldDiffSyncPublicBee ? this.view.snapshot() : null
+
+    // Log Autobase state before update
+    const localLen = this.base?.local?.length || 0
+    const viewLen = this.view?.core?.length || 0
+    console.log(`[Channel:${channelId}] _safeUpdate: calling base.update (local=${localLen}, view=${viewLen}, writable=${this.writable})`)
+
+    try {
+      // Use wait: true to wait for any pending replication data
+      // This is critical for read-only peers - without it, update() returns immediately
+      // even if data is being replicated from peers
+      const result = await this.base.update({ wait: true, ...updateOpts })
+      const viewLenAfter = this.view?.core?.length || 0
+      console.log(`[Channel:${channelId}] _safeUpdate: base.update done (view: ${viewLen} -> ${viewLenAfter})`)
+
+      if (beforeSnapshot && shouldDiffSyncPublicBee) {
+        try {
+          const afterSnapshot = this.view.snapshot()
+          await this._syncPublicBeeFromViewDiff(beforeSnapshot, afterSnapshot)
+        } catch (err) {
+          console.log(`[Channel:${channelId}] _safeUpdate: PublicBee diff sync error (non-fatal):`, err?.message)
+        }
+      }
+      return result
+    } catch (err) {
+      console.log(`[Channel:${channelId}] _safeUpdate: error, retrying... ${err?.message}`)
+      if (this.base?._applyState?.views) {
+        this.base._applyState.views = this.base._applyState.views.map((v) => v || { core: { download: () => {} } })
+      }
+      const result = await this.base.update({ wait: true, ...updateOpts })
+      if (beforeSnapshot && shouldDiffSyncPublicBee) {
+        try {
+          const afterSnapshot = this.view.snapshot()
+          await this._syncPublicBeeFromViewDiff(beforeSnapshot, afterSnapshot)
+        } catch (err2) {
+          console.log(`[Channel:${channelId}] _safeUpdate: PublicBee diff sync error (non-fatal):`, err2?.message)
+        }
+      }
+      return result
+    }
+  }
+
+  _toPublicVideoMeta(value) {
+    if (!value || typeof value !== 'object') return {}
+    // Keep PublicBee values aligned with existing write paths:
+    // - addVideo() strips { type, schemaVersion, logicalClock }
+    // - view entries contain schemaVersion/logicalClock but not type
+    const { type, schemaVersion, logicalClock, ...rest } = value
+    return rest
+  }
+
+  async _syncPublicBeeFromViewDiff(beforeSnapshot, afterSnapshot) {
+    if (!this.publicBee?.writable) return
+    if (!BeeDiffStream) return
+
+    // 1) Sync channel metadata (only `meta` key, and only public fields)
+    try {
+      const metaDiff = new BeeDiffStream(afterSnapshot, beforeSnapshot, {
+        gte: 'channel-meta/',
+        lt: 'channel-meta0',
+        keyEncoding: 'utf-8',
+        valueEncoding: 'json'
+      })
+
+      for await (const d of metaDiff) {
+        const key = d?.left?.key ?? d?.right?.key
+        if (key !== 'channel-meta/meta') continue
+        const v = d?.left?.value || null
+        if (v) {
+          const { name, description, avatar } = v
+          await this.publicBee.setMetadata({
+            name: typeof name === 'string' ? name : '',
+            description: typeof description === 'string' ? description : '',
+            avatar: avatar ?? null
+          })
+        }
+      }
+    } catch (err) {
+      console.log('[Channel] _syncPublicBeeFromViewDiff meta error (non-fatal):', err?.message)
+    }
+
+    // 2) Sync video index changes (put/del only for changed keys)
+    const videoChanges = []
+    try {
+      const videosDiff = new BeeDiffStream(afterSnapshot, beforeSnapshot, {
+        gte: 'videos/',
+        lt: 'videos0',
+        keyEncoding: 'utf-8',
+        valueEncoding: 'json'
+      })
+
+      for await (const d of videosDiff) {
+        const key = d?.left?.key ?? d?.right?.key
+        if (typeof key !== 'string' || !key.startsWith('videos/')) continue
+        const id = key.slice('videos/'.length)
+        if (!id) continue
+
+        if (d.left === null) {
+          videoChanges.push({ type: 'del', id })
+        } else if (d.left?.value) {
+          videoChanges.push({ type: 'put', id, value: this._toPublicVideoMeta(d.left.value) })
+        }
+      }
+    } catch (err) {
+      console.log('[Channel] _syncPublicBeeFromViewDiff videos error (non-fatal):', err?.message)
+    }
+
+    if (videoChanges.length > 0) {
+      await this.publicBee.applyVideoChanges(videoChanges)
+    }
+  }
+
   async _open() {
     const bootstrapKey = this.opts.key ? fromHex(this.opts.key) : null
     const encryptionKey = this.opts.encryptionKey ? fromHex(this.opts.encryptionKey) : null
@@ -110,8 +327,10 @@ export class MultiWriterChannel extends ReadyResource {
       encrypt: Boolean(this.opts.encrypt),
       encryptionKey,
       open: (store) => {
+        // NOTE: Autobase may call open() multiple times during replication.
+        // The store here is namespaced per-Autobase, so using a shared name is safe.
         console.log('[Channel] open callback: creating Hyperbee view...')
-        const core = store.get({ name: 'peartube-channel-view' })
+        const core = store.get({ name: 'view' })
         const bee = new Hyperbee(core, { keyEncoding: 'utf-8', valueEncoding: 'json' })
         this.view = bee
         console.log('[Channel] open callback: view created')
@@ -140,18 +359,189 @@ export class MultiWriterChannel extends ReadyResource {
     await this.view.ready()
     console.log('[Channel] _open: view.ready() took', Date.now() - viewReadyStart, 'ms')
 
+    // CRITICAL: Set up Autobase replication BEFORE base.update()
+    // Without this, base.update() can't receive data from peers
+    if (this.swarm && this.swarm.connections?.size > 0) {
+      console.log('[Channel] _open: setting up replication on', this.swarm.connections.size, 'existing connections BEFORE update')
+      for (const conn of this.swarm.connections) {
+        if (!this._replicatedConns.has(conn)) {
+          this._replicatedConns.add(conn)
+          try {
+            this.base.replicate(conn)
+            console.log('[Channel] _open: replicated on connection for:', this.keyHex?.slice(0, 16))
+          } catch (err) {
+            console.log('[Channel] _open: replicate error:', err?.message)
+          }
+        }
+      }
+    }
+
     // Force apply any pending operations to the view
     console.log('[Channel] _open: calling base.update() to apply pending ops...')
     const updateStart = Date.now()
-    await this.base.update()
+    await this._safeUpdate()
     console.log('[Channel] _open: base.update() took', Date.now() - updateStart, 'ms')
 
-    console.log('[Channel] _open complete: key:', this.keyHex?.slice(0, 16), 'writable:', this.writable, 'local length:', this.base.local?.length, 'view length:', this.view?.core?.length)
+    // Debug Autobase internals
+    const inputs = this.base.inputs || []
+    const activeWriters = this.base.activeWriters || []
+    console.log('[Channel] _open complete: key:', this.keyHex?.slice(0, 16),
+      'writable:', this.writable,
+      'local length:', this.base.local?.length,
+      'view length:', this.view?.core?.length,
+      'inputs:', inputs.length,
+      'activeWriters:', activeWriters.length,
+      'linearizer:', this.base.linearizer ? 'yes' : 'no'
+    )
+
+    // Initialize per-device Hyperblobs for video storage
+    // Each device needs its own writable blobs core (Hypercore is single-writer)
+    // The blobs core key is stored in video metadata so other devices can fetch
+    const localWriterKey = this.localWriterKeyHex || 'default'
+    const blobsCoreName = `peartube-blobs-${this.keyHex?.slice(0, 16)}-${localWriterKey.slice(0, 16)}`
+    console.log('[Channel] _open: initializing Hyperblobs with core:', blobsCoreName)
+    this._blobsCore = this.store.get({ name: blobsCoreName })
+    await this._blobsCore.ready()
+    this.blobs = new Hyperblobs(this._blobsCore)
+    console.log('[Channel] _open: Hyperblobs ready, key:', this.blobsKeyHex?.slice(0, 16), 'writable:', this._blobsCore.writable)
+
+    // Initialize public Hyperbee for auto-replicating channel data
+    // This is what public feed viewers load - it auto-replicates via store.replicate()
+    // Only the owner (writable) creates and syncs to this; viewers load it separately
+    if (this.writable) {
+      const existingMeta = await this.getMetadata().catch(() => null)
+      const existingPublicBeeKey = existingMeta?.publicBeeKey || null
+
+      // IMPORTANT:
+      // - If `publicBeeKey` is already in channel metadata, ALWAYS load by key.
+      //   Creating by `{ name }` is only deterministic within a single Corestore seed; across devices it can fork.
+      // - Only create by `{ name }` when no key exists yet (first-time owner bootstrap).
+      const isValidPublicBeeKey = (k) => typeof k === 'string' && /^[0-9a-f]{64}$/i.test(k)
+
+      if (isValidPublicBeeKey(existingPublicBeeKey)) {
+        console.log('[Channel] _open: loading public Hyperbee by key:', existingPublicBeeKey.slice(0, 16))
+        this.publicBee = new PublicChannelBee(this.store, { key: existingPublicBeeKey })
+      } else {
+      const publicBeeName = `peartube-public-${this.keyHex}`
+        console.log('[Channel] _open: creating public Hyperbee by name:', publicBeeName.slice(0, 40))
+      this.publicBee = new PublicChannelBee(this.store, { name: publicBeeName })
+      }
+
+      await this.publicBee.ready()
+      console.log('[Channel] _open: public Hyperbee ready, key:', this.publicBee.keyHex?.slice(0, 16))
+
+      // CRITICAL: Ensure other peers can FIND the PublicBee seeders.
+      // Viewers join the PublicBee discoveryKey to discover/replicate it. If the publisher/owner never joins,
+      // then viewers may connect only to "gossip peers" (public-feed topic) that don't actually seed the bee,
+      // leading to permanent empty reads on mobile.
+      if (this.swarm && this.publicBee.discoveryKey) {
+        try {
+          const d = this.swarm.join(this.publicBee.discoveryKey)
+          // Best-effort; do not block startup if it hangs on mobile networks.
+          d?.flushed?.().catch(() => {})
+          console.log('[Channel] _open: joined swarm for public bee discovery:', this.publicBee.keyHex?.slice(0, 16))
+        } catch (err) {
+          console.log('[Channel] _open: failed to join swarm for public bee (non-fatal):', err?.message)
+        }
+      }
+
+      // Store the public bee key in Autobase metadata so paired devices know about it
+      // and so it can be retrieved for publishing to the public feed.
+      // If there was a bogus key in metadata, overwrite it with the actual key we opened.
+      if ((!isValidPublicBeeKey(existingPublicBeeKey) || !existingPublicBeeKey) && this.publicBee.keyHex) {
+        await this.updateMetadata({
+          ...(existingMeta || {}),
+          publicBeeKey: this.publicBee.keyHex
+        })
+        console.log('[Channel] _open: stored public bee key in metadata')
+      }
+
+      // Backfill existing videos to the public Hyperbee
+      // This ensures channels created before PublicBee was added get their content synced
+      await this.syncToPublicBee()
+    }
 
     // Initialize comments, reactions, and watch logger
     this.comments = new CommentsChannel(this)
     this.reactions = new ReactionsManager(this)
     this.watchLogger = new WatchEventLogger(this)
+
+    // Initialize CommentsAutobase (separate Autobase for open comment participation)
+    await this._initCommentsAutobase()
+  }
+
+  /**
+   * Initialize or load the CommentsAutobase for this channel.
+   * The key is stored in channel metadata so all devices can discover it.
+   */
+  async _initCommentsAutobase() {
+    try {
+      const { getOrCreateCommentsAutobase } = await import('./comments-autobase.js')
+
+      // Check if commentsAutobaseKey already exists in metadata
+      const meta = await this.getMetadata().catch(() => null)
+      let existingKey = meta?.commentsAutobaseKey || null
+
+      // If metadata doesn't have it yet, try the PublicBee metadata (viewers/paired devices rely on this).
+      if (!existingKey && this.publicBee) {
+        try {
+          const pubMeta = await this.publicBee.getMetadata().catch(() => null)
+          existingKey = pubMeta?.commentsAutobaseKey || null
+        } catch {}
+      }
+
+      const isPublishingDevice = Boolean(this.publicBee?.writable)
+      console.log('[Channel] _initCommentsAutobase: existingKey:', existingKey?.slice(0, 16) || 'none', 'publisher:', isPublishingDevice)
+
+      // IMPORTANT: Non-publishing devices must never create a new CommentsAutobase by `{ name }`,
+      // because that derivation is deterministic per-device and will fork comments.
+      if (!isPublishingDevice && !existingKey) {
+        console.log('[Channel] _initCommentsAutobase: skipping (no published key yet)')
+        return
+      }
+
+      // Create or load CommentsAutobase
+      this.commentsAutobase = await getOrCreateCommentsAutobase(this.store, {
+        channelKey: this.keyHex,
+        commentsAutobaseKey: existingKey,
+        isChannelOwner: isPublishingDevice, // Only the PublicBee writer can publish/ack reliably
+        swarm: this.swarm
+      })
+      console.log('[Channel] _initCommentsAutobase: ready, key:', this.commentsAutobase.keyHex?.slice(0, 16))
+
+      // Publishing device: ensure the canonical key is persisted + published.
+      if (isPublishingDevice && this.commentsAutobase.keyHex) {
+        try {
+          if (!existingKey) {
+            console.log('[Channel] _initCommentsAutobase: storing commentsAutobaseKey in metadata')
+            await this.updateMetadata({ commentsAutobaseKey: this.commentsAutobase.keyHex })
+          }
+
+          const pubMeta = await this.publicBee.getMetadata().catch(() => ({}))
+          if (pubMeta?.commentsAutobaseKey !== this.commentsAutobase.keyHex) {
+            await this.publicBee.setMetadata({ commentsAutobaseKey: this.commentsAutobase.keyHex })
+            console.log('[Channel] _initCommentsAutobase: synced commentsAutobaseKey to PublicBee')
+          }
+        } catch (err) {
+          console.log('[Channel] _initCommentsAutobase: publish error (non-fatal):', err?.message)
+        }
+      }
+    } catch (err) {
+      console.log('[Channel] _initCommentsAutobase error:', err?.message)
+      // Non-fatal: comments may not work but channel still loads
+    }
+  }
+
+  /**
+   * Get the CommentsAutobase for this channel.
+   * Lazily initializes if not already done.
+   * @returns {Promise<import('./comments-autobase.js').CommentsAutobase>}
+   */
+  async getCommentsAutobase() {
+    if (!this.commentsAutobase) {
+      await this._initCommentsAutobase()
+    }
+    return this.commentsAutobase
   }
 
   async _close() {
@@ -171,10 +561,12 @@ export class MultiWriterChannel extends ReadyResource {
       this.pairing = null
     }
 
-    for (const d of this.blobDrives.values()) {
-      try { await d.close() } catch {}
+    // Close blobs core
+    if (this._blobsCore) {
+      try { await this._blobsCore.close() } catch {}
+      this._blobsCore = null
+      this.blobs = null
     }
-    this.blobDrives.clear()
     if (this.view) await this.view.close()
     if (this.base) await this.base.close()
   }
@@ -246,6 +638,11 @@ export class MultiWriterChannel extends ReadyResource {
           name: op.name !== undefined ? op.name : prev.name,
           description: op.description !== undefined ? op.description : (prev.description || ''),
           avatar: op.avatar !== undefined ? op.avatar : prev.avatar,
+          // Persist public bee key across updates so viewers/paired devices can use the fast path.
+          // If the op does not include it, keep the previous value.
+          publicBeeKey: op.publicBeeKey !== undefined ? op.publicBeeKey : (prev.publicBeeKey ?? null),
+          // Persist the canonical CommentsAutobase key so all devices can discover the shared comments log.
+          commentsAutobaseKey: op.commentsAutobaseKey !== undefined ? op.commentsAutobaseKey : (prev.commentsAutobaseKey ?? null),
           updatedAt: op.updatedAt || prev.updatedAt || 0,
           updatedBy: op.updatedBy || prev.updatedBy || null,
           createdAt: prev.createdAt || op.createdAt || op.updatedAt || 0,
@@ -273,6 +670,14 @@ export class MultiWriterChannel extends ReadyResource {
         if (!shouldUseNew && prev.avatar) {
           merged.avatar = prev.avatar
         }
+        // Only accept a new publicBeeKey when the update "wins"; otherwise preserve the previous value.
+        // If no previous key exists yet, allow it to be introduced regardless.
+        if (!shouldUseNew && prev.publicBeeKey) {
+          merged.publicBeeKey = prev.publicBeeKey
+        }
+        if (!shouldUseNew && prev.commentsAutobaseKey) {
+          merged.commentsAutobaseKey = prev.commentsAutobaseKey
+        }
 
         await view.put(key, merged)
         return
@@ -281,8 +686,16 @@ export class MultiWriterChannel extends ReadyResource {
       case 'add-video': {
         const key = prefixedKey('videos', op.id)
         const { type, ...rest } = op
-        console.log('[Channel] _applyOp add-video:', op.id, 'blobDriveKey:', op.blobDriveKey?.slice(0, 16), 'key:', key)
-        await view.put(key, rest)
+        // Coerce schema fields to safe strings to avoid rejecting historical ops
+        const safe = {
+          ...rest,
+          title: typeof rest.title === 'string' ? rest.title : String(rest.title ?? ''),
+          description: typeof rest.description === 'string' ? rest.description : '',
+          category: typeof rest.category === 'string' ? rest.category : '',
+          mimeType: typeof rest.mimeType === 'string' ? rest.mimeType : '',
+        }
+        console.log('[Channel] _applyOp add-video:', op.id, 'blobId:', op.blobId, 'blobsCoreKey:', op.blobsCoreKey?.slice(0, 16), 'keyLen:', op.blobsCoreKey?.length, 'key:', key)
+        await view.put(key, safe)
         return
       }
 
@@ -518,22 +931,71 @@ export class MultiWriterChannel extends ReadyResource {
     return meta
   }
 
-  async updateMetadata({ name, description = '', avatar = null }) {
+  /**
+   * Update channel metadata.
+   *
+   * Important: only fields present on `updates` are written into the op so we don't
+   * accidentally clear existing metadata (e.g. `avatar`).
+   *
+   * @param {Object} updates
+   * @param {string} [updates.name]
+   * @param {string} [updates.description]
+   * @param {string|null} [updates.avatar]
+   * @param {string|null} [updates.publicBeeKey]
+   * @param {string|null} [updates.commentsAutobaseKey]
+   */
+  async updateMetadata(updates = {}) {
+    const patch = updates && typeof updates === 'object' ? updates : {}
+
     // Get current logical clock from view
     const currentMeta = await this.getMetadata().catch(() => null)
     const nextClock = (currentMeta?.logicalClock || 0) + 1
 
-    await this.appendOp({
+    // Preserve existing publicBeeKey if not provided
+    const finalPublicBeeKey =
+      (typeof patch.publicBeeKey === 'string' && patch.publicBeeKey.length > 0 ? patch.publicBeeKey : null) ||
+      currentMeta?.publicBeeKey ||
+      this.publicBee?.keyHex ||
+      null
+
+    /** @type {any} */
+    const op = {
       type: 'update-channel',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       logicalClock: nextClock,
       key: 'meta',
-      name,
-      description,
-      avatar,
+      publicBeeKey: finalPublicBeeKey,
       updatedAt: Date.now(),
       updatedBy: this.localWriterKeyHex
-    })
+    }
+
+    if ('name' in patch) op.name = patch.name
+    if ('description' in patch) op.description = patch.description
+    if ('avatar' in patch) op.avatar = patch.avatar
+    if ('createdAt' in patch) op.createdAt = patch.createdAt
+    if ('createdBy' in patch) op.createdBy = patch.createdBy
+    if ('commentsAutobaseKey' in patch) op.commentsAutobaseKey = patch.commentsAutobaseKey
+
+    await this.appendOp(op)
+
+    // Sync public-facing metadata to the public Hyperbee (viewers read this, not the Autobase).
+    if (this.publicBee?.writable) {
+      try {
+        /** @type {any} */
+        const publicPatch = {}
+        if ('name' in patch) publicPatch.name = patch.name
+        if ('description' in patch) publicPatch.description = patch.description
+        if ('avatar' in patch) publicPatch.avatar = patch.avatar
+        if ('commentsAutobaseKey' in patch) publicPatch.commentsAutobaseKey = patch.commentsAutobaseKey
+
+        if (Object.keys(publicPatch).length > 0) {
+          await this.publicBee.setMetadata(publicPatch)
+          console.log('[Channel] updateMetadata synced to public bee')
+        }
+      } catch (err) {
+        console.log('[Channel] updateMetadata public sync error (non-fatal):', err?.message)
+      }
+    }
   }
 
   // ----------------------------
@@ -548,34 +1010,31 @@ export class MultiWriterChannel extends ReadyResource {
     return out
   }
 
+  /**
+   * Ensure the local writer is registered in the channel.
+   * In the unified architecture, all writers share the same Hyperblobs.
+   * @deprecated Use channel.blobs directly for blob operations
+   */
   async ensureLocalBlobDrive({ deviceName = '' } = {}) {
     if (!this.localWriterKeyHex) throw new Error('Channel not ready')
+    if (!this.blobs) throw new Error('Blobs not initialized')
 
-    // Try to load existing writer record
+    // Check if writer is already registered
     const existing = await this.view.get(prefixedKey('writers', this.localWriterKeyHex)).catch(() => null)
-    const prev = existing?.value || null
-
-    if (prev?.blobDriveKey) {
-      await this._loadBlobDrive(prev.blobDriveKey)
-      return prev.blobDriveKey
+    if (existing?.value) {
+      return this.blobsKeyHex // Return shared blobs key for compatibility
     }
 
-    // Create a new per-device blob drive
-    const drive = new Hyperdrive(this.store)
-    await drive.ready()
-    const driveKeyHex = b4a.toString(drive.key, 'hex')
-    this.blobDrives.set(driveKeyHex, drive)
-
-    // Persist writer record (does not affect membership, only metadata)
+    // Register the writer (all writers share the same Hyperblobs)
     await this.appendOp({
       type: 'upsert-writer',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       keyHex: this.localWriterKeyHex,
       deviceName,
-      blobDriveKey: driveKeyHex
+      blobDriveKey: this.blobsKeyHex // Point to shared blobs
     })
 
-    return driveKeyHex
+    return this.blobsKeyHex
   }
 
   async addWriter({ keyHex, role = 'device', deviceName = '' }) {
@@ -628,31 +1087,26 @@ export class MultiWriterChannel extends ReadyResource {
   // ----------------------------
 
   async listVideos() {
-    // Ensure the view catches up to any newly replicated Autobase nodes.
-    // (Some devices won't call base.update() elsewhere.)
+    // Ensure the view catches up to any newly replicated nodes.
+    // This is critical for ALL channels - both writable and read-only.
+    // Read-only peers viewing others' channels need the view to be updated
+    // with replicated Autobase data, otherwise they'll see empty video lists.
     try {
       await Promise.race([
-        this.base.update(),
-        new Promise((resolve) => setTimeout(resolve, 1500))
+        this._safeUpdate(),
+        new Promise((resolve) => setTimeout(resolve, 10000))  // 10s timeout for initial sync (includes discovery flush)
       ])
-    } catch {}
+    } catch (err) {
+      console.log('[Channel] listVideos update error (non-fatal):', err?.message)
+    }
 
     const out = []
     for await (const { value } of this.view.createReadStream({ gt: 'videos/', lt: 'videos/\xff' })) {
       out.push(value)
     }
 
-    // Proactively join blob drives referenced by the latest metadata (helps replication + playback)
-    if (this.swarm) {
-      const seen = new Set()
-      for (const v of out) {
-        const dk = v?.blobDriveKey || v?.blobDrive || null
-        if (dk && !seen.has(dk)) {
-          seen.add(dk)
-          this.joinBlobDrive(dk).catch(() => {})
-        }
-      }
-    }
+    // Note: In the unified architecture, all blobs are in a single Hyperblobs instance
+    // that's already part of the channel's Corestore. No need to join separate blob drives.
 
     // Sort newest first, consistent with existing UI expectations
     out.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
@@ -666,72 +1120,232 @@ export class MultiWriterChannel extends ReadyResource {
       console.error('[Channel] getVideo error:', err?.message)
       return null
     })
-    console.log('[Channel] getVideo result:', res?.value?.id, 'blobDriveKey:', res?.value?.blobDriveKey?.slice(0, 16))
+    const bck = res?.value?.blobsCoreKey
+    console.log('[Channel] getVideo result:', res?.value?.id, 'blobId:', res?.value?.blobId, 'blobsCoreKey:', bck?.slice(0, 16), 'keyLen:', bck?.length)
+    if (bck && bck.length !== 64) {
+      console.error('[Channel] WARNING: blobsCoreKey is TRUNCATED! Length:', bck.length, 'Full value:', bck)
+    }
     return res?.value || null
   }
 
   async addVideo(meta) {
     const id = meta.id
     if (!id) throw new Error('Video id required')
-    console.log('[Channel] addVideo:', id, 'blobDriveKey:', meta.blobDriveKey?.slice(0, 16))
+    console.log('[Channel] addVideo:', id, 'blobId:', meta.blobId, 'blobsCoreKey:', meta.blobsCoreKey?.slice(0, 16), 'keyLen:', meta.blobsCoreKey?.length)
 
     // Get next logical clock
     const videos = await this.listVideos().catch(() => [])
     const maxClock = Math.max(...videos.map(v => v.logicalClock || 0), 0)
     const nextClock = maxClock + 1
 
-    await this.appendOp({
+    const videoMeta = {
       type: 'add-video',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       logicalClock: nextClock,
       ...meta,
       uploadedAt: meta.uploadedAt || Date.now(),
       uploadedBy: meta.uploadedBy || this.localWriterKeyHex
-    })
+    }
+
+    await this.appendOp(videoMeta)
     // Wait for the view to be updated with our new entry
-    await this.base.update()
+    await this._safeUpdate()
     console.log('[Channel] addVideo appended and view updated')
+
+    // Sync to public Hyperbee for instant public feed replication
+    if (this.publicBee?.writable) {
+      try {
+        const { type, schemaVersion, logicalClock, ...publicMeta } = videoMeta
+        await this.publicBee.putVideo(id, publicMeta)
+        console.log('[Channel] addVideo synced to public bee')
+      } catch (err) {
+        console.log('[Channel] addVideo public sync error (non-fatal):', err?.message)
+      }
+    }
+  }
+
+  async updateVideo(id, updates) {
+    if (!id) throw new Error('Video id required')
+    console.log('[Channel] updateVideo:', id, 'updates:', JSON.stringify(updates))
+
+    // Get existing video
+    const existing = await this.getVideo(id)
+    if (!existing) throw new Error('Video not found: ' + id)
+
+    // Get next logical clock
+    const videos = await this.listVideos().catch(() => [])
+    const maxClock = Math.max(...videos.map(v => v.logicalClock || 0), 0)
+    const nextClock = maxClock + 1
+
+    const videoMeta = {
+      type: 'update-video',
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      logicalClock: nextClock,
+      id,
+      ...updates,
+      updatedAt: Date.now(),
+      updatedBy: this.localWriterKeyHex
+    }
+
+    await this.appendOp(videoMeta)
+    await this._safeUpdate()
+    console.log('[Channel] updateVideo appended and view updated')
+
+    // Sync to public Hyperbee
+    if (this.publicBee?.writable) {
+      try {
+        const merged = { ...existing, ...updates }
+        const { type, schemaVersion, logicalClock, ...publicMeta } = merged
+        await this.publicBee.putVideo(id, publicMeta)
+        console.log('[Channel] updateVideo synced to public bee')
+      } catch (err) {
+        console.log('[Channel] updateVideo public sync error (non-fatal):', err?.message)
+      }
+    }
   }
 
   async deleteVideo(id) {
-    // Blob deletion is best-effort; the blob store may belong to another device.
-    const v = await this.getVideo(id)
+    // Note: In Hyperblobs, blobs are content-addressed and immutable.
+    // We can't delete individual blobs, but removing the video metadata
+    // makes the blob unreferenced and it won't be served.
+    console.log('[Channel] deleteVideo:', id)
     await this.appendOp({
       type: 'delete-video',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       id
     })
-    if (v?.blobDriveKey && v?.path) {
-      const d = await this._loadBlobDrive(v.blobDriveKey).catch(() => null)
-      if (d) {
-        try { await d.del(v.path) } catch {}
+    // Wait for the view to be updated with the deletion
+    await this._safeUpdate()
+    console.log('[Channel] deleteVideo appended and view updated')
+
+    // Sync deletion to public Hyperbee
+    if (this.publicBee?.writable) {
+      try {
+        await this.publicBee.deleteVideo(id)
+        console.log('[Channel] deleteVideo synced to public bee')
+      } catch (err) {
+        console.log('[Channel] deleteVideo public sync error (non-fatal):', err?.message)
       }
     }
   }
 
   // ----------------------------
-  // Blob resolution
+  // Blob operations (Hyperblobs)
   // ----------------------------
 
-  async _loadBlobDrive(driveKeyHex) {
-    if (this.blobDrives.has(driveKeyHex)) return this.blobDrives.get(driveKeyHex)
-    const d = new Hyperdrive(this.store, fromHex(driveKeyHex))
-    await d.ready()
-    this.blobDrives.set(driveKeyHex, d)
-    return d
+  /**
+   * Store a blob in the shared Hyperblobs instance.
+   * @param {Buffer|Uint8Array} data - The blob data to store
+   * @returns {Promise<{id: string, blockOffset: number, blockLength: number, byteOffset: number, byteLength: number}>}
+   */
+  async putBlob(data) {
+    if (!this.blobs) throw new Error('Blobs not initialized')
+    const id = await this.blobs.put(data)
+    // Hyperblobs.put() returns a blob ID object with: { blockOffset, blockLength, byteOffset, byteLength }
+    return {
+      id: `${id.blockOffset}:${id.blockLength}:${id.byteOffset}:${id.byteLength}`,
+      ...id
+    }
   }
 
-  async getBlobDrive(driveKeyHex) {
-    return this._loadBlobDrive(driveKeyHex)
+  /**
+   * Get a blob from the shared Hyperblobs instance.
+   * @param {string|{blockOffset: number, blockLength: number, byteOffset: number, byteLength: number}} blobId
+   * @returns {Promise<Buffer|null>}
+   */
+  async getBlob(blobId) {
+    if (!this.blobs) throw new Error('Blobs not initialized')
+
+    // Parse string ID if needed
+    let id = blobId
+    if (typeof blobId === 'string') {
+      const parts = blobId.split(':').map(Number)
+      if (parts.length !== 4) throw new Error('Invalid blob ID format')
+      id = {
+        blockOffset: parts[0],
+        blockLength: parts[1],
+        byteOffset: parts[2],
+        byteLength: parts[3]
+      }
+    }
+
+    try {
+      return await this.blobs.get(id)
+    } catch (err) {
+      console.log('[Channel] getBlob error:', err?.message)
+      return null
+    }
   }
 
-  async getBlobEntry({ blobDriveKey, path }) {
-    const drive = await this._loadBlobDrive(blobDriveKey)
-    const entry = await drive.entry(path)
-    if (!entry || !entry.value?.blob) return null
-    const blobs = await drive.getBlobs()
-    if (!blobs) return null
-    return { entry, blobsKey: blobs.core.key }
+  /**
+   * Create a read stream for a blob.
+   * @param {string|{blockOffset: number, blockLength: number, byteOffset: number, byteLength: number}} blobId
+   * @param {Object} [opts] - Stream options (start, end, etc.)
+   * @returns {ReadableStream}
+   */
+  createBlobReadStream(blobId, opts = {}) {
+    if (!this.blobs) throw new Error('Blobs not initialized')
+
+    // Parse string ID if needed
+    let id = blobId
+    if (typeof blobId === 'string') {
+      const parts = blobId.split(':').map(Number)
+      if (parts.length !== 4) throw new Error('Invalid blob ID format')
+      id = {
+        blockOffset: parts[0],
+        blockLength: parts[1],
+        byteOffset: parts[2],
+        byteLength: parts[3]
+      }
+    }
+
+    return this.blobs.createReadStream(id, opts)
+  }
+
+  /**
+   * Get blob entry info for playback (compatible with existing API).
+   * @param {Object} video - Video metadata with blobId
+   * @returns {Promise<{blobId: Object, blobsKey: Buffer, byteLength: number}|null>}
+   */
+  async getBlobEntry(video) {
+    if (!video?.blobId) return null
+
+    // Parse the blobId
+    let id = video.blobId
+    if (typeof id === 'string') {
+      const parts = id.split(':').map(Number)
+      if (parts.length !== 4) return null
+      id = {
+        blockOffset: parts[0],
+        blockLength: parts[1],
+        byteOffset: parts[2],
+        byteLength: parts[3]
+      }
+    }
+
+    // Determine which blobs core has this video
+    let blobsKey = this._blobsCore?.key
+
+    // If video specifies a different blobs core (uploaded by another device), load it
+    if (video.blobsCoreKey && video.blobsCoreKey !== this.blobsKeyHex) {
+      try {
+        const remoteBlobsCore = this.store.get(b4a.from(video.blobsCoreKey, 'hex'))
+        await remoteBlobsCore.ready()
+        blobsKey = remoteBlobsCore.key
+        console.log('[Channel] getBlobEntry: using remote blobs core:', video.blobsCoreKey.slice(0, 16))
+      } catch (err) {
+        console.log('[Channel] getBlobEntry: failed to load remote blobs core:', err?.message)
+        return null
+      }
+    }
+
+    if (!blobsKey) return null
+
+    return {
+      blobId: id,
+      blobsKey,
+      byteLength: id.byteLength
+    }
   }
 
   // ----------------------------
@@ -800,11 +1414,18 @@ export class MultiWriterChannel extends ReadyResource {
     this._pairingSetupDone = true
     this.swarm = swarm
 
+    // IMPORTANT: replication idempotency must be per-channel (per Autobase instance).
+    // Using a global per-connection WeakSet prevents other channels from replicating on the same
+    // peer connection, which makes public-feed channels appear "empty" (no videos).
+    const replicatedConns = this._replicatedConns
+
     // ALWAYS join the channel's discovery topic for replication
     // This is critical - even non-writable/paired devices need to find peers to sync data
     if (this.discoveryKey) {
       console.log('[Channel] Joining swarm for discovery key:', this.discoveryKey.toString('hex').slice(0, 16))
+      // Retain the discovery handle; otherwise it can be GC'd on some runtimes and discovery stops.
       const discovery = swarm.join(this.discoveryKey)
+      this._channelDiscovery = discovery
       // IMPORTANT: Do not await flushed() here.
       // On some runtimes (notably mobile/Bare), flushed() can take a long time and would prevent
       // us from wiring replication handlers (base.replicate) early, which makes the channel
@@ -822,7 +1443,13 @@ export class MultiWriterChannel extends ReadyResource {
     // CRITICAL: Wire up Autobase replication on peer connections
     // Unlike Hyperdrive, Autobase requires explicit base.replicate(conn) calls
     // Without this, data never syncs between peers!
+    // IMPORTANT: Use idempotency check - calling replicate() twice on the same Autobase+connection can corrupt state
     this._connectionHandler = (conn) => {
+      if (replicatedConns.has(conn)) {
+        console.log('[Channel] Already replicated on this connection, skipping:', this.keyHex?.slice(0, 16))
+        return
+      }
+      replicatedConns.add(conn)
       console.log('[Channel] Peer connected, replicating Autobase for:', this.keyHex?.slice(0, 16))
       if (this.base) {
         this.base.replicate(conn)
@@ -834,13 +1461,24 @@ export class MultiWriterChannel extends ReadyResource {
     // This is critical for newly paired devices that already have a connection
     if (swarm.connections && swarm.connections.size > 0) {
       console.log('[Channel] Replicating Autobase on', swarm.connections.size, 'existing connections for:', this.keyHex?.slice(0, 16))
+      let replicated = 0
+      let skipped = 0
       for (const conn of swarm.connections) {
+        if (replicatedConns.has(conn)) {
+          skipped++
+          continue  // Already replicated
+        }
+        replicatedConns.add(conn)
         try {
           this.base.replicate(conn)
+          replicated++
         } catch (err) {
           console.log('[Channel] Error replicating on existing connection:', err?.message)
         }
       }
+      console.log('[Channel] setupPairing: replicated on', replicated, 'connections, skipped', skipped, 'for:', this.keyHex?.slice(0, 16))
+    } else {
+      console.log('[Channel] setupPairing: no existing connections for:', this.keyHex?.slice(0, 16))
     }
 
     // Only writable peers should accept pairing requests (owner devices).
@@ -893,7 +1531,7 @@ export class MultiWriterChannel extends ReadyResource {
           })
 
           // Ensure the membership change is applied promptly so the new device becomes writable
-          await this.base.update()
+          await this._safeUpdate()
 
           // Confirm the pairing - send channel key and encryption key
           req.confirm({
@@ -918,20 +1556,9 @@ export class MultiWriterChannel extends ReadyResource {
     console.log('[Channel] Pairing member set up for channel:', this.keyHex?.slice(0, 16))
   }
 
-  /**
-   * Join the swarm for a specific blob drive (to fetch blobs from other devices).
-   *
-   * @param {string} driveKeyHex
-   */
-  async joinBlobDrive(driveKeyHex) {
-    if (!this.swarm) return
-
-    const drive = await this._loadBlobDrive(driveKeyHex)
-    if (drive.discoveryKey) {
-      this.swarm.join(drive.discoveryKey)
-      console.log('[Channel] Joined swarm for blob drive:', driveKeyHex.slice(0, 16))
-    }
-  }
+  // Note: joinBlobDrive() removed - in the unified architecture, all blobs are in
+  // the shared Hyperblobs instance that's part of the channel's Corestore.
+  // No separate discovery/replication needed for blobs.
 
   // ----------------------------
   // Sync helpers
@@ -954,6 +1581,7 @@ export class MultiWriterChannel extends ReadyResource {
     if (this.discoveryKey) {
       try {
         const discovery = this.swarm.join(this.discoveryKey)
+        this._channelDiscovery = discovery
         await discovery.flushed()
         console.log('[Channel] waitForPeerConnection: discovery flushed')
       } catch (err) {
@@ -1096,5 +1724,3 @@ export class MultiWriterChannel extends ReadyResource {
     prev.count++
   }
 }
-
-

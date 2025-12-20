@@ -6,7 +6,6 @@
  */
 
 import b4a from 'b4a'
-import crypto from 'hypercore-crypto'
 import { prefixedKey } from './util.js'
 
 const CURRENT_SCHEMA_VERSION = 1
@@ -37,13 +36,13 @@ export class CommentsChannel {
       throw new Error('Comment text must be 5000 characters or less')
     }
 
-    const commentId = b4a.toString(crypto.randomBytes(16), 'hex')
+    const commentId = b4a.toString(b4a.randomBytes(16), 'hex')
     const authorKeyHex = this.channel.localWriterKeyHex
     if (!authorKeyHex) {
       throw new Error('Channel not ready')
     }
 
-    await this.channel.appendOp({
+    await this.channel.base.append({
       type: 'add-comment',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       videoId,
@@ -53,9 +52,6 @@ export class CommentsChannel {
       timestamp: Date.now(),
       parentId: parentId || null
     })
-
-    // Wait for the view to be updated with the new comment
-    await this.channel.base.update()
 
     return { commentId, success: true }
   }
@@ -71,44 +67,24 @@ export class CommentsChannel {
   async listComments(videoId, options = {}) {
     const { page = 0, limit = 50 } = options
 
-    console.log('[Comments] listComments for videoId:', videoId)
-
-    // Wait for peer connections if swarm available but no peers yet
-    // This gives time for replication to start before we read
-    const swarm = this.channel.swarm
-    if (swarm && swarm.connections?.size === 0) {
-      console.log('[Comments] No peers yet, waiting for connections...')
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      console.log('[Comments] After wait, peers:', swarm.connections?.size || 0)
-    }
-
-    // Ensure view is up to date - use longer timeout and wait for remote data
+    // Ensure view is up to date
     try {
-      console.log('[Comments] Calling base.update with wait:true')
       await Promise.race([
-        this.channel.base.update({ wait: true }),
-        new Promise((resolve) => setTimeout(resolve, 5000)) // Increased from 2s to 5s
+        this.channel.base.update(),
+        new Promise((resolve) => setTimeout(resolve, 1000))
       ])
-      console.log('[Comments] base.update complete')
-    } catch (err) {
-      console.log('[Comments] base.update error:', err?.message)
-    }
+    } catch {}
 
     const comments = []
     const prefix = prefixedKey('comments', `${videoId}/`)
     const start = `${prefix}`
     const end = `${prefix}\xff`
 
-    console.log('[Comments] Scanning range:', start, '->', end)
-
     for await (const { value } of this.channel.view.createReadStream({ gt: start, lt: end })) {
-      console.log('[Comments] Found comment:', value?.commentId, value?.text?.slice(0, 30))
       if (value && !value.hidden) {
         comments.push(value)
       }
     }
-
-    console.log('[Comments] Total comments found:', comments.length)
 
     // Sort by timestamp (newest first)
     comments.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
@@ -137,17 +113,13 @@ export class CommentsChannel {
       throw new Error('Only moderators can hide comments')
     }
 
-    await this.channel.appendOp({
+    await this.channel.base.append({
       type: 'hide-comment',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       videoId,
       commentId,
-      moderatorKeyHex,
-      timestamp: Date.now()
+      moderatorKeyHex
     })
-
-    // Wait for the view to be updated
-    await this.channel.base.update()
 
     return { success: true }
   }
@@ -181,7 +153,7 @@ export class CommentsChannel {
       throw new Error('Only moderators or comment authors can remove comments')
     }
 
-    await this.channel.appendOp({
+    await this.channel.base.append({
       type: 'remove-comment',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       videoId,
@@ -189,9 +161,6 @@ export class CommentsChannel {
       moderatorKeyHex: isModerator ? authorKeyHex : null,
       authorKeyHex: isAuthor ? authorKeyHex : null
     })
-
-    // Wait for the view to be updated
-    await this.channel.base.update()
 
     return { success: true }
   }

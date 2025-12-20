@@ -117,6 +117,7 @@ export async function createBackendContext(config) {
 
   // Phase 4: Wire up swarm connection handling
   ctx.swarm.on('connection', (conn, info) => {
+    console.log('[Orchestrator] Swarm connection received, passing to publicFeed.handleConnection');
     publicFeed.handleConnection(conn, info);
   });
 
@@ -126,6 +127,18 @@ export async function createBackendContext(config) {
   // Phase 6: Load identities (fast - reads from disk, needed before eventReady)
   console.log('[Orchestrator] Loading identities...');
   await identityManager.loadIdentities();
+
+  // Phase 6.5: Start public feed discovery immediately so UIs can get updates without waiting
+  try {
+    await publicFeed.start();
+    try {
+      publicFeed.requestFeedsFromPeers();
+    } catch (e) {
+      console.log('[Orchestrator] Initial feed request failed:', e?.message);
+    }
+  } catch (e) {
+    console.error('[Orchestrator] Public feed start failed:', e?.message);
+  }
 
   // Phase 7: Create unified API
   const api = createApi({
@@ -168,13 +181,6 @@ export async function createBackendContext(config) {
       }
 
       // Start public feed discovery
-      await publicFeed.start();
-      try {
-        publicFeed.requestFeedsFromPeers();
-      } catch (e) {
-        console.log('[Orchestrator] Initial feed request failed:', e?.message);
-      }
-
       // Warm subscribed / pinned / seeding drives (can be slow)
       try {
         const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || [];

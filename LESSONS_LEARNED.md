@@ -121,3 +121,14 @@ SIDEBAR_COLLAPSED = 72 // Collapsed sidebar
 ```
 
 Sidebar top position = `PEAR_BAR_HEIGHT + HEADER_HEIGHT` (108px) because it's position:fixed relative to viewport, not content area.
+
+---
+
+## Autobase / Comments
+
+### Viewer Autobase needs its own keyPair
+When opening a read-only CommentsAutobase on a viewer, pass a per-device `keyPair` to Autobase (e.g. `corestore.createKeyPair('peartube-comments-viewer:<channelKey>')`).
+If you do not, Autobase follows the bootstrap core's `autobase/local` pointer (owner local writer) and the viewer never reaches `base.opened=true` (inputs stays 0, ready() times out).
+
+### Optional: force fast-forward bootstrap for viewers
+If a viewer still stalls during ready(), force a fast-forward bootstrap (`force: true`, `minimum: 1`) before waiting for ready().

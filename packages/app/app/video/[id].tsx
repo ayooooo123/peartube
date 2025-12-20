@@ -4,18 +4,16 @@
  * Supports swipe-down to minimize to mini player
  * Uses SHARED player from VideoPlayerContext for continuous playback
  */
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet, TextInput, RefreshControl, Alert } from 'react-native'
+import { useState, useEffect, useRef } from 'react'
+import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { GestureDetector, Gesture } from 'react-native-gesture-handler'
-import { runOnJS } from 'react-native-reanimated'
 // VLC player for iOS/Android
 let VLCPlayer: any = null
 if (Platform.OS !== 'web') {
   VLCPlayer = require('react-native-vlc-media-player').VLCPlayer
 }
-import { ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Users, Reply, Trash2, X, Play, Pause } from 'lucide-react-native'
+import { ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Users } from 'lucide-react-native'
 import { useApp, colors } from '../_layout'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 
@@ -211,17 +209,26 @@ export default function VideoPlayerScreen() {
   const videoHeight = Math.round(screenWidth * 9 / 16)
   const { rpc } = useApp()
 
-  // VideoPlayerContext for minimize functionality
-  const { minimizePlayer, loadAndPlayVideo } = useVideoPlayerContext()
-
-  // Local video state
-  const [videoUrl, setVideoUrl] = useState<string | null>(null)
-  const [isPlaying, setIsPlaying] = useState(true)
-  const [isLoading, setIsLoading] = useState(false)
-  const [playbackRate, setPlaybackRate] = useState(1)
-  const [showControls, setShowControls] = useState(false)
-  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  const playerRef = useRef<any>(null)
+  // VideoPlayerContext - SHARED player for continuous playback
+  // Stats come via EVENT_VIDEO_STATS events from backend -> videoStatsEventEmitter -> context
+  const {
+    videoUrl,
+    isPlaying,
+    isLoading: loadingVideo,
+    videoStats,
+    playerRef,
+    playbackRate,
+    minimizePlayer,
+    loadAndPlayVideo,
+    setIsLoading,
+    // VLC callbacks
+    onProgress,
+    onPlaying,
+    onPaused,
+    onBuffering,
+    onEnded,
+    onError,
+  } = useVideoPlayerContext()
 
   // Parse video data from params (JSON encoded)
   const params = useLocalSearchParams()
@@ -235,97 +242,17 @@ export default function VideoPlayerScreen() {
   const [localStats, setLocalStats] = useState<VideoStats | null>(null)
   const statsPollingRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Social state (multi-writer channels)
-  const [comments, setComments] = useState<any[]>([])
-  const [commentText, setCommentText] = useState('')
-  const [commentsLoading, setCommentsLoading] = useState(false)
-  const [postingComment, setPostingComment] = useState(false)
-  const [replyToComment, setReplyToComment] = useState<any>(null)
-  const [commentsPage, setCommentsPage] = useState(0)
-  const [hasMoreComments, setHasMoreComments] = useState(false)
-  const [loadingMoreComments, setLoadingMoreComments] = useState(false)
-  const [refreshingComments, setRefreshingComments] = useState(false)
-  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null)
-  const COMMENTS_PER_PAGE = 25
-
-  const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({})
-  const [userReaction, setUserReaction] = useState<string | null>(null)
-  const [reactionsLoading, setReactionsLoading] = useState(false)
-
-  // Get current user's identity key for ownership checks
-  const { identity } = useApp()
-
-  // Show controls temporarily
-  const showControlsTemporarily = useCallback(() => {
-    setShowControls(true)
-    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current)
-    controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3000)
-  }, [])
-
-  // Handle minimize action (called from gesture or button)
-  const doMinimize = useCallback(() => {
-    if (videoUrl && videoData) {
-      loadAndPlayVideo(videoData, videoUrl)
+  // Intercept back navigation (swipe gesture, back button) to minimize instead of close
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', () => {
+      // Set mini mode when leaving screen (for any reason)
       minimizePlayer()
-      router.back()
-    }
-  }, [videoUrl, videoData, loadAndPlayVideo, minimizePlayer, router])
-
-  // Drag gesture to minimize - use runOnJS for React state updates
-  const panGesture = Gesture.Pan()
-    .onEnd((event) => {
-      if (event.translationY > 100) {
-        runOnJS(doMinimize)()
-      }
     })
-
-  // VLC callbacks
-  const onProgress = useCallback((data: { currentTime: number; duration: number }) => {
-    // Track progress if needed
-  }, [])
-
-  const onPlaying = useCallback(() => {
-    setIsPlaying(true)
-  }, [])
-
-  const onPaused = useCallback(() => {
-    setIsPlaying(false)
-  }, [])
-
-  const onBuffering = useCallback((data: { isBuffering: boolean }) => {
-    setIsLoading(data.isBuffering)
-  }, [])
-
-  const onEnded = useCallback(() => {
-    setIsPlaying(false)
-  }, [])
-
-  const onError = useCallback((error: any) => {
-    console.error('[VideoPlayer] VLC error:', error)
-    setIsLoading(false)
-  }, [])
-
-  // Handle tap on video - show controls, and if controls visible, toggle play/pause
-  const handleVideoTap = useCallback(() => {
-    if (showControls) {
-      // Controls are visible - toggle play/pause
-      if (isPlaying) {
-        setIsPlaying(false)
-        playerRef.current?.pause?.()
-      } else {
-        setIsPlaying(true)
-        playerRef.current?.play?.()
-      }
-    }
-    // Always show controls on tap
-    showControlsTemporarily()
-  }, [isPlaying, showControls, showControlsTemporarily])
+    return unsubscribe
+  }, [navigation, minimizePlayer])
 
   // Load video on mount (only if not coming from mini player which already has video loaded)
   useEffect(() => {
-    // Wait for rpc to be ready before loading
-    if (!rpc) return
-
     if (videoData && !fromMiniPlayer && !videoLoaded) {
       loadVideo()
       setVideoLoaded(true)
@@ -343,205 +270,7 @@ export default function VideoPlayerScreen() {
         statsPollingRef.current = null
       }
     }
-  }, [videoData, fromMiniPlayer, rpc])
-
-  // Track if we've loaded comments for this video to avoid re-fetching on fullscreen toggle
-  const commentsLoadedRef = useRef<string | null>(null)
-
-  // Load comments/reactions (separate effect to handle rpc becoming ready)
-  useEffect(() => {
-    if (!videoData || !rpc) return
-
-    const videoKey = `${videoData.channelKey}:${videoData.id}`
-
-    // Only load if we haven't already loaded for this video
-    if (commentsLoadedRef.current !== videoKey) {
-      commentsLoadedRef.current = videoKey
-      loadSocial()
-
-      // Best-effort index vector for semantic search
-      ;(async () => {
-        try {
-          if ((rpc as any).indexVideoVectors) {
-            await (rpc as any).indexVideoVectors({ channelKey: videoData.channelKey, videoId: videoData.id })
-          }
-        } catch {}
-      })()
-    }
-  }, [videoData?.id, videoData?.channelKey, rpc])
-
-  const loadSocial = async (page = 0, append = false, forceRefresh = false) => {
-    if (!videoData || !rpc) return
-    const vid = videoData.id
-    const ch = videoData.channelKey
-    if (!vid || !ch) return
-
-    // Don't show loading state if we already have comments (unless force refreshing)
-    const isInitialLoad = comments.length === 0
-
-    if (!append && (isInitialLoad || forceRefresh)) {
-      setCommentsLoading(true)
-      setReactionsLoading(true)
-    }
-    try {
-      const [commentsRes, reactionsRes] = await Promise.all([
-        (rpc as any).listComments?.({ channelKey: ch, videoId: vid, page, limit: COMMENTS_PER_PAGE }).catch(() => null),
-        !append ? (rpc as any).getReactions?.({ channelKey: ch, videoId: vid }).catch(() => null) : Promise.resolve(null),
-      ])
-
-      if (commentsRes?.success && Array.isArray(commentsRes.comments)) {
-        if (append) {
-          setComments(prev => [...prev, ...commentsRes.comments])
-        } else {
-          setComments(commentsRes.comments)
-        }
-        setHasMoreComments(commentsRes.comments.length >= COMMENTS_PER_PAGE)
-        setCommentsPage(page)
-      } else if (!append && isInitialLoad) {
-        // Only clear comments if this was initial load and it failed
-        setComments([])
-        setHasMoreComments(false)
-      }
-      // If we already have comments and the API fails, keep existing comments
-
-      if (reactionsRes?.success) {
-        // Backend returns counts as object map { like: 3, dislike: 1 } not array
-        const countsData = reactionsRes.counts || {}
-        const counts: Record<string, number> = {}
-        if (Array.isArray(countsData)) {
-          // Handle legacy array format: [{ reactionType, count }]
-          for (const c of countsData) {
-            if (c?.reactionType) counts[c.reactionType] = c.count || 0
-          }
-        } else if (typeof countsData === 'object') {
-          // Handle object map format: { like: 3, dislike: 1 }
-          for (const [key, value] of Object.entries(countsData)) {
-            counts[key] = typeof value === 'number' ? value : 0
-          }
-        }
-        setReactionCounts(counts)
-        setUserReaction(reactionsRes.userReaction || null)
-      }
-      // If reactions fail and we already have data, keep existing data
-    } finally {
-      setCommentsLoading(false)
-      setReactionsLoading(false)
-      setLoadingMoreComments(false)
-      setRefreshingComments(false)
-    }
-  }
-
-  const loadMoreComments = useCallback(async () => {
-    if (loadingMoreComments || !hasMoreComments) return
-    setLoadingMoreComments(true)
-    await loadSocial(commentsPage + 1, true)
-  }, [loadingMoreComments, hasMoreComments, commentsPage, videoData, rpc])
-
-  const refreshComments = useCallback(async () => {
-    setRefreshingComments(true)
-    setCommentsPage(0)
-    commentsLoadedRef.current = null // Allow reload
-    await loadSocial(0, false, true) // forceRefresh = true
-  }, [videoData, rpc])
-
-  const deleteComment = async (commentId: string) => {
-    if (!videoData || !rpc) return
-    const vid = videoData.id
-    const ch = videoData.channelKey
-    if (!vid || !ch) return
-
-    Alert.alert(
-      'Delete Comment',
-      'Are you sure you want to delete this comment?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            setDeletingCommentId(commentId)
-            try {
-              const res = await (rpc as any).removeComment?.({ channelKey: ch, videoId: vid, commentId })
-              if (res?.success) {
-                setComments(prev => prev.filter(c => c.commentId !== commentId))
-              }
-            } catch (err) {
-              console.error('[VideoPlayer] Delete comment failed:', err)
-              Alert.alert('Error', 'Failed to delete comment')
-            } finally {
-              setDeletingCommentId(null)
-            }
-          }
-        }
-      ]
-    )
-  }
-
-  const toggleReaction = async (type: string) => {
-    if (!videoData || !rpc) return
-    const vid = videoData.id
-    const ch = videoData.channelKey
-    if (!vid || !ch) return
-    try {
-      if (userReaction === type) {
-        await (rpc as any).removeReaction?.({ channelKey: ch, videoId: vid })
-      } else {
-        await (rpc as any).addReaction?.({ channelKey: ch, videoId: vid, reactionType: type })
-      }
-      await loadSocial()
-    } catch (err) {
-      console.error('[VideoPlayer] Reaction failed:', err)
-    }
-  }
-
-  const postComment = async () => {
-    if (!videoData || !rpc) return
-    const text = commentText.trim()
-    if (!text) return
-    const vid = videoData.id
-    const ch = videoData.channelKey
-    if (!vid || !ch) return
-
-    setPostingComment(true)
-    try {
-      const res = await (rpc as any).addComment?.({
-        channelKey: ch,
-        videoId: vid,
-        text,
-        parentId: replyToComment?.commentId || null
-      })
-      if (res?.success) {
-        setCommentText('')
-        setReplyToComment(null)
-        // Wait a moment for backend to apply the op, then reload comments
-        await new Promise(resolve => setTimeout(resolve, 500))
-        await loadSocial(0, false)
-      }
-    } catch (err) {
-      console.error('[VideoPlayer] Add comment failed:', err)
-    } finally {
-      setPostingComment(false)
-    }
-  }
-
-  const cancelReply = () => {
-    setReplyToComment(null)
-    setCommentText('')
-  }
-
-  // Organize comments into threads (top-level + replies)
-  const organizedComments = comments.reduce((acc, c) => {
-    if (!c.parentId) {
-      acc.push({ ...c, replies: comments.filter(r => r.parentId === c.commentId) })
-    }
-    return acc
-  }, [] as any[])
-
-  // Check if user owns a comment
-  const isOwnComment = (comment: any) => {
-    if (!identity?.driveKey) return false
-    return comment.authorKeyHex === identity.driveKey
-  }
+  }, [videoData, fromMiniPlayer])
 
   const loadVideo = async () => {
     if (!videoData || !rpc) return
@@ -559,17 +288,16 @@ export default function VideoPlayerScreen() {
       })
 
       if (result?.url) {
-        setVideoUrl(result.url)
-        setIsPlaying(true)
-        setIsLoading(false)
+        // Use context's loadAndPlayVideo - this uses the shared player
+        loadAndPlayVideo(videoData, result.url)
 
         // Start prefetch and poll for stats
         if (Platform.OS !== 'web') {
+          // Start prefetch first, then poll after a short delay to ensure stats are initialized
           startPrefetch()
+          // Poll for stats - delay slightly to let prefetchVideo initialize stats
           setTimeout(() => startStatsPolling(), 500)
         }
-      } else {
-        setIsLoading(false)
       }
     } catch (err) {
       console.error('[VideoPlayer] Failed to load video:', err)
@@ -637,14 +365,10 @@ export default function VideoPlayerScreen() {
     statsPollingRef.current = setInterval(pollStats, 1000)
   }
 
-  // Minimize button - minimize to mini player instead of closing
-  const handleMinimize = useCallback(() => {
-    if (videoUrl && videoData) {
-      loadAndPlayVideo(videoData, videoUrl)
-      minimizePlayer()
-    }
+  // Back/minimize button - beforeRemove listener handles minimizePlayer()
+  const goBack = () => {
     router.back()
-  }, [videoUrl, videoData, loadAndPlayVideo, minimizePlayer, router])
+  }
 
   const channelName = channelMeta?.name || videoData?.channel?.name || `Channel ${videoData?.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
@@ -652,84 +376,61 @@ export default function VideoPlayerScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Video Player Area */}
-      <GestureDetector gesture={panGesture}>
-        <View style={styles.playerContainer}>
-          {/* Minimize button overlay (chevron down) */}
-          <Pressable style={styles.backButton} onPress={handleMinimize}>
-            <ChevronDown color="#fff" size={28} />
-          </Pressable>
+      <View style={styles.playerContainer}>
+        {/* Minimize button overlay (chevron down) */}
+        <Pressable style={styles.backButton} onPress={goBack}>
+          <ChevronDown color="#fff" size={28} />
+        </Pressable>
 
-          <Pressable style={[styles.player, { height: videoHeight }]} onPress={handleVideoTap}>
-            {isLoading ? (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator color="white" size="large" />
-                <Text style={styles.loadingText}>Connecting to P2P network...</Text>
-              </View>
-            ) : videoUrl ? (
-              Platform.OS === 'web' ? (
-                <video src={videoUrl} controls autoPlay style={{ width: '100%', height: '100%', backgroundColor: '#000' }} />
-              ) : (
-                <View style={{ width: screenWidth, height: videoHeight }} pointerEvents="box-none">
-                  {VLCPlayer && (
-                    <VLCPlayer
-                      ref={playerRef}
-                      source={{ uri: videoUrl }}
-                      style={{ width: screenWidth, height: videoHeight }}
-                      resizeMode="contain"
-                      paused={!isPlaying}
-                      rate={playbackRate}
-                      onProgress={onProgress}
-                      onPlaying={onPlaying}
-                      onPaused={onPaused}
-                      onBuffering={onBuffering}
-                      onEnd={onEnded}
-                      onError={onError}
-                    />
-                  )}
-                  {/* Play/Pause controls overlay */}
-                  {showControls && (
-                    <View style={styles.controlsOverlay} pointerEvents="none">
-                      {isPlaying ? (
-                        <Pause color="#fff" size={48} />
-                      ) : (
-                        <Play color="#fff" size={48} />
-                      )}
-                    </View>
-                  )}
-                  <P2PStatsOverlay
-                    stats={localStats}
-                    showDetails={showStats}
-                    onPress={() => setShowStats(!showStats)}
-                  />
-                </View>
-              )
+        <View style={[styles.player, { height: videoHeight }]}>
+          {loadingVideo ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator color="white" size="large" />
+              <Text style={styles.loadingText}>Connecting to P2P network...</Text>
+            </View>
+          ) : videoUrl ? (
+            Platform.OS === 'web' ? (
+              <video src={videoUrl} controls autoPlay style={{ width: '100%', height: '100%', backgroundColor: '#000' }} />
             ) : (
-              <View style={styles.errorContainer}>
-                <Text style={styles.errorText}>Failed to load video</Text>
-                <Pressable style={styles.retryButton} onPress={loadVideo}>
-                  <Text style={styles.retryText}>Retry</Text>
-                </Pressable>
+              <View style={{ width: screenWidth, height: videoHeight }}>
+                {VLCPlayer && (
+                  <VLCPlayer
+                    ref={playerRef}
+                    source={{ uri: videoUrl }}
+                    style={{ width: screenWidth, height: videoHeight }}
+                    resizeMode="contain"
+                    paused={!isPlaying}
+                    rate={playbackRate}
+                    onProgress={onProgress}
+                    onPlaying={onPlaying}
+                    onPaused={onPaused}
+                    onBuffering={onBuffering}
+                    onEnd={onEnded}
+                    onError={onError}
+                  />
+                )}
+                <P2PStatsOverlay
+                  stats={localStats || videoStats}
+                  showDetails={showStats}
+                  onPress={() => setShowStats(!showStats)}
+                />
               </View>
-            )}
-          </Pressable>
+            )
+          ) : (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>Failed to load video</Text>
+              <Pressable style={styles.retryButton} onPress={loadVideo}>
+                <Text style={styles.retryText}>Retry</Text>
+              </Pressable>
+            </View>
+          )}
         </View>
-      </GestureDetector>
+      </View>
 
       {/* Video Info & Actions */}
-      <ScrollView
-        style={styles.content}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshingComments}
-            onRefresh={refreshComments}
-            tintColor={colors.primary}
-            colors={[colors.primary]}
-          />
-        }
-      >
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* P2P Stats Bar */}
-        {Platform.OS !== 'web' && <P2PStatsBar stats={localStats} />}
+        {Platform.OS !== 'web' && <P2PStatsBar stats={localStats || videoStats} />}
 
         {/* Video Title & Meta */}
         <View style={styles.videoInfo}>
@@ -741,18 +442,8 @@ export default function VideoPlayerScreen() {
 
         {/* Action Buttons */}
         <View style={styles.actions}>
-          <ActionButton
-            icon={ThumbsUp}
-            label={`Like${reactionCounts.like ? ` (${reactionCounts.like})` : ''}`}
-            active={userReaction === 'like'}
-            onPress={() => toggleReaction('like')}
-          />
-          <ActionButton
-            icon={ThumbsDown}
-            label={`Dislike${reactionCounts.dislike ? ` (${reactionCounts.dislike})` : ''}`}
-            active={userReaction === 'dislike'}
-            onPress={() => toggleReaction('dislike')}
-          />
+          <ActionButton icon={ThumbsUp} label="Like" />
+          <ActionButton icon={ThumbsDown} label="Dislike" />
           <ActionButton icon={Share2} label="Share" />
           <ActionButton icon={Download} label="Download" />
           <ActionButton icon={MoreHorizontal} label="More" />
@@ -770,132 +461,6 @@ export default function VideoPlayerScreen() {
             <Text style={styles.descriptionText}>{videoData.description}</Text>
           </View>
         )}
-
-        {/* Comments */}
-        <View style={styles.commentsSection}>
-          <Text style={styles.commentsTitle}>
-            {comments.length > 0 ? `${comments.length} Comment${comments.length !== 1 ? 's' : ''}` : 'Comments'}
-          </Text>
-
-          {/* Reply indicator */}
-          {replyToComment && (
-            <View style={styles.replyIndicator}>
-              <Text style={styles.replyIndicatorText}>
-                Replying to {(replyToComment.authorKeyHex || '').slice(0, 8)}…
-              </Text>
-              <Pressable onPress={cancelReply} style={styles.cancelReplyButton}>
-                <X color={colors.textMuted} size={16} />
-              </Pressable>
-            </View>
-          )}
-
-          <View style={styles.commentComposer}>
-            <TextInput
-              value={commentText}
-              onChangeText={setCommentText}
-              placeholder={replyToComment ? 'Write a reply…' : 'Add a comment…'}
-              placeholderTextColor={colors.textMuted}
-              style={styles.commentInput}
-              multiline
-            />
-            <Pressable
-              onPress={postComment}
-              disabled={postingComment || !commentText.trim()}
-              style={[styles.commentButton, (postingComment || !commentText.trim()) && { opacity: 0.5 }]}
-            >
-              <Text style={styles.commentButtonText}>{postingComment ? 'Posting…' : 'Post'}</Text>
-            </Pressable>
-          </View>
-
-          {commentsLoading ? (
-            <View style={{ paddingVertical: 12 }}>
-              <ActivityIndicator color={colors.primary} />
-            </View>
-          ) : comments.length === 0 ? (
-            <Text style={styles.commentsEmpty}>No comments yet. Be the first to comment!</Text>
-          ) : (
-            <View style={{ gap: 12, paddingBottom: 24 }}>
-              {organizedComments.map((c: any) => (
-                <View key={c.commentId}>
-                  {/* Main comment */}
-                  <View style={styles.commentItem}>
-                    <View style={styles.commentHeader}>
-                      <Text style={styles.commentAuthor}>
-                        {(c.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(c.timestamp || Date.now())}
-                      </Text>
-                      <View style={styles.commentActions}>
-                        <Pressable
-                          onPress={() => setReplyToComment(c)}
-                          style={styles.commentActionButton}
-                        >
-                          <Reply color={colors.textMuted} size={14} />
-                        </Pressable>
-                        {isOwnComment(c) && (
-                          <Pressable
-                            onPress={() => deleteComment(c.commentId)}
-                            disabled={deletingCommentId === c.commentId}
-                            style={styles.commentActionButton}
-                          >
-                            {deletingCommentId === c.commentId ? (
-                              <ActivityIndicator size="small" color={colors.textMuted} />
-                            ) : (
-                              <Trash2 color="#f87171" size={14} />
-                            )}
-                          </Pressable>
-                        )}
-                      </View>
-                    </View>
-                    <Text style={styles.commentText}>{c.text}</Text>
-                  </View>
-
-                  {/* Replies */}
-                  {c.replies && c.replies.length > 0 && (
-                    <View style={styles.repliesContainer}>
-                      {c.replies.map((reply: any) => (
-                        <View key={reply.commentId} style={styles.replyItem}>
-                          <View style={styles.commentHeader}>
-                            <Text style={styles.commentAuthor}>
-                              {(reply.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(reply.timestamp || Date.now())}
-                            </Text>
-                            {isOwnComment(reply) && (
-                              <Pressable
-                                onPress={() => deleteComment(reply.commentId)}
-                                disabled={deletingCommentId === reply.commentId}
-                                style={styles.commentActionButton}
-                              >
-                                {deletingCommentId === reply.commentId ? (
-                                  <ActivityIndicator size="small" color={colors.textMuted} />
-                                ) : (
-                                  <Trash2 color="#f87171" size={14} />
-                                )}
-                              </Pressable>
-                            )}
-                          </View>
-                          <Text style={styles.commentText}>{reply.text}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              ))}
-
-              {/* Load more button */}
-              {hasMoreComments && (
-                <Pressable
-                  onPress={loadMoreComments}
-                  disabled={loadingMoreComments}
-                  style={styles.loadMoreButton}
-                >
-                  {loadingMoreComments ? (
-                    <ActivityIndicator size="small" color={colors.primary} />
-                  ) : (
-                    <Text style={styles.loadMoreText}>Load more comments</Text>
-                  )}
-                </Pressable>
-              )}
-            </View>
-          )}
-        </View>
       </ScrollView>
     </View>
   )
@@ -1051,123 +616,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
-  commentsSection: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-  },
-  commentsTitle: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 10,
-  },
-  commentComposer: {
-    backgroundColor: colors.bgSecondary,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 12,
-  },
-  commentInput: {
-    color: colors.text,
-    minHeight: 44,
-    fontSize: 14,
-    padding: 0,
-  },
-  commentButton: {
-    alignSelf: 'flex-end',
-    marginTop: 10,
-    backgroundColor: colors.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  commentButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  commentsEmpty: {
-    color: colors.textMuted,
-    fontSize: 13,
-    paddingVertical: 8,
-  },
-  commentItem: {
-    backgroundColor: colors.bgSecondary,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    padding: 10,
-  },
-  commentHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  commentAuthor: {
-    color: colors.textMuted,
-    fontSize: 12,
-    flex: 1,
-  },
-  commentActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  commentActionButton: {
-    padding: 4,
-  },
-  commentText: {
-    color: colors.text,
-    fontSize: 14,
-    lineHeight: 20,
-  },
-  repliesContainer: {
-    marginLeft: 20,
-    marginTop: 8,
-    gap: 8,
-    borderLeftWidth: 2,
-    borderLeftColor: colors.border,
-    paddingLeft: 12,
-  },
-  replyItem: {
-    backgroundColor: colors.bgSecondary,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    padding: 8,
-  },
-  replyIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.primary + '20',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-  replyIndicatorText: {
-    color: colors.primary,
-    fontSize: 13,
-  },
-  cancelReplyButton: {
-    padding: 4,
-  },
-  loadMoreButton: {
-    alignItems: 'center',
-    paddingVertical: 12,
-    backgroundColor: colors.bgSecondary,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  loadMoreText: {
-    color: colors.primary,
-    fontSize: 14,
-    fontWeight: '500',
-  },
   // P2P Stats Overlay
   statsOverlay: {
     position: 'absolute',
@@ -1279,15 +727,5 @@ const styles = StyleSheet.create({
     height: '100%',
     backgroundColor: colors.primary,
     borderRadius: 2,
-  },
-  controlsOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
 })

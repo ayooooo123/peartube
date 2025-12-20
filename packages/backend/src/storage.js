@@ -12,6 +12,23 @@ import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
+import { PublicChannelBee } from './channel/public-channel-bee.js'
+
+// Blind peering for mobile connectivity (keeps Autobases available through mirror servers)
+// This solves the issue where mobile devices behind CGNAT can't establish direct P2P connections
+// - BlindPeer (server): Desktop instances run as mirrors to keep data available
+// - BlindPeering (client): Mobile instances connect to mirrors when direct P2P fails
+let BlindPeer = null;
+let BlindPeering = null;
+let Wakeup = null;
+try {
+  BlindPeer = (await import('blind-peer')).default;
+  BlindPeering = (await import('blind-peering')).default;
+  Wakeup = (await import('protomux-wakeup')).default;
+} catch (e) {
+  // blind-peering is optional - will work without it but mobile may have connectivity issues
+  console.log('[Storage] blind-peer/blind-peering not available, mobile connectivity may be limited');
+}
 
 // Import bare-fs and bare-path for Bare runtime environments (mobile/desktop)
 // Note: These are only available in Bare runtime, guards below handle when they're not
@@ -30,10 +47,16 @@ try { path = (await import('bare-path')).default || (await import('bare-path'));
  */
 export function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
   const originalGet = store.get.bind(store);
-  store.get = function(opts = {}) {
+  store.get = function(keyOrOpts = {}) {
+    // Handle both store.get(key) and store.get({ key, ... }) signatures
+    // If first arg is a Buffer, it's a raw key - wrap it in options
+    if (b4a.isBuffer(keyOrOpts)) {
+      return originalGet({ key: keyOrOpts, timeout: defaultTimeout });
+    }
+    // Otherwise it's an options object - add timeout if not present
     const optsWithTimeout = {
-      ...opts,
-      timeout: opts.timeout ?? defaultTimeout
+      ...keyOrOpts,
+      timeout: keyOrOpts.timeout ?? defaultTimeout
     };
     return originalGet(optsWithTimeout);
   };
@@ -50,10 +73,21 @@ export function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
  * @param {string} [config.swarmKeyPath] - Optional path to persist Hyperswarm keypair
  * @param {number} [config.blobServerPort] - Optional fixed blob server port
  * @param {string} [config.blobServerHost] - Optional blob server host (defaults to 127.0.0.1)
+ * @param {string[]} [config.blindPeerMirrors] - Z32-encoded keys of blind peer mirrors to connect to
+ * @param {boolean} [config.enableBlindPeerServer=true] - Whether to run as blind peer server (desktop)
  * @returns {Promise<import('./types.js').StorageContext>}
  */
 export async function initializeStorage(config) {
-  const { storagePath, defaultTimeout = 30000, wrapTimeout = true, swarmKeyPath, blobServerPort: blobServerPortOverride, blobServerHost: blobServerHostOverride } = config;
+  const {
+    storagePath,
+    defaultTimeout = 30000,
+    wrapTimeout = true,
+    swarmKeyPath,
+    blobServerPort: blobServerPortOverride,
+    blobServerHost: blobServerHostOverride,
+    blindPeerMirrors = [],
+    enableBlindPeerServer = true
+  } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
 
@@ -144,22 +178,78 @@ export async function initializeStorage(config) {
   const swarm = new Hyperswarm({ keyPair });
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
 
+  // Start listening - DON'T block on it since it may hang on mobile
+  // The listen() call starts the server but we don't need to wait for it
+  console.log('[Storage] Starting swarm.listen() (non-blocking)...');
+  const listenPromise = swarm.listen()
+
+  // Track listen state for debugging
+  swarm._peartubeListenResolved = false
+  if (listenPromise && typeof listenPromise.then === 'function') {
+    listenPromise
+      .then(() => {
+        swarm._peartubeListenResolved = true
+        console.log('[Storage] listen() resolved, dht.firewalled:', swarm.dht?.firewalled, 'dht.bootstrapped:', swarm.dht?.bootstrapped)
+      })
+      .catch((e) => {
+        console.log('[Storage] listen() failed:', e?.message)
+      })
+  }
+
+  // Log DHT state for debugging
+  const logDhtState = () => {
+    const dht = swarm.dht
+    if (dht) {
+      console.log('[Storage] DHT state: bootstrapped=', dht.bootstrapped, 'firewalled=', dht.firewalled, 'ephemeral=', dht.ephemeral, 'online=', dht.online)
+    }
+  }
+
+  // Check DHT state after a delay
+  setTimeout(logDhtState, 2000)
+  setTimeout(logDhtState, 5000)
+
+  // Log swarm events for debugging mobile connectivity
+  swarm.on('update', () => {
+    console.log('[Storage] Swarm update event: connections=', swarm.connections?.size || 0, 'peers=', swarm.peers?.size || 0);
+  });
+
+  // Log connection events
+  swarm.on('connection', (conn, info) => {
+    const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown'
+    console.log('[Storage] NEW CONNECTION:', remoteKey, 'total:', swarm.connections?.size || 0)
+  })
+
+  // Log peer discovery events (DHT found a peer)
+  swarm.on('peer', (peer) => {
+    const peerKey = peer?.publicKey ? b4a.toString(peer.publicKey, 'hex').slice(0, 16) : 'unknown'
+    console.log('[Storage] PEER DISCOVERED:', peerKey, 'total peers:', swarm.peers?.size || 0)
+  })
+
+  // Drive cache (declare early so connection handler can access)
+  const drives = new Map();
+  const channels = new Map();
+
   // Set up replication for all connections
   swarm.on('connection', (conn, info) => {
     const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
     console.log('[Storage] Peer connected:', remoteKey);
 
-    // Replicate Hypercore/Hyperdrive storage
+    // Replicate all Hypercore data in the Corestore:
+    // - Autobase cores (channel metadata, videos, comments, etc.)
+    // - Hyperblobs cores (video bytes, thumbnails)
+    // - Legacy Hyperdrive cores (for backward compatibility)
     store.replicate(conn);
 
     // CRITICAL: Also replicate all loaded Autobase channels
-    // This ensures comments, reactions, and other Autobase ops sync between devices
-    // Without this, only Hypercore data syncs but Autobase linearization doesn't happen
-    if (channels && channels.size > 0) {
+    // Each channel's setupPairing registers its own handler, but that only fires for
+    // connections established AFTER the channel is loaded. This ensures channels loaded
+    // BEFORE this peer connected also get replicated.
+    if (channels.size > 0) {
       console.log('[Storage] Replicating', channels.size, 'Autobase channel(s) on new connection');
       for (const [keyHex, channel] of channels) {
-        if (channel.base) {
+        if (channel.base && channel._replicatedConns && !channel._replicatedConns.has(conn)) {
           try {
+            channel._replicatedConns.add(conn)
             channel.base.replicate(conn)
             console.log('[Storage] Replicated Autobase for channel:', keyHex.slice(0, 16))
           } catch (err) {
@@ -170,9 +260,66 @@ export async function initializeStorage(config) {
     }
   });
 
-  // Drive cache
-  const drives = new Map();
-  const channels = new Map();
+  // Initialize blind peering for mobile connectivity
+  // Desktop (non-firewalled): runs as blind peer server to keep data available
+  // Mobile (firewalled): connects to mirrors to sync when direct P2P fails
+  // DISABLED: Testing if this affects playback
+  let blindPeering = null;
+  let blindPeerServer = null;
+  let wakeup = null;
+
+  // if (BlindPeering && Wakeup) {
+  //   try {
+  //     wakeup = new Wakeup();
+  //
+  //     // Set up blind peering client (for connecting to mirrors)
+  //     // This helps mobile devices sync through desktop mirrors when direct P2P fails
+  //     const mirrors = blindPeerMirrors.length > 0 ? blindPeerMirrors : [];
+  //
+  //     if (mirrors.length > 0 || enableBlindPeerServer) {
+  //       blindPeering = new BlindPeering(swarm, store, {
+  //         mirrors,
+  //         wakeup
+  //       });
+  //       console.log('[Storage] BlindPeering client initialized with', mirrors.length, 'mirrors');
+  //     }
+  //
+  //     // Set up blind peer server on desktop (when not firewalled)
+  //     // This allows desktop to act as a mirror for mobile devices
+  //     if (enableBlindPeerServer && BlindPeer) {
+  //       // Wait for DHT to bootstrap before checking firewall status
+  //       const setupBlindPeerServer = async () => {
+  //         // Wait a bit for DHT state to stabilize
+  //         await new Promise(r => setTimeout(r, 5000));
+  //
+  //         const isFirewalled = swarm.dht?.firewalled;
+  //         console.log('[Storage] DHT firewalled:', isFirewalled);
+  //
+  //         // Only run blind peer server if NOT behind firewall (i.e., can accept connections)
+  //         if (!isFirewalled) {
+  //           try {
+  //             blindPeerServer = new BlindPeer(swarm, store, { wakeup });
+  //             await blindPeerServer.ready();
+  //             const serverKey = blindPeerServer.key ? b4a.toString(blindPeerServer.key, 'hex').slice(0, 16) : 'unknown';
+  //             console.log('[Storage] BlindPeer server started, key:', serverKey);
+  //             console.log('[Storage] Other devices can use this as a mirror for mobile connectivity');
+  //           } catch (err) {
+  //             console.log('[Storage] BlindPeer server setup failed (non-fatal):', err?.message);
+  //           }
+  //         } else {
+  //           console.log('[Storage] Firewalled, skipping blind peer server (will use client mode only)');
+  //         }
+  //       };
+  //
+  //       // Run in background, don't block initialization
+  //       setupBlindPeerServer().catch(err => {
+  //         console.log('[Storage] BlindPeer server setup error:', err?.message);
+  //       });
+  //     }
+  //   } catch (err) {
+  //     console.log('[Storage] BlindPeering setup failed (non-fatal):', err?.message);
+  //   }
+  // }
 
   return {
     store,
@@ -182,7 +329,11 @@ export async function initializeStorage(config) {
     blobServerPort,
     blobServerHost,
     drives,
-    channels
+    channels,
+    // Blind peering for mobile connectivity
+    blindPeering,
+    blindPeerServer,
+    wakeup
   };
 }
 
@@ -201,8 +352,26 @@ const loadingChannels = new Map()
 export async function loadChannel(ctx, channelKeyHex, options = {}) {
   if (!ctx.channels) ctx.channels = new Map()
   if (ctx.channels.has(channelKeyHex)) {
+    const cached = ctx.channels.get(channelKeyHex)
     console.log('[Storage] loadChannel: returning cached channel:', channelKeyHex.slice(0, 16))
-    return ctx.channels.get(channelKeyHex)
+
+    // CRITICAL: Ensure replication is set up on any connections that came in after the channel was loaded
+    // This handles the case where channel was cached but new peers connected since then
+    if (ctx.swarm && ctx.swarm.connections?.size > 0 && cached.base && cached._replicatedConns) {
+      for (const conn of ctx.swarm.connections) {
+        if (!cached._replicatedConns.has(conn)) {
+          cached._replicatedConns.add(conn)
+          try {
+            cached.base.replicate(conn)
+            console.log('[Storage] loadChannel: replicated cached channel on new connection:', channelKeyHex.slice(0, 16))
+          } catch (err) {
+            console.log('[Storage] loadChannel: replicate error:', err?.message)
+          }
+        }
+      }
+    }
+
+    return cached
   }
 
   // Check if already loading - wait for existing load to complete
@@ -224,7 +393,8 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
     console.log('[Storage] Loading channel:', channelKeyHex.slice(0, 16));
     const ch = new MultiWriterChannel(ctx.store, {
       key: b4a.from(channelKeyHex, 'hex'),
-      encryptionKey: options.encryptionKeyHex ? b4a.from(options.encryptionKeyHex, 'hex') : null
+      encryptionKey: options.encryptionKeyHex ? b4a.from(options.encryptionKeyHex, 'hex') : null,
+      swarm: ctx.swarm  // CRITICAL: Pass swarm so replication can be set up BEFORE base.update()
     })
 
     // Add timeout to prevent hanging on channel ready
@@ -236,6 +406,8 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
       ])
     } catch (err) {
       console.error('[Storage] Channel ready failed:', err.message)
+      // Best-effort cleanup so a failed open doesn't leak resources or leave half-open cores around.
+      try { await ch.close() } catch {}
       throw err
     }
     console.log('[Storage] Channel ready in', Date.now() - readyStart, 'ms:', channelKeyHex.slice(0, 16));
@@ -246,14 +418,28 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
     if (ctx.swarm) {
       try {
         if (ch.discoveryKey) ctx.swarm.join(ch.discoveryKey)
-        // Non-blocking: setupPairing may wait on swarm internals; don't let this stall API calls.
-        ch.setupPairing(ctx.swarm).catch((err) => {
-          console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
-        })
+        // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
+        // BEFORE any data queries (like listVideos). Unlike Hyperdrive which auto-replicates,
+        // Autobase requires explicit replication setup. Without awaiting, the race condition
+        // causes listVideos to return empty on mobile because handlers aren't registered yet.
+        await ch.setupPairing(ctx.swarm)
       } catch (err) {
         console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
       }
     }
+
+    // Register Autobase with blind-peering for mobile connectivity
+    // This ensures the channel data is available through mirror servers even when
+    // direct P2P connections fail (common on mobile behind CGNAT)
+    // DISABLED: Testing if this affects playback
+    // if (ctx.blindPeering && ch.base) {
+    //   try {
+    //     ctx.blindPeering.addAutobaseBackground(ch.base)
+    //     console.log('[Storage] Registered channel with blind-peering:', channelKeyHex.slice(0, 16))
+    //   } catch (err) {
+    //     console.log('[Storage] Blind-peering registration failed (non-fatal):', err?.message)
+    //   }
+    // }
 
     return ch
   })()
@@ -270,6 +456,54 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
   }
 }
 
+// Cache for public bees (keyed by publicBeeKeyHex)
+const publicBeeCache = new Map()
+
+/**
+ * Load a public channel Hyperbee for viewing.
+ * This is the simple, auto-replicating layer for public feed viewers.
+ * No Autobase complexity - just load the Hyperbee by key and it syncs via store.replicate().
+ *
+ * @param {import('./types.js').StorageContext} ctx
+ * @param {string} publicBeeKeyHex - The public Hyperbee key (NOT the Autobase channel key)
+ * @returns {Promise<PublicChannelBee>}
+ */
+export async function loadPublicBee(ctx, publicBeeKeyHex) {
+  // Check cache first
+  if (publicBeeCache.has(publicBeeKeyHex)) {
+    console.log('[Storage] loadPublicBee: returning cached:', publicBeeKeyHex.slice(0, 16))
+    return publicBeeCache.get(publicBeeKeyHex)
+  }
+
+  console.log('[Storage] loadPublicBee: loading:', publicBeeKeyHex.slice(0, 16))
+
+  const bee = new PublicChannelBee(ctx.store, {
+    key: publicBeeKeyHex
+  })
+
+  // Add timeout to prevent hanging
+  try {
+    await Promise.race([
+      bee.ready(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('PublicBee ready timeout')), 10000))
+    ])
+  } catch (err) {
+    console.error('[Storage] loadPublicBee failed:', err.message)
+    try { await bee.close() } catch {}
+    throw err
+  }
+
+  // Join swarm for discovery
+  if (ctx.swarm && bee.discoveryKey) {
+    ctx.swarm.join(bee.discoveryKey)
+    console.log('[Storage] loadPublicBee: joined swarm for:', publicBeeKeyHex.slice(0, 16))
+  }
+
+  publicBeeCache.set(publicBeeKeyHex, bee)
+  console.log('[Storage] loadPublicBee: ready:', publicBeeKeyHex.slice(0, 16), 'length:', bee.core?.length)
+  return bee
+}
+
 /**
  * Create a new multi-writer channel and join it on the swarm.
  *
@@ -280,7 +514,10 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
 export async function createChannel(ctx, options = {}) {
   if (!ctx.channels) ctx.channels = new Map()
 
-  const ch = new MultiWriterChannel(ctx.store, { encrypt: Boolean(options.encrypt) })
+  const ch = new MultiWriterChannel(ctx.store, {
+    encrypt: Boolean(options.encrypt),
+    swarm: ctx.swarm  // Pass swarm for early replication setup
+  })
   await ch.ready()
 
   const channelKeyHex = ch.keyHex
@@ -293,15 +530,25 @@ export async function createChannel(ctx, options = {}) {
     await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'autobase', createdAt: Date.now() })
   } catch {}
 
-  // Set up pairing and replication in background (non-blocking)
+  // Set up pairing and replication - AWAIT to ensure handlers are registered
   if (ctx.swarm) {
     try {
       if (ch.discoveryKey) ctx.swarm.join(ch.discoveryKey)
-    } catch {}
-
-    ch.setupPairing(ctx.swarm).catch(err => {
+      // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
+      await ch.setupPairing(ctx.swarm)
+    } catch (err) {
       console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
-    })
+    }
+  }
+
+  // Register with blind-peering for mobile connectivity
+  if (ctx.blindPeering && ch.base) {
+    try {
+      ctx.blindPeering.addAutobaseBackground(ch.base)
+      console.log('[Storage] Registered new channel with blind-peering:', channelKeyHex.slice(0, 16))
+    } catch (err) {
+      console.log('[Storage] Blind-peering registration failed (non-fatal):', err?.message)
+    }
   }
 
   return { channel: ch, channelKeyHex, encryptionKeyHex }
@@ -332,18 +579,24 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
     await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'autobase', createdAt: Date.now() })
   } catch {}
 
-  // Set up pairing and replication - MUST await to ensure base.replicate(conn) handler is wired up
-  // before waitForInitialSync() is called in the API layer.
-  // NOTE: API no longer blocks on waitForInitialSync in listVideos; keep this non-blocking to
-  // avoid mobile hangs while still joining replication.
+  // Set up pairing and replication - AWAIT to ensure base.replicate(conn) handlers are registered
   if (ctx.swarm) {
     try {
       if (channel.discoveryKey) ctx.swarm.join(channel.discoveryKey)
-      channel.setupPairing(ctx.swarm).catch((err) => {
-        console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
-      })
+      // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
+      await channel.setupPairing(ctx.swarm)
     } catch (err) {
       console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
+    }
+  }
+
+  // Register with blind-peering for mobile connectivity
+  if (ctx.blindPeering && channel.base) {
+    try {
+      ctx.blindPeering.addAutobaseBackground(channel.base)
+      console.log('[Storage] Registered paired channel with blind-peering:', channelKeyHex.slice(0, 16))
+    } catch (err) {
+      console.log('[Storage] Blind-peering registration failed (non-fatal):', err?.message)
     }
   }
 
@@ -552,4 +805,98 @@ export async function getVideoUrl(ctx, driveKey, videoPath, options = {}) {
 
   console.log('[Storage] Direct blob URL:', url);
   return { url };
+}
+
+/**
+ * Get video URL from Hyperblobs (new multi-writer architecture)
+ * @param {Object} ctx - Storage context
+ * @param {string} blobsCoreKeyHex - Hex key of the blobs Hypercore
+ * @param {Object} blobId - Blob ID with {blockOffset, blockLength, byteOffset, byteLength}
+ * @param {Object} [options]
+ * @param {string} [options.mimeType] - MIME type (default: video/mp4)
+ * @returns {Promise<{url: string}>}
+ */
+export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options = {}) {
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB:', blobsCoreKeyHex?.slice(0, 16), 'blobId:', JSON.stringify(blobId), 'keyLength:', blobsCoreKeyHex?.length);
+
+  if (!blobsCoreKeyHex) {
+    throw new Error('Missing blobsCoreKeyHex')
+  }
+
+  // Validate key length - should be 64 hex chars (32 bytes)
+  if (blobsCoreKeyHex.length !== 64) {
+    throw new Error(`Invalid blobsCoreKey length: ${blobsCoreKeyHex.length} (expected 64). Key is truncated or corrupted. Full key: ${blobsCoreKeyHex}`)
+  }
+
+  // Load the blobs core
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: converting hex to buffer...');
+  const keyBuffer = b4a.from(blobsCoreKeyHex, 'hex')
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: keyBuffer length:', keyBuffer.length, 'bytes');
+  
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: calling store.get...');
+  const blobsCore = ctx.store.get(keyBuffer)
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: store.get returned, calling ready...');
+  
+  await blobsCore.ready()
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: ready() complete');
+
+  if (!blobsCore.key) {
+    throw new Error('Blobs core key not available after ready')
+  }
+
+  console.log('[Storage] Blobs core ready, key:', b4a.toString(blobsCore.key, 'hex').slice(0, 16));
+
+  // Join swarm for the blobs core discovery key
+  if (ctx.swarm && blobsCore.discoveryKey) {
+    try {
+      ctx.swarm.join(blobsCore.discoveryKey)
+    } catch (err) {
+      console.log('[Storage] Swarm join error (non-fatal):', err?.message)
+    }
+  }
+
+  // Wait briefly for peers if needed
+  try {
+    await Promise.race([
+      blobsCore.update({ wait: true }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('blobs core update timeout')), 15000))
+    ])
+  } catch {}
+
+  const mimeType = options.mimeType || 'video/mp4'
+
+  // Parse blobId string to object if needed
+  // blobId can be a string like "0:28174:0:1846355808" or an object
+  let blob = blobId
+  if (typeof blobId === 'string') {
+    const parts = blobId.split(':').map(Number)
+    blob = {
+      blockOffset: parts[0],
+      blockLength: parts[1],
+      byteOffset: parts[2],
+      byteLength: parts[3]
+    }
+  }
+
+  // Generate direct blob URL
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: blobsCore.key type:', typeof blobsCore.key, 'isBuffer:', Buffer.isBuffer(blobsCore.key), 'length:', blobsCore.key?.length);
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: blobsCore.key hex:', blobsCore.key ? b4a.toString(blobsCore.key, 'hex') : 'NULL');
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: blob:', JSON.stringify(blob));
+  console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: ctx.blobServer exists:', !!ctx.blobServer, 'port:', ctx.blobServer?.port);
+  
+  if (!ctx.blobServer) {
+    throw new Error('BlobServer not initialized')
+  }
+  
+  try {
+    const url = ctx.blobServer.getLink(blobsCore.key, {
+      blob,
+      type: mimeType
+    });
+    console.log('[Storage] Direct blob URL (hyperblobs):', url);
+    return { url };
+  } catch (err) {
+    console.error('[Storage] GET_VIDEO_URL_FROM_BLOB: blobServer.getLink FAILED:', err.message, err.stack);
+    throw err;
+  }
 }

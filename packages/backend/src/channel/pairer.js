@@ -31,6 +31,9 @@ export class ChannelPairer extends ReadyResource {
     this.pairing = null
     this.candidate = null
     this.channel = null
+    // Track replicated connections for the pairing swarm we manage (if we create one).
+    // This is intentionally local to the pairer: replication idempotency for Autobase is per-channel.
+    this._replicatedConns = new WeakSet()
 
     this._resolve = null
     this._reject = null
@@ -61,7 +64,15 @@ export class ChannelPairer extends ReadyResource {
     if (!this.swarm) {
       console.log('[ChannelPairer] Creating new Hyperswarm')
       this.swarm = new Hyperswarm()
-      this.swarm.on('connection', (conn) => this.store.replicate(conn))
+      // Use idempotent replication - check before calling store.replicate()
+      this.swarm.on('connection', (conn) => {
+        if (this._replicatedConns.has(conn)) {
+          console.log('[ChannelPairer] Connection already replicated, skipping')
+          return
+        }
+        this._replicatedConns.add(conn)
+        this.store.replicate(conn)
+      })
     }
 
     console.log('[ChannelPairer] Getting local writer key...')
@@ -125,9 +136,15 @@ export class ChannelPairer extends ReadyResource {
 
             // CRITICAL: Start Autobase replication on existing connections
             // This ensures data syncs immediately after pairing, not just for future connections
+            // Use idempotent replication - check before calling base.replicate()
             if (this.swarm.connections && this.swarm.connections.size > 0) {
               console.log('[ChannelPairer] Replicating Autobase on', this.swarm.connections.size, 'existing connections')
               for (const conn of this.swarm.connections) {
+                if (this._replicatedConns.has(conn)) {
+                  console.log('[ChannelPairer] Connection already replicated, skipping')
+                  continue
+                }
+                this._replicatedConns.add(conn)
                 try {
                   this.channel.base.replicate(conn)
                 } catch (err) {

@@ -14,6 +14,8 @@ import { usePlatform } from '@/lib/PlatformProvider'
 // Public feed types
 interface FeedEntry {
   driveKey: string
+  channelKey?: string  // Alias for driveKey from RPC
+  publicBeeKey?: string  // Fast path key for viewers (auto-replicating Hyperbee)
   addedAt: number
   source: 'peer' | 'local'
 }
@@ -43,7 +45,7 @@ const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(wind
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
-  const { ready, identity, videos, loading, loadVideos, rpc } = useApp()
+  const { ready, identity, videos, loading, loadVideos, rpc, backendError, retryBackend, platformEvents } = useApp()
   const { loadAndPlayVideo } = useVideoPlayerContext()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
@@ -90,7 +92,6 @@ export default function HomeScreen() {
 
   // Thumbnail cache: key = `${driveKey}:${videoId}` -> url
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
-  const { platformEvents } = useApp()
   const appState = useRef<AppStateStatus>(AppState.currentState)
 
   // Fetch thumbnail for a video (non-blocking)
@@ -178,9 +179,10 @@ export default function HomeScreen() {
       if (result?.entries) {
         setFeedEntries(result.entries)
         for (const entry of result.entries) {
-          // Schema returns channelKey, not driveKey
-          if (entry.channelKey && !channelMeta[entry.channelKey]) {
-            loadChannelMeta(entry.channelKey)
+          const key = entry.channelKey || entry.driveKey
+          if (key && !channelMeta[key]) {
+            // Pass publicBeeKey for fast viewer access via auto-replicating Hyperbee
+            loadChannelMeta(key, entry.publicBeeKey)
           }
         }
       }
@@ -238,10 +240,10 @@ export default function HomeScreen() {
     }
   }, [rpc, identity?.driveKey, searchQuery])
 
-  const loadChannelMeta = useCallback(async (driveKey: string) => {
+  const loadChannelMeta = useCallback(async (driveKey: string, publicBeeKey?: string) => {
     if (!rpc) return
     try {
-      const result = await rpc.getChannelMeta({ channelKey: driveKey })
+      const result = await rpc.getChannelMeta({ channelKey: driveKey, publicBeeKey: publicBeeKey || undefined })
       if (result) {
         setChannelMeta(prev => ({ ...prev, [driveKey]: result }))
       }
@@ -285,19 +287,38 @@ export default function HomeScreen() {
         new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))
       ])
 
-    // Fetch videos from channels IN PARALLEL with per-channel timeout (8s each)
+    // Fetch videos from channels IN PARALLEL with per-channel timeout.
+    // Note: For newly discovered channels, `listVideos` may return [] until replication catches up.
+    // We do a few bounded retries to improve UX without blocking indefinitely.
     const PER_CHANNEL_TIMEOUT = 8000
+    const LIST_ATTEMPT_TIMEOUT = 2500
+    const LIST_ATTEMPTS = 3
+    const LIST_RETRY_DELAY_MS = 1000
+
     const channelPromises = feedEntries.slice(0, 15).map(async (entry) => {
       const channelKey = entry.channelKey || entry.driveKey
+      const publicBeeKey = entry.publicBeeKey || undefined
       if (!channelKey) return []
 
       try {
         // Join + list with combined timeout
         await withTimeout(rpc.joinChannel({ channelKey }), PER_CHANNEL_TIMEOUT, { success: false })
-        const result = await withTimeout(rpc.listVideos({ channelKey }), PER_CHANNEL_TIMEOUT, { videos: [] })
-        return (result?.videos || []).map((v: any) => ({
+
+        let videos: any[] = []
+        for (let attempt = 0; attempt < LIST_ATTEMPTS; attempt++) {
+          // Pass publicBeeKey for fast viewer access via auto-replicating Hyperbee
+          const result = await withTimeout(rpc.listVideos({ channelKey, publicBeeKey }), LIST_ATTEMPT_TIMEOUT, { videos: [] } as any)
+          videos = (result as any)?.videos || []
+          if (Array.isArray(videos) && videos.length > 0) break
+          if (attempt < LIST_ATTEMPTS - 1) {
+            await new Promise((resolve) => setTimeout(resolve, LIST_RETRY_DELAY_MS))
+          }
+        }
+
+        return (videos || []).map((v: any) => ({
           ...v,
           channelKey,
+          publicBeeKey: publicBeeKey || undefined,  // Include for video playback
           channel: { name: channelMeta[channelKey]?.name || 'Unknown' }
         }))
       } catch (err: any) {
@@ -336,15 +357,31 @@ export default function HomeScreen() {
     setLoadingChannel(true)
     setChannelVideos([])
 
+    // Look up publicBeeKey from feed entries for fast access
+    const entry = feedEntries.find(e => (e.channelKey || e.driveKey) === driveKey)
+    const publicBeeKey = entry?.publicBeeKey || undefined
+
     try {
       // Join/get the channel first
       await rpc.joinChannel({ channelKey: driveKey })
-      const result = await rpc.listVideos({ channelKey: driveKey })
-      const videoList = result?.videos || []
+      // Similar retry logic: channel can be discovered before any metadata is replicated.
+      const attempts = 5
+      const delayMs = 1000
+      let videoList: any[] = []
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        // Pass publicBeeKey for fast viewer access
+        const result = await withTimeout(rpc.listVideos({ channelKey: driveKey, publicBeeKey }), 3000, { videos: [] } as any)
+        videoList = (result as any)?.videos || []
+        if (Array.isArray(videoList) && videoList.length > 0) break
+        if (attempt < attempts - 1) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs))
+        }
+      }
       if (Array.isArray(videoList)) {
         const videosWithChannel = videoList.map((v: any) => ({
           ...v,
           channelKey: driveKey,
+          publicBeeKey: publicBeeKey || undefined,  // Include for video playback
           channel: channelMeta[driveKey] ? { name: channelMeta[driveKey].name } : undefined
         }))
         setChannelVideos(videosWithChannel)
@@ -356,7 +393,7 @@ export default function HomeScreen() {
     } finally {
       setLoadingChannel(false)
     }
-  }, [rpc, channelMeta, fetchThumbnailsForVideos])
+  }, [rpc, channelMeta, fetchThumbnailsForVideos, feedEntries])
 
   const closeChannelView = useCallback(() => {
     setViewingChannel(null)
@@ -378,9 +415,11 @@ export default function HomeScreen() {
         ? video.path
         : video.id
 
+      // Pass publicBeeKey for fast viewer access to video metadata
       const result = await rpc.getVideoUrl({
         channelKey: video.channelKey,
-        videoId: videoRef
+        videoId: videoRef,
+        publicBeeKey: (video as any).publicBeeKey || undefined
       })
 
       if (result?.url) {
@@ -409,7 +448,8 @@ export default function HomeScreen() {
       // Get video URL from backend
       const result = await rpc.getVideoUrl({
         channelKey: video.channelKey,
-        videoId: videoRef
+        videoId: videoRef,
+        publicBeeKey: (video as any).publicBeeKey || undefined
       })
 
       if (result?.url) {
@@ -475,6 +515,27 @@ export default function HomeScreen() {
         <Text className="text-pear-text-muted mt-4 text-label">
           {!ready ? 'Starting P2P network...' : 'Loading...'}
         </Text>
+        {backendError ? (
+          <>
+            <Text className="text-pear-text mt-3 text-center px-6 text-caption">
+              {backendError}
+            </Text>
+            {retryBackend ? (
+              <Pressable
+                onPress={retryBackend}
+                style={{
+                  marginTop: 12,
+                  paddingHorizontal: 16,
+                  paddingVertical: 8,
+                  borderRadius: 999,
+                  backgroundColor: colors.primary,
+                }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '600' }}>Retry backend</Text>
+              </Pressable>
+            ) : null}
+          </>
+        ) : null}
       </View>
     )
   }

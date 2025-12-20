@@ -37,7 +37,7 @@ export class ReactionsManager {
       throw new Error('Channel not ready')
     }
 
-    await this.channel.appendOp({
+    await this.channel.base.append({
       type: 'add-reaction',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       videoId,
@@ -45,9 +45,6 @@ export class ReactionsManager {
       authorKeyHex,
       timestamp: Date.now()
     })
-
-    // Wait for the view to be updated
-    await this.channel.base.update()
 
     return { success: true }
   }
@@ -63,15 +60,12 @@ export class ReactionsManager {
       throw new Error('Channel not ready')
     }
 
-    await this.channel.appendOp({
+    await this.channel.base.append({
       type: 'remove-reaction',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       videoId,
       authorKeyHex
     })
-
-    // Wait for the view to be updated
-    await this.channel.base.update()
 
     return { success: true }
   }
@@ -82,17 +76,11 @@ export class ReactionsManager {
    * @returns {Promise<{counts: Record<string, number>, userReaction: string|null}>}
    */
   async getReactions(videoId) {
-    // Wait for peer connections if swarm available but no peers yet
-    const swarm = this.channel.swarm
-    if (swarm && swarm.connections?.size === 0) {
-      await new Promise(resolve => setTimeout(resolve, 1500))
-    }
-
-    // Ensure view is up to date with longer timeout
+    // Ensure view is up to date
     try {
       await Promise.race([
-        this.channel.base.update({ wait: true }),
-        new Promise((resolve) => setTimeout(resolve, 5000)) // Increased from 1s
+        this.channel.base.update(),
+        new Promise((resolve) => setTimeout(resolve, 1000))
       ])
     } catch {}
 

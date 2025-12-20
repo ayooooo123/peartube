@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from './desktop/constants'
-import { useApp } from '../app/_layout'
+import { useApp } from '@/lib/AppContext'
 
 // VLC player for iOS/Android
 let VLCPlayer: any = null
@@ -281,6 +281,7 @@ export function VideoPlayerOverlay() {
   // Lives in the overlay so it persists across minimize/maximize/fullscreen.
   // ---------------------------------------
   const [comments, setComments] = useState<any[]>([])
+  const [pendingComments, setPendingComments] = useState<any[]>([])
   const [commentText, setCommentText] = useState('')
   const [replyToComment, setReplyToComment] = useState<any>(null)
   const [commentsLoading, setCommentsLoading] = useState(false)
@@ -301,22 +302,51 @@ export function VideoPlayerOverlay() {
     return `${currentVideo.channelKey}:${currentVideo.id}`
   }, [currentVideo?.channelKey, currentVideo?.id])
 
+  // Some parts of the app historically used `video.path` (often `/videos/{id}.mp4`) as the
+  // identifier for comments/reactions, while other parts used the stable `video.id`.
+  // Include both variants for reads so owners/viewers can see each other's existing comments.
+  const socialVideoIds = useMemo(() => {
+    const out = new Set<string>()
+    if (currentVideo?.id) out.add(currentVideo.id)
+
+    const p = currentVideo?.path
+    if (typeof p === 'string' && p && p !== currentVideo?.id) {
+      out.add(p)
+      if (p.startsWith('/')) out.add(p.slice(1))
+      else out.add(`/${p}`)
+    }
+
+    return Array.from(out)
+  }, [currentVideo?.id, currentVideo?.path])
+
+  const displayComments = useMemo(() => {
+    if (pendingComments.length === 0) return comments
+    const merged = new Map<string, any>()
+    for (const c of comments) merged.set(c.commentId, c)
+    for (const p of pendingComments) {
+      const id = p.commentId || p.localId
+      if (!id) continue
+      if (!merged.has(id)) merged.set(id, p)
+    }
+    return Array.from(merged.values()).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+  }, [comments, pendingComments])
+
   const organizedComments = useMemo(() => {
     const byParent = new Map<string, any[]>()
-    for (const c of comments) {
+    for (const c of displayComments) {
       const parentId = c?.parentId || ''
       if (!parentId) continue
       if (!byParent.has(parentId)) byParent.set(parentId, [])
       byParent.get(parentId)!.push(c)
     }
     const out: any[] = []
-    for (const c of comments) {
+    for (const c of displayComments) {
       const parentId = c?.parentId || ''
       if (parentId) continue
       out.push({ ...c, replies: byParent.get(c.commentId) || [] })
     }
     return out
-  }, [comments])
+  }, [displayComments])
 
   const isOwnComment = useCallback((c: any) => {
     if (!identity?.driveKey) return false
@@ -328,10 +358,9 @@ export function VideoPlayerOverlay() {
     if (!rpc?.listComments || !rpc?.getReactions) return
 
     const ch = currentVideo.channelKey
-    const primaryVid = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
-      ? currentVideo.path
-      : currentVideo.id
-    const altVid = (currentVideo.path && currentVideo.path !== primaryVid) ? currentVideo.path : null
+    const canonicalVid = currentVideo.id
+    const pubBee = (currentVideo as any).publicBeeKey || undefined  // Pass for comments key discovery
+    const altVids = socialVideoIds.filter(v => v !== canonicalVid)
 
     const isInitialLoad = comments.length === 0
     if (!append && (isInitialLoad || forceRefresh)) {
@@ -340,55 +369,97 @@ export function VideoPlayerOverlay() {
 
     try {
       const [commentsRes, reactionsRes] = await Promise.all([
-        rpc.listComments?.({ channelKey: ch, videoId: primaryVid, page, limit: COMMENTS_PER_PAGE }).catch(() => null),
-        !append ? rpc.getReactions?.({ channelKey: ch, videoId: primaryVid }).catch(() => null) : Promise.resolve(null),
+        rpc.listComments?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee, page, limit: COMMENTS_PER_PAGE }).catch(() => null),
+        !append ? rpc.getReactions?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee }).catch(() => null) : Promise.resolve(null),
       ])
 
       // Safety: if some peers used a different videoId key (id vs path), merge both.
-      let altCommentsRes: any = null
-      if (!append && altVid && rpc.listComments) {
-        altCommentsRes = await rpc.listComments?.({ channelKey: ch, videoId: altVid, page: 0, limit: COMMENTS_PER_PAGE }).catch(() => null)
+      const primaryOk = Boolean(commentsRes?.success && Array.isArray(commentsRes.comments))
+      const primaryComments = primaryOk ? commentsRes.comments : []
+
+      let altCommentResults: any[] = []
+      if (!append && altVids.length > 0 && rpc.listComments) {
+        altCommentResults = await Promise.all(
+          altVids.map((vid) =>
+            rpc.listComments?.({ channelKey: ch, videoId: vid, publicBeeKey: pubBee, page: 0, limit: COMMENTS_PER_PAGE }).catch(() => null)
+          )
+        )
       }
 
-      if (commentsRes?.success && Array.isArray(commentsRes.comments)) {
-        if (append) {
-          setComments(prev => [...prev, ...commentsRes.comments])
-        } else {
-          const merged = new Map<string, any>()
-          for (const c of commentsRes.comments) merged.set(c.commentId, c)
-          if (altCommentsRes?.success && Array.isArray(altCommentsRes.comments)) {
-            for (const c of altCommentsRes.comments) merged.set(c.commentId, c)
-          }
-          setComments(Array.from(merged.values()))
-        }
-        setHasMoreComments(commentsRes.comments.length >= COMMENTS_PER_PAGE)
+      if (append) {
+        if (primaryComments.length > 0) setComments(prev => [...prev, ...primaryComments])
+        setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
         setCommentsPage(page)
-      } else if (!append && isInitialLoad) {
-        setComments([])
-        setHasMoreComments(false)
+        if (primaryComments.length > 0) {
+          const newIds = new Set(primaryComments.map((c: any) => c.commentId))
+          setPendingComments(prev => prev.filter((p) => !p.commentId || !newIds.has(p.commentId)))
+        }
+      } else {
+        const merged = new Map<string, any>()
+        for (const c of primaryComments) merged.set(c.commentId, c)
+        for (const r of altCommentResults) {
+          if (r?.success && Array.isArray(r.comments)) {
+            for (const c of r.comments) merged.set(c.commentId, c)
+          }
+        }
+
+        if (merged.size > 0) {
+          const nextComments = Array.from(merged.values())
+          setComments(nextComments)
+          setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
+          setCommentsPage(page)
+          const knownIds = new Set(nextComments.map((c: any) => c.commentId))
+          setPendingComments(prev => prev.filter((p) => !p.commentId || !knownIds.has(p.commentId)))
+        } else if (isInitialLoad) {
+          setComments([])
+          setHasMoreComments(false)
+        }
       }
 
       if (reactionsRes?.success) {
-        const countsData = reactionsRes.counts || {}
-        const counts: Record<string, number> = {}
-        if (Array.isArray(countsData)) {
-          for (const c of countsData) {
-            if (c?.reactionType) counts[c.reactionType] = c.count || 0
+        const toCountMap = (countsData: any): Record<string, number> => {
+          const counts: Record<string, number> = {}
+          if (Array.isArray(countsData)) {
+            for (const c of countsData) {
+              if (c?.reactionType) counts[c.reactionType] = c.count || 0
+            }
+          } else if (countsData && typeof countsData === 'object') {
+            for (const [k, v] of Object.entries(countsData)) {
+              counts[k] = typeof v === 'number' ? v : 0
+            }
           }
-        } else if (typeof countsData === 'object') {
-          for (const [k, v] of Object.entries(countsData)) {
-            counts[k] = typeof v === 'number' ? v : 0
+          return counts
+        }
+
+        const mergedCounts: Record<string, number> = {}
+        let mergedUserReaction: string | null = reactionsRes.userReaction || null
+
+        for (const [k, v] of Object.entries(toCountMap(reactionsRes.counts || {}))) {
+          mergedCounts[k] = (mergedCounts[k] || 0) + v
+        }
+
+        if (!append && altVids.length > 0 && rpc.getReactions) {
+          const altReactionResults = await Promise.all(
+            altVids.map((vid) => rpc.getReactions?.({ channelKey: ch, videoId: vid, publicBeeKey: pubBee }).catch(() => null))
+          )
+          for (const r of altReactionResults) {
+            if (!r?.success) continue
+            for (const [k, v] of Object.entries(toCountMap(r.counts || {}))) {
+              mergedCounts[k] = (mergedCounts[k] || 0) + v
+            }
+            if (!mergedUserReaction && r.userReaction) mergedUserReaction = r.userReaction
           }
         }
-        setReactionCounts(counts)
-        setUserReaction(reactionsRes.userReaction || null)
+
+        setReactionCounts(mergedCounts)
+        setUserReaction(mergedUserReaction)
       }
     } finally {
       setCommentsLoading(false)
       setLoadingMoreComments(false)
       setRefreshingComments(false)
     }
-  }, [currentVideo?.channelKey, currentVideo?.id, comments.length])
+  }, [currentVideo?.channelKey, currentVideo?.id, comments.length, rpc, socialVideoIds])
 
   // Reload social when the current video changes
   useEffect(() => {
@@ -438,32 +509,60 @@ export function VideoPlayerOverlay() {
     if (!currentVideo?.channelKey || !currentVideo?.id) return
     const text = commentText.trim()
     if (!text) return
+    const parentId = replyToComment?.commentId || null
+    const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const authorKeyHex = identity?.driveKey || 'local'
+    setPendingComments(prev => [{
+      commentId: localId,
+      localId,
+      text,
+      authorKeyHex,
+      timestamp: Date.now(),
+      parentId,
+      pendingState: 'sending',
+    }, ...prev])
+    setCommentText('')
+    setReplyToComment(null)
     setPostingComment(true)
     try {
-      const vid = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
-        ? currentVideo.path
-        : currentVideo.id
       const res = await rpc.addComment?.({
         channelKey: currentVideo.channelKey,
-        videoId: vid,
+        videoId: currentVideo.id,
+        publicBeeKey: (currentVideo as any).publicBeeKey || undefined,
         text,
-        parentId: replyToComment?.commentId || null
+        parentId
       })
       if (res?.success) {
-        setCommentText('')
-        setReplyToComment(null)
+        setPendingComments(prev => prev.map((p) => {
+          if (p.localId !== localId) return p
+          return {
+            ...p,
+            commentId: res.commentId || p.commentId,
+            pendingState: res.queued ? 'queued' : 'pending',
+          }
+        }))
         await loadSocial(0, false, true)
+      } else {
+        setPendingComments(prev => prev.map((p) => (
+          p.localId === localId ? { ...p, pendingState: 'failed' } : p
+        )))
       }
+    } catch {
+      setPendingComments(prev => prev.map((p) => (
+        p.localId === localId ? { ...p, pendingState: 'failed' } : p
+      )))
     } finally {
       setPostingComment(false)
     }
-  }, [currentVideoKey, commentText, replyToComment, loadSocial])
+  }, [currentVideoKey, commentText, replyToComment, loadSocial, rpc, identity?.driveKey])
 
   const deleteComment = useCallback(async (commentId: string) => {
     if (!currentVideo?.channelKey || !currentVideo?.id) return
-    const vid = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
-      ? currentVideo.path
-      : currentVideo.id
+    if (pendingComments.some((p) => p.commentId === commentId || p.localId === commentId)) {
+      setPendingComments(prev => prev.filter(p => p.commentId !== commentId && p.localId !== commentId))
+      return
+    }
+    const pubBee = (currentVideo as any).publicBeeKey || undefined
     Alert.alert(
       'Delete Comment',
       'Are you sure you want to delete this comment?',
@@ -475,9 +574,13 @@ export function VideoPlayerOverlay() {
           onPress: async () => {
             setDeletingCommentId(commentId)
             try {
-              const res = await rpc.removeComment?.({ channelKey: currentVideo.channelKey, videoId: vid, commentId })
-              if (res?.success) {
-                setComments(prev => prev.filter(c => c.commentId !== commentId))
+              const tryIds = [currentVideo.id, ...socialVideoIds.filter(v => v !== currentVideo.id)]
+              for (const vid of tryIds) {
+                const res = await rpc.removeComment?.({ channelKey: currentVideo.channelKey, videoId: vid, publicBeeKey: pubBee, commentId })
+                if (res?.success) {
+                  setComments(prev => prev.filter(c => c.commentId !== commentId))
+                  break
+                }
               }
             } finally {
               setDeletingCommentId(null)
@@ -486,22 +589,23 @@ export function VideoPlayerOverlay() {
         }
       ]
     )
-  }, [currentVideoKey])
+  }, [currentVideoKey, rpc, socialVideoIds])
 
   const toggleReaction = useCallback(async (type: string) => {
     if (!currentVideo?.channelKey || !currentVideo?.id) return
-    const vid = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
-      ? currentVideo.path
-      : currentVideo.id
+    const pubBee = (currentVideo as any).publicBeeKey || undefined
     try {
       if (userReaction === type) {
-        await rpc.removeReaction?.({ channelKey: currentVideo.channelKey, videoId: vid })
+        const tryIds = [currentVideo.id, ...socialVideoIds.filter(v => v !== currentVideo.id)]
+        await Promise.all(tryIds.map((vid) => rpc.removeReaction?.({ channelKey: currentVideo.channelKey, videoId: vid, publicBeeKey: pubBee })))
       } else {
-        await rpc.addReaction?.({ channelKey: currentVideo.channelKey, videoId: vid, reactionType: type })
+        const tryIds = [currentVideo.id, ...socialVideoIds.filter(v => v !== currentVideo.id)]
+        await Promise.all(tryIds.map((vid) => rpc.removeReaction?.({ channelKey: currentVideo.channelKey, videoId: vid, publicBeeKey: pubBee })))
+        await rpc.addReaction?.({ channelKey: currentVideo.channelKey, videoId: currentVideo.id, publicBeeKey: pubBee, reactionType: type })
       }
       await loadSocial(0, false, true)
     } catch {}
-  }, [currentVideoKey, userReaction, loadSocial])
+  }, [currentVideoKey, userReaction, loadSocial, socialVideoIds, rpc])
 
   // Show controls temporarily
   const showControlsTemporarily = useCallback(() => {
@@ -1502,7 +1606,7 @@ export function VideoPlayerOverlay() {
             <View style={styles.commentsSection}>
               <View style={styles.commentsHeader}>
                 <Text style={styles.commentsTitle}>
-                  {comments.length > 0 ? `${comments.length} Comment${comments.length !== 1 ? 's' : ''}` : 'Comments'}
+                  {displayComments.length > 0 ? `${displayComments.length} Comment${displayComments.length !== 1 ? 's' : ''}` : 'Comments'}
                 </Text>
                 <Pressable
                   onPress={refreshComments}
@@ -1547,11 +1651,11 @@ export function VideoPlayerOverlay() {
                 </Pressable>
               </View>
 
-              {commentsLoading ? (
+              {commentsLoading && displayComments.length === 0 ? (
                 <View style={{ paddingVertical: 12 }}>
                   <ActivityIndicator color={colors.primary} />
                 </View>
-              ) : comments.length === 0 ? (
+              ) : displayComments.length === 0 ? (
                 <Text style={styles.commentsEmpty}>No comments yet. Be the first to comment!</Text>
               ) : (
                 <View style={{ gap: 12, paddingBottom: 24 }}>
@@ -1562,11 +1666,16 @@ export function VideoPlayerOverlay() {
                           <Text style={styles.commentAuthor}>
                             {(c.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(c.timestamp || Date.now())}
                           </Text>
+                          {c.pendingState && (
+                            <Text style={styles.pendingBadge}>
+                              {c.pendingState === 'failed' ? 'Failed' : 'Pending'}
+                            </Text>
+                          )}
                           <View style={styles.commentActions}>
                             <Pressable onPress={() => setReplyToComment(c)} style={styles.commentActionButton}>
                               <Reply color={colors.textMuted} size={14} />
                             </Pressable>
-                            {isOwnComment(c) && (
+                            {(isOwnComment(c) || c.pendingState) && (
                               <Pressable
                                 onPress={() => deleteComment(c.commentId)}
                                 disabled={deletingCommentId === c.commentId}
@@ -1581,7 +1690,7 @@ export function VideoPlayerOverlay() {
                             )}
                           </View>
                         </View>
-                        <Text style={styles.commentText}>{c.text}</Text>
+                        <Text style={c.pendingState ? styles.commentTextPending : styles.commentText}>{c.text}</Text>
                       </View>
 
                       {c.replies && c.replies.length > 0 && (
@@ -1592,7 +1701,12 @@ export function VideoPlayerOverlay() {
                                 <Text style={styles.commentAuthor}>
                                   {(reply.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(reply.timestamp || Date.now())}
                                 </Text>
-                                {isOwnComment(reply) && (
+                                {reply.pendingState && (
+                                  <Text style={styles.pendingBadge}>
+                                    {reply.pendingState === 'failed' ? 'Failed' : 'Pending'}
+                                  </Text>
+                                )}
+                                {(isOwnComment(reply) || reply.pendingState) && (
                                   <Pressable
                                     onPress={() => deleteComment(reply.commentId)}
                                     disabled={deletingCommentId === reply.commentId}
@@ -1606,7 +1720,7 @@ export function VideoPlayerOverlay() {
                                   </Pressable>
                                 )}
                               </View>
-                              <Text style={styles.commentText}>{reply.text}</Text>
+                              <Text style={reply.pendingState ? styles.commentTextPending : styles.commentText}>{reply.text}</Text>
                             </View>
                           ))}
                         </View>
@@ -2225,8 +2339,8 @@ const styles = StyleSheet.create({
   },
   commentHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
     marginBottom: 6,
   },
   commentAuthor: {
@@ -2234,15 +2348,30 @@ const styles = StyleSheet.create({
     fontSize: 12,
     flex: 1,
   },
+  pendingBadge: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    fontSize: 11,
+    color: colors.textMuted,
+  },
   commentActions: {
     flexDirection: 'row',
     gap: 8,
+    marginLeft: 'auto',
   },
   commentActionButton: {
     padding: 4,
   },
   commentText: {
     color: colors.text,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  commentTextPending: {
+    color: colors.textMuted,
     fontSize: 14,
     lineHeight: 20,
   },

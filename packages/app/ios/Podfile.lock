@@ -1410,7 +1410,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - "react-native-bare-kit (0.11.5+15b217)":
+  - "react-native-bare-kit (0.11.5+1dbcd7)":
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2473,7 +2473,7 @@ SPEC CHECKSUMS:
   React-Mapbuffer: 9050ee10c19f4f7fca8963d0211b2854d624973e
   React-microtasksnativemodule: f775db9e991c6f3b8ccbc02bfcde22770f96e23b
   react-native-b4a: 3f26169d6e2907c6db9b0a805806584a17e91c38
-  react-native-bare-kit: a16dcc3d0f9493b2831b760a3d58ae42209a1868
+  react-native-bare-kit: 6a5cc768a7d1e679d2a2b344329aed375a55af62
   react-native-safe-area-context: 37e680fc4cace3c0030ee46e8987d24f5d3bdab2
   react-native-vlc-media-player: da3308dda896d4ff7abfacadb8f981752bf9b425
   React-NativeModulesApple: 8969913947d5b576de4ed371a939455a8daf28aa

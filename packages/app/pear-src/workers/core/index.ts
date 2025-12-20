@@ -137,10 +137,8 @@ async function checkFFmpeg(): Promise<boolean> {
   });
 }
 
-// Generate thumbnail from video file using FFmpeg
-async function generateThumbnail(filePath: string, videoId: string, drive: any): Promise<string | null> {
-  const thumbnailPath = `/thumbnails/${videoId}.jpg`;
-
+// Generate thumbnail from video file using FFmpeg and store in Hyperblobs
+async function generateThumbnail(filePath: string, videoId: string, channel: any): Promise<{ thumbnailBlobId: string; thumbnailBlobsCoreKey: string } | null> {
   const args = [
     '-ss', '1',
     '-i', filePath,
@@ -164,15 +162,20 @@ async function generateThumbnail(filePath: string, videoId: string, drive: any):
         if (code === 0 && chunks.length > 0) {
           try {
             const thumbBuf = Buffer.concat(chunks);
-            // Use createWriteStream to ensure blob entry (not inline) for blob server compatibility
-            await new Promise<void>((res, rej) => {
-              const ws = drive.createWriteStream(thumbnailPath);
-              ws.on('error', rej);
-              ws.on('close', res);
-              ws.end(thumbBuf);
+            // Store in Hyperblobs
+            if (!channel.blobs) {
+              console.warn('[Worker] Channel blobs not available for thumbnail');
+              resolve(null);
+              return;
+            }
+            const blobResult = await channel.putBlob(thumbBuf);
+            console.log('[Worker] Thumbnail stored in Hyperblobs, blobId:', blobResult.id);
+            resolve({
+              thumbnailBlobId: blobResult.id,
+              thumbnailBlobsCoreKey: channel.blobsKeyHex
             });
-            resolve(thumbnailPath);
-          } catch {
+          } catch (err: any) {
+            console.warn('[Worker] Thumbnail storage failed:', err?.message);
             resolve(null);
           }
         } else {
@@ -702,8 +705,8 @@ rpc.onUpdateChannel(async (req: any) => {
 
 // Video handlers
 rpc.onListVideos(async (req: any) => {
-  console.log('[Worker] onListVideos called for channelKey:', req.channelKey?.slice(0, 16));
-  const videos = await api.listVideos(req.channelKey || '');
+  console.log('[Worker] onListVideos called for channelKey:', req.channelKey?.slice(0, 16), 'publicBeeKey:', req.publicBeeKey?.slice(0, 16));
+  const videos = await api.listVideos(req.channelKey || '', req.publicBeeKey);
   console.log('[Worker] Got', videos.length, 'videos from API');
 
   // Resolve thumbnail URLs via blob server with timeout
@@ -746,15 +749,15 @@ rpc.onListVideos(async (req: any) => {
 
 rpc.onGetVideoUrl(async (req: any) => {
   const videoPath = req.videoId;
-  console.log('[Worker] getVideoUrl request:', req.channelKey?.slice(0, 8), videoPath);
-  const result = await api.getVideoUrl(req.channelKey, videoPath);
+  console.log('[Worker] getVideoUrl request:', req.channelKey?.slice(0, 8), videoPath, 'publicBeeKey:', req.publicBeeKey?.slice(0, 16));
+  const result = await api.getVideoUrl(req.channelKey, videoPath, req.publicBeeKey);
   console.log('[Worker] Blob URL:', result.url);
   return { url: result.url };
 });
 
 rpc.onGetVideoData(async (req: any) => {
   if (isShuttingDown) return { video: { id: req.videoId, title: 'Unknown' } };
-  const video = await api.getVideoData(req.channelKey, req.videoId);
+  const video = await api.getVideoData(req.channelKey, req.videoId, req.publicBeeKey);
   return { video: video || { id: req.videoId, title: 'Unknown' } };
 });
 
@@ -765,8 +768,7 @@ rpc.onUploadVideo(async (req: any) => {
   const channel = await identityManager.getActiveChannel?.();
   if (!channel) throw new Error('No active channel');
 
-  const blobDriveKey = await channel.ensureLocalBlobDrive({ deviceName: active.name || '' });
-  const drive = await channel.getBlobDrive(blobDriveKey);
+  if (!channel.blobs) throw new Error('Channel blobs not initialized');
 
   let uploadPath = req.filePath;
   let transcodedPath: string | null = null;
@@ -813,9 +815,9 @@ rpc.onUploadVideo(async (req: any) => {
     }
   }
 
-  // Upload the file
+  // Upload the file to Hyperblobs
   const result = await uploadManager.uploadFromPath(
-    drive,
+    channel,
     uploadPath,
     { title: req.title, description: req.description, mimeType },
     fs,
@@ -842,50 +844,31 @@ rpc.onUploadVideo(async (req: any) => {
   }
 
   // Generate thumbnail if FFmpeg available AND no custom thumbnail will be provided
-  // skipThumbnailGeneration is true when user has selected a custom thumbnail
-  if (result.success && result.videoId && !req.skipThumbnailGeneration) {
-    console.log('[Worker] Generating FFmpeg thumbnail (no custom thumbnail provided)');
-    if (hasFFmpeg) {
-      // Use original file for thumbnail (better quality, no transcode artifacts)
-      const thumbPath = await generateThumbnail(req.filePath, result.videoId, drive);
-      if (thumbPath) {
-        const metaPath = `/videos/${result.videoId}.json`;
-        const metaBuf = await drive.get(metaPath);
-        if (metaBuf) {
-          const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
-          meta.thumbnail = thumbPath;
-          await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-        }
+  if (result.success && result.videoId && !req.skipThumbnailGeneration && hasFFmpeg) {
+    console.log('[Worker] Generating FFmpeg thumbnail');
+    try {
+      const thumbResult = await generateThumbnail(req.filePath, result.videoId, channel);
+      if (thumbResult?.thumbnailBlobId) {
+        console.log('[Worker] Thumbnail stored with blobId:', thumbResult.thumbnailBlobId);
+        // Update video metadata with thumbnail info
+        await channel.updateVideo(result.videoId, {
+          thumbnailBlobId: thumbResult.thumbnailBlobId,
+          thumbnailBlobsCoreKey: thumbResult.thumbnailBlobsCoreKey
+        });
       }
+    } catch (thumbErr: any) {
+      console.warn('[Worker] Thumbnail generation failed:', thumbErr?.message);
     }
   } else if (req.skipThumbnailGeneration) {
     console.log('[Worker] Skipping FFmpeg thumbnail - custom thumbnail will be uploaded');
   }
 
-  // Record/refresh the video in the channel's multi-writer metadata log
-  console.log('[Worker] Upload result:', JSON.stringify({ success: result.success, videoId: result.videoId }));
-  if (result.success && result.videoId) {
-    const metaBuf = await drive.get(`/videos/${result.videoId}.json`).catch(() => null);
-    console.log('[Worker] Got metadata from drive:', !!metaBuf);
-    if (metaBuf) {
-      const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
-      console.log('[Worker] Adding video to channel metadata log...');
-      try {
-        await channel.addVideo({
-          ...meta,
-          channelKey: active.driveKey,
-          blobDriveKey,
-        });
-        console.log('[Worker] Video added to channel successfully');
-      } catch (addErr: any) {
-        console.error('[Worker] Failed to add video to channel:', addErr?.message, addErr?.stack);
-      }
-    }
-  } else {
+  console.log('[Worker] Upload result:', JSON.stringify({ success: result.success, videoId: result.videoId, blobId: result.metadata?.blobId }));
+
+  if (!result.success) {
     console.error('[Worker] Upload failed:', result.error);
   }
 
-  console.log('[Worker] Returning upload response');
   return {
     video: {
       id: result.videoId || '',
@@ -968,6 +951,7 @@ rpc.onGetPublicFeed(async () => {
   return {
     entries: result.entries.map((e: any) => ({
       channelKey: e.driveKey,
+      publicBeeKey: e.publicBeeKey || '',  // Fast path key for viewers
       channelName: e.name || '',
       videoCount: 0,
       peerCount: 0,
@@ -1008,6 +992,123 @@ rpc.onIsChannelPublished(async () => {
 rpc.onHideChannel(async (req: any) => {
   api.hideChannel(req.channelKey);
   return { success: true };
+});
+
+// ============================================
+// Comment handlers
+// ============================================
+
+rpc.onAddComment(async (req: any) => {
+  console.log('[Worker] ===== ADD COMMENT HANDLER CALLED =====');
+  console.log('[Worker] addComment req:', JSON.stringify(req));
+  console.log('[Worker] api.addComment exists:', typeof api.addComment);
+
+  // Validate required fields first
+  if (!req.channelKey || !req.videoId || !req.text) {
+    console.log('[Worker] addComment: missing required fields');
+    return { success: false, error: 'Missing required fields (channelKey, videoId, or text)' };
+  }
+
+  try {
+    console.log('[Worker] addComment: calling api.addComment...');
+    const result = await api.addComment(req.channelKey, req.videoId, req.text, req.parentId, req.publicBeeKey);
+    console.log('[Worker] addComment result:', JSON.stringify(result));
+    return { success: result.success, commentId: result.commentId || null, error: result.error };
+  } catch (e: any) {
+    console.log('[Worker] addComment failed:', e?.message, e?.stack);
+    return { success: false, error: e?.message || 'Failed to add comment' };
+  }
+});
+
+rpc.onListComments(async (req: any) => {
+  console.log('[Worker] listComments:', req.channelKey?.slice(0, 16), req.videoId, 'publicBeeKey:', req.publicBeeKey?.slice(0, 16));
+  try {
+    const result = await api.listComments(req.channelKey, req.videoId, { page: req.page || 0, limit: req.limit || 50, publicBeeKey: req.publicBeeKey });
+    const comments = (result.comments || []).map((c: any) => ({
+      videoId: req.videoId,
+      commentId: c.commentId || c.id || '',
+      text: c.text || '',
+      authorKeyHex: c.authorKeyHex || c.author || '',
+      timestamp: c.timestamp || 0,
+      parentId: c.parentId || null
+    }));
+    return { success: Boolean(result?.success), comments, error: result?.error || null };
+  } catch (e: any) {
+    console.log('[Worker] listComments failed:', e?.message);
+    return { success: false, comments: [], error: e?.message };
+  }
+});
+
+rpc.onHideComment(async (req: any) => {
+  console.log('[Worker] hideComment:', req.commentId);
+  try {
+    const result = await api.hideComment(req.channelKey, req.videoId, req.commentId, req.publicBeeKey);
+    return { success: result.success, error: result.error };
+  } catch (e: any) {
+    console.log('[Worker] hideComment failed:', e?.message);
+    return { success: false, error: e?.message };
+  }
+});
+
+rpc.onRemoveComment(async (req: any) => {
+  console.log('[Worker] removeComment:', req.commentId);
+  try {
+    const result = await api.removeComment(req.channelKey, req.videoId, req.commentId, req.publicBeeKey);
+    return { success: result.success, error: result.error };
+  } catch (e: any) {
+    console.log('[Worker] removeComment failed:', e?.message);
+    return { success: false, error: e?.message };
+  }
+});
+
+// ============================================
+// Reaction handlers
+// ============================================
+
+rpc.onAddReaction(async (req: any) => {
+  console.log('[Worker] addReaction:', req.channelKey?.slice(0, 16), req.videoId, req.reactionType, 'publicBeeKey:', req.publicBeeKey?.slice(0, 16));
+  try {
+    const result = await api.addReaction(req.channelKey, req.videoId, req.reactionType, req.publicBeeKey);
+    return { success: result.success, error: result.error };
+  } catch (e: any) {
+    console.log('[Worker] addReaction failed:', e?.message);
+    return { success: false, error: e?.message };
+  }
+});
+
+rpc.onRemoveReaction(async (req: any) => {
+  console.log('[Worker] removeReaction:', req.channelKey?.slice(0, 16), req.videoId, 'publicBeeKey:', req.publicBeeKey?.slice(0, 16));
+  try {
+    const result = await api.removeReaction(req.channelKey, req.videoId, req.publicBeeKey);
+    return { success: result.success, error: result.error };
+  } catch (e: any) {
+    console.log('[Worker] removeReaction failed:', e?.message);
+    return { success: false, error: e?.message };
+  }
+});
+
+rpc.onGetReactions(async (req: any) => {
+  console.log('[Worker] getReactions:', req.channelKey?.slice(0, 16), req.videoId, 'publicBeeKey:', req.publicBeeKey?.slice(0, 16));
+  try {
+    const result = await api.getReactions(req.channelKey, req.videoId, req.publicBeeKey);
+    const countsObj = (result && typeof result === 'object' && result.counts && typeof result.counts === 'object')
+      ? result.counts
+      : {};
+    const counts = Object.entries(countsObj).map(([reactionType, count]) => ({
+      reactionType: String(reactionType),
+      count: typeof count === 'number' ? count : 0,
+    }));
+
+    return { 
+      success: Boolean(result?.success), 
+      counts, 
+      userReaction: result?.userReaction || null,
+      error: result?.error || null 
+    };
+  } catch (e: any) {
+    console.log('[Worker] getReactions failed:', e?.message);
+    return { success: false, counts: [], userReaction: null, error: e?.message };
+  }
 });
 
 // Seeding handlers
@@ -1058,26 +1159,35 @@ rpc.onClearCache(async () => {
 rpc.onGetVideoThumbnail(async (req: any) => {
   if (isShuttingDown) return { url: null, exists: false };
 
-  const drive = ctx.drives.get(req.channelKey);
-  if (drive) {
-    // Try all supported formats
-    for (const ext of ['jpg', 'jpeg', 'png', 'webp', 'gif']) {
-      const thumbPath = `/thumbnails/${req.videoId}.${ext}`;
-      try {
-        const entry = await drive.entry(thumbPath);
-        if (entry && entry.value?.blob) {
-          const blobsCore = await drive.getBlobs();
-          if (blobsCore) {
-            const url = ctx.blobServer.getLink(blobsCore.core.key, {
-              blob: entry.value.blob,
-              type: getMimeType(ext)
-            });
-            return { url, exists: true };
-          }
-        }
-      } catch {}
+  try {
+    // Get video metadata to find thumbnail blob info
+    const video = await api.getVideoData(req.channelKey, req.videoId);
+    if (!video) return { url: null, exists: false };
+
+    if (video.thumbnailBlobId && video.thumbnailBlobsCoreKey) {
+      // New Hyperblobs-based thumbnail
+      const blobsCore = ctx.store.get(b4a.from(video.thumbnailBlobsCoreKey, 'hex'));
+      await blobsCore.ready();
+
+      // Parse blobId string to blob object
+      const parts = video.thumbnailBlobId.split(':').map(Number);
+      const blob = {
+        blockOffset: parts[0],
+        blockLength: parts[1],
+        byteOffset: parts[2],
+        byteLength: parts[3]
+      };
+
+      const url = ctx.blobServer.getLink(blobsCore.key, {
+        blob,
+        type: 'image/jpeg'
+      });
+      return { url, exists: true };
     }
+  } catch (err: any) {
+    console.log('[Worker] Thumbnail fetch error:', err?.message);
   }
+
   return { url: null, exists: false };
 });
 
@@ -1094,35 +1204,21 @@ rpc.onSetVideoThumbnail(async (req: any) => {
   const channel = await identityManager.getActiveChannel?.();
   if (!channel) return { success: false };
 
-  const meta = await api.getVideoData(active.driveKey, req.videoId);
-  const sourceDriveKey = meta?.blobDriveKey;
-  if (!sourceDriveKey) return { success: false };
-
-  const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 8000 });
+  if (!channel.blobs) return { success: false, error: 'Channel blobs not initialized' };
 
   const imageBuffer = Buffer.from(req.imageData, 'base64');
-  const ext = req.mimeType?.includes('png') ? 'png' : 'jpg';
-  const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
 
-  // Use createWriteStream to ensure blob entry (not inline) for blob server compatibility
-  await new Promise<void>((resolve, reject) => {
-    const ws = drive.createWriteStream(thumbnailPath);
-    ws.on('error', reject);
-    ws.on('close', resolve);
-    ws.end(imageBuffer);
+  // Store thumbnail in Hyperblobs
+  const blobResult = await channel.putBlob(imageBuffer);
+  console.log('[Worker] Thumbnail stored in Hyperblobs, blobId:', blobResult.id);
+
+  // Update video metadata with thumbnail info
+  await channel.updateVideo(req.videoId, {
+    thumbnailBlobId: blobResult.id,
+    thumbnailBlobsCoreKey: channel.blobsKeyHex
   });
 
-  // Update metadata
-  const metaPath = `/videos/${req.videoId}.json`;
-  const metaBuf = await drive.get(metaPath);
-  if (metaBuf) {
-    const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
-    meta.thumbnail = thumbnailPath;
-    await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-    await channel.addVideo({ ...meta, channelKey: active.driveKey, blobDriveKey: sourceDriveKey });
-  }
-
-  return { success: true, thumbnailPath };
+  return { success: true, thumbnailBlobId: blobResult.id };
 });
 
 rpc.onSetVideoThumbnailFromFile(async (req: any) => {
@@ -1132,73 +1228,26 @@ rpc.onSetVideoThumbnailFromFile(async (req: any) => {
   const channel = await identityManager.getActiveChannel?.();
   if (!channel) return { success: false };
 
-  const meta = await api.getVideoData(active.driveKey, req.videoId);
-  const sourceDriveKey = meta?.blobDriveKey;
-  if (!sourceDriveKey) {
-    console.error('[Worker] No blobDriveKey for thumbnail upload');
-    return { success: false };
+  if (!channel.blobs) {
+    console.error('[Worker] Channel blobs not initialized');
+    return { success: false, error: 'Channel blobs not initialized' };
   }
-
-  const drive = await loadDrive(ctx, sourceDriveKey, { waitForSync: true, syncTimeout: 8000 });
-  console.log('[Worker] Blob drive key:', sourceDriveKey.slice(0, 16));
 
   const imageBuffer = fs.readFileSync(req.filePath);
   console.log('[Worker] Read image file, size:', imageBuffer.length);
 
-  // Detect extension from file path
-  const fileExt = req.filePath.toLowerCase().split('.').pop() || 'jpg';
-  const ext = ['png', 'webp', 'gif', 'jpeg'].includes(fileExt) ? fileExt : 'jpg';
-  const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
-  console.log('[Worker] Saving thumbnail:', thumbnailPath, 'ext:', ext);
+  // Store thumbnail in Hyperblobs
+  const blobResult = await channel.putBlob(imageBuffer);
+  console.log('[Worker] Thumbnail stored in Hyperblobs, blobId:', blobResult.id);
 
-  // Use createWriteStream to ensure blob entry (not inline) for blob server compatibility
-  await new Promise<void>((resolve, reject) => {
-    const ws = drive.createWriteStream(thumbnailPath);
-    ws.on('error', reject);
-    ws.on('close', resolve);
-    ws.end(imageBuffer);
+  // Update video metadata with thumbnail info
+  await channel.updateVideo(req.videoId, {
+    thumbnailBlobId: blobResult.id,
+    thumbnailBlobsCoreKey: channel.blobsKeyHex
   });
-  console.log('[Worker] Thumbnail saved to drive as blob');
+  console.log('[Worker] Updated video metadata with thumbnail blobId');
 
-  // Verify the entry was created
-  const thumbEntry = await drive.entry(thumbnailPath);
-  console.log('[Worker] Verify thumbnail entry:', thumbEntry ? 'found' : 'NOT FOUND');
-  if (thumbEntry) {
-    console.log('[Worker] Thumbnail entry value:', JSON.stringify(thumbEntry.value));
-  }
-
-  const metaPath = `/videos/${req.videoId}.json`;
-  const metaBuf = await drive.get(metaPath);
-  console.log('[Worker] Video metadata exists:', !!metaBuf);
-
-  if (metaBuf) {
-    const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
-    console.log('[Worker] Old thumbnail in meta:', meta.thumbnail);
-    meta.thumbnail = thumbnailPath;
-    await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-    console.log('[Worker] Updated metadata with thumbnail:', thumbnailPath);
-    await channel.addVideo({ ...meta, channelKey: active.driveKey, blobDriveKey: sourceDriveKey });
-
-    // Verify the update
-    const verifyBuf = await drive.get(metaPath);
-    if (verifyBuf) {
-      const verifyMeta = JSON.parse(b4a.toString(verifyBuf, 'utf-8'));
-      console.log('[Worker] Verified thumbnail in meta:', verifyMeta.thumbnail);
-    }
-  } else {
-    console.error('[Worker] No video metadata found at:', metaPath);
-  }
-
-  // Try to flush, but don't fail if flush isn't fully supported
-  try {
-    if (drive.flush) {
-      await drive.flush();
-      console.log('[Worker] Drive flushed');
-    }
-  } catch (flushErr: any) {
-    console.log('[Worker] Drive flush not supported (ok):', flushErr.message);
-  }
-  return { success: true };
+  return { success: true, thumbnailBlobId: blobResult.id };
 });
 
 // Status handlers
@@ -1241,113 +1290,6 @@ rpc.onListDevices(async (req: any) => {
   console.log('[Worker] listDevices:', req.channelKey?.slice(0, 16));
   const res = await api.listDevices(req.channelKey);
   return { devices: res.devices || [] };
-});
-
-// Search
-rpc.onSearchVideos(async (req: any) => {
-  const channelKey = req.channelKey;
-  const query = req.query || '';
-  const topK = typeof req.topK === 'number' ? req.topK : 10;
-  const federated = req.federated !== false;
-  const results = await api.searchVideos(channelKey, query, { topK, federated });
-
-  return {
-    results: (results || []).map((r: any) => ({
-      id: r.id,
-      score: typeof r.score === 'number' ? String(r.score) : (r.score ? String(r.score) : ''),
-      metadata: r.metadata ? JSON.stringify(r.metadata) : ''
-    }))
-  };
-});
-
-rpc.onIndexVideoVectors(async (req: any) => {
-  const res = await api.indexVideoVectors(req.channelKey, req.videoId);
-  return { success: Boolean(res?.success), error: res?.error || '' };
-});
-
-// Comments
-rpc.onAddComment(async (req: any) => {
-  const res = await api.addComment(req.channelKey, req.videoId, req.text, req.parentId || null);
-  return { success: Boolean(res?.success), commentId: res?.commentId || '', error: res?.error || '' };
-});
-
-rpc.onListComments(async (req: any) => {
-  const res = await api.listComments(req.channelKey, req.videoId, { page: req.page || 0, limit: req.limit || 50 });
-  const comments = (res?.comments || []).map((c: any) => ({
-    videoId: c.videoId,
-    commentId: c.commentId,
-    text: c.text,
-    authorKeyHex: c.authorKeyHex,
-    timestamp: c.timestamp || 0,
-    parentId: c.parentId || ''
-  }));
-  return { success: Boolean(res?.success), comments, error: res?.error || '' };
-});
-
-rpc.onHideComment(async (req: any) => {
-  const res = await api.hideComment(req.channelKey, req.videoId, req.commentId);
-  return { success: Boolean(res?.success), error: res?.error || '' };
-});
-
-rpc.onRemoveComment(async (req: any) => {
-  const res = await api.removeComment(req.channelKey, req.videoId, req.commentId);
-  return { success: Boolean(res?.success), error: res?.error || '' };
-});
-
-// Reactions
-rpc.onAddReaction(async (req: any) => {
-  const res = await api.addReaction(req.channelKey, req.videoId, req.reactionType);
-  return { success: Boolean(res?.success), error: res?.error || '' };
-});
-
-rpc.onRemoveReaction(async (req: any) => {
-  const res = await api.removeReaction(req.channelKey, req.videoId);
-  return { success: Boolean(res?.success), error: res?.error || '' };
-});
-
-rpc.onGetReactions(async (req: any) => {
-  const res = await api.getReactions(req.channelKey, req.videoId);
-  const countsObj = res?.counts || {};
-  const counts = Object.entries(countsObj).map(([reactionType, count]) => ({
-    reactionType,
-    count: typeof count === 'number' ? count : 0
-  }));
-  return {
-    success: Boolean(res?.success),
-    counts,
-    userReaction: res?.userReaction || '',
-    error: res?.error || ''
-  };
-});
-
-// Recommendations
-rpc.onLogWatchEvent(async (req: any) => {
-  const res = await api.logWatchEvent(req.channelKey, req.videoId, {
-    duration: req.duration || 0,
-    completed: Boolean(req.completed),
-    share: Boolean(req.share)
-  });
-  return { success: Boolean(res?.success), error: res?.error || '' };
-});
-
-rpc.onGetRecommendations(async (req: any) => {
-  const res = await api.getRecommendations(req.channelKey, { limit: req.limit || 10 });
-  const recommendations = (res?.recommendations || []).map((r: any) => ({
-    videoId: r.videoId,
-    score: typeof r.score === 'number' ? String(r.score) : (r.score ? String(r.score) : ''),
-    reason: r.reason || ''
-  }));
-  return { success: Boolean(res?.success), recommendations, error: res?.error || '' };
-});
-
-rpc.onGetVideoRecommendations(async (req: any) => {
-  const res = await api.getVideoRecommendations(req.channelKey, req.videoId, req.limit || 5);
-  const recommendations = (res?.recommendations || []).map((r: any) => ({
-    videoId: r.videoId,
-    score: typeof r.score === 'number' ? String(r.score) : (r.score ? String(r.score) : ''),
-    reason: r.reason || ''
-  }));
-  return { success: Boolean(res?.success), recommendations, error: res?.error || '' };
 });
 
 rpc.onGetBlobServerPort(async () => ({ port: getBlobPort() }));

@@ -44,6 +44,12 @@ class WorkerClient {
     console.log('[WorkerClient] Creating HRPC instance...')
     this.rpc = new HRPC(this.pipe)
     console.log('[WorkerClient] HRPC client initialized')
+    
+    // Debug: log available methods
+    const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(this.rpc))
+      .filter(m => !m.startsWith('_') && m !== 'constructor')
+    console.log('[WorkerClient] Available RPC methods:', methods.slice(0, 20), '... total:', methods.length)
+    console.log('[WorkerClient] Has addComment:', typeof this.rpc.addComment)
 
     // Add error handler on the RPC
     if (this.rpc.on) {

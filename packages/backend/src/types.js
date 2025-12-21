@@ -21,6 +21,7 @@
  * @property {string} [blobServerHost] - Blob server host
  * @property {Map<string, import('hyperdrive')>} drives - Loaded drives cache
  * @property {Map<string, any>} [channels] - Loaded multi-writer channels cache (keyed by channelKey hex)
+ * @property {any} [wakeup] - Protomux wakeup instance for content announcements
  */
 
 /**

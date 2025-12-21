@@ -1724,7 +1724,22 @@ export class MultiWriterChannel extends ReadyResource {
     const writerKeyHex =
       op?.updatedBy || op?.uploadedBy || op?.authorKeyHex || op?.moderatorKeyHex || this.localWriterKeyHex || null
     if (writerKeyHex) this._checkLocalRateLimit(writerKeyHex)
-    return this.base.append(op)
+    const result = await this.base.append(op)
+
+    // Announce new content to peers via wakeup protocol
+    // This enables faster sync - peers learn about new content immediately
+    if (this.wakeupSession && this.base?.view?.length) {
+      try {
+        const announcement = [{ key: this.base.key, length: this.base.view.length }]
+        for (const peer of this.wakeupSession.peers) {
+          this.wakeupSession.announce(peer, announcement)
+        }
+      } catch (err) {
+        // Non-fatal - wakeup is best-effort
+      }
+    }
+
+    return result
   }
 
   _checkLocalRateLimit(writerKeyHex) {

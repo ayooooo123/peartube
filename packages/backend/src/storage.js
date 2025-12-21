@@ -28,6 +28,7 @@ let networkStats = null;
 // Global references for suspend/resume (set in initializeStorage)
 let globalSwarm = null;
 let globalBlobServer = null;
+let globalChannels = null;
 
 // Blind peering for mobile connectivity (keeps Autobases available through mirror servers)
 // This solves the issue where mobile devices behind CGNAT can't establish direct P2P connections
@@ -277,6 +278,15 @@ export async function initializeStorage(config) {
     const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
     console.log('[Storage] Peer connected:', remoteKey);
 
+    // Register stream with wakeup protocol for content announcements
+    if (wakeup) {
+      try {
+        wakeup.addStream(conn);
+      } catch (err) {
+        console.log('[Storage] Wakeup addStream error (non-fatal):', err?.message);
+      }
+    }
+
     // Replicate all Hypercore data in the Corestore:
     // - Autobase cores (channel metadata, videos, comments, etc.)
     // - Hyperblobs cores (video bytes, thumbnails)
@@ -310,6 +320,17 @@ export async function initializeStorage(config) {
   let blindPeering = null;
   let blindPeerServer = null;
   let wakeup = null;
+
+  // Initialize protomux-wakeup for content announcements
+  // This enables faster sync by announcing new content to peers immediately
+  if (Wakeup) {
+    try {
+      wakeup = new Wakeup();
+      console.log('[Storage] Wakeup protocol initialized');
+    } catch (err) {
+      console.log('[Storage] Wakeup init failed (non-fatal):', err?.message);
+    }
+  }
 
   // if (BlindPeering && Wakeup) {
   //   try {
@@ -363,6 +384,9 @@ export async function initializeStorage(config) {
   //     console.log('[Storage] BlindPeering setup failed (non-fatal):', err?.message);
   //   }
   // }
+
+  // Set global reference for suspend/resume lifecycle management
+  globalChannels = channels;
 
   return {
     store,
@@ -484,6 +508,25 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
     //   }
     // }
 
+    // Create wakeup session for this channel
+    // This enables fast content announcements to peers when new videos/comments are added
+    if (ctx.wakeup && ch.base) {
+      try {
+        ch.wakeupSession = ctx.wakeup.session(ch.base.key, {
+          onannounce(announcement, peer) {
+            console.log('[Wakeup] Peer announced new content for channel:', channelKeyHex.slice(0, 16));
+            // Trigger sync - the announcement means peer has new data
+            if (ch.base) {
+              ch.base.update().catch(() => {});
+            }
+          }
+        });
+        console.log('[Storage] Wakeup session created for channel:', channelKeyHex.slice(0, 16));
+      } catch (err) {
+        console.log('[Storage] Wakeup session failed (non-fatal):', err?.message);
+      }
+    }
+
     return ch
   })()
 
@@ -594,6 +637,23 @@ export async function createChannel(ctx, options = {}) {
     }
   }
 
+  // Create wakeup session for this channel
+  if (ctx.wakeup && ch.base) {
+    try {
+      ch.wakeupSession = ctx.wakeup.session(ch.base.key, {
+        onannounce(announcement, peer) {
+          console.log('[Wakeup] Peer announced new content for channel:', channelKeyHex.slice(0, 16));
+          if (ch.base) {
+            ch.base.update().catch(() => {});
+          }
+        }
+      });
+      console.log('[Storage] Wakeup session created for new channel:', channelKeyHex.slice(0, 16));
+    } catch (err) {
+      console.log('[Storage] Wakeup session failed (non-fatal):', err?.message);
+    }
+  }
+
   return { channel: ch, channelKeyHex, encryptionKeyHex }
 }
 
@@ -640,6 +700,23 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
       console.log('[Storage] Registered paired channel with blind-peering:', channelKeyHex.slice(0, 16))
     } catch (err) {
       console.log('[Storage] Blind-peering registration failed (non-fatal):', err?.message)
+    }
+  }
+
+  // Create wakeup session for paired channel
+  if (ctx.wakeup && channel.base) {
+    try {
+      channel.wakeupSession = ctx.wakeup.session(channel.base.key, {
+        onannounce(announcement, peer) {
+          console.log('[Wakeup] Peer announced new content for paired channel:', channelKeyHex.slice(0, 16));
+          if (channel.base) {
+            channel.base.update().catch(() => {});
+          }
+        }
+      });
+      console.log('[Storage] Wakeup session created for paired channel:', channelKeyHex.slice(0, 16));
+    } catch (err) {
+      console.log('[Storage] Wakeup session failed (non-fatal):', err?.message);
     }
   }
 
@@ -958,6 +1035,20 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
 export async function suspendNetworking() {
   console.log('[Network] Suspending...');
   try {
+    // Mark all wakeup sessions as inactive
+    if (globalChannels) {
+      for (const channel of globalChannels.values()) {
+        if (channel.wakeupSession) {
+          try {
+            channel.wakeupSession.inactive();
+          } catch (err) {
+            // Non-fatal
+          }
+        }
+      }
+      console.log('[Network] Wakeup sessions marked inactive');
+    }
+
     if (globalSwarm) {
       await globalSwarm.suspend();
       console.log('[Network] Swarm suspended');
@@ -989,6 +1080,21 @@ export async function resumeNetworking() {
       await globalBlobServer.resume();
       console.log('[Network] BlobServer resumed');
     }
+
+    // Mark all wakeup sessions as active
+    if (globalChannels) {
+      for (const channel of globalChannels.values()) {
+        if (channel.wakeupSession) {
+          try {
+            channel.wakeupSession.active();
+          } catch (err) {
+            // Non-fatal
+          }
+        }
+      }
+      console.log('[Network] Wakeup sessions marked active');
+    }
+
     console.log('[Network] Resumed successfully');
   } catch (err) {
     console.log('[Network] Resume error (non-fatal):', err?.message);

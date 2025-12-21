@@ -302,23 +302,6 @@ export function VideoPlayerOverlay() {
     return `${currentVideo.channelKey}:${currentVideo.id}`
   }, [currentVideo?.channelKey, currentVideo?.id])
 
-  // Some parts of the app historically used `video.path` (often `/videos/{id}.mp4`) as the
-  // identifier for comments/reactions, while other parts used the stable `video.id`.
-  // Include both variants for reads so owners/viewers can see each other's existing comments.
-  const socialVideoIds = useMemo(() => {
-    const out = new Set<string>()
-    if (currentVideo?.id) out.add(currentVideo.id)
-
-    const p = currentVideo?.path
-    if (typeof p === 'string' && p && p !== currentVideo?.id) {
-      out.add(p)
-      if (p.startsWith('/')) out.add(p.slice(1))
-      else out.add(`/${p}`)
-    }
-
-    return Array.from(out)
-  }, [currentVideo?.id, currentVideo?.path])
-
   const displayComments = useMemo(() => {
     if (pendingComments.length === 0) return comments
     const merged = new Map<string, any>()
@@ -360,7 +343,6 @@ export function VideoPlayerOverlay() {
     const ch = currentVideo.channelKey
     const canonicalVid = currentVideo.id
     const pubBee = (currentVideo as any).publicBeeKey || undefined  // Pass for comments key discovery
-    const altVids = socialVideoIds.filter(v => v !== canonicalVid)
 
     const isInitialLoad = comments.length === 0
     if (!append && (isInitialLoad || forceRefresh)) {
@@ -373,17 +355,12 @@ export function VideoPlayerOverlay() {
         !append ? rpc.getReactions?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee }).catch(() => null) : Promise.resolve(null),
       ])
 
-      // Safety: if some peers used a different videoId key (id vs path), merge both.
       const primaryOk = Boolean(commentsRes?.success && Array.isArray(commentsRes.comments))
       const primaryComments = primaryOk ? commentsRes.comments : []
-
-      let altCommentResults: any[] = []
-      if (!append && altVids.length > 0 && rpc.listComments) {
-        altCommentResults = await Promise.all(
-          altVids.map((vid) =>
-            rpc.listComments?.({ channelKey: ch, videoId: vid, publicBeeKey: pubBee, page: 0, limit: COMMENTS_PER_PAGE }).catch(() => null)
-          )
-        )
+      console.log('[VideoPlayer] listComments response:', { success: commentsRes?.success, count: primaryComments.length })
+      if (primaryComments.length > 0) {
+        console.log('[VideoPlayer] First comment isAdmin:', primaryComments[0]?.isAdmin, 'authorKeyHex:', primaryComments[0]?.authorKeyHex?.slice(0, 16))
+        console.log('[VideoPlayer] Comments with isAdmin=true:', primaryComments.filter((c: any) => c.isAdmin).length)
       }
 
       if (append) {
@@ -395,20 +372,11 @@ export function VideoPlayerOverlay() {
           setPendingComments(prev => prev.filter((p) => !p.commentId || !newIds.has(p.commentId)))
         }
       } else {
-        const merged = new Map<string, any>()
-        for (const c of primaryComments) merged.set(c.commentId, c)
-        for (const r of altCommentResults) {
-          if (r?.success && Array.isArray(r.comments)) {
-            for (const c of r.comments) merged.set(c.commentId, c)
-          }
-        }
-
-        if (merged.size > 0) {
-          const nextComments = Array.from(merged.values())
-          setComments(nextComments)
+        if (primaryComments.length > 0) {
+          setComments(primaryComments)
           setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
           setCommentsPage(page)
-          const knownIds = new Set(nextComments.map((c: any) => c.commentId))
+          const knownIds = new Set(primaryComments.map((c: any) => c.commentId))
           setPendingComments(prev => prev.filter((p) => !p.commentId || !knownIds.has(p.commentId)))
         } else if (isInitialLoad) {
           setComments([])
@@ -431,35 +399,15 @@ export function VideoPlayerOverlay() {
           return counts
         }
 
-        const mergedCounts: Record<string, number> = {}
-        let mergedUserReaction: string | null = reactionsRes.userReaction || null
-
-        for (const [k, v] of Object.entries(toCountMap(reactionsRes.counts || {}))) {
-          mergedCounts[k] = (mergedCounts[k] || 0) + v
-        }
-
-        if (!append && altVids.length > 0 && rpc.getReactions) {
-          const altReactionResults = await Promise.all(
-            altVids.map((vid) => rpc.getReactions?.({ channelKey: ch, videoId: vid, publicBeeKey: pubBee }).catch(() => null))
-          )
-          for (const r of altReactionResults) {
-            if (!r?.success) continue
-            for (const [k, v] of Object.entries(toCountMap(r.counts || {}))) {
-              mergedCounts[k] = (mergedCounts[k] || 0) + v
-            }
-            if (!mergedUserReaction && r.userReaction) mergedUserReaction = r.userReaction
-          }
-        }
-
-        setReactionCounts(mergedCounts)
-        setUserReaction(mergedUserReaction)
+        setReactionCounts(toCountMap(reactionsRes.counts || {}))
+        setUserReaction(reactionsRes.userReaction || null)
       }
     } finally {
       setCommentsLoading(false)
       setLoadingMoreComments(false)
       setRefreshingComments(false)
     }
-  }, [currentVideo?.channelKey, currentVideo?.id, comments.length, rpc, socialVideoIds])
+  }, [currentVideo?.channelKey, currentVideo?.id, comments.length, rpc])
 
   // Reload social when the current video changes
   useEffect(() => {
@@ -574,13 +522,9 @@ export function VideoPlayerOverlay() {
           onPress: async () => {
             setDeletingCommentId(commentId)
             try {
-              const tryIds = [currentVideo.id, ...socialVideoIds.filter(v => v !== currentVideo.id)]
-              for (const vid of tryIds) {
-                const res = await rpc.removeComment?.({ channelKey: currentVideo.channelKey, videoId: vid, publicBeeKey: pubBee, commentId })
-                if (res?.success) {
-                  setComments(prev => prev.filter(c => c.commentId !== commentId))
-                  break
-                }
+              const res = await rpc.removeComment?.({ channelKey: currentVideo.channelKey, videoId: currentVideo.id, publicBeeKey: pubBee, commentId })
+              if (res?.success) {
+                setComments(prev => prev.filter(c => c.commentId !== commentId))
               }
             } finally {
               setDeletingCommentId(null)
@@ -589,23 +533,21 @@ export function VideoPlayerOverlay() {
         }
       ]
     )
-  }, [currentVideoKey, rpc, socialVideoIds])
+  }, [currentVideoKey, rpc])
 
   const toggleReaction = useCallback(async (type: string) => {
     if (!currentVideo?.channelKey || !currentVideo?.id) return
     const pubBee = (currentVideo as any).publicBeeKey || undefined
     try {
       if (userReaction === type) {
-        const tryIds = [currentVideo.id, ...socialVideoIds.filter(v => v !== currentVideo.id)]
-        await Promise.all(tryIds.map((vid) => rpc.removeReaction?.({ channelKey: currentVideo.channelKey, videoId: vid, publicBeeKey: pubBee })))
+        await rpc.removeReaction?.({ channelKey: currentVideo.channelKey, videoId: currentVideo.id, publicBeeKey: pubBee })
       } else {
-        const tryIds = [currentVideo.id, ...socialVideoIds.filter(v => v !== currentVideo.id)]
-        await Promise.all(tryIds.map((vid) => rpc.removeReaction?.({ channelKey: currentVideo.channelKey, videoId: vid, publicBeeKey: pubBee })))
+        await rpc.removeReaction?.({ channelKey: currentVideo.channelKey, videoId: currentVideo.id, publicBeeKey: pubBee })
         await rpc.addReaction?.({ channelKey: currentVideo.channelKey, videoId: currentVideo.id, publicBeeKey: pubBee, reactionType: type })
       }
       await loadSocial(0, false, true)
     } catch {}
-  }, [currentVideoKey, userReaction, loadSocial, socialVideoIds, rpc])
+  }, [currentVideoKey, userReaction, loadSocial, rpc])
 
   // Show controls temporarily
   const showControlsTemporarily = useCallback(() => {
@@ -1666,6 +1608,9 @@ export function VideoPlayerOverlay() {
                           <Text style={styles.commentAuthor}>
                             {(c.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(c.timestamp || Date.now())}
                           </Text>
+                          {c.isAdmin && (
+                            <Text style={styles.adminBadge}>Admin</Text>
+                          )}
                           {c.pendingState && (
                             <Text style={styles.pendingBadge}>
                               {c.pendingState === 'failed' ? 'Failed' : 'Pending'}
@@ -1701,6 +1646,9 @@ export function VideoPlayerOverlay() {
                                 <Text style={styles.commentAuthor}>
                                   {(reply.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(reply.timestamp || Date.now())}
                                 </Text>
+                                {reply.isAdmin && (
+                                  <Text style={styles.adminBadge}>Admin</Text>
+                                )}
                                 {reply.pendingState && (
                                   <Text style={styles.pendingBadge}>
                                     {reply.pendingState === 'failed' ? 'Failed' : 'Pending'}
@@ -2347,6 +2295,16 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     flex: 1,
+  },
+  adminBadge: {
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    fontSize: 11,
+    color: colors.primary,
+    fontWeight: '600',
   },
   pendingBadge: {
     borderWidth: 1,

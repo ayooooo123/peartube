@@ -1030,7 +1030,8 @@ rpc.onListComments(async (req: any) => {
       text: c.text || '',
       authorKeyHex: c.authorKeyHex || c.author || '',
       timestamp: c.timestamp || 0,
-      parentId: c.parentId || null
+      parentId: c.parentId || null,
+      isAdmin: Boolean(c.isAdmin)
     }));
     return { success: Boolean(result?.success), comments, error: result?.error || null };
   } catch (e: any) {

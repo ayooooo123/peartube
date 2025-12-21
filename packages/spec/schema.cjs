@@ -1161,6 +1161,175 @@ ns.register({
   ]
 })
 
+// ============================================
+// Comments RPC (matching existing schema.json)
+// ============================================
+
+ns.register({
+  name: 'add-comment-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'text', type: 'string', required: true },
+    { name: 'parentId', type: 'string', required: false },
+    { name: 'authorChannelKey', type: 'string', required: false },
+    { name: 'publicBeeKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'add-comment-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'commentId', type: 'string', required: false },
+    { name: 'queued', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-comments-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'page', type: 'uint', required: false },
+    { name: 'limit', type: 'uint', required: false },
+    { name: 'publicBeeKey', type: 'string', required: false }
+  ]
+})
+
+// comment type used by list-comments-response
+ns.register({
+  name: 'comment',
+  fields: [
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'commentId', type: 'string', required: true },
+    { name: 'text', type: 'string', required: true },
+    { name: 'authorKeyHex', type: 'string', required: true },
+    { name: 'timestamp', type: 'uint', required: false },
+    { name: 'parentId', type: 'string', required: false },
+    { name: 'isAdmin', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'list-comments-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'comments', type: '@peartube/comment', array: true, required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'hide-comment-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'commentId', type: 'string', required: true },
+    { name: 'publicBeeKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'hide-comment-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'remove-comment-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'commentId', type: 'string', required: true },
+    { name: 'authorChannelKey', type: 'string', required: false },
+    { name: 'publicBeeKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'remove-comment-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'queued', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// ============================================
+// Reactions RPC (matching existing schema.json)
+// ============================================
+
+ns.register({
+  name: 'reaction-count',
+  fields: [
+    { name: 'reactionType', type: 'string', required: true },
+    { name: 'count', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'add-reaction-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'reactionType', type: 'string', required: true },
+    { name: 'authorChannelKey', type: 'string', required: false },
+    { name: 'publicBeeKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'add-reaction-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'queued', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'remove-reaction-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'authorChannelKey', type: 'string', required: false },
+    { name: 'publicBeeKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'remove-reaction-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'queued', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-reactions-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'authorChannelKey', type: 'string', required: false },
+    { name: 'publicBeeKey', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-reactions-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'counts', type: '@peartube/reaction-count', array: true, required: true },
+    { name: 'userReaction', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
 // Save schema to disk
 Hyperschema.toDisk(schema)
 
@@ -1467,174 +1636,6 @@ rpcNs.register({
 })
 
 // Event streams (send-only, no response expected)
-// ============================================
-// Comments RPC (matching existing schema.json)
-// ============================================
-
-ns.register({
-  name: 'add-comment-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'text', type: 'string', required: true },
-    { name: 'parentId', type: 'string', required: false },
-    { name: 'authorChannelKey', type: 'string', required: false },
-    { name: 'publicBeeKey', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'add-comment-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'commentId', type: 'string', required: false },
-    { name: 'queued', type: 'bool', required: false },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'list-comments-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'page', type: 'uint', required: false },
-    { name: 'limit', type: 'uint', required: false },
-    { name: 'publicBeeKey', type: 'string', required: false }
-  ]
-})
-
-// comment type used by list-comments-response
-ns.register({
-  name: 'comment',
-  fields: [
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'commentId', type: 'string', required: true },
-    { name: 'text', type: 'string', required: true },
-    { name: 'authorKeyHex', type: 'string', required: true },
-    { name: 'timestamp', type: 'uint', required: false },
-    { name: 'parentId', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'list-comments-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'comments', type: '@peartube/comment', array: true, required: true },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'hide-comment-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'commentId', type: 'string', required: true },
-    { name: 'publicBeeKey', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'hide-comment-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'remove-comment-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'commentId', type: 'string', required: true },
-    { name: 'authorChannelKey', type: 'string', required: false },
-    { name: 'publicBeeKey', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'remove-comment-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'queued', type: 'bool', required: false },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-// ============================================
-// Reactions RPC (matching existing schema.json)
-// ============================================
-
-ns.register({
-  name: 'reaction-count',
-  fields: [
-    { name: 'reactionType', type: 'string', required: true },
-    { name: 'count', type: 'uint', required: true }
-  ]
-})
-
-ns.register({
-  name: 'add-reaction-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'reactionType', type: 'string', required: true },
-    { name: 'authorChannelKey', type: 'string', required: false },
-    { name: 'publicBeeKey', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'add-reaction-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'queued', type: 'bool', required: false },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'remove-reaction-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'authorChannelKey', type: 'string', required: false },
-    { name: 'publicBeeKey', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'remove-reaction-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'queued', type: 'bool', required: false },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-reactions-request',
-  fields: [
-    { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true },
-    { name: 'authorChannelKey', type: 'string', required: false },
-    { name: 'publicBeeKey', type: 'string', required: false }
-  ]
-})
-
-ns.register({
-  name: 'get-reactions-response',
-  fields: [
-    { name: 'success', type: 'bool', required: false },
-    { name: 'counts', type: '@peartube/reaction-count', array: true, required: true },
-    { name: 'userReaction', type: 'string', required: false },
-    { name: 'error', type: 'string', required: false }
-  ]
-})
-
 // Comment RPC methods
 rpcNs.register({
   name: 'add-comment',

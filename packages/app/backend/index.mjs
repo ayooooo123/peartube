@@ -917,7 +917,8 @@ rpc.onListComments(async (req) => {
       text: String(c?.text || ''),
       authorKeyHex: String(c?.authorKeyHex || c?.author || ''),
       timestamp: typeof c?.timestamp === 'number' ? c.timestamp : 0,
-      parentId: c?.parentId ? String(c.parentId) : null
+      parentId: c?.parentId ? String(c.parentId) : null,
+      isAdmin: Boolean(c?.isAdmin)
     })).filter((c) => Boolean(c.videoId && c.commentId))
 
     return { success: Boolean(result?.success), comments, error: result?.error || null }

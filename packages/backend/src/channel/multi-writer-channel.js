@@ -481,12 +481,14 @@ export class MultiWriterChannel extends ReadyResource {
       // Check if commentsAutobaseKey already exists in metadata
       const meta = await this.getMetadata().catch(() => null)
       let existingKey = meta?.commentsAutobaseKey || null
+      let existingAdminKey = meta?.commentsAdminKey || null
 
       // If metadata doesn't have it yet, try the PublicBee metadata (viewers/paired devices rely on this).
       if (!existingKey && this.publicBee) {
         try {
           const pubMeta = await this.publicBee.getMetadata().catch(() => null)
           existingKey = pubMeta?.commentsAutobaseKey || null
+          existingAdminKey = existingAdminKey || pubMeta?.commentsAdminKey || null
         } catch {}
       }
 
@@ -504,23 +506,37 @@ export class MultiWriterChannel extends ReadyResource {
       this.commentsAutobase = await getOrCreateCommentsAutobase(this.store, {
         channelKey: this.keyHex,
         commentsAutobaseKey: existingKey,
+        commentsAdminKey: existingAdminKey,
         isChannelOwner: isPublishingDevice, // Only the PublicBee writer can publish/ack reliably
         swarm: this.swarm
       })
       console.log('[Channel] _initCommentsAutobase: ready, key:', this.commentsAutobase.keyHex?.slice(0, 16))
+      if (existingAdminKey) {
+        this.commentsAutobase.setAdminKey?.(existingAdminKey)
+      }
 
       // Publishing device: ensure the canonical key is persisted + published.
       if (isPublishingDevice && this.commentsAutobase.keyHex) {
+        const adminKeyHex = this.commentsAutobase.localWriterKeyHex
         try {
           if (!existingKey) {
             console.log('[Channel] _initCommentsAutobase: storing commentsAutobaseKey in metadata')
             await this.updateMetadata({ commentsAutobaseKey: this.commentsAutobase.keyHex })
+          }
+          if (adminKeyHex && (!existingAdminKey || existingAdminKey !== adminKeyHex)) {
+            await this.updateMetadata({ commentsAdminKey: adminKeyHex })
+            // FIX: Also set the admin key on the current instance immediately
+            this.commentsAutobase.setAdminKey?.(adminKeyHex)
           }
 
           const pubMeta = await this.publicBee.getMetadata().catch(() => ({}))
           if (pubMeta?.commentsAutobaseKey !== this.commentsAutobase.keyHex) {
             await this.publicBee.setMetadata({ commentsAutobaseKey: this.commentsAutobase.keyHex })
             console.log('[Channel] _initCommentsAutobase: synced commentsAutobaseKey to PublicBee')
+          }
+          if (adminKeyHex && pubMeta?.commentsAdminKey !== adminKeyHex) {
+            await this.publicBee.setMetadata({ commentsAdminKey: adminKeyHex })
+            console.log('[Channel] _initCommentsAutobase: synced commentsAdminKey to PublicBee')
           }
         } catch (err) {
           console.log('[Channel] _initCommentsAutobase: publish error (non-fatal):', err?.message)
@@ -943,6 +959,7 @@ export class MultiWriterChannel extends ReadyResource {
    * @param {string|null} [updates.avatar]
    * @param {string|null} [updates.publicBeeKey]
    * @param {string|null} [updates.commentsAutobaseKey]
+   * @param {string|null} [updates.commentsAdminKey]
    */
   async updateMetadata(updates = {}) {
     const patch = updates && typeof updates === 'object' ? updates : {}
@@ -975,6 +992,7 @@ export class MultiWriterChannel extends ReadyResource {
     if ('createdAt' in patch) op.createdAt = patch.createdAt
     if ('createdBy' in patch) op.createdBy = patch.createdBy
     if ('commentsAutobaseKey' in patch) op.commentsAutobaseKey = patch.commentsAutobaseKey
+    if ('commentsAdminKey' in patch) op.commentsAdminKey = patch.commentsAdminKey
 
     await this.appendOp(op)
 

@@ -94,6 +94,13 @@ export class CommentsAutobase extends ReadyResource {
     /** @type {Promise<any>|null} Viewer keyPair promise */
     this._viewerKeyPairPromise = null
 
+    /** @type {string|null} Canonical admin writer key (hex) */
+    this._adminKeyHex = opts.commentsAdminKey
+      ? (typeof opts.commentsAdminKey === 'string'
+        ? opts.commentsAdminKey
+        : b4a.toString(opts.commentsAdminKey, 'hex'))
+      : null
+
     this.ready().catch(() => {})
   }
 
@@ -123,6 +130,13 @@ export class CommentsAutobase extends ReadyResource {
 
   get localWriterKeyHex() {
     return this.localWriterKey ? b4a.toString(this.localWriterKey, 'hex') : null
+  }
+
+  setAdminKey(key) {
+    if (!key) return
+    const newKey = typeof key === 'string' ? key : b4a.toString(key, 'hex')
+    console.log('[CommentsAutobase] setAdminKey called:', newKey?.slice(0, 16), '(was:', this._adminKeyHex?.slice(0, 16) || 'null', ')')
+    this._adminKeyHex = newKey
   }
 
   get discoveryKey() {
@@ -936,8 +950,20 @@ export class CommentsAutobase extends ReadyResource {
         force: true,
         minimum: 1
       })
-      await this.base._runFastForward(ff)
-      console.log('[CommentsAutobase] Viewer: fast-forward complete')
+      const result = await ff.upgrade()
+      await ff.close()
+      if (!result) {
+        console.log('[CommentsAutobase] Viewer: fast-forward skipped (not ready)')
+        return
+      }
+      if (!result.indexers || result.indexers.length === 0) {
+        console.log('[CommentsAutobase] Viewer: fast-forward skipped (no indexers yet)')
+        return
+      }
+      this.base.fastForwardTo = result
+      this.base._bumpAckTimer?.()
+      this.base._queueBump?.()
+      console.log('[CommentsAutobase] Viewer: fast-forward queued')
     } catch (err) {
       console.log('[CommentsAutobase] Viewer: fast-forward failed (non-fatal):', err?.message)
     }
@@ -1036,10 +1062,40 @@ export class CommentsAutobase extends ReadyResource {
 
     const comments = []
     const prefix = prefixedKey('comments', `${videoId}/`)
+    const adminKeys = new Set()
+    if (this._adminKeyHex) adminKeys.add(this._adminKeyHex)
+    const linearizerIndexers = this.base?.linearizer?.indexers || []
+    for (const writer of linearizerIndexers) {
+      if (writer?.key) adminKeys.add(b4a.toString(writer.key, 'hex'))
+    }
+    const systemIndexers = this.base?.system?.indexers || []
+    for (const idx of systemIndexers) {
+      if (idx?.key) adminKeys.add(b4a.toString(idx.key, 'hex'))
+    }
+    if (this.base?.writable && this.localWriterKeyHex) {
+      adminKeys.add(this.localWriterKeyHex)
+    }
+
+    console.log('[CommentsAutobase] listComments adminKeys debug:')
+    console.log('[CommentsAutobase]   _adminKeyHex:', this._adminKeyHex || 'null')
+    console.log('[CommentsAutobase]   linearizerIndexers:', linearizerIndexers.length)
+    console.log('[CommentsAutobase]   systemIndexers:', systemIndexers.length)
+    console.log('[CommentsAutobase]   base.writable:', this.base?.writable)
+    console.log('[CommentsAutobase]   localWriterKeyHex:', this.localWriterKeyHex || 'null')
+    console.log('[CommentsAutobase]   adminKeys set size:', adminKeys.size)
+    console.log('[CommentsAutobase]   adminKeys full:', JSON.stringify([...adminKeys]))
 
     for await (const { value } of this.view.createReadStream({ gte: prefix, lt: prefix + '\xff' })) {
       if (value && !value.hidden) {
-        comments.push(value)
+        const authorKey = value.authorKeyHex
+        const isInSet = adminKeys.has(authorKey)
+        const isAdmin = Boolean(authorKey && isInSet)
+        console.log('[CommentsAutobase]   comment authorKeyHex FULL:', authorKey)
+        console.log('[CommentsAutobase]   authorKey in adminKeys?:', isInSet, '-> isAdmin:', isAdmin)
+        comments.push({
+          ...value,
+          isAdmin
+        })
       }
     }
 
@@ -1244,6 +1300,7 @@ export async function getOrCreateCommentsAutobase(store, opts = {}) {
     // Best-effort upgrade of runtime wiring based on newest caller's context.
     if (opts?.swarm) cached.then((c) => c.attachSwarm(opts.swarm)).catch(() => {})
     if (opts?.isChannelOwner) cached.then((c) => c.setIsChannelOwner(true)).catch(() => {})
+    if (opts?.commentsAdminKey) cached.then((c) => c.setAdminKey?.(opts.commentsAdminKey)).catch(() => {})
     return cached
   }
 

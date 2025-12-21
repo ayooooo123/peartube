@@ -113,6 +113,20 @@ function formatTimeAgo(timestamp: number): string {
   return `${days}d ago`
 }
 
+function toCountMap(countsData: any): Record<string, number> {
+  const counts: Record<string, number> = {}
+  if (Array.isArray(countsData)) {
+    for (const c of countsData) {
+      if (c?.reactionType) counts[c.reactionType] = c.count || 0
+    }
+  } else if (countsData && typeof countsData === 'object') {
+    for (const [key, value] of Object.entries(countsData)) {
+      counts[key] = typeof value === 'number' ? value : 0
+    }
+  }
+  return counts
+}
+
 // Now using HRPC methods directly - no command IDs needed
 
 // Route parsing for hash-based routing
@@ -188,22 +202,6 @@ function WatchPageView({
   const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({})
   const [userReaction, setUserReaction] = useState<string | null>(null)
   const publicBeeKey = (video as any)?.publicBeeKey || undefined
-
-  // Some parts of the app historically used `video.path` as the identifier for comments/reactions,
-  // while others used the stable `video.id`. Include both variants for reads so devices agree.
-  const socialVideoIds = useMemo(() => {
-    const out = new Set<string>()
-    if (video?.id) out.add(video.id)
-
-    const p = (video as any)?.path
-    if (typeof p === 'string' && p && p !== (video as any)?.id) {
-      out.add(p)
-      if (p.startsWith('/')) out.add(p.slice(1))
-      else out.add(`/${p}`)
-    }
-
-    return Array.from(out)
-  }, [video?.id, (video as any)?.path])
 
   const displayComments = useMemo(() => {
     if (pendingComments.length === 0) return comments
@@ -324,23 +322,17 @@ function WatchPageView({
     if (!rpc || !video) return
     if (!append) setCommentsLoading(true)
     try {
-      const canonicalVid = video.id
-      const altVids = socialVideoIds.filter(v => v !== canonicalVid)
       const [cRes, rRes] = await Promise.all([
-        rpc.listComments?.({ channelKey, videoId: canonicalVid, publicBeeKey, page, limit: COMMENTS_PER_PAGE }).catch(() => null),
-        !append ? rpc.getReactions?.({ channelKey, videoId: canonicalVid, publicBeeKey }).catch(() => null) : Promise.resolve(null),
+        rpc.listComments?.({ channelKey, videoId: video.id, publicBeeKey, page, limit: COMMENTS_PER_PAGE }).catch(() => null),
+        !append ? rpc.getReactions?.({ channelKey, videoId: video.id, publicBeeKey }).catch(() => null) : Promise.resolve(null),
       ])
 
       const primaryOk = Boolean(cRes?.success && Array.isArray(cRes.comments))
       const primaryComments = primaryOk ? cRes.comments : []
-
-      let altCommentResults: any[] = []
-      if (!append && altVids.length > 0 && rpc.listComments) {
-        altCommentResults = await Promise.all(
-          altVids.map((vid) =>
-            rpc.listComments?.({ channelKey, videoId: vid, publicBeeKey, page: 0, limit: COMMENTS_PER_PAGE }).catch(() => null)
-          )
-        )
+      console.log('[WatchPage] listComments response:', { success: cRes?.success, count: primaryComments.length })
+      if (primaryComments.length > 0) {
+        console.log('[WatchPage] First comment isAdmin:', primaryComments[0]?.isAdmin, 'authorKeyHex:', primaryComments[0]?.authorKeyHex?.slice(0, 16))
+        console.log('[WatchPage] Comments with isAdmin=true:', primaryComments.filter((c: any) => c.isAdmin).length)
       }
 
       if (append) {
@@ -352,20 +344,11 @@ function WatchPageView({
           setPendingComments(prev => prev.filter((p) => !p.commentId || !newIds.has(p.commentId)))
         }
       } else {
-        const merged = new Map<string, any>()
-        for (const c of primaryComments) merged.set(c.commentId, c)
-        for (const r of altCommentResults) {
-          if (r?.success && Array.isArray(r.comments)) {
-            for (const c of r.comments) merged.set(c.commentId, c)
-          }
-        }
-
-        if (merged.size > 0) {
-          const nextComments = Array.from(merged.values())
-          setComments(nextComments)
+        if (primaryComments.length > 0) {
+          setComments(primaryComments)
           setHasMoreComments(primaryComments.length >= COMMENTS_PER_PAGE)
           setCommentsPage(page)
-          const knownIds = new Set(nextComments.map((c: any) => c.commentId))
+          const knownIds = new Set(primaryComments.map((c: any) => c.commentId))
           setPendingComments(prev => prev.filter((p) => !p.commentId || !knownIds.has(p.commentId)))
         } else {
           setComments([])
@@ -374,42 +357,8 @@ function WatchPageView({
       }
 
       if (rRes?.success) {
-        const toCountMap = (countsData: any): Record<string, number> => {
-          const counts: Record<string, number> = {}
-          if (Array.isArray(countsData)) {
-            for (const c of countsData) {
-              if (c?.reactionType) counts[c.reactionType] = c.count || 0
-            }
-          } else if (countsData && typeof countsData === 'object') {
-            for (const [key, value] of Object.entries(countsData)) {
-              counts[key] = typeof value === 'number' ? value : 0
-            }
-          }
-          return counts
-        }
-
-        const mergedCounts: Record<string, number> = {}
-        let mergedUserReaction: string | null = rRes.userReaction || null
-
-        for (const [k, v] of Object.entries(toCountMap(rRes.counts || {}))) {
-          mergedCounts[k] = (mergedCounts[k] || 0) + v
-        }
-
-        if (!append && altVids.length > 0 && rpc.getReactions) {
-          const altReactionResults = await Promise.all(
-            altVids.map((vid) => rpc.getReactions?.({ channelKey, videoId: vid, publicBeeKey }).catch(() => null))
-          )
-          for (const r of altReactionResults) {
-            if (!r?.success) continue
-            for (const [k, v] of Object.entries(toCountMap(r.counts || {}))) {
-              mergedCounts[k] = (mergedCounts[k] || 0) + v
-            }
-            if (!mergedUserReaction && r.userReaction) mergedUserReaction = r.userReaction
-          }
-        }
-
-        setReactionCounts(mergedCounts)
-        setUserReaction(mergedUserReaction)
+        setReactionCounts(toCountMap(rRes.counts || {}))
+        setUserReaction(rRes.userReaction || null)
       } else if (!append) {
         setReactionCounts({})
         setUserReaction(null)
@@ -418,7 +367,7 @@ function WatchPageView({
       setCommentsLoading(false)
       setLoadingMoreComments(false)
     }
-  }, [rpc, channelKey, video?.id, socialVideoIds, publicBeeKey])
+  }, [rpc, channelKey, video?.id, publicBeeKey])
 
   useEffect(() => {
     if (!rpc || !video) return
@@ -452,13 +401,9 @@ function WatchPageView({
     if (!window.confirm('Are you sure you want to delete this comment?')) return
     setDeletingCommentId(commentId)
     try {
-      const tryIds = [video.id, ...socialVideoIds.filter(v => v !== video.id)]
-      for (const vid of tryIds) {
-        const res = await rpc.removeComment?.({ channelKey, videoId: vid, publicBeeKey, commentId })
-        if (res?.success) {
-          setComments(prev => prev.filter(c => c.commentId !== commentId))
-          break
-        }
+      const res = await rpc.removeComment?.({ channelKey, videoId: video.id, publicBeeKey, commentId })
+      if (res?.success) {
+        setComments(prev => prev.filter(c => c.commentId !== commentId))
       }
     } catch (err) {
       console.error('[WatchPage] Delete comment failed:', err)
@@ -472,29 +417,15 @@ function WatchPageView({
     if (!rpc || !video) return
     try {
       if (userReaction === type) {
-        const tryIds = [video.id, ...socialVideoIds.filter(v => v !== video.id)]
-        await Promise.all(tryIds.map((vid) => rpc.removeReaction?.({ channelKey, videoId: vid, publicBeeKey })))
+        await rpc.removeReaction?.({ channelKey, videoId: video.id, publicBeeKey })
       } else {
-        const tryIds = [video.id, ...socialVideoIds.filter(v => v !== video.id)]
-        await Promise.all(tryIds.map((vid) => rpc.removeReaction?.({ channelKey, videoId: vid, publicBeeKey })))
+        await rpc.removeReaction?.({ channelKey, videoId: video.id, publicBeeKey })
         await rpc.addReaction?.({ channelKey, videoId: video.id, publicBeeKey, reactionType: type })
       }
       // refresh
       const rRes = await rpc.getReactions?.({ channelKey, videoId: video.id, publicBeeKey })
       if (rRes?.success) {
-        // Backend returns counts as object map { like: 3, dislike: 1 } not array
-        const countsData = rRes.counts || {}
-        const counts: Record<string, number> = {}
-        if (Array.isArray(countsData)) {
-          for (const c of countsData) {
-            if (c?.reactionType) counts[c.reactionType] = c.count || 0
-          }
-        } else if (typeof countsData === 'object') {
-          for (const [key, value] of Object.entries(countsData)) {
-            counts[key] = typeof value === 'number' ? value : 0
-          }
-        }
-        setReactionCounts(counts)
+        setReactionCounts(toCountMap(rRes.counts || {}))
         setUserReaction(rRes.userReaction || null)
       }
     } catch {}
@@ -762,6 +693,9 @@ function WatchPageView({
                           <span style={watchStyles.commentAuthor}>
                             {(c.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(c.timestamp || Date.now())}
                           </span>
+                          {c.isAdmin && (
+                            <span style={watchStyles.adminBadge}>Admin</span>
+                          )}
                           {c.pendingState && (
                             <span style={watchStyles.pendingBadge}>
                               {c.pendingState === 'failed' ? 'Failed' : 'Pending'}
@@ -801,6 +735,9 @@ function WatchPageView({
                                 <span style={watchStyles.commentAuthor}>
                                   {(reply.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(reply.timestamp || Date.now())}
                                 </span>
+                                {reply.isAdmin && (
+                                  <span style={watchStyles.adminBadge}>Admin</span>
+                                )}
                                 {reply.pendingState && (
                                   <span style={watchStyles.pendingBadge}>
                                     {reply.pendingState === 'failed' ? 'Failed' : 'Pending'}
@@ -1162,6 +1099,15 @@ const watchStyles: Record<string, React.CSSProperties> = {
     color: colors.textMuted,
     fontSize: 12,
     flex: 1,
+  },
+  adminBadge: {
+    fontSize: 11,
+    color: colors.primary,
+    border: `1px solid ${colors.primary}`,
+    borderRadius: 999,
+    padding: '2px 6px',
+    marginRight: 8,
+    fontWeight: 600,
   },
   pendingBadge: {
     fontSize: 11,

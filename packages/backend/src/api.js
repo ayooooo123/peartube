@@ -1582,6 +1582,30 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           throw err
         })
         console.log('[API] _getCommentsAutobase: cached promise resolved')
+
+        // FIX: Try to update admin key on cached instance if not already set
+        // This handles the case where the instance was cached before admin key was available
+        if (!result._adminKeyHex && publicBeeKey) {
+          try {
+            const pubBee = await Promise.race([
+              loadPublicBee(ctx, publicBeeKey),
+              new Promise((resolve) => setTimeout(() => resolve(null), 2000))
+            ])
+            if (pubBee) {
+              const meta = await Promise.race([
+                pubBee.getMetadata(),
+                new Promise((resolve) => setTimeout(() => resolve(null), 1000))
+              ]).catch(() => null)
+              if (meta?.commentsAdminKey) {
+                result.setAdminKey?.(meta.commentsAdminKey)
+                console.log('[API] _getCommentsAutobase: updated admin key on cached instance')
+              }
+            }
+          } catch (err) {
+            console.log('[API] _getCommentsAutobase: could not update admin key on cached instance:', err?.message)
+          }
+        }
+
         return result
       }
 
@@ -1589,6 +1613,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         console.log('[API] _getCommentsAutobase: openPromise STARTED')
         let resolvedPublicBeeKey = (typeof publicBeeKey === 'string' && publicBeeKey.length > 0) ? publicBeeKey : null
         let commentsAutobaseKey = null
+        let commentsAdminKey = null
         /** @type {any|null} */
         let pubBee = null
 
@@ -1644,7 +1669,39 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             // If the channel already has a CommentsAutobase instance, use it (fast path for owners).
             if (localChannel?.commentsAutobase) {
               console.log('[API] _getCommentsAutobase: using channel.commentsAutobase')
-              return localChannel.commentsAutobase
+              const commentsBase = localChannel.commentsAutobase
+              const isPublishingDevice = Boolean(localChannel.publicBee?.writable)
+              if (isPublishingDevice) commentsBase.setIsChannelOwner?.(true)
+
+              const meta = await Promise.race([
+                localChannel?.getMetadata?.(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('getMetadata timeout')), 2000))
+              ]).catch(() => null)
+              const metaAdminKey = meta?.commentsAdminKey || null
+              if (metaAdminKey) {
+                commentsBase.setAdminKey?.(metaAdminKey)
+              }
+
+              const adminKeyHex = commentsBase.localWriterKeyHex
+              if (!metaAdminKey && adminKeyHex) {
+                commentsBase.setAdminKey?.(adminKeyHex)
+              }
+
+              if (isPublishingDevice && adminKeyHex && (!metaAdminKey || metaAdminKey !== adminKeyHex)) {
+                try {
+                  await localChannel.updateMetadata({ commentsAdminKey: adminKeyHex })
+                } catch (err) {
+                  console.log('[API] _getCommentsAutobase: could not store admin key in channel metadata:', err?.message)
+                }
+                try {
+                  await localChannel.publicBee?.setMetadata({ commentsAdminKey: adminKeyHex })
+                  console.log('[API] _getCommentsAutobase: published commentsAdminKey to PublicBee')
+                } catch (err) {
+                  console.log('[API] _getCommentsAutobase: could not publish admin key:', err?.message)
+                }
+              }
+
+              return commentsBase
             }
 
             // Prefer canonical keys from channel metadata / PublicBee if available.
@@ -1653,6 +1710,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               new Promise((_, reject) => setTimeout(() => reject(new Error('getMetadata timeout')), 2000))
             ]).catch(() => null)
             commentsAutobaseKey = meta?.commentsAutobaseKey || null
+            commentsAdminKey = meta?.commentsAdminKey || null
             resolvedPublicBeeKey = resolvedPublicBeeKey ||
               localChannel?.publicBeeKey ||
               null
@@ -1698,6 +1756,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               new Promise((resolve) => setTimeout(() => resolve(null), 2000))
             ]).catch(() => null)
             commentsAutobaseKey = meta?.commentsAutobaseKey || null
+            commentsAdminKey = commentsAdminKey || meta?.commentsAdminKey || null
             console.log('[API] _getCommentsAutobase: commentsAutobaseKey from PublicBee:', commentsAutobaseKey?.slice(0, 16) || 'null')
           }
         } catch (err) {
@@ -1718,6 +1777,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           commentsBase = await getOrCreateCommentsAutobase(ctx.store, {
             channelKey,
             commentsAutobaseKey,
+            commentsAdminKey,
             isChannelOwner: isPublishingDevice,
             swarm: ctx.swarm
           })
@@ -1729,6 +1789,9 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           throw err
         }
         console.log('[API] _getCommentsAutobase: CommentsAutobase ready, key:', commentsBase.keyHex?.slice(0, 16))
+        if (commentsAdminKey) {
+          commentsBase.setAdminKey?.(commentsAdminKey)
+        }
 
         // Publishing device: publish the key to PublicBee if it wasn't there yet.
         if (isPublishingDevice && pubBee?.writable && commentsBase.keyHex && !commentsAutobaseKey) {
@@ -1737,6 +1800,26 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             console.log('[API] _getCommentsAutobase: published commentsAutobaseKey to PublicBee')
           } catch (err) {
             console.log('[API] _getCommentsAutobase: could not publish key to PublicBee:', err?.message)
+          }
+        }
+
+        // Publishing device: publish admin key if missing or stale.
+        if (isPublishingDevice && pubBee?.writable && commentsBase.localWriterKeyHex) {
+          const adminKeyHex = commentsBase.localWriterKeyHex
+          if (!commentsAdminKey || commentsAdminKey !== adminKeyHex) {
+            try {
+              await pubBee.setMetadata({ commentsAdminKey: adminKeyHex })
+              console.log('[API] _getCommentsAutobase: published commentsAdminKey to PublicBee')
+            } catch (err) {
+              console.log('[API] _getCommentsAutobase: could not publish admin key:', err?.message)
+            }
+          }
+          if (localChannel) {
+            try {
+              await localChannel.updateMetadata({ commentsAdminKey: adminKeyHex })
+            } catch (err) {
+              console.log('[API] _getCommentsAutobase: could not store admin key in channel metadata:', err?.message)
+            }
           }
         }
 

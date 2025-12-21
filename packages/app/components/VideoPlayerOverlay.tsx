@@ -1300,7 +1300,8 @@ export function VideoPlayerOverlay() {
   // Render - all styles are animated, no React state conditionals in JSX to prevent VLC remounting
   const content = (
     <Animated.View style={[styles.container, containerStyle]}>
-          {/* Video area */}
+          {/* Video area - wrapped with GestureDetector for pull-down-to-minimize */}
+          <GestureDetector gesture={composedGesture}>
           <Animated.View style={[styles.videoWrapper, videoStyle]}>
             {/* Background - fills the parent container */}
             <Pressable
@@ -1457,6 +1458,7 @@ export function VideoPlayerOverlay() {
             </Animated.View>
           )}
         </Animated.View>
+        </GestureDetector>
 
         {/* Mini player info row - hidden in landscape (and during landscape exit gating) */}
         {!isLandscapeFullscreen && !pendingLandscapeExit && (
@@ -1706,12 +1708,8 @@ export function VideoPlayerOverlay() {
   )
 
   // Always use same structure to prevent remounting
-  // GestureDetector is disabled in landscape via the enabled property on the gesture
-  return (
-    <GestureDetector gesture={composedGesture}>
-      {content}
-    </GestureDetector>
-  )
+  // GestureDetector wraps only video area - comments scroll freely
+  return content
 }
 
 const styles = StyleSheet.create({

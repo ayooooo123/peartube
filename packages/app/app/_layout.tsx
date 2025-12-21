@@ -93,6 +93,13 @@ export default function RootLayout() {
         await platformRPC.rpc.prefetchVideo(video.channelKey, videoRef)
         console.log('[App] prefetchVideo sent for:', videoRef)
 
+        // Proactively prefetch next videos in background for smooth playback
+        platformRPC.rpc.prefetchNextVideos?.(video.channelKey, videoRef, 3).then((res: any) => {
+          if (res?.prefetchedCount > 0) {
+            console.log('[App] Prefetching', res.prefetchedCount, 'next videos in background')
+          }
+        }).catch(() => {})
+
         // Fallback: poll getVideoStats and feed into the context emitter.
         // Some mobile runtimes can be flaky with push events (eventVideoStats) over BareKit IPC.
         // Polling keeps the UI stats bar updated regardless.
@@ -151,13 +158,24 @@ export default function RootLayout() {
     if (!platformRPC) return
 
     if (nextState === 'background') {
-      console.log('[App] Terminating backend for background')
-      platformRPC.terminatePlatformRPC()
-      setReady(false)
-      setBackendError(null)
-    } else if (nextState === 'active' && !platformRPC.isInitialized()) {
-      console.log('[App] Re-initializing backend from foreground')
-      initNativeBackend()
+      // Suspend networking instead of terminating entire backend
+      // This is faster to resume and saves battery while keeping state
+      console.log('[App] Suspending network for background')
+      platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
+        console.log('[App] suspendNetwork error:', err?.message)
+      })
+    } else if (nextState === 'active') {
+      // Resume networking when returning to foreground
+      console.log('[App] Resuming network from foreground')
+      platformRPC.rpc?.resumeNetwork?.().catch((err: any) => {
+        console.log('[App] resumeNetwork error:', err?.message)
+      })
+
+      // If backend was terminated (shouldn't happen with suspend/resume), reinitialize
+      if (!platformRPC.isInitialized()) {
+        console.log('[App] Backend not initialized, reinitializing...')
+        initNativeBackend()
+      }
     }
   }
 

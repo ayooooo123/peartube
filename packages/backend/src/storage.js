@@ -14,6 +14,21 @@ import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
 
+// Network stats for debugging connection issues
+let HyperswarmStats = null;
+try {
+  HyperswarmStats = (await import('hyperswarm-stats')).default;
+} catch (e) {
+  console.log('[Storage] hyperswarm-stats not available');
+}
+
+// Global network stats instance (set after swarm is created)
+let networkStats = null;
+
+// Global references for suspend/resume (set in initializeStorage)
+let globalSwarm = null;
+let globalBlobServer = null;
+
 // Blind peering for mobile connectivity (keeps Autobases available through mirror servers)
 // This solves the issue where mobile devices behind CGNAT can't establish direct P2P connections
 // - BlindPeer (server): Desktop instances run as mirrors to keep data available
@@ -124,6 +139,7 @@ export async function initializeStorage(config) {
     console.log('[Storage] Starting blob server listen...');
     await blobServer.listen();
     blobServerPort = blobServer.port;
+    globalBlobServer = blobServer;  // Set global reference for suspend/resume
     console.log('[Storage] Blob server listening on port:', blobServerPort);
   } catch (err) {
     console.error('[Storage] Failed to initialize blob server:', err.message);
@@ -177,6 +193,33 @@ export async function initializeStorage(config) {
   console.log('[Storage] Creating Hyperswarm...');
   const swarm = new Hyperswarm({ keyPair });
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
+
+  // Set global references for suspend/resume and stats
+  globalSwarm = swarm;
+
+  // Initialize network stats for debugging
+  if (HyperswarmStats) {
+    try {
+      networkStats = new HyperswarmStats(swarm);
+      console.log('[Storage] Network stats initialized');
+    } catch (e) {
+      console.log('[Storage] Network stats init failed:', e?.message);
+    }
+  }
+
+  // Join the PearTube network topic for peer pool building
+  // More connected peers = better relay options for symmetric NAT holepunching
+  const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from('peartube-network', 'utf-8'));
+  try {
+    const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
+    console.log('[Storage] Joined peartube-network topic for peer pool building');
+    // Don't await flushed() - it can hang on mobile
+    poolDiscovery.flushed().then(() => {
+      console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
+    }).catch(() => {});
+  } catch (e) {
+    console.log('[Storage] Failed to join peer pool topic:', e?.message);
+  }
 
   // Start listening - DON'T block on it since it may hang on mobile
   // The listen() call starts the server but we don't need to wait for it
@@ -898,5 +941,120 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
   } catch (err) {
     console.error('[Storage] GET_VIDEO_URL_FROM_BLOB: blobServer.getLink FAILED:', err.message, err.stack);
     throw err;
+  }
+}
+
+// =============================================================================
+// Mobile Lifecycle Management
+// =============================================================================
+
+/**
+ * Suspend networking for mobile background state.
+ * Call this when the app goes to background to save battery and avoid connection issues.
+ * Uses Hyperswarm's built-in suspend() which gracefully pauses DHT and connections.
+ *
+ * @returns {Promise<void>}
+ */
+export async function suspendNetworking() {
+  console.log('[Network] Suspending...');
+  try {
+    if (globalSwarm) {
+      await globalSwarm.suspend();
+      console.log('[Network] Swarm suspended');
+    }
+    if (globalBlobServer) {
+      await globalBlobServer.suspend();
+      console.log('[Network] BlobServer suspended');
+    }
+    console.log('[Network] Suspended successfully');
+  } catch (err) {
+    console.log('[Network] Suspend error (non-fatal):', err?.message);
+  }
+}
+
+/**
+ * Resume networking when app returns to foreground.
+ * Resumes DHT operations and re-establishes connections.
+ *
+ * @returns {Promise<void>}
+ */
+export async function resumeNetworking() {
+  console.log('[Network] Resuming...');
+  try {
+    if (globalSwarm) {
+      await globalSwarm.resume();
+      console.log('[Network] Swarm resumed, connections:', globalSwarm.connections?.size || 0);
+    }
+    if (globalBlobServer) {
+      await globalBlobServer.resume();
+      console.log('[Network] BlobServer resumed');
+    }
+    console.log('[Network] Resumed successfully');
+  } catch (err) {
+    console.log('[Network] Resume error (non-fatal):', err?.message);
+  }
+}
+
+// =============================================================================
+// Network Debugging
+// =============================================================================
+
+/**
+ * Get network stats as JSON for debugging.
+ * Uses hyperswarm-stats to provide detailed connection and DHT information.
+ *
+ * @returns {Object|null} Stats object or null if stats not available
+ */
+export function getNetworkStats() {
+  if (!networkStats) {
+    // Fallback: return basic stats from swarm
+    if (globalSwarm) {
+      return {
+        connections: globalSwarm.connections?.size || 0,
+        peers: globalSwarm.peers?.size || 0,
+        dht: {
+          firewalled: globalSwarm.dht?.firewalled ?? null,
+          bootstrapped: globalSwarm.dht?.bootstrapped ?? null,
+          ephemeral: globalSwarm.dht?.ephemeral ?? null,
+          online: globalSwarm.dht?.online ?? null
+        }
+      };
+    }
+    return null;
+  }
+
+  try {
+    return networkStats.toJson();
+  } catch (err) {
+    console.log('[Network] Stats toJson error:', err?.message);
+    return null;
+  }
+}
+
+/**
+ * Get human-readable network stats for debugging.
+ *
+ * @returns {string} Human-readable stats or message if not available
+ */
+export function getNetworkStatsReadable() {
+  if (!networkStats) {
+    // Fallback: create basic readable output
+    if (globalSwarm) {
+      const dht = globalSwarm.dht;
+      return [
+        `Connections: ${globalSwarm.connections?.size || 0}`,
+        `Peers discovered: ${globalSwarm.peers?.size || 0}`,
+        `DHT firewalled: ${dht?.firewalled ?? 'unknown'}`,
+        `DHT bootstrapped: ${dht?.bootstrapped ?? 'unknown'}`,
+        `DHT online: ${dht?.online ?? 'unknown'}`
+      ].join('\n');
+    }
+    return 'Network stats not available';
+  }
+
+  try {
+    return networkStats.toString();
+  } catch (err) {
+    return `Stats error: ${err?.message}`;
   }
 }

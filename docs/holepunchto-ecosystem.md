@@ -504,5 +504,22 @@ TURN-like relay requiring infrastructure. **Contradicts pure P2P model.**
 
 ---
 
+## Implementation Status (Dec 2025)
+
+### Completed (Tier 1)
+- [x] `hyperswarm-stats` - Installed and integrated for network debugging
+- [x] Peer pool topic (`peartube-network`) - All users join to build relay options
+- [x] Mobile lifecycle hooks - `suspend()/resume()` wired to AppState
+- [x] Proactive video prefetching - Next 3 videos prefetch when current starts
+
+### Remaining (Tier 2-3)
+- [ ] `hypercore-byte-stream` with `maxPrefetch` - For improved video streaming
+- [ ] `throwaway-local-cache` - Fast metadata caching
+- [ ] `activity-queue` - Track prefetch completion
+- [ ] `protomux-wakeup` - Background sync (already installed, needs enabling)
+- [ ] `blind-peering` - Content availability (already installed, needs enabling)
+
+---
+
 *Last updated: December 2025*
 *Total holepunchto repos: 515*

@@ -7,7 +7,7 @@
 
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
-import { loadDrive, createDrive, getVideoUrl, getVideoUrlFromBlob, waitForDriveSync, loadChannel, loadPublicBee, pairDevice as pairChannelDevice } from './storage.js';
+import { loadDrive, createDrive, getVideoUrl, getVideoUrlFromBlob, waitForDriveSync, loadChannel, loadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
@@ -1188,6 +1188,70 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     },
 
     /**
+     * Prefetch next videos in a channel for smooth playback.
+     * Called when a video starts playing to preload upcoming content.
+     *
+     * @param {string} channelKey - Channel key
+     * @param {string} currentVideoId - Current video ID being watched
+     * @param {number} [count=3] - Number of next videos to prefetch
+     * @returns {Promise<{success: boolean, prefetchedCount?: number, error?: string}>}
+     */
+    async prefetchNextVideos(channelKey, currentVideoId, count = 3) {
+      console.log('[API] prefetchNextVideos: channel:', channelKey?.slice(0, 16), 'current:', currentVideoId, 'count:', count)
+
+      try {
+        // Get list of videos for this channel
+        const videosResult = await this.listVideos({ channelKey })
+        const videos = videosResult?.videos || []
+
+        if (videos.length === 0) {
+          console.log('[API] prefetchNextVideos: no videos found')
+          return { success: true, prefetchedCount: 0 }
+        }
+
+        // Find current video index
+        const currentIndex = videos.findIndex(v =>
+          v.id === currentVideoId ||
+          v.videoId === currentVideoId ||
+          v.path?.includes(currentVideoId)
+        )
+
+        if (currentIndex === -1) {
+          console.log('[API] prefetchNextVideos: current video not found in list')
+          // Fall back to prefetching first N videos
+          const toPreload = videos.slice(0, count)
+          for (const video of toPreload) {
+            const videoRef = video.id || video.videoId || video.path
+            // Fire and forget - don't wait for each prefetch
+            this.prefetchVideo(channelKey, videoRef).catch(() => {})
+          }
+          return { success: true, prefetchedCount: toPreload.length }
+        }
+
+        // Get next N videos after current
+        const nextVideos = videos.slice(currentIndex + 1, currentIndex + 1 + count)
+        console.log('[API] prefetchNextVideos: found', nextVideos.length, 'videos to prefetch')
+
+        // Start prefetching in background (fire and forget)
+        let prefetchedCount = 0
+        for (const video of nextVideos) {
+          const videoRef = video.id || video.videoId || video.path
+          console.log('[API] prefetchNextVideos: starting prefetch for:', videoRef)
+          // Don't await - run in background
+          this.prefetchVideo(channelKey, videoRef).catch(err => {
+            console.log('[API] prefetchNextVideos: prefetch error for', videoRef, ':', err?.message)
+          })
+          prefetchedCount++
+        }
+
+        return { success: true, prefetchedCount }
+      } catch (err) {
+        console.error('[API] prefetchNextVideos error:', err.message)
+        return { success: false, prefetchedCount: 0, error: err.message }
+      }
+    },
+
+    /**
      * Get video stats
      * @param {string} driveKey
      * @param {string} videoPath
@@ -2160,6 +2224,50 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       } catch (err) {
         console.error('[API] getVideoRecommendations error:', err.message)
         return { success: false, recommendations: [], error: err.message }
+      }
+    },
+
+    // ============================================
+    // Network Lifecycle Management
+    // ============================================
+
+    /**
+     * Suspend networking for mobile background state.
+     * Call this when the app goes to background to save battery.
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async suspendNetwork() {
+      try {
+        await suspendNetworking()
+        return { success: true }
+      } catch (err) {
+        console.error('[API] suspendNetwork error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Resume networking when app returns to foreground.
+     * @returns {Promise<{success: boolean, error?: string}>}
+     */
+    async resumeNetwork() {
+      try {
+        await resumeNetworking()
+        return { success: true }
+      } catch (err) {
+        console.error('[API] resumeNetwork error:', err.message)
+        return { success: false, error: err.message }
+      }
+    },
+
+    /**
+     * Get network stats for debugging.
+     * @returns {{stats: Object|null, readable: string}}
+     */
+    getNetworkDebugStats() {
+      return {
+        stats: getNetworkStats(),
+        readable: getNetworkStatsReadable()
       }
     }
   };

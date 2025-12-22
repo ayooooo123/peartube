@@ -15,7 +15,11 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.peartube.app"
+      "bundleIdentifier": "com.peartube.app",
+      "infoPlist": {
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -37,6 +41,14 @@
           "android": {
             "minSdkVersion": 29
           }
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow PearTube to save videos to your device.",
+          "savePhotosPermission": "Allow PearTube to save videos to your device.",
+          "isAccessMediaLocationEnabled": true
         }
       ]
     ]

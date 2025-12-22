@@ -1,0 +1,17 @@
+{
+  "name": "expo-downloads-save",
+  "version": "1.0.0",
+  "description": "Save files to the system Downloads folder on Android and iOS",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {},
+  "author": "PearTube",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/ayooooo123/peartube",
+  "peerDependencies": {
+    "expo": "*"
+  },
+  "devDependencies": {
+    "expo-module-scripts": "^4.0.0"
+  }
+}

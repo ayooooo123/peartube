@@ -70,6 +70,7 @@ declare const HRPC: new (stream: any) => {
   onEventError(handler: (data: any) => void): void;
   onEventVideoStats(handler: (data: any) => void): void;
   onEventUploadProgress(handler: (data: any) => void): void;
+  onEventDownloadProgress(handler: (data: any) => void): void;
   onEventFeedUpdate(handler: (data: any) => void): void;
   onEventLog(handler: (data: any) => void): void;
 };
@@ -90,6 +91,7 @@ type ReadyCallback = (data: { blobServerPort: number }) => void;
 type ErrorCallback = (data: { message: string }) => void;
 type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
 type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
+type DownloadProgressCallback = (data: { id: string; progress: number; bytesDownloaded?: number; totalBytes?: number }) => void;
 type FeedUpdateCallback = (data: { action?: string; channelKey?: string }) => void;
 
 // Event callback storage
@@ -98,6 +100,7 @@ const eventCallbacks = {
   error: [] as ErrorCallback[],
   videoStats: [] as VideoStatsCallback[],
   uploadProgress: [] as UploadProgressCallback[],
+  downloadProgress: [] as DownloadProgressCallback[],
   feedUpdate: [] as FeedUpdateCallback[],
 };
 
@@ -126,6 +129,10 @@ export const events = {
   onUploadProgress: (cb: UploadProgressCallback) => {
     eventCallbacks.uploadProgress.push(cb);
     return () => removeCallback(eventCallbacks.uploadProgress, cb);
+  },
+  onDownloadProgress: (cb: DownloadProgressCallback) => {
+    eventCallbacks.downloadProgress.push(cb);
+    return () => removeCallback(eventCallbacks.downloadProgress, cb);
   },
   onFeedUpdate: (cb: FeedUpdateCallback) => {
     eventCallbacks.feedUpdate.push(cb);
@@ -215,6 +222,10 @@ export async function initPlatformRPC(config: {
     eventCallbacks.uploadProgress.forEach(cb => cb(data));
   };
 
+  const handleDownloadProgress = (data: any) => {
+    eventCallbacks.downloadProgress.forEach(cb => cb(data));
+  };
+
   const handleFeedUpdate = (data: any) => {
     eventCallbacks.feedUpdate.forEach(cb => cb(data));
   };
@@ -260,6 +271,9 @@ export async function initPlatformRPC(config: {
             case '@peartube/event-upload-progress':
               handleUploadProgress(payload || {});
               break;
+            case '@peartube/event-download-progress':
+              handleDownloadProgress(payload || {});
+              break;
             case '@peartube/event-feed-update':
               handleFeedUpdate(payload || {});
               break;
@@ -286,6 +300,7 @@ export async function initPlatformRPC(config: {
   hrpc.onEventError(handleError);
   hrpc.onEventVideoStats(handleVideoStats);
   hrpc.onEventUploadProgress(handleUploadProgress);
+  hrpc.onEventDownloadProgress(handleDownloadProgress);
   hrpc.onEventFeedUpdate(handleFeedUpdate);
   hrpc.onEventLog(handleLog);
 

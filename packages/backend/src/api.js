@@ -556,6 +556,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         const totalBytes = blob.byteLength;
         let bytesWritten = 0;
 
+        console.log('[API] Creating write stream for:', destPath);
         const readStream = blobs.createReadStream(blob);
         const writeStream = fsModule.createWriteStream(destPath);
 

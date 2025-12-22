@@ -910,6 +910,16 @@ ns.register({
 })
 
 ns.register({
+  name: 'event-download-progress',
+  fields: [
+    { name: 'id', type: 'string', required: true },           // download ID: channelKey:videoId
+    { name: 'progress', type: 'uint', required: true },       // 0-100
+    { name: 'bytesDownloaded', type: 'uint', required: false },
+    { name: 'totalBytes', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
   name: 'event-feed-update',
   fields: [
     { name: 'channelKey', type: 'string', required: true },
@@ -1693,6 +1703,11 @@ rpcNs.register({
 rpcNs.register({
   name: 'event-upload-progress',
   request: { name: '@peartube/event-upload-progress', stream: false, send: true }
+})
+
+rpcNs.register({
+  name: 'event-download-progress',
+  request: { name: '@peartube/event-download-progress', stream: false, send: true }
 })
 
 rpcNs.register({

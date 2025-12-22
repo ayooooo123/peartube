@@ -5,9 +5,19 @@
  */
 import { createContext, useContext, useState, useCallback, useEffect, ReactNode, useRef } from 'react'
 import { Platform, Alert } from 'react-native'
-import * as FileSystem from 'expo-file-system'
-import * as MediaLibrary from 'expo-media-library'
+import { events } from '@peartube/platform/rpc'
 import type { VideoData } from '@peartube/core'
+
+// Conditionally import saveToDownloads for mobile platforms
+let saveToDownloads: ((sourcePath: string, filename: string, mimeType: string) => Promise<string>) | null = null
+if (Platform.OS !== 'web') {
+  try {
+    const DownloadsSave = require('expo-downloads-save')
+    saveToDownloads = DownloadsSave.saveToDownloads
+  } catch (e) {
+    console.log('[Downloads] expo-downloads-save not available:', e)
+  }
+}
 
 // Download item status
 export type DownloadStatus = 'queued' | 'downloading' | 'saving' | 'complete' | 'error' | 'cancelled'
@@ -101,41 +111,55 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
   // Calculate active downloads count
   const activeCount = downloads.filter(d => d.status === 'downloading' || d.status === 'queued' || d.status === 'saving').length
 
-  // Subscribe to progress events
-  useEffect(() => {
-    const unsubscribe = downloadProgressEventEmitter.subscribe((id, progress, bytesDownloaded, totalBytes) => {
-      setDownloads(prev => prev.map(d => {
-        if (d.id !== id) return d
+  // Handle progress update from any source
+  const handleProgressUpdate = useCallback((id: string, progress: number, bytesDownloaded: number, totalBytes: number) => {
+    setDownloads(prev => prev.map(d => {
+      if (d.id !== id) return d
 
-        // Calculate speed
-        const tracker = speedTrackers.current.get(id)
-        const now = Date.now()
-        let speed = d.speed
+      // Calculate speed
+      const tracker = speedTrackers.current.get(id)
+      const now = Date.now()
+      let speed = d.speed
 
-        if (tracker) {
-          const timeDelta = (now - tracker.lastTime) / 1000 // seconds
-          if (timeDelta > 0.5) { // Update speed every 500ms
-            const bytesDelta = bytesDownloaded - tracker.lastBytes
-            const bytesPerSec = bytesDelta / timeDelta
-            speed = formatBytes(bytesPerSec) + '/s'
-            speedTrackers.current.set(id, { lastBytes: bytesDownloaded, lastTime: now })
-          }
-        } else {
+      if (tracker) {
+        const timeDelta = (now - tracker.lastTime) / 1000 // seconds
+        if (timeDelta > 0.5) { // Update speed every 500ms
+          const bytesDelta = bytesDownloaded - tracker.lastBytes
+          const bytesPerSec = bytesDelta / timeDelta
+          speed = formatBytes(bytesPerSec) + '/s'
           speedTrackers.current.set(id, { lastBytes: bytesDownloaded, lastTime: now })
         }
+      } else {
+        speedTrackers.current.set(id, { lastBytes: bytesDownloaded, lastTime: now })
+      }
 
-        return {
-          ...d,
-          progress,
-          bytesDownloaded,
-          totalBytes,
-          speed,
-          status: 'downloading' as DownloadStatus
-        }
-      }))
+      return {
+        ...d,
+        progress,
+        bytesDownloaded,
+        totalBytes,
+        speed,
+        status: 'downloading' as DownloadStatus
+      }
+    }))
+  }, [])
+
+  // Subscribe to progress events from internal emitter (for web)
+  useEffect(() => {
+    const unsubscribe = downloadProgressEventEmitter.subscribe(handleProgressUpdate)
+    return () => { unsubscribe() }
+  }, [handleProgressUpdate])
+
+  // Subscribe to platform events (for mobile - backend emits progress via HRPC)
+  useEffect(() => {
+    if (Platform.OS === 'web') return // Web uses internal emitter
+
+    const unsubscribe = events.onDownloadProgress((data) => {
+      console.log('[Downloads] Platform progress event:', data.id, data.progress)
+      handleProgressUpdate(data.id, data.progress, data.bytesDownloaded || 0, data.totalBytes || 0)
     })
     return () => { unsubscribe() }
-  }, [])
+  }, [handleProgressUpdate])
 
   // Add a download to the queue and start it
   const addDownload = useCallback(async (video: VideoData, rpc: any) => {
@@ -174,40 +198,101 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     abortControllers.current.set(id, abortController)
 
     try {
-      // Get blob URL from backend
       console.log('[Downloads] Starting download for:', video.title)
       setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'downloading' } : d))
 
-      const result = await rpc.downloadVideo({
-        channelKey: video.channelKey,
-        videoId: video.id || video.path,
-        destPath: '',
-        publicBeeKey: (video as any).publicBeeKey || undefined
-      })
-
-      if (!result?.filePath) {
-        throw new Error('Failed to get video URL')
-      }
-
-      const blobUrl = result.filePath
-      const totalBytes = result.size || video.size || 0
-      const mimeType = (video as any).mimeType || 'video/mp4'
-      const ext = getExtension(mimeType)
-      const filename = `${sanitizeFilename(video.title)}_${video.id || 'video'}.${ext}`
-
-      console.log('[Downloads] Got blob URL:', blobUrl)
-      console.log('[Downloads] Total bytes:', totalBytes)
-
-      // Update total bytes
-      setDownloads(prev => prev.map(d => d.id === id ? { ...d, totalBytes } : d))
-
-      // Platform-specific download
       if (Platform.OS === 'web') {
-        // Web: Use fetch + blob + anchor download
+        // Web/Desktop: Get blob URL and download via browser
+        const result = await rpc.downloadVideo({
+          channelKey: video.channelKey,
+          videoId: video.id || video.path,
+          destPath: '',
+          publicBeeKey: (video as any).publicBeeKey || undefined
+        })
+
+        if (!result?.filePath) {
+          throw new Error('Failed to get video URL')
+        }
+
+        const blobUrl = result.filePath
+        const totalBytes = result.size || video.size || 0
+        const mimeType = (video as any).mimeType || 'video/mp4'
+        const ext = getExtension(mimeType)
+        const filename = `${sanitizeFilename(video.title)}_${video.id || 'video'}.${ext}`
+
+        console.log('[Downloads] Got blob URL:', blobUrl)
+        setDownloads(prev => prev.map(d => d.id === id ? { ...d, totalBytes } : d))
+
         await downloadForWeb(id, blobUrl, filename, abortController.signal)
       } else {
-        // Mobile: Use expo-file-system + expo-media-library
-        await downloadForMobile(id, blobUrl, filename, totalBytes, abortController.signal)
+        // Mobile: Backend downloads directly to file using bare-fs
+        // Progress events are emitted by the backend and captured by our progress listener
+        const result = await rpc.downloadVideo({
+          channelKey: video.channelKey,
+          videoId: video.id || video.path,
+          destPath: '', // Backend will choose the path
+          publicBeeKey: (video as any).publicBeeKey || undefined
+        })
+
+        if (!result?.success) {
+          throw new Error(result?.error || 'Download failed')
+        }
+
+        console.log('[Downloads] Backend saved to:', result.filePath)
+
+        // Now copy from app storage to public Downloads folder
+        if (saveToDownloads && result.filePath) {
+          setDownloads(prev => prev.map(d => d.id === id ? {
+            ...d,
+            status: 'saving' as DownloadStatus,
+            progress: 100
+          } : d))
+
+          const mimeType = (video as any).mimeType || 'video/mp4'
+          const ext = getExtension(mimeType)
+          const filename = `${sanitizeFilename(video.title)}_${video.id || 'video'}.${ext}`
+
+          try {
+            const finalPath = await saveToDownloads(result.filePath, filename, mimeType)
+            console.log('[Downloads] Saved to Downloads:', finalPath)
+
+            setDownloads(prev => prev.map(d => d.id === id ? {
+              ...d,
+              filePath: finalPath,
+              totalBytes: result.size || video.size || 0
+            } : d))
+
+            Alert.alert(
+              'Download Complete',
+              `"${video.title}" saved to Downloads folder.`
+            )
+          } catch (saveError: any) {
+            console.error('[Downloads] Failed to save to Downloads:', saveError)
+            // Fall back to showing app storage path
+            setDownloads(prev => prev.map(d => d.id === id ? {
+              ...d,
+              filePath: result.filePath,
+              totalBytes: result.size || video.size || 0
+            } : d))
+
+            Alert.alert(
+              'Download Complete',
+              `"${video.title}" downloaded. Saved to app storage.`
+            )
+          }
+        } else {
+          // No saveToDownloads available, just use app storage path
+          setDownloads(prev => prev.map(d => d.id === id ? {
+            ...d,
+            filePath: result.filePath,
+            totalBytes: result.size || video.size || 0
+          } : d))
+
+          Alert.alert(
+            'Download Complete',
+            `"${video.title}" downloaded.`
+          )
+        }
       }
 
       // Mark as complete
@@ -240,13 +325,40 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
 
   // Download for web platform
   const downloadForWeb = async (id: string, url: string, filename: string, signal: AbortSignal) => {
-    console.log('[Downloads] Web download:', filename)
+    console.log('[Downloads] Web download:', filename, 'from:', url)
 
     const response = await fetch(url, { signal })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
-    const blob = await response.blob()
+    const contentLength = response.headers.get('content-length')
+    const totalBytes = contentLength ? parseInt(contentLength, 10) : 0
+    console.log('[Downloads] Content-Length:', totalBytes)
+
+    // Stream the response to track progress
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Response body not readable')
+    }
+
+    const chunks: Uint8Array[] = []
+    let bytesReceived = 0
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      chunks.push(value)
+      bytesReceived += value.length
+
+      // Emit progress
+      const progress = totalBytes > 0 ? Math.round((bytesReceived / totalBytes) * 100) : 0
+      downloadProgressEventEmitter.emit(id, progress, bytesReceived, totalBytes)
+    }
+
+    // Combine chunks into blob
+    const blob = new Blob(chunks)
     const blobUrl = URL.createObjectURL(blob)
+    console.log('[Downloads] Download complete, size:', blob.size)
 
     // Create and click download link
     const a = document.createElement('a')
@@ -257,11 +369,13 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     document.body.removeChild(a)
     URL.revokeObjectURL(blobUrl)
 
-    // Update progress to 100%
+    // Final progress update
     downloadProgressEventEmitter.emit(id, 100, blob.size, blob.size)
   }
 
-  // Download for mobile (iOS/Android)
+  // Download for mobile (iOS/Android) - handled by backend using bare-fs
+  // The backend streams the file to disk with progress events
+  // This function is not used on mobile - download happens in addDownload via RPC
   const downloadForMobile = async (
     id: string,
     url: string,
@@ -269,67 +383,10 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     totalBytes: number,
     signal: AbortSignal
   ) => {
-    console.log('[Downloads] Mobile download:', filename)
-
-    // Request media library permissions
-    const { status } = await MediaLibrary.requestPermissionsAsync()
-    if (status !== 'granted') {
-      throw new Error('Media library permission denied')
-    }
-
-    // Create temp directory
-    const tempDir = `${FileSystem.cacheDirectory}downloads/`
-    await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true }).catch(() => {})
-
-    const tempPath = `${tempDir}${filename}`
-
-    // Mark as saving
-    setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'saving' } : d))
-
-    // Download to temp file with progress
-    const downloadResumable = FileSystem.createDownloadResumable(
-      url,
-      tempPath,
-      {},
-      (downloadProgress) => {
-        const progress = downloadProgress.totalBytesExpectedToWrite > 0
-          ? Math.round((downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite) * 100)
-          : 0
-        downloadProgressEventEmitter.emit(
-          id,
-          progress,
-          downloadProgress.totalBytesWritten,
-          downloadProgress.totalBytesExpectedToWrite || totalBytes
-        )
-      }
-    )
-
-    // Check for abort
-    if (signal.aborted) throw new Error('AbortError')
-
-    const result = await downloadResumable.downloadAsync()
-    if (!result?.uri) throw new Error('Download failed - no file created')
-
-    console.log('[Downloads] Downloaded to temp:', result.uri)
-
-    // Save to media library (gallery/photos)
-    try {
-      const asset = await MediaLibrary.createAssetAsync(result.uri)
-      console.log('[Downloads] Saved to gallery:', asset.uri)
-
-      // Update with final path
-      setDownloads(prev => prev.map(d => d.id === id ? { ...d, filePath: asset.uri } : d))
-
-      // Clean up temp file
-      await FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => {})
-    } catch (err: any) {
-      console.log('[Downloads] Could not save to gallery:', err.message)
-      // Fall back to keeping in app documents
-      const docsPath = `${FileSystem.documentDirectory}Downloads/${filename}`
-      await FileSystem.makeDirectoryAsync(`${FileSystem.documentDirectory}Downloads/`, { intermediates: true }).catch(() => {})
-      await FileSystem.moveAsync({ from: result.uri, to: docsPath })
-      setDownloads(prev => prev.map(d => d.id === id ? { ...d, filePath: docsPath } : d))
-    }
+    // On mobile, the backend handles the download using bare-fs
+    // Progress is emitted via RPC events which we listen to in the progress subscriber
+    // This function should not be called on mobile - see addDownload
+    console.log('[Downloads] Mobile download handled by backend:', filename)
   }
 
   // Cancel a download
@@ -341,26 +398,14 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'cancelled' } : d))
   }, [])
 
-  // Remove a download from the list and delete file from storage
+  // Remove a download from the list
   const removeDownload = useCallback(async (id: string) => {
-    const download = downloads.find(d => d.id === id)
-
     // Cancel if still active
     cancelDownload(id)
 
-    // Delete file from storage (mobile only - web downloads go to browser folder)
-    if (download?.filePath && Platform.OS !== 'web') {
-      try {
-        await FileSystem.deleteAsync(download.filePath, { idempotent: true })
-        console.log('[Downloads] Deleted file:', download.filePath)
-      } catch (err) {
-        console.log('[Downloads] Could not delete file:', err)
-      }
-    }
-
-    // Remove from list
+    // Remove from list (file remains in Downloads folder - user can delete manually)
     setDownloads(prev => prev.filter(d => d.id !== id))
-  }, [downloads, cancelDownload])
+  }, [cancelDownload])
 
   // Clear completed downloads
   const clearCompleted = useCallback(() => {

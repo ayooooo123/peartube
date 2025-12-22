@@ -18,6 +18,15 @@ import b4a from 'b4a'
 const { IPC } = BareKit
 const storagePath = Bare.argv[0] || ''
 
+// Debug: Log storagePath to identify initialization issues
+console.log('[Backend] Raw storagePath from Bare.argv[0]:', storagePath || '(empty)')
+console.log('[Backend] Bare.argv:', JSON.stringify(Bare.argv))
+
+// Warn if storagePath looks invalid but continue
+if (!storagePath || !storagePath.startsWith('/')) {
+  console.warn('[Backend] WARNING: storagePath may be invalid:', storagePath)
+}
+
 // Debug: Log all IPC writes with buffer details
 const originalWrite = IPC.write?.bind?.(IPC)
 if (originalWrite) {
@@ -478,32 +487,74 @@ rpc.onUploadVideo(async (req) => {
   }
 })
 
-rpc.onDownloadVideo(async (req) => {
-  console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId, 'publicBeeKey:', req.publicBeeKey?.slice(0, 16))
+rpc.onDownloadVideo(async (req, ctx) => {
+  console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId, 'destPath:', req.destPath)
 
   try {
-    // Use getVideoUrl which handles both local and remote channels
-    // Pass publicBeeKey for remote channel access
-    const result = await api.getVideoUrl(req.channelKey, req.videoId, req.publicBeeKey)
-    if (!result?.url) {
-      return { success: false, error: 'Failed to get video URL' }
+    // Get video metadata for filename and size
+    const meta = await api.getVideoData(req.channelKey, req.videoId, req.publicBeeKey)
+    if (!meta) {
+      return { success: false, error: 'Video metadata not found' }
     }
 
-    // Try to get video metadata for size info
-    const meta = await api.getVideoData(req.channelKey, req.videoId)
-    let size = 0
-    if (meta?.blobId) {
-      const parts = meta.blobId.split(':').map(Number)
-      if (parts.length === 4) {
-        size = parts[3] // byteLength
+    // Generate filename
+    const sanitizedTitle = (meta.title || 'video')
+      .replace(/[^a-zA-Z0-9\s\-_]/g, '')
+      .replace(/\s+/g, '_')
+      .slice(0, 50)
+    const ext = meta.mimeType?.includes('webm') ? 'webm' :
+                meta.mimeType?.includes('mkv') ? 'mkv' : 'mp4'
+    const filename = `${sanitizedTitle}_${req.videoId}.${ext}`
+
+    // Save to Downloads subdirectory
+    const downloadsDir = path.join(storagePath, 'Downloads')
+    console.log('[HRPC] storagePath:', storagePath)
+    console.log('[HRPC] downloadsDir:', downloadsDir)
+
+    // Create downloads directory synchronously before download
+    try {
+      const stat = fs.statSync(downloadsDir)
+      console.log('[HRPC] downloads dir exists, isDir:', stat.isDirectory())
+    } catch (statErr) {
+      console.log('[HRPC] downloads dir does not exist, creating...')
+      fs.mkdirSync(downloadsDir)
+      console.log('[HRPC] Created downloads directory')
+    }
+
+    const destPath = req.destPath || path.join(downloadsDir, filename)
+
+    console.log('[HRPC] Downloading to:', destPath)
+
+    // Use the API's downloadVideo method which streams with progress
+    const result = await api.downloadVideo(
+      req.channelKey,
+      req.videoId,
+      destPath,
+      fs,
+      (progress, bytesWritten, totalBytes) => {
+        // Emit progress event to frontend
+        try {
+          rpc.eventDownloadProgress({
+            id: `${req.channelKey}:${req.videoId}`,
+            progress,
+            bytesDownloaded: bytesWritten,
+            totalBytes
+          })
+        } catch (e) {
+          // Ignore event emission errors
+        }
       }
+    )
+
+    if (!result?.success) {
+      return { success: false, error: result?.error || 'Download failed' }
     }
 
-    console.log('[HRPC] Download URL:', result.url, 'size:', size)
+    console.log('[HRPC] Download complete:', destPath)
     return {
       success: true,
-      filePath: result.url,
-      size: size || meta?.size || 0
+      filePath: destPath,
+      size: result.size || 0
     }
   } catch (err) {
     console.error('[HRPC] downloadVideo failed:', err?.message)

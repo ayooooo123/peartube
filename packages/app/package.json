@@ -59,6 +59,7 @@
     "expo-build-properties": "^1.0.9",
     "expo-constants": "^18.0.9",
     "expo-document-picker": "^13.0.0",
+    "expo-downloads-save": "file:./modules/expo-downloads-save",
     "expo-file-system": "^18.0.0",
     "expo-image-picker": "^17.0.8",
     "expo-linking": "^8.0.8",
@@ -72,7 +73,6 @@
     "expo-video-thumbnails": "^8.0.0",
     "hrpc": "^4.2.0",
     "hyperbee-diff-stream": "^2.0.1",
-    "lucide-react-native": "^0.300.0",
     "nativewind": "^4.2.1",
     "protomux-wakeup": "^2.9.0",
     "react": "19.1.0",
@@ -119,6 +119,10 @@
     "z32": "^1.1.0"
   },
   "overrides": {
-    "@peartube/spec": "file:../spec"
+    "@peartube/spec": "file:../spec",
+    "react-native-web": {
+      "react": "$react",
+      "react-dom": "$react-dom"
+    }
   }
 }

@@ -7,7 +7,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { Tabs, Slot } from 'expo-router'
-import { Home, Film, Users, Settings, Download } from 'lucide-react-native'
+import { Feather } from '@expo/vector-icons'
 import { View, Platform } from 'react-native'
 import { BottomTabBar, type BottomTabBarProps } from '@react-navigation/bottom-tabs'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -86,35 +86,35 @@ export default function TabLayout() {
           name="index"
           options={{
             title: 'Home',
-            tabBarIcon: ({ color }) => <Home color={color} size={22} />,
+            tabBarIcon: ({ color }) => <Feather name="home" color={color} size={22} />,
           }}
         />
         <Tabs.Screen
           name="subscriptions"
           options={{
             title: 'Subs',
-            tabBarIcon: ({ color }) => <Users color={color} size={22} />,
+            tabBarIcon: ({ color }) => <Feather name="users" color={color} size={22} />,
           }}
         />
         <Tabs.Screen
           name="studio"
           options={{
             title: 'Studio',
-            tabBarIcon: ({ color }) => <Film color={color} size={22} />,
+            tabBarIcon: ({ color }) => <Feather name="film" color={color} size={22} />,
           }}
         />
         <Tabs.Screen
           name="downloads"
           options={{
             title: 'Downloads',
-            tabBarIcon: ({ color }) => <Download color={color} size={22} />,
+            tabBarIcon: ({ color }) => <Feather name="download" color={color} size={22} />,
           }}
         />
         <Tabs.Screen
           name="settings"
           options={{
             title: 'Settings',
-            tabBarIcon: ({ color }) => <Settings color={color} size={22} />,
+            tabBarIcon: ({ color }) => <Feather name="settings" color={color} size={22} />,
           }}
         />
       </Tabs>

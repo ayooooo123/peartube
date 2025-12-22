@@ -132,7 +132,7 @@ onBuffering={(data) => {
   "react-native-reanimated": "60fps animations for player transitions",
   "react-native-gesture-handler": "Pan/tap gestures for player controls",
   "react-native-safe-area-context": "Safe area insets for notch/home indicator",
-  "lucide-react-native": "Icons (Play, Pause, RotateCcw, RotateCw, etc.)"
+  "@expo/vector-icons": "Icons (Feather, Ionicons for Play, Pause, etc.)"
 }
 ```
 

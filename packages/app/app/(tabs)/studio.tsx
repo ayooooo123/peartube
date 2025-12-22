@@ -4,11 +4,25 @@
 import { useState, useCallback } from 'react'
 import { View, Text, FlatList, Alert, Pressable, TextInput, ActivityIndicator, Platform, Image } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Upload, Film, Trash2, Play, ImageIcon } from 'lucide-react-native'
+import { Feather, Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import * as VideoThumbnails from 'expo-video-thumbnails'
-import * as FileSystem from 'expo-file-system'
 import { useApp, colors } from '../_layout'
+
+// Helper to read file as base64 without expo-file-system
+async function readFileAsBase64(uri: string): Promise<string> {
+  const response = await fetch(uri)
+  const blob = await response.blob()
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const base64 = (reader.result as string).split(',')[1] // Remove data:... prefix
+      resolve(base64)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(blob)
+  })
+}
 
 // Detect Pear desktop (web platform with PearWorkerClient)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).PearWorkerClient
@@ -271,25 +285,15 @@ export default function StudioScreen() {
         if (thumbnailUri && videoId) {
           console.log('[Studio] Uploading thumbnail from URI:', thumbnailUri)
           try {
-            // Check if file exists first
-            const fileInfo = await FileSystem.getInfoAsync(thumbnailUri)
-            console.log('[Studio] Thumbnail file info:', JSON.stringify(fileInfo))
+            const thumbBase64 = await readFileAsBase64(thumbnailUri)
+            console.log('[Studio] Thumbnail base64 length:', thumbBase64.length)
 
-            if (!fileInfo.exists) {
-              console.error('[Studio] Thumbnail file does not exist at:', thumbnailUri)
-            } else {
-              const thumbBase64 = await FileSystem.readAsStringAsync(thumbnailUri, {
-                encoding: FileSystem.EncodingType.Base64,
-              })
-              console.log('[Studio] Thumbnail base64 length:', thumbBase64.length)
-
-              const uploadResult = await rpc.setVideoThumbnail({
-                videoId,
-                imageData: thumbBase64,
-                mimeType: 'image/jpeg',
-              })
-              console.log('[Studio] Thumbnail upload result:', JSON.stringify(uploadResult))
-            }
+            const uploadResult = await rpc.setVideoThumbnail({
+              videoId,
+              imageData: thumbBase64,
+              mimeType: 'image/jpeg',
+            })
+            console.log('[Studio] Thumbnail upload result:', JSON.stringify(uploadResult))
           } catch (thumbErr: any) {
             console.error('[Studio] Failed to upload thumbnail:', thumbErr?.message || thumbErr)
             // Don't fail the whole upload if thumbnail fails
@@ -406,7 +410,7 @@ export default function StudioScreen() {
                   />
                 ) : (
                   <View className="flex-1 items-center justify-center bg-pear-bg-elevated">
-                    <Film color={colors.textMuted} size={48} />
+                    <Feather name="film" color={colors.textMuted} size={48} />
                     <Text className="text-caption text-pear-text-muted mt-2">
                       {isPear ? 'Click below to add thumbnail' : 'Generating thumbnail...'}
                     </Text>
@@ -418,7 +422,7 @@ export default function StudioScreen() {
                 onPress={pickThumbnail}
                 className="flex-row items-center justify-center gap-2 py-3 bg-pear-bg-elevated active:opacity-80"
               >
-                <ImageIcon color={colors.textMuted} size={16} />
+                <Feather name="image" color={colors.textMuted} size={16} />
                 <Text className="text-caption text-pear-text-muted">
                   {thumbnailUri ? 'Change Thumbnail' : 'Add Thumbnail'}
                 </Text>
@@ -428,7 +432,7 @@ export default function StudioScreen() {
             {/* Selected video indicator */}
             <View className="flex-row items-center bg-pear-bg-card rounded-lg p-4">
               <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
-                <Film color={colors.primary} size={20} />
+                <Feather name="film" color={colors.primary} size={20} />
               </View>
               <Text className="flex-1 text-label text-pear-text ml-3" numberOfLines={1}>
                 Video selected
@@ -437,7 +441,7 @@ export default function StudioScreen() {
                 onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); }}
                 className="w-8 h-8 items-center justify-center"
               >
-                <Trash2 color={colors.error} size={18} />
+                <Feather name="trash-2" color={colors.error} size={18} />
               </Pressable>
             </View>
 
@@ -508,7 +512,7 @@ export default function StudioScreen() {
                 disabled={!title.trim()}
                 className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${!title.trim() ? 'opacity-50' : ''}`}
               >
-                <Upload color="white" size={18} />
+                <Feather name="upload" color="white" size={18} />
                 <Text className="text-white text-label">Upload Video</Text>
               </Pressable>
             )}
@@ -518,7 +522,7 @@ export default function StudioScreen() {
             onPress={pickVideo}
             className="flex-row items-center justify-center gap-3 bg-pear-bg-card border-2 border-dashed border-pear-border rounded-xl py-8 active:opacity-80"
           >
-            <Upload color={colors.textMuted} size={24} />
+            <Feather name="upload" color={colors.textMuted} size={24} />
             <Text className="text-body text-pear-text-muted">Select a video to upload</Text>
           </Pressable>
         )}
@@ -541,7 +545,7 @@ export default function StudioScreen() {
           ListEmptyComponent={
             <View className="flex-1 justify-center items-center py-16">
               <View className="w-16 h-16 rounded-full bg-pear-bg-card items-center justify-center mb-4">
-                <Film color={colors.textMuted} size={28} />
+                <Feather name="film" color={colors.textMuted} size={28} />
               </View>
               <Text className="text-body text-pear-text-muted text-center">
                 No videos uploaded yet
@@ -552,7 +556,7 @@ export default function StudioScreen() {
           renderItem={({ item }) => (
             <View className="flex-row bg-pear-bg-elevated rounded-xl overflow-hidden" style={{ minHeight: 72 }}>
               <View className="w-28 bg-pear-bg-card justify-center items-center">
-                <Play color={colors.text} size={16} fill={colors.text} />
+                <Ionicons name="play" color={colors.text} size={16} />
               </View>
               <View className="flex-1 p-4 justify-center">
                 <Text className="text-label text-pear-text" numberOfLines={1}>{item.title}</Text>
@@ -564,7 +568,7 @@ export default function StudioScreen() {
                 onPress={() => handleDeleteVideo(item.id, item.title)}
                 className="w-12 justify-center items-center active:opacity-60"
               >
-                <Trash2 color={colors.error} size={18} />
+                <Feather name="trash-2" color={colors.error} size={18} />
               </Pressable>
             </View>
           )}

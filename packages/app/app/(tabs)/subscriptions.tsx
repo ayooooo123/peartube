@@ -4,7 +4,7 @@
 import { useState, useCallback } from 'react'
 import { View, Text, FlatList, RefreshControl, Alert, Pressable, TextInput } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { UserPlus, Users, Trash2 } from 'lucide-react-native'
+import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 
 interface Subscription {
@@ -115,7 +115,7 @@ export default function SubscriptionsScreen() {
           disabled={loading || !channelKey.trim()}
           className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(loading || !channelKey.trim()) ? 'opacity-50' : ''}`}
         >
-          <UserPlus color="white" size={18} />
+          <Feather name="user-plus" color="white" size={18} />
           <Text className="text-white text-label">Subscribe to Channel</Text>
         </Pressable>
       </View>
@@ -140,7 +140,7 @@ export default function SubscriptionsScreen() {
         ListEmptyComponent={
           <View className="flex-1 justify-center items-center py-16">
             <View className="w-16 h-16 rounded-full bg-pear-bg-card items-center justify-center mb-4">
-              <Users color={colors.textMuted} size={28} />
+              <Feather name="users" color={colors.textMuted} size={28} />
             </View>
             <Text className="text-headline text-pear-text mb-2">No subscriptions yet</Text>
             <Text className="text-body text-pear-text-muted text-center px-8">
@@ -171,7 +171,7 @@ export default function SubscriptionsScreen() {
               onPress={() => unsubscribe(item.channelKey)}
               className="w-10 h-10 items-center justify-center"
             >
-              <Trash2 color={colors.error} size={18} />
+              <Feather name="trash-2" color={colors.error} size={18} />
             </Pressable>
           </View>
         )}

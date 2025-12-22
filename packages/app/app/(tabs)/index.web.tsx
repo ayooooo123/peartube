@@ -106,6 +106,23 @@ function CheckIcon({ color, size }: { color: string; size: number }) {
   )
 }
 
+function SpinnerIcon({ color, size }: { color: string; size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={color}
+      strokeWidth="2"
+      style={{ animation: 'spin 1s linear infinite' }}
+    >
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  )
+}
+
 // Public feed types
 interface FeedEntry {
   driveKey: string
@@ -671,19 +688,20 @@ function WatchPageView({
                 style={{
                   ...watchStyles.actionButton,
                   ...(isDownloaded ? watchStyles.actionButtonActive : {}),
-                  opacity: isDownloading ? 0.6 : 1,
                   cursor: isDownloaded ? 'default' : 'pointer',
                 }}
                 onClick={handleDownload}
                 disabled={isDownloading || isDownloaded}
               >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isDownloaded ? (
+                  {isDownloading ? (
+                    <SpinnerIcon color={colors.primary} size={16} />
+                  ) : isDownloaded ? (
                     <CheckIcon color="white" size={16} />
                   ) : (
                     <DownloadIcon color={colors.text} size={16} />
                   )}
-                  {isDownloaded ? 'Downloaded' : isDownloading ? 'Downloading...' : 'Download'}
+                  {isDownloaded ? 'Saved' : 'Download'}
                 </span>
               </button>
             </div>
@@ -1397,8 +1415,8 @@ export default function HomeScreen() {
       setCurrentRoute(route)
 
       if (route.type === 'watch') {
-        // Try to find the video in local state first
-        const allVideos = [...videos, ...channelVideos]
+        // Try to find the video in local state first (include feedVideos!)
+        const allVideos = [...videos, ...channelVideos, ...feedVideos]
         const foundVideo = allVideos.find(
           v => v.id === route.videoId && (v.channelKey === route.channelKey || !v.channelKey)
         )
@@ -1419,7 +1437,7 @@ export default function HomeScreen() {
     // Listen for hash changes
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
-  }, [videos, channelVideos, loadVideoInfo])
+  }, [videos, channelVideos, feedVideos, loadVideoInfo])
 
   // If a path navigation happens to "/", but hash is still on watch, reset hash/state to home
   useEffect(() => {

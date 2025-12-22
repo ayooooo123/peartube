@@ -4,7 +4,7 @@
  */
 import { useState, useEffect } from 'react'
 import { View, Image, Text, StyleSheet, ActivityIndicator } from 'react-native'
-import { Play } from 'lucide-react-native'
+import { Ionicons } from '@expo/vector-icons'
 
 interface ThumbnailImageProps {
   thumbnailUrl?: string | null
@@ -51,7 +51,7 @@ export function ThumbnailImage({
       {/* Always show placeholder as background, image overlays on top when loaded */}
       <View style={styles.placeholder}>
         <View style={styles.playIconContainer}>
-          <Play color="#9147ff" size={48} fill="#9147ff" />
+          <Ionicons name="play" color="#9147ff" size={48} />
         </View>
       </View>
 

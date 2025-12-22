@@ -34,6 +34,8 @@ PODS:
     - ExpoModulesCore
   - ExpoDocumentPicker (13.1.6):
     - ExpoModulesCore
+  - ExpoDownloadsSave (1.0.0):
+    - ExpoModulesCore
   - ExpoFileSystem (18.1.11):
     - ExpoModulesCore
   - ExpoFont (14.0.10):
@@ -1410,7 +1412,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - "react-native-bare-kit (0.11.5+1dbcd7)":
+  - "react-native-bare-kit (0.11.5+4fa70e)":
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2125,6 +2127,7 @@ DEPENDENCIES:
   - Expo (from `../node_modules/expo`)
   - ExpoAsset (from `../node_modules/expo-asset/ios`)
   - ExpoDocumentPicker (from `../node_modules/expo-document-picker/ios`)
+  - ExpoDownloadsSave (from `../modules/expo-downloads-save/ios`)
   - ExpoFileSystem (from `../node_modules/expo-file-system/ios`)
   - ExpoFont (from `../node_modules/expo-font/ios`)
   - ExpoHead (from `../node_modules/expo-router/ios`)
@@ -2234,6 +2237,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-asset/ios"
   ExpoDocumentPicker:
     :path: "../node_modules/expo-document-picker/ios"
+  ExpoDownloadsSave:
+    :path: "../modules/expo-downloads-save/ios"
   ExpoFileSystem:
     :path: "../node_modules/expo-file-system/ios"
   ExpoFont:
@@ -2423,6 +2428,7 @@ SPEC CHECKSUMS:
   Expo: 3d19389232751e415391827839a629100a3c6a64
   ExpoAsset: 23a958e97d3d340919fe6774db35d563241e6c03
   ExpoDocumentPicker: b263a279685b6640b8c8bc70d71c83067aeaae55
+  ExpoDownloadsSave: 07d731bf9a7769bbec5f1cb9a3946e149a1f9513
   ExpoFileSystem: 7f92f7be2f5c5ed40a7c9efc8fa30821181d9d63
   ExpoFont: 35ac6191ed86bbf56b3ebd2d9154eda9fad5b509
   ExpoHead: 5611b33d6b983922d0233367ee6ab65633364dfd
@@ -2473,7 +2479,7 @@ SPEC CHECKSUMS:
   React-Mapbuffer: 9050ee10c19f4f7fca8963d0211b2854d624973e
   React-microtasksnativemodule: f775db9e991c6f3b8ccbc02bfcde22770f96e23b
   react-native-b4a: 3f26169d6e2907c6db9b0a805806584a17e91c38
-  react-native-bare-kit: 6a5cc768a7d1e679d2a2b344329aed375a55af62
+  react-native-bare-kit: 37368360fc194543c283e462b02f1bb4863751a5
   react-native-safe-area-context: 37e680fc4cace3c0030ee46e8987d24f5d3bdab2
   react-native-vlc-media-player: da3308dda896d4ff7abfacadb8f981752bf9b425
   React-NativeModulesApple: 8969913947d5b576de4ed371a939455a8daf28aa

@@ -6,21 +6,23 @@
  */
 import { View, Text, Pressable, StyleSheet } from 'react-native'
 import { usePathname, router } from 'expo-router'
-import { Home, Film, Users, Settings } from 'lucide-react-native'
+import { Feather } from '@expo/vector-icons'
 import { colors } from '@/app/_layout'
+
+type FeatherIconName = React.ComponentProps<typeof Feather>['name']
 
 interface NavItem {
   name: string
   path: string
-  icon: typeof Home
+  icon: FeatherIconName
   label: string
 }
 
 const navItems: NavItem[] = [
-  { name: 'index', path: '/', icon: Home, label: 'Home' },
-  { name: 'subscriptions', path: '/subscriptions', icon: Users, label: 'Subscriptions' },
-  { name: 'studio', path: '/studio', icon: Film, label: 'Studio' },
-  { name: 'settings', path: '/settings', icon: Settings, label: 'Settings' },
+  { name: 'index', path: '/', icon: 'home', label: 'Home' },
+  { name: 'subscriptions', path: '/subscriptions', icon: 'users', label: 'Subscriptions' },
+  { name: 'studio', path: '/studio', icon: 'film', label: 'Studio' },
+  { name: 'settings', path: '/settings', icon: 'settings', label: 'Settings' },
 ]
 
 export function DesktopSidebar() {
@@ -37,7 +39,6 @@ export function DesktopSidebar() {
     <View style={styles.sidebar}>
       {navItems.map((item) => {
         const active = isActive(item)
-        const Icon = item.icon
 
         return (
           <Pressable
@@ -45,7 +46,8 @@ export function DesktopSidebar() {
             style={[styles.navItem, active && styles.navItemActive]}
             onPress={() => router.push(item.path as any)}
           >
-            <Icon
+            <Feather
+              name={item.icon}
               size={20}
               color={active ? colors.primary : colors.textMuted}
               style={styles.navIcon}

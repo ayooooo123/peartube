@@ -5,7 +5,7 @@ import { useCallback, useState, useEffect, useRef } from 'react'
 import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, AppState, AppStateStatus, TextInput } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
-import { X, Globe, RefreshCw, Users, EyeOff } from 'lucide-react-native'
+import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { VideoCard, VideoData } from '../../components/video'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
@@ -560,7 +560,7 @@ export default function HomeScreen() {
       {viewingChannel && (
         <View className="flex-1">
           <View className="flex-row items-center py-4 bg-pear-bg-elevated border-b border-pear-border" style={{ paddingHorizontal: isDesktop ? 24 : 20 }}>
-            <Pressable onPress={closeChannelView} className="mr-3 p-1"><X color={colors.text} size={24} /></Pressable>
+            <Pressable onPress={closeChannelView} className="mr-3 p-1"><Feather name="x" color={colors.text} size={24} /></Pressable>
             <View className="flex-1">
               <Text className="text-headline text-pear-text">{channelMeta[viewingChannel]?.name || 'Channel'}</Text>
               <Text className="text-caption text-pear-text-muted">{viewingChannel.slice(0, 16)}...</Text>
@@ -609,17 +609,17 @@ export default function HomeScreen() {
           <View style={{ paddingHorizontal: isDesktop ? 24 : 20, paddingTop: isDesktop ? 24 : 16 }}>
             <View className="flex-row items-center justify-between mb-3">
               <View className="flex-row items-center">
-                <Globe color={colors.primary} size={18} />
+                <Feather name="globe" color={colors.primary} size={18} />
                 <Text className="text-headline text-pear-text ml-2">Discover</Text>
                 {peerCount > 0 && (
                   <View className="flex-row items-center ml-2 bg-pear-bg-card px-2 py-0.5 rounded-full">
-                    <Users color={colors.textMuted} size={12} />
+                    <Feather name="users" color={colors.textMuted} size={12} />
                     <Text className="text-caption text-pear-text-muted ml-1">{peerCount}</Text>
                   </View>
                 )}
               </View>
               <Pressable onPress={refreshFeed} className="p-2 active:opacity-60" disabled={feedLoading}>
-                <RefreshCw color={feedLoading ? colors.textMuted : colors.primary} size={18} />
+                <Feather name="refresh-cw" color={feedLoading ? colors.textMuted : colors.primary} size={18} />
               </Pressable>
             </View>
 
@@ -740,7 +740,7 @@ export default function HomeScreen() {
               </View>
             ) : feedVideos.length === 0 ? (
               <View className="py-8 items-center bg-pear-bg-elevated rounded-xl">
-                <Globe color={colors.textMuted} size={32} />
+                <Feather name="globe" color={colors.textMuted} size={32} />
                 <Text className="text-label text-pear-text mt-2">No videos discovered yet</Text>
                 <Text className="text-caption text-pear-text-muted mt-1">Click refresh or wait for peers to connect</Text>
               </View>
@@ -779,7 +779,7 @@ export default function HomeScreen() {
                 className="p-2 active:opacity-60"
                 disabled={refreshingMyVideos || !identity?.driveKey}
               >
-                <RefreshCw color={refreshingMyVideos ? colors.textMuted : colors.primary} size={18} />
+                <Feather name="refresh-cw" color={refreshingMyVideos ? colors.textMuted : colors.primary} size={18} />
               </Pressable>
             </View>
             {console.log('[Home] Rendering Your Videos section, count:', myVideosWithMeta.length, 'viewingChannel:', viewingChannel)}

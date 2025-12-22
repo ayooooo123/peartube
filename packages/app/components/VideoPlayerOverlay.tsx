@@ -6,7 +6,6 @@
  */
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
 import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput } from 'react-native'
-import * as FileSystem from 'expo-file-system'
 import { rpc } from '@peartube/platform/rpc'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
@@ -28,7 +27,7 @@ import Animated, {
   runOnJS,
   Extrapolation,
 } from 'react-native-reanimated'
-import { Play, Pause, X, ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, Check, MoreHorizontal, Users, RotateCcw, RotateCw, Maximize, Minimize, Reply, Trash2 } from 'lucide-react-native'
+import { Feather, Ionicons } from '@expo/vector-icons'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { useDownloads } from '@/lib/DownloadsContext'
@@ -109,7 +108,7 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
         {stats && (
           <>
             <View style={styles.statsBarCenter}>
-              <Users color={colors.textMuted} size={12} />
+              <Feather name="users" color={colors.textMuted} size={12} />
               <Text style={styles.statsBarText}>{stats.peerCount || 0} peers</Text>
             </View>
             <View style={styles.statsBarSpeeds}>
@@ -157,15 +156,20 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
 }
 
 // Action Button Component
-function ActionButton({ icon: Icon, label, onPress, active }: {
+function ActionButton({ icon: Icon, label, onPress, active, loading }: {
   icon: any
   label: string
   onPress?: () => void
   active?: boolean
+  loading?: boolean
 }) {
   return (
     <Pressable style={styles.actionButton} onPress={onPress}>
-      <Icon color={active ? colors.primary : colors.text} size={22} />
+      {loading ? (
+        <ActivityIndicator size={20} color={colors.primary} />
+      ) : (
+        <Icon color={active ? colors.primary : colors.text} size={22} />
+      )}
       <Text style={[styles.actionLabel, active && styles.actionLabelActive]}>{label}</Text>
     </Pressable>
   )
@@ -1181,9 +1185,9 @@ export function VideoPlayerOverlay() {
                   }}
                 >
                   {isDownloaded ? (
-                    <Check color={colors.primary} size={20} />
+                    <Feather name="check" color={colors.primary} size={20} />
                   ) : (
-                    <Download color={colors.text} size={20} />
+                    <Feather name="download" color={colors.text} size={20} />
                   )}
                   <span style={desktopStyles.actionLabel}>
                     {isDownloaded ? 'Downloaded' : isDownloading ? 'Downloading...' : 'Download'}
@@ -1202,7 +1206,7 @@ export function VideoPlayerOverlay() {
 
           {/* Close button */}
           <button onClick={closeVideo} style={desktopStyles.closeButton} aria-label="Close">
-            <X color={colors.text} size={24} />
+            <Feather name="x" color={colors.text} size={24} />
           </button>
         </div>
       </div>
@@ -1293,22 +1297,22 @@ export function VideoPlayerOverlay() {
               <View style={styles.controlsOverlay}>
                 {/* Seek backward */}
                 <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('left')}>
-                  <RotateCcw color="#fff" size={32} />
+                  <Feather name="rotate-ccw" color="#fff" size={32} />
                   <Text style={styles.controlButtonText}>10s</Text>
                 </Pressable>
 
                 {/* Play/Pause */}
                 <Pressable style={styles.controlButtonLarge} onPress={handlePlayPause}>
                   {isPlaying ? (
-                    <Pause color="#fff" size={48} fill="#fff" />
+                    <Ionicons name="pause" color="#fff" size={48} />
                   ) : (
-                    <Play color="#fff" size={48} fill="#fff" />
+                    <Ionicons name="play" color="#fff" size={48} />
                   )}
                 </Pressable>
 
                 {/* Seek forward */}
                 <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('right')}>
-                  <RotateCw color="#fff" size={32} />
+                  <Feather name="rotate-cw" color="#fff" size={32} />
                   <Text style={styles.controlButtonText}>10s</Text>
                 </Pressable>
               </View>
@@ -1321,9 +1325,9 @@ export function VideoPlayerOverlay() {
                 seekFeedback === 'left' ? styles.seekFeedbackLeft : styles.seekFeedbackRight
               ]}>
                 {seekFeedback === 'left' ? (
-                  <RotateCcw color="#fff" size={32} />
+                  <Feather name="rotate-ccw" color="#fff" size={32} />
                 ) : (
-                  <RotateCw color="#fff" size={32} />
+                  <Feather name="rotate-cw" color="#fff" size={32} />
                 )}
                 <Text style={styles.seekFeedbackText}>10s</Text>
               </View>
@@ -1334,7 +1338,7 @@ export function VideoPlayerOverlay() {
           {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && (
             <Animated.View style={[styles.minimizeButton, fullscreenContentStyle]}>
               <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
-                <ChevronDown color="#fff" size={28} />
+                <Feather name="chevron-down" color="#fff" size={28} />
               </Pressable>
             </Animated.View>
           )}
@@ -1354,9 +1358,9 @@ export function VideoPlayerOverlay() {
               <Pressable onPress={toggleLandscapeFullscreen} style={styles.fullscreenButtonInner}>
                 {/* Icon changes based on state but doesn't affect VLC */}
                 {isLandscapeFullscreen ? (
-                  <Minimize color="#fff" size={22} />
+                  <Feather name="minimize" color="#fff" size={22} />
                 ) : (
-                  <Maximize color="#fff" size={22} />
+                  <Feather name="maximize" color="#fff" size={22} />
                 )}
               </Pressable>
             </Animated.View>
@@ -1449,13 +1453,13 @@ export function VideoPlayerOverlay() {
           <Animated.View style={[styles.miniControls, miniControlsStyle]}>
             <Pressable style={styles.miniControlButton} onPress={handlePlayPause}>
               {isPlaying ? (
-                <Pause color={colors.text} size={24} fill={colors.text} />
+                <Ionicons name="pause" color={colors.text} size={24} />
               ) : (
-                <Play color={colors.text} size={24} fill={colors.text} />
+                <Ionicons name="play" color={colors.text} size={24} />
               )}
             </Pressable>
             <Pressable style={styles.miniControlButton} onPress={closeVideo}>
-              <X color={colors.text} size={24} />
+              <Feather name="x" color={colors.text} size={24} />
             </Pressable>
           </Animated.View>
         )}
@@ -1485,24 +1489,25 @@ export function VideoPlayerOverlay() {
             {/* Action Buttons */}
             <View style={styles.actions}>
               <ActionButton
-                icon={ThumbsUp}
+                icon={({ color, size }: { color: string; size: number }) => <Feather name="thumbs-up" color={color} size={size} />}
                 label={`Like${reactionCounts.like ? ` (${reactionCounts.like})` : ''}`}
                 active={userReaction === 'like'}
                 onPress={() => toggleReaction('like')}
               />
               <ActionButton
-                icon={ThumbsDown}
+                icon={({ color, size }: { color: string; size: number }) => <Feather name="thumbs-down" color={color} size={size} />}
                 label={`Dislike${reactionCounts.dislike ? ` (${reactionCounts.dislike})` : ''}`}
                 active={userReaction === 'dislike'}
                 onPress={() => toggleReaction('dislike')}
               />
-              <ActionButton icon={Share2} label="Share" />
+              <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="share-2" color={color} size={size} />} label="Share" />
               <ActionButton
-                icon={isDownloaded ? Check : Download}
-                label={isDownloaded ? "Downloaded" : isDownloading ? "Downloading..." : "Download"}
+                icon={({ color, size }: { color: string; size: number }) => isDownloaded ? <Feather name="check" color={color} size={size} /> : <Feather name="download" color={color} size={size} />}
+                label={isDownloaded ? "Saved" : "Download"}
                 onPress={isDownloaded ? undefined : handleDownload}
+                loading={isDownloading}
               />
-              <ActionButton icon={MoreHorizontal} label="More" />
+              <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="more-horizontal" color={color} size={size} />} label="More" />
             </View>
 
             {/* Channel Info */}
@@ -1532,7 +1537,7 @@ export function VideoPlayerOverlay() {
                   {refreshingComments ? (
                     <ActivityIndicator size="small" color={colors.primary} />
                   ) : (
-                    <RotateCcw color={colors.primary} size={16} />
+                    <Feather name="rotate-ccw" color={colors.primary} size={16} />
                   )}
                   <Text style={styles.refreshButtonText}>Refresh</Text>
                 </Pressable>
@@ -1544,7 +1549,7 @@ export function VideoPlayerOverlay() {
                     Replying to {(replyToComment.authorKeyHex || '').slice(0, 8)}…
                   </Text>
                   <Pressable onPress={() => { setReplyToComment(null); setCommentText('') }} style={styles.cancelReplyButton}>
-                    <X color={colors.textMuted} size={16} />
+                    <Feather name="x" color={colors.textMuted} size={16} />
                   </Pressable>
                 </View>
               )}
@@ -1592,7 +1597,7 @@ export function VideoPlayerOverlay() {
                           )}
                           <View style={styles.commentActions}>
                             <Pressable onPress={() => setReplyToComment(c)} style={styles.commentActionButton}>
-                              <Reply color={colors.textMuted} size={14} />
+                              <Feather name="corner-up-left" color={colors.textMuted} size={14} />
                             </Pressable>
                             {(isOwnComment(c) || c.pendingState) && (
                               <Pressable
@@ -1603,7 +1608,7 @@ export function VideoPlayerOverlay() {
                                 {deletingCommentId === c.commentId ? (
                                   <ActivityIndicator size="small" color={colors.textMuted} />
                                 ) : (
-                                  <Trash2 color="#f87171" size={14} />
+                                  <Feather name="trash-2" color="#f87171" size={14} />
                                 )}
                               </Pressable>
                             )}
@@ -1637,7 +1642,7 @@ export function VideoPlayerOverlay() {
                                     {deletingCommentId === reply.commentId ? (
                                       <ActivityIndicator size="small" color={colors.textMuted} />
                                     ) : (
-                                      <Trash2 color="#f87171" size={14} />
+                                      <Feather name="trash-2" color="#f87171" size={14} />
                                     )}
                                   </Pressable>
                                 )}

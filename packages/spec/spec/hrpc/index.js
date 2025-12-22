@@ -3,7 +3,7 @@
 /* eslint-disable space-before-function-paren */
 
 const { c, RPC, RPCStream, RPCRequestStream } = require('hrpc/runtime')
-const { getEncoding, setVersion, VERSION } = require('./messages.js')
+const { getEncoding } = require('./messages.js')
 
 const methods = new Map([
   ['@peartube/create-identity', 0],
@@ -135,7 +135,9 @@ const methods = new Map([
   ['@peartube/event-log', 63],
   [63, '@peartube/event-log'],
   ['@peartube/event-video-stats', 64],
-  [64, '@peartube/event-video-stats']
+  [64, '@peartube/event-video-stats'],
+  ['@peartube/event-download-progress', 65],
+  [65, '@peartube/event-download-progress']
 ])
 
 class HRPC {
@@ -207,7 +209,8 @@ class HRPC {
       ['@peartube/event-upload-progress', getEncoding('@peartube/event-upload-progress')],
       ['@peartube/event-feed-update', getEncoding('@peartube/event-feed-update')],
       ['@peartube/event-log', getEncoding('@peartube/event-log')],
-      ['@peartube/event-video-stats', getEncoding('@peartube/event-video-stats')]
+      ['@peartube/event-video-stats', getEncoding('@peartube/event-video-stats')],
+      ['@peartube/event-download-progress', getEncoding('@peartube/event-download-progress')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -271,32 +274,17 @@ class HRPC {
       ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
-      // Ensure peartube schema version is set before encoding/decoding
-      setVersion(VERSION)
       const command = methods.get(req.command)
-      if (!command) {
-        console.error('[HRPC] Unknown command:', req.command)
-        return
-      }
-      const handler = this._handlers[command]
-      if (typeof handler !== 'function') {
-        console.error('[HRPC] Missing handler:', command, 'raw:', req.command)
-        return
-      }
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
-      if (!requestEncoding || (!this._requestIsSend(command) && !responseEncoding)) {
-        console.error('[HRPC] Missing encoding for command:', command)
-        return
-      }
       if (this._requestIsSend(command)) {
         const request = req.data ? c.decode(requestEncoding, req.data) : null
-        await handler(request)
+        await this._handlers[command](request)
         return
       }
       if (!this._requestIsStream(command) && !this._responseIsStream(command)) {
         const request = req.data ? c.decode(requestEncoding, req.data) : null
-        const response = await handler(request)
+        const response = await this._handlers[command](request)
         req.reply(c.encode(responseEncoding, response))
       }
       if (!this._requestIsStream(command) && this._responseIsStream(command)) {
@@ -308,7 +296,7 @@ class HRPC {
           responseEncoding
         )
         responseStream.data = request
-        await handler(responseStream)
+        await this._handlers[command](responseStream)
       }
       if (this._requestIsStream(command) && !this._responseIsStream(command)) {
         const requestStream = new RPCRequestStream(
@@ -317,7 +305,7 @@ class HRPC {
           req.createRequestStream(),
           requestEncoding
         )
-        const response = await handler(requestStream)
+        const response = await this._handlers[command](requestStream)
         req.reply(c.encode(responseEncoding, response))
       }
       if (this._requestIsStream(command) && this._responseIsStream(command)) {
@@ -329,14 +317,12 @@ class HRPC {
           req.createResponseStream(),
           responseEncoding
         )
-        await handler(requestStream)
+        await this._handlers[command](requestStream)
       }
     })
   }
 
   async _call(name, args) {
-    // Ensure peartube schema version is set before encoding/decoding
-    setVersion(VERSION)
     const requestEncoding = this._requestEncodings.get(name)
     const responseEncoding = this._responseEncodings.get(name)
     const request = this._rpc.request(methods.get(name))
@@ -346,8 +332,6 @@ class HRPC {
   }
 
   _callSync(name, args) {
-    // Ensure peartube schema version is set before encoding/decoding
-    setVersion(VERSION)
     const requestEncoding = this._requestEncodings.get(name)
     const responseEncoding = this._responseEncodings.get(name)
     const request = this._rpc.request(methods.get(name))
@@ -642,6 +626,10 @@ class HRPC {
     return this._callSync('@peartube/event-video-stats', args)
   }
 
+  eventDownloadProgress(args) {
+    return this._callSync('@peartube/event-download-progress', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -902,6 +890,10 @@ class HRPC {
     this._handlers['@peartube/event-video-stats'] = responseFn
   }
 
+  onEventDownloadProgress(responseFn) {
+    this._handlers['@peartube/event-download-progress'] = responseFn
+  }
+
   _requestIsStream(command) {
     return [
     ].includes(command)
@@ -921,7 +913,8 @@ class HRPC {
       '@peartube/event-upload-progress',
       '@peartube/event-feed-update',
       '@peartube/event-log',
-      '@peartube/event-video-stats'
+      '@peartube/event-video-stats',
+      '@peartube/event-download-progress'
     ].includes(command)
   }
 }

@@ -6,7 +6,7 @@
 import { View, Text, Pressable, StyleSheet, Animated, PanResponder, Platform } from 'react-native'
 import { useRef } from 'react'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Play, Pause, X } from 'lucide-react-native'
+import { Feather, Ionicons } from '@expo/vector-icons'
 
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { colors } from '@/lib/colors'
@@ -130,13 +130,13 @@ export function MiniPlayer() {
       <View style={styles.controls}>
         <Pressable style={styles.controlButton} onPress={handlePlayPause}>
           {isPlaying ? (
-            <Pause color={colors.text} size={24} fill={colors.text} />
+            <Ionicons name="pause" color={colors.text} size={24} />
           ) : (
-            <Play color={colors.text} size={24} fill={colors.text} />
+            <Ionicons name="play" color={colors.text} size={24} />
           )}
         </Pressable>
         <Pressable style={styles.controlButton} onPress={closeVideo}>
-          <X color={colors.text} size={24} />
+          <Feather name="x" color={colors.text} size={24} />
         </Pressable>
       </View>
 

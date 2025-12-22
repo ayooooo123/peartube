@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "name": "empty",
@@ -3789,6 +3789,38 @@
           "required": false,
           "type": "uint",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "event-download-progress",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "progress",
+          "required": true,
+          "type": "uint",
+          "version": 3
+        },
+        {
+          "name": "bytesDownloaded",
+          "required": false,
+          "type": "uint",
+          "version": 3
+        },
+        {
+          "name": "totalBytes",
+          "required": false,
+          "type": "uint",
+          "version": 3
         }
       ]
     }

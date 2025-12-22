@@ -22,10 +22,9 @@ config.resolver.nodeModulesPaths = [
 // Enable hierarchical lookup for proper module resolution
 config.resolver.disableHierarchicalLookup = false
 
-// Force lucide-react-native to use CJS instead of ESM (ESM has import resolution issues)
+// Spec module resolution
 const specRoot = path.resolve(monorepoRoot, 'packages/spec')
 config.resolver.extraNodeModules = {
-  'lucide-react-native': path.resolve(projectRoot, 'node_modules/lucide-react-native/dist/cjs/lucide-react-native.js'),
   '@peartube/spec': path.resolve(specRoot, 'spec/hrpc/index.js'),
   '@peartube/spec/messages': path.resolve(specRoot, 'spec/hrpc/messages.js'),
   '@peartube/spec/schema': path.resolve(specRoot, 'spec/schema/index.js'),

@@ -3,7 +3,7 @@
  */
 import { View, Text, ScrollView, Pressable, Alert, Platform, Image } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Download, X, Trash2, CheckCircle, AlertCircle, Clock, RefreshCw, FolderOpen } from 'lucide-react-native'
+import { Feather } from '@expo/vector-icons'
 import { useDownloads, DownloadItem, DownloadStatus } from '../../lib/DownloadsContext'
 import { colors } from '../_layout'
 
@@ -20,15 +20,15 @@ function formatBytes(bytes: number): string {
 function StatusIcon({ status }: { status: DownloadStatus }) {
   switch (status) {
     case 'complete':
-      return <CheckCircle size={20} color={colors.primary} />
+      return <Feather name="check-circle" size={20} color={colors.primary} />
     case 'error':
-      return <AlertCircle size={20} color="#ef4444" />
+      return <Feather name="alert-circle" size={20} color="#ef4444" />
     case 'cancelled':
-      return <X size={20} color={colors.textSecondary} />
+      return <Feather name="x" size={20} color={colors.textSecondary} />
     case 'queued':
-      return <Clock size={20} color={colors.textSecondary} />
+      return <Feather name="clock" size={20} color={colors.textSecondary} />
     default:
-      return <Download size={20} color={colors.primary} />
+      return <Feather name="download" size={20} color={colors.primary} />
   }
 }
 
@@ -94,7 +94,7 @@ function DownloadItemRow({
           />
         ) : (
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <Download size={20} color={colors.textSecondary} />
+            <Feather name="download" size={20} color={colors.textSecondary} />
           </View>
         )}
       </View>
@@ -145,11 +145,11 @@ function DownloadItemRow({
         }}
       >
         {isActive ? (
-          <X size={20} color={colors.textSecondary} />
+          <Feather name="x" size={20} color={colors.textSecondary} />
         ) : isError ? (
-          <RefreshCw size={20} color={colors.primary} />
+          <Feather name="refresh-cw" size={20} color={colors.primary} />
         ) : (
-          <Trash2 size={18} color={colors.textSecondary} />
+          <Feather name="trash-2" size={18} color={colors.textSecondary} />
         )}
       </Pressable>
     </View>
@@ -178,7 +178,7 @@ export default function DownloadsScreen() {
         alignItems: 'center'
       }}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <Download size={24} color={colors.primary} />
+          <Feather name="download" size={24} color={colors.primary} />
           <Text style={{
             color: colors.text,
             fontSize: 24,
@@ -211,7 +211,7 @@ export default function DownloadsScreen() {
               padding: 8
             }}
           >
-            <Trash2 size={18} color={colors.textSecondary} />
+            <Feather name="trash-2" size={18} color={colors.textSecondary} />
             <Text style={{ color: colors.textSecondary, fontSize: 14, marginLeft: 4 }}>
               Clear
             </Text>
@@ -233,7 +233,7 @@ export default function DownloadsScreen() {
             alignItems: 'center',
             paddingTop: 100
           }}>
-            <FolderOpen size={64} color={colors.textSecondary} />
+            <Feather name="folder" size={64} color={colors.textSecondary} />
             <Text style={{
               color: colors.textSecondary,
               fontSize: 18,

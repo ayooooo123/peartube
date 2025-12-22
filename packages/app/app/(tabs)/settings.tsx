@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { View, Text, ScrollView, Alert, Share, Clipboard, Pressable, TextInput, Platform } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Copy, Share2, User, Key, Info, ExternalLink, Globe, X, HardDrive, Trash2 } from 'lucide-react-native'
+import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 
 interface StorageStats {
@@ -423,7 +423,7 @@ export default function SettingsScreen() {
           {/* Channel Name */}
           <View className="flex-row bg-pear-bg-elevated rounded-xl p-4 mb-3 items-center">
             <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
-              <User color={colors.primary} size={20} />
+              <Feather name="user" color={colors.primary} size={20} />
             </View>
             <View className="flex-1 ml-4">
               <Text className="text-caption text-pear-text-muted">Channel Name</Text>
@@ -434,7 +434,7 @@ export default function SettingsScreen() {
           {/* Channel Key */}
           <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
             <View className="flex-row items-center mb-3">
-              <Key color={colors.primary} size={16} />
+              <Feather name="key" color={colors.primary} size={16} />
               <Text className="text-caption text-pear-text-muted ml-2">Channel Key</Text>
             </View>
             <Text className="text-caption text-pear-text font-mono mb-4" numberOfLines={2}>
@@ -445,14 +445,14 @@ export default function SettingsScreen() {
                 onPress={() => identity.driveKey && copyToClipboard(identity.driveKey, 'Channel key')}
                 className="flex-1 flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5"
               >
-                <Copy color={colors.text} size={16} />
+                <Feather name="copy" color={colors.text} size={16} />
                 <Text className="text-pear-text text-label">Copy</Text>
               </Pressable>
               <Pressable
                 onPress={shareChannelKey}
                 className="flex-1 flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-2.5"
               >
-                <Share2 color="white" size={16} />
+                <Feather name="share-2" color="white" size={16} />
                 <Text className="text-white text-label">Share</Text>
               </Pressable>
             </View>
@@ -461,7 +461,7 @@ export default function SettingsScreen() {
           {/* Public Key */}
           <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
             <View className="flex-row items-center mb-3">
-              <Key color={colors.textMuted} size={16} />
+              <Feather name="key" color={colors.textMuted} size={16} />
               <Text className="text-caption text-pear-text-muted ml-2">Public Key</Text>
             </View>
             <Text className="text-caption text-pear-text font-mono mb-4" numberOfLines={2}>
@@ -471,7 +471,7 @@ export default function SettingsScreen() {
               onPress={() => copyToClipboard(identity.publicKey, 'Public key')}
               className="flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5"
             >
-              <Copy color={colors.text} size={16} />
+              <Feather name="copy" color={colors.text} size={16} />
               <Text className="text-pear-text text-label">Copy Public Key</Text>
             </Pressable>
           </View>
@@ -480,7 +480,7 @@ export default function SettingsScreen() {
           {isPublished ? (
             <>
               <View className="flex-row items-center justify-center gap-2 bg-pear-bg-elevated rounded-xl py-4 mb-2">
-                <Globe color={colors.primary} size={18} />
+                <Feather name="globe" color={colors.primary} size={18} />
                 <Text className="text-pear-primary text-label font-semibold">Published to Public Feed</Text>
               </View>
               <Pressable
@@ -488,7 +488,7 @@ export default function SettingsScreen() {
                 disabled={publishLoading}
                 className={`flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-xl py-3 ${publishLoading ? 'opacity-50' : ''}`}
               >
-                <X color={colors.textMuted} size={16} />
+                <Feather name="x" color={colors.textMuted} size={16} />
                 <Text className="text-pear-text-muted text-label">
                   {publishLoading ? 'Updating...' : 'Unpublish from Feed'}
                 </Text>
@@ -504,7 +504,7 @@ export default function SettingsScreen() {
                 disabled={publishLoading}
                 className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-xl py-4 ${publishLoading ? 'opacity-50' : ''}`}
               >
-                <Globe color="white" size={18} />
+                <Feather name="globe" color="white" size={18} />
                 <Text className="text-white text-label font-semibold">
                   {publishLoading ? 'Publishing...' : 'Publish to Public Feed'}
                 </Text>
@@ -545,7 +545,7 @@ export default function SettingsScreen() {
                 disabled={inviteLoading}
                 className={`flex-1 flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-2.5 ${inviteLoading ? 'opacity-50' : ''}`}
               >
-                <Key color="white" size={16} />
+                <Feather name="key" color="white" size={16} />
                 <Text className="text-white text-label">{inviteLoading ? 'Creating...' : 'Create Invite'}</Text>
               </Pressable>
 
@@ -554,7 +554,7 @@ export default function SettingsScreen() {
                 disabled={!inviteCode}
                 className={`flex-1 flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5 ${!inviteCode ? 'opacity-50' : ''}`}
               >
-                <Copy color={colors.text} size={16} />
+                <Feather name="copy" color={colors.text} size={16} />
                 <Text className="text-pear-text text-label">Copy</Text>
               </Pressable>
             </View>
@@ -584,7 +584,7 @@ export default function SettingsScreen() {
               disabled={pairing || !pairInviteCode.trim()}
               className={`flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5 ${(pairing || !pairInviteCode.trim()) ? 'opacity-50' : ''}`}
             >
-              <User color={colors.text} size={16} />
+              <Feather name="user" color={colors.text} size={16} />
               <Text className="text-pear-text text-label">{pairing ? 'Pairing...' : 'Pair Device'}</Text>
             </Pressable>
           </View>
@@ -633,7 +633,7 @@ export default function SettingsScreen() {
           <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
             <View className="flex-row items-center mb-3">
               <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
-                <HardDrive color={colors.primary} size={20} />
+                <Feather name="hard-drive" color={colors.primary} size={20} />
               </View>
               <View className="flex-1 ml-4">
                 <Text className="text-label text-pear-text">Peer Content Cache</Text>
@@ -682,7 +682,7 @@ export default function SettingsScreen() {
               disabled={clearingCache}
               className={`flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5 ${clearingCache ? 'opacity-50' : ''}`}
             >
-              <Trash2 color={colors.text} size={16} />
+              <Feather name="trash-2" color={colors.text} size={16} />
               <Text className="text-pear-text text-label">
                 {clearingCache ? 'Clearing...' : 'Clear Cache'}
               </Text>
@@ -703,7 +703,7 @@ export default function SettingsScreen() {
 
           <View className="flex-row bg-pear-bg-elevated rounded-xl p-4 mb-3 items-center">
             <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
-              <Info color={colors.primary} size={20} />
+              <Feather name="info" color={colors.primary} size={20} />
             </View>
             <View className="flex-1 ml-4">
               <Text className="text-label text-pear-text">PearTube Mobile</Text>
@@ -713,7 +713,7 @@ export default function SettingsScreen() {
 
           <View className="flex-row bg-pear-bg-elevated rounded-xl p-4 items-center">
             <View className="w-10 h-10 rounded-lg bg-pear-bg-card items-center justify-center">
-              <ExternalLink color={colors.textMuted} size={20} />
+              <Feather name="external-link" color={colors.textMuted} size={20} />
             </View>
             <Text className="flex-1 ml-4 text-body text-pear-text">Powered by Hyperswarm & Hyperdrive</Text>
           </View>

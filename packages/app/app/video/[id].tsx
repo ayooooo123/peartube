@@ -13,7 +13,7 @@ let VLCPlayer: any = null
 if (Platform.OS !== 'web') {
   VLCPlayer = require('react-native-vlc-media-player').VLCPlayer
 }
-import { ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Users } from 'lucide-react-native'
+import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 
@@ -127,7 +127,7 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
         {stats && (
           <>
             <View style={styles.statsBarCenter}>
-              <Users color={colors.textMuted} size={12} />
+              <Feather name="users" color={colors.textMuted} size={12} />
               <Text style={styles.statsBarText}>{stats.peerCount || 0} peers</Text>
             </View>
             {!stats.isComplete && parseFloat(stats.speedMBps) > 0 && (
@@ -379,7 +379,7 @@ export default function VideoPlayerScreen() {
       <View style={styles.playerContainer}>
         {/* Minimize button overlay (chevron down) */}
         <Pressable style={styles.backButton} onPress={goBack}>
-          <ChevronDown color="#fff" size={28} />
+          <Feather name="chevron-down" color="#fff" size={28} />
         </Pressable>
 
         <View style={[styles.player, { height: videoHeight }]}>
@@ -442,11 +442,11 @@ export default function VideoPlayerScreen() {
 
         {/* Action Buttons */}
         <View style={styles.actions}>
-          <ActionButton icon={ThumbsUp} label="Like" />
-          <ActionButton icon={ThumbsDown} label="Dislike" />
-          <ActionButton icon={Share2} label="Share" />
-          <ActionButton icon={Download} label="Download" />
-          <ActionButton icon={MoreHorizontal} label="More" />
+          <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="thumbs-up" color={color} size={size} />} label="Like" />
+          <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="thumbs-down" color={color} size={size} />} label="Dislike" />
+          <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="share-2" color={color} size={size} />} label="Share" />
+          <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="download" color={color} size={size} />} label="Download" />
+          <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="more-horizontal" color={color} size={size} />} label="More" />
         </View>
 
         {/* Channel Info */}

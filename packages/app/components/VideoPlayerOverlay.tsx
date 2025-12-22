@@ -28,9 +28,10 @@ import Animated, {
   runOnJS,
   Extrapolation,
 } from 'react-native-reanimated'
-import { Play, Pause, X, ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, MoreHorizontal, Users, RotateCcw, RotateCw, Maximize, Minimize, Reply, Trash2 } from 'lucide-react-native'
+import { Play, Pause, X, ChevronDown, ThumbsUp, ThumbsDown, Share2, Download, Check, MoreHorizontal, Users, RotateCcw, RotateCw, Maximize, Minimize, Reply, Trash2 } from 'lucide-react-native'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
+import { useDownloads } from '@/lib/DownloadsContext'
 import { colors } from '@/lib/colors'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 
@@ -1063,20 +1064,19 @@ export function VideoPlayerOverlay() {
     }
   }, [playerMode, isLandscapeFullscreen, pendingLandscapeExit])
 
-  // State for download
-  const [isDownloading, setIsDownloading] = useState(false)
-  const [downloadBanner, setDownloadBanner] = useState<string | null>(null)
-  const bannerTimeout = useRef<NodeJS.Timeout | null>(null)
+  // Downloads context for browser-style download manager
+  const { addDownload, downloads } = useDownloads()
 
-  // Handle video download - streams from Hyperdrive and opens share sheet
+  // Check if current video is being downloaded or already downloaded
+  const currentDownload = currentVideo ? downloads.find(d =>
+    d.id === `${currentVideo.channelKey}:${currentVideo.id || currentVideo.path}`
+  ) : null
+  const isDownloading = currentDownload?.status === 'downloading' || currentDownload?.status === 'queued' || currentDownload?.status === 'saving'
+  const isDownloaded = currentDownload?.status === 'complete'
+
+  // Handle video download - adds to downloads queue
   const handleDownload = useCallback(async () => {
     if (!currentVideo || isDownloading) return
-
-    // Only supported on native platforms
-    if (Platform.OS === 'web') {
-      Alert.alert('Download', 'Download is only available on mobile devices')
-      return
-    }
 
     // Ensure RPC is ready
     if (!rpc) {
@@ -1084,78 +1084,24 @@ export function VideoPlayerOverlay() {
       return
     }
 
-    try {
-      setIsDownloading(true)
-
-      // Generate safe filename
-      const safeTitle = currentVideo.title.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 50)
-      const ext = currentVideo.mimeType?.includes('webm') ? 'webm' : currentVideo.mimeType?.includes('matroska') ? 'mkv' : 'mp4'
-      const filename = `${safeTitle}_${currentVideo.id.slice(0, 8)}.${ext}`
-
-      // Write to Documents directory (visible in Files app)
-      const downloadsDir = `${FileSystem.documentDirectory}Downloads/`
-      await FileSystem.makeDirectoryAsync(downloadsDir, { intermediates: true }).catch(() => {})
-      const destPath = `${downloadsDir}${filename}`
-
-      // Get channel key from the video
-      const channelKey = currentVideo.channelKey || currentVideo.channel?.key
-
-      if (!channelKey) {
-        Alert.alert('Download Failed', 'Could not determine channel for this video')
-        setIsDownloading(false)
-        return
-      }
-
-      console.log('[Download] Starting download via RPC:', currentVideo.title)
-
-      // Request a direct blob URL from backend
-      const result = await rpc.downloadVideo({
-        channelKey,
-        videoId: currentVideo.path || currentVideo.id,
-        destPath: '', // Not used, but required by RPC spec
-      })
-
-      if (result?.success) {
-        if (result?.filePath) {
-          console.log('[Download] Downloading from blob URL:', result.filePath)
-          const downloadRes = await FileSystem.downloadAsync(result.filePath, destPath)
-          if (downloadRes.status !== 200) {
-            throw new Error(`HTTP ${downloadRes.status}`)
-          }
-        } else if (result?.data) {
-          // Fallback for older backends that return base64
-          console.log('[Download] Got base64 payload, size:', result.size, 'writing to:', destPath)
-          await FileSystem.writeAsStringAsync(destPath, result.data, {
-            encoding: FileSystem.EncodingType.Base64,
-          })
-        } else {
-          throw new Error('Backend did not return a URL or data')
-        }
-
-        Alert.alert(
-          'Download Complete',
-          `"${currentVideo.title}" saved to:\nFiles > On My iPhone > PearTube > Downloads`
-        )
-        const msg = `Saved to Files > PearTube/Downloads\n${destPath.replace('file://', '')}`
-        setDownloadBanner(msg)
-        if (bannerTimeout.current) clearTimeout(bannerTimeout.current)
-        bannerTimeout.current = setTimeout(() => setDownloadBanner(null), 4000)
-      } else {
-        Alert.alert('Download Failed', result?.error || 'Unknown error')
-      }
-    } catch (err: any) {
-      console.error('[Download] Error:', err)
-      Alert.alert('Download Failed', err.message || 'Failed to download video')
-    } finally {
-      setIsDownloading(false)
+    // Get channel key from the video
+    const channelKey = currentVideo.channelKey || currentVideo.channel?.key
+    if (!channelKey) {
+      Alert.alert('Download Failed', 'Could not determine channel for this video')
+      return
     }
-  }, [currentVideo, isDownloading])
+
+    // Add to downloads queue - DownloadsContext handles the rest
+    await addDownload({
+      ...currentVideo,
+      channelKey,
+    }, rpc)
+  }, [currentVideo, isDownloading, addDownload])
 
   // Always register cleanup hooks (even when no video) to avoid changing hook order
   useEffect(() => {
     return () => {
       if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current)
-      if (bannerTimeout.current) clearTimeout(bannerTimeout.current)
     }
   }, [])
 
@@ -1221,6 +1167,28 @@ export function VideoPlayerOverlay() {
                 <div style={desktopStyles.channelInfo}>
                   <span style={desktopStyles.channelName}>{channelName}</span>
                 </div>
+              </div>
+
+              {/* Action buttons */}
+              <div style={desktopStyles.actions}>
+                <button
+                  onClick={isDownloaded ? undefined : handleDownload}
+                  disabled={isDownloaded || isDownloading}
+                  style={{
+                    ...desktopStyles.actionButton,
+                    opacity: isDownloaded ? 0.7 : 1,
+                    cursor: isDownloaded ? 'default' : 'pointer',
+                  }}
+                >
+                  {isDownloaded ? (
+                    <Check color={colors.primary} size={20} />
+                  ) : (
+                    <Download color={colors.text} size={20} />
+                  )}
+                  <span style={desktopStyles.actionLabel}>
+                    {isDownloaded ? 'Downloaded' : isDownloading ? 'Downloading...' : 'Download'}
+                  </span>
+                </button>
               </div>
 
               {/* Description */}
@@ -1503,8 +1471,8 @@ export function VideoPlayerOverlay() {
         {!isLandscapeFullscreen && !pendingLandscapeExit && (
           <Animated.View style={[styles.fullscreenContent, fullscreenContentStyle]}>
           <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            {/* P2P Stats */}
-            {Platform.OS !== 'web' && <P2PStatsBar stats={videoStats} />}
+            {/* P2P Stats - show on native and Pear desktop */}
+            {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={videoStats} />}
 
             {/* Video Info */}
             <View style={styles.videoInfo}>
@@ -1529,7 +1497,11 @@ export function VideoPlayerOverlay() {
                 onPress={() => toggleReaction('dislike')}
               />
               <ActionButton icon={Share2} label="Share" />
-              <ActionButton icon={Download} label={isDownloading ? "Downloading..." : "Download"} onPress={handleDownload} />
+              <ActionButton
+                icon={isDownloaded ? Check : Download}
+                label={isDownloaded ? "Downloaded" : isDownloading ? "Downloading..." : "Download"}
+                onPress={isDownloaded ? undefined : handleDownload}
+              />
               <ActionButton icon={MoreHorizontal} label="More" />
             </View>
 
@@ -1696,13 +1668,6 @@ export function VideoPlayerOverlay() {
             </View>
           </ScrollView>
         </Animated.View>
-        )}
-
-        {downloadBanner && (
-          <View style={[styles.toast, { bottom: insets.bottom + 24 }]}>
-            <Text style={styles.toastTitle}>Download Complete</Text>
-            <Text style={styles.toastText}>{downloadBanner}</Text>
-          </View>
         )}
     </Animated.View>
   )
@@ -2544,6 +2509,26 @@ const desktopStyles: Record<string, React.CSSProperties> = {
   channelName: {
     fontSize: 14,
     fontWeight: '500',
+    color: colors.text,
+  },
+  actions: {
+    display: 'flex',
+    gap: 12,
+    paddingTop: 12,
+  },
+  actionButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 16px',
+    backgroundColor: colors.bgSecondary,
+    border: 'none',
+    borderRadius: 20,
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  actionLabel: {
     color: colors.text,
   },
   description: {

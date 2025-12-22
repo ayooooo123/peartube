@@ -10,6 +10,7 @@ import { StatusBar, View, Platform, AppState, AppStateStatus } from 'react-nativ
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData } from '@/lib/VideoPlayerContext'
+import { DownloadsProvider } from '@/lib/DownloadsContext'
 import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import * as ScreenOrientation from 'expo-screen-orientation'
@@ -540,17 +541,19 @@ export default function RootLayout() {
         <PlatformProvider>
           <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
           <AppContext.Provider value={contextValue}>
-            <VideoPlayerProvider>
-              <View style={{ flex: 1 }}>
-                <Stack
-                  screenOptions={{
-                    headerShown: false,
-                    contentStyle: { backgroundColor: colors.bg },
-                  }}
-                />
-              </View>
-              <VideoPlayerOverlay />
-            </VideoPlayerProvider>
+            <DownloadsProvider>
+              <VideoPlayerProvider>
+                <View style={{ flex: 1 }}>
+                  <Stack
+                    screenOptions={{
+                      headerShown: false,
+                      contentStyle: { backgroundColor: colors.bg },
+                    }}
+                  />
+                </View>
+                <VideoPlayerOverlay />
+              </VideoPlayerProvider>
+            </DownloadsProvider>
           </AppContext.Provider>
         </PlatformProvider>
       </GluestackUIProvider>

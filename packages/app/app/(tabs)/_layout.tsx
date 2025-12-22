@@ -7,7 +7,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { Tabs, Slot } from 'expo-router'
-import { Home, Film, Users, Settings } from 'lucide-react-native'
+import { Home, Film, Users, Settings, Download } from 'lucide-react-native'
 import { View, Platform } from 'react-native'
 import { BottomTabBar, type BottomTabBarProps } from '@react-navigation/bottom-tabs'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -101,6 +101,13 @@ export default function TabLayout() {
           options={{
             title: 'Studio',
             tabBarIcon: ({ color }) => <Film color={color} size={22} />,
+          }}
+        />
+        <Tabs.Screen
+          name="downloads"
+          options={{
+            title: 'Downloads',
+            tabBarIcon: ({ color }) => <Download color={color} size={22} />,
           }}
         />
         <Tabs.Screen

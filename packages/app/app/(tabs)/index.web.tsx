@@ -10,6 +10,7 @@ import { ActivityIndicator } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePathname } from 'expo-router'
 import { useApp, colors } from '../_layout'
+import { useDownloads } from '../../lib/DownloadsContext'
 import { VideoData } from '../../components/video'
 // We navigate to the dedicated video route on web instead of overlay playback
 import { VideoGrid } from '@/components/video/VideoGrid.web'
@@ -83,6 +84,24 @@ function TrashIcon({ color, size }: { color: string; size: number }) {
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
       <polyline points="3 6 5 6 21 6" />
       <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    </svg>
+  )
+}
+
+function DownloadIcon({ color, size }: { color: string; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  )
+}
+
+function CheckIcon({ color, size }: { color: string; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2">
+      <polyline points="20 6 9 17 4 12" />
     </svg>
   )
 }
@@ -176,6 +195,7 @@ function WatchPageView({
 }: WatchPageViewProps) {
   const { isCollapsed } = useSidebar()
   const { identity } = useApp()
+  const { downloads, addDownload } = useDownloads()
   const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH
 
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
@@ -203,6 +223,25 @@ function WatchPageView({
   const [userReaction, setUserReaction] = useState<string | null>(null)
   const publicBeeKey = (video as any)?.publicBeeKey || undefined
 
+  // Download state
+  const downloadId = video ? `${channelKey}:${video.id || video.path}` : null
+  const currentDownload = downloadId ? downloads.find(d => d.id === downloadId) : null
+  const isDownloading = currentDownload?.status === 'downloading' || currentDownload?.status === 'queued' || currentDownload?.status === 'saving'
+  const isDownloaded = currentDownload?.status === 'complete'
+
+  const handleDownload = useCallback(async () => {
+    if (!video || !rpc || isDownloading || isDownloaded) return
+    const videoData = {
+      ...video,
+      channelKey,
+      id: video.id || video.path,
+      description: video.description || '',
+      publicBeeKey: publicBeeKey || (video as any).publicBeeKey,
+    }
+    console.log('[WatchPage] handleDownload:', videoData.id, 'publicBeeKey:', videoData.publicBeeKey?.slice(0, 16))
+    await addDownload(videoData as any, rpc)
+  }, [video, rpc, channelKey, publicBeeKey, isDownloading, isDownloaded, addDownload])
+
   const displayComments = useMemo(() => {
     if (pendingComments.length === 0) return comments
     const merged = new Map<string, any>()
@@ -218,6 +257,7 @@ function WatchPageView({
   // Load video URL
   useEffect(() => {
     if (!video || !rpc) return
+    const currentVideo = video  // Capture for async closure
 
     let cancelled = false
     setIsLoading(true)
@@ -225,14 +265,14 @@ function WatchPageView({
 
     async function loadVideo() {
       try {
-        const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
-          ? video.path
-          : video.id
+        const videoRef = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
+          ? currentVideo.path
+          : currentVideo.id
         // Get video URL from backend
         const result = await rpc.getVideoUrl({
           channelKey: channelKey,
           videoId: videoRef,
-          publicBeeKey: (video as any).publicBeeKey || undefined,
+          publicBeeKey: (currentVideo as any).publicBeeKey || undefined,
         })
 
         if (cancelled) return
@@ -626,6 +666,25 @@ function WatchPageView({
                 onClick={() => toggleReaction('dislike')}
               >
                 Dislike{reactionCounts.dislike ? ` (${reactionCounts.dislike})` : ''}
+              </button>
+              <button
+                style={{
+                  ...watchStyles.actionButton,
+                  ...(isDownloaded ? watchStyles.actionButtonActive : {}),
+                  opacity: isDownloading ? 0.6 : 1,
+                  cursor: isDownloaded ? 'default' : 'pointer',
+                }}
+                onClick={handleDownload}
+                disabled={isDownloading || isDownloaded}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isDownloaded ? (
+                    <CheckIcon color="white" size={16} />
+                  ) : (
+                    <DownloadIcon color={colors.text} size={16} />
+                  )}
+                  {isDownloaded ? 'Downloaded' : isDownloading ? 'Downloading...' : 'Download'}
+                </span>
               </button>
             </div>
 

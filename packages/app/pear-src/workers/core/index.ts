@@ -879,26 +879,37 @@ rpc.onUploadVideo(async (req: any) => {
   };
 });
 
-// Download video using streams
+// Download video - returns URL for web/desktop download
 rpc.onDownloadVideo(async (req: any) => {
-  let destPath = req.destPath;
-  if (destPath.startsWith('file://')) {
-    destPath = destPath.slice(7);
-  }
+  console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId, 'publicBeeKey:', req.publicBeeKey?.slice(0, 16));
 
-  const result = await api.downloadVideo(
-    req.channelKey,
-    req.videoId,
-    destPath,
-    fs,
-    (progress: number, bytesWritten: number, totalBytes: number) => {
-      try {
-        rpc.eventUploadProgress({ videoId: req.videoId, progress, bytesUploaded: bytesWritten, totalBytes });
-      } catch {}
+  try {
+    // Use getVideoUrl which handles both local and remote channels
+    const result = await api.getVideoUrl(req.channelKey, req.videoId, req.publicBeeKey);
+    if (!result?.url) {
+      return { success: false, error: 'Failed to get video URL' };
     }
-  );
 
-  return result;
+    // Try to get video metadata for size info
+    const meta = await api.getVideoData(req.channelKey, req.videoId);
+    let size = 0;
+    if (meta?.blobId) {
+      const parts = meta.blobId.split(':').map(Number);
+      if (parts.length === 4) {
+        size = parts[3]; // byteLength
+      }
+    }
+
+    console.log('[HRPC] Download URL:', result.url, 'size:', size);
+    return {
+      success: true,
+      filePath: result.url,
+      size: size || meta?.size || 0
+    };
+  } catch (err: any) {
+    console.error('[HRPC] downloadVideo failed:', err?.message);
+    return { success: false, error: err?.message || 'download failed' };
+  }
 });
 
 // Delete video

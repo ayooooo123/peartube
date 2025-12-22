@@ -479,49 +479,31 @@ rpc.onUploadVideo(async (req) => {
 })
 
 rpc.onDownloadVideo(async (req) => {
-  console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId)
+  console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId, 'publicBeeKey:', req.publicBeeKey?.slice(0, 16))
 
   try {
+    // Use getVideoUrl which handles both local and remote channels
+    // Pass publicBeeKey for remote channel access
+    const result = await api.getVideoUrl(req.channelKey, req.videoId, req.publicBeeKey)
+    if (!result?.url) {
+      return { success: false, error: 'Failed to get video URL' }
+    }
+
+    // Try to get video metadata for size info
     const meta = await api.getVideoData(req.channelKey, req.videoId)
-    if (!meta) {
-      return { success: false, error: 'Video metadata not found' }
+    let size = 0
+    if (meta?.blobId) {
+      const parts = meta.blobId.split(':').map(Number)
+      if (parts.length === 4) {
+        size = parts[3] // byteLength
+      }
     }
 
-    if (!meta.blobId || !meta.blobsCoreKey) {
-      return { success: false, error: 'Video missing blobId or blobsCoreKey' }
-    }
-
-    console.log('[HRPC] downloadVideo: blobId:', meta.blobId, 'blobsCoreKey:', meta.blobsCoreKey?.slice(0, 16))
-
-    // Parse blobId
-    const parts = meta.blobId.split(':').map(Number)
-    if (parts.length !== 4) {
-      return { success: false, error: 'Invalid blob ID format' }
-    }
-    const blob = {
-      blockOffset: parts[0],
-      blockLength: parts[1],
-      byteOffset: parts[2],
-      byteLength: parts[3]
-    }
-
-    // Load blobs core
-    const blobsCore = ctx.store.get(b4a.from(meta.blobsCoreKey, 'hex'))
-    await blobsCore.ready()
-
-    const mime = meta.mimeType || 'video/mp4'
-    const url = ctx.blobServer.getLink(blobsCore.key, {
-      blob,
-      type: mime,
-      host: '127.0.0.1',
-      port: ctx.blobServer?.port || ctx.blobServerPort
-    })
-
-    console.log('[HRPC] Direct blob URL:', url)
+    console.log('[HRPC] Download URL:', result.url, 'size:', size)
     return {
       success: true,
-      filePath: url,
-      size: blob.byteLength
+      filePath: result.url,
+      size: size || meta?.size || 0
     }
   } catch (err) {
     console.error('[HRPC] downloadVideo failed:', err?.message)

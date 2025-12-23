@@ -10,6 +10,8 @@
  * @typedef {import('./types.js').VideoStats} VideoStats
  */
 
+let instanceCounter = 0;
+
 export class VideoStatsTracker {
   constructor() {
     /** @type {Map<string, VideoStatsData>} key: `${driveKey}:${videoPath}` -> stats */
@@ -19,7 +21,8 @@ export class VideoStatsTracker {
     /** @type {((driveKey: string, videoPath: string, stats: VideoStats) => void) | null} */
     this.onStatsUpdate = null;
 
-    console.log('[VideoStats] Initialized');
+    this._instanceId = ++instanceCounter;
+    console.log('[VideoStats] Initialized, instance #' + this._instanceId);
   }
 
   /**
@@ -27,6 +30,9 @@ export class VideoStatsTracker {
    * @param {(driveKey: string, videoPath: string, stats: VideoStats) => void} callback
    */
   setOnStatsUpdate(callback) {
+    // Add marker to identify which callback this is
+    const marker = callback?._statsMarker || 'unknown';
+    console.log('[VideoStats] instance #' + this._instanceId + ' setOnStatsUpdate called, marker:', marker);
     this.onStatsUpdate = callback;
   }
 
@@ -141,6 +147,8 @@ export class VideoStatsTracker {
    * @param {string} videoPath
    */
   emitStats(driveKey, videoPath) {
+    const marker = this.onStatsUpdate?._statsMarker || 'unknown';
+    console.log('[VideoStats] instance #' + this._instanceId + ' emitStats, callback marker:', marker);
     if (!this.onStatsUpdate) {
       console.log('[VideoStats] emitStats: no callback set');
       return;

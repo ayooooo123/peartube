@@ -91,7 +91,11 @@ export default function RootLayout() {
         const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
           ? video.path
           : video.id
-        await platformRPC.rpc.prefetchVideo(video.channelKey, videoRef)
+        await platformRPC.rpc.prefetchVideo({
+          channelKey: video.channelKey,
+          videoId: videoRef,
+          publicBeeKey: (video as any).publicBeeKey || undefined
+        })
         console.log('[App] prefetchVideo sent for:', videoRef)
 
         // Proactively prefetch next videos in background for smooth playback

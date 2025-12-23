@@ -22,7 +22,7 @@ declare const HRPC: new (stream: any) => {
   setActiveIdentity(req: { publicKey: string }): Promise<any>;
   listVideos(req: { channelKey: string }): Promise<any>;
   getVideoUrl(req: { channelKey: string; videoId: string }): Promise<any>;
-  prefetchVideo(req: { channelKey: string; videoId: string }): Promise<any>;
+  prefetchVideo(req: { channelKey: string; videoId: string; publicBeeKey?: string }): Promise<any>;
   getVideoStats(req: { channelKey: string; videoId: string }): Promise<any>;
   getVideoThumbnail(req: { channelKey: string; videoId: string }): Promise<any>;
   setVideoThumbnail(req: { videoId: string; imageData: string; mimeType: string }): Promise<any>;
@@ -390,7 +390,7 @@ export const rpc = {
     return ensureRPC().getVideoUrl(req);
   },
 
-  async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+  async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string }, videoId?: string) {
     const req = typeof channelKeyOrReq === 'string'
       ? { channelKey: channelKeyOrReq, videoId: videoId! }
       : channelKeyOrReq;

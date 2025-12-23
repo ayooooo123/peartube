@@ -61,14 +61,18 @@ console.log('[Worker] Pear.config:', JSON.stringify({
   dev: Pear.config.dev
 }, null, 2));
 
+// Create a placeholder callback that we'll replace after HRPC init
+const placeholderStatsCallback = (driveKey: string, videoPath: string, stats: any) => {
+  console.log('[Worker] PLACEHOLDER stats callback called - this should not happen!');
+};
+(placeholderStatsCallback as any)._statsMarker = 'placeholder';
+
 const backend = await createBackendContext({
   storagePath: storage,
   onFeedUpdate: () => {
     // Feed updates will be wired after HRPC init
   },
-  onStatsUpdate: (driveKey: string, videoPath: string, stats: any) => {
-    // Stats updates will be wired after HRPC init
-  }
+  onStatsUpdate: placeholderStatsCallback
 });
 
 const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
@@ -600,7 +604,9 @@ const rpc = new HRPC(ipcPipe);
 console.log('[Worker] HRPC initialized');
 
 // Wire up video stats events
-videoStats.setOnStatsUpdate((driveKey: string, videoPath: string, stats: any) => {
+console.log('[Worker] Setting up videoStats callback');
+const workerStatsCallback = (driveKey: string, videoPath: string, stats: any) => {
+  console.log('[Worker] videoStats callback fired, progress:', stats.progress);
   try {
     rpc.eventVideoStats({
       stats: {
@@ -619,10 +625,14 @@ videoStats.setOnStatsUpdate((driveKey: string, videoPath: string, stats: any) =>
         isComplete: Boolean(stats.isComplete),
       }
     });
-  } catch (e) {
-    // Ignore event send errors
+    console.log('[Worker] rpc.eventVideoStats sent successfully');
+  } catch (e: any) {
+    console.log('[Worker] rpc.eventVideoStats error:', e?.message);
   }
-});
+};
+(workerStatsCallback as any)._statsMarker = 'worker-rpc';
+videoStats.setOnStatsUpdate(workerStatsCallback);
+console.log('[Worker] videoStats callback registered');
 
 // ============================================
 // HRPC Handlers - Thin Delegation Layer
@@ -926,7 +936,13 @@ rpc.onDeleteVideo(async (req: any) => {
 
 // Video stats
 rpc.onPrefetchVideo(async (req: any) => {
-  await api.prefetchVideo(req.channelKey, req.videoId);
+  console.log('[Worker] onPrefetchVideo called:', req.channelKey?.slice(0, 16), req.videoId);
+  try {
+    await api.prefetchVideo(req.channelKey, req.videoId, req.publicBeeKey);
+    console.log('[Worker] onPrefetchVideo completed');
+  } catch (e: any) {
+    console.log('[Worker] onPrefetchVideo error:', e?.message);
+  }
   return { success: true };
 });
 

@@ -15,23 +15,34 @@ if (Platform.OS !== 'web') {
 }
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
+import { usePlatform } from '@/lib/PlatformProvider'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 
 // HRPC methods used: getVideoUrl, prefetchVideo, getVideoStats, getChannelMeta
 
 // Format helpers
-function formatSize(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+function formatSize(bytes: number | string): string {
+  const value = Number(bytes)
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function formatDate(timestamp: number): string {
-  const date = new Date(timestamp)
+function formatDate(timestamp: number | string): string {
+  const value = typeof timestamp === 'string'
+    ? (Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.parse(timestamp))
+    : Number(timestamp)
+  if (!Number.isFinite(value) || value <= 0) return 'Unknown'
+  const date = new Date(value)
   return date.toLocaleDateString()
 }
 
-function formatTimeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000)
+function formatTimeAgo(timestamp: number | string): string {
+  const value = typeof timestamp === 'string'
+    ? (Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.parse(timestamp))
+    : Number(timestamp)
+  if (!Number.isFinite(value) || value <= 0) return 'recently'
+  const seconds = Math.floor((Date.now() - value) / 1000)
   if (seconds < 60) return 'just now'
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m ago`
@@ -92,7 +103,41 @@ function P2PStatsOverlay({ stats, showDetails, onPress }: {
 
 // P2P Stats Bar Component - Enhanced with more details
 function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
-  console.log('[P2PStatsBar] Rendering, stats:', stats ? 'present' : 'null', stats)
+  const { rpc: appRpc } = useApp()
+  const [globalPeers, setGlobalPeers] = useState(0)
+
+  // Fetch global peer count as fallback when video stats are not available yet.
+  useEffect(() => {
+    let mounted = true
+    let intervalId: NodeJS.Timeout | null = null
+
+    const fetchGlobalStatus = async () => {
+      try {
+        const swarmStatus = await appRpc?.getSwarmStatus?.()
+        const peerCount =
+          swarmStatus?.peerCount ??
+          swarmStatus?.swarmConnections ??
+          swarmStatus?.swarmPeers
+        if (mounted && peerCount !== undefined) {
+          setGlobalPeers(peerCount)
+        }
+      } catch {
+        // Ignore errors - backend might be unavailable
+      }
+    }
+
+    if (!stats && appRpc) {
+      fetchGlobalStatus()
+      intervalId = setInterval(fetchGlobalStatus, 2000)
+    }
+
+    return () => {
+      mounted = false
+      if (intervalId) clearInterval(intervalId)
+    }
+  }, [stats, appRpc])
+
+  console.log('[P2PStatsBar] Rendering, stats:', stats ? 'present' : 'null', 'globalPeers:', globalPeers)
 
   // Format bytes to human readable
   const formatBytes = (bytes: number): string => {
@@ -103,9 +148,19 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
   }
 
+  // Get peer count - prefer video stats, fallback to global
+  const peerCount = stats?.peerCount ?? globalPeers
+  const downloadSpeedValue = Number(stats?.speedMBps ?? 0)
+  const uploadSpeedValue = Number(stats?.uploadSpeedMBps ?? 0)
+  const downloadSpeedText = Number.isFinite(downloadSpeedValue) ? downloadSpeedValue.toFixed(2) : '0.00'
+  const uploadSpeedText = Number.isFinite(uploadSpeedValue) ? uploadSpeedValue.toFixed(2) : '0.00'
+
   // Status color and label
   const getStatusInfo = () => {
-    if (!stats) return { color: '#6b7280', label: 'Loading...' }
+    if (!stats) {
+      if (globalPeers > 0) return { color: '#60a5fa', label: 'Connected' }
+      return { color: '#6b7280', label: 'Connecting...' }
+    }
     if (stats.isComplete) return { color: '#4ade80', label: 'Cached' }
     if (stats.status === 'downloading') return { color: '#fbbf24', label: 'Downloading' }
     if (stats.status === 'connecting') return { color: '#60a5fa', label: 'Connecting...' }
@@ -124,16 +179,15 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
           <View style={[styles.statusDot, { backgroundColor: statusInfo.color }]} />
           <Text style={styles.statsBarText}>{statusInfo.label}</Text>
         </View>
+        <View style={styles.statsBarCenter}>
+          <Feather name="users" color={colors.textMuted} size={12} />
+          <Text style={styles.statsBarText}>{peerCount} peers</Text>
+        </View>
         {stats && (
-          <>
-            <View style={styles.statsBarCenter}>
-              <Feather name="users" color={colors.textMuted} size={12} />
-              <Text style={styles.statsBarText}>{stats.peerCount || 0} peers</Text>
-            </View>
-            {!stats.isComplete && parseFloat(stats.speedMBps) > 0 && (
-              <Text style={styles.statsBarSpeed}>↓ {stats.speedMBps} MB/s</Text>
-            )}
-          </>
+          <View style={styles.statsBarSpeeds}>
+            <Text style={styles.statsBarSpeed}>↓ {downloadSpeedText} MB/s</Text>
+            <Text style={styles.statsBarUploadSpeed}>↑ {uploadSpeedText} MB/s</Text>
+          </View>
         )}
       </View>
 
@@ -205,6 +259,7 @@ export default function VideoPlayerScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const insets = useSafeAreaInsets()
+  const { isPear } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
   const videoHeight = Math.round(screenWidth * 9 / 16)
   const { rpc } = useApp()
@@ -256,7 +311,7 @@ export default function VideoPlayerScreen() {
     if (videoData && !fromMiniPlayer && !videoLoaded) {
       loadVideo()
       setVideoLoaded(true)
-    } else if (videoData && fromMiniPlayer && Platform.OS !== 'web') {
+    } else if (videoData && fromMiniPlayer && (Platform.OS !== 'web' || isPear)) {
       // Coming from mini player - start polling for stats
       startStatsPolling()
     }
@@ -270,7 +325,7 @@ export default function VideoPlayerScreen() {
         statsPollingRef.current = null
       }
     }
-  }, [videoData, fromMiniPlayer])
+  }, [videoData, fromMiniPlayer, isPear])
 
   const loadVideo = async () => {
     if (!videoData || !rpc) return
@@ -292,7 +347,7 @@ export default function VideoPlayerScreen() {
         loadAndPlayVideo(videoData, result.url)
 
         // Start prefetch and poll for stats
-        if (Platform.OS !== 'web') {
+        if (Platform.OS !== 'web' || isPear) {
           // Start prefetch first, then poll after a short delay to ensure stats are initialized
           startPrefetch()
           // Poll for stats - delay slightly to let prefetchVideo initialize stats
@@ -323,7 +378,8 @@ export default function VideoPlayerScreen() {
         : videoData.id
       await rpc.prefetchVideo({
         channelKey: videoData.channelKey,
-        videoId: videoRef
+        videoId: videoRef,
+        publicBeeKey: (videoData as any)?.publicBeeKey || undefined
       })
     } catch (err) {
       console.error('[VideoPlayer] Prefetch failed:', err)
@@ -348,13 +404,6 @@ export default function VideoPlayerScreen() {
         console.log('[VideoPlayer] Got stats:', stats ? `${stats.progress}%` : 'null')
         if (stats) {
           setLocalStats(stats as VideoStats)
-          if (stats.isComplete || stats.status === 'complete') {
-            console.log('[VideoPlayer] Video complete, stopping polling')
-            if (statsPollingRef.current) {
-              clearInterval(statsPollingRef.current)
-              statsPollingRef.current = null
-            }
-          }
         }
       } catch (err) {
         console.error('[VideoPlayer] Stats polling error:', err)
@@ -430,7 +479,7 @@ export default function VideoPlayerScreen() {
       {/* Video Info & Actions */}
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* P2P Stats Bar */}
-        {Platform.OS !== 'web' && <P2PStatsBar stats={localStats || videoStats} />}
+        {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={localStats || videoStats} />}
 
         {/* Video Title & Meta */}
         <View style={styles.videoInfo}>
@@ -693,8 +742,18 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
   },
+  statsBarSpeeds: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   statsBarSpeed: {
     color: colors.primary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  statsBarUploadSpeed: {
+    color: '#4ade80',
     fontSize: 12,
     fontWeight: '600',
   },

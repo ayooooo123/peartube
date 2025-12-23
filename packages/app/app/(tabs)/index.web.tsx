@@ -138,8 +138,12 @@ interface ChannelMeta {
 }
 
 // Format helpers
-function formatTimeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000)
+function formatTimeAgo(timestamp: number | string | null | undefined): string {
+  const value = typeof timestamp === 'string'
+    ? (Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.parse(timestamp))
+    : Number(timestamp)
+  if (!Number.isFinite(value) || value <= 0) return 'recently'
+  const seconds = Math.floor((Date.now() - value) / 1000)
   if (seconds < 60) return 'just now'
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m ago`
@@ -147,6 +151,15 @@ function formatTimeAgo(timestamp: number): string {
   if (hours < 24) return `${hours}h ago`
   const days = Math.floor(hours / 24)
   return `${days}d ago`
+}
+
+function formatBytes(bytes: number | string | null | undefined): string {
+  const value = Number(bytes)
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
 function toCountMap(countsData: any): Record<string, number> {
@@ -312,7 +325,7 @@ function WatchPageView({
 
     loadVideo()
     return () => { cancelled = true }
-  }, [channelKey, video?.path, video?.id, rpc])
+  }, [channelKey, video?.path, video?.id, publicBeeKey, rpc])
 
   // Load channel info
   useEffect(() => {
@@ -342,6 +355,7 @@ function WatchPageView({
     rpc.prefetchVideo({
       channelKey: channelKey,
       videoId: videoRef,
+      publicBeeKey,
     }).catch((err: any) => console.log('[WatchPage] Prefetch already running or failed:', err))
 
     async function pollStats() {
@@ -353,11 +367,6 @@ function WatchPageView({
         const stats = result?.stats
         if (!cancelled && stats) {
           setVideoStats(stats)
-          // Stop polling if complete
-          if (stats.isComplete && interval) {
-            clearInterval(interval)
-            interval = null
-          }
         }
       } catch (err) {
         // Ignore polling errors
@@ -580,6 +589,10 @@ function WatchPageView({
 
   const channelName = channel?.name || 'Loading...'
   const channelInitial = channelName.charAt(0).toUpperCase()
+  const downloadSpeedValue = Number(videoStats?.speedMBps ?? 0)
+  const uploadSpeedValue = Number(videoStats?.uploadSpeedMBps ?? 0)
+  const downloadSpeedText = Number.isFinite(downloadSpeedValue) ? downloadSpeedValue.toFixed(2) : '0.00'
+  const uploadSpeedText = Number.isFinite(uploadSpeedValue) ? uploadSpeedValue.toFixed(2) : '0.00'
 
   return (
     <div style={{ ...watchStyles.container, left: sidebarWidth, transition: 'left 0.2s ease' }}>
@@ -630,12 +643,8 @@ function WatchPageView({
                   <span style={{ color: colors.textMuted, fontSize: 12 }}>
                     {videoStats.peerCount || 0} peers
                   </span>
-                  {!videoStats.isComplete && parseFloat(videoStats.speedMBps) > 0 && (
-                    <span style={{ color: '#3b82f6', fontSize: 12 }}>↓ {videoStats.speedMBps} MB/s</span>
-                  )}
-                  {videoStats.uploadSpeedMBps && parseFloat(videoStats.uploadSpeedMBps) > 0 && (
-                    <span style={{ color: '#4ade80', fontSize: 12 }}>↑ {videoStats.uploadSpeedMBps} MB/s</span>
-                  )}
+                  <span style={{ color: '#3b82f6', fontSize: 12 }}>↓ {downloadSpeedText} MB/s</span>
+                  <span style={{ color: '#4ade80', fontSize: 12 }}>↑ {uploadSpeedText} MB/s</span>
                   {!videoStats.isComplete && videoStats.progress > 0 && (
                     <span style={{ color: colors.textSecondary, fontSize: 12, fontWeight: 500 }}>
                       {videoStats.progress}%
@@ -647,6 +656,23 @@ function WatchPageView({
                     <div style={{ ...watchStyles.progressFill, width: `${videoStats.progress || 0}%` }} />
                   </div>
                 )}
+                <div style={watchStyles.statsRow2}>
+                  <span style={watchStyles.statsDetail}>
+                    {formatBytes(videoStats.downloadedBytes)} / {formatBytes(videoStats.totalBytes)}
+                  </span>
+                  <span style={watchStyles.statsDetail}>
+                    {videoStats.downloadedBlocks || 0} / {videoStats.totalBlocks || 0} blocks
+                  </span>
+                  {!videoStats.isComplete && videoStats.elapsed > 0 && (
+                    <span style={watchStyles.statsDetail}>{videoStats.elapsed}s</span>
+                  )}
+                  <span style={{
+                    ...watchStyles.statsProgress,
+                    ...(videoStats.isComplete ? watchStyles.statsProgressComplete : {})
+                  }}>
+                    {videoStats.progress || 0}%
+                  </span>
+                </div>
               </div>
             )}
 
@@ -654,9 +680,7 @@ function WatchPageView({
             <div style={watchStyles.meta}>
               <span>{formatTimeAgo(video.uploadedAt)}</span>
               <span style={{ color: colors.textMuted }}>•</span>
-              <span>{video.size < 1024 * 1024 * 1024
-                ? `${(video.size / (1024 * 1024)).toFixed(1)} MB`
-                : `${(video.size / (1024 * 1024 * 1024)).toFixed(2)} GB`}</span>
+              <span>{formatBytes(video.size)}</span>
             </div>
 
             {/* Channel info */}
@@ -996,6 +1020,12 @@ const watchStyles: Record<string, React.CSSProperties> = {
     gap: 16,
     flexWrap: 'wrap',
   },
+  statsRow2: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+    flexWrap: 'wrap',
+  },
   statusIndicator: {
     display: 'flex',
     alignItems: 'center',
@@ -1005,6 +1035,18 @@ const watchStyles: Record<string, React.CSSProperties> = {
     width: 8,
     height: 8,
     borderRadius: '50%',
+  },
+  statsDetail: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  statsProgress: {
+    fontSize: 12,
+    fontWeight: 500,
+    color: colors.textSecondary,
+  },
+  statsProgressComplete: {
+    color: '#4ade80',
   },
   progressBar: {
     width: '100%',

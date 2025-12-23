@@ -79,6 +79,7 @@ class WorkerClient {
     })
 
     this.rpc.onEventVideoStats((data) => {
+      console.log('[WorkerClient] Video stats event received:', data?.stats?.progress + '%')
       window.dispatchEvent(new CustomEvent('pearVideoStats', { detail: data }))
     })
 

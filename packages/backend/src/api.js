@@ -985,12 +985,15 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {string} videoPath
      * @returns {Promise<Object>}
      */
-    async prefetchVideo(driveKey, videoPath) {
+    async prefetchVideo(driveKey, videoPath, publicBeeKey = null) {
       const prefetchStart = Date.now();
 
       console.log('[API] ===== STARTING PREFETCH =====');
       console.log('[API] Drive:', driveKey?.slice(0, 16));
       console.log('[API] Path:', videoPath);
+      if (publicBeeKey) {
+        console.log('[API] Prefetch publicBeeKey:', publicBeeKey?.slice(0, 16));
+      }
 
       // Check if corestore is still open
       if (ctx.store.closed) {
@@ -998,24 +1001,36 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         return { success: false, error: 'Corestore is closed' };
       }
 
-      // Multi-writer channels: resolve the blob source drive+path (per-writer Hyperdrive)
+      // Multi-writer channels: resolve the blob source from metadata
       let resolvedDriveKey = driveKey
       let resolvedPath = videoPath
-      let isMultiWriter = await isMultiWriterChannelKey(driveKey)
+      let isMultiWriter = publicBeeKey ? true : await isMultiWriterChannelKey(driveKey)
       let channel = null
+      let blobMeta = null
+      console.log('[API] Prefetch isMultiWriter:', isMultiWriter, 'driveKey:', driveKey?.slice(0, 16))
       if (isMultiWriter) {
-        const v = await this.getVideoData(driveKey, videoPath)
-        if (v?.blobDriveKey && v?.path) {
-          resolvedDriveKey = v.blobDriveKey
-          resolvedPath = v.path
-
-          // Get channel for blob drive access
-          channel = await loadChannel(ctx, driveKey)
-          // Join swarm for blob drive if it's from another device
-          if (channel?.joinBlobDrive) {
-            await channel.joinBlobDrive(resolvedDriveKey).catch(() => {})
-          }
+        if (publicBeeKey) {
+          await markAsMultiWriterChannel(driveKey)
         }
+        const v = await this.getVideoData(driveKey, videoPath, publicBeeKey)
+        console.log('[API] Prefetch video data:', v?.id, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16), 'path:', v?.path)
+        if (v?.blobsCoreKey && v?.blobId) {
+          blobMeta = {
+            blobsCoreKey: v.blobsCoreKey,
+            blobId: v.blobId,
+            byteLength: v?.size || v?.byteLength || 0
+          }
+          console.log('[API] Prefetch using blobsCoreKey:', v.blobsCoreKey?.slice(0, 16))
+        } else if (v?.blobsCoreKey && v?.path) {
+          // Legacy fallback if path exists.
+          resolvedDriveKey = v.blobsCoreKey
+          resolvedPath = v.path
+          console.log('[API] Prefetch using blobsCoreKey + path:', resolvedDriveKey?.slice(0, 16))
+        } else {
+          console.log('[API] Prefetch: video missing blobsCoreKey or blobId, v:', JSON.stringify(v)?.slice(0, 200))
+        }
+      } else {
+        console.log('[API] Prefetch: using legacy drive path')
       }
 
       // Clean up any existing monitor
@@ -1028,15 +1043,198 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       }
 
       try {
-        // For multi-writer channels, get blob drive from channel's cache
-        // For legacy drives, use loadDrive from storage
-        let drive;
-        if (isMultiWriter && channel) {
-          drive = await channel.getBlobDrive(resolvedDriveKey);
-          console.log('[API] Prefetch: using blob drive from channel');
-        } else {
-          drive = await loadDrive(ctx, resolvedDriveKey, { waitForSync: true, syncTimeout: 10000 });
+        // Multi-writer (Hyperblobs) path: prefetch directly from blobs core using blobId.
+        if (isMultiWriter && blobMeta?.blobsCoreKey && blobMeta?.blobId) {
+          const keyBuf = b4a.from(blobMeta.blobsCoreKey, 'hex')
+          const core = ctx.store.get({ key: keyBuf })
+          await core.ready()
+
+          if (ctx.swarm && core.discoveryKey) {
+            try {
+              ctx.swarm.join(core.discoveryKey)
+            } catch {}
+          }
+
+          let blobId = blobMeta.blobId
+          if (typeof blobId === 'string') {
+            const parts = blobId.split(':').map(Number)
+            if (parts.length !== 4) throw new Error('Invalid blob ID format')
+            blobId = {
+              blockOffset: parts[0],
+              blockLength: parts[1],
+              byteOffset: parts[2],
+              byteLength: parts[3]
+            }
+          }
+
+          const startBlock = blobId.blockOffset
+          const endBlock = blobId.blockOffset + blobId.blockLength
+          const totalBlocks = blobId.blockLength
+          const totalBytes = blobId.byteLength || blobMeta.byteLength || 0
+
+          // Count initial blocks already available (avoid async has() pitfalls)
+          let initialAvailable = 0
+          const fullyCached = await core.has(startBlock, endBlock)
+          if (fullyCached) {
+            initialAvailable = totalBlocks
+          } else if (totalBlocks <= 512) {
+            for (let i = startBlock; i < endBlock; i++) {
+              if (await core.has(i)) initialAvailable++
+            }
+          }
+          console.log(`[API] Initial: ${initialAvailable}/${totalBlocks} blocks (${Math.round(initialAvailable/totalBlocks*100)}%)`)
+
+          if (videoStats) {
+            videoStats.updateStats(driveKey, videoPath, {
+              status: initialAvailable === totalBlocks ? 'complete' : 'downloading',
+              totalBlocks,
+              totalBytes,
+              initialBlocks: initialAvailable,
+              downloadedBlocks: 0,
+              peerCount: core.peers?.length || ctx.swarm?.connections?.size || 0
+            })
+            videoStats.emitStats(driveKey, videoPath)
+          }
+
+          const wasCached = initialAvailable === totalBlocks && totalBlocks > 0
+          if (wasCached) {
+            console.log('[API] Already fully cached (blobs)')
+          }
+
+          const bytesPerBlock = totalBlocks > 0 ? totalBytes / totalBlocks : 0
+          let downloadedBlocks = 0
+          let downloadedBytesTotal = initialAvailable * bytesPerBlock
+          let downloadSpeed = 0
+          let lastSpeedTime = Date.now()
+          let lastSpeedBytes = downloadedBytesTotal
+          let uploadSpeed = 0
+          let uploadedBytesTotal = 0
+          let lastUploadTime = Date.now()
+          let lastUploadBytes = 0
+          const downloadedIndices = new Set()
+          let assumedComplete = wasCached
+
+          const onDownload = (index, byteLength) => {
+            if (typeof index !== 'number') return
+            if (index < startBlock || index >= endBlock) return
+            if (assumedComplete) {
+              assumedComplete = false
+              initialAvailable = 0
+              downloadedBytesTotal = 0
+              lastSpeedBytes = 0
+              if (videoStats) {
+                videoStats.updateStats(driveKey, videoPath, { initialBlocks: 0 })
+              }
+            }
+            if (!downloadedIndices.has(index)) {
+              downloadedIndices.add(index)
+              downloadedBlocks = downloadedIndices.size
+            }
+            const chunkBytes =
+              typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
+                ? byteLength
+                : bytesPerBlock
+            downloadedBytesTotal += chunkBytes
+            const totalDownloaded = initialAvailable + downloadedBlocks
+            const now = Date.now()
+            const elapsed = (now - lastSpeedTime) / 1000
+            if (elapsed >= 0.5) {
+              const deltaBytes = downloadedBytesTotal - lastSpeedBytes
+              downloadSpeed = elapsed > 0 ? deltaBytes / elapsed : 0
+              lastSpeedBytes = downloadedBytesTotal
+              lastSpeedTime = now
+            }
+
+            const isComplete = totalDownloaded >= totalBlocks
+            if (videoStats) {
+              videoStats.updateStats(driveKey, videoPath, {
+                downloadedBlocks,
+                peerCount: core.peers?.length || ctx.swarm?.connections?.size || 0,
+                status: isComplete ? 'complete' : 'downloading',
+                initialBlocks: initialAvailable
+              })
+              videoStats.emitStats(driveKey, videoPath)
+            }
+          }
+
+          const onUpload = (index, byteLength) => {
+            if (typeof index !== 'number') return
+            if (index < startBlock || index >= endBlock) return
+            const chunkBytes =
+              typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
+                ? byteLength
+                : bytesPerBlock
+            uploadedBytesTotal += chunkBytes
+            const now = Date.now()
+            const elapsed = (now - lastUploadTime) / 1000
+            if (elapsed >= 0.5) {
+              const deltaBytes = uploadedBytesTotal - lastUploadBytes
+              uploadSpeed = elapsed > 0 ? deltaBytes / elapsed : 0
+              lastUploadBytes = uploadedBytesTotal
+              lastUploadTime = now
+            }
+
+            if (videoStats) {
+              videoStats.updateStats(driveKey, videoPath, {
+                peerCount: core.peers?.length || ctx.swarm?.connections?.size || 0
+              })
+              videoStats.emitStats(driveKey, videoPath)
+            }
+          }
+
+          const monitor = {
+            downloadSpeed: () => (Date.now() - lastSpeedTime > 2000 ? 0 : downloadSpeed),
+            uploadSpeed: () => (Date.now() - lastUploadTime > 2000 ? 0 : uploadSpeed)
+          }
+
+          core.on('download', onDownload)
+          core.on('upload', onUpload)
+          if (videoStats) {
+            videoStats.registerMonitor(driveKey, videoPath, monitor, () => {
+              core.off('download', onDownload)
+              core.off('upload', onUpload)
+            })
+          }
+
+          if (!wasCached) {
+            const downloadRange = core.download({ start: startBlock, end: endBlock })
+            downloadRange.done().then(() => {
+              console.log('[API] Download complete (blobs)')
+              downloadSpeed = 0
+              if (videoStats) {
+                videoStats.updateStats(driveKey, videoPath, { status: 'complete' })
+                setTimeout(() => videoStats.cleanupMonitor(driveKey, videoPath), 30000)
+              }
+            }).catch(err => {
+              if (err.message?.includes('closed') || ctx.store.closed) {
+                console.log('[API] Prefetch cancelled (corestore closed)')
+              } else {
+                console.error('[API] Prefetch error:', err.message)
+              }
+              if (videoStats) {
+                videoStats.updateStats(driveKey, videoPath, { status: 'cancelled' })
+                videoStats.cleanupMonitor(driveKey, videoPath)
+              }
+            })
+          } else if (videoStats) {
+            // Keep stats fresh for cached videos so upload speeds can update.
+            videoStats.emitStats(driveKey, videoPath)
+          }
+
+          return {
+            success: true,
+            totalBlocks,
+            totalBytes,
+            peerCount: core.peers?.length || ctx.swarm?.connections?.size || 0,
+            initialBlocks: initialAvailable,
+            cached: wasCached,
+            message: wasCached ? 'Video already fully cached' : 'Prefetch started'
+          }
         }
+
+        // Legacy Hyperdrive path
+        let drive;
+        drive = await loadDrive(ctx, resolvedDriveKey, { waitForSync: true, syncTimeout: 10000 });
         const peerCount = ctx.swarm?.connections?.size || 0;
         console.log('[API] Active swarm connections:', peerCount);
 
@@ -1064,10 +1262,15 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         const totalBlocks = blob.blockLength;
         const totalBytes = blob.byteLength;
 
-        // Count initial blocks already available
+        // Count initial blocks already available (avoid async has() pitfalls)
         let initialAvailable = 0;
-        for (let i = startBlock; i < endBlock; i++) {
-          if (core.has(i)) initialAvailable++;
+        const fullyCached = await core.has(startBlock, endBlock);
+        if (fullyCached) {
+          initialAvailable = totalBlocks;
+        } else if (totalBlocks <= 512) {
+          for (let i = startBlock; i < endBlock; i++) {
+            if (await core.has(i)) initialAvailable++;
+          }
         }
         console.log(`[API] Initial: ${initialAvailable}/${totalBlocks} blocks (${Math.round(initialAvailable/totalBlocks*100)}%)`);
 

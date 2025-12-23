@@ -89,7 +89,10 @@ function setupEventListeners() {
     const channelKey = data?.channelKey ?? stats?.channelKey;
     const videoId = data?.videoId ?? stats?.videoId;
 
+    console.log('[Platform RPC] pearVideoStats event received:', { channelKey: channelKey?.slice?.(0, 16), videoId: videoId?.slice?.(0, 30), progress: stats?.progress });
+
     if (channelKey && videoId && stats) {
+      console.log('[Platform RPC] Dispatching to', eventCallbacks.videoStats.length, 'listeners');
       eventCallbacks.videoStats.forEach(cb => cb({ channelKey, videoId, stats }));
     } else {
       eventCallbacks.videoStats.forEach(cb => cb(data));
@@ -244,7 +247,7 @@ export const rpc = {
     return ensureRPC().getVideoUrl(req);
   },
 
-  async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+  async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string }, videoId?: string) {
     const req = typeof channelKeyOrReq === 'string'
       ? { channelKey: channelKeyOrReq, videoId: videoId! }
       : channelKeyOrReq;

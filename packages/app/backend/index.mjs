@@ -722,7 +722,7 @@ rpc.onRetrySyncChannel(async (req) => {
 // Video prefetch and stats
 rpc.onPrefetchVideo(async (req) => {
   console.log('[HRPC] prefetchVideo:', req.channelKey?.slice(0, 16), req.videoId)
-  await api.prefetchVideo(req.channelKey, req.videoId)
+  await api.prefetchVideo(req.channelKey, req.videoId, req.publicBeeKey)
   return { success: true }
 })
 

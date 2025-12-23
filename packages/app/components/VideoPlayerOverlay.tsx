@@ -48,13 +48,22 @@ const SPRING_CONFIG = {
 }
 
 // Format helpers
-function formatSize(bytes: number): string {
+function formatSize(bytes: number | undefined | null): string {
+  if (!bytes || isNaN(bytes) || bytes <= 0) {
+    return 'Unknown size'
+  }
+  if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
-function formatTimeAgo(timestamp: number): string {
+function formatTimeAgo(timestamp: number | undefined | null): string {
+  if (!timestamp || isNaN(timestamp) || timestamp <= 0) {
+    return 'recently'
+  }
   const seconds = Math.floor((Date.now() - timestamp) / 1000)
+  if (isNaN(seconds) || seconds < 0) return 'recently'
   if (seconds < 60) return 'just now'
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m ago`
@@ -71,58 +80,78 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
-// P2P Stats Bar Component - Enhanced with more details
+// P2P Stats Bar Component - All stats with clean design
 function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
-  console.log('[P2PStatsBar-Overlay] Rendering, stats:', stats ? 'present' : 'null', stats)
+  const { rpc: appRpc } = useApp()
+  const [globalPeers, setGlobalPeers] = useState(0)
 
-  // Format bytes to human readable
-  const formatBytes = (bytes: number): string => {
-    if (!bytes) return '0 B'
-    if (bytes < 1024) return `${bytes} B`
+  useEffect(() => {
+    let mounted = true
+    let intervalId: NodeJS.Timeout | null = null
+
+    const fetchGlobalStatus = async () => {
+      try {
+        const swarmStatus = await appRpc?.getSwarmStatus?.()
+        const peerCount = swarmStatus?.peerCount ?? swarmStatus?.swarmConnections ?? swarmStatus?.swarmPeers
+        if (mounted && peerCount !== undefined) {
+          setGlobalPeers(peerCount)
+        }
+      } catch (e) {}
+    }
+
+    if (!stats && appRpc) {
+      fetchGlobalStatus()
+      intervalId = setInterval(fetchGlobalStatus, 2000)
+    }
+
+    return () => {
+      mounted = false
+      if (intervalId) clearInterval(intervalId)
+    }
+  }, [stats, appRpc])
+
+  const formatSize = (bytes: number): string => {
+    if (!bytes || bytes <= 0) return '0 B'
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
   }
 
-  // Status color and label
+  const peerCount = stats?.peerCount ?? globalPeers
+  const downloadSpeed = Number(stats?.speedMBps ?? 0)
+  const uploadSpeed = Number(stats?.uploadSpeedMBps ?? 0)
+
   const getStatusInfo = () => {
-    if (!stats) return { color: '#6b7280', label: 'Loading...' }
+    if (!stats) {
+      if (globalPeers > 0) return { color: '#4ade80', label: 'Connected' }
+      return { color: '#6b7280', label: 'Connecting' }
+    }
     if (stats.isComplete) return { color: '#4ade80', label: 'Cached' }
     if (stats.status === 'downloading') return { color: '#fbbf24', label: 'Downloading' }
-    if (stats.status === 'connecting') return { color: '#60a5fa', label: 'Connecting...' }
-    if (stats.status === 'resolving') return { color: '#a78bfa', label: 'Resolving...' }
-    if (stats.status === 'error') return { color: '#f87171', label: 'Error' }
+    if (stats.status === 'connecting' || stats.status === 'resolving') return { color: '#60a5fa', label: 'Connecting' }
     return { color: '#6b7280', label: 'Waiting' }
   }
 
-  const statusInfo = getStatusInfo()
+  const { color, label } = getStatusInfo()
 
   return (
     <View style={styles.statsBar}>
-      {/* Top row: Status, Peers, Speed */}
-      <View style={styles.statsBarRow}>
-        <View style={styles.statsBarLeft}>
-          <View style={[styles.statusDot, { backgroundColor: statusInfo.color }]} />
-          <Text style={styles.statsBarText}>{statusInfo.label}</Text>
+      {/* Main stats row */}
+      <View style={styles.statsRow}>
+        {/* Status with dot */}
+        <View style={styles.statItem}>
+          <View style={[styles.statusDot, { backgroundColor: color }]} />
+          <Text style={[styles.statLabel, { color }]}>{label}</Text>
         </View>
-        {stats && (
-          <>
-            <View style={styles.statsBarCenter}>
-              <Feather name="users" color={colors.textMuted} size={12} />
-              <Text style={styles.statsBarText}>{stats.peerCount || 0} peers</Text>
-            </View>
-            <View style={styles.statsBarSpeeds}>
-              {/* Download speed - show when downloading */}
-              {!stats.isComplete && parseFloat(stats.speedMBps) > 0 && (
-                <Text style={styles.statsBarSpeed}>↓ {stats.speedMBps}</Text>
-              )}
-              {/* Upload speed - show when seeding (always if > 0) */}
-              {stats.uploadSpeedMBps && parseFloat(stats.uploadSpeedMBps) > 0 && (
-                <Text style={styles.statsBarUploadSpeed}>↑ {stats.uploadSpeedMBps}</Text>
-              )}
-            </View>
-          </>
-        )}
+
+        {/* Peers */}
+        <Text style={styles.statText}>{peerCount} {peerCount === 1 ? 'peer' : 'peers'}</Text>
+
+        {/* Download speed */}
+        <Text style={styles.statSpeed}>↓ {downloadSpeed.toFixed(2)} MB/s</Text>
+
+        {/* Upload speed */}
+        <Text style={styles.statSpeedUp}>↑ {uploadSpeed.toFixed(2)} MB/s</Text>
       </View>
 
       {/* Progress bar */}
@@ -132,21 +161,16 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
         </View>
       )}
 
-      {/* Bottom row: Bytes, Blocks, Time */}
+      {/* Details row */}
       {stats && (
-        <View style={styles.statsBarRow2}>
-          <Text style={styles.statsBarDetail}>
-            {formatBytes(stats.downloadedBytes || 0)} / {formatBytes(stats.totalBytes || 0)}
+        <View style={styles.statsRowSecondary}>
+          <Text style={styles.statDetail}>
+            {formatSize(stats.downloadedBytes || 0)} / {formatSize(stats.totalBytes || 0)}
           </Text>
-          <Text style={styles.statsBarDetail}>
+          <Text style={styles.statDetail}>
             {stats.downloadedBlocks || 0} / {stats.totalBlocks || 0} blocks
           </Text>
-          {!stats.isComplete && stats.elapsed > 0 && (
-            <Text style={styles.statsBarDetail}>
-              {stats.elapsed}s
-            </Text>
-          )}
-          <Text style={[styles.statsBarProgress, stats.isComplete && styles.statsBarProgressComplete]}>
+          <Text style={[styles.statProgress, stats.isComplete && styles.statProgressComplete]}>
             {stats.progress || 0}%
           </Text>
         </View>
@@ -2329,64 +2353,65 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
-  // P2P Stats Bar styles
+  // P2P Stats Bar styles - Clean with all stats
   statsBar: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 10,
-    backgroundColor: colors.bgSecondary,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 10,
+    marginHorizontal: 12,
+    marginTop: 8,
   },
-  statsBarRow: {
+  statsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  statsBarRow2: {
+  statsRowSecondary: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 6,
+    marginTop: 8,
+    justifyContent: 'space-between',
   },
-  statsBarLeft: {
+  statItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
-  statsBarCenter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
+  statsDivider: {
+    width: 1,
+    height: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    marginHorizontal: 10,
   },
-  statsBarText: {
-    color: colors.textSecondary,
-    fontSize: 12,
+  statLabel: {
+    fontSize: 13,
+    fontWeight: '600',
   },
-  statsBarDetail: {
-    color: colors.textMuted,
+  statText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 13,
+  },
+  statSpeed: {
+    color: '#60a5fa',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  statSpeedUp: {
+    color: '#4ade80',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  statDetail: {
+    color: 'rgba(255, 255, 255, 0.5)',
     fontSize: 11,
   },
-  statsBarSpeeds: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  statsBarSpeed: {
-    color: colors.primary,
+  statProgress: {
+    color: 'rgba(255, 255, 255, 0.7)',
     fontSize: 12,
     fontWeight: '600',
   },
-  statsBarUploadSpeed: {
-    color: '#4ade80', // Green for upload
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  statsBarProgress: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  statsBarProgressComplete: {
+  statProgressComplete: {
     color: '#4ade80',
   },
   statusDot: {
@@ -2395,15 +2420,15 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   progressBarBg: {
-    marginTop: 8,
+    marginTop: 10,
     height: 4,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     borderRadius: 2,
     overflow: 'hidden',
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: colors.primary,
+    backgroundColor: '#fbbf24',
     borderRadius: 2,
   },
 })

@@ -40,6 +40,7 @@ declare const HRPC: new (stream: any) => {
   pairDevice(req: { inviteCode: string; deviceName?: string }): Promise<any>;
   listDevices(req: { channelKey: string }): Promise<any>;
   searchVideos(req: { channelKey: string; query: string; topK?: number; federated?: boolean }): Promise<any>;
+  globalSearchVideos(req: { query: string; topK?: number }): Promise<any>;
   indexVideoVectors(req: { channelKey: string; videoId: string }): Promise<any>;
   addComment(req: { channelKey: string; videoId: string; text: string; parentId?: string | null; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<any>;
   listComments(req: { channelKey: string; videoId: string; page?: number; limit?: number; publicBeeKey?: string | null }): Promise<any>;
@@ -536,6 +537,14 @@ export const rpc = {
 
   async getReactions(req: { channelKey: string; videoId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }) {
     return ensureRPC().getReactions(req);
+  },
+
+  // Search
+  async globalSearchVideos(queryOrReq: string | { query: string; topK?: number }, topK?: number): Promise<{ results: Array<{ id: string; score: number; metadata: any }> }> {
+    const req = typeof queryOrReq === 'string'
+      ? { query: queryOrReq, topK: topK || 20 }
+      : queryOrReq;
+    return ensureRPC().globalSearchVideos(req);
   },
 
   // Recommendations / watch events

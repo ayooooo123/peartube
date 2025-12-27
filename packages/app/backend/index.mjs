@@ -912,16 +912,48 @@ publicFeed.setOnFeedUpdate(() => {
 // Search handlers
 rpc.onSearchVideos(async (req) => {
   console.log('[HRPC] searchVideos:', req.query)
-  // Stub: return empty results for now
-  // Response format: { results: array of search results }
-  return { results: [] }
+  try {
+    const rawResults = await api.searchVideos(req.channelKey, req.query, {
+      topK: req.topK || 10,
+      federated: Boolean(req.federated)
+    })
+    const results = (rawResults || []).map((r) => ({
+      id: String(r.id || ''),
+      score: r.score != null ? String(r.score) : null,
+      metadata: r.metadata ? JSON.stringify(r.metadata) : null
+    }))
+    return { results }
+  } catch (e) {
+    console.log('[HRPC] searchVideos failed:', e?.message)
+    return { results: [] }
+  }
+})
+
+rpc.onGlobalSearchVideos(async (req) => {
+  console.log('[HRPC] globalSearchVideos:', req.query)
+  try {
+    const rawResults = await api.globalSearchVideos(req.query, { topK: req.topK || 20 })
+    const results = (rawResults || []).map((r) => ({
+      id: String(r.id || ''),
+      score: r.score != null ? String(r.score) : null,
+      metadata: r.metadata ? JSON.stringify(r.metadata) : null
+    }))
+    return { results }
+  } catch (e) {
+    console.log('[HRPC] globalSearchVideos failed:', e?.message)
+    return { results: [] }
+  }
 })
 
 rpc.onIndexVideoVectors(async (req) => {
   console.log('[HRPC] indexVideoVectors:', req.channelKey?.slice(0, 16), req.videoId)
-  // Stub: indexing not implemented on mobile yet
-  // Response format: { success, error? }
-  return { success: true }
+  try {
+    const result = await api.indexVideoVectors?.(req.channelKey, req.videoId)
+    return { success: Boolean(result?.success), error: result?.error || null }
+  } catch (e) {
+    console.log('[HRPC] indexVideoVectors failed:', e?.message)
+    return { success: false, error: e?.message || 'Indexing failed' }
+  }
 })
 
 // Comment handlers

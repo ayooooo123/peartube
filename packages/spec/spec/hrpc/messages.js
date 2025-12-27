@@ -3604,6 +3604,54 @@ const encoding158 = {
   }
 }
 
+// @peartube/global-search-videos-request
+const encoding159 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.query)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.topK) c.uint.preencode(state, m.topK)
+  },
+  encode(state, m) {
+    const flags =
+      (m.topK ? 1 : 0)
+
+    c.string.encode(state, m.query)
+    c.uint.encode(state, flags)
+
+    if (m.topK) c.uint.encode(state, m.topK)
+  },
+  decode(state) {
+    const r0 = c.string.decode(state)
+    const flags = c.uint.decode(state)
+
+    return {
+      query: r0,
+      topK: (flags & 1) !== 0 ? c.uint.decode(state) : 0
+    }
+  }
+}
+
+// @peartube/global-search-videos-response.results
+const encoding160_0 = c.array(c.frame(encoding106))
+
+// @peartube/global-search-videos-response
+const encoding160 = {
+  preencode(state, m) {
+    encoding160_0.preencode(state, m.results)
+  },
+  encode(state, m) {
+    encoding160_0.encode(state, m.results)
+  },
+  decode(state) {
+    const r0 = encoding160_0.decode(state)
+
+    return {
+      results: r0
+    }
+  }
+}
+
 function setVersion(v) {
   version = v
 }
@@ -3945,6 +3993,10 @@ function getEncoding(name) {
       return encoding157
     case '@peartube/event-download-progress':
       return encoding158
+    case '@peartube/global-search-videos-request':
+      return encoding159
+    case '@peartube/global-search-videos-response':
+      return encoding160
     default:
       throw new Error('Encoder not found ' + name)
   }

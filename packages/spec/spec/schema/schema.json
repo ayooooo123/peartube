@@ -2083,6 +2083,41 @@
       ]
     },
     {
+      "name": "global-search-videos-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "query",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "topK",
+          "required": false,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "global-search-videos-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "results",
+          "required": true,
+          "array": true,
+          "type": "@peartube/search-result",
+          "version": 1
+        }
+      ]
+    },
+    {
       "name": "index-video-vectors-request",
       "namespace": "peartube",
       "compact": false,

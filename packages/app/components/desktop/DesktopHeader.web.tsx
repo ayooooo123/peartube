@@ -61,10 +61,9 @@ export function DesktopHeader() {
   const handleSearch = useCallback((e: React.FormEvent) => {
     e.preventDefault()
     if (searchQuery.trim()) {
-      // TODO: Navigate to search results
-      console.log('Search:', searchQuery)
+      router.push(`/search?q=${encodeURIComponent(searchQuery.trim())}`)
     }
-  }, [searchQuery])
+  }, [searchQuery, router])
 
   const handleLogoClick = useCallback(() => {
     router.push('/')

@@ -48,8 +48,8 @@ class WorkerClient {
     // Debug: log available methods
     const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(this.rpc))
       .filter(m => !m.startsWith('_') && m !== 'constructor')
-    console.log('[WorkerClient] Available RPC methods:', methods.slice(0, 20), '... total:', methods.length)
-    console.log('[WorkerClient] Has addComment:', typeof this.rpc.addComment)
+    console.log('[WorkerClient] Available RPC methods:', methods.join(', '))
+    console.log('[WorkerClient] Has globalSearchVideos:', typeof this.rpc.globalSearchVideos)
 
     // Add error handler on the RPC
     if (this.rpc.on) {

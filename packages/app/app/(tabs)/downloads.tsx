@@ -2,6 +2,7 @@
  * Downloads Tab - View and manage video downloads
  */
 import { View, Text, ScrollView, Pressable, Alert, Platform, Image } from 'react-native'
+import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useDownloads, DownloadItem, DownloadStatus } from '../../lib/DownloadsContext'
@@ -158,6 +159,7 @@ function DownloadItemRow({
 
 export default function DownloadsScreen() {
   const insets = useSafeAreaInsets()
+  const router = useRouter()
   const { downloads, activeCount, cancelDownload, removeDownload, clearCompleted, retryDownload } = useDownloads()
 
   // We need rpc for retry - get it from app context
@@ -202,21 +204,26 @@ export default function DownloadsScreen() {
           )}
         </View>
 
-        {hasCompleted && (
-          <Pressable
-            onPress={clearCompleted}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              padding: 8
-            }}
-          >
-            <Feather name="trash-2" size={18} color={colors.textSecondary} />
-            <Text style={{ color: colors.textSecondary, fontSize: 14, marginLeft: 4 }}>
-              Clear
-            </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Pressable onPress={() => router.push('/search')} style={{ padding: 8 }}>
+            <Feather name="search" size={18} color={colors.textSecondary} />
           </Pressable>
-        )}
+          {hasCompleted && (
+            <Pressable
+              onPress={clearCompleted}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                padding: 8
+              }}
+            >
+              <Feather name="trash-2" size={18} color={colors.textSecondary} />
+              <Text style={{ color: colors.textSecondary, fontSize: 14, marginLeft: 4 }}>
+                Clear
+              </Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       <ScrollView

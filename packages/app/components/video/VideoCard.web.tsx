@@ -156,6 +156,58 @@ export function VideoCardDesktop({
   )
 }
 
+// VideoData interface matching the native version
+export interface VideoData {
+  id: string
+  title: string
+  path?: string
+  size?: number
+  uploadedAt?: number
+  createdAt?: number
+  channelKey?: string
+  driveKey?: string
+  publicBeeKey?: string | null
+  thumbnailUrl?: string | null
+  thumbnail?: string | null
+  duration?: number
+  description?: string
+  mimeType?: string
+  category?: string
+  score?: number
+  channel?: {
+    name: string
+    avatarUrl?: string
+  }
+}
+
+interface VideoCardWrapperProps {
+  video: VideoData
+  onPress: () => void
+  showChannelInfo?: boolean
+}
+
+// Wrapper to match the native VideoCard interface
+export function VideoCard({ video, onPress, showChannelInfo = true }: VideoCardWrapperProps) {
+  const channelKey = video.channelKey || video.driveKey
+  const channelName = video.channel?.name || `Channel ${channelKey?.slice(0, 8) || 'Unknown'}`
+  const timeAgo = video.uploadedAt || video.createdAt
+    ? new Date(video.uploadedAt || video.createdAt!).toISOString()
+    : undefined
+
+  return (
+    <VideoCardDesktop
+      id={video.id}
+      title={video.title}
+      thumbnailUrl={video.thumbnailUrl || video.thumbnail || undefined}
+      channelName={showChannelInfo ? channelName : ''}
+      channelAvatarUrl={video.channel?.avatarUrl}
+      uploadedAt={timeAgo}
+      duration={video.duration}
+      onPress={onPress}
+    />
+  )
+}
+
 const styles: Record<string, React.CSSProperties> = {
   card: {
     display: 'flex',

@@ -144,19 +144,22 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       // Normalize both before comparison so mobile/desktop stay consistent.
       const extractVideoId = (idOrPath?: string | null) => {
         if (!idOrPath) return null
-        // Path case: /videos/<id>.<ext>
-        const m = idOrPath.match(/\/videos\/([^.\/]+)(?:\.[^\/]+)?$/)
+        const cleaned = idOrPath.split('?')[0]?.split('#')[0] || idOrPath
+        // Path case: /videos/<id>.<ext> or videos/<id>.<ext>
+        const m = cleaned.match(/(?:^|\/)videos\/([^.\/]+)(?:\.[^\/]+)?$/)
         if (m?.[1]) return m[1]
-        // Fallback: strip extension if present (e.g. abc.mp4)
-        return idOrPath.replace(/\.[^./]+$/, '')
+        // Fallback: take basename then strip extension if present (e.g. abc.mp4)
+        const base = cleaned.split('/').pop() || cleaned
+        return base.replace(/\.[^./]+$/, '')
       }
 
-      const currentId = extractVideoId(video?.path) ?? extractVideoId((video as any)?.id)
+      const currentKey = (video as any)?.channelKey || (video as any)?.driveKey || null
+      const currentId = extractVideoId((video as any)?.id) ?? extractVideoId(video?.path)
       const incomingId = extractVideoId(videoPath)
 
       const sameVideo =
         Boolean(video) &&
-        video?.channelKey === driveKey &&
+        (currentKey ? currentKey === driveKey : true) &&
         (
           // Exact path match
           video?.path === videoPath ||
@@ -167,6 +170,15 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       if (sameVideo) {
         console.log('[VideoPlayerContext] Received stats event:', stats.progress + '%')
         setVideoStats(stats)
+        // Drop the "connecting" overlay once stats show real activity.
+        setIsLoading((prev) => {
+          if (!prev) return prev
+          if (!stats) return prev
+          if (stats.isComplete) return false
+          if (typeof stats.progress === 'number' && stats.progress > 0) return false
+          if (stats.status && stats.status !== 'connecting' && stats.status !== 'resolving') return false
+          return prev
+        })
       }
     })
     return unsubscribe
@@ -279,6 +291,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setCurrentTime(data.currentTime / 1000)
     if (data.duration > 0) {
       setDuration(data.duration / 1000)
+    }
+    // Some platforms never emit onPlaying; clear loading once playback advances.
+    if (data.currentTime > 0) {
+      setIsLoading((prev) => (prev ? false : prev))
     }
   }, [])
 

@@ -3,6 +3,7 @@
  */
 import { useState, useCallback } from 'react'
 import { View, Text, FlatList, RefreshControl, Alert, Pressable, TextInput } from 'react-native'
+import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
@@ -18,6 +19,7 @@ const isValidChannelKey = (key: string) => /^[a-f0-9]{64}$/i.test(key)
 
 export default function SubscriptionsScreen() {
   const insets = useSafeAreaInsets()
+  const router = useRouter()
   const { rpc } = useApp()
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
   const [refreshing, setRefreshing] = useState(false)
@@ -95,7 +97,12 @@ export default function SubscriptionsScreen() {
         style={{ paddingTop: insets.top }}
       >
         <View className="px-5 py-4">
-          <Text className="text-title text-pear-text">Subscriptions</Text>
+          <View className="flex-row items-center justify-between">
+            <Text className="text-title text-pear-text">Subscriptions</Text>
+            <Pressable onPress={() => router.push('/search')} className="p-2">
+              <Feather name="search" color={colors.text} size={18} />
+            </Pressable>
+          </View>
           <Text className="text-caption text-pear-text-muted mt-1">Channels you follow</Text>
         </View>
       </View>

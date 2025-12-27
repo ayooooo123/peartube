@@ -3,6 +3,7 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { View, Text, ScrollView, Alert, Share, Clipboard, Pressable, TextInput, Platform } from 'react-native'
+import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
@@ -18,6 +19,7 @@ interface StorageStats {
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets()
+  const router = useRouter()
   const { identity, createIdentity, rpc, loadIdentity } = useApp()
   const [newName, setNewName] = useState('')
   const [creating, setCreating] = useState(false)
@@ -408,7 +410,12 @@ export default function SettingsScreen() {
         style={{ paddingTop: insets.top }}
       >
         <View className="px-5 py-4">
-          <Text className="text-title text-pear-text">Settings</Text>
+          <View className="flex-row items-center justify-between">
+            <Text className="text-title text-pear-text">Settings</Text>
+            <Pressable onPress={() => router.push('/search')} className="p-2">
+              <Feather name="search" color={colors.text} size={18} />
+            </Pressable>
+          </View>
         </View>
       </View>
 

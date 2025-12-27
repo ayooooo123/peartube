@@ -235,6 +235,17 @@ function WatchPageView({
   const [videoStats, setVideoStats] = useState<any>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
 
+  // Ensure the HTML video element is fully stopped when this view unmounts.
+  useEffect(() => {
+    return () => {
+      if (videoRef.current) {
+        videoRef.current.pause()
+        videoRef.current.removeAttribute('src')
+        videoRef.current.load?.()
+      }
+    }
+  }, [])
+
   // Social state
   const [comments, setComments] = useState<any[]>([])
   const [pendingComments, setPendingComments] = useState<any[]>([])
@@ -613,6 +624,7 @@ function WatchPageView({
               </div>
             ) : (
               <video
+                key={`${channelKey}:${video.id || videoId}`}
                 ref={videoRef}
                 src={videoUrl || undefined}
                 controls

@@ -3,6 +3,7 @@
  */
 import { useState, useCallback } from 'react'
 import { View, Text, FlatList, Alert, Pressable, TextInput, ActivityIndicator, Platform, Image } from 'react-native'
+import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
@@ -51,6 +52,7 @@ function formatEta(seconds: number): string {
 
 export default function StudioScreen() {
   const insets = useSafeAreaInsets()
+  const router = useRouter()
   const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos } = useApp()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -388,7 +390,12 @@ export default function StudioScreen() {
         style={{ paddingTop: insets.top }}
       >
         <View className="px-5 py-4">
-          <Text className="text-title text-pear-text">Studio</Text>
+          <View className="flex-row items-center justify-between">
+            <Text className="text-title text-pear-text">Studio</Text>
+            <Pressable onPress={() => router.push('/search')} className="p-2">
+              <Feather name="search" color={colors.text} size={18} />
+            </Pressable>
+          </View>
           <Text className="text-caption text-pear-text-muted mt-1">
             {identity ? `Channel: ${identity.name}` : 'No identity - create one in Settings'}
           </Text>

@@ -1320,6 +1320,28 @@ rpc.onListDevices(async (req: any) => {
   return { devices: res.devices || [] };
 });
 
+rpc.onGlobalSearchVideos(async (req: any) => {
+  console.log('[Worker] globalSearchVideos called with:', JSON.stringify(req));
+  try {
+    const rawResults = await api.globalSearchVideos(req.query, { topK: req.topK || 20 });
+    console.log('[Worker] globalSearchVideos got', rawResults.length, 'raw results');
+    // Convert results to match the encoding schema (score and metadata as strings)
+    const results = rawResults.map((r: any) => ({
+      id: String(r.id || ''),
+      score: r.score != null ? String(r.score) : null,
+      metadata: r.metadata ? JSON.stringify(r.metadata) : null
+    }));
+    console.log('[Worker] globalSearchVideos returning', results.length, 'results');
+    if (results.length > 0) {
+      console.log('[Worker] first result:', JSON.stringify(results[0]));
+    }
+    return { results };
+  } catch (err: any) {
+    console.error('[Worker] globalSearchVideos error:', err?.message || err);
+    return { results: [] };
+  }
+});
+
 rpc.onGetBlobServerPort(async () => ({ port: getBlobPort() }));
 
 // Desktop-specific file pickers

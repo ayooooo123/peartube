@@ -43,7 +43,25 @@ export class VideoStatsTracker {
    * @returns {string}
    */
   getKey(driveKey, videoPath) {
-    return `${driveKey}:${videoPath}`;
+    const normalized = this.normalizeVideoId(videoPath);
+    const suffix = normalized || videoPath || '';
+    return `${driveKey}:${suffix}`;
+  }
+
+  /**
+   * Normalize a video identifier for stats keys.
+   * Accepts id or path variants like /videos/<id>.mp4 or videos/<id>.mp4.
+   * @param {string} videoPath
+   * @returns {string}
+   */
+  normalizeVideoId(videoPath) {
+    if (!videoPath) return '';
+    const raw = String(videoPath);
+    const cleaned = raw.split('?')[0].split('#')[0];
+    const match = cleaned.match(/(?:^|\/)videos\/([^.\/]+)(?:\.[^\/]+)?$/);
+    if (match?.[1]) return match[1];
+    const base = cleaned.split('/').pop() || cleaned;
+    return base.replace(/\.[^./]+$/, '');
   }
 
   /**

@@ -441,6 +441,14 @@ export const rpc = {
   async getReactions(req: { channelKey: string; videoId: string; authorChannelKey?: string | null; publicBeeKey?: string | null }): Promise<{ success: boolean; counts: Array<{ reactionType: string; count: number }>; userReaction?: string | null; error?: string | null }> {
     return ensureRPC().getReactions(req);
   },
+
+  // Search
+  async globalSearchVideos(queryOrReq: string | { query: string; topK?: number }, topK?: number): Promise<{ results: Array<{ id: string; score: number; metadata: any }> }> {
+    const req = typeof queryOrReq === 'string'
+      ? { query: queryOrReq, topK: topK || 20 }
+      : queryOrReq;
+    return ensureRPC().globalSearchVideos(req);
+  },
 };
 
 export type RPCClient = typeof rpc;

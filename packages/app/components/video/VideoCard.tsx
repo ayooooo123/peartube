@@ -8,14 +8,20 @@ import { ThumbnailImage } from './ThumbnailImage'
 export interface VideoData {
   id: string
   title: string
-  path: string
-  size: number
-  uploadedAt: number
-  channelKey: string
+  path?: string
+  size?: number
+  uploadedAt?: number
+  createdAt?: number
+  channelKey?: string
+  driveKey?: string
+  publicBeeKey?: string | null
   thumbnailUrl?: string | null
+  thumbnail?: string | null
   duration?: number
   description?: string
   mimeType?: string
+  category?: string
+  score?: number  // Search relevance score
   channel?: {
     name: string
     avatarUrl?: string
@@ -65,9 +71,10 @@ function getChannelInitial(name?: string, key?: string): string {
 }
 
 export function VideoCard({ video, onPress, showChannelInfo = true }: VideoCardProps) {
-  const channelName = video.channel?.name || `Channel ${video.channelKey?.slice(0, 8) || 'Unknown'}`
-  const channelInitial = getChannelInitial(video.channel?.name, video.channelKey)
-  const timeAgo = formatTimeAgo(video.uploadedAt)
+  const channelKey = video.channelKey || video.driveKey
+  const channelName = video.channel?.name || `Channel ${channelKey?.slice(0, 8) || 'Unknown'}`
+  const channelInitial = getChannelInitial(video.channel?.name, channelKey)
+  const timeAgo = formatTimeAgo(video.uploadedAt || video.createdAt)
 
   return (
     <Pressable
@@ -79,7 +86,7 @@ export function VideoCard({ video, onPress, showChannelInfo = true }: VideoCardP
     >
       {/* Thumbnail */}
       <ThumbnailImage
-        thumbnailUrl={video.thumbnailUrl}
+        thumbnailUrl={video.thumbnailUrl || video.thumbnail}
         duration={video.duration}
         channelInitial={channelInitial}
       />

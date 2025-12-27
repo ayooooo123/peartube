@@ -1155,6 +1155,7 @@ export function VideoPlayerOverlay() {
             <div style={{ ...desktopStyles.videoWrapper, width: desktopVideoWidth, height: desktopVideoHeight }}>
               {videoUrl ? (
                 <video
+                  key={currentVideo?.id || videoUrl}
                   src={videoUrl}
                   controls
                   autoPlay
@@ -1181,6 +1182,44 @@ export function VideoPlayerOverlay() {
             {/* Video info */}
             <div style={desktopStyles.videoInfo}>
               <h1 style={desktopStyles.title}>{currentVideo.title}</h1>
+
+              {/* P2P Stats Bar - matching mobile design */}
+              <div style={desktopStyles.p2pStatsBar}>
+                {/* Main stats row */}
+                <div style={desktopStyles.p2pStatsRow}>
+                  <div style={desktopStyles.p2pStatItem}>
+                    <div style={{
+                      ...desktopStyles.statusDot,
+                      backgroundColor: videoStats?.isComplete ? '#4ade80' : videoStats?.status === 'downloading' ? '#fbbf24' : '#6b7280'
+                    }} />
+                    <span style={{
+                      ...desktopStyles.statusLabel,
+                      color: videoStats?.isComplete ? '#4ade80' : videoStats?.status === 'downloading' ? '#fbbf24' : '#6b7280'
+                    }}>
+                      {videoStats?.isComplete ? 'Cached' : videoStats?.status === 'downloading' ? 'Downloading' : 'Connecting'}
+                    </span>
+                  </div>
+                  <span style={desktopStyles.p2pStatText}>{videoStats?.peerCount ?? 0} peers</span>
+                  <span style={desktopStyles.p2pStatSpeed}>↓ {Number(videoStats?.speedMBps ?? 0).toFixed(2)} MB/s</span>
+                  <span style={desktopStyles.p2pStatSpeedUp}>↑ {Number(videoStats?.uploadSpeedMBps ?? 0).toFixed(2)} MB/s</span>
+                </div>
+                {/* Details row */}
+                <div style={desktopStyles.p2pStatsRowSecondary}>
+                  <span style={desktopStyles.p2pStatDetail}>
+                    {formatSize(videoStats?.downloadedBytes || 0)} / {formatSize(videoStats?.totalBytes || 0)}
+                  </span>
+                  <span style={desktopStyles.p2pStatDetail}>
+                    {videoStats?.downloadedBlocks || 0} / {videoStats?.totalBlocks || 0} blocks
+                  </span>
+                  <span style={{
+                    ...desktopStyles.p2pStatProgress,
+                    color: videoStats?.isComplete ? '#4ade80' : colors.text
+                  }}>
+                    {videoStats?.progress ?? 0}%
+                  </span>
+                </div>
+              </div>
+
               <div style={desktopStyles.meta}>
                 <span>{formatTimeAgo(currentVideo.uploadedAt)}</span>
                 <span style={desktopStyles.dot}>•</span>
@@ -1194,11 +1233,34 @@ export function VideoPlayerOverlay() {
                 </div>
                 <div style={desktopStyles.channelInfo}>
                   <span style={desktopStyles.channelName}>{channelName}</span>
+                  <span style={desktopStyles.channelKey}>{currentVideo.channelKey?.slice(0, 16)}...</span>
                 </div>
               </div>
 
-              {/* Action buttons */}
+              {/* Action buttons - Like, Dislike, Download */}
               <div style={desktopStyles.actions}>
+                <button
+                  onClick={() => toggleReaction('like')}
+                  style={{
+                    ...desktopStyles.reactionButton,
+                    backgroundColor: userReaction === 'like' ? colors.primary : colors.bgSecondary,
+                  }}
+                >
+                  <span style={{ color: userReaction === 'like' ? '#fff' : colors.text }}>
+                    Like ({reactions.like || 0})
+                  </span>
+                </button>
+                <button
+                  onClick={() => toggleReaction('dislike')}
+                  style={{
+                    ...desktopStyles.reactionButton,
+                    backgroundColor: userReaction === 'dislike' ? colors.textSecondary : colors.bgSecondary,
+                  }}
+                >
+                  <span style={{ color: userReaction === 'dislike' ? '#fff' : colors.text }}>
+                    Dislike ({reactions.dislike || 0})
+                  </span>
+                </button>
                 <button
                   onClick={isDownloaded ? undefined : handleDownload}
                   disabled={isDownloaded || isDownloading}
@@ -1208,11 +1270,7 @@ export function VideoPlayerOverlay() {
                     cursor: isDownloaded ? 'default' : 'pointer',
                   }}
                 >
-                  {isDownloaded ? (
-                    <Feather name="check" color={colors.primary} size={20} />
-                  ) : (
-                    <Feather name="download" color={colors.text} size={20} />
-                  )}
+                  <Feather name={isDownloaded ? 'check' : 'download'} color={isDownloaded ? colors.primary : colors.text} size={18} />
                   <span style={desktopStyles.actionLabel}>
                     {isDownloaded ? 'Downloaded' : isDownloading ? 'Downloading...' : 'Download'}
                   </span>
@@ -1225,6 +1283,74 @@ export function VideoPlayerOverlay() {
                   <p style={desktopStyles.descriptionText}>{currentVideo.description}</p>
                 </div>
               )}
+
+              {/* Comments Section */}
+              <div style={desktopStyles.commentsSection}>
+                <div style={desktopStyles.commentsHeader}>
+                  <h3 style={desktopStyles.commentsTitle}>
+                    {displayComments.length > 0 ? `${displayComments.length} Comment${displayComments.length !== 1 ? 's' : ''}` : 'Comments'}
+                  </h3>
+                  <button onClick={refreshComments} disabled={refreshingComments} style={desktopStyles.refreshButton}>
+                    <Feather name="rotate-ccw" color={colors.primary} size={14} />
+                    <span>{refreshingComments ? 'Refreshing...' : 'Refresh'}</span>
+                  </button>
+                </div>
+
+                {/* Comment composer */}
+                <div style={desktopStyles.commentComposer}>
+                  <input
+                    type="text"
+                    value={commentText}
+                    onChange={(e) => setCommentText(e.target.value)}
+                    placeholder="Add a comment..."
+                    style={desktopStyles.commentInput}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && commentText.trim()) postComment() }}
+                  />
+                  <button
+                    onClick={postComment}
+                    disabled={postingComment || !commentText.trim()}
+                    style={{ ...desktopStyles.postButton, opacity: (postingComment || !commentText.trim()) ? 0.5 : 1 }}
+                  >
+                    {postingComment ? 'Posting...' : 'Post'}
+                  </button>
+                </div>
+
+                {/* Comments list */}
+                <div style={desktopStyles.commentsList}>
+                  {commentsLoading && displayComments.length === 0 ? (
+                    <div style={{ padding: 20, textAlign: 'center' as const }}>
+                      <ActivityIndicator color={colors.primary} />
+                    </div>
+                  ) : displayComments.length === 0 ? (
+                    <p style={desktopStyles.noComments}>No comments yet. Be the first to comment!</p>
+                  ) : (
+                    organizedComments.map((c: any) => (
+                      <div key={c.commentId} style={desktopStyles.commentItem}>
+                        <div style={desktopStyles.commentHeader}>
+                          <span style={desktopStyles.commentAuthor}>
+                            {(c.authorKeyHex || '').slice(0, 12)}…
+                          </span>
+                          <span style={desktopStyles.commentTime}>
+                            {formatTimeAgo(c.timestamp || Date.now())}
+                          </span>
+                          {c.isAdmin && <span style={desktopStyles.adminBadge}>Admin</span>}
+                        </div>
+                        <p style={desktopStyles.commentText}>{c.content}</p>
+                        {c.replies?.length > 0 && (
+                          <div style={desktopStyles.replies}>
+                            {c.replies.map((r: any) => (
+                              <div key={r.commentId} style={desktopStyles.replyItem}>
+                                <span style={desktopStyles.commentAuthor}>{(r.authorKeyHex || '').slice(0, 12)}…</span>
+                                <p style={desktopStyles.commentText}>{r.content}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1272,6 +1398,7 @@ export function VideoPlayerOverlay() {
       )}
       {Platform.OS === 'web' && videoUrl && (
         <video
+          key={currentVideo?.id || videoUrl}
           src={videoUrl}
           controls
           autoPlay
@@ -2541,6 +2668,10 @@ const desktopStyles: Record<string, React.CSSProperties> = {
     fontWeight: '500',
     color: colors.text,
   },
+  channelKey: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
   actions: {
     display: 'flex',
     gap: 12,
@@ -2560,6 +2691,17 @@ const desktopStyles: Record<string, React.CSSProperties> = {
   },
   actionLabel: {
     color: colors.text,
+  },
+  reactionButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 16px',
+    border: 'none',
+    borderRadius: 20,
+    fontSize: 14,
+    fontWeight: '500',
+    cursor: 'pointer',
   },
   description: {
     paddingTop: 16,
@@ -2584,5 +2726,187 @@ const desktopStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // P2P Stats styles (old simplified version)
+  statsSection: {
+    display: 'flex',
+    gap: 24,
+    padding: '12px 0',
+    borderTop: `1px solid ${colors.border}`,
+  },
+  statItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  statText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  // P2P Stats Bar - matching mobile design
+  p2pStatsBar: {
+    backgroundColor: colors.bgSecondary,
+    borderRadius: 12,
+    padding: 16,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  p2pStatsRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+    flexWrap: 'wrap',
+  },
+  p2pStatItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  p2pStatText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  p2pStatSpeed: {
+    fontSize: 14,
+    color: '#4ade80',
+  },
+  p2pStatSpeedUp: {
+    fontSize: 14,
+    color: '#fbbf24',
+  },
+  p2pStatsRowSecondary: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+    flexWrap: 'wrap',
+  },
+  p2pStatDetail: {
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  p2pStatProgress: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  // Comments styles
+  commentsSection: {
+    paddingTop: 16,
+    borderTop: `1px solid ${colors.border}`,
+  },
+  commentsHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  commentsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.text,
+    margin: 0,
+  },
+  refreshButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 12px',
+    backgroundColor: 'transparent',
+    border: 'none',
+    color: colors.primary,
+    fontSize: 13,
+    cursor: 'pointer',
+  },
+  commentComposer: {
+    display: 'flex',
+    gap: 12,
+    marginBottom: 16,
+  },
+  commentInput: {
+    flex: 1,
+    padding: '10px 14px',
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 8,
+    color: colors.text,
+    fontSize: 14,
+    outline: 'none',
+  },
+  postButton: {
+    padding: '10px 20px',
+    backgroundColor: colors.primary,
+    border: 'none',
+    borderRadius: 8,
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '500',
+    cursor: 'pointer',
+  },
+  commentsList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 16,
+  },
+  noComments: {
+    color: colors.textMuted,
+    fontSize: 14,
+    textAlign: 'center',
+    padding: 20,
+    margin: 0,
+  },
+  commentItem: {
+    padding: 12,
+    backgroundColor: colors.bgSecondary,
+    borderRadius: 8,
+  },
+  commentHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  commentAuthor: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: colors.text,
+  },
+  commentTime: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  adminBadge: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.primary,
+    backgroundColor: `${colors.primary}22`,
+    padding: '2px 6px',
+    borderRadius: 4,
+  },
+  commentText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    lineHeight: 1.5,
+    margin: 0,
+  },
+  replies: {
+    marginTop: 12,
+    marginLeft: 16,
+    paddingLeft: 12,
+    borderLeft: `2px solid ${colors.border}`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  replyItem: {
+    padding: 8,
   },
 }

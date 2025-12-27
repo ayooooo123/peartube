@@ -547,11 +547,16 @@ export default function HomeScreen() {
         <View className="bg-pear-bg border-b border-pear-border" style={{ paddingTop: insets.top }}>
           <View className="flex-row px-5 py-4 items-center justify-between">
             <Text className="text-title text-pear-text">PearTube</Text>
-            {identity && (
-              <View className="bg-pear-bg-card px-3 py-1.5 rounded-full">
-                <Text className="text-caption text-pear-text-secondary">{identity.name}</Text>
-              </View>
-            )}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <Pressable onPress={() => router.push('/search')} className="p-2">
+                <Feather name="search" color={colors.text} size={18} />
+              </Pressable>
+              {identity && (
+                <View className="bg-pear-bg-card px-3 py-1.5 rounded-full">
+                  <Text className="text-caption text-pear-text-secondary">{identity.name}</Text>
+                </View>
+              )}
+            </View>
           </View>
         </View>
       )}

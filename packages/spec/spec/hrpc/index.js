@@ -66,6 +66,8 @@ const methods = new Map([
   [28, '@peartube/retry-sync-channel'],
   ['@peartube/search-videos', 29],
   [29, '@peartube/search-videos'],
+  ['@peartube/global-search-videos', 70],
+  [70, '@peartube/global-search-videos'],
   ['@peartube/index-video-vectors', 30],
   [30, '@peartube/index-video-vectors'],
   ['@peartube/add-comment', 31],
@@ -175,6 +177,7 @@ class HRPC {
       ['@peartube/list-devices', getEncoding('@peartube/list-devices-request')],
       ['@peartube/retry-sync-channel', getEncoding('@peartube/retry-sync-channel-request')],
       ['@peartube/search-videos', getEncoding('@peartube/search-videos-request')],
+      ['@peartube/global-search-videos', getEncoding('@peartube/global-search-videos-request')],
       ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-request')],
       ['@peartube/add-comment', getEncoding('@peartube/add-comment-request')],
       ['@peartube/list-comments', getEncoding('@peartube/list-comments-request')],
@@ -243,6 +246,7 @@ class HRPC {
       ['@peartube/list-devices', getEncoding('@peartube/list-devices-response')],
       ['@peartube/retry-sync-channel', getEncoding('@peartube/retry-sync-channel-response')],
       ['@peartube/search-videos', getEncoding('@peartube/search-videos-response')],
+      ['@peartube/global-search-videos', getEncoding('@peartube/global-search-videos-response')],
       ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-response')],
       ['@peartube/add-comment', getEncoding('@peartube/add-comment-response')],
       ['@peartube/list-comments', getEncoding('@peartube/list-comments-response')],
@@ -484,6 +488,10 @@ class HRPC {
 
   async searchVideos(args) {
     return this._call('@peartube/search-videos', args)
+  }
+
+  async globalSearchVideos(args) {
+    return this._call('@peartube/global-search-videos', args)
   }
 
   async indexVideoVectors(args) {
@@ -748,6 +756,10 @@ class HRPC {
 
   onSearchVideos(responseFn) {
     this._handlers['@peartube/search-videos'] = responseFn
+  }
+
+  onGlobalSearchVideos(responseFn) {
+    this._handlers['@peartube/global-search-videos'] = responseFn
   }
 
   onIndexVideoVectors(responseFn) {

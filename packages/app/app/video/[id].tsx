@@ -285,9 +285,11 @@ export default function VideoPlayerScreen() {
     onError,
   } = useVideoPlayerContext()
 
-  // Parse video data from params (JSON encoded)
+  // Parse video data from params (JSON encoded or URL params)
   const params = useLocalSearchParams()
-  const videoData = params.videoData ? JSON.parse(params.videoData as string) : null
+  const channelKeyParam = params.channel as string | undefined
+  const publicBeeParam = params.publicBee as string | undefined
+  const videoDataParam = params.videoData ? JSON.parse(params.videoData as string) : null
   const fromMiniPlayer = params.fromMiniPlayer === 'true'
 
   // Local UI state only
@@ -295,7 +297,41 @@ export default function VideoPlayerScreen() {
   const [channelMeta, setChannelMeta] = useState<{ name?: string } | null>(null)
   const [videoLoaded, setVideoLoaded] = useState(false)
   const [localStats, setLocalStats] = useState<VideoStats | null>(null)
+  const [videoData, setVideoData] = useState<any>(videoDataParam)
+  const [loadingMeta, setLoadingMeta] = useState(!videoDataParam && !!channelKeyParam)
   const statsPollingRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Fetch video metadata if not provided (YouTube-style: load from ID)
+  useEffect(() => {
+    if (videoDataParam || !channelKeyParam || !id || !rpc) return
+
+    const fetchVideoData = async () => {
+      console.log('[VideoPlayer] Fetching video data for:', id, 'from channel:', channelKeyParam)
+      setLoadingMeta(true)
+      try {
+        const result = await rpc.getVideoData({
+          channelKey: channelKeyParam,
+          videoId: id,
+          publicBeeKey: publicBeeParam || undefined
+        })
+        if (result) {
+          console.log('[VideoPlayer] Got video data:', result.title)
+          setVideoData({
+            id,
+            channelKey: channelKeyParam,
+            publicBeeKey: publicBeeParam,
+            ...result
+          })
+        }
+      } catch (err) {
+        console.error('[VideoPlayer] Failed to fetch video data:', err)
+      } finally {
+        setLoadingMeta(false)
+      }
+    }
+
+    fetchVideoData()
+  }, [id, channelKeyParam, publicBeeParam, videoDataParam, rpc])
 
   // Intercept back navigation (swipe gesture, back button) to minimize instead of close
   useEffect(() => {
@@ -306,18 +342,18 @@ export default function VideoPlayerScreen() {
     return unsubscribe
   }, [navigation, minimizePlayer])
 
-  // Load video on mount (only if not coming from mini player which already has video loaded)
+  // Load video when videoData is available (either from params or fetched)
   useEffect(() => {
-    if (videoData && !fromMiniPlayer && !videoLoaded) {
+    if (!videoData || loadingMeta) return
+
+    if (!fromMiniPlayer && !videoLoaded) {
       loadVideo()
       setVideoLoaded(true)
-    } else if (videoData && fromMiniPlayer && (Platform.OS !== 'web' || isPear)) {
+    } else if (fromMiniPlayer && (Platform.OS !== 'web' || isPear)) {
       // Coming from mini player - start polling for stats
       startStatsPolling()
     }
-    if (videoData) {
-      loadChannelInfo()
-    }
+    loadChannelInfo()
 
     return () => {
       if (statsPollingRef.current) {
@@ -325,7 +361,7 @@ export default function VideoPlayerScreen() {
         statsPollingRef.current = null
       }
     }
-  }, [videoData, fromMiniPlayer, isPear])
+  }, [videoData, loadingMeta, fromMiniPlayer, isPear, videoLoaded])
 
   const loadVideo = async () => {
     if (!videoData || !rpc) return
@@ -419,8 +455,22 @@ export default function VideoPlayerScreen() {
     router.back()
   }
 
+  const goSearch = () => {
+    router.push('/search')
+  }
+
   const channelName = channelMeta?.name || videoData?.channel?.name || `Channel ${videoData?.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
+
+  // Show loading while fetching video metadata
+  if (loadingMeta) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top, justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator color={colors.primary} size="large" />
+        <Text style={{ color: colors.textSecondary, marginTop: 16 }}>Loading video...</Text>
+      </View>
+    )
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -429,6 +479,9 @@ export default function VideoPlayerScreen() {
         {/* Minimize button overlay (chevron down) */}
         <Pressable style={styles.backButton} onPress={goBack}>
           <Feather name="chevron-down" color="#fff" size={28} />
+        </Pressable>
+        <Pressable style={styles.searchButton} onPress={goSearch}>
+          <Feather name="search" color="#fff" size={22} />
         </Pressable>
 
         <View style={[styles.player, { height: videoHeight }]}>
@@ -527,6 +580,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 12,
     left: 12,
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchButton: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
     zIndex: 10,
     width: 40,
     height: 40,

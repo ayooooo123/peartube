@@ -67,6 +67,48 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     } catch {}
   }
 
+  /**
+   * Ensure SemanticFinder is initialized with persistence
+   * YouTube-Fast: loads persisted index on first use for instant search
+   */
+  async function ensureSemanticFinder(context) {
+    if (!context.semanticFinder) {
+      context.semanticFinder = new SemanticFinder({ metaDb: context.metaDb })
+      await context.semanticFinder.init()
+      await context.semanticFinder.loadIndex()
+      console.log('[API] SemanticFinder initialized, index size:', context.semanticFinder.globalSize())
+    }
+    return context.semanticFinder
+  }
+
+  /**
+   * Background index videos for search (non-blocking)
+   * YouTube-Fast: proactively indexes videos when they're listed
+   */
+  function backgroundIndexVideos(videos, channelKey) {
+    if (!videos || videos.length === 0) return
+
+    // Run indexing in background (don't await)
+    ;(async () => {
+      try {
+        const finder = await ensureSemanticFinder(ctx)
+        let indexed = 0
+        for (const video of videos) {
+          if (!finder.hasVideo(video.id)) {
+            await finder.indexFromMetadata(video, channelKey)
+            indexed++
+          }
+        }
+        if (indexed > 0) {
+          console.log('[API] Background indexed', indexed, 'videos from channel:', channelKey?.slice(0, 16))
+        }
+      } catch (err) {
+        // Silently fail - indexing is best-effort
+        console.log('[API] Background indexing error:', err?.message)
+      }
+    })()
+  }
+
   // ------------------------------------------------------------
   // Lightweight in-memory caching (worker-local)
   // ------------------------------------------------------------
@@ -336,6 +378,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             console.log('[API] LIST_VIDEOS: PublicBee returned', videos?.length, 'videos')
             const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
             listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+            // YouTube-Fast: background index for search
+            backgroundIndexVideos(result, driveKey)
             return cloneArrayOfObjects(result)
           } catch (err) {
             console.log('[API] LIST_VIDEOS: PublicBee fast path failed:', err.message, '- trying channel directly')
@@ -346,6 +390,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               console.log('[API] LIST_VIDEOS: channel fallback returned', videos?.length, 'videos')
               const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
               listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+              // YouTube-Fast: background index for search
+              backgroundIndexVideos(result, driveKey)
               return cloneArrayOfObjects(result)
             } catch (channelErr) {
               console.log('[API] LIST_VIDEOS: channel fallback also failed:', channelErr.message)
@@ -368,6 +414,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           console.log('[API] LIST_VIDEOS returning', videos?.length, 'videos from channel')
           const result = (videos || []).map(v => ({ ...v, channelKey: driveKey }))
           listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+          // YouTube-Fast: background index for search
+          backgroundIndexVideos(result, driveKey)
           return cloneArrayOfObjects(result)
         }
 
@@ -390,6 +438,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           const result = videos.sort((a, b) => b.uploadedAt - a.uploadedAt);
           console.log('[API] Found', result.length, 'videos');
           listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+          // YouTube-Fast: background index for search
+          backgroundIndexVideos(result, driveKey)
           return cloneArrayOfObjects(result)
         } catch (e) {
           console.log('[API] Error listing videos:', e.message);
@@ -404,6 +454,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               console.log('[API] LIST_VIDEOS: multi-writer retry returned', mwVideos?.length || 0, 'videos')
               const result = (mwVideos || []).map(v => ({ ...v, channelKey: driveKey }))
               listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+              // YouTube-Fast: background index for search
+              backgroundIndexVideos(result, driveKey)
               return cloneArrayOfObjects(result)
             }
           }
@@ -1735,11 +1787,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async searchVideos(channelKey, query, options = {}) {
       const { topK = 10, federated = true } = options
 
-      // Initialize semantic finder if not already done
-      if (!ctx.semanticFinder) {
-        ctx.semanticFinder = new SemanticFinder()
-        await ctx.semanticFinder.init()
-      }
+      // Ensure semantic finder is initialized with persistence
+      await ensureSemanticFinder(ctx)
 
       // Initialize federated search if not already done
       if (!ctx.federatedSearch && ctx.swarm) {
@@ -1757,7 +1806,42 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     },
 
     /**
-     * Index a video for semantic search
+     * Global search across ALL discovered channels (YouTube-Fast)
+     * Uses pre-built global index for O(1) search instead of iterating channels
+     * @param {string} query - Search query
+     * @param {Object} [options]
+     * @param {number} [options.topK=50] - Max results to return
+     * @returns {Promise<Array<{id: string, score: number, metadata: any}>>}
+     */
+    async globalSearchVideos(query, options = {}) {
+      const { topK = 50 } = options
+
+      console.log('[API] globalSearchVideos:', query, 'topK:', topK)
+
+      // Ensure semantic finder is initialized with persistence
+      const finder = await ensureSemanticFinder(ctx)
+
+      // Best-effort: import replicated vectors from any loaded channels.
+      if (ctx.channels && ctx.channels.size > 0) {
+        ;(async () => {
+          for (const [channelKey, channel] of ctx.channels.entries()) {
+            try {
+              await finder.ensureGlobalIndexedFromChannelView(channelKey, channel)
+            } catch {}
+          }
+        })()
+      }
+
+      // Fast global search - O(1) not O(channels)
+      const results = await finder.globalSearch(query, topK)
+      console.log('[API] globalSearchVideos: found', results.length, 'results in global index')
+
+      return results
+    },
+
+    /**
+     * Index a video for semantic search (YouTube-Fast)
+     * Uses global index with persistence for instant search
      * @param {string} channelKey
      * @param {string} videoId
      * @returns {Promise<{success: boolean}>}
@@ -1770,36 +1854,36 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           return { success: false, error: 'Video not found' }
         }
 
-        // Initialize semantic finder if not already done
-        if (!ctx.semanticFinder) {
-          ctx.semanticFinder = new SemanticFinder()
-          await ctx.semanticFinder.init()
+        // Ensure semantic finder is initialized with persistence
+        const finder = await ensureSemanticFinder(ctx)
+
+        // Skip if already indexed
+        if (finder.hasVideo(videoId)) {
+          return { success: true, alreadyIndexed: true }
         }
 
-        // Index the video
-        await ctx.semanticFinder.indexVideo(
-          videoId,
-          video.title || '',
-          video.description || '',
-          { channelKey, ...video }
-        )
+        // Index to global index (YouTube-Fast)
+        await finder.indexFromMetadata({ ...video, id: videoId }, channelKey)
 
-        // Store vector index op in Autobase (for replication)
+        // Store vector index op in Autobase (for replication to other peers)
         const isMW = await isMultiWriterChannelKey(channelKey)
         if (isMW) {
-        const channel = await loadChannel(ctx, channelKey)
-        const embedding = await ctx.semanticFinder.embed(`${video.title || ''} ${video.description || ''}`)
-        const vectorBase64 = b4a.toString(Buffer.from(embedding.buffer), 'base64')
+          const channel = await loadChannel(ctx, channelKey)
+          const embedding = await finder.embed(`${video.title || ''} ${video.description || ''}`)
+          const vectorBase64 = b4a.toString(
+            b4a.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
+            'base64'
+          )
 
           await channel.base.append({
-          type: 'add-vector-index',
-          schemaVersion: 1,
-          videoId,
-          vector: vectorBase64,
-          text: `${video.title || ''} ${video.description || ''}`,
-          metadata: JSON.stringify({ channelKey, title: video.title }),
-          indexedAt: Date.now()
-        })
+            type: 'add-vector-index',
+            schemaVersion: 1,
+            videoId,
+            vector: vectorBase64,
+            text: `${video.title || ''} ${video.description || ''}`,
+            metadata: JSON.stringify({ channelKey, title: video.title }),
+            indexedAt: Date.now()
+          })
         }
 
         return { success: true }
@@ -2380,11 +2464,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           return { success: false, recommendations: [], error: 'Watch logger not initialized' }
         }
 
-        // Initialize semantic finder if needed
-        if (!ctx.semanticFinder) {
-          ctx.semanticFinder = new SemanticFinder()
-          await ctx.semanticFinder.init()
-        }
+        // Ensure semantic finder is initialized with persistence
+        await ensureSemanticFinder(ctx)
 
         // Initialize recommender
         const recommender = new Recommender(channel, ctx.semanticFinder, channel.watchLogger)
@@ -2413,11 +2494,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
 
         const channel = await loadChannel(ctx, channelKey)
 
-        // Initialize semantic finder if needed
-        if (!ctx.semanticFinder) {
-          ctx.semanticFinder = new SemanticFinder()
-          await ctx.semanticFinder.init()
-        }
+        // Ensure semantic finder is initialized with persistence
+        await ensureSemanticFinder(ctx)
 
         // Initialize recommender (watch logger may be null, that's ok)
         const watchLogger = channel.watchLogger || null

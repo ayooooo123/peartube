@@ -20,6 +20,24 @@ platform :ios, podfile_properties['ios.deploymentTarget'] || '15.1'
 
 prepare_react_native_project!
 
+def ensure_bare_xcframeworks!
+  frameworks_dir = File.expand_path('../Frameworks', __dir__)
+  has_frameworks =
+    Dir.exist?(frameworks_dir) &&
+    Dir.children(frameworks_dir).any? { |name| name.end_with?('.xcframework') }
+  return if has_frameworks
+
+  script = File.expand_path('../scripts/create-xcframeworks.sh', __dir__)
+  Pod::UI.puts("BareAddons XCFrameworks missing; generating via #{script}")
+  unless system('bash', script)
+    raise 'Failed to generate BareAddons XCFrameworks'
+  end
+end
+
+pre_install do |installer|
+  ensure_bare_xcframeworks!
+end
+
 target 'PearTube' do
   use_expo_modules!
 

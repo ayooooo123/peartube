@@ -8,6 +8,18 @@ MOBILE_DIR="$(dirname "$SCRIPT_DIR")"
 DEVICE_DIR="$MOBILE_DIR/prebuilds"
 SIM_DIR="$MOBILE_DIR/prebuilds-sim"
 OUTPUT_DIR="$MOBILE_DIR/Frameworks"
+BARE_KIT_ADDONS_DIR="$MOBILE_DIR/node_modules/react-native-bare-kit/ios/addons"
+
+# Build a skip list for frameworks already bundled by react-native-bare-kit.
+declare -A SKIP_FRAMEWORKS
+if [ -d "$BARE_KIT_ADDONS_DIR" ]; then
+    for addon_path in "$BARE_KIT_ADDONS_DIR"/*.xcframework; do
+        if [ -d "$addon_path" ]; then
+            addon_name=$(basename "$addon_path" .xcframework)
+            SKIP_FRAMEWORKS["$addon_name"]=1
+        fi
+    done
+fi
 
 # Clean output
 rm -rf "$OUTPUT_DIR"
@@ -22,6 +34,11 @@ for framework_path in "$DEVICE_DIR"/*.framework; do
         # Get the binary name (same as framework name without .framework)
         device_binary="$DEVICE_DIR/$framework_name/$name_without_ext"
         sim_binary="$SIM_DIR/$framework_name/$name_without_ext"
+
+        if [ -n "${SKIP_FRAMEWORKS[$name_without_ext]:-}" ]; then
+            echo "Skipping $name_without_ext (already provided by react-native-bare-kit)"
+            continue
+        fi
 
         if [ -f "$device_binary" ] && [ -f "$sim_binary" ]; then
             echo "Creating XCFramework for $name_without_ext..."

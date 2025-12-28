@@ -18,6 +18,7 @@
     "bare-events": "^2.8.1",
     "bare-ffmpeg": "^1.0.0",
     "bare-fs": "^4.5.0",
+    "bare-mpv": "file:../../bare-mpv",
     "bare-http1": "^4.1.0",
     "bare-os": "^3.0.0",
     "bare-path": "^3.0.0",

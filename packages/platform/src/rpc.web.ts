@@ -449,6 +449,43 @@ export const rpc = {
       : queryOrReq;
     return ensureRPC().globalSearchVideos(req);
   },
+
+  // MPV Player (Universal Codec Support)
+  async mpvAvailable(): Promise<{ available: boolean }> {
+    return ensureRPC().mpvAvailable({});
+  },
+
+  async mpvCreate(req: { width?: number; height?: number }): Promise<{ success: boolean; playerId?: string; error?: string }> {
+    return ensureRPC().mpvCreate(req);
+  },
+
+  async mpvLoadFile(req: { playerId: string; url: string }): Promise<{ success: boolean; error?: string }> {
+    return ensureRPC().mpvLoadFile(req);
+  },
+
+  async mpvPlay(req: { playerId: string }): Promise<{ success: boolean; error?: string }> {
+    return ensureRPC().mpvPlay(req);
+  },
+
+  async mpvPause(req: { playerId: string }): Promise<{ success: boolean; error?: string }> {
+    return ensureRPC().mpvPause(req);
+  },
+
+  async mpvSeek(req: { playerId: string; time: number }): Promise<{ success: boolean; error?: string }> {
+    return ensureRPC().mpvSeek(req);
+  },
+
+  async mpvGetState(req: { playerId: string }): Promise<{ success: boolean; currentTime?: number; duration?: number; paused?: boolean; error?: string }> {
+    return ensureRPC().mpvGetState(req);
+  },
+
+  async mpvRenderFrame(req: { playerId: string }): Promise<{ success: boolean; hasFrame?: boolean; width?: number; height?: number; frameData?: string; error?: string }> {
+    return ensureRPC().mpvRenderFrame(req);
+  },
+
+  async mpvDestroy(req: { playerId: string }): Promise<{ success: boolean; error?: string }> {
+    return ensureRPC().mpvDestroy(req);
+  },
 };
 
 export type RPCClient = typeof rpc;

@@ -14,16 +14,6 @@ import { usePlatform } from '@/lib/PlatformProvider'
 // Detect Pear desktop vs mobile (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
 
-// Debug logging for Pear detection
-if (typeof window !== 'undefined') {
-  console.log('[Search] Pear detection:', {
-    'Platform.OS': Platform.OS,
-    'window.Pear': !!(window as any).Pear,
-    'window.PearWorkerClient': !!(window as any).PearWorkerClient,
-    isPear,
-  })
-}
-
 export default function SearchScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
@@ -54,16 +44,10 @@ export default function SearchScreen() {
 
   // On Pear desktop, clear any active watch hash so background playback stops.
   useEffect(() => {
-    console.log('[Search] Mount effect - isPear:', isPear, 'hash:', typeof window !== 'undefined' ? window.location.hash : 'N/A')
-    if (!isPear || typeof window === 'undefined') {
-      console.log('[Search] Skipping cleanup - isPear:', isPear)
-      return
-    }
-    console.log('[Search] Calling closeVideo and clearing hash')
+    if (!isPear || typeof window === 'undefined') return
     closeVideo()
     if (window.location.hash.startsWith('#/watch')) {
       window.location.hash = ''
-      console.log('[Search] Hash cleared')
     }
   }, [closeVideo])
 

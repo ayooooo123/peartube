@@ -25,8 +25,8 @@ async function readFileAsBase64(uri: string): Promise<string> {
   })
 }
 
-// Detect Pear desktop (web platform with PearWorkerClient)
-const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).PearWorkerClient
+// Detect Pear desktop (must match index.web.tsx detection)
+const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
 
 function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`

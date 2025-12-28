@@ -237,11 +237,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Close video completely
   const closeVideo = useCallback(() => {
-    console.log('[VideoPlayerContext] Closing video - current state:', {
-      hasVideo: !!currentVideoRef.current,
-      videoId: currentVideoRef.current?.id,
-      playerMode,
-    })
+    console.log('[VideoPlayerContext] Closing video')
     try {
       playerRef.current?.stop?.()
       playerRef.current?.pause?.()
@@ -254,8 +250,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setVideoStats(null)
     setCurrentTime(0)
     setDuration(0)
-    console.log('[VideoPlayerContext] Video closed, playerMode set to hidden')
-  }, [playerMode])
+  }, [])
 
   // Minimize to mini player - video keeps playing, just changes UI mode
   const minimizePlayer = useCallback(() => {

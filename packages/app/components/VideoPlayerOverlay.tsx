@@ -18,6 +18,9 @@ let VLCPlayer: any = null
 if (Platform.OS !== 'web') {
   VLCPlayer = require('react-native-vlc-media-player').VLCPlayer
 }
+
+// MpvPlayer for Pear Desktop (universal codec support)
+import { MpvPlayer, MpvPlayerRef } from './MpvPlayer'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -1155,18 +1158,36 @@ export function VideoPlayerOverlay() {
             {/* Video player */}
             <div style={{ ...desktopStyles.videoWrapper, width: desktopVideoWidth, height: desktopVideoHeight }}>
               {videoUrl ? (
-                <video
-                  key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-                  src={videoUrl}
-                  controls
-                  autoPlay
-                  onCanPlay={onPlaying}
-                  onPause={onPaused}
-                  onPlay={onPlaying}
-                  onEnded={onEnded}
-                  onError={onError}
-                  style={{ width: '100%', height: '100%', backgroundColor: '#000', borderRadius: 12, outline: 'none' }}
-                />
+                isPear ? (
+                  <MpvPlayer
+                    key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
+                    url={videoUrl}
+                    autoPlay
+                    onCanPlay={onPlaying}
+                    onPaused={onPaused}
+                    onPlaying={onPlaying}
+                    onEnded={onEnded}
+                    onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
+                    onProgress={(data) => onProgress?.({
+                      currentTime: data.currentTime * 1000,
+                      duration: data.duration * 1000,
+                    } as any)}
+                    style={{ width: '100%', height: '100%', borderRadius: 12 }}
+                  />
+                ) : (
+                  <video
+                    key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
+                    src={videoUrl}
+                    controls
+                    autoPlay
+                    onCanPlay={onPlaying}
+                    onPause={onPaused}
+                    onPlay={onPlaying}
+                    onEnded={onEnded}
+                    onError={onError}
+                    style={{ width: '100%', height: '100%', backgroundColor: '#000', borderRadius: 12, outline: 'none' }}
+                  />
+                )
               ) : (
                 <div style={desktopStyles.placeholder}>
                   <span style={desktopStyles.placeholderText}>{currentVideo.title.charAt(0).toUpperCase()}</span>

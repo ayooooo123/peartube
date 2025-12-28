@@ -46,6 +46,7 @@
     "@gluestack-ui/spinner": "^0.1.15",
     "@gluestack-ui/toast": "^1.0.9",
     "@legendapp/motion": "^2.5.3",
+    "bare-mpv": "file:../bare-mpv",
     "@peartube/backend": "file:../backend",
     "@peartube/core": "file:../core",
     "@peartube/platform": "file:../platform",

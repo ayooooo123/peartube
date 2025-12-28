@@ -29,5 +29,4 @@ setTimeout(() => {
   console.log('Destroying player...')
   player.destroy()
   console.log('Test complete!')
-  process.exit(0)
 }, 2000)

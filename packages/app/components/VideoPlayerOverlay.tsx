@@ -263,6 +263,7 @@ export function VideoPlayerOverlay() {
     isLoading,
     playerMode,
     videoStats,
+    playbackSession,
     playerRef,
     currentTime,
     duration,
@@ -1155,7 +1156,7 @@ export function VideoPlayerOverlay() {
             <div style={{ ...desktopStyles.videoWrapper, width: desktopVideoWidth, height: desktopVideoHeight }}>
               {videoUrl ? (
                 <video
-                  key={currentVideo?.id || videoUrl}
+                  key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
                   src={videoUrl}
                   controls
                   autoPlay
@@ -1369,7 +1370,7 @@ export function VideoPlayerOverlay() {
     <>
       {Platform.OS !== 'web' && videoUrl && VLCPlayer && (
         <VLCPlayer
-          key={currentVideo?.id || videoUrl}
+          key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
           ref={playerRef}
           source={{
             uri: videoUrl,
@@ -1398,7 +1399,7 @@ export function VideoPlayerOverlay() {
       )}
       {Platform.OS === 'web' && videoUrl && (
         <video
-          key={currentVideo?.id || videoUrl}
+          key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
           src={videoUrl}
           controls
           autoPlay

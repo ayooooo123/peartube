@@ -234,6 +234,42 @@ function WatchPageView({
   const [channel, setChannel] = useState<ChannelMeta | null>(null)
   const [videoStats, setVideoStats] = useState<any>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const watchInstanceIdRef = useRef(`watch-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  const [isActiveWatch, setIsActiveWatch] = useState(true)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const instanceId = watchInstanceIdRef.current
+    ;(window as any).__peartubeActiveWatch = instanceId
+
+    const updateActive = () => {
+      setIsActiveWatch((window as any).__peartubeActiveWatch === instanceId)
+    }
+
+    updateActive()
+    window.dispatchEvent(new Event('peartube:watch'))
+
+    const handleWatchChange = () => updateActive()
+    window.addEventListener('peartube:watch', handleWatchChange)
+    window.addEventListener('hashchange', handleWatchChange)
+    return () => {
+      window.removeEventListener('peartube:watch', handleWatchChange)
+      window.removeEventListener('hashchange', handleWatchChange)
+      if ((window as any).__peartubeActiveWatch === instanceId) {
+        delete (window as any).__peartubeActiveWatch
+        window.dispatchEvent(new Event('peartube:watch'))
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isActiveWatch) return
+    if (videoRef.current) {
+      videoRef.current.pause()
+      videoRef.current.removeAttribute('src')
+      videoRef.current.load?.()
+    }
+  }, [isActiveWatch])
 
   // Ensure the HTML video element is fully stopped when this view unmounts.
   useEffect(() => {
@@ -297,7 +333,7 @@ function WatchPageView({
 
   // Load video URL
   useEffect(() => {
-    if (!video || !rpc) return
+    if (!video || !rpc || !isActiveWatch) return
     const currentVideo = video  // Capture for async closure
 
     let cancelled = false
@@ -336,7 +372,7 @@ function WatchPageView({
 
     loadVideo()
     return () => { cancelled = true }
-  }, [channelKey, video?.path, video?.id, publicBeeKey, rpc])
+  }, [channelKey, video?.path, video?.id, publicBeeKey, rpc, isActiveWatch])
 
   // Load channel info
   useEffect(() => {
@@ -353,7 +389,7 @@ function WatchPageView({
 
   // Start prefetch and poll for video stats
   useEffect(() => {
-    if (!video || !channelKey || !rpc) return
+    if (!video || !channelKey || !rpc || !isActiveWatch) return
 
     let cancelled = false
     let interval: NodeJS.Timeout | null = null
@@ -622,7 +658,7 @@ function WatchPageView({
                 <ActivityIndicator size="large" color="#fff" />
                 <p style={{ color: '#fff', marginTop: 12 }}>Connecting to P2P network...</p>
               </div>
-            ) : (
+            ) : isActiveWatch ? (
               <video
                 key={`${channelKey}:${video.id || videoId}`}
                 ref={videoRef}
@@ -631,6 +667,11 @@ function WatchPageView({
                 autoPlay
                 style={watchStyles.video}
               />
+            ) : (
+              <div style={watchStyles.loadingOverlay}>
+                <ActivityIndicator size="large" color="#fff" />
+                <p style={{ color: '#fff', marginTop: 12 }}>Loading...</p>
+              </div>
             )}
           </div>
 

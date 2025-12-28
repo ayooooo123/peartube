@@ -7,6 +7,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
+import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 // VLC player for iOS/Android
 let VLCPlayer: any = null
@@ -263,6 +264,7 @@ export default function VideoPlayerScreen() {
   const { width: screenWidth } = useWindowDimensions()
   const videoHeight = Math.round(screenWidth * 9 / 16)
   const { rpc } = useApp()
+  const isFocused = useIsFocused()
 
   // VideoPlayerContext - SHARED player for continuous playback
   // Stats come via EVENT_VIDEO_STATS events from backend -> videoStatsEventEmitter -> context
@@ -271,6 +273,7 @@ export default function VideoPlayerScreen() {
     isPlaying,
     isLoading: loadingVideo,
     videoStats,
+    playbackSession,
     playerRef,
     playbackRate,
     minimizePlayer,
@@ -492,11 +495,20 @@ export default function VideoPlayerScreen() {
             </View>
           ) : videoUrl ? (
             Platform.OS === 'web' ? (
-              <video src={videoUrl} controls autoPlay style={{ width: '100%', height: '100%', backgroundColor: '#000' }} />
+              isFocused ? (
+                <video
+                  key={`${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
+                  src={videoUrl}
+                  controls
+                  autoPlay
+                  style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
+                />
+              ) : null
             ) : (
               <View style={{ width: screenWidth, height: videoHeight }}>
-                {VLCPlayer && (
+                {isFocused && VLCPlayer && (
                   <VLCPlayer
+                    key={`${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
                     ref={playerRef}
                     source={{ uri: videoUrl }}
                     style={{ width: screenWidth, height: videoHeight }}

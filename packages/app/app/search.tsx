@@ -11,8 +11,18 @@ import { VideoCard, VideoData } from '../components/video'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 
-// Detect Pear desktop vs mobile
-const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).PearWorkerClient
+// Detect Pear desktop vs mobile (must match index.web.tsx detection)
+const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
+
+// Debug logging for Pear detection
+if (typeof window !== 'undefined') {
+  console.log('[Search] Pear detection:', {
+    'Platform.OS': Platform.OS,
+    'window.Pear': !!(window as any).Pear,
+    'window.PearWorkerClient': !!(window as any).PearWorkerClient,
+    isPear,
+  })
+}
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets()
@@ -44,10 +54,16 @@ export default function SearchScreen() {
 
   // On Pear desktop, clear any active watch hash so background playback stops.
   useEffect(() => {
-    if (!isPear || typeof window === 'undefined') return
+    console.log('[Search] Mount effect - isPear:', isPear, 'hash:', typeof window !== 'undefined' ? window.location.hash : 'N/A')
+    if (!isPear || typeof window === 'undefined') {
+      console.log('[Search] Skipping cleanup - isPear:', isPear)
+      return
+    }
+    console.log('[Search] Calling closeVideo and clearing hash')
     closeVideo()
     if (window.location.hash.startsWith('#/watch')) {
       window.location.hash = ''
+      console.log('[Search] Hash cleared')
     }
   }, [closeVideo])
 
@@ -150,11 +166,33 @@ export default function SearchScreen() {
 
     // Pear desktop: use the same hash watch route as the homepage.
     if (isPear && typeof window !== 'undefined') {
+      console.log('[Search] isPear detected, using hash routing')
+
+      // First, close any existing video and wait for state to propagate
       closeVideo()
-      router.push('/')
-      setTimeout(() => {
+
+      const setWatchHash = () => {
+        console.log('[Search] Setting hash to watch:', channelKey, video.id)
         window.location.hash = `/watch/${channelKey}/${video.id}`
-      }, 0)
+      }
+
+      const ensureHome = () => {
+        const path = window.location.pathname.replace(/\/+$/, '') || '/'
+        if (path !== '/') {
+          router.replace('/')
+        }
+      }
+
+      if (typeof (router as any).canGoBack === 'function' && (router as any).canGoBack()) {
+        router.back()
+        setTimeout(() => {
+          ensureHome()
+          setTimeout(setWatchHash, 50)
+        }, 0)
+      } else {
+        ensureHome()
+        setTimeout(setWatchHash, 50)
+      }
       return
     }
 

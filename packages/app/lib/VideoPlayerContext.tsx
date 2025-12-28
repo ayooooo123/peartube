@@ -53,6 +53,7 @@ interface VideoPlayerContextType {
   isLoading: boolean
   playerMode: PlayerMode
   videoStats: VideoStats | null
+  playbackSession: number
 
   // Playback position
   currentTime: number
@@ -110,6 +111,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [playerMode, setPlayerMode] = useState<PlayerMode>('hidden')
   const [videoStats, setVideoStats] = useState<VideoStats | null>(null)
+  const [playbackSession, setPlaybackSession] = useState(0)
 
   // Playback position state
   const [currentTime, setCurrentTime] = useState(0)
@@ -187,6 +189,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Load and play a new video (triggers overlay to fullscreen)
   const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {
     console.log('[VideoPlayerContext] Loading video:', video.title, 'URL:', url)
+    // Stop any existing playback before swapping sources to avoid overlap.
+    try {
+      playerRef.current?.stop?.()
+      playerRef.current?.pause?.()
+    } catch {}
+    setPlaybackSession((prev) => prev + 1)
     // Update ref synchronously FIRST (before emitting event)
     currentVideoRef.current = video
     setCurrentVideo(video)
@@ -229,7 +237,15 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Close video completely
   const closeVideo = useCallback(() => {
-    console.log('[VideoPlayerContext] Closing video')
+    console.log('[VideoPlayerContext] Closing video - current state:', {
+      hasVideo: !!currentVideoRef.current,
+      videoId: currentVideoRef.current?.id,
+      playerMode,
+    })
+    try {
+      playerRef.current?.stop?.()
+      playerRef.current?.pause?.()
+    } catch {}
     currentVideoRef.current = null
     setCurrentVideo(null)
     setVideoUrl(null)
@@ -238,7 +254,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setVideoStats(null)
     setCurrentTime(0)
     setDuration(0)
-  }, [])
+    console.log('[VideoPlayerContext] Video closed, playerMode set to hidden')
+  }, [playerMode])
 
   // Minimize to mini player - video keeps playing, just changes UI mode
   const minimizePlayer = useCallback(() => {
@@ -341,6 +358,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     duration,
     progress,
     playbackRate,
+    playbackSession,
     vlcSeekPosition: seekPosition,
     playerRef,
     loadAndPlayVideo,

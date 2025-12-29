@@ -18,6 +18,7 @@ import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
+import { MpvPlayer } from '@/components/MpvPlayer'
 
 // HRPC methods used: getVideoUrl, prefetchVideo, getVideoStats, getChannelMeta
 
@@ -496,11 +497,20 @@ export default function VideoPlayerScreen() {
           ) : videoUrl ? (
             Platform.OS === 'web' ? (
               isFocused ? (
-                <video
-                  key={`${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
-                  src={videoUrl}
-                  controls
+                <MpvPlayer
+                  key={`mpv:${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
+                  ref={playerRef}
+                  url={videoUrl || ''}
                   autoPlay
+                  onCanPlay={onPlaying}
+                  onPaused={onPaused}
+                  onPlaying={onPlaying}
+                  onEnded={onEnded}
+                  onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
+                  onProgress={(data) => onProgress?.({
+                    currentTime: data.currentTime * 1000,
+                    duration: data.duration * 1000,
+                  } as any)}
                   style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
                 />
               ) : null

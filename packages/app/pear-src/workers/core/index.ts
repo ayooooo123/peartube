@@ -14,34 +14,172 @@ import env from 'bare-env';
 import pipe from 'pear-pipe';
 import { spawn } from 'bare-subprocess';
 import b4a from 'b4a';
+import http1 from 'bare-http1';
 
 // bare-ffmpeg for fast native transcoding
 let ffmpeg: any = null;
-try {
-  ffmpeg = require('bare-ffmpeg');
-  console.log('[Worker] bare-ffmpeg loaded');
-} catch (err: any) {
-  console.warn('[Worker] bare-ffmpeg not available:', err?.message);
+let ffmpegLoadError: string | null = null;
+let ffmpegLoadPromise: Promise<void> | null = null;
+
+async function loadBareFfmpeg(): Promise<void> {
+  if (ffmpeg || ffmpegLoadError) return;
+  if (ffmpegLoadPromise) return ffmpegLoadPromise;
+  ffmpegLoadPromise = (async () => {
+    let lastError: any;
+    if (typeof require === 'function') {
+      try {
+        const mod = require('bare-ffmpeg');
+        ffmpeg = mod?.default ?? mod;
+        console.log('[Worker] bare-ffmpeg loaded');
+        return;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+    try {
+      const mod = await import('bare-ffmpeg');
+      ffmpeg = (mod as any)?.default ?? mod;
+      console.log('[Worker] bare-ffmpeg loaded');
+      return;
+    } catch (err: any) {
+      lastError = err;
+    }
+    ffmpegLoadError = lastError?.message || 'Unknown error';
+    console.warn('[Worker] bare-ffmpeg not available:', ffmpegLoadError);
+  })();
+  return ffmpegLoadPromise;
 }
+
+void loadBareFfmpeg();
 
 // bare-mpv for universal codec playback (AC3, DTS, etc.)
-let bareMpv: any = null;
-try {
-  bareMpv = require('bare-mpv');
-  console.log('[Worker] bare-mpv loaded');
-} catch (err: any) {
-  console.warn('[Worker] bare-mpv not available:', err?.message);
+let MpvPlayer: any = null;
+let mpvLoadError: string | null = null;
+let mpvLoadPromise: Promise<void> | null = null;
+
+async function loadBareMpv(): Promise<void> {
+  if (MpvPlayer || mpvLoadError) return;
+  if (mpvLoadPromise) return mpvLoadPromise;
+  mpvLoadPromise = (async () => {
+    let lastError: any;
+    if (typeof require === 'function') {
+      try {
+        const mod = require('bare-mpv');
+        MpvPlayer = mod?.MpvPlayer ?? mod?.default?.MpvPlayer ?? mod;
+        if (!MpvPlayer) {
+          throw new Error('bare-mpv export missing MpvPlayer');
+        }
+        console.log('[Worker] bare-mpv loaded');
+        return;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+    try {
+      const mod = await import('bare-mpv');
+      MpvPlayer = (mod as any)?.MpvPlayer ?? (mod as any)?.default?.MpvPlayer ?? (mod as any)?.default ?? null;
+      if (!MpvPlayer) {
+        throw new Error('bare-mpv export missing MpvPlayer');
+      }
+      console.log('[Worker] bare-mpv loaded');
+      return;
+    } catch (err: any) {
+      lastError = err;
+    }
+    mpvLoadError = lastError?.message || 'Unknown error';
+    console.warn('[Worker] bare-mpv not available:', mpvLoadError);
+  })();
+  return mpvLoadPromise;
 }
 
-// MPV Player Manager - tracks active player instances
-interface MpvPlayerState {
-  player: any;
-  width: number;
-  height: number;
-  url: string;
-}
-const mpvPlayers = new Map<string, MpvPlayerState>();
+void loadBareMpv();
+
+// Active mpv player instances (keyed by player ID)
+const mpvPlayers = new Map<string, any>();
 let mpvPlayerIdCounter = 0;
+let mpvFrameServer: any = null;
+let mpvFrameServerPort = 0;
+let mpvFrameServerReady: Promise<number> | null = null;
+
+function handleMpvFrameRequest(req: any, res: any) {
+  const corsHeaders = { 'Access-Control-Allow-Origin': '*' };
+  try {
+    if (req.method !== 'GET') {
+      res.writeHead(405, { ...corsHeaders, 'Content-Type': 'text/plain' });
+      res.end('Method Not Allowed');
+      return;
+    }
+
+    const rawUrl = typeof req.url === 'string' ? req.url : '/';
+    const path = rawUrl.split('?')[0] || '/';
+    const parts = path.split('/').filter(Boolean);
+    if (parts[0] !== 'frame' || !parts[1]) {
+      res.writeHead(404, { ...corsHeaders, 'Content-Type': 'text/plain' });
+      res.end('Not Found');
+      return;
+    }
+
+    const playerId = decodeURIComponent(parts[1]);
+    const state = mpvPlayers.get(playerId);
+    if (!state) {
+      res.writeHead(404, { ...corsHeaders, 'Content-Type': 'text/plain' });
+      res.end('Player Not Found');
+      return;
+    }
+
+    if (!state.player.needsRender()) {
+      res.writeHead(204, corsHeaders);
+      res.end();
+      return;
+    }
+
+    const frameData = state.player.renderFrame();
+    if (!frameData || frameData.length === 0) {
+      res.writeHead(204, corsHeaders);
+      res.end();
+      return;
+    }
+
+    const buffer = b4a.from(frameData);
+    res.writeHead(200, {
+      ...corsHeaders,
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': buffer.byteLength,
+      'Cache-Control': 'no-store',
+      'X-Frame-Width': String(state.width),
+      'X-Frame-Height': String(state.height),
+    });
+    res.end(buffer);
+  } catch (err: any) {
+    console.error('[Worker] mpv frame server error:', err?.message);
+    try {
+      res.writeHead(500, { ...corsHeaders, 'Content-Type': 'text/plain' });
+      res.end('Internal Error');
+    } catch {
+      // Ignore response errors.
+    }
+  }
+}
+
+async function ensureMpvFrameServer(): Promise<number> {
+  if (mpvFrameServerPort) return mpvFrameServerPort;
+  if (mpvFrameServerReady) return mpvFrameServerReady;
+
+  mpvFrameServerReady = new Promise((resolve, reject) => {
+    mpvFrameServer = http1.createServer(handleMpvFrameRequest);
+    mpvFrameServer.on('error', (err: any) => {
+      console.error('[Worker] mpv frame server failed:', err?.message);
+      reject(err);
+    });
+    mpvFrameServer.listen(0, '127.0.0.1', () => {
+      mpvFrameServerPort = mpvFrameServer.address().port || 0;
+      console.log('[Worker] mpv frame server listening on port:', mpvFrameServerPort);
+      resolve(mpvFrameServerPort);
+    });
+  });
+
+  return mpvFrameServerReady;
+}
 
 // Import the orchestrator from backend
 // @ts-ignore - backend-core is JavaScript
@@ -805,7 +943,8 @@ rpc.onUploadVideo(async (req: any) => {
 
   // Check if audio needs transcoding (AC3, DTS, etc. -> AAC)
   const hasFFmpeg = await checkFFmpeg();
-  if (hasFFmpeg) {
+  const shouldTranscodeAudio = false; // Disabled for desktop now that mpv is the default player.
+  if (hasFFmpeg && shouldTranscodeAudio) {
     const audioCodec = await getAudioCodec(req.filePath);
     console.log('[Worker] Audio codec detected:', audioCodec);
 
@@ -1386,102 +1525,104 @@ rpc.onPickImageFile(async () => {
 });
 
 // ============================================
-// MPV Player RPC Handlers (Universal Codec Support)
+// MPV Player RPC Handlers
 // ============================================
 
-// Check if bare-mpv is available
 rpc.onMpvAvailable(async () => {
-  return { available: bareMpv !== null };
+  await loadBareMpv();
+  return { available: MpvPlayer !== null, error: mpvLoadError };
 });
 
-// Create a new mpv player instance
 rpc.onMpvCreate(async (req: any) => {
-  if (!bareMpv) {
-    return { success: false, error: 'bare-mpv not available' };
+  await loadBareMpv();
+  if (!MpvPlayer) {
+    return { success: false, error: mpvLoadError || 'bare-mpv not available' };
   }
-
   try {
-    const playerId = `mpv-${++mpvPlayerIdCounter}`;
-    const width = req.width || 1280;
-    const height = req.height || 720;
-
-    const player = new bareMpv.MpvPlayer();
-    const status = player.initialize();
-
-    if (status !== 0) {
-      return { success: false, error: `mpv initialize failed with status ${status}` };
+    const frameServerPort = await ensureMpvFrameServer();
+    const playerId = `mpv_${++mpvPlayerIdCounter}`;
+    const player = new MpvPlayer();
+    const initStatus = player.initialize();
+    if (initStatus !== 0) {
+      throw new Error(`Failed to initialize mpv: ${initStatus}`);
     }
 
-    // Initialize renderer
-    player.initRender(width, height);
+    // Initialize software renderer at requested size
+    const width = req.width || 1280;
+    const height = req.height || 720;
+    const renderReady = player.initRender(width, height);
+    if (!renderReady) {
+      throw new Error('Failed to initialize mpv renderer');
+    }
 
-    mpvPlayers.set(playerId, { player, width, height, url: '' });
-    console.log('[Worker] MPV player created:', playerId);
+    mpvPlayers.set(playerId, {
+      player,
+      width,
+      height,
+      lastFrameTime: 0,
+    });
 
-    return { success: true, playerId };
+    console.log('[Worker] Created mpv player:', playerId, `${width}x${height}`);
+    return { success: true, playerId, frameServerPort };
   } catch (err: any) {
-    console.error('[Worker] MPV create error:', err?.message);
-    return { success: false, error: err?.message || 'Failed to create mpv player' };
+    console.error('[Worker] mpvCreate error:', err?.message);
+    return { success: false, error: err?.message || 'Failed to create player' };
   }
 });
 
-// Load a video file
 rpc.onMpvLoadFile(async (req: any) => {
   const state = mpvPlayers.get(req.playerId);
   if (!state) {
     return { success: false, error: 'Player not found' };
   }
-
   try {
+    console.log('[Worker] mpv loading:', req.url);
     state.player.loadFile(req.url);
-    state.url = req.url;
-    console.log('[Worker] MPV loading:', req.url);
-    return { success: true };
+    return { success: true, error: null };
   } catch (err: any) {
+    console.error('[Worker] mpvLoadFile error:', err?.message);
     return { success: false, error: err?.message || 'Failed to load file' };
   }
 });
 
-// Play
 rpc.onMpvPlay(async (req: any) => {
   const state = mpvPlayers.get(req.playerId);
-  if (!state) return { success: false, error: 'Player not found' };
+  if (!state) return { success: false };
   try {
     state.player.play();
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err?.message };
+  } catch (err) {
+    return { success: false };
   }
 });
 
-// Pause
 rpc.onMpvPause(async (req: any) => {
   const state = mpvPlayers.get(req.playerId);
-  if (!state) return { success: false, error: 'Player not found' };
+  if (!state) return { success: false };
   try {
     state.player.pause();
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err?.message };
+  } catch (err) {
+    return { success: false };
   }
 });
 
-// Seek
 rpc.onMpvSeek(async (req: any) => {
   const state = mpvPlayers.get(req.playerId);
-  if (!state) return { success: false, error: 'Player not found' };
+  if (!state) return { success: false };
   try {
     state.player.seek(req.time);
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err?.message };
+  } catch (err) {
+    return { success: false };
   }
 });
 
-// Get player state (time, duration, paused)
 rpc.onMpvGetState(async (req: any) => {
   const state = mpvPlayers.get(req.playerId);
-  if (!state) return { success: false, error: 'Player not found' };
+  if (!state) {
+    return { success: false, error: 'Player not found' };
+  }
   try {
     return {
       success: true,
@@ -1489,57 +1630,46 @@ rpc.onMpvGetState(async (req: any) => {
       duration: state.player.duration || 0,
       paused: state.player.paused ?? true,
     };
-  } catch (err: any) {
-    return { success: false, error: err?.message };
+  } catch (err) {
+    return { success: false, error: 'Failed to read player state' };
   }
 });
 
-// Render a frame and return as base64 (for canvas display)
-// Note: This is bandwidth-intensive; consider HTTP streaming for production
 rpc.onMpvRenderFrame(async (req: any) => {
   const state = mpvPlayers.get(req.playerId);
-  if (!state) return { success: false, error: 'Player not found' };
-
+  if (!state) {
+    return { success: false, hasFrame: false, frameData: null, error: 'Player not found' };
+  }
   try {
-    // Check if new frame is available
+    // Check if we need to render a new frame
     if (!state.player.needsRender()) {
-      return { success: true, hasFrame: false };
+      return { success: true, hasFrame: false, frameData: null };
     }
 
-    // Render frame to RGBA buffer
     const frameData = state.player.renderFrame();
-    if (!frameData) {
-      return { success: true, hasFrame: false };
+    if (!frameData || frameData.length === 0) {
+      return { success: true, hasFrame: false, frameData: null };
     }
 
-    // Convert to base64 for RPC transport
-    // Note: This is ~5MB per frame at 1080p, consider JPEG compression for production
-    const base64 = Buffer.from(frameData).toString('base64');
-
-    return {
-      success: true,
-      hasFrame: true,
-      width: state.width,
-      height: state.height,
-      frameData: base64,
-    };
-  } catch (err: any) {
-    return { success: false, error: err?.message };
+    // Return as base64 for RPC transport (not ideal but works)
+    const base64 = b4a.toString(frameData, 'base64');
+    return { success: true, hasFrame: true, frameData: base64, width: state.width, height: state.height };
+  } catch (err) {
+    return { success: false, hasFrame: false, frameData: null, error: 'Failed to render frame' };
   }
 });
 
-// Destroy player
 rpc.onMpvDestroy(async (req: any) => {
   const state = mpvPlayers.get(req.playerId);
-  if (!state) return { success: true }; // Already destroyed
-
+  if (!state) return { success: false };
   try {
     state.player.destroy();
     mpvPlayers.delete(req.playerId);
-    console.log('[Worker] MPV player destroyed:', req.playerId);
+    console.log('[Worker] Destroyed mpv player:', req.playerId);
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err?.message };
+  } catch (err) {
+    mpvPlayers.delete(req.playerId);
+    return { success: false };
   }
 });
 
@@ -1567,16 +1697,28 @@ Pear.teardown(async () => {
   // Give in-flight RPC handlers a moment to finish
   await new Promise(resolve => setTimeout(resolve, 100));
 
-  // Clean up mpv players
-  for (const [playerId, state] of mpvPlayers) {
-    try {
-      state.player.destroy();
-      console.log('[Worker] Destroyed mpv player on shutdown:', playerId);
+// Clean up mpv players
+for (const [playerId, state] of mpvPlayers) {
+  try {
+    state.player.destroy();
+    console.log('[Worker] Destroyed mpv player on shutdown:', playerId);
     } catch (e) {
       // Ignore errors during cleanup
     }
+}
+mpvPlayers.clear();
+
+if (mpvFrameServer) {
+  try {
+    mpvFrameServer.close();
+    console.log('[Worker] mpv frame server closed');
+  } catch (err: any) {
+    console.warn('[Worker] mpv frame server close error:', err?.message);
   }
-  mpvPlayers.clear();
+  mpvFrameServer = null;
+  mpvFrameServerPort = 0;
+  mpvFrameServerReady = null;
+}
 
   try {
     await ctx.blobServer?.close();

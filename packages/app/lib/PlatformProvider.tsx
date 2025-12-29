@@ -10,7 +10,7 @@
  *   const { insets, platform, isDesktop } = usePlatform()
  */
 
-import React, { createContext, useContext, useMemo } from 'react'
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { Platform } from 'react-native'
 import { useSafeAreaInsets, EdgeInsets } from 'react-native-safe-area-context'
 import {
@@ -60,10 +60,47 @@ interface PlatformProviderProps {
 export function PlatformProvider({ children }: PlatformProviderProps) {
   // Get native safe area insets (returns zeros on web)
   const nativeInsets = useSafeAreaInsets()
+  const [pearDetected, setPearDetected] = useState(() => isPearRuntime())
+
+  useEffect(() => {
+    if (pearDetected || Platform.OS !== 'web') return
+    let cancelled = false
+    let attempts = 0
+
+    const check = () => {
+      if (cancelled) return
+      if (isPearRuntime()) {
+        setPearDetected(true)
+        return
+      }
+      attempts += 1
+      if (attempts < 10) {
+        setTimeout(check, 250)
+      }
+    }
+
+    check()
+    return () => {
+      cancelled = true
+    }
+  }, [pearDetected])
 
   const value = useMemo<PlatformContextValue>(() => {
-    const platform = detectPlatform()
-    const isPear = isPearRuntime()
+    let platform: PlatformType
+    if (Platform.OS === 'ios') platform = 'ios'
+    else if (Platform.OS === 'android') platform = 'android'
+    else if (Platform.OS === 'web') {
+      if (!pearDetected) platform = 'web'
+      else {
+        const ua = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : ''
+        if (ua.includes('mac')) platform = 'pear-macos'
+        else if (ua.includes('win')) platform = 'pear-windows'
+        else platform = 'pear-linux'
+      }
+    } else {
+      platform = 'web'
+    }
+    const isPear = pearDetected
     const isDesktop = checkIsDesktop(platform)
     const isMobile = checkIsMobile(platform)
     const isWeb = Platform.OS === 'web'
@@ -95,7 +132,7 @@ export function PlatformProvider({ children }: PlatformProviderProps) {
       isPear,
       isWeb,
     }
-  }, [nativeInsets])
+  }, [nativeInsets, pearDetected])
 
   return (
     <PlatformContext.Provider value={value}>

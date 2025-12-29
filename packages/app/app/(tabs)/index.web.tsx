@@ -9,6 +9,7 @@ import { useCallback, useState, useEffect, useMemo, useRef } from 'react'
 import { ActivityIndicator } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePathname } from 'expo-router'
+import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { useDownloads } from '../../lib/DownloadsContext'
 import { VideoData } from '../../components/video'
@@ -16,6 +17,7 @@ import { VideoData } from '../../components/video'
 import { VideoGrid } from '@/components/video/VideoGrid.web'
 import { VideoCardProps } from '@/components/video/VideoCard.web'
 import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/desktop/constants'
+import { MpvPlayer, MpvPlayerRef } from '@/components/MpvPlayer'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && !!(window as any).Pear
@@ -162,6 +164,17 @@ function formatBytes(bytes: number | string | null | undefined): string {
   return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+function formatDuration(seconds: number | null | undefined): string {
+  const value = Number(seconds)
+  if (!Number.isFinite(value) || value <= 0) return '0:00'
+  const totalSeconds = Math.floor(value)
+  const hrs = Math.floor(totalSeconds / 3600)
+  const mins = Math.floor((totalSeconds % 3600) / 60)
+  const secs = totalSeconds % 60
+  if (hrs > 0) return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
+  return `${mins}:${String(secs).padStart(2, '0')}`
+}
+
 function toCountMap(countsData: any): Record<string, number> {
   const counts: Record<string, number> = {}
   if (Array.isArray(countsData)) {
@@ -233,9 +246,17 @@ function WatchPageView({
   const [error, setError] = useState<string | null>(null)
   const [channel, setChannel] = useState<ChannelMeta | null>(null)
   const [videoStats, setVideoStats] = useState<any>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const videoRef = useRef<MpvPlayerRef>(null)
+  const videoWrapperRef = useRef<HTMLDivElement | null>(null)
   const watchInstanceIdRef = useRef(`watch-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   const [isActiveWatch, setIsActiveWatch] = useState(true)
+  const [isPlaying, setIsPlaying] = useState(true)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [showControls, setShowControls] = useState(false)
+  const [isSeeking, setIsSeeking] = useState(false)
+  const [seekPosition, setSeekPosition] = useState(0)
+  const [isFullscreen, setIsFullscreen] = useState(false)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -264,21 +285,100 @@ function WatchPageView({
 
   useEffect(() => {
     if (isActiveWatch) return
-    if (videoRef.current) {
-      videoRef.current.pause()
-      videoRef.current.removeAttribute('src')
-      videoRef.current.load?.()
-    }
+    videoRef.current?.pause()
   }, [isActiveWatch])
 
   // Ensure the HTML video element is fully stopped when this view unmounts.
   useEffect(() => {
     return () => {
-      if (videoRef.current) {
-        videoRef.current.pause()
-        videoRef.current.removeAttribute('src')
-        videoRef.current.load?.()
+      videoRef.current?.pause()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isSeeking) {
+      setSeekPosition(currentTime)
+    }
+  }, [currentTime, isSeeking])
+
+  const toggleControls = useCallback((next?: boolean) => {
+    if (typeof next === 'boolean') {
+      setShowControls(next)
+    } else {
+      setShowControls((prev) => !prev)
+    }
+  }, [])
+
+  const handlePlayPause = useCallback(() => {
+    if (isPlaying) {
+      videoRef.current?.pause()
+      setIsPlaying(false)
+    } else {
+      videoRef.current?.play()
+      setIsPlaying(true)
+    }
+  }, [isPlaying])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isActiveWatch) return
+      if (event.code !== 'Space' && event.key !== ' ') return
+      const target = event.target as HTMLElement | null
+      const tagName = target?.tagName?.toLowerCase()
+      if (tagName === 'input' || tagName === 'textarea' || target?.isContentEditable) {
+        return
       }
+      event.preventDefault()
+      handlePlayPause()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [handlePlayPause, isActiveWatch])
+
+  const handleSeekStart = useCallback(() => {
+    if (duration > 0) {
+      setIsSeeking(true)
+      toggleControls(true)
+    }
+  }, [duration, toggleControls])
+
+  const handleSeekChange = useCallback((event: any) => {
+    const value = Number(event?.target?.value)
+    if (!Number.isFinite(value)) return
+    setSeekPosition(value)
+  }, [])
+
+  const handleSeekEnd = useCallback(() => {
+    if (duration <= 0) return
+    if (isSeeking) {
+      videoRef.current?.seek(seekPosition)
+      setCurrentTime(seekPosition)
+      setIsSeeking(false)
+    }
+  }, [duration, isSeeking, seekPosition])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const handler = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement))
+    }
+    document.addEventListener('fullscreenchange', handler)
+    return () => document.removeEventListener('fullscreenchange', handler)
+  }, [])
+
+  const handleFullscreenToggle = useCallback(async () => {
+    if (typeof document === 'undefined') return
+    const target = videoWrapperRef.current
+    if (!target) return
+    try {
+      if (!document.fullscreenElement) {
+        await target.requestFullscreen?.()
+      } else {
+        await document.exitFullscreen?.()
+      }
+    } catch (err) {
+      console.warn('[WatchPage] Fullscreen toggle failed:', err)
     }
   }, [])
 
@@ -647,7 +747,7 @@ function WatchPageView({
         {/* Main column - video + info */}
         <div style={watchStyles.mainColumn}>
           {/* Video player */}
-          <div style={watchStyles.videoWrapper}>
+          <div style={watchStyles.videoWrapper} ref={videoWrapperRef} onClick={() => toggleControls()}>
             {error ? (
               <div style={watchStyles.errorState}>
                 <p style={{ color: colors.textMuted }}>{error}</p>
@@ -659,18 +759,57 @@ function WatchPageView({
                 <p style={{ color: '#fff', marginTop: 12 }}>Connecting to P2P network...</p>
               </div>
             ) : isActiveWatch ? (
-              <video
+              <MpvPlayer
                 key={`${channelKey}:${video.id || videoId}`}
                 ref={videoRef}
-                src={videoUrl || undefined}
-                controls
+                url={videoUrl || ''}
                 autoPlay
+                onError={(err) => setError(err)}
+                onPlaying={() => setIsPlaying(true)}
+                onPaused={() => setIsPlaying(false)}
+                onProgress={(data) => {
+                  setCurrentTime(data.currentTime)
+                  if (data.duration > 0) setDuration(data.duration)
+                }}
+                onCanPlay={() => setIsLoading(false)}
                 style={watchStyles.video}
               />
             ) : (
               <div style={watchStyles.loadingOverlay}>
                 <ActivityIndicator size="large" color="#fff" />
                 <p style={{ color: '#fff', marginTop: 12 }}>Loading...</p>
+              </div>
+            )}
+
+            {showControls && (
+              <div style={watchStyles.controlsOverlay} onClick={(e) => e.stopPropagation()}>
+                <button onClick={handlePlayPause} style={watchStyles.controlButton} aria-label={isPlaying ? 'Pause' : 'Play'}>
+                  <Feather name={isPlaying ? 'pause' : 'play'} color="#fff" size={16} />
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 0}
+                  step={0.1}
+                  value={isSeeking ? seekPosition : currentTime}
+                  disabled={duration <= 0}
+                  onMouseDown={handleSeekStart}
+                  onTouchStart={handleSeekStart}
+                  onChange={handleSeekChange}
+                  onMouseUp={handleSeekEnd}
+                  onTouchEnd={handleSeekEnd}
+                  style={watchStyles.seekInput}
+                />
+                <span style={watchStyles.timeLabel}>
+                  {formatDuration(isSeeking ? seekPosition : currentTime)} / {formatDuration(duration)}
+                </span>
+                <button
+                  onClick={handleFullscreenToggle}
+                  style={watchStyles.controlButton}
+                  aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                >
+                  <Feather name={isFullscreen ? 'minimize' : 'maximize'} color="#fff" size={16} />
+                </button>
               </div>
             )}
           </div>
@@ -1010,6 +1149,43 @@ const watchStyles: Record<string, React.CSSProperties> = {
     width: '100%',
     height: '100%',
     backgroundColor: '#000',
+  },
+  controlsOverlay: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 12,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '10px 12px',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 10,
+    backdropFilter: 'blur(6px)',
+  },
+  controlButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    border: '1px solid rgba(255,255,255,0.2)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+  },
+  seekInput: {
+    flex: 1,
+    accentColor: colors.primary,
+    backgroundColor: 'transparent',
+    cursor: 'pointer',
+  },
+  timeLabel: {
+    fontSize: 12,
+    color: '#fff',
+    minWidth: 90,
+    textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
   },
   loadingOverlay: {
     position: 'absolute',

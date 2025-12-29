@@ -33,7 +33,11 @@ config.resolver.extraNodeModules = {
 // Force Metro to ignore the hoisted spec in the monorepo root.
 const escapeForRegex = value => value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')
 const rootSpecPath = path.resolve(monorepoRoot, 'node_modules/@peartube/spec')
-config.resolver.blockList = [new RegExp(`${escapeForRegex(rootSpecPath)}\\/.*`)]
+const pearBuildPath = path.resolve(projectRoot, 'pear')
+config.resolver.blockList = [
+  new RegExp(`${escapeForRegex(rootSpecPath)}\\/.*`),
+  new RegExp(`${escapeForRegex(pearBuildPath)}\\/.*`),
+]
 
 // Add .bundle.js extension to source extensions so Metro can resolve it
 // The backend.bundle.js file is a CommonJS module that exports a string

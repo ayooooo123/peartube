@@ -837,6 +837,136 @@
         "send": true
       },
       "version": 2
+    },
+    {
+      "id": 65,
+      "name": "@peartube/global-search-videos",
+      "request": {
+        "name": "@peartube/global-search-videos-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/global-search-videos-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 66,
+      "name": "@peartube/mpv-available",
+      "request": {
+        "name": "@peartube/mpv-available-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/mpv-available-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 67,
+      "name": "@peartube/mpv-create",
+      "request": {
+        "name": "@peartube/mpv-create-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/mpv-create-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 68,
+      "name": "@peartube/mpv-load-file",
+      "request": {
+        "name": "@peartube/mpv-load-file-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/mpv-load-file-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 69,
+      "name": "@peartube/mpv-play",
+      "request": {
+        "name": "@peartube/mpv-play-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/mpv-play-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 70,
+      "name": "@peartube/mpv-pause",
+      "request": {
+        "name": "@peartube/mpv-pause-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/mpv-pause-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 71,
+      "name": "@peartube/mpv-seek",
+      "request": {
+        "name": "@peartube/mpv-seek-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/mpv-seek-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 72,
+      "name": "@peartube/mpv-get-state",
+      "request": {
+        "name": "@peartube/mpv-get-state-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/mpv-get-state-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 73,
+      "name": "@peartube/mpv-render-frame",
+      "request": {
+        "name": "@peartube/mpv-render-frame-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/mpv-render-frame-response",
+        "stream": false
+      },
+      "version": 1
+    },
+    {
+      "id": 74,
+      "name": "@peartube/mpv-destroy",
+      "request": {
+        "name": "@peartube/mpv-destroy-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/mpv-destroy-response",
+        "stream": false
+      },
+      "version": 1
     }
   ]
 }

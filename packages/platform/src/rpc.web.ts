@@ -455,7 +455,7 @@ export const rpc = {
     return ensureRPC().mpvAvailable({});
   },
 
-  async mpvCreate(req: { width?: number; height?: number }): Promise<{ success: boolean; playerId?: string; error?: string }> {
+  async mpvCreate(req: { width?: number; height?: number }): Promise<{ success: boolean; playerId?: string; frameServerPort?: number; error?: string }> {
     return ensureRPC().mpvCreate(req);
   },
 

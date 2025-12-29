@@ -33,17 +33,40 @@ const PEAR_TITLE_BAR_LINUX = 38
 
 /**
  * Detect if running in Pear Runtime
+ * Checks multiple indicators to reliably detect Pear desktop environment
  */
-export function isPearRuntime(): boolean {
-  if (Platform.OS !== 'web') return false
-  if (typeof window === 'undefined') return false
+let _isPearCached: boolean | null = null
 
-  // Check for Pear-specific globals or elements
-  return !!(
-    (window as any).Pear ||
-    document.querySelector('pear-ctrl') ||
-    document.getElementById('pear-bar')
-  )
+export function isPearRuntime(): boolean {
+  if (_isPearCached === true) return true
+
+  if (Platform.OS !== 'web') {
+    _isPearCached = false
+    return false
+  }
+
+  if (typeof window === 'undefined') {
+    return false // Don't cache during SSR, re-check on client
+  }
+
+  // Check for Pear-specific indicators
+  // 1. Pear global (may be present)
+  // 2. pear-ctrl custom element (injected in HTML)
+  // 3. pear-bar element (injected in HTML)
+  // 4. PearWorkerClient (set up by worker-client.js)
+  // 5. User agent containing 'pear' or 'electron' (Pear uses Electron)
+  const hasPearGlobal = !!(window as any).Pear
+  const hasPearCtrl = !!document.querySelector('pear-ctrl')
+  const hasPearBar = !!document.getElementById('pear-bar')
+  const hasPearWorkerClient = !!(window as any).PearWorkerClient
+  const userAgent = navigator?.userAgent?.toLowerCase() || ''
+  const isPearUserAgent = userAgent.includes('pear') || userAgent.includes('electron')
+
+  const detected = hasPearGlobal || hasPearCtrl || hasPearBar || hasPearWorkerClient || isPearUserAgent
+  if (detected) _isPearCached = true
+  else if (_isPearCached === null) _isPearCached = false
+
+  return detected
 }
 
 /**
@@ -105,4 +128,7 @@ export function isNative(): boolean {
 
 // Export singleton values for quick access
 export const currentPlatform = detectPlatform()
+
+// isPear is evaluated at module load, but isPearRuntime() is available
+// for lazy evaluation in components (via usePlatform hook in PlatformProvider)
 export const isPear = isPearRuntime()

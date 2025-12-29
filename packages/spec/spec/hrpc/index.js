@@ -139,7 +139,25 @@ const methods = new Map([
   ['@peartube/event-video-stats', 64],
   [64, '@peartube/event-video-stats'],
   ['@peartube/event-download-progress', 65],
-  [65, '@peartube/event-download-progress']
+  [65, '@peartube/event-download-progress'],
+  ['@peartube/mpv-available', 66],
+  [66, '@peartube/mpv-available'],
+  ['@peartube/mpv-create', 67],
+  [67, '@peartube/mpv-create'],
+  ['@peartube/mpv-load-file', 68],
+  [68, '@peartube/mpv-load-file'],
+  ['@peartube/mpv-play', 69],
+  [69, '@peartube/mpv-play'],
+  ['@peartube/mpv-pause', 70],
+  [70, '@peartube/mpv-pause'],
+  ['@peartube/mpv-seek', 71],
+  [71, '@peartube/mpv-seek'],
+  ['@peartube/mpv-get-state', 72],
+  [72, '@peartube/mpv-get-state'],
+  ['@peartube/mpv-render-frame', 73],
+  [73, '@peartube/mpv-render-frame'],
+  ['@peartube/mpv-destroy', 74],
+  [74, '@peartube/mpv-destroy']
 ])
 
 class HRPC {
@@ -213,7 +231,16 @@ class HRPC {
       ['@peartube/event-feed-update', getEncoding('@peartube/event-feed-update')],
       ['@peartube/event-log', getEncoding('@peartube/event-log')],
       ['@peartube/event-video-stats', getEncoding('@peartube/event-video-stats')],
-      ['@peartube/event-download-progress', getEncoding('@peartube/event-download-progress')]
+      ['@peartube/event-download-progress', getEncoding('@peartube/event-download-progress')],
+      ['@peartube/mpv-available', getEncoding('@peartube/mpv-available-request')],
+      ['@peartube/mpv-create', getEncoding('@peartube/mpv-create-request')],
+      ['@peartube/mpv-load-file', getEncoding('@peartube/mpv-load-file-request')],
+      ['@peartube/mpv-play', getEncoding('@peartube/mpv-play-request')],
+      ['@peartube/mpv-pause', getEncoding('@peartube/mpv-pause-request')],
+      ['@peartube/mpv-seek', getEncoding('@peartube/mpv-seek-request')],
+      ['@peartube/mpv-get-state', getEncoding('@peartube/mpv-get-state-request')],
+      ['@peartube/mpv-render-frame', getEncoding('@peartube/mpv-render-frame-request')],
+      ['@peartube/mpv-destroy', getEncoding('@peartube/mpv-destroy-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -275,7 +302,16 @@ class HRPC {
       ['@peartube/get-status', getEncoding('@peartube/get-status-response')],
       ['@peartube/pick-video-file', getEncoding('@peartube/pick-video-file-response')],
       ['@peartube/pick-image-file', getEncoding('@peartube/pick-image-file-response')],
-      ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-response')]
+      ['@peartube/get-blob-server-port', getEncoding('@peartube/get-blob-server-port-response')],
+      ['@peartube/mpv-available', getEncoding('@peartube/mpv-available-response')],
+      ['@peartube/mpv-create', getEncoding('@peartube/mpv-create-response')],
+      ['@peartube/mpv-load-file', getEncoding('@peartube/mpv-load-file-response')],
+      ['@peartube/mpv-play', getEncoding('@peartube/mpv-play-response')],
+      ['@peartube/mpv-pause', getEncoding('@peartube/mpv-pause-response')],
+      ['@peartube/mpv-seek', getEncoding('@peartube/mpv-seek-response')],
+      ['@peartube/mpv-get-state', getEncoding('@peartube/mpv-get-state-response')],
+      ['@peartube/mpv-render-frame', getEncoding('@peartube/mpv-render-frame-response')],
+      ['@peartube/mpv-destroy', getEncoding('@peartube/mpv-destroy-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -904,6 +940,78 @@ class HRPC {
 
   onEventDownloadProgress(responseFn) {
     this._handlers['@peartube/event-download-progress'] = responseFn
+  }
+
+  async mpvAvailable(args) {
+    return this._call('@peartube/mpv-available', args)
+  }
+
+  async mpvCreate(args) {
+    return this._call('@peartube/mpv-create', args)
+  }
+
+  async mpvLoadFile(args) {
+    return this._call('@peartube/mpv-load-file', args)
+  }
+
+  async mpvPlay(args) {
+    return this._call('@peartube/mpv-play', args)
+  }
+
+  async mpvPause(args) {
+    return this._call('@peartube/mpv-pause', args)
+  }
+
+  async mpvSeek(args) {
+    return this._call('@peartube/mpv-seek', args)
+  }
+
+  async mpvGetState(args) {
+    return this._call('@peartube/mpv-get-state', args)
+  }
+
+  async mpvRenderFrame(args) {
+    return this._call('@peartube/mpv-render-frame', args)
+  }
+
+  async mpvDestroy(args) {
+    return this._call('@peartube/mpv-destroy', args)
+  }
+
+  onMpvAvailable(responseFn) {
+    this._handlers['@peartube/mpv-available'] = responseFn
+  }
+
+  onMpvCreate(responseFn) {
+    this._handlers['@peartube/mpv-create'] = responseFn
+  }
+
+  onMpvLoadFile(responseFn) {
+    this._handlers['@peartube/mpv-load-file'] = responseFn
+  }
+
+  onMpvPlay(responseFn) {
+    this._handlers['@peartube/mpv-play'] = responseFn
+  }
+
+  onMpvPause(responseFn) {
+    this._handlers['@peartube/mpv-pause'] = responseFn
+  }
+
+  onMpvSeek(responseFn) {
+    this._handlers['@peartube/mpv-seek'] = responseFn
+  }
+
+  onMpvGetState(responseFn) {
+    this._handlers['@peartube/mpv-get-state'] = responseFn
+  }
+
+  onMpvRenderFrame(responseFn) {
+    this._handlers['@peartube/mpv-render-frame'] = responseFn
+  }
+
+  onMpvDestroy(responseFn) {
+    this._handlers['@peartube/mpv-destroy'] = responseFn
   }
 
   _requestIsStream(command) {

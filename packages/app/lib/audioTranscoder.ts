@@ -5,12 +5,14 @@
  * to browser-compatible AAC audio while preserving video.
  */
 
+import { Platform } from 'react-native';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 let ffmpeg: FFmpeg | null = null;
 let ffmpegLoading = false;
 let ffmpegLoaded = false;
+const AUDIO_TRANSCODE_ENABLED = Platform.OS === 'web';
 
 /**
  * Load FFmpeg WASM (lazy-loaded on first use)
@@ -60,6 +62,7 @@ async function loadFFmpeg(onProgress?: (progress: number) => void): Promise<FFmp
  * Check if a file needs audio transcoding based on extension
  */
 export function needsAudioTranscode(filename: string): boolean {
+  if (!AUDIO_TRANSCODE_ENABLED) return false;
   const ext = filename.split('.').pop()?.toLowerCase();
   // MKV files may contain AC3/DTS audio that browsers can't play
   return ext === 'mkv';
@@ -74,6 +77,13 @@ export async function probeAudioCodec(file: File | ArrayBuffer): Promise<{
   audioCodec?: string;
   videoCodec?: string;
 }> {
+  if (!AUDIO_TRANSCODE_ENABLED) {
+    return {
+      needsTranscode: false,
+      audioCodec: 'unknown',
+      videoCodec: 'unknown'
+    };
+  }
   // For now, assume all MKV files need transcoding since we can't easily probe
   // In the future, we could use ffprobe via ffmpeg.wasm
   const filename = file instanceof File ? file.name : 'video.mkv';
@@ -107,6 +117,18 @@ export async function transcodeAudio(
   options: TranscodeOptions = {}
 ): Promise<TranscodeResult> {
   const { onProgress, onStatus } = options;
+
+  if (!AUDIO_TRANSCODE_ENABLED) {
+    const data = file instanceof File
+      ? new Uint8Array(await file.arrayBuffer())
+      : new Uint8Array(file);
+    return {
+      data,
+      filename,
+      size: data.length,
+      transcoded: false
+    };
+  }
 
   // Check if transcoding is needed
   if (!needsAudioTranscode(filename)) {
@@ -182,6 +204,7 @@ export function isFFmpegLoaded(): boolean {
  * Preload FFmpeg (call early to speed up first transcode)
  */
 export async function preloadFFmpeg(): Promise<void> {
+  if (!AUDIO_TRANSCODE_ENABLED) return;
   try {
     await loadFFmpeg();
   } catch (err) {

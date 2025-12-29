@@ -225,7 +225,19 @@ function ChannelInfo({ channelName, channelInitial }: { channelName: string, cha
 export function VideoPlayerOverlay() {
   const insets = useSafeAreaInsets()
   const { width: screenWidth, height: screenHeight } = useWindowDimensions()
-  const { isDesktop, isPear } = usePlatform()
+  const { isDesktop } = usePlatform()
+  const isPear = Platform.OS === 'web'
+
+  // Debug log on mount
+  useEffect(() => {
+    console.log('[VideoPlayerOverlay] Mounted. isPear:', isPear, 'isDesktop:', isDesktop, 'Platform.OS:', Platform.OS)
+    if (typeof window !== 'undefined') {
+      console.log('[VideoPlayerOverlay] window.Pear:', !!(window as any).Pear)
+      console.log('[VideoPlayerOverlay] PearWorkerClient:', !!(window as any).PearWorkerClient)
+      console.log('[VideoPlayerOverlay] userAgent:', navigator?.userAgent?.substring(0, 100))
+    }
+  }, [isPear, isDesktop])
+
   const { isCollapsed } = useSidebar()
   const { identity } = useApp()
   const isWindowLandscape = screenWidth > screenHeight
@@ -233,6 +245,7 @@ export function VideoPlayerOverlay() {
   const exitGateLastSnapshotRef = useRef<string | null>(null)
   const exitGateStableCountRef = useRef(0)
   const exitGateAttemptsRef = useRef(0)
+  const playerLogKeyRef = useRef<string | null>(null)
 
   // For landscape fullscreen, track screen dimensions as shared values
   // This allows animated styles to use current screen size without React re-renders
@@ -289,6 +302,23 @@ export function VideoPlayerOverlay() {
     onError,
   } = useVideoPlayerContext()
 
+  useEffect(() => {
+    if (!currentVideo || playerMode === 'hidden') return
+    const player = Platform.OS === 'web' ? 'mpv' : 'vlc'
+    const channelKey = currentVideo.channelKey || currentVideo.channel?.key || ''
+    const logKey = `${player}:${channelKey}:${currentVideo.id || videoUrl || ''}`
+    if (playerLogKeyRef.current === logKey) return
+    playerLogKeyRef.current = logKey
+    if (typeof window !== 'undefined') {
+      ;(window as any).__PEARTUBE_PLAYER__ = {
+        player,
+        videoId: currentVideo.id,
+        channelKey,
+      }
+    }
+    console.log('[VideoPlayerOverlay] Using player:', player, 'video:', currentVideo.id, 'channel:', channelKey)
+  }, [currentVideo?.id, currentVideo?.channelKey, currentVideo?.channel?.key, videoUrl, playerMode])
+
   const { height: reportedTabBarHeight, paddingBottom: reportedTabBarPadding } = useTabBarMetrics()
 
   // State for showing seek feedback
@@ -299,6 +329,12 @@ export function VideoPlayerOverlay() {
   const [seekPosition, setSeekPosition] = useState(0)
   const progressBarRef = useRef<View>(null)
   const progressBarWidth = useRef(0)
+
+  useEffect(() => {
+    if (!isSeeking) {
+      setSeekPosition(currentTime)
+    }
+  }, [currentTime, isSeeking])
 
   // State for showing custom controls overlay
   const [showControls, setShowControls] = useState(false)
@@ -1017,6 +1053,26 @@ export function VideoPlayerOverlay() {
     }
   }, [isPlaying, pauseVideo, resumeVideo])
 
+  const handleDesktopSeekStart = useCallback(() => {
+    if (duration > 0) {
+      setIsSeeking(true)
+    }
+  }, [duration])
+
+  const handleDesktopSeekChange = useCallback((event: any) => {
+    const value = Number(event?.target?.value)
+    if (!Number.isFinite(value)) return
+    setSeekPosition(value)
+  }, [])
+
+  const handleDesktopSeekEnd = useCallback(() => {
+    if (duration <= 0) return
+    if (isSeeking) {
+      seekTo(seekPosition)
+      setIsSeeking(false)
+    }
+  }, [duration, isSeeking, seekPosition, seekTo])
+
   // Handle double-tap seek - 10s forward/backward
   const handleDoubleTapSeek = useCallback((direction: 'left' | 'right') => {
     const delta = direction === 'left' ? -10 : 10
@@ -1137,6 +1193,18 @@ export function VideoPlayerOverlay() {
     }
   }, [])
 
+  // Debug: log player state
+  useEffect(() => {
+    console.log('[VideoPlayerOverlay] State:', {
+      hasCurrentVideo: !!currentVideo,
+      videoId: currentVideo?.id,
+      playerMode,
+      videoUrl: videoUrl?.substring(0, 50),
+      isPear,
+      isDesktop,
+    })
+  }, [currentVideo, playerMode, videoUrl, isPear, isDesktop])
+
   // Don't render if no video
   if (!currentVideo || playerMode === 'hidden') {
     return null
@@ -1158,36 +1226,22 @@ export function VideoPlayerOverlay() {
             {/* Video player */}
             <div style={{ ...desktopStyles.videoWrapper, width: desktopVideoWidth, height: desktopVideoHeight }}>
               {videoUrl ? (
-                isPear ? (
-                  <MpvPlayer
-                    key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-                    url={videoUrl}
-                    autoPlay
-                    onCanPlay={onPlaying}
-                    onPaused={onPaused}
-                    onPlaying={onPlaying}
-                    onEnded={onEnded}
-                    onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-                    onProgress={(data) => onProgress?.({
-                      currentTime: data.currentTime * 1000,
-                      duration: data.duration * 1000,
-                    } as any)}
-                    style={{ width: '100%', height: '100%', borderRadius: 12 }}
-                  />
-                ) : (
-                  <video
-                    key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-                    src={videoUrl}
-                    controls
-                    autoPlay
-                    onCanPlay={onPlaying}
-                    onPause={onPaused}
-                    onPlay={onPlaying}
-                    onEnded={onEnded}
-                    onError={onError}
-                    style={{ width: '100%', height: '100%', backgroundColor: '#000', borderRadius: 12, outline: 'none' }}
-                  />
-                )
+                <MpvPlayer
+                  key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
+                  ref={playerRef}
+                  url={videoUrl}
+                  autoPlay
+                  onCanPlay={onPlaying}
+                  onPaused={onPaused}
+                  onPlaying={onPlaying}
+                  onEnded={onEnded}
+                  onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
+                  onProgress={(data) => onProgress?.({
+                    currentTime: data.currentTime * 1000,
+                    duration: data.duration * 1000,
+                  } as any)}
+                  style={{ width: '100%', height: '100%', borderRadius: 12 }}
+                />
               ) : (
                 <div style={desktopStyles.placeholder}>
                   <span style={desktopStyles.placeholderText}>{currentVideo.title.charAt(0).toUpperCase()}</span>
@@ -1199,6 +1253,32 @@ export function VideoPlayerOverlay() {
                   <Text style={{ color: '#fff', marginTop: 12 }}>Connecting to P2P...</Text>
                 </div>
               )}
+            </div>
+
+            {/* Desktop playback controls */}
+            <div style={desktopStyles.playerControls}>
+              <button onClick={handlePlayPause} style={desktopStyles.controlButton} aria-label={isPlaying ? 'Pause' : 'Play'}>
+                <Feather name={isPlaying ? 'pause' : 'play'} color={colors.text} size={16} />
+              </button>
+              <div style={desktopStyles.seekRow}>
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 0}
+                  step={0.1}
+                  value={isSeeking ? seekPosition : currentTime}
+                  disabled={duration <= 0}
+                  onMouseDown={handleDesktopSeekStart}
+                  onTouchStart={handleDesktopSeekStart}
+                  onChange={handleDesktopSeekChange}
+                  onMouseUp={handleDesktopSeekEnd}
+                  onTouchEnd={handleDesktopSeekEnd}
+                  style={desktopStyles.seekInput}
+                />
+                <span style={desktopStyles.timeLabel}>
+                  {formatDuration(isSeeking ? seekPosition : currentTime)} / {formatDuration(duration)}
+                </span>
+              </div>
             </div>
 
             {/* Video info */}
@@ -1419,16 +1499,20 @@ export function VideoPlayerOverlay() {
         />
       )}
       {Platform.OS === 'web' && videoUrl && (
-        <video
-          key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-          src={videoUrl}
-          controls
+        <MpvPlayer
+          key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
+          ref={playerRef}
+          url={videoUrl}
           autoPlay
           onCanPlay={onPlaying}
-          onPause={onPaused}
-          onPlay={onPlaying}
+          onPaused={onPaused}
+          onPlaying={onPlaying}
           onEnded={onEnded}
-          onError={onError}
+          onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
+          onProgress={(data) => onProgress?.({
+            currentTime: data.currentTime * 1000,
+            duration: data.duration * 1000,
+          } as any)}
           style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
         />
       )}
@@ -2642,6 +2726,44 @@ const desktopStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     gap: 12,
+  },
+  playerControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '10px 12px',
+    backgroundColor: colors.bgSecondary,
+    borderRadius: 10,
+  },
+  controlButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    border: `1px solid ${colors.border}`,
+    backgroundColor: colors.bg,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+  },
+  seekRow: {
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+  },
+  seekInput: {
+    flex: 1,
+    accentColor: colors.primary,
+    outline: 'none',
+    cursor: 'pointer',
+  },
+  timeLabel: {
+    fontSize: 12,
+    color: colors.textMuted,
+    minWidth: 90,
+    textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
   },
   title: {
     fontSize: 20,

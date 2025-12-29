@@ -132,3 +132,22 @@ If you do not, Autobase follows the bootstrap core's `autobase/local` pointer (o
 
 ### Optional: force fast-forward bootstrap for viewers
 If a viewer still stalls during ready(), force a fast-forward bootstrap (`force: true`, `minimum: 1`) before waiting for ready().
+
+---
+
+## MPV Playback + Upload
+
+### Pear worker is ESM; avoid top-level require
+Pear workers are bundled as ESM. `require` is not defined, so native addons must be loaded via dynamic `import()` and cached in a loader.
+
+### Metro must ignore pear build output
+Metro will crawl `packages/app/pear` and can crash on file/dir name collisions. Blocklist the pear build directory in `packages/app/metro.config.js`.
+
+### Avoid mpv re-init loops
+Do not put volatile callbacks in the mpv init effect dependency list. Keep callbacks in refs so mpv is not created/destroyed every render.
+
+### Web playback controls need manual wiring
+mpv has no native controls in the canvas. Play/pause/seek must call the mpv ref, and the watch page needs its own control overlay logic.
+
+### Disable audio transcoding when mpv is default
+With mpv on desktop and VLC on mobile, audio transcoding can be disabled to preserve original codecs. Gate it in the Pear worker and the shared audio transcoder so uploads keep original media.

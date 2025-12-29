@@ -212,6 +212,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Pause video
   const pauseVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Pausing video')
+    if (Platform.OS === 'web') {
+      try {
+        playerRef.current?.pause?.()
+      } catch {}
+    }
     setIsPlaying(false)
   }, [])
 
@@ -232,6 +237,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       }, 100)
     } else {
       setIsPlaying(true)
+      if (Platform.OS === 'web') {
+        try {
+          playerRef.current?.play?.()
+        } catch {}
+      }
     }
   }, [currentTime, duration])
 
@@ -268,6 +278,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const seekTo = useCallback((time: number) => {
     if (duration <= 0) return
     const clampedTime = Math.max(0, Math.min(time, duration))
+    if (Platform.OS === 'web') {
+      try {
+        playerRef.current?.seek?.(clampedTime)
+      } catch {}
+      setCurrentTime(clampedTime)
+      return
+    }
     const seekValue = clampedTime / duration // VLC seek uses 0-1 range
     console.log('[VideoPlayerContext] Seeking to:', clampedTime, 'seconds, seek prop:', seekValue)
     // Set the seek position - VLC will see this as the seek prop
@@ -281,6 +298,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const seekBy = useCallback((delta: number) => {
     if (duration <= 0) return
     const newTime = Math.max(0, Math.min(currentTime + delta, duration))
+    if (Platform.OS === 'web') {
+      try {
+        playerRef.current?.seek?.(newTime)
+      } catch {}
+      setCurrentTime(newTime)
+      return
+    }
     const seekValue = newTime / duration // VLC seek uses 0-1 range
     console.log('[VideoPlayerContext] Seeking by:', delta, 'to:', newTime, 'seek prop:', seekValue)
     // Set the seek position - VLC will see this as the seek prop

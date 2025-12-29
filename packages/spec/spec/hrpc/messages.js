@@ -3652,6 +3652,225 @@ const encoding160 = {
   }
 }
 
+// @peartube/mpv-available-request
+const encoding161 = encoding0
+
+// @peartube/mpv-available-response
+const encoding162 = {
+  preencode(state, m) {
+    state.end++ // flag byte for boolean
+  },
+  encode(state, m) {
+    c.uint.encode(state, m.available ? 1 : 0)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+    return {
+      available: (flags & 1) !== 0
+    }
+  }
+}
+
+// @peartube/mpv-create-request
+const encoding163 = {
+  preencode(state, m) {
+    state.end++ // max flag is 2 so always one byte
+    if (m.width) c.uint.preencode(state, m.width)
+    if (m.height) c.uint.preencode(state, m.height)
+  },
+  encode(state, m) {
+    const flags = (m.width ? 1 : 0) | (m.height ? 2 : 0)
+    c.uint.encode(state, flags)
+    if (m.width) c.uint.encode(state, m.width)
+    if (m.height) c.uint.encode(state, m.height)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+    return {
+      width: (flags & 1) !== 0 ? c.uint.decode(state) : 0,
+      height: (flags & 2) !== 0 ? c.uint.decode(state) : 0
+    }
+  }
+}
+
+// @peartube/mpv-create-response
+const encoding164 = {
+  preencode(state, m) {
+    state.end++ // max flag is 8 so always one byte
+    if (m.playerId) c.string.preencode(state, m.playerId)
+    if (m.frameServerPort) c.uint.preencode(state, m.frameServerPort)
+    if (m.error) c.string.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags = (m.success ? 1 : 0) | (m.playerId ? 2 : 0) | (m.frameServerPort ? 4 : 0) | (m.error ? 8 : 0)
+    c.uint.encode(state, flags)
+    if (m.playerId) c.string.encode(state, m.playerId)
+    if (m.frameServerPort) c.uint.encode(state, m.frameServerPort)
+    if (m.error) c.string.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+    return {
+      success: (flags & 1) !== 0,
+      playerId: (flags & 2) !== 0 ? c.string.decode(state) : null,
+      frameServerPort: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
+      error: (flags & 8) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/mpv-load-file-request
+const encoding165 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.playerId)
+    c.string.preencode(state, m.url)
+  },
+  encode(state, m) {
+    c.string.encode(state, m.playerId)
+    c.string.encode(state, m.url)
+  },
+  decode(state) {
+    return {
+      playerId: c.string.decode(state),
+      url: c.string.decode(state)
+    }
+  }
+}
+
+// @peartube/mpv-load-file-response
+const encoding166 = {
+  preencode(state, m) {
+    state.end++ // max flag is 2 so always one byte
+    if (m.error) c.string.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags = (m.success ? 1 : 0) | (m.error ? 2 : 0)
+    c.uint.encode(state, flags)
+    if (m.error) c.string.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+    return {
+      success: (flags & 1) !== 0,
+      error: (flags & 2) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/mpv-play-request
+const encoding167 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.playerId)
+  },
+  encode(state, m) {
+    c.string.encode(state, m.playerId)
+  },
+  decode(state) {
+    return {
+      playerId: c.string.decode(state)
+    }
+  }
+}
+
+// @peartube/mpv-play-response
+const encoding168 = encoding166
+
+// @peartube/mpv-pause-request
+const encoding169 = encoding167
+
+// @peartube/mpv-pause-response
+const encoding170 = encoding166
+
+// @peartube/mpv-seek-request
+const encoding171 = {
+  preencode(state, m) {
+    c.string.preencode(state, m.playerId)
+    c.float64.preencode(state, m.time)
+  },
+  encode(state, m) {
+    c.string.encode(state, m.playerId)
+    c.float64.encode(state, m.time)
+  },
+  decode(state) {
+    return {
+      playerId: c.string.decode(state),
+      time: c.float64.decode(state)
+    }
+  }
+}
+
+// @peartube/mpv-seek-response
+const encoding172 = encoding166
+
+// @peartube/mpv-get-state-request
+const encoding173 = encoding167
+
+// @peartube/mpv-get-state-response
+const encoding174 = {
+  preencode(state, m) {
+    state.end++ // max flag is 16 so always one byte
+    if (m.currentTime) c.float64.preencode(state, m.currentTime)
+    if (m.duration) c.float64.preencode(state, m.duration)
+    if (m.error) c.string.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags = (m.success ? 1 : 0) | (m.currentTime ? 2 : 0) | (m.duration ? 4 : 0) | (m.paused ? 8 : 0) | (m.error ? 16 : 0)
+    c.uint.encode(state, flags)
+    if (m.currentTime) c.float64.encode(state, m.currentTime)
+    if (m.duration) c.float64.encode(state, m.duration)
+    if (m.error) c.string.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+    return {
+      success: (flags & 1) !== 0,
+      currentTime: (flags & 2) !== 0 ? c.float64.decode(state) : 0,
+      duration: (flags & 4) !== 0 ? c.float64.decode(state) : 0,
+      paused: (flags & 8) !== 0,
+      error: (flags & 16) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/mpv-render-frame-request
+const encoding175 = encoding167
+
+// @peartube/mpv-render-frame-response
+const encoding176 = {
+  preencode(state, m) {
+    state.end++ // max flag is 32 so always one byte
+    if (m.width) c.uint.preencode(state, m.width)
+    if (m.height) c.uint.preencode(state, m.height)
+    if (m.frameData) c.string.preencode(state, m.frameData)
+    if (m.error) c.string.preencode(state, m.error)
+  },
+  encode(state, m) {
+    const flags = (m.success ? 1 : 0) | (m.hasFrame ? 2 : 0) | (m.width ? 4 : 0) | (m.height ? 8 : 0) | (m.frameData ? 16 : 0) | (m.error ? 32 : 0)
+    c.uint.encode(state, flags)
+    if (m.width) c.uint.encode(state, m.width)
+    if (m.height) c.uint.encode(state, m.height)
+    if (m.frameData) c.string.encode(state, m.frameData)
+    if (m.error) c.string.encode(state, m.error)
+  },
+  decode(state) {
+    const flags = c.uint.decode(state)
+    return {
+      success: (flags & 1) !== 0,
+      hasFrame: (flags & 2) !== 0,
+      width: (flags & 4) !== 0 ? c.uint.decode(state) : 0,
+      height: (flags & 8) !== 0 ? c.uint.decode(state) : 0,
+      frameData: (flags & 16) !== 0 ? c.string.decode(state) : null,
+      error: (flags & 32) !== 0 ? c.string.decode(state) : null
+    }
+  }
+}
+
+// @peartube/mpv-destroy-request
+const encoding177 = encoding167
+
+// @peartube/mpv-destroy-response
+const encoding178 = encoding166
+
 function setVersion(v) {
   version = v
 }
@@ -3997,6 +4216,42 @@ function getEncoding(name) {
       return encoding159
     case '@peartube/global-search-videos-response':
       return encoding160
+    case '@peartube/mpv-available-request':
+      return encoding161
+    case '@peartube/mpv-available-response':
+      return encoding162
+    case '@peartube/mpv-create-request':
+      return encoding163
+    case '@peartube/mpv-create-response':
+      return encoding164
+    case '@peartube/mpv-load-file-request':
+      return encoding165
+    case '@peartube/mpv-load-file-response':
+      return encoding166
+    case '@peartube/mpv-play-request':
+      return encoding167
+    case '@peartube/mpv-play-response':
+      return encoding168
+    case '@peartube/mpv-pause-request':
+      return encoding169
+    case '@peartube/mpv-pause-response':
+      return encoding170
+    case '@peartube/mpv-seek-request':
+      return encoding171
+    case '@peartube/mpv-seek-response':
+      return encoding172
+    case '@peartube/mpv-get-state-request':
+      return encoding173
+    case '@peartube/mpv-get-state-response':
+      return encoding174
+    case '@peartube/mpv-render-frame-request':
+      return encoding175
+    case '@peartube/mpv-render-frame-response':
+      return encoding176
+    case '@peartube/mpv-destroy-request':
+      return encoding177
+    case '@peartube/mpv-destroy-response':
+      return encoding178
     default:
       throw new Error('Encoder not found ' + name)
   }

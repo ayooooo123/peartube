@@ -481,8 +481,12 @@ export class ChromecastDevice extends EventEmitter {
   _startHeartbeat() {
     if (this._heartbeatTimer) return
     this._heartbeatTimer = setInterval(() => {
-      if (this._connected) {
-        this._sendHeartbeat({ type: 'PING' })
+      if (this._connected && this._socket) {
+        try {
+          this._sendHeartbeat({ type: 'PING' })
+        } catch (err) {
+          // Socket closed, will be handled by disconnect
+        }
       }
     }, HEARTBEAT_INTERVAL)
   }
@@ -497,8 +501,12 @@ export class ChromecastDevice extends EventEmitter {
   _startStatusPolling() {
     if (this._statusTimer) return
     this._statusTimer = setInterval(() => {
-      if (this._connected && this._transportId) {
-        this._sendMediaMessage({ type: 'GET_STATUS', requestId: this._nextRequestId() })
+      if (this._connected && this._transportId && this._socket) {
+        try {
+          this._sendMediaMessage({ type: 'GET_STATUS', requestId: this._nextRequestId() })
+        } catch (err) {
+          // Socket closed, will be handled by disconnect
+        }
       }
     }, 5000)
   }
@@ -511,8 +519,13 @@ export class ChromecastDevice extends EventEmitter {
   }
 
   _sendCastMessage(namespace, payload, destinationId) {
-    if (!this._socket) {
+    if (!this._socket || !this._connected) {
       throw new Error('Not connected')
+    }
+
+    // Check if socket is still writable
+    if (this._socket.destroyed || this._socket.writableEnded) {
+      throw new Error('Socket closed')
     }
 
     const payloadUtf8 = typeof payload === 'string' ? payload : JSON.stringify(payload)
@@ -523,7 +536,12 @@ export class ChromecastDevice extends EventEmitter {
       payloadUtf8
     })
 
-    this._socket.write(message)
+    try {
+      this._socket.write(message)
+    } catch (err) {
+      // Socket may have closed between check and write
+      this._handleError(err)
+    }
   }
 
   _sendConnect(destinationId) {
@@ -622,7 +640,11 @@ export class ChromecastDevice extends EventEmitter {
 
   _handleHeartbeat(payload) {
     if (payload.type === 'PING') {
-      this._sendHeartbeat({ type: 'PONG' })
+      try {
+        this._sendHeartbeat({ type: 'PONG' })
+      } catch (err) {
+        // Socket closed
+      }
     }
   }
 

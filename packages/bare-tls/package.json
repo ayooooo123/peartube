@@ -51,6 +51,7 @@
   "devDependencies": {
     "bare-events": "^2.6.0",
     "bare-fs": "^4.0.2",
+    "bare-make": "^1.6.3",
     "brittle": "^3.1.1",
     "cmake-bare": "^1.1.6",
     "cmake-fetch": "^1.0.0",

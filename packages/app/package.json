@@ -57,7 +57,7 @@
     "bare-dgram": "^1.0.0",
     "bare-fcast": "file:../bare-fcast",
     "bare-http1": "^4.1.0",
-    "bare-tls": "^2.1.5",
+    "bare-tls": "file:../bare-tls",
     "blind-peer": "^3.0.1",
     "blind-peering": "^1.15.0",
     "expo": "^54.0.10",

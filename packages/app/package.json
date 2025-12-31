@@ -16,7 +16,7 @@
     "pear:merge": "mkdir -p pear && rsync -av --exclude='package.json' .pear-build/ pear/ && rm -rf .pear-build",
     "pear:copy": "cp pear-src/package.json pear-src/worker-client.js pear-src/index.js pear/ && mkdir -p pear/scripts && cp pear-src/scripts/build-release.js pear/scripts/",
     "pear:install": "cd pear && npm install && cd .. && node scripts/ensure-bare-mpv.js",
-    "pear:worker": "mkdir -p pear/build/workers/core && npx swc pear-src/workers/core/index.ts -o pear/build/workers/core/index.js",
+    "pear:worker": "mkdir -p pear/build/workers/core pear/build/workers/transcode && npx swc pear-src/workers/core/index.ts -o pear/build/workers/core/index.js && npx swc pear-src/workers/transcode/index.ts -C module.type=commonjs -o pear/build/workers/transcode/index.js",
     "pear:inject": "node pear-src/scripts/inject-pear-bar.js pear",
     "pear:build": "npm run pear:export && npm run pear:merge && npm run pear:copy && npm run pear:install && npm run pear:worker && npm run pear:inject",
     "pear:dev": "npm run pear:build && cd pear && pear run --store=$HOME/.peartube --dev .",
@@ -46,7 +46,6 @@
     "@gluestack-ui/spinner": "^0.1.15",
     "@gluestack-ui/toast": "^1.0.9",
     "@legendapp/motion": "^2.5.3",
-    "bare-mpv": "file:../bare-mpv",
     "@peartube/backend": "file:../backend",
     "@peartube/core": "file:../core",
     "@peartube/platform": "file:../platform",
@@ -55,6 +54,10 @@
     "@react-navigation/core": "^7.13.6",
     "@react-navigation/native": "^7.1.22",
     "autobase": "^7.24.0",
+    "bare-dgram": "^1.0.0",
+    "bare-fcast": "file:../bare-fcast",
+    "bare-http1": "^4.1.0",
+    "bare-tls": "^2.1.5",
     "blind-peer": "^3.0.1",
     "blind-peering": "^1.15.0",
     "expo": "^54.0.10",
@@ -90,7 +93,8 @@
     "react-native-svg": "^15.15.0",
     "react-native-vlc-media-player": "^1.0.98",
     "react-native-web": "^0.19.13",
-    "react-native-worklets": "^0.6.1"
+    "react-native-worklets": "^0.6.1",
+    "mediabunny": "^1.27.2"
   },
   "devDependencies": {
     "@swc/cli": "^0.5.2",

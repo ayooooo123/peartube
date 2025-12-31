@@ -86,9 +86,14 @@
     <string>PearTube needs permission to save video thumbnails</string>
     <key>NSCameraUsageDescription</key>
     <string>PearTube needs camera access to record videos</string>
-    <key>NSLocalNetworkUsageDescription</key>
-    <string>PearTube uses local network for peer-to-peer video streaming</string>
-    <key>NSUserActivityTypes</key>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>PearTube uses local network for peer-to-peer video streaming</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_fcast._tcp</string>
+		<string>_googlecast._tcp</string>
+	</array>
+	<key>NSUserActivityTypes</key>
     <array>
       <string>$(PRODUCT_BUNDLE_IDENTIFIER).expo.index_route</string>
     </array>

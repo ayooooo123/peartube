@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { VideoCard, VideoData } from '../../components/video'
+import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 
@@ -548,6 +549,7 @@ export default function HomeScreen() {
           <View className="flex-row px-5 py-4 items-center justify-between">
             <Text className="text-title text-pear-text">PearTube</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <CastHeaderButton size={18} />
               <Pressable onPress={() => router.push('/search')} className="p-2">
                 <Feather name="search" color={colors.text} size={18} />
               </Pressable>

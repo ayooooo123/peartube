@@ -10,7 +10,10 @@
  */
 import React, { useState, useCallback } from 'react'
 import { useRouter } from 'expo-router'
+import { Feather } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
+import { useCast } from '@/lib/cast'
+import { DevicePickerModal } from '@/components/cast'
 import { useSidebar, HEADER_HEIGHT } from './constants'
 
 // Icon components (simple SVG-based)
@@ -55,8 +58,11 @@ function UserIcon() {
 export function DesktopHeader() {
   const router = useRouter()
   const { toggleSidebar } = useSidebar()
+  const cast = useCast()
   const [searchQuery, setSearchQuery] = useState('')
   const [isSearchFocused, setIsSearchFocused] = useState(false)
+  const [showCastPicker, setShowCastPicker] = useState(false)
+  const [isConnectingCast, setIsConnectingCast] = useState(false)
 
   const handleSearch = useCallback((e: React.FormEvent) => {
     e.preventDefault()
@@ -73,70 +79,122 @@ export function DesktopHeader() {
     router.push('/studio')
   }, [router])
 
+  const handleCastPress = useCallback(() => {
+    if (!cast.available) return
+    setShowCastPicker(true)
+    cast.startDiscovery()
+  }, [cast])
+
   return (
-    <header style={styles.header}>
-      {/* Left section - hamburger + logo */}
-      <div style={styles.leftSection}>
-        <button
-          style={styles.iconButton}
-          onClick={toggleSidebar}
-          aria-label="Toggle sidebar"
-        >
-          <MenuIcon />
-        </button>
-
-        <button
-          style={styles.logoButton}
-          onClick={handleLogoClick}
-          aria-label="Go to home"
-        >
-          <span style={styles.logoText}>PearTube</span>
-        </button>
-      </div>
-
-      {/* Center section - search */}
-      <div style={styles.centerSection}>
-        <form onSubmit={handleSearch} style={styles.searchForm}>
-          <div
-            style={{
-              ...styles.searchContainer,
-              borderColor: isSearchFocused ? colors.primary : colors.border,
-            }}
+    <>
+      <header style={styles.header}>
+        {/* Left section - hamburger + logo */}
+        <div style={styles.leftSection}>
+          <button
+            style={styles.iconButton}
+            onClick={toggleSidebar}
+            aria-label="Toggle sidebar"
           >
-            <input
-              type="text"
-              placeholder="Search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onFocus={() => setIsSearchFocused(true)}
-              onBlur={() => setIsSearchFocused(false)}
-              style={styles.searchInput}
-            />
-            <button type="submit" style={styles.searchButton} aria-label="Search">
-              <SearchIcon />
+            <MenuIcon />
+          </button>
+
+          <button
+            style={styles.logoButton}
+            onClick={handleLogoClick}
+            aria-label="Go to home"
+          >
+            <span style={styles.logoText}>PearTube</span>
+          </button>
+        </div>
+
+        {/* Center section - search */}
+        <div style={styles.centerSection}>
+          <form onSubmit={handleSearch} style={styles.searchForm}>
+            <div
+              style={{
+                ...styles.searchContainer,
+                borderColor: isSearchFocused ? colors.primary : colors.border,
+              }}
+            >
+              <input
+                type="text"
+                placeholder="Search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => setIsSearchFocused(false)}
+                style={styles.searchInput}
+              />
+              <button type="submit" style={styles.searchButton} aria-label="Search">
+                <SearchIcon />
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Right section - cast + upload + user */}
+        <div style={styles.rightSection}>
+          {cast.available && (
+            <button
+              style={styles.iconButton}
+              onClick={handleCastPress}
+              aria-label={cast.isConnected ? 'Casting' : 'Cast to device'}
+            >
+              {isConnectingCast ? (
+                <span style={{ fontSize: 12, color: colors.primary }}>…</span>
+              ) : (
+                <Feather name="cast" size={20} color={cast.isConnected ? colors.primary : colors.text} />
+              )}
             </button>
-          </div>
-        </form>
-      </div>
+          )}
 
-      {/* Right section - upload + user */}
-      <div style={styles.rightSection}>
-        <button
-          style={styles.iconButton}
-          onClick={handleUploadClick}
-          aria-label="Upload video"
-        >
-          <UploadIcon />
-        </button>
+          <button
+            style={styles.iconButton}
+            onClick={handleUploadClick}
+            aria-label="Upload video"
+          >
+            <UploadIcon />
+          </button>
 
-        <button
-          style={styles.avatarButton}
-          aria-label="User menu"
-        >
-          <UserIcon />
-        </button>
-      </div>
-    </header>
+          <button
+            style={styles.avatarButton}
+            aria-label="User menu"
+          >
+            <UserIcon />
+          </button>
+        </div>
+      </header>
+
+      <DevicePickerModal
+        visible={showCastPicker}
+        devices={cast.devices}
+        connectedDevice={cast.connectedDevice}
+        isDiscovering={cast.isDiscovering}
+        onClose={() => {
+          cast.stopDiscovery()
+          setShowCastPicker(false)
+        }}
+        onDeviceSelect={async (deviceId: string) => {
+          setIsConnectingCast(true)
+          try {
+            const success = await cast.connect(deviceId)
+            if (!success && typeof window !== 'undefined' && typeof window.alert === 'function') {
+              window.alert('Failed to connect to Chromecast device.')
+              return
+            }
+            setShowCastPicker(false)
+          } finally {
+            setIsConnectingCast(false)
+          }
+        }}
+        onDisconnect={async () => {
+          await cast.disconnect()
+          setShowCastPicker(false)
+        }}
+        onAddManualDevice={cast.addManualDevice}
+        onRefresh={cast.startDiscovery}
+      />
+    </>
   )
 }
 

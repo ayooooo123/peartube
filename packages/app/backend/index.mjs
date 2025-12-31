@@ -13,6 +13,7 @@ import { loadDrive } from '@peartube/backend/storage'
 import path from 'bare-path'
 import fs from 'bare-fs'
 import b4a from 'b4a'
+import http1 from 'bare-http1'
 
 // Get IPC from BareKit, args from Bare
 const { IPC } = BareKit
@@ -27,20 +28,310 @@ if (!storagePath || !storagePath.startsWith('/')) {
   console.warn('[Backend] WARNING: storagePath may be invalid:', storagePath)
 }
 
-// Debug: Log all IPC writes with buffer details
-const originalWrite = IPC.write?.bind?.(IPC)
-if (originalWrite) {
-  IPC.write = (data) => {
-    const len = data?.length || data?.byteLength || 0
-    const type = data?.constructor?.name || typeof data
-    const first4 = data?.slice?.(0, 4)
-    console.log('[Backend IPC] Writing', len, 'bytes, type:', type, 'first4:', first4 ? Array.from(first4) : 'N/A')
-    return originalWrite(data)
+// HRPC instance (initialized early so we can surface init errors)
+let rpc = null
+
+// ============================================
+// Cast (FCast/Chromecast) helpers
+// ============================================
+
+let castProxyServer = null
+let castProxyPort = 0
+let castProxyReady = null
+const castProxySessions = new Map()
+const CAST_PROXY_TTL_MS = 30 * 60 * 1000
+
+let CastContext = null
+let castLoadError = null
+let castLoadPromise = null
+let castContext = null
+
+const CAST_LOCALHOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '::1'])
+
+function cleanupCastProxySessions(now = Date.now()) {
+  for (const [token, entry] of castProxySessions.entries()) {
+    if (now - entry.createdAt > CAST_PROXY_TTL_MS) {
+      castProxySessions.delete(token)
+    }
   }
 }
 
-// HRPC instance (initialized early so we can surface init errors)
-let rpc = null
+function buildLocalProxyTarget(url) {
+  try {
+    const parsed = new URL(url)
+    if (CAST_LOCALHOSTS.has(parsed.hostname)) {
+      parsed.hostname = '127.0.0.1'
+    }
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+async function ensureCastProxyServer() {
+  if (castProxyPort) return castProxyPort
+  if (castProxyReady) return castProxyReady
+
+  castProxyReady = new Promise((resolve, reject) => {
+    castProxyServer = http1.createServer((req, res) => {
+      try {
+        console.log('[CastProxy] incoming', req.method || 'GET', req.url || '/')
+      } catch {}
+      const now = Date.now()
+      cleanupCastProxySessions(now)
+      const base = 'http://localhost'
+      const parsed = new URL(req.url || '/', base)
+      if (parsed.pathname === '/cast/ping') {
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('pong')
+        return
+      }
+      const parts = parsed.pathname.split('/').filter(Boolean)
+      const token = parts[0] === 'cast' ? parts[1] : null
+
+      if (!token || !castProxySessions.has(token)) {
+        console.warn('[CastProxy] missing token or session', token || 'none')
+        res.statusCode = 404
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('Cast proxy session not found.')
+        return
+      }
+
+      const entry = castProxySessions.get(token)
+      const target = entry ? buildLocalProxyTarget(entry.url) : null
+      if (!target) {
+        console.warn('[CastProxy] invalid target url for token', token)
+        res.statusCode = 500
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('Cast proxy target invalid.')
+        return
+      }
+      try {
+        const remote = req.socket?.remoteAddress || 'unknown'
+        console.log('[CastProxy] request from', remote, '->', target.host)
+      } catch {}
+
+      const proxyReq = http1.request({
+        method: req.method || 'GET',
+        hostname: target.hostname,
+        port: target.port || 80,
+        path: `${target.pathname}${target.search}`,
+        headers: {
+          range: req.headers?.range,
+        },
+      }, (proxyRes) => {
+        res.statusCode = proxyRes.statusCode || 502
+        try {
+          console.log('[CastProxy] upstream status', proxyRes.statusCode, 'len', proxyRes.headers?.['content-length'] || 'unknown')
+        } catch {}
+        if (proxyRes.headers) {
+          for (const [key, value] of Object.entries(proxyRes.headers)) {
+            if (value !== undefined) {
+              res.setHeader(key, value)
+            }
+          }
+        }
+        proxyRes.pipe(res)
+      })
+
+      proxyReq.on('error', (err) => {
+        console.warn('[CastProxy] upstream error:', err?.message || err)
+        if (!res.headersSent) {
+          res.statusCode = 502
+          res.setHeader('Content-Type', 'text/plain')
+          res.end(`Cast proxy upstream error: ${err?.message || err}`)
+          return
+        }
+        res.end()
+      })
+
+      if (req.method === 'HEAD') {
+        proxyReq.end()
+      } else {
+        req.pipe(proxyReq)
+      }
+    })
+
+    castProxyServer.on('error', (err) => {
+      console.error('[CastProxy] server error:', err?.message || err)
+      reject(err)
+    })
+
+    castProxyServer.listen(0, '0.0.0.0', () => {
+      const addr = castProxyServer.address?.() || null
+      castProxyPort = addr?.port || 0
+      console.log('[CastProxy] listening on', addr?.address || '0.0.0.0', 'port:', castProxyPort)
+      resolve(castProxyPort)
+    })
+  })
+
+  return castProxyReady
+}
+
+function isUsableIPv4(address, family) {
+  if (!address) return false
+  if (address.includes(':')) return false
+  if (CAST_LOCALHOSTS.has(address)) return false
+  if (address.startsWith('127.')) return false
+  if (family && family !== 4 && family !== 'IPv4') return false
+  return true
+}
+
+async function getLocalIPv4ForTarget(targetHost) {
+  if (!targetHost) return null
+
+  try {
+    const mod = await import('bare-dgram')
+    const dgram = mod?.default || mod
+    const socket = (() => {
+      try {
+        return dgram.createSocket('udp4')
+      } catch {}
+      try {
+        return dgram.createSocket({ type: 'udp4' })
+      } catch {}
+      return dgram.createSocket()
+    })()
+    await new Promise((resolve) => socket.bind(0, resolve))
+    socket.connect(1, targetHost)
+    const addr = socket.address?.()
+    const local = addr?.address || null
+    await socket.close?.()
+    if (isUsableIPv4(local, addr?.family)) {
+      return local
+    }
+  } catch (err) {
+    console.warn('[Backend] bare-dgram local IP detection failed:', err?.message || err)
+  }
+
+  let targetPrefix = null
+  const parts = targetHost.split('.')
+  if (parts.length === 4) {
+    targetPrefix = parts.slice(0, 3).join('.')
+  }
+
+  try {
+    const mod = await import('udx-native')
+    const UDX = mod?.default || mod
+    const udx = new UDX()
+    let fallback = null
+
+    for (const iface of udx.networkInterfaces()) {
+      if (iface.family !== 4 || iface.internal) continue
+      if (!isUsableIPv4(iface.host, iface.family)) continue
+      if (targetPrefix && iface.host.startsWith(`${targetPrefix}.`)) {
+        return iface.host
+      }
+      if (!fallback) fallback = iface.host
+    }
+
+    return fallback
+  } catch (err) {
+    console.warn('[Backend] udx-native not available for IP detection:', err?.message || err)
+    return null
+  }
+}
+
+function rewriteUrlHost(url, host) {
+  try {
+    const parsed = new URL(url)
+    parsed.hostname = host
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
+async function createCastProxyUrl(targetHost, sourceUrl) {
+  const localIp = await getLocalIPv4ForTarget(targetHost)
+  if (!localIp || !castProxyPort) {
+    console.warn('[Backend] Cast proxy unavailable', {
+      localIp: localIp || null,
+      port: castProxyPort || 0
+    })
+    return null
+  }
+  console.log('[Backend] Cast proxy local IP selected:', localIp, 'targetHost:', targetHost || 'unknown')
+  cleanupCastProxySessions()
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+  castProxySessions.set(token, { url: sourceUrl, createdAt: Date.now() })
+  return `http://${localIp}:${castProxyPort}/cast/${token}`
+}
+
+async function loadBareFcast() {
+  if (CastContext || castLoadError) return
+  if (castLoadPromise) return castLoadPromise
+  castLoadPromise = (async () => {
+    let lastError
+    if (typeof require === 'function') {
+      try {
+        const mod = require('bare-fcast')
+        CastContext = mod?.CastContext ?? mod?.default ?? mod
+        console.log('[Backend] bare-fcast loaded')
+        return
+      } catch (err) {
+        lastError = err
+      }
+    }
+    try {
+      const mod = await import('bare-fcast')
+      CastContext = mod?.CastContext ?? mod?.default ?? mod
+      console.log('[Backend] bare-fcast loaded')
+      return
+    } catch (err) {
+      lastError = err
+    }
+    castLoadError = lastError?.message || 'Unknown error'
+    console.warn('[Backend] bare-fcast not available:', castLoadError)
+  })()
+  return castLoadPromise
+}
+
+function getCastContext() {
+  if (!castContext && CastContext) {
+    castContext = new CastContext()
+
+    castContext.on('deviceFound', (device) => {
+      try {
+        rpc?.eventCastDeviceFound?.({ device: {
+          id: device.id,
+          name: device.name,
+          host: device.host,
+          port: device.port,
+          protocol: device.protocol,
+        }})
+      } catch {}
+    })
+
+    castContext.on('deviceLost', (deviceId) => {
+      try {
+        rpc?.eventCastDeviceLost?.({ deviceId })
+      } catch {}
+    })
+
+    castContext.on('playbackStateChanged', (state) => {
+      try {
+        rpc?.eventCastPlaybackState?.({ state })
+      } catch {}
+    })
+
+    castContext.on('timeChanged', (time) => {
+      try {
+        rpc?.eventCastTimeUpdate?.({ currentTime: time })
+      } catch {}
+    })
+
+    castContext.on('error', (error) => {
+      try {
+        const message = error?.message || String(error)
+        console.warn('[Backend] Cast error:', message)
+        rpc?.eventCastPlaybackState?.({ state: 'error', error: message })
+      } catch {}
+    })
+  }
+  return castContext
+}
 
 function formatError(err) {
   if (!err) return 'Unknown error'
@@ -87,7 +378,12 @@ function ensureRpc() {
               req.command = 18
             }
           } catch {}
-          return originalOnRequest(req)
+          try {
+            return await originalOnRequest(req)
+          } catch (err) {
+            console.error('[Backend] HRPC request failed:', req?.command, err?.message || err)
+            return
+          }
         }
         rawRpc._peartubeCompat = true
       }
@@ -861,6 +1157,271 @@ rpc.onSetVideoThumbnailFromFile(async () => {
   return { success: false }
 })
 
+// Cast handlers (FCast/Chromecast)
+rpc.onCastAvailable(async () => {
+  await loadBareFcast()
+  return { available: CastContext !== null, error: castLoadError }
+})
+
+rpc.onCastStartDiscovery(async () => {
+  await loadBareFcast()
+  if (!CastContext) {
+    return { success: false, error: castLoadError || 'bare-fcast not available' }
+  }
+  try {
+    const ctx = getCastContext()
+    await ctx.startDiscovery()
+    return { success: true }
+  } catch (err) {
+    console.error('[Backend] Cast discovery error:', err)
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastStopDiscovery(async () => {
+  if (!castContext) return { success: true }
+  try {
+    castContext.stopDiscovery()
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastGetDevices(async () => {
+  if (!castContext) return { devices: [] }
+  try {
+    const devices = castContext.getDevices()
+    return { devices: devices.map((d) => ({
+      id: d.id,
+      name: d.name,
+      host: d.host,
+      port: d.port,
+      protocol: d.protocol,
+    })) }
+  } catch {
+    return { devices: [] }
+  }
+})
+
+rpc.onCastAddManualDevice(async (req) => {
+  await loadBareFcast()
+  if (!CastContext) {
+    return { success: false, error: castLoadError || 'bare-fcast not available' }
+  }
+  try {
+    const ctx = getCastContext()
+    const device = ctx._discoverer.addManualDevice({
+      name: req.name,
+      host: req.host,
+      port: req.port,
+      protocol: req.protocol || 'fcast',
+    })
+    return { success: true, device: {
+      id: device.id,
+      name: device.name,
+      host: device.host,
+      port: device.port,
+      protocol: device.protocol,
+    } }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastConnect(async (req) => {
+  if (!castContext) {
+    return { success: false, error: 'Cast not initialized' }
+  }
+  let deviceInfo = null
+  try {
+    try {
+      const devices = castContext.getDevices?.() || []
+      const device = devices.find((d) => d.id === req.deviceId)
+      if (device) {
+        console.log('[Backend] Cast connect:', device.name, device.protocol, device.host + ':' + device.port)
+        deviceInfo = device
+      } else {
+        console.log('[Backend] Cast connect: device not found for', req.deviceId)
+      }
+    } catch {}
+    await castContext.connect(req.deviceId)
+    return deviceInfo ? {
+      success: true,
+      device: {
+        id: deviceInfo.id,
+        name: deviceInfo.name,
+        host: deviceInfo.host,
+        port: deviceInfo.port,
+        protocol: deviceInfo.protocol,
+      },
+    } : { success: true }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastDisconnect(async () => {
+  if (!castContext) return { success: true }
+  try {
+    await castContext.disconnect()
+    castProxySessions.clear()
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastPlay(async (req) => {
+  if (!castContext?.isConnected()) {
+    return { success: false, error: 'Not connected to cast device' }
+  }
+  try {
+    let url = req.url
+    try {
+      const protocol = castContext?._connectedDevice?.deviceInfo?.protocol
+      if (protocol === 'chromecast') {
+        let usedProxy = false
+        try {
+          await ensureCastProxyServer()
+          const deviceHost = castContext?._connectedDevice?.deviceInfo?.host
+          const proxyUrl = await createCastProxyUrl(deviceHost, req.url)
+          if (proxyUrl) {
+            url = proxyUrl
+            usedProxy = true
+            console.log('[Backend] Cast play: using proxy URL', proxyUrl)
+          }
+        } catch (err) {
+          console.warn('[Backend] Cast proxy init failed:', err?.message || err)
+        }
+        if (!usedProxy) {
+          const parsed = new URL(req.url)
+          if (CAST_LOCALHOSTS.has(parsed.hostname)) {
+            const deviceHost = castContext?._connectedDevice?.deviceInfo?.host
+            const localIp = await getLocalIPv4ForTarget(deviceHost)
+            if (localIp) {
+              url = rewriteUrlHost(req.url, localIp)
+              console.log('[Backend] Cast play: rewrote host to', localIp)
+            }
+          }
+        }
+      }
+    } catch {}
+    try {
+      let host = 'unknown'
+      try {
+        const parsed = new URL(url)
+        host = parsed.host
+      } catch {}
+      const protocol = castContext?._connectedDevice?.deviceInfo?.protocol
+      console.log('[Backend] Cast play:', protocol || 'unknown', 'contentType:', req.contentType, 'host:', host)
+    } catch {}
+    await castContext.play({
+      url,
+      contentType: req.contentType,
+      title: req.title,
+      thumbnail: req.thumbnail,
+      time: req.time,
+      volume: req.volume,
+    })
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastPause(async () => {
+  if (!castContext?.isConnected()) {
+    return { success: false, error: 'Not connected' }
+  }
+  try {
+    await castContext.pause()
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastResume(async () => {
+  if (!castContext?.isConnected()) {
+    return { success: false, error: 'Not connected' }
+  }
+  try {
+    await castContext.resume()
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastStop(async () => {
+  if (!castContext?.isConnected()) {
+    return { success: false, error: 'Not connected' }
+  }
+  try {
+    await castContext.stop()
+    castProxySessions.clear()
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastSeek(async (req) => {
+  if (!castContext?.isConnected()) {
+    return { success: false, error: 'Not connected' }
+  }
+  try {
+    await castContext.seek(req.time)
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastSetVolume(async (req) => {
+  if (!castContext?.isConnected()) {
+    return { success: false, error: 'Not connected' }
+  }
+  try {
+    await castContext.setVolume(req.volume)
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onCastGetState(async () => {
+  if (!castContext) {
+    return { state: 'idle', currentTime: 0, duration: 0, volume: 1.0 }
+  }
+  try {
+    const state = castContext.getPlaybackState()
+    return {
+      state: state.state || 'idle',
+      currentTime: state.currentTime || 0,
+      duration: state.duration || 0,
+      volume: state.volume ?? 1.0,
+    }
+  } catch {
+    return { state: 'idle', currentTime: 0, duration: 0, volume: 1.0 }
+  }
+})
+
+rpc.onCastIsConnected(async () => {
+  return { connected: Boolean(castContext?.isConnected()) }
+})
+
+rpc.onMpvAvailable(async () => ({ available: false, error: 'MPV not supported on mobile' }))
+rpc.onMpvCreate(async () => ({ success: false, error: 'MPV not supported on mobile' }))
+rpc.onMpvLoadFile(async () => ({ success: false, error: 'MPV not supported on mobile' }))
+rpc.onMpvPlay(async () => ({ success: false, error: 'MPV not supported on mobile' }))
+rpc.onMpvPause(async () => ({ success: false, error: 'MPV not supported on mobile' }))
+rpc.onMpvSeek(async () => ({ success: false, error: 'MPV not supported on mobile' }))
+rpc.onMpvGetState(async () => ({ success: false, currentTime: 0, duration: 0, paused: true }))
+rpc.onMpvRenderFrame(async () => ({ success: false, error: 'MPV not supported on mobile' }))
+rpc.onMpvDestroy(async () => ({ success: false, error: 'MPV not supported on mobile' }))
+
 // Event handlers (client -> server, usually no-ops)
 rpc.onEventReady(() => {
   console.log('[HRPC] Client acknowledged ready')
@@ -869,6 +1430,11 @@ rpc.onEventReady(() => {
 rpc.onEventError((data) => {
   console.error('[HRPC] Client reported error:', data?.message)
 })
+
+rpc.onEventCastDeviceFound?.(() => {})
+rpc.onEventCastDeviceLost?.(() => {})
+rpc.onEventCastPlaybackState?.(() => {})
+rpc.onEventCastTimeUpdate?.(() => {})
 
 rpc.onEventUploadProgress(() => {})
 rpc.onEventFeedUpdate(() => {})
@@ -910,51 +1476,63 @@ publicFeed.setOnFeedUpdate(() => {
 // ============================================
 
 // Search handlers
-rpc.onSearchVideos(async (req) => {
-  console.log('[HRPC] searchVideos:', req.query)
-  try {
-    const rawResults = await api.searchVideos(req.channelKey, req.query, {
-      topK: req.topK || 10,
-      federated: Boolean(req.federated)
-    })
-    const results = (rawResults || []).map((r) => ({
-      id: String(r.id || ''),
-      score: r.score != null ? String(r.score) : null,
-      metadata: r.metadata ? JSON.stringify(r.metadata) : null
-    }))
-    return { results }
-  } catch (e) {
-    console.log('[HRPC] searchVideos failed:', e?.message)
-    return { results: [] }
-  }
-})
+if (typeof rpc.onSearchVideos === 'function') {
+  rpc.onSearchVideos(async (req) => {
+    console.log('[HRPC] searchVideos:', req.query)
+    try {
+      const rawResults = await api.searchVideos(req.channelKey, req.query, {
+        topK: req.topK || 10,
+        federated: Boolean(req.federated)
+      })
+      const results = (rawResults || []).map((r) => ({
+        id: String(r.id || ''),
+        score: r.score != null ? String(r.score) : null,
+        metadata: r.metadata ? JSON.stringify(r.metadata) : null
+      }))
+      return { results }
+    } catch (e) {
+      console.log('[HRPC] searchVideos failed:', e?.message)
+      return { results: [] }
+    }
+  })
+} else {
+  console.warn('[HRPC] searchVideos handler not registered (client too old)')
+}
 
-rpc.onGlobalSearchVideos(async (req) => {
-  console.log('[HRPC] globalSearchVideos:', req.query)
-  try {
-    const rawResults = await api.globalSearchVideos(req.query, { topK: req.topK || 20 })
-    const results = (rawResults || []).map((r) => ({
-      id: String(r.id || ''),
-      score: r.score != null ? String(r.score) : null,
-      metadata: r.metadata ? JSON.stringify(r.metadata) : null
-    }))
-    return { results }
-  } catch (e) {
-    console.log('[HRPC] globalSearchVideos failed:', e?.message)
-    return { results: [] }
-  }
-})
+if (typeof rpc.onGlobalSearchVideos === 'function') {
+  rpc.onGlobalSearchVideos(async (req) => {
+    console.log('[HRPC] globalSearchVideos:', req.query)
+    try {
+      const rawResults = await api.globalSearchVideos(req.query, { topK: req.topK || 20 })
+      const results = (rawResults || []).map((r) => ({
+        id: String(r.id || ''),
+        score: r.score != null ? String(r.score) : null,
+        metadata: r.metadata ? JSON.stringify(r.metadata) : null
+      }))
+      return { results }
+    } catch (e) {
+      console.log('[HRPC] globalSearchVideos failed:', e?.message)
+      return { results: [] }
+    }
+  })
+} else {
+  console.warn('[HRPC] globalSearchVideos handler not registered (client too old)')
+}
 
-rpc.onIndexVideoVectors(async (req) => {
-  console.log('[HRPC] indexVideoVectors:', req.channelKey?.slice(0, 16), req.videoId)
-  try {
-    const result = await api.indexVideoVectors?.(req.channelKey, req.videoId)
-    return { success: Boolean(result?.success), error: result?.error || null }
-  } catch (e) {
-    console.log('[HRPC] indexVideoVectors failed:', e?.message)
-    return { success: false, error: e?.message || 'Indexing failed' }
-  }
-})
+if (typeof rpc.onIndexVideoVectors === 'function') {
+  rpc.onIndexVideoVectors(async (req) => {
+    console.log('[HRPC] indexVideoVectors:', req.channelKey?.slice(0, 16), req.videoId)
+    try {
+      const result = await api.indexVideoVectors?.(req.channelKey, req.videoId)
+      return { success: Boolean(result?.success), error: result?.error || null }
+    } catch (e) {
+      console.log('[HRPC] indexVideoVectors failed:', e?.message)
+      return { success: false, error: e?.message || 'Indexing failed' }
+    }
+  })
+} else {
+  console.warn('[HRPC] indexVideoVectors handler not registered (client too old)')
+}
 
 // Comment handlers
 rpc.onAddComment(async (req) => {

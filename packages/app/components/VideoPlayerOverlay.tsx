@@ -36,6 +36,8 @@ import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { useDownloads } from '@/lib/DownloadsContext'
 import { colors } from '@/lib/colors'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
+import { useCast } from '@/lib/cast'
+import { CastButton, DevicePickerModal } from '@/components/cast'
 
 // Constants
 const MINI_PLAYER_HEIGHT = 64
@@ -48,6 +50,14 @@ const SPRING_CONFIG = {
   damping: 20,
   stiffness: 200,
   mass: 0.8,
+}
+
+function showCastAlert(message: string) {
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.alert === 'function') {
+    window.alert(message)
+    return
+  }
+  Alert.alert('Chromecast', message)
 }
 
 // Format helpers
@@ -225,8 +235,7 @@ function ChannelInfo({ channelName, channelInitial }: { channelName: string, cha
 export function VideoPlayerOverlay() {
   const insets = useSafeAreaInsets()
   const { width: screenWidth, height: screenHeight } = useWindowDimensions()
-  const { isDesktop } = usePlatform()
-  const isPear = Platform.OS === 'web'
+  const { isDesktop, isPear } = usePlatform()
 
   // Debug log on mount
   useEffect(() => {
@@ -304,7 +313,7 @@ export function VideoPlayerOverlay() {
 
   useEffect(() => {
     if (!currentVideo || playerMode === 'hidden') return
-    const player = Platform.OS === 'web' ? 'mpv' : 'vlc'
+    const player = Platform.OS === 'web' ? (isPear ? 'mpv' : 'web') : 'vlc'
     const channelKey = currentVideo.channelKey || currentVideo.channel?.key || ''
     const logKey = `${player}:${channelKey}:${currentVideo.id || videoUrl || ''}`
     if (playerLogKeyRef.current === logKey) return
@@ -329,12 +338,6 @@ export function VideoPlayerOverlay() {
   const [seekPosition, setSeekPosition] = useState(0)
   const progressBarRef = useRef<View>(null)
   const progressBarWidth = useRef(0)
-
-  useEffect(() => {
-    if (!isSeeking) {
-      setSeekPosition(currentTime)
-    }
-  }, [currentTime, isSeeking])
 
   // State for showing custom controls overlay
   const [showControls, setShowControls] = useState(false)
@@ -363,6 +366,33 @@ export function VideoPlayerOverlay() {
 
   const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({})
   const [userReaction, setUserReaction] = useState<string | null>(null)
+
+  // Casting state
+  const [showCastPicker, setShowCastPicker] = useState(false)
+  const [isConnectingCast, setIsConnectingCast] = useState(false)
+  const cast = useCast()
+  const isCasting = cast.isConnected
+  const castDeviceName = cast.connectedDevice?.name || 'Casting device'
+  const castPlayback = cast.playbackState
+  const castIsPlaying = castPlayback.state === 'playing' || castPlayback.state === 'buffering'
+  const effectiveCurrentTime = isCasting ? castPlayback.currentTime : currentTime
+  const effectiveDuration = isCasting ? castPlayback.duration : duration
+  const effectiveIsPlaying = isCasting ? castIsPlaying : isPlaying
+  const effectiveProgress = effectiveDuration > 0 ? effectiveCurrentTime / effectiveDuration : 0
+  const showLoadingOverlay = isCasting ? castPlayback.state === 'buffering' : isLoading
+  const loadingLabel = isCasting ? `Casting to ${castDeviceName}...` : 'Connecting to P2P...'
+  const castAutoPlayRef = useRef<string | null>(null)
+  const castAutoPlayInFlightRef = useRef(false)
+
+  // Sync seek position with current time when not seeking
+  useEffect(() => {
+    if (!isSeeking) {
+      setSeekPosition(effectiveCurrentTime)
+    }
+  }, [effectiveCurrentTime, isSeeking])
+
+  // Debug: log cast state on every render
+  console.log('[VideoPlayerOverlay] RENDER - cast.available:', cast.available, 'playerMode:', playerMode, 'showControls:', showControls)
 
   const COMMENTS_PER_PAGE = 25
 
@@ -617,6 +647,126 @@ export function VideoPlayerOverlay() {
       await loadSocial(0, false, true)
     } catch {}
   }, [currentVideoKey, userReaction, loadSocial, rpc])
+
+  // Cast handlers
+  const handleCastPress = useCallback(() => {
+    setShowCastPicker(true)
+    cast.startDiscovery()
+  }, [cast])
+
+  const handleCastDeviceSelect = useCallback(async (deviceId: string) => {
+    setIsConnectingCast(true)
+    try {
+      const success = await cast.connect(deviceId)
+      if (!success) {
+        showCastAlert('Failed to connect to Chromecast device.')
+        return
+      }
+
+      if (!currentVideo) {
+        showCastAlert('No video selected for casting yet.')
+        return
+      }
+
+      let urlToCast = videoUrl
+      if (!urlToCast && rpc?.getVideoUrl) {
+        try {
+          const videoRef = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
+            ? currentVideo.path
+            : currentVideo.id
+          const result = await rpc.getVideoUrl({
+            channelKey: currentVideo.channelKey,
+            videoId: videoRef,
+            publicBeeKey: (currentVideo as any).publicBeeKey || undefined,
+          })
+          urlToCast = result?.url || null
+        } catch (err: any) {
+          showCastAlert(err?.message || 'Failed to resolve video URL for casting.')
+          return
+        }
+      }
+
+      if (!urlToCast) {
+        showCastAlert('Video URL is not ready yet. Try again once playback starts.')
+        return
+      }
+
+      // Start casting the current video
+      await cast.play({
+        url: urlToCast,
+        contentType: currentVideo.mimeType || 'video/mp4',
+        title: currentVideo.title,
+        time: currentTime,
+      })
+      castAutoPlayRef.current = `${currentVideo.channelKey}:${currentVideo.id}`
+      setShowCastPicker(false)
+    } finally {
+      setIsConnectingCast(false)
+    }
+  }, [cast, videoUrl, currentVideo, currentTime, rpc])
+
+  const handleCastDisconnect = useCallback(async () => {
+    await cast.disconnect()
+  }, [cast])
+
+  const handleCloseCastPicker = useCallback(() => {
+    setShowCastPicker(false)
+    cast.stopDiscovery()
+  }, [cast])
+
+  // Auto-cast any loaded video while connected.
+  useEffect(() => {
+    if (!isCasting) {
+      castAutoPlayRef.current = null
+      castAutoPlayInFlightRef.current = false
+      return
+    }
+
+    if (!currentVideo?.channelKey || !currentVideo?.id) return
+    if (castAutoPlayInFlightRef.current) return
+
+    const castKey = `${currentVideo.channelKey}:${currentVideo.id}`
+    if (castAutoPlayRef.current === castKey) return
+
+    let cancelled = false
+    const startCast = async () => {
+      castAutoPlayInFlightRef.current = true
+      try {
+        let urlToCast = videoUrl
+        if (!urlToCast && rpc?.getVideoUrl) {
+          const videoRef = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
+            ? currentVideo.path
+            : currentVideo.id
+          const result = await rpc.getVideoUrl({
+            channelKey: currentVideo.channelKey,
+            videoId: videoRef,
+            publicBeeKey: (currentVideo as any).publicBeeKey || undefined,
+          })
+          urlToCast = result?.url || null
+        }
+
+        if (!urlToCast || cancelled) return
+
+        const success = await cast.play({
+          url: urlToCast,
+          contentType: currentVideo.mimeType || 'video/mp4',
+          title: currentVideo.title,
+          time: Math.floor(currentTime || 0),
+        })
+
+        if (success && !cancelled) {
+          castAutoPlayRef.current = castKey
+        }
+      } finally {
+        castAutoPlayInFlightRef.current = false
+      }
+    }
+
+    startCast()
+    return () => {
+      cancelled = true
+    }
+  }, [isCasting, currentVideo?.channelKey, currentVideo?.id, videoUrl, rpc, cast, currentTime])
 
   // Show controls temporarily
   const showControlsTemporarily = useCallback(() => {
@@ -1046,18 +1196,27 @@ export function VideoPlayerOverlay() {
 
   // Handle play/pause
   const handlePlayPause = useCallback(() => {
+    if (isCasting) {
+      if (castIsPlaying) {
+        cast.pause()
+      } else {
+        cast.resume()
+      }
+      return
+    }
+
     if (isPlaying) {
       pauseVideo()
     } else {
       resumeVideo()
     }
-  }, [isPlaying, pauseVideo, resumeVideo])
+  }, [isCasting, castIsPlaying, cast, isPlaying, pauseVideo, resumeVideo])
 
   const handleDesktopSeekStart = useCallback(() => {
-    if (duration > 0) {
+    if (effectiveDuration > 0) {
       setIsSeeking(true)
     }
-  }, [duration])
+  }, [effectiveDuration])
 
   const handleDesktopSeekChange = useCallback((event: any) => {
     const value = Number(event?.target?.value)
@@ -1066,20 +1225,29 @@ export function VideoPlayerOverlay() {
   }, [])
 
   const handleDesktopSeekEnd = useCallback(() => {
-    if (duration <= 0) return
+    if (effectiveDuration <= 0) return
     if (isSeeking) {
-      seekTo(seekPosition)
+      if (isCasting) {
+        cast.seek(seekPosition)
+      } else {
+        seekTo(seekPosition)
+      }
       setIsSeeking(false)
     }
-  }, [duration, isSeeking, seekPosition, seekTo])
+  }, [effectiveDuration, isSeeking, seekPosition, isCasting, cast, seekTo])
 
   // Handle double-tap seek - 10s forward/backward
   const handleDoubleTapSeek = useCallback((direction: 'left' | 'right') => {
     const delta = direction === 'left' ? -10 : 10
-    seekBy(delta)
+    if (isCasting) {
+      const nextTime = Math.max(0, Math.min(effectiveCurrentTime + delta, effectiveDuration || 0))
+      cast.seek(nextTime)
+    } else {
+      seekBy(delta)
+    }
     setSeekFeedback(direction)
     setTimeout(() => setSeekFeedback(null), 500)
-  }, [seekBy])
+  }, [isCasting, effectiveCurrentTime, effectiveDuration, cast, seekBy])
 
 
   // Available playback speeds
@@ -1225,7 +1393,15 @@ export function VideoPlayerOverlay() {
           <div style={desktopStyles.mainColumn}>
             {/* Video player */}
             <div style={{ ...desktopStyles.videoWrapper, width: desktopVideoWidth, height: desktopVideoHeight }}>
-              {videoUrl ? (
+              {isCasting ? (
+                <div style={desktopStyles.castPlaceholder}>
+                  <Feather name="cast" color={colors.primary} size={40} />
+                  <div style={desktopStyles.castTextBlock}>
+                    <span style={desktopStyles.castTitle}>Casting to {castDeviceName}</span>
+                    <span style={desktopStyles.castSubtitle}>{currentVideo.title}</span>
+                  </div>
+                </div>
+              ) : videoUrl ? (
                 <MpvPlayer
                   key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
                   ref={playerRef}
@@ -1247,27 +1423,27 @@ export function VideoPlayerOverlay() {
                   <span style={desktopStyles.placeholderText}>{currentVideo.title.charAt(0).toUpperCase()}</span>
                 </div>
               )}
-              {isLoading && (
+              {showLoadingOverlay && (
                 <div style={desktopStyles.loadingOverlay}>
                   <ActivityIndicator color="white" size="large" />
-                  <Text style={{ color: '#fff', marginTop: 12 }}>Connecting to P2P...</Text>
+                  <Text style={{ color: '#fff', marginTop: 12 }}>{loadingLabel}</Text>
                 </div>
               )}
             </div>
 
             {/* Desktop playback controls */}
             <div style={desktopStyles.playerControls}>
-              <button onClick={handlePlayPause} style={desktopStyles.controlButton} aria-label={isPlaying ? 'Pause' : 'Play'}>
-                <Feather name={isPlaying ? 'pause' : 'play'} color={colors.text} size={16} />
+              <button onClick={handlePlayPause} style={desktopStyles.controlButton} aria-label={effectiveIsPlaying ? 'Pause' : 'Play'}>
+                <Feather name={effectiveIsPlaying ? 'pause' : 'play'} color={colors.text} size={16} />
               </button>
               <div style={desktopStyles.seekRow}>
                 <input
                   type="range"
                   min={0}
-                  max={duration || 0}
+                  max={effectiveDuration || 0}
                   step={0.1}
-                  value={isSeeking ? seekPosition : currentTime}
-                  disabled={duration <= 0}
+                  value={isSeeking ? seekPosition : effectiveCurrentTime}
+                  disabled={effectiveDuration <= 0}
                   onMouseDown={handleDesktopSeekStart}
                   onTouchStart={handleDesktopSeekStart}
                   onChange={handleDesktopSeekChange}
@@ -1276,7 +1452,7 @@ export function VideoPlayerOverlay() {
                   style={desktopStyles.seekInput}
                 />
                 <span style={desktopStyles.timeLabel}>
-                  {formatDuration(isSeeking ? seekPosition : currentTime)} / {formatDuration(duration)}
+                  {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
                 </span>
               </div>
             </div>
@@ -1284,6 +1460,19 @@ export function VideoPlayerOverlay() {
             {/* Video info */}
             <div style={desktopStyles.videoInfo}>
               <h1 style={desktopStyles.title}>{currentVideo.title}</h1>
+              {isCasting && (
+                <div style={desktopStyles.castBanner}>
+                  <Feather name="cast" color={colors.primary} size={14} />
+                  <span style={desktopStyles.castBannerText}>Casting to {castDeviceName}</span>
+                  <button
+                    onClick={() => cast.disconnect()}
+                    style={desktopStyles.castDisconnectButton}
+                    aria-label="Disconnect casting"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              )}
 
               {/* P2P Stats Bar - matching mobile design */}
               <div style={desktopStyles.p2pStatsBar}>
@@ -1467,64 +1656,78 @@ export function VideoPlayerOverlay() {
 
   // Mobile: Single render path - landscape uses View wrapper, portrait uses Animated.View
   // The VLCPlayer stays mounted across orientation changes for smooth transitions
-  const renderVideoPlayer = () => (
-    <>
-      {Platform.OS !== 'web' && videoUrl && VLCPlayer && (
-        <VLCPlayer
-          key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-          ref={playerRef}
-          source={{
-            uri: videoUrl,
-            initType: 2,
-            initOptions: [
-              '--network-caching=15000',
-              '--file-caching=5000',
-              '--live-caching=5000',
-              '--disc-caching=5000',
-              '--avcodec-hw=any',
-              '--avcodec-threads=0',
-            ],
-          }}
-          style={StyleSheet.absoluteFill}
-          paused={!isPlaying}
-          rate={playbackRate}
-          seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
-          resizeMode="contain"
-          onProgress={onProgress}
-          onPlaying={onPlaying}
-          onPaused={onPaused}
-          onBuffering={onBuffering}
-          onEnd={onEnded}
-          onError={onError}
-        />
-      )}
-      {Platform.OS === 'web' && videoUrl && (
-        <MpvPlayer
-          key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-          ref={playerRef}
-          url={videoUrl}
-          autoPlay
-          onCanPlay={onPlaying}
-          onPaused={onPaused}
-          onPlaying={onPlaying}
-          onEnded={onEnded}
-          onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-          onProgress={(data) => onProgress?.({
-            currentTime: data.currentTime * 1000,
-            duration: data.duration * 1000,
-          } as any)}
-          style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
-        />
-      )}
-      {!videoUrl && (
-        <View style={styles.videoPlaceholder}>
-          <Text style={styles.placeholderText}>
-            {currentVideo.title.charAt(0).toUpperCase()}
+  const renderVideoPlayer = () => {
+    if (isCasting) {
+      return (
+        <View style={styles.castPlaceholder}>
+          <Feather name="cast" size={40} color={colors.primary} />
+          <Text style={styles.castPlaceholderTitle}>Casting to {castDeviceName}</Text>
+          <Text style={styles.castPlaceholderSubtitle} numberOfLines={1}>
+            {currentVideo.title}
           </Text>
         </View>
-      )}
-    </>
-  )
+      )
+    }
+
+    return (
+      <>
+        {Platform.OS !== 'web' && videoUrl && VLCPlayer && (
+          <VLCPlayer
+            key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
+            ref={playerRef}
+            source={{
+              uri: videoUrl,
+              initType: 2,
+              initOptions: [
+                '--network-caching=15000',
+                '--file-caching=5000',
+                '--live-caching=5000',
+                '--disc-caching=5000',
+                '--avcodec-hw=any',
+                '--avcodec-threads=0',
+              ],
+            }}
+            style={StyleSheet.absoluteFill}
+            paused={!isPlaying}
+            rate={playbackRate}
+            seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
+            resizeMode="contain"
+            onProgress={onProgress}
+            onPlaying={onPlaying}
+            onPaused={onPaused}
+            onBuffering={onBuffering}
+            onEnd={onEnded}
+            onError={onError}
+          />
+        )}
+        {Platform.OS === 'web' && isPear && videoUrl && (
+          <MpvPlayer
+            key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
+            ref={playerRef}
+            url={videoUrl}
+            autoPlay
+            onCanPlay={onPlaying}
+            onPaused={onPaused}
+            onPlaying={onPlaying}
+            onEnded={onEnded}
+            onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
+            onProgress={(data) => onProgress?.({
+              currentTime: data.currentTime * 1000,
+              duration: data.duration * 1000,
+            } as any)}
+            style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
+          />
+        )}
+        {!videoUrl && (
+          <View style={styles.videoPlaceholder}>
+            <Text style={styles.placeholderText}>
+              {currentVideo.title.charAt(0).toUpperCase()}
+            </Text>
+          </View>
+        )}
+      </>
+    )
+  }
 
   // Render - all styles are animated, no React state conditionals in JSX to prevent VLC remounting
   const content = (
@@ -1542,10 +1745,10 @@ export function VideoPlayerOverlay() {
               </Animated.View>
 
               {/* Loading overlay */}
-            {isLoading && (
+            {showLoadingOverlay && (
               <View style={styles.loadingOverlay}>
                 <ActivityIndicator color="white" size="large" />
-                <Text style={styles.loadingText}>Connecting to P2P...</Text>
+                <Text style={styles.loadingText}>{loadingLabel}</Text>
               </View>
             )}
 
@@ -1560,7 +1763,7 @@ export function VideoPlayerOverlay() {
 
                 {/* Play/Pause */}
                 <Pressable style={styles.controlButtonLarge} onPress={handlePlayPause}>
-                  {isPlaying ? (
+                  {effectiveIsPlaying ? (
                     <Ionicons name="pause" color="#fff" size={48} />
                   ) : (
                     <Ionicons name="play" color="#fff" size={48} />
@@ -1609,6 +1812,15 @@ export function VideoPlayerOverlay() {
             </Animated.View>
           )}
 
+          {/* Cast button - show with controls */}
+          {playerMode === 'fullscreen' && showControls && (
+            <Animated.View style={[styles.castButton, fullscreenContentStyle]}>
+              <Pressable onPress={handleCastPress} style={styles.castButtonInner}>
+                <Feather name="cast" color={cast.isConnected ? colors.primary : "#fff"} size={22} />
+              </Pressable>
+            </Animated.View>
+          )}
+
           {/* Fullscreen button - only show with controls */}
           {playerMode === 'fullscreen' && showControls && (
             <Animated.View style={fullscreenButtonStyle}>
@@ -1634,18 +1846,22 @@ export function VideoPlayerOverlay() {
               const locationX = e.nativeEvent.locationX
               const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
               setIsSeeking(true)
-              setSeekPosition(progress * duration)
+              setSeekPosition(progress * effectiveDuration)
             }}
             onTouchMove={(e) => {
               if (isSeeking) {
                 const locationX = e.nativeEvent.locationX
                 const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
-                setSeekPosition(progress * duration)
+                setSeekPosition(progress * effectiveDuration)
               }
             }}
             onTouchEnd={() => {
               if (isSeeking) {
-                seekTo(seekPosition)
+                if (isCasting) {
+                  cast.seek(seekPosition)
+                } else {
+                  seekTo(seekPosition)
+                }
                 setIsSeeking(false)
               }
             }}
@@ -1654,7 +1870,7 @@ export function VideoPlayerOverlay() {
             {isSeeking && (
               <View style={[
                 styles.seekTimePreview,
-                { left: `${(seekPosition / duration) * 100}%` }
+                { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
               ]}>
                 <Text style={styles.seekTimeText}>{formatDuration(seekPosition)}</Text>
               </View>
@@ -1665,7 +1881,7 @@ export function VideoPlayerOverlay() {
                 style={[
                   styles.thinProgressFill,
                   isSeeking && styles.thinProgressFillActive,
-                  { width: `${(isSeeking ? seekPosition / duration : playbackProgress) * 100}%` }
+                  { width: `${(isSeeking ? seekPosition / (effectiveDuration || 1) : effectiveProgress) * 100}%` }
                 ]}
               />
             </View>
@@ -1673,7 +1889,7 @@ export function VideoPlayerOverlay() {
             {isSeeking && (
               <View style={[
                 styles.scrubberHandle,
-                { left: `${(seekPosition / duration) * 100}%` }
+                { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
               ]} />
             )}
           </Animated.View>
@@ -1682,7 +1898,7 @@ export function VideoPlayerOverlay() {
           {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && (
             <Animated.View style={timeDisplayStyle}>
               <Text style={styles.timeText}>
-                {formatDuration(isSeeking ? seekPosition : currentTime)} / {formatDuration(duration)}
+                {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
               </Text>
             </Animated.View>
           )}
@@ -1709,7 +1925,7 @@ export function VideoPlayerOverlay() {
         {!isLandscapeFullscreen && !pendingLandscapeExit && (
           <Animated.View style={[styles.miniControls, miniControlsStyle]}>
             <Pressable style={styles.miniControlButton} onPress={handlePlayPause}>
-              {isPlaying ? (
+              {effectiveIsPlaying ? (
                 <Ionicons name="pause" color={colors.text} size={24} />
               ) : (
                 <Ionicons name="play" color={colors.text} size={24} />
@@ -1724,7 +1940,7 @@ export function VideoPlayerOverlay() {
         {/* Mini player progress bar - hidden in landscape (and during landscape exit gating) */}
         {!isLandscapeFullscreen && !pendingLandscapeExit && (
           <Animated.View style={[styles.miniProgressBar, miniInfoStyle]}>
-            <View style={[styles.miniProgressFill, { width: `${playbackProgress * 100}%` }]} />
+            <View style={[styles.miniProgressFill, { width: `${effectiveProgress * 100}%` }]} />
           </Animated.View>
         )}
 
@@ -1738,6 +1954,15 @@ export function VideoPlayerOverlay() {
             {/* Video Info */}
             <View style={styles.videoInfo}>
               <Text style={styles.videoTitle}>{currentVideo.title}</Text>
+              {isCasting && (
+                <View style={styles.castBanner}>
+                  <Feather name="cast" color={colors.primary} size={14} />
+                  <Text style={styles.castBannerText}>Casting to {castDeviceName}</Text>
+                  <Pressable onPress={() => cast.disconnect()} style={styles.castBannerAction}>
+                    <Text style={styles.castBannerActionText}>Disconnect</Text>
+                  </Pressable>
+                </View>
+              )}
               <Text style={styles.videoMeta}>
                 {formatTimeAgo(currentVideo.uploadedAt)} · {formatSize(currentVideo.size)}
               </Text>
@@ -1758,6 +1983,16 @@ export function VideoPlayerOverlay() {
                 onPress={() => toggleReaction('dislike')}
               />
               <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="share-2" color={color} size={size} />} label="Share" />
+              {console.log('[VideoPlayerOverlay] cast.available:', cast.available)}
+              {cast.available && (
+                <ActionButton
+                  icon={({ color, size }: { color: string; size: number }) => <Feather name="cast" color={color} size={size} />}
+                  label={cast.isConnected ? "Casting" : "Cast"}
+                  active={cast.isConnected}
+                  onPress={handleCastPress}
+                  loading={isConnectingCast}
+                />
+              )}
               <ActionButton
                 icon={({ color, size }: { color: string; size: number }) => isDownloaded ? <Feather name="check" color={color} size={size} /> : <Feather name="download" color={color} size={size} />}
                 label={isDownloaded ? "Saved" : "Download"}
@@ -1936,7 +2171,22 @@ export function VideoPlayerOverlay() {
 
   // Always use same structure to prevent remounting
   // GestureDetector wraps only video area - comments scroll freely
-  return content
+  return (
+    <>
+      {content}
+      <DevicePickerModal
+        visible={showCastPicker}
+        onClose={handleCloseCastPicker}
+        devices={cast.devices}
+        connectedDevice={cast.connectedDevice}
+        isDiscovering={cast.isDiscovering}
+        onDeviceSelect={handleCastDeviceSelect}
+        onDisconnect={handleCastDisconnect}
+        onAddManualDevice={cast.addManualDevice}
+        onRefresh={cast.startDiscovery}
+      />
+    </>
+  )
 }
 
 const styles = StyleSheet.create({
@@ -2011,6 +2261,50 @@ const styles = StyleSheet.create({
   placeholderText: {
     color: colors.primary,
     fontSize: 32,
+    fontWeight: '600',
+  },
+  castPlaceholder: {
+    flex: 1,
+    backgroundColor: colors.bgHover,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 24,
+  },
+  castPlaceholderTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  castPlaceholderSubtitle: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  castBanner: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: colors.bgCard,
+    alignSelf: 'flex-start',
+  },
+  castBannerText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  castBannerAction: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: colors.bgSecondary,
+  },
+  castBannerActionText: {
+    color: colors.text,
+    fontSize: 11,
     fontWeight: '600',
   },
   loadingOverlay: {
@@ -2108,6 +2402,20 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  castButton: {
+    position: 'absolute',
+    bottom: 44,
+    right: 60,
+    zIndex: 10,
+  },
+  castButtonInner: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   fullscreenButton: {
     position: 'absolute',
@@ -2697,6 +3005,35 @@ const desktopStyles: Record<string, React.CSSProperties> = {
     borderRadius: 12,
     overflow: 'hidden',
   },
+  castPlaceholder: {
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.bgSecondary,
+    gap: 10,
+    flexDirection: 'column',
+  },
+  castTextBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 4,
+    maxWidth: 520,
+  },
+  castTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  castSubtitle: {
+    fontSize: 13,
+    color: colors.textMuted,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
   placeholder: {
     width: '100%',
     height: '100%',
@@ -2771,6 +3108,29 @@ const desktopStyles: Record<string, React.CSSProperties> = {
     color: colors.text,
     margin: 0,
     lineHeight: 1.3,
+  },
+  castBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 12px',
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 999,
+    width: 'fit-content',
+  },
+  castBannerText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  castDisconnectButton: {
+    marginLeft: 8,
+    backgroundColor: 'transparent',
+    border: 'none',
+    color: colors.primary,
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: '600',
   },
   meta: {
     display: 'flex',

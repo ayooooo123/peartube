@@ -18,6 +18,8 @@ import { VideoGrid } from '@/components/video/VideoGrid.web'
 import { VideoCardProps } from '@/components/video/VideoCard.web'
 import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/desktop/constants'
 import { MpvPlayer, MpvPlayerRef } from '@/components/MpvPlayer'
+import { useCast } from '@/lib/cast'
+import { DevicePickerModal } from '@/components/cast'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && !!(window as any).Pear
@@ -258,6 +260,22 @@ function WatchPageView({
   const [seekPosition, setSeekPosition] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(false)
 
+  // Casting
+  const cast = useCast()
+  const [showCastPicker, setShowCastPicker] = useState(false)
+  const castPlayback = cast.playbackState
+  const isCasting = cast.isConnected
+  const castDeviceName = cast.connectedDevice?.name || 'Chromecast'
+  const castIsPlaying = castPlayback.state === 'playing' || castPlayback.state === 'buffering'
+  const effectiveCurrentTime = isCasting ? castPlayback.currentTime : currentTime
+  const effectiveDuration = isCasting ? castPlayback.duration : duration
+  const effectiveIsPlaying = isCasting ? castIsPlaying : isPlaying
+  const showCastControls = showControls || isCasting
+  const showLoadingOverlay = isCasting ? castPlayback.state === 'buffering' : isLoading
+  const loadingLabel = isCasting ? `Casting to ${castDeviceName}...` : 'Connecting to P2P network...'
+  const castAutoPlayRef = useRef<string | null>(null)
+  const castAutoPlayInFlightRef = useRef(false)
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     const instanceId = watchInstanceIdRef.current
@@ -296,10 +314,16 @@ function WatchPageView({
   }, [])
 
   useEffect(() => {
+    if (!isCasting) return
+    videoRef.current?.pause()
+    setIsPlaying(false)
+  }, [isCasting])
+
+  useEffect(() => {
     if (!isSeeking) {
-      setSeekPosition(currentTime)
+      setSeekPosition(effectiveCurrentTime)
     }
-  }, [currentTime, isSeeking])
+  }, [effectiveCurrentTime, isSeeking])
 
   const toggleControls = useCallback((next?: boolean) => {
     if (typeof next === 'boolean') {
@@ -310,6 +334,15 @@ function WatchPageView({
   }, [])
 
   const handlePlayPause = useCallback(() => {
+    if (isCasting) {
+      if (castIsPlaying) {
+        cast.pause()
+      } else {
+        cast.resume()
+      }
+      return
+    }
+
     if (isPlaying) {
       videoRef.current?.pause()
       setIsPlaying(false)
@@ -317,7 +350,7 @@ function WatchPageView({
       videoRef.current?.play()
       setIsPlaying(true)
     }
-  }, [isPlaying])
+  }, [isCasting, castIsPlaying, cast, isPlaying])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -337,11 +370,11 @@ function WatchPageView({
   }, [handlePlayPause, isActiveWatch])
 
   const handleSeekStart = useCallback(() => {
-    if (duration > 0) {
+    if (effectiveDuration > 0) {
       setIsSeeking(true)
       toggleControls(true)
     }
-  }, [duration, toggleControls])
+  }, [effectiveDuration, toggleControls])
 
   const handleSeekChange = useCallback((event: any) => {
     const value = Number(event?.target?.value)
@@ -350,13 +383,16 @@ function WatchPageView({
   }, [])
 
   const handleSeekEnd = useCallback(() => {
-    if (duration <= 0) return
-    if (isSeeking) {
+    if (effectiveDuration <= 0) return
+    if (!isSeeking) return
+    if (isCasting) {
+      cast.seek(seekPosition)
+    } else {
       videoRef.current?.seek(seekPosition)
       setCurrentTime(seekPosition)
-      setIsSeeking(false)
     }
-  }, [duration, isSeeking, seekPosition])
+    setIsSeeking(false)
+  }, [effectiveDuration, isSeeking, seekPosition, isCasting, cast])
 
   useEffect(() => {
     if (typeof document === 'undefined') return
@@ -473,6 +509,57 @@ function WatchPageView({
     loadVideo()
     return () => { cancelled = true }
   }, [channelKey, video?.path, video?.id, publicBeeKey, rpc, isActiveWatch])
+
+  // Auto-cast any loaded video while connected.
+  useEffect(() => {
+    if (!isCasting) {
+      castAutoPlayRef.current = null
+      castAutoPlayInFlightRef.current = false
+      return
+    }
+    if (!video || !channelKey) return
+    if (castAutoPlayInFlightRef.current) return
+
+    const videoKey = `${channelKey}:${video.id || video.path || ''}`
+    if (castAutoPlayRef.current === videoKey) return
+
+    let cancelled = false
+    const startCast = async () => {
+      castAutoPlayInFlightRef.current = true
+      try {
+        let urlToCast = videoUrl
+        if (!urlToCast && rpc?.getVideoUrl) {
+          const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
+            ? video.path
+            : video.id
+          const result = await rpc.getVideoUrl({
+            channelKey,
+            videoId: videoRef,
+            publicBeeKey: (video as any).publicBeeKey || undefined,
+          })
+          urlToCast = result?.url || null
+        }
+
+        if (!urlToCast || cancelled) return
+
+        const success = await cast.play({
+          url: urlToCast,
+          contentType: video.mimeType || 'video/mp4',
+          title: video.title,
+          time: Math.floor(currentTime || 0),
+        })
+
+        if (success && !cancelled) {
+          castAutoPlayRef.current = videoKey
+        }
+      } finally {
+        castAutoPlayInFlightRef.current = false
+      }
+    }
+
+    startCast()
+    return () => { cancelled = true }
+  }, [isCasting, video, channelKey, videoUrl, rpc, cast, currentTime])
 
   // Load channel info
   useEffect(() => {
@@ -753,12 +840,15 @@ function WatchPageView({
                 <p style={{ color: colors.textMuted }}>{error}</p>
                 <button onClick={onBack} style={watchStyles.backButton}>Go Back</button>
               </div>
-            ) : isLoading ? (
-              <div style={watchStyles.loadingOverlay}>
-                <ActivityIndicator size="large" color="#fff" />
-                <p style={{ color: '#fff', marginTop: 12 }}>Connecting to P2P network...</p>
+            ) : isCasting ? (
+              <div style={watchStyles.castPlaceholder}>
+                <Feather name="cast" size={42} color={colors.primary} />
+                <div style={watchStyles.castTextBlock}>
+                  <span style={watchStyles.castTitle}>Casting to {castDeviceName}</span>
+                  <span style={watchStyles.castSubtitle}>{video?.title}</span>
+                </div>
               </div>
-            ) : isActiveWatch ? (
+            ) : isActiveWatch && videoUrl ? (
               <MpvPlayer
                 key={`${channelKey}:${video.id || videoId}`}
                 ref={videoRef}
@@ -781,18 +871,25 @@ function WatchPageView({
               </div>
             )}
 
-            {showControls && (
+            {showLoadingOverlay && !error && (
+              <div style={watchStyles.loadingOverlay}>
+                <ActivityIndicator size="large" color="#fff" />
+                <p style={{ color: '#fff', marginTop: 12 }}>{loadingLabel}</p>
+              </div>
+            )}
+
+            {showCastControls && (
               <div style={watchStyles.controlsOverlay} onClick={(e) => e.stopPropagation()}>
-                <button onClick={handlePlayPause} style={watchStyles.controlButton} aria-label={isPlaying ? 'Pause' : 'Play'}>
-                  <Feather name={isPlaying ? 'pause' : 'play'} color="#fff" size={16} />
+                <button onClick={handlePlayPause} style={watchStyles.controlButton} aria-label={effectiveIsPlaying ? 'Pause' : 'Play'}>
+                  <Feather name={effectiveIsPlaying ? 'pause' : 'play'} color="#fff" size={16} />
                 </button>
                 <input
                   type="range"
                   min={0}
-                  max={duration || 0}
+                  max={effectiveDuration || 0}
                   step={0.1}
-                  value={isSeeking ? seekPosition : currentTime}
-                  disabled={duration <= 0}
+                  value={isSeeking ? seekPosition : effectiveCurrentTime}
+                  disabled={effectiveDuration <= 0}
                   onMouseDown={handleSeekStart}
                   onTouchStart={handleSeekStart}
                   onChange={handleSeekChange}
@@ -801,8 +898,21 @@ function WatchPageView({
                   style={watchStyles.seekInput}
                 />
                 <span style={watchStyles.timeLabel}>
-                  {formatDuration(isSeeking ? seekPosition : currentTime)} / {formatDuration(duration)}
+                  {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
                 </span>
+                <button
+                  onClick={() => {
+                    cast.startDiscovery()
+                    setShowCastPicker(true)
+                  }}
+                  style={{
+                    ...watchStyles.controlButton,
+                    color: cast.isConnected ? colors.primary : '#fff',
+                  }}
+                  aria-label="Cast"
+                >
+                  <Feather name="cast" color={cast.isConnected ? colors.primary : '#fff'} size={16} />
+                </button>
                 <button
                   onClick={handleFullscreenToggle}
                   style={watchStyles.controlButton}
@@ -817,6 +927,19 @@ function WatchPageView({
           {/* Video info */}
           <div style={watchStyles.videoInfo}>
             <h1 style={watchStyles.title}>{video.title}</h1>
+            {isCasting && (
+              <div style={watchStyles.castBanner}>
+                <Feather name="cast" color={colors.primary} size={14} />
+                <span style={watchStyles.castBannerText}>Casting to {castDeviceName}</span>
+                <button
+                  onClick={() => cast.disconnect()}
+                  style={watchStyles.castDisconnectButton}
+                  aria-label="Disconnect casting"
+                >
+                  Disconnect
+                </button>
+              </div>
+            )}
 
             {/* P2P Stats bar */}
             {videoStats && (
@@ -1106,6 +1229,34 @@ function WatchPageView({
           <CloseIcon color={colors.text} size={24} />
         </button>
       </div>
+
+      {/* Cast Device Picker Modal */}
+      <DevicePickerModal
+        visible={showCastPicker}
+        devices={cast.devices}
+        connectedDevice={cast.connectedDevice}
+        isDiscovering={cast.isDiscovering}
+        onClose={() => {
+          cast.stopDiscovery()
+          setShowCastPicker(false)
+        }}
+        onDeviceSelect={async (deviceId: string) => {
+          const success = await cast.connect(deviceId)
+          if (!success) {
+            if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+              window.alert('Failed to connect to Chromecast device.')
+            }
+            return
+          }
+          setShowCastPicker(false)
+        }}
+        onDisconnect={async () => {
+          await cast.disconnect()
+          setShowCastPicker(false)
+        }}
+        onAddManualDevice={cast.addManualDevice}
+        onRefresh={cast.startDiscovery}
+      />
     </div>
   )
 }
@@ -1144,6 +1295,35 @@ const watchStyles: Record<string, React.CSSProperties> = {
     backgroundColor: '#000',
     borderRadius: 12,
     overflow: 'hidden',
+  },
+  castPlaceholder: {
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    backgroundColor: colors.bgSecondary,
+    flexDirection: 'column',
+  },
+  castTextBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 4,
+    maxWidth: 520,
+  },
+  castTitle: {
+    fontSize: 16,
+    fontWeight: 600,
+    color: colors.text,
+  },
+  castSubtitle: {
+    fontSize: 13,
+    color: colors.textMuted,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   video: {
     width: '100%',
@@ -1234,6 +1414,29 @@ const watchStyles: Record<string, React.CSSProperties> = {
     color: colors.text,
     margin: 0,
     lineHeight: 1.3,
+  },
+  castBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 12px',
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 999,
+    width: 'fit-content',
+  },
+  castBannerText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  castDisconnectButton: {
+    marginLeft: 8,
+    backgroundColor: 'transparent',
+    border: 'none',
+    color: colors.primary,
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 600,
   },
   statsBar: {
     display: 'flex',

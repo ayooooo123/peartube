@@ -5,7 +5,7 @@
  * Uses SHARED player from VideoPlayerContext for continuous playback
  */
 import { useState, useEffect, useRef } from 'react'
-import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet } from 'react-native'
+import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet, Alert } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -19,6 +19,8 @@ import { useApp, colors } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { MpvPlayer } from '@/components/MpvPlayer'
+import { useCast } from '@/lib/cast'
+import { DevicePickerModal } from '@/components/cast'
 
 // HRPC methods used: getVideoUrl, prefetchVideo, getVideoStats, getChannelMeta
 
@@ -37,6 +39,14 @@ function formatDate(timestamp: number | string): string {
   if (!Number.isFinite(value) || value <= 0) return 'Unknown'
   const date = new Date(value)
   return date.toLocaleDateString()
+}
+
+function showCastAlert(message: string) {
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.alert === 'function') {
+    window.alert(message)
+    return
+  }
+  Alert.alert('Chromecast', message)
 }
 
 function formatTimeAgo(timestamp: number | string): string {
@@ -305,6 +315,10 @@ export default function VideoPlayerScreen() {
   const [loadingMeta, setLoadingMeta] = useState(!videoDataParam && !!channelKeyParam)
   const statsPollingRef = useRef<NodeJS.Timeout | null>(null)
 
+  // Casting
+  const cast = useCast()
+  const [showCastPicker, setShowCastPicker] = useState(false)
+
   // Fetch video metadata if not provided (YouTube-style: load from ID)
   useEffect(() => {
     if (videoDataParam || !channelKeyParam || !id || !rpc) return
@@ -488,6 +502,14 @@ export default function VideoPlayerScreen() {
           <Feather name="search" color="#fff" size={22} />
         </Pressable>
 
+        {/* Cast button */}
+        <Pressable style={styles.castButton} onPress={() => {
+          cast.startDiscovery()
+          setShowCastPicker(true)
+        }}>
+          <Feather name="cast" color={cast.isConnected ? colors.primary : "#fff"} size={22} />
+        </Pressable>
+
         <View style={[styles.player, { height: videoHeight }]}>
           {loadingVideo ? (
             <View style={styles.loadingContainer}>
@@ -496,24 +518,30 @@ export default function VideoPlayerScreen() {
             </View>
           ) : videoUrl ? (
             Platform.OS === 'web' ? (
-              isFocused ? (
-                <MpvPlayer
-                  key={`mpv:${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
-                  ref={playerRef}
-                  url={videoUrl || ''}
-                  autoPlay
-                  onCanPlay={onPlaying}
-                  onPaused={onPaused}
-                  onPlaying={onPlaying}
-                  onEnded={onEnded}
-                  onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-                  onProgress={(data) => onProgress?.({
-                    currentTime: data.currentTime * 1000,
-                    duration: data.duration * 1000,
-                  } as any)}
-                  style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
-                />
-              ) : null
+              isPear ? (
+                isFocused ? (
+                  <MpvPlayer
+                    key={`mpv:${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
+                    ref={playerRef}
+                    url={videoUrl || ''}
+                    autoPlay
+                    onCanPlay={onPlaying}
+                    onPaused={onPaused}
+                    onPlaying={onPlaying}
+                    onEnded={onEnded}
+                    onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
+                    onProgress={(data) => onProgress?.({
+                      currentTime: data.currentTime * 1000,
+                      duration: data.duration * 1000,
+                    } as any)}
+                    style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
+                  />
+                ) : null
+              ) : (
+                <View style={styles.errorContainer}>
+                  <Text style={styles.errorText}>Pear Desktop is required for playback</Text>
+                </View>
+              )
             ) : (
               <View style={{ width: screenWidth, height: videoHeight }}>
                 {isFocused && VLCPlayer && (
@@ -586,6 +614,61 @@ export default function VideoPlayerScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* Cast Device Picker Modal */}
+      <DevicePickerModal
+        visible={showCastPicker}
+        devices={cast.devices}
+        connectedDevice={cast.connectedDevice}
+        isDiscovering={cast.isDiscovering}
+        onClose={() => {
+          cast.stopDiscovery()
+          setShowCastPicker(false)
+        }}
+        onDeviceSelect={async (deviceId: string) => {
+          const success = await cast.connect(deviceId)
+          if (!success) {
+            showCastAlert('Failed to connect to Chromecast device.')
+            return
+          }
+
+          let urlToCast = videoUrl
+          if (!urlToCast && videoData && rpc?.getVideoUrl) {
+            try {
+              const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
+                ? videoData.path
+                : videoData.id
+              const result = await rpc.getVideoUrl({
+                channelKey: videoData.channelKey,
+                videoId: videoRef,
+                publicBeeKey: videoData.publicBeeKey || undefined,
+              })
+              urlToCast = result?.url || null
+            } catch (err: any) {
+              showCastAlert(err?.message || 'Failed to resolve video URL for casting.')
+              return
+            }
+          }
+
+          if (!urlToCast) {
+            showCastAlert('Video URL is not ready yet. Try again once playback starts.')
+            return
+          }
+
+          await cast.play({
+            url: urlToCast,
+            contentType: videoData?.mimeType || 'video/mp4',
+            title: videoData?.title,
+          })
+          setShowCastPicker(false)
+        }}
+        onDisconnect={async () => {
+          await cast.disconnect()
+          setShowCastPicker(false)
+        }}
+        onAddManualDevice={cast.addManualDevice}
+        onRefresh={cast.startDiscovery}
+      />
     </View>
   )
 }
@@ -614,6 +697,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 12,
     right: 12,
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  castButton: {
+    position: 'absolute',
+    top: 12,
+    right: 60,
     zIndex: 10,
     width: 40,
     height: 40,

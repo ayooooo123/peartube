@@ -9,6 +9,7 @@ import { Feather, Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import * as VideoThumbnails from 'expo-video-thumbnails'
 import { useApp, colors } from '../_layout'
+import { CastHeaderButton } from '@/components/cast'
 
 // Helper to read file as base64 without expo-file-system
 async function readFileAsBase64(uri: string): Promise<string> {
@@ -392,9 +393,12 @@ export default function StudioScreen() {
         <View className="px-5 py-4">
           <View className="flex-row items-center justify-between">
             <Text className="text-title text-pear-text">Studio</Text>
-            <Pressable onPress={() => router.push('/search')} className="p-2">
-              <Feather name="search" color={colors.text} size={18} />
-            </Pressable>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <CastHeaderButton size={18} />
+              <Pressable onPress={() => router.push('/search')} className="p-2">
+                <Feather name="search" color={colors.text} size={18} />
+              </Pressable>
+            </View>
           </View>
           <Text className="text-caption text-pear-text-muted mt-1">
             {identity ? `Channel: ${identity.name}` : 'No identity - create one in Settings'}

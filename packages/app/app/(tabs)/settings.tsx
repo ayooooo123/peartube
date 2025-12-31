@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
+import { CastHeaderButton } from '@/components/cast'
 
 interface StorageStats {
   usedBytes: number
@@ -412,9 +413,12 @@ export default function SettingsScreen() {
         <View className="px-5 py-4">
           <View className="flex-row items-center justify-between">
             <Text className="text-title text-pear-text">Settings</Text>
-            <Pressable onPress={() => router.push('/search')} className="p-2">
-              <Feather name="search" color={colors.text} size={18} />
-            </Pressable>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <CastHeaderButton size={18} />
+              <Pressable onPress={() => router.push('/search')} className="p-2">
+                <Feather name="search" color={colors.text} size={18} />
+              </Pressable>
+            </View>
           </View>
         </View>
       </View>

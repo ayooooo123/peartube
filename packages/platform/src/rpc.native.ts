@@ -67,6 +67,21 @@ declare const HRPC: new (stream: any) => {
   getStorageStats(req: {}): Promise<any>;
   setStorageLimit(req: { maxGB: number }): Promise<any>;
   clearCache(req: {}): Promise<any>;
+  castAvailable(req: {}): Promise<any>;
+  castStartDiscovery(req: {}): Promise<any>;
+  castStopDiscovery(req: {}): Promise<any>;
+  castGetDevices(req: {}): Promise<any>;
+  castAddManualDevice(req: { name: string; host: string; port?: number; protocol?: string }): Promise<any>;
+  castConnect(req: { deviceId: string }): Promise<any>;
+  castDisconnect(req: {}): Promise<any>;
+  castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number }): Promise<any>;
+  castPause(req: {}): Promise<any>;
+  castResume(req: {}): Promise<any>;
+  castStop(req: {}): Promise<any>;
+  castSeek(req: { time: number }): Promise<any>;
+  castSetVolume(req: { volume: number }): Promise<any>;
+  castGetState(req: {}): Promise<any>;
+  castIsConnected(req: {}): Promise<any>;
   onEventReady(handler: (data: any) => void): void;
   onEventError(handler: (data: any) => void): void;
   onEventVideoStats(handler: (data: any) => void): void;
@@ -74,6 +89,10 @@ declare const HRPC: new (stream: any) => {
   onEventDownloadProgress(handler: (data: any) => void): void;
   onEventFeedUpdate(handler: (data: any) => void): void;
   onEventLog(handler: (data: any) => void): void;
+  onEventCastDeviceFound(handler: (data: any) => void): void;
+  onEventCastDeviceLost(handler: (data: any) => void): void;
+  onEventCastPlaybackState(handler: (data: any) => void): void;
+  onEventCastTimeUpdate(handler: (data: any) => void): void;
 };
 
 // FileSystem from expo-file-system
@@ -94,6 +113,10 @@ type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: V
 type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
 type DownloadProgressCallback = (data: { id: string; progress: number; bytesDownloaded?: number; totalBytes?: number }) => void;
 type FeedUpdateCallback = (data: { action?: string; channelKey?: string }) => void;
+type CastDeviceFoundCallback = (data: { device: { id: string; name: string; host: string; port: number; protocol: string } }) => void;
+type CastDeviceLostCallback = (data: { deviceId: string }) => void;
+type CastPlaybackStateCallback = (data: { state: string; error?: string }) => void;
+type CastTimeUpdateCallback = (data: { currentTime: number }) => void;
 
 // Event callback storage
 const eventCallbacks = {
@@ -103,6 +126,10 @@ const eventCallbacks = {
   uploadProgress: [] as UploadProgressCallback[],
   downloadProgress: [] as DownloadProgressCallback[],
   feedUpdate: [] as FeedUpdateCallback[],
+  castDeviceFound: [] as CastDeviceFoundCallback[],
+  castDeviceLost: [] as CastDeviceLostCallback[],
+  castPlaybackState: [] as CastPlaybackStateCallback[],
+  castTimeUpdate: [] as CastTimeUpdateCallback[],
 };
 
 // Helper to remove callback
@@ -139,6 +166,22 @@ export const events = {
     eventCallbacks.feedUpdate.push(cb);
     return () => removeCallback(eventCallbacks.feedUpdate, cb);
   },
+  onCastDeviceFound: (cb: CastDeviceFoundCallback) => {
+    eventCallbacks.castDeviceFound.push(cb);
+    return () => removeCallback(eventCallbacks.castDeviceFound, cb);
+  },
+  onCastDeviceLost: (cb: CastDeviceLostCallback) => {
+    eventCallbacks.castDeviceLost.push(cb);
+    return () => removeCallback(eventCallbacks.castDeviceLost, cb);
+  },
+  onCastPlaybackState: (cb: CastPlaybackStateCallback) => {
+    eventCallbacks.castPlaybackState.push(cb);
+    return () => removeCallback(eventCallbacks.castPlaybackState, cb);
+  },
+  onCastTimeUpdate: (cb: CastTimeUpdateCallback) => {
+    eventCallbacks.castTimeUpdate.push(cb);
+    return () => removeCallback(eventCallbacks.castTimeUpdate, cb);
+  },
 };
 
 /**
@@ -174,35 +217,36 @@ export async function initPlatformRPC(config: {
   hrpc = new HRPCClass(worklet.IPC);
   console.log('[Platform RPC] HRPC client initialized');
 
-  // Debug: Log IPC stream state and intercept data
   console.log('[Platform RPC] IPC type:', worklet.IPC?.constructor?.name);
-  const ipcOnData = worklet.IPC.on.bind(worklet.IPC);
-  worklet.IPC.on = (event: string, handler: (...args: any[]) => void) => {
-    if (event === 'data') {
-      return ipcOnData(event, (data: any) => {
-        const len = data?.length || data?.byteLength || 0;
-        const type = data?.constructor?.name || typeof data;
-        const isBuffer = Buffer.isBuffer(data);
-        const first4 = data?.slice?.(0, 4);
-        console.log('[Platform RPC] IPC data received:', len, 'bytes, type:', type, 'isBuffer:', isBuffer, 'first4:', first4 ? Array.from(first4) : 'N/A');
-        handler(data);
-      });
-    }
-    return ipcOnData(event, handler);
-  };
 
   const { decode: decodeHrpcMessage } = require('@peartube/spec/messages');
+
+  const safeDispatch = <T extends unknown>(label: string, callbacks: Array<(data: T) => void>, data: T) => {
+    callbacks.forEach((cb) => {
+      if (typeof cb !== 'function') return;
+      try {
+        const result = cb(data);
+        if (result && typeof (result as any).then === 'function') {
+          (result as Promise<any>).catch((err) => {
+            console.error(`[Platform RPC] ${label} handler rejected:`, err?.message || err);
+          });
+        }
+      } catch (err: any) {
+        console.error(`[Platform RPC] ${label} handler threw:`, err?.message || err);
+      }
+    });
+  };
 
   const handleReady = (data: any) => {
     console.log('[Platform RPC] Backend ready, blobServerPort:', data?.blobServerPort);
     _blobServerPort = data?.blobServerPort || null;
     _isInitialized = true;
-    eventCallbacks.ready.forEach(cb => cb(data));
+    safeDispatch('ready', eventCallbacks.ready, data);
   };
 
   const handleError = (data: any) => {
     console.error('[Platform RPC] Backend error:', data?.message);
-    eventCallbacks.error.forEach(cb => cb(data));
+    safeDispatch('error', eventCallbacks.error, data);
   };
 
   const handleVideoStats = (data: any) => {
@@ -212,23 +256,39 @@ export async function initPlatformRPC(config: {
     const videoId = data?.videoId ?? stats?.videoId;
 
     if (channelKey && videoId && stats) {
-      eventCallbacks.videoStats.forEach(cb => cb({ channelKey, videoId, stats }));
+      safeDispatch('videoStats', eventCallbacks.videoStats, { channelKey, videoId, stats });
     } else {
       // Fallback: forward raw data for debugging rather than dropping it.
-      eventCallbacks.videoStats.forEach(cb => cb(data));
+      safeDispatch('videoStats', eventCallbacks.videoStats, data);
     }
   };
 
   const handleUploadProgress = (data: any) => {
-    eventCallbacks.uploadProgress.forEach(cb => cb(data));
+    safeDispatch('uploadProgress', eventCallbacks.uploadProgress, data);
   };
 
   const handleDownloadProgress = (data: any) => {
-    eventCallbacks.downloadProgress.forEach(cb => cb(data));
+    safeDispatch('downloadProgress', eventCallbacks.downloadProgress, data);
   };
 
   const handleFeedUpdate = (data: any) => {
-    eventCallbacks.feedUpdate.forEach(cb => cb(data));
+    safeDispatch('feedUpdate', eventCallbacks.feedUpdate, data);
+  };
+
+  const handleCastDeviceFound = (data: any) => {
+    safeDispatch('castDeviceFound', eventCallbacks.castDeviceFound, data);
+  };
+
+  const handleCastDeviceLost = (data: any) => {
+    safeDispatch('castDeviceLost', eventCallbacks.castDeviceLost, data);
+  };
+
+  const handleCastPlaybackState = (data: any) => {
+    safeDispatch('castPlaybackState', eventCallbacks.castPlaybackState, data);
+  };
+
+  const handleCastTimeUpdate = (data: any) => {
+    safeDispatch('castTimeUpdate', eventCallbacks.castTimeUpdate, data);
   };
 
   const handleLog = (data: any) => {
@@ -239,27 +299,24 @@ export async function initPlatformRPC(config: {
     }
   };
 
-  const fallbackEventCommands: Record<number, string> = {
-    59: '@peartube/event-ready',
-    60: '@peartube/event-error',
-    61: '@peartube/event-upload-progress',
-    62: '@peartube/event-feed-update',
-    63: '@peartube/event-log',
-    64: '@peartube/event-video-stats',
-  };
-
+  const fallbackEventCommands: Record<number, string> = {};
   const rawRpc = (hrpc as any)?._rpc;
-  if (rawRpc && !rawRpc._peartubePatched) {
+  if (rawRpc && !rawRpc._peartubePatched && Object.keys(fallbackEventCommands).length) {
     const originalOnRequest = rawRpc._onrequest;
     rawRpc._onrequest = async (req: any) => {
       try {
         const fallbackEvent = fallbackEventCommands[req?.command];
         if (fallbackEvent) {
+          const hasPayload = Boolean(req?.data && req.data.length > 0);
+          if (!hasPayload) {
+            return await originalOnRequest(req);
+          }
           let payload = null;
           try {
-            payload = req?.data ? decodeHrpcMessage(fallbackEvent, req.data) : null;
+            payload = decodeHrpcMessage(fallbackEvent, req.data);
           } catch (decodeErr: any) {
             console.error('[Platform RPC] Fallback decode failed:', decodeErr?.message || decodeErr, 'command:', req?.command);
+            return await originalOnRequest(req);
           }
 
           switch (fallbackEvent) {
@@ -304,6 +361,10 @@ export async function initPlatformRPC(config: {
   hrpc.onEventDownloadProgress(handleDownloadProgress);
   hrpc.onEventFeedUpdate(handleFeedUpdate);
   hrpc.onEventLog(handleLog);
+  hrpc.onEventCastDeviceFound(handleCastDeviceFound);
+  hrpc.onEventCastDeviceLost(handleCastDeviceLost);
+  hrpc.onEventCastPlaybackState(handleCastPlaybackState);
+  hrpc.onEventCastTimeUpdate(handleCastTimeUpdate);
 
   // Start worklet after handlers are registered.
   worklet.start('/backend.bundle', config.backendSource, [storagePath]);
@@ -590,6 +651,67 @@ export const rpc = {
 
   async clearCache(): Promise<{ success: boolean; clearedBytes?: number }> {
     return ensureRPC().clearCache({});
+  },
+
+  // Casting (FCast/Chromecast)
+  async castAvailable(): Promise<{ available: boolean; error?: string | null }> {
+    return ensureRPC().castAvailable({});
+  },
+
+  async castStartDiscovery(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castStartDiscovery({});
+  },
+
+  async castStopDiscovery(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castStopDiscovery({});
+  },
+
+  async castGetDevices(): Promise<{ devices: Array<{ id: string; name: string; host: string; port: number; protocol: string }> }> {
+    return ensureRPC().castGetDevices({});
+  },
+
+  async castAddManualDevice(req: { name: string; host: string; port?: number; protocol?: string }): Promise<{ success: boolean; device?: { id: string; name: string; host: string; port: number; protocol: string }; error?: string | null }> {
+    return ensureRPC().castAddManualDevice(req);
+  },
+
+  async castConnect(req: { deviceId: string }): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castConnect(req);
+  },
+
+  async castDisconnect(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castDisconnect({});
+  },
+
+  async castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number }): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castPlay(req);
+  },
+
+  async castPause(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castPause({});
+  },
+
+  async castResume(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castResume({});
+  },
+
+  async castStop(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castStop({});
+  },
+
+  async castSeek(req: { time: number }): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castSeek(req);
+  },
+
+  async castSetVolume(req: { volume: number }): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castSetVolume(req);
+  },
+
+  async castGetState(): Promise<{ state: string; currentTime: number; duration: number; volume: number }> {
+    return ensureRPC().castGetState({});
+  },
+
+  async castIsConnected(): Promise<{ connected: boolean }> {
+    return ensureRPC().castIsConnected({});
   },
 
   // Identity - recovery

@@ -802,6 +802,183 @@ ns.register({
 })
 
 // ============================================
+// Global Search
+// ============================================
+
+ns.register({
+  name: 'search-result',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'score', type: 'string', required: false },
+    { name: 'metadata', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'global-search-videos-request',
+  fields: [
+    { name: 'query', type: 'string', required: true },
+    { name: 'topK', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'global-search-videos-response',
+  fields: [
+    { name: 'results', type: '@peartube/search-result', array: true, required: true }
+  ]
+})
+
+// ============================================
+// MPV Player
+// ============================================
+
+ns.register({
+  name: 'mpv-available-request',
+  fields: []
+})
+
+ns.register({
+  name: 'mpv-available-response',
+  fields: [
+    { name: 'available', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-create-request',
+  fields: [
+    { name: 'width', type: 'uint', required: false },
+    { name: 'height', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-create-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'playerId', type: 'string', required: false },
+    { name: 'frameServerPort', type: 'uint', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-load-file-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true },
+    { name: 'url', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-load-file-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-play-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-play-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-pause-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-pause-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-seek-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true },
+    { name: 'time', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-seek-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-get-state-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-get-state-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'currentTime', type: 'uint', required: false },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'paused', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-render-frame-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-render-frame-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'hasFrame', type: 'bool', required: false },
+    { name: 'frameData', type: 'string', required: false },
+    { name: 'width', type: 'uint', required: false },
+    { name: 'height', type: 'uint', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-destroy-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-destroy-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// ============================================
 // Multi-device channel pairing
 // ============================================
 
@@ -1340,6 +1517,361 @@ ns.register({
   ]
 })
 
+// ============================================
+// Casting Types
+// ============================================
+
+ns.register({
+  name: 'cast-device',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'name', type: 'string', required: true },
+    { name: 'host', type: 'string', required: true },
+    { name: 'port', type: 'uint', required: true },
+    { name: 'protocol', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'cast-available-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-available-response',
+  fields: [
+    { name: 'available', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'cast-start-discovery-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-start-discovery-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'cast-stop-discovery-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-stop-discovery-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'cast-get-devices-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-get-devices-response',
+  fields: [
+    { name: 'devices', type: '@peartube/cast-device', array: true, required: true }
+  ]
+})
+
+ns.register({
+  name: 'cast-add-manual-device-request',
+  fields: [
+    { name: 'name', type: 'string', required: true },
+    { name: 'host', type: 'string', required: true },
+    { name: 'port', type: 'uint', required: false },
+    { name: 'protocol', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-add-manual-device-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'device', type: '@peartube/cast-device', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-connect-request',
+  fields: [
+    { name: 'deviceId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'cast-connect-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-disconnect-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-disconnect-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-play-request',
+  fields: [
+    { name: 'url', type: 'string', required: true },
+    { name: 'contentType', type: 'string', required: true },
+    { name: 'title', type: 'string', required: false },
+    { name: 'thumbnail', type: 'string', required: false },
+    { name: 'time', type: 'uint', required: false },
+    { name: 'volume', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-play-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-pause-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-pause-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-resume-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-resume-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-stop-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-stop-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-seek-request',
+  fields: [
+    { name: 'time', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'cast-seek-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-set-volume-request',
+  fields: [
+    { name: 'volume', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'cast-set-volume-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-get-state-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-get-state-response',
+  fields: [
+    { name: 'state', type: 'string', required: true },
+    { name: 'currentTime', type: 'uint', required: false },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'volume', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'cast-is-connected-request',
+  fields: []
+})
+
+ns.register({
+  name: 'cast-is-connected-response',
+  fields: [
+    { name: 'connected', type: 'bool', required: true }
+  ]
+})
+
+// Cast events
+ns.register({
+  name: 'event-cast-device-found',
+  fields: [
+    { name: 'device', type: '@peartube/cast-device', required: true }
+  ]
+})
+
+ns.register({
+  name: 'event-cast-device-lost',
+  fields: [
+    { name: 'deviceId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'event-cast-playback-state',
+  fields: [
+    { name: 'state', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'event-cast-time-update',
+  fields: [
+    { name: 'currentTime', type: 'uint', required: true }
+  ]
+})
+
+// ============================================
+// Search / Watch Events (appended for compat)
+// ============================================
+
+ns.register({
+  name: 'search-videos-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'query', type: 'string', required: true },
+    { name: 'topK', type: 'uint', required: false },
+    { name: 'federated', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'search-videos-response',
+  fields: [
+    { name: 'results', type: '@peartube/search-result', array: true, required: true }
+  ]
+})
+
+ns.register({
+  name: 'log-watch-event-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'completed', type: 'bool', required: false },
+    { name: 'share', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'log-watch-event-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'index-video-vectors-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'index-video-vectors-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'recommendation',
+  fields: [
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'score', type: 'string', required: false },
+    { name: 'reason', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-recommendations-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'limit', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-recommendations-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'recommendations', type: '@peartube/recommendation', array: true, required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-video-recommendations-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'limit', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-video-recommendations-response',
+  fields: [
+    { name: 'success', type: 'bool', required: false },
+    { name: 'recommendations', type: '@peartube/recommendation', array: true, required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
 // Save schema to disk
 Hyperschema.toDisk(schema)
 
@@ -1645,6 +2177,68 @@ rpcNs.register({
   response: { name: '@peartube/get-blob-server-port-response', stream: false }
 })
 
+// Global search
+rpcNs.register({
+  name: 'global-search-videos',
+  request: { name: '@peartube/global-search-videos-request', stream: false },
+  response: { name: '@peartube/global-search-videos-response', stream: false }
+})
+
+// MPV player commands
+rpcNs.register({
+  name: 'mpv-available',
+  request: { name: '@peartube/mpv-available-request', stream: false },
+  response: { name: '@peartube/mpv-available-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-create',
+  request: { name: '@peartube/mpv-create-request', stream: false },
+  response: { name: '@peartube/mpv-create-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-load-file',
+  request: { name: '@peartube/mpv-load-file-request', stream: false },
+  response: { name: '@peartube/mpv-load-file-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-play',
+  request: { name: '@peartube/mpv-play-request', stream: false },
+  response: { name: '@peartube/mpv-play-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-pause',
+  request: { name: '@peartube/mpv-pause-request', stream: false },
+  response: { name: '@peartube/mpv-pause-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-seek',
+  request: { name: '@peartube/mpv-seek-request', stream: false },
+  response: { name: '@peartube/mpv-seek-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-get-state',
+  request: { name: '@peartube/mpv-get-state-request', stream: false },
+  response: { name: '@peartube/mpv-get-state-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-render-frame',
+  request: { name: '@peartube/mpv-render-frame-request', stream: false },
+  response: { name: '@peartube/mpv-render-frame-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-destroy',
+  request: { name: '@peartube/mpv-destroy-request', stream: false },
+  response: { name: '@peartube/mpv-destroy-response', stream: false }
+})
+
 // Event streams (send-only, no response expected)
 // Comment RPC methods
 rpcNs.register({
@@ -1723,6 +2317,149 @@ rpcNs.register({
 rpcNs.register({
   name: 'event-video-stats',
   request: { name: '@peartube/event-video-stats', stream: false, send: true }
+})
+
+// Cast commands
+rpcNs.register({
+  name: 'cast-available',
+  request: { name: '@peartube/cast-available-request', stream: false },
+  response: { name: '@peartube/cast-available-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-start-discovery',
+  request: { name: '@peartube/cast-start-discovery-request', stream: false },
+  response: { name: '@peartube/cast-start-discovery-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-stop-discovery',
+  request: { name: '@peartube/cast-stop-discovery-request', stream: false },
+  response: { name: '@peartube/cast-stop-discovery-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-get-devices',
+  request: { name: '@peartube/cast-get-devices-request', stream: false },
+  response: { name: '@peartube/cast-get-devices-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-add-manual-device',
+  request: { name: '@peartube/cast-add-manual-device-request', stream: false },
+  response: { name: '@peartube/cast-add-manual-device-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-connect',
+  request: { name: '@peartube/cast-connect-request', stream: false },
+  response: { name: '@peartube/cast-connect-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-disconnect',
+  request: { name: '@peartube/cast-disconnect-request', stream: false },
+  response: { name: '@peartube/cast-disconnect-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-play',
+  request: { name: '@peartube/cast-play-request', stream: false },
+  response: { name: '@peartube/cast-play-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-pause',
+  request: { name: '@peartube/cast-pause-request', stream: false },
+  response: { name: '@peartube/cast-pause-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-resume',
+  request: { name: '@peartube/cast-resume-request', stream: false },
+  response: { name: '@peartube/cast-resume-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-stop',
+  request: { name: '@peartube/cast-stop-request', stream: false },
+  response: { name: '@peartube/cast-stop-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-seek',
+  request: { name: '@peartube/cast-seek-request', stream: false },
+  response: { name: '@peartube/cast-seek-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-set-volume',
+  request: { name: '@peartube/cast-set-volume-request', stream: false },
+  response: { name: '@peartube/cast-set-volume-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-get-state',
+  request: { name: '@peartube/cast-get-state-request', stream: false },
+  response: { name: '@peartube/cast-get-state-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'cast-is-connected',
+  request: { name: '@peartube/cast-is-connected-request', stream: false },
+  response: { name: '@peartube/cast-is-connected-response', stream: false }
+})
+
+// Cast events
+rpcNs.register({
+  name: 'event-cast-device-found',
+  request: { name: '@peartube/event-cast-device-found', stream: false, send: true }
+})
+
+rpcNs.register({
+  name: 'event-cast-device-lost',
+  request: { name: '@peartube/event-cast-device-lost', stream: false, send: true }
+})
+
+rpcNs.register({
+  name: 'event-cast-playback-state',
+  request: { name: '@peartube/event-cast-playback-state', stream: false, send: true }
+})
+
+rpcNs.register({
+  name: 'event-cast-time-update',
+  request: { name: '@peartube/event-cast-time-update', stream: false, send: true }
+})
+
+// Search / Watch events (appended for compat)
+rpcNs.register({
+  name: 'search-videos',
+  request: { name: '@peartube/search-videos-request', stream: false },
+  response: { name: '@peartube/search-videos-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'log-watch-event',
+  request: { name: '@peartube/log-watch-event-request', stream: false },
+  response: { name: '@peartube/log-watch-event-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'index-video-vectors',
+  request: { name: '@peartube/index-video-vectors-request', stream: false },
+  response: { name: '@peartube/index-video-vectors-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-recommendations',
+  request: { name: '@peartube/get-recommendations-request', stream: false },
+  response: { name: '@peartube/get-recommendations-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-video-recommendations',
+  request: { name: '@peartube/get-video-recommendations-request', stream: false },
+  response: { name: '@peartube/get-video-recommendations-response', stream: false }
 })
 
 // Save HRPC interface to disk

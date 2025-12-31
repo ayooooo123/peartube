@@ -89,6 +89,7 @@ export function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
  * @param {string} [config.swarmKeyPath] - Optional path to persist Hyperswarm keypair
  * @param {number} [config.blobServerPort] - Optional fixed blob server port
  * @param {string} [config.blobServerHost] - Optional blob server host (defaults to 127.0.0.1)
+ * @param {string} [config.blobServerBindHost] - Optional blob server bind host (defaults to blobServerHost)
  * @param {string[]} [config.blindPeerMirrors] - Z32-encoded keys of blind peer mirrors to connect to
  * @param {boolean} [config.enableBlindPeerServer=true] - Whether to run as blind peer server (desktop)
  * @returns {Promise<import('./types.js').StorageContext>}
@@ -101,6 +102,7 @@ export async function initializeStorage(config) {
     swarmKeyPath,
     blobServerPort: blobServerPortOverride,
     blobServerHost: blobServerHostOverride,
+    blobServerBindHost: blobServerBindHostOverride,
     blindPeerMirrors = [],
     enableBlindPeerServer = true
   } = config;
@@ -128,13 +130,14 @@ export async function initializeStorage(config) {
   let blobServer = null;
   let blobServerPort = 0;
   let blobServerHost = blobServerHostOverride || '127.0.0.1';
+  let blobServerBindHost = blobServerBindHostOverride || blobServerHost;
 
   try {
     const desiredPort = blobServerPortOverride || 0;
 
     blobServer = new BlobServer(blobStore, {
       port: desiredPort || 0, // Use fixed if provided
-      host: blobServerHost
+      host: blobServerBindHost
     });
 
     console.log('[Storage] Starting blob server listen...');
@@ -395,6 +398,7 @@ export async function initializeStorage(config) {
     blobServer,
     blobServerPort,
     blobServerHost,
+    blobServerBindHost,
     drives,
     channels,
     // Blind peering for mobile connectivity

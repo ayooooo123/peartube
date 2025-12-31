@@ -34,6 +34,10 @@ type ErrorCallback = (data: { message: string }) => void;
 type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
 type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
 type FeedUpdateCallback = (data: { channelKey: string; action: string }) => void;
+type CastDeviceFoundCallback = (data: { device: { id: string; name: string; host: string; port: number; protocol: string } }) => void;
+type CastDeviceLostCallback = (data: { deviceId: string }) => void;
+type CastPlaybackStateCallback = (data: { state: string }) => void;
+type CastTimeUpdateCallback = (data: { currentTime: number }) => void;
 
 // Event callback storage
 const eventCallbacks = {
@@ -42,6 +46,10 @@ const eventCallbacks = {
   videoStats: [] as VideoStatsCallback[],
   uploadProgress: [] as UploadProgressCallback[],
   feedUpdate: [] as FeedUpdateCallback[],
+  castDeviceFound: [] as CastDeviceFoundCallback[],
+  castDeviceLost: [] as CastDeviceLostCallback[],
+  castPlaybackState: [] as CastPlaybackStateCallback[],
+  castTimeUpdate: [] as CastTimeUpdateCallback[],
 };
 
 // Helper to remove callback
@@ -74,6 +82,22 @@ export const events = {
     eventCallbacks.feedUpdate.push(cb);
     return () => removeCallback(eventCallbacks.feedUpdate, cb);
   },
+  onCastDeviceFound: (cb: CastDeviceFoundCallback) => {
+    eventCallbacks.castDeviceFound.push(cb);
+    return () => removeCallback(eventCallbacks.castDeviceFound, cb);
+  },
+  onCastDeviceLost: (cb: CastDeviceLostCallback) => {
+    eventCallbacks.castDeviceLost.push(cb);
+    return () => removeCallback(eventCallbacks.castDeviceLost, cb);
+  },
+  onCastPlaybackState: (cb: CastPlaybackStateCallback) => {
+    eventCallbacks.castPlaybackState.push(cb);
+    return () => removeCallback(eventCallbacks.castPlaybackState, cb);
+  },
+  onCastTimeUpdate: (cb: CastTimeUpdateCallback) => {
+    eventCallbacks.castTimeUpdate.push(cb);
+    return () => removeCallback(eventCallbacks.castTimeUpdate, cb);
+  },
 };
 
 // Event listeners for window events (dispatched by worker-client.js)
@@ -105,6 +129,22 @@ function setupEventListeners() {
 
   window.addEventListener('pearFeedUpdate', ((e: CustomEvent) => {
     eventCallbacks.feedUpdate.forEach(cb => cb(e.detail));
+  }) as EventListener);
+
+  window.addEventListener('pearCastDeviceFound', ((e: CustomEvent) => {
+    eventCallbacks.castDeviceFound.forEach(cb => cb(e.detail));
+  }) as EventListener);
+
+  window.addEventListener('pearCastDeviceLost', ((e: CustomEvent) => {
+    eventCallbacks.castDeviceLost.forEach(cb => cb(e.detail));
+  }) as EventListener);
+
+  window.addEventListener('pearCastPlaybackState', ((e: CustomEvent) => {
+    eventCallbacks.castPlaybackState.forEach(cb => cb(e.detail));
+  }) as EventListener);
+
+  window.addEventListener('pearCastTimeUpdate', ((e: CustomEvent) => {
+    eventCallbacks.castTimeUpdate.forEach(cb => cb(e.detail));
   }) as EventListener);
 }
 
@@ -485,6 +525,67 @@ export const rpc = {
 
   async mpvDestroy(req: { playerId: string }): Promise<{ success: boolean; error?: string }> {
     return ensureRPC().mpvDestroy(req);
+  },
+
+  // Casting (FCast/Chromecast)
+  async castAvailable(): Promise<{ available: boolean; error?: string | null }> {
+    return ensureRPC().castAvailable({});
+  },
+
+  async castStartDiscovery(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castStartDiscovery({});
+  },
+
+  async castStopDiscovery(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castStopDiscovery({});
+  },
+
+  async castGetDevices(): Promise<{ devices: Array<{ id: string; name: string; host: string; port: number; protocol: string }> }> {
+    return ensureRPC().castGetDevices({});
+  },
+
+  async castAddManualDevice(req: { name: string; host: string; port?: number; protocol?: string }): Promise<{ success: boolean; device?: { id: string; name: string; host: string; port: number; protocol: string }; error?: string | null }> {
+    return ensureRPC().castAddManualDevice(req);
+  },
+
+  async castConnect(req: { deviceId: string }): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castConnect(req);
+  },
+
+  async castDisconnect(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castDisconnect({});
+  },
+
+  async castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number }): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castPlay(req);
+  },
+
+  async castPause(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castPause({});
+  },
+
+  async castResume(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castResume({});
+  },
+
+  async castStop(): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castStop({});
+  },
+
+  async castSeek(req: { time: number }): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castSeek(req);
+  },
+
+  async castSetVolume(req: { volume: number }): Promise<{ success: boolean; error?: string | null }> {
+    return ensureRPC().castSetVolume(req);
+  },
+
+  async castGetState(): Promise<{ state: string; currentTime: number; duration: number; volume: number }> {
+    return ensureRPC().castGetState({});
+  },
+
+  async castIsConnected(): Promise<{ connected: boolean }> {
+    return ensureRPC().castIsConnected({});
   },
 };
 

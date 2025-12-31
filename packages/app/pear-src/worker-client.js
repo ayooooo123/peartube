@@ -83,6 +83,22 @@ class WorkerClient {
       window.dispatchEvent(new CustomEvent('pearVideoStats', { detail: data }))
     })
 
+    this.rpc.onEventCastDeviceFound?.((data) => {
+      window.dispatchEvent(new CustomEvent('pearCastDeviceFound', { detail: data }))
+    })
+
+    this.rpc.onEventCastDeviceLost?.((data) => {
+      window.dispatchEvent(new CustomEvent('pearCastDeviceLost', { detail: data }))
+    })
+
+    this.rpc.onEventCastPlaybackState?.((data) => {
+      window.dispatchEvent(new CustomEvent('pearCastPlaybackState', { detail: data }))
+    })
+
+    this.rpc.onEventCastTimeUpdate?.((data) => {
+      window.dispatchEvent(new CustomEvent('pearCastTimeUpdate', { detail: data }))
+    })
+
     this.pipe.on('end', () => {
       console.log('[WorkerClient] Pipe ended')
       this.isConnected = false

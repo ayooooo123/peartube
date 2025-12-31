@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useDownloads, DownloadItem, DownloadStatus } from '../../lib/DownloadsContext'
 import { colors } from '../_layout'
+import { CastHeaderButton } from '@/components/cast'
 
 // Format bytes to human readable
 function formatBytes(bytes: number): string {
@@ -205,6 +206,7 @@ export default function DownloadsScreen() {
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <CastHeaderButton size={18} color={colors.textSecondary} activeColor={colors.primary} />
           <Pressable onPress={() => router.push('/search')} style={{ padding: 8 }}>
             <Feather name="search" size={18} color={colors.textSecondary} />
           </Pressable>

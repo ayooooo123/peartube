@@ -20,6 +20,8 @@ import { createUploadManager } from './upload.js';
 /**
  * @typedef {Object} BackendConfig
  * @property {string} storagePath - Path to storage directory
+ * @property {string} [blobServerHost] - Hostname to use when generating blob URLs
+ * @property {string} [blobServerBindHost] - Host to bind the blob server listener
  * @property {() => void} [onFeedUpdate] - Callback when feed updates
  * @property {(driveKey: string, videoPath: string, stats: any) => void} [onStatsUpdate] - Callback for video stats
  */
@@ -90,13 +92,13 @@ async function prefetchDriveMetadata(ctx, driveKeys, videoLimit = 1) {
  * @returns {Promise<BackendContext>} - All backend components
  */
 export async function createBackendContext(config) {
-  const { storagePath, onFeedUpdate, onStatsUpdate } = config;
+  const { storagePath, blobServerHost, blobServerBindHost, onFeedUpdate, onStatsUpdate } = config;
 
   console.log('[Orchestrator] ===== INITIALIZING BACKEND =====');
   console.log('[Orchestrator] Storage path:', storagePath);
 
   // Phase 1: Initialize core storage (fast - just creates corestore, blob server, swarm)
-  const ctx = await initializeStorage({ storagePath });
+  const ctx = await initializeStorage({ storagePath, blobServerHost, blobServerBindHost });
   console.log('[Orchestrator] Storage initialized, blob server port:', ctx.blobServerPort);
 
   // Phase 2: Create managers (synchronous, fast)

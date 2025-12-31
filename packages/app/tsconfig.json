@@ -5,6 +5,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "bare-fcast": [
+        "../bare-fcast/index.d.ts"
       ]
     }
   },

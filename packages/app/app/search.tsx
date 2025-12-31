@@ -8,6 +8,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from './_layout'
 import { VideoCard, VideoData } from '../components/video'
+import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 
@@ -241,6 +242,7 @@ export default function SearchScreen() {
           <Text style={{ color: colors.text, fontSize: 18, fontWeight: '600', flex: 1 }} numberOfLines={1}>
             Search: {query}
           </Text>
+          <CastHeaderButton size={18} />
         </View>
       )}
 

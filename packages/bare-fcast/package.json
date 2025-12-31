@@ -1,0 +1,27 @@
+{
+  "name": "bare-fcast",
+  "version": "0.1.0",
+  "description": "FCast and Chromecast sender SDK for Bare/Pear runtime",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "type": "module",
+  "scripts": {
+    "test": "bare test.js"
+  },
+  "dependencies": {
+    "bare-buffer": "^3.0.0",
+    "bare-dgram": "^1.0.0",
+    "bare-events": "^2.0.0",
+    "bare-tcp": "^1.0.0",
+    "bare-tls": "file:../bare-tls"
+  },
+  "devDependencies": {},
+  "engines": {
+    "bare": ">=2.0.0"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "lib"
+  ]
+}

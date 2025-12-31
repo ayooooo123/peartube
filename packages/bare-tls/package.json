@@ -1,0 +1,60 @@
+{
+  "name": "bare-tls",
+  "version": "2.1.5-patched.1",
+  "description": "Transport Layer Security (TLS) streams for JavaScript",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package": "./package.json",
+    "./constants": {
+      "types": "./lib/constants.d.ts",
+      "default": "./lib/constants.js"
+    },
+    "./errors": {
+      "types": "./lib/errors.d.ts",
+      "default": "./lib/errors.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "net.js",
+    "binding.c",
+    "binding.js",
+    "CMakeLists.txt",
+    "lib",
+    "prebuilds"
+  ],
+  "addon": true,
+  "scripts": {
+    "test": "prettier . --check && bare test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holepunchto/bare-tls.git"
+  },
+  "author": "Holepunch",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/holepunchto/bare-tls/issues"
+  },
+  "homepage": "https://github.com/holepunchto/bare-tls#readme",
+  "engines": {
+    "bare": ">=1.7.0"
+  },
+  "dependencies": {
+    "bare-net": "^2.0.1",
+    "bare-stream": "^2.6.4"
+  },
+  "devDependencies": {
+    "bare-events": "^2.6.0",
+    "bare-fs": "^4.0.2",
+    "brittle": "^3.1.1",
+    "cmake-bare": "^1.1.6",
+    "cmake-fetch": "^1.0.0",
+    "prettier": "^3.4.1",
+    "prettier-config-standard": "^7.0.0"
+  }
+}

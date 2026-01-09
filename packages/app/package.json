@@ -56,7 +56,7 @@
     "@react-navigation/core": "^7.13.6",
     "@react-navigation/native": "^7.1.22",
     "autobase": "^7.24.0",
-    "bare-channel": "^1.0.0",
+    "bare-channel": "^5.2.2",
     "bare-dgram": "^1.0.0",
     "bare-fcast": "file:../bare-fcast",
     "bare-ffmpeg": "file:../bare-ffmpeg",

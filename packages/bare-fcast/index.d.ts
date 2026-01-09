@@ -42,6 +42,8 @@ declare module 'bare-fcast' {
     thumbnail?: string
     time?: number
     volume?: number
+    duration?: number
+    streamType?: 'BUFFERED' | 'LIVE'
   }
 
   export interface DeviceState {

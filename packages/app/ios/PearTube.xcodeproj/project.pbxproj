@@ -17,7 +17,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		0B578897D873CF432CEB650B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; name = PrivacyInfo.xcprivacy; path = PearTube/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		0B578897D873CF432CEB650B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = PearTube/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* PearTube.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PearTube.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = PearTube/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = PearTube/Info.plist; sourceTree = "<group>"; };
@@ -81,7 +81,6 @@
 				4A4BD87A92B24AAC9EFE2CB0 /* Pods-PearTube.debug.xcconfig */,
 				EE73F1D2529B459916A0E121 /* Pods-PearTube.release.xcconfig */,
 			);
-			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};
@@ -337,7 +336,6 @@
 			);
 			inputPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-PearTube/Pods-PearTube-frameworks.sh",
-				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-buffer.3.4.2.framework/bare-buffer.3.4.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-crypto.1.12.0.framework/bare-crypto.1.12.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-hrtime.2.1.1.framework/bare-hrtime.2.1.1",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-inspect.3.1.4.framework/bare-inspect.3.1.4",
@@ -346,19 +344,28 @@
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-subprocess.5.2.1.framework/bare-subprocess.5.2.1",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-tcp.2.2.0.framework/bare-tcp.2.2.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-tty.5.0.3.framework/bare-tty.5.0.3",
-				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-type.1.1.0.framework/bare-type.1.1.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/crc-native.1.1.8.framework/crc-native.1.1.8",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/MobileVLCKit/MobileVLCKit.framework/MobileVLCKit",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/React-Core-prebuilt/React.framework/React",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/ReactNativeDependencies/ReactNativeDependencies.framework/ReactNativeDependencies",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/hermes-engine/Pre-built/hermes.framework/hermes",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/BareKit.framework/BareKit",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-buffer.3.4.2.framework/bare-buffer.3.4.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-channel.5.2.2.framework/bare-channel.5.2.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-dns.1.0.5.framework/bare-dns.1.0.5",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-dns.2.1.4.framework/bare-dns.2.1.4",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-ffmpeg.1.0.0.framework/bare-ffmpeg.1.0.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-fs.4.5.2.framework/bare-fs.4.5.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-module-lexer.1.4.7.framework/bare-module-lexer.1.4.7",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-module.6.1.2.framework/bare-module.6.1.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-os.3.6.2.framework/bare-os.3.6.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-pipe.4.1.2.framework/bare-pipe.4.1.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-structured-clone.1.5.2.framework/bare-structured-clone.1.5.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-subprocess.5.2.2.framework/bare-subprocess.5.2.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tcp.1.9.1.framework/bare-tcp.1.9.1",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tcp.2.2.2.framework/bare-tcp.2.2.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tls.2.1.5.framework/bare-tls.2.1.5",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-type.1.1.0.framework/bare-type.1.1.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-url.2.3.2.framework/bare-url.2.3.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/fs-native-extensions.1.4.5.framework/fs-native-extensions.1.4.5",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/quickbit-native.2.4.8.framework/quickbit-native.2.4.8",
@@ -369,7 +376,6 @@
 			);
 			name = "[CP] Embed Pods Frameworks";
 			outputPaths = (
-				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-buffer.3.4.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-crypto.1.12.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-hrtime.2.1.1.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-inspect.3.1.4.framework",
@@ -378,19 +384,28 @@
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-subprocess.5.2.1.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tcp.2.2.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tty.5.0.3.framework",
-				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-type.1.1.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/crc-native.1.1.8.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/MobileVLCKit.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/React.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/ReactNativeDependencies.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/hermes.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/BareKit.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-buffer.3.4.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-channel.5.2.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-dns.1.0.5.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-dns.2.1.4.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-ffmpeg.1.0.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-fs.4.5.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-module-lexer.1.4.7.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-module.6.1.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-os.3.6.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-pipe.4.1.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-structured-clone.1.5.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-subprocess.5.2.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tcp.1.9.1.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tcp.2.2.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tls.2.1.5.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-type.1.1.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-url.2.3.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/fs-native-extensions.1.4.5.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/quickbit-native.2.4.8.framework",
@@ -427,6 +442,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = PearTube/PearTube.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YW9KBXR4W3;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"$(inherited)",
@@ -463,6 +479,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = PearTube/PearTube.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YW9KBXR4W3;
 				INFOPLIST_FILE = PearTube/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
 				LD_RUNPATH_SEARCH_PATHS = (

@@ -151,3 +151,37 @@ mpv has no native controls in the canvas. Play/pause/seek must call the mpv ref,
 
 ### Disable audio transcoding when mpv is default
 With mpv on desktop and VLC on mobile, audio transcoding can be disabled to preserve original codecs. Gate it in the Pear worker and the shared audio transcoder so uploads keep original media.
+
+---
+
+## Chromecast HLS Transcoding (Mobile)
+
+### E-AC3 -> AAC frame size mismatch causes encoder errors
+Symptom: Chromecast stays idle and logs show repeated `Audio error: Invalid argument` or crash.
+Cause: E-AC3 frames are 1536 samples, AAC-LC requires 1024 samples. Sending 1536 samples directly to the AAC encoder fails.
+Fix: Buffer resampled audio with `AudioFIFO` and read exactly 1024 samples per AAC frame before encoding.
+
+### Use-after-free crash when reusing encoderFrame
+Symptom: `hardened_malloc: fatal allocator error: detected write after free` shortly after casting begins.
+Cause: `audioEncoder.sendFrame()` may keep a reference to `encoderFrame` buffers. Reusing the same frame without reallocating can lead to writing into freed memory.
+Fix: Before each FIFO read, call `encoderFrame.unref()` and `encoderFrame.alloc()` to allocate a fresh buffer. Also `audioFrame.unref()` after each decoded audio frame to release decoder-owned buffers.
+
+### Keep FIFO/frames sample format aligned with encoder
+Use `audioEncoder.sampleFormat` for:
+- `resampledFrame.format`
+- `AudioFIFO` sample format
+- `encoderFrame.format`
+This avoids mismatches between resampler output and encoder input.
+
+### HLS playlist crash fix
+Symptom: `/hls/.../stream.m3u8` request throws `firstSegmentIndex is not defined`.
+Fix: Define `firstSegmentIndex`/`lastSegmentIndex` in `packages/app/backend/hls-segment-manager.mjs` when generating playlists.
+
+### Code locations and rebuild
+- Transcode logic: `packages/app/backend/hls-transcoder.mjs`
+- Playlist generation: `packages/app/backend/hls-segment-manager.mjs`
+- Bundle version marker: `packages/app/backend/index.mjs`
+- Rebuild mobile bundle: `npm run bundle:backend`
+Check logs for:
+`[Backend] Bundle version: add-audio-fifo-v4`
+`[HlsTranscoder] TRANSCODER_VERSION: add-audio-fifo-v4`

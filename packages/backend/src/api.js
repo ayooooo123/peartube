@@ -7,6 +7,9 @@
 
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
+import HypercoreID from 'hypercore-id-encoding';
+import z32 from 'z32';
+import c from 'compact-encoding';
 import { loadDrive, createDrive, getVideoUrl, getVideoUrlFromBlob, waitForDriveSync, loadChannel, loadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
@@ -1145,7 +1148,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               downloadedBlocks: 0,
               peerCount: core.peers?.length || ctx.swarm?.connections?.size || 0
             })
-            videoStats.emitStats(driveKey, videoPath)
+            videoStats.emitStats(driveKey, videoPath, true) // force=true for initial stats
           }
 
           const wasCached = initialAvailable === totalBlocks && totalBlocks > 0
@@ -1205,7 +1208,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
                 status: isComplete ? 'complete' : 'downloading',
                 initialBlocks: initialAvailable
               })
-              videoStats.emitStats(driveKey, videoPath)
+              // Use force=true on completion, otherwise let throttle work
+              videoStats.emitStats(driveKey, videoPath, isComplete)
             }
           }
 
@@ -1255,6 +1259,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               downloadSpeed = 0
               if (videoStats) {
                 videoStats.updateStats(driveKey, videoPath, { status: 'complete' })
+                videoStats.emitStats(driveKey, videoPath, true) // force=true for completion
                 setTimeout(() => videoStats.cleanupMonitor(driveKey, videoPath), 30000)
               }
             }).catch(err => {
@@ -1265,12 +1270,13 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               }
               if (videoStats) {
                 videoStats.updateStats(driveKey, videoPath, { status: 'cancelled' })
+                videoStats.emitStats(driveKey, videoPath, true) // force=true for cancellation
                 videoStats.cleanupMonitor(driveKey, videoPath)
               }
             })
           } else if (videoStats) {
             // Keep stats fresh for cached videos so upload speeds can update.
-            videoStats.emitStats(driveKey, videoPath)
+            videoStats.emitStats(driveKey, videoPath, true) // force=true for cached videos
           }
 
           return {
@@ -1334,7 +1340,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             initialBlocks: initialAvailable,
             downloadedBlocks: 0
           });
-          videoStats.emitStats(driveKey, videoPath);
+          videoStats.emitStats(driveKey, videoPath, true); // force=true for initial stats
         }
 
         // If already complete, skip download
@@ -1374,7 +1380,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
                 peerCount: stats.peers || ctx.swarm?.connections?.size || 0,
                 status: isComplete ? 'complete' : 'downloading'
               });
-              videoStats.emitStats(driveKey, videoPath);
+              // Use force=true on completion, otherwise let throttle work
+              videoStats.emitStats(driveKey, videoPath, isComplete);
             }
 
             if (progress >= lastLoggedProgress + 10 || progress === 100) {
@@ -1535,6 +1542,161 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         elapsed: 0,
         isComplete: false
       };
+    },
+
+    /**
+     * Check if a video blob is fully synced (all blocks locally available)
+     * @param {string} blobUrl - Full blob server URL
+     * @returns {Promise<{isComplete: boolean, progress: number, availableBlocks: number, totalBlocks: number, byteLength: number}>}
+     */
+    async checkVideoSync(blobUrl) {
+      console.log('[API] CHECK_VIDEO_SYNC:', blobUrl?.slice(0, 180));
+      try {
+        const parsed = new URL(blobUrl);
+        const keyParam = parsed.searchParams.get('key');
+        const blobParam = parsed.searchParams.get('blob');
+        
+        console.log('[API] CHECK_VIDEO_SYNC: key param:', keyParam?.slice(0, 16), 'blob param:', blobParam?.slice(0, 30));
+
+        if (!keyParam) {
+          console.log('[API] CHECK_VIDEO_SYNC: missing key param, all params:', Array.from(parsed.searchParams.keys()).join(', '));
+          // If video is cached in UI, assume it's complete (can't check without key)
+          return { isComplete: true, progress: 100, availableBlocks: 0, totalBlocks: 0, byteLength: 0, assumed: true };
+        }
+
+        // Parse blob ID - BlobServer uses z32-encoded compact-encoding format
+        // blobId codec matches hypercore-blob-server's format
+        const blobIdCodec = {
+          preencode(state, b) {
+            c.uint.preencode(state, b.blockOffset)
+            c.uint.preencode(state, b.blockLength)
+            c.uint.preencode(state, b.byteOffset)
+            c.uint.preencode(state, b.byteLength)
+          },
+          encode(state, b) {
+            c.uint.encode(state, b.blockOffset)
+            c.uint.encode(state, b.blockLength)
+            c.uint.encode(state, b.byteOffset)
+            c.uint.encode(state, b.byteLength)
+          },
+          decode(state) {
+            return {
+              blockOffset: c.uint.decode(state),
+              blockLength: c.uint.decode(state),
+              byteOffset: c.uint.decode(state),
+              byteLength: c.uint.decode(state)
+            }
+          }
+        };
+
+        let blob = null;
+        if (blobParam) {
+          try {
+            // Decode z32-encoded blob ID
+            const decoded = z32.decode(blobParam);
+            blob = c.decode(blobIdCodec, decoded);
+            console.log('[API] CHECK_VIDEO_SYNC: decoded blob:', JSON.stringify(blob));
+          } catch (decodeErr) {
+            console.log('[API] CHECK_VIDEO_SYNC: blob decode failed:', decodeErr?.message);
+          }
+        }
+
+        if (!blob) {
+          console.log('[API] CHECK_VIDEO_SYNC: missing or invalid blob param, all params:', Array.from(parsed.searchParams.keys()).join(', '));
+          // If video is cached in UI, assume it's complete (can't check without blob info)
+          return { isComplete: true, progress: 100, availableBlocks: 0, totalBlocks: 0, byteLength: 0, assumed: true };
+        }
+
+        // Load the blobs core - key is HypercoreID encoded (z32-based), not hex
+        let keyBuffer;
+        try {
+          keyBuffer = HypercoreID.decode(keyParam);
+          console.log('[API] CHECK_VIDEO_SYNC: decoded key buffer length:', keyBuffer.length);
+        } catch (keyErr) {
+          console.log('[API] CHECK_VIDEO_SYNC: key decode failed:', keyErr?.message);
+          return { isComplete: true, progress: 100, availableBlocks: 0, totalBlocks: 0, byteLength: 0, assumed: true };
+        }
+
+        const blobsCore = ctx.store.get(keyBuffer);
+        await blobsCore.ready();
+
+        // Debug: check core state
+        console.log('[API] CHECK_VIDEO_SYNC: core ready, length:', blobsCore.length, 'contiguousLength:', blobsCore.contiguousLength);
+
+        // Check how many blocks are locally available
+        const startBlock = blob.blockOffset;
+        const endBlock = blob.blockOffset + blob.blockLength;
+        const totalBlocks = blob.blockLength;
+        
+        console.log('[API] CHECK_VIDEO_SYNC: checking blocks', startBlock, 'to', endBlock, '(', totalBlocks, 'total)');
+
+        // Quick check: if core.contiguousLength >= endBlock, all blocks are available
+        if (blobsCore.contiguousLength >= endBlock) {
+          console.log('[API] CHECK_VIDEO_SYNC: contiguousLength covers all blocks - COMPLETE');
+          return {
+            isComplete: true,
+            progress: 100,
+            availableBlocks: totalBlocks,
+            totalBlocks,
+            byteLength: blob.byteLength,
+            // Return blob info for direct Hypercore access (HypercoreIOReader)
+            blobInfo: blob,
+            blobsCoreKey: keyBuffer.toString('hex')
+          };
+        }
+
+        // IMPORTANT: In Hypercore v10+, has() is async!
+        // For large videos, check a sample of blocks instead of all
+        let availableBlocks = 0;
+        const sampleSize = Math.min(totalBlocks, 20); // Check up to 20 blocks for speed
+        const step = Math.max(1, Math.floor(totalBlocks / sampleSize));
+        
+        for (let i = startBlock; i < endBlock; i += step) {
+          try {
+            const hasBlock = await blobsCore.has(i);
+            if (hasBlock) {
+              availableBlocks++;
+            }
+          } catch (e) {
+            console.log('[API] CHECK_VIDEO_SYNC: has() error at block', i, ':', e?.message);
+          }
+        }
+
+        // Extrapolate from sample
+        const sampledBlocks = Math.ceil((endBlock - startBlock) / step);
+        const allSampledAvailable = availableBlocks >= sampledBlocks; // All sampled blocks available
+        const progress = sampledBlocks > 0 ? Math.round((availableBlocks / sampledBlocks) * 100) : 0;
+
+        // IMPORTANT: Sampling can give false positives!
+        // Even if all sampled blocks are available, the video may not be complete
+        // because we only check every Nth block. For true completion, contiguousLength must cover all blocks.
+        // Only mark as complete if BOTH conditions are met:
+        // 1. All sampled blocks are available (sample check passed)
+        // 2. Core's contiguousLength is at least at startBlock (data is contiguous from beginning)
+        //    AND contiguousLength is close to endBlock (within reasonable margin)
+        const contiguousCoversStart = blobsCore.contiguousLength >= startBlock;
+        const contiguousNearEnd = blobsCore.contiguousLength >= endBlock - Math.min(100, totalBlocks * 0.01);
+        const isComplete = allSampledAvailable && contiguousCoversStart && contiguousNearEnd;
+
+        console.log('[API] CHECK_VIDEO_SYNC: sampled', availableBlocks, '/', sampledBlocks, 'blocks (' + progress + '%)',
+          'contiguous:', blobsCore.contiguousLength, 'need:', endBlock,
+          isComplete ? 'COMPLETE' : 'INCOMPLETE');
+
+        return {
+          isComplete,
+          progress,
+          availableBlocks,
+          totalBlocks,
+          byteLength: blob.byteLength,
+          // Return blob info for direct Hypercore access (HypercoreIOReader)
+          blobInfo: blob,
+          // Return hex-encoded key (not z32) for store.get(Buffer.from(key, 'hex'))
+          blobsCoreKey: keyBuffer.toString('hex')
+        };
+      } catch (err) {
+        console.error('[API] CHECK_VIDEO_SYNC error:', err?.message);
+        return { isComplete: false, progress: 0, availableBlocks: 0, totalBlocks: 0, byteLength: 0, error: err?.message };
+      }
     },
 
     // ============================================

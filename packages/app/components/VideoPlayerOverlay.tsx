@@ -656,15 +656,20 @@ export function VideoPlayerOverlay() {
 
   const handleCastDeviceSelect = useCallback(async (deviceId: string) => {
     setIsConnectingCast(true)
+    // Set in-flight flag BEFORE connect to prevent auto-cast effect from also calling play
+    // The auto-cast effect checks this flag and bails out if true
+    castAutoPlayInFlightRef.current = true
     try {
       const success = await cast.connect(deviceId)
       if (!success) {
         showCastAlert('Failed to connect to Chromecast device.')
+        castAutoPlayInFlightRef.current = false
         return
       }
 
       if (!currentVideo) {
         showCastAlert('No video selected for casting yet.')
+        castAutoPlayInFlightRef.current = false
         return
       }
 
@@ -682,14 +687,20 @@ export function VideoPlayerOverlay() {
           urlToCast = result?.url || null
         } catch (err: any) {
           showCastAlert(err?.message || 'Failed to resolve video URL for casting.')
+          castAutoPlayInFlightRef.current = false
           return
         }
       }
 
       if (!urlToCast) {
         showCastAlert('Video URL is not ready yet. Try again once playback starts.')
+        castAutoPlayInFlightRef.current = false
         return
       }
+
+      // Set ref BEFORE play to prevent auto-cast effect from also calling play
+      castAutoPlayRef.current = `${currentVideo.channelKey}:${currentVideo.id}`
+      setShowCastPicker(false)
 
       // Start casting the current video
       await cast.play({
@@ -698,10 +709,10 @@ export function VideoPlayerOverlay() {
         title: currentVideo.title,
         time: currentTime,
       })
-      castAutoPlayRef.current = `${currentVideo.channelKey}:${currentVideo.id}`
-      setShowCastPicker(false)
     } finally {
       setIsConnectingCast(false)
+      // Reset in-flight flag - auto-cast effect can now run for different videos
+      castAutoPlayInFlightRef.current = false
     }
   }, [cast, videoUrl, currentVideo, currentTime, rpc])
 
@@ -754,7 +765,8 @@ export function VideoPlayerOverlay() {
           time: Math.floor(currentTime || 0),
         })
 
-        if (success && !cancelled) {
+        if (!cancelled) {
+          // Always set castAutoPlayRef to prevent retry loops on failure
           castAutoPlayRef.current = castKey
         }
       } finally {
@@ -766,7 +778,7 @@ export function VideoPlayerOverlay() {
     return () => {
       cancelled = true
     }
-  }, [isCasting, currentVideo?.channelKey, currentVideo?.id, videoUrl, rpc, cast, currentTime])
+  }, [isCasting, currentVideo?.channelKey, currentVideo?.id, videoUrl, rpc, cast])
 
   // Show controls temporarily
   const showControlsTemporarily = useCallback(() => {

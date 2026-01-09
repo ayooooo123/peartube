@@ -20,6 +20,10 @@ export class VideoStatsTracker {
     this.videoMonitors = new Map();
     /** @type {((driveKey: string, videoPath: string, stats: VideoStats) => void) | null} */
     this.onStatsUpdate = null;
+    /** @type {Map<string, number>} key -> last emit timestamp (for throttling) */
+    this._lastEmitTime = new Map();
+    /** @type {number} Minimum ms between emits per video (throttle) */
+    this._emitThrottleMs = 250; // Max 4 updates per second per video
 
     this._instanceId = ++instanceCounter;
     console.log('[VideoStats] Initialized, instance #' + this._instanceId);
@@ -160,27 +164,33 @@ export class VideoStatsTracker {
   }
 
   /**
-   * Emit stats update to callback
+   * Emit stats update to callback (with throttling)
    * @param {string} driveKey
    * @param {string} videoPath
+   * @param {boolean} [force=false] - Skip throttle check (for completion events)
    */
-  emitStats(driveKey, videoPath) {
-    const marker = this.onStatsUpdate?._statsMarker || 'unknown';
-    console.log('[VideoStats] instance #' + this._instanceId + ' emitStats, callback marker:', marker);
+  emitStats(driveKey, videoPath, force = false) {
     if (!this.onStatsUpdate) {
-      console.log('[VideoStats] emitStats: no callback set');
       return;
     }
+
+    // Throttle: limit how often we emit per video to prevent RPC flood
+    const key = this.getKey(driveKey, videoPath);
+    const now = Date.now();
+    const lastEmit = this._lastEmitTime.get(key) || 0;
+
+    if (!force && (now - lastEmit) < this._emitThrottleMs) {
+      return; // Too soon since last emit, skip this one
+    }
+
     const stats = this.getStats(driveKey, videoPath);
     if (stats) {
-      console.log('[VideoStats] Emitting stats:', stats.progress + '% complete');
+      this._lastEmitTime.set(key, now);
       try {
         this.onStatsUpdate(driveKey, videoPath, stats);
       } catch (e) {
         console.log('[VideoStats] Error emitting stats:', e.message);
       }
-    } else {
-      console.log('[VideoStats] emitStats: no stats found for', videoPath?.slice(0, 30));
     }
   }
 
@@ -203,6 +213,7 @@ export class VideoStatsTracker {
     const key = this.getKey(driveKey, videoPath);
     this.cleanupMonitor(driveKey, videoPath);
     this.videoStats.delete(key);
+    this._lastEmitTime.delete(key);
   }
 
   /**
@@ -215,5 +226,6 @@ export class VideoStatsTracker {
     }
     this.videoStats.clear();
     this.videoMonitors.clear();
+    this._lastEmitTime.clear();
   }
 }

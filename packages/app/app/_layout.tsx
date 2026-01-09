@@ -237,8 +237,10 @@ export default function RootLayout() {
     // If it's missing (common when running `expo run:ios` directly), fail gracefully instead of crashing.
     try {
       const backendSource = require('../backend.bundle.js')
+      const downloaderWorkerSource = require('../downloader-worker.bundle.js')
       console.log('[App] Backend bundle length:', backendSource?.length || 0)
-      await platformRPC.initPlatformRPC({ backendSource })
+      console.log('[App] Downloader worker bundle length:', downloaderWorkerSource?.length || 0)
+      await platformRPC.initPlatformRPC({ backendSource, downloaderWorkerSource })
     } catch (err) {
       console.error('[App] Failed to initialize platform RPC:', err)
       setBackendError(err instanceof Error ? err.message : 'Failed to initialize backend')

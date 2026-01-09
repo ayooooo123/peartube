@@ -1,8 +1,8 @@
-export { useCast } from './useCast.shared'
+export { useCast } from './useCast'
 export type {
   CastDevice,
   CastPlaybackState,
   TranscodeStatus,
   UseCastOptions,
   UseCastReturn,
-} from './useCast.shared'
+} from './useCast'

@@ -106,6 +106,17 @@ let hrpc: InstanceType<typeof HRPC> | null = null;
 let _blobServerPort: number | null = null;
 let _isInitialized = false;
 
+// Transcoder worklet state
+let transcodeWorklet: InstanceType<typeof Worklet> | null = null;
+let _transcodeCallbacks: {
+  onProgress?: (data: any) => void;
+  onSegment?: (data: any) => void;
+  onComplete?: (data: any) => void;
+  onError?: (data: any) => void;
+} = {};
+let _transcodeResolve: ((data: any) => void) | null = null;
+let _transcodeReject: ((error: Error) => void) | null = null;
+
 // Event callback types
 type ReadyCallback = (data: { blobServerPort: number }) => void;
 type ErrorCallback = (data: { message: string }) => void;
@@ -192,6 +203,7 @@ export const events = {
  */
 export async function initPlatformRPC(config: {
   backendSource: string;
+  downloaderWorkerSource?: string;
   storagePath?: string;
 }): Promise<void> {
   if (_isInitialized && worklet) {
@@ -203,6 +215,7 @@ export async function initPlatformRPC(config: {
   const WorkletClass = require('react-native-bare-kit').Worklet;
   const HRPCClass = require('@peartube/spec');
   const FS = require('expo-file-system');
+  const encoding = FS.EncodingType?.UTF8 || 'utf8';
 
   // Determine storage path
   let storagePath = config.storagePath || FS.documentDirectory || '';
@@ -211,6 +224,21 @@ export async function initPlatformRPC(config: {
   }
 
   console.log('[Platform RPC] Initializing with storage:', storagePath);
+
+  if (!config.downloaderWorkerSource) {
+    throw new Error('Downloader worker bundle missing');
+  }
+
+  const storageDir = storagePath.endsWith('/') ? storagePath : `${storagePath}/`;
+  const downloaderWorkerPath = `${storageDir}downloader-worker.bundle.js`;
+  const downloaderWorkerUri = `file://${downloaderWorkerPath}`;
+
+  try {
+    await FS.writeAsStringAsync(downloaderWorkerUri, config.downloaderWorkerSource, { encoding });
+    console.log('[Platform RPC] Downloader worker written:', downloaderWorkerPath);
+  } catch (err: any) {
+    throw new Error(`Failed to write downloader worker bundle: ${err?.message || err}`);
+  }
 
   // Create worklet and HRPC client before starting to avoid missing early events.
   worklet = new WorkletClass();
@@ -367,7 +395,7 @@ export async function initPlatformRPC(config: {
   hrpc.onEventCastTimeUpdate(handleCastTimeUpdate);
 
   // Start worklet after handlers are registered.
-  worklet.start('/backend.bundle', config.backendSource, [storagePath]);
+  worklet.start('/backend.bundle', config.backendSource, [storagePath, downloaderWorkerPath]);
   console.log('[Platform RPC] Worklet started');
 }
 
@@ -407,6 +435,210 @@ export function getBlobServerPort(): number | null {
  */
 export function getHRPCInstance(): any {
   return hrpc;
+}
+
+// ============================================
+// Transcoder Worklet Management
+// ============================================
+
+/**
+ * Start the transcoder worklet and begin transcoding
+ */
+export async function startTranscodeWorklet(config: {
+  transcodeSource: string;
+  inputUrl: string;
+  outputDir: string;
+  options?: {
+    useHardwareAccel?: boolean;
+    videoBitrate?: number;
+    audioBitrate?: number;
+    segmentDuration?: number;
+  };
+  onProgress?: (data: { phase: string; percent?: number; frames?: number; bytes?: number; total?: number }) => void;
+  onSegment?: (data: { index: number; duration: number; segmentsReady: number }) => void;
+}): Promise<{
+  success: boolean;
+  sessionId?: string;
+  hlsDir?: string;
+  playlistPath?: string;
+  totalFrames?: number;
+  totalSegments?: number;
+  error?: string;
+}> {
+  // Get Worklet class at runtime
+  const WorkletClass = require('react-native-bare-kit').Worklet;
+  const FS = require('expo-file-system');
+
+  // Terminate any existing transcode worklet
+  if (transcodeWorklet) {
+    console.log('[Platform RPC] Terminating existing transcode worklet');
+    try {
+      transcodeWorklet.terminate();
+    } catch {}
+    transcodeWorklet = null;
+  }
+
+  return new Promise((resolve, reject) => {
+    try {
+      console.log('[Platform RPC] Starting transcode worklet...');
+
+      // Store callbacks
+      _transcodeCallbacks = {
+        onProgress: config.onProgress,
+        onSegment: config.onSegment,
+      };
+      _transcodeResolve = resolve;
+      _transcodeReject = reject;
+
+      // Create new worklet
+      transcodeWorklet = new WorkletClass();
+
+      // Message buffer for line-based protocol
+      let messageBuffer = '';
+
+      // Handle IPC messages from transcode worklet
+      transcodeWorklet!.IPC.on('data', (chunk: Uint8Array) => {
+        messageBuffer += Buffer.from(chunk).toString();
+        const lines = messageBuffer.split('\n');
+        messageBuffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            handleTranscodeMessage(msg, config.inputUrl, config.outputDir, config.options);
+          } catch (err: any) {
+            console.error('[Platform RPC] Failed to parse transcode message:', err?.message);
+          }
+        }
+      });
+
+      transcodeWorklet!.IPC.on('error', (err: Error) => {
+        console.error('[Platform RPC] Transcode worklet IPC error:', err?.message);
+        if (_transcodeReject) {
+          _transcodeReject(err);
+          _transcodeReject = null;
+          _transcodeResolve = null;
+        }
+      });
+
+      // Determine storage path for worklet args
+      let storagePath = FS.documentDirectory || '';
+      if (storagePath.startsWith('file://')) {
+        storagePath = storagePath.slice(7);
+      }
+
+      // Start the worklet
+      transcodeWorklet!.start('/transcode-worklet.bundle', config.transcodeSource, [storagePath]);
+      console.log('[Platform RPC] Transcode worklet started');
+
+    } catch (err: any) {
+      console.error('[Platform RPC] Failed to start transcode worklet:', err?.message);
+      reject(err);
+    }
+  });
+}
+
+/**
+ * Handle messages from transcode worklet
+ */
+function handleTranscodeMessage(
+  msg: any,
+  inputUrl: string,
+  outputDir: string,
+  options?: any
+) {
+  console.log('[Platform RPC] Transcode message:', msg.type);
+
+  switch (msg.type) {
+    case 'ready':
+      // Send start command to worklet
+      console.log('[Platform RPC] Transcode worklet ready, sending start command');
+      const startMsg = JSON.stringify({
+        type: 'start',
+        inputUrl,
+        outputDir,
+        options: options || {},
+      }) + '\n';
+      transcodeWorklet?.IPC.write(Buffer.from(startMsg));
+      break;
+
+    case 'progress':
+      if (_transcodeCallbacks.onProgress) {
+        _transcodeCallbacks.onProgress(msg);
+      }
+      break;
+
+    case 'segment':
+      if (_transcodeCallbacks.onSegment) {
+        _transcodeCallbacks.onSegment(msg);
+      }
+      break;
+
+    case 'complete':
+      console.log('[Platform RPC] Transcode complete:', msg.totalFrames, 'frames');
+      if (_transcodeResolve) {
+        _transcodeResolve({
+          success: true,
+          sessionId: msg.sessionId,
+          hlsDir: msg.hlsDir,
+          playlistPath: msg.playlistPath,
+          totalFrames: msg.totalFrames,
+          totalSegments: msg.totalSegments,
+        });
+        _transcodeResolve = null;
+        _transcodeReject = null;
+      }
+      // Terminate worklet after completion
+      terminateTranscodeWorklet();
+      break;
+
+    case 'error':
+      console.error('[Platform RPC] Transcode error:', msg.error);
+      if (_transcodeReject) {
+        _transcodeReject(new Error(msg.error || 'Transcode failed'));
+        _transcodeReject = null;
+        _transcodeResolve = null;
+      }
+      // Terminate worklet after error
+      terminateTranscodeWorklet();
+      break;
+  }
+}
+
+/**
+ * Stop active transcode and terminate worklet
+ */
+export function terminateTranscodeWorklet(): void {
+  if (transcodeWorklet) {
+    console.log('[Platform RPC] Terminating transcode worklet');
+    try {
+      // Send stop command
+      const stopMsg = JSON.stringify({ type: 'stop' }) + '\n';
+      transcodeWorklet.IPC.write(Buffer.from(stopMsg));
+
+      // Terminate after short delay to allow cleanup
+      setTimeout(() => {
+        try {
+          transcodeWorklet?.terminate();
+        } catch {}
+        transcodeWorklet = null;
+      }, 100);
+    } catch (err) {
+      console.error('[Platform RPC] Failed to terminate transcode worklet:', err);
+      transcodeWorklet = null;
+    }
+  }
+  _transcodeCallbacks = {};
+  _transcodeResolve = null;
+  _transcodeReject = null;
+}
+
+/**
+ * Check if transcode worklet is running
+ */
+export function isTranscodeWorkletRunning(): boolean {
+  return transcodeWorklet !== null;
 }
 
 // Helper to ensure RPC is ready

@@ -32,6 +32,7 @@ packages/.peartube/
 # Environment
 .env
 .env.local
+.claude
 
 # IDE
 .vscode/

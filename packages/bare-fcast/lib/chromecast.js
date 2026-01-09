@@ -92,7 +92,7 @@ function encodeCastMessage({ sourceId, destinationId, namespace, payloadUtf8, pa
 
   if (payloadBinary) {
     parts.push(encodeFieldVarint(5, 1))
-    parts.push(encodeFieldBytes(7, payloadBinary))
+    parts.push(encodeFieldBytes(7, Buffer.from(payloadBinary)))
   } else {
     parts.push(encodeFieldVarint(5, 0))
     parts.push(encodeFieldString(6, payloadUtf8 || ''))
@@ -214,7 +214,12 @@ export class ChromecastDevice extends EventEmitter {
     this._connectToken = 0
     this._activeConnectToken = 0
     this._cleanupInProgress = false
+    this._cleanupScheduled = false
+    this._cleanupPromise = null
+    this._cleanupResolve = null
+    this._gracefulClose = false
     this._socket = null
+    this._socketHandlers = null
     this._buffer = Buffer.alloc(0)
     this._heartbeatTimer = null
     this._statusTimer = null
@@ -230,6 +235,11 @@ export class ChromecastDevice extends EventEmitter {
       duration: 0,
       volume: 1.0
     }
+
+    // LOAD debouncing to prevent rapid consecutive calls
+    this._loadInProgress = false
+    this._lastLoadTime = 0
+    this._loadDebounceMs = 1000 // Minimum 1 second between LOAD calls
   }
 
   /**
@@ -238,6 +248,13 @@ export class ChromecastDevice extends EventEmitter {
   async connect(timeout = 5000) {
     if (this._connected) return
     if (this._connectPromise) return this._connectPromise
+
+    // Fix 3: Wait for any pending cleanup to complete before starting new connection
+    if (this._cleanupPromise) {
+      try {
+        await this._cleanupPromise
+      } catch {}
+    }
 
     this.emit('connectionStateChanged', 'connecting')
     this._connecting = true
@@ -255,12 +272,39 @@ export class ChromecastDevice extends EventEmitter {
       }, timeout)
       this._connectTimer = timer
 
-      const socket = tls.createConnection(this.deviceInfo.port || CHROMECAST_PORT, this.deviceInfo.host)
+      // Fix 1: Wrap TLS connection in try-catch to handle native crashes gracefully
+      let socket
+      try {
+        console.log('[Chromecast] About to call tls.createConnection to', this.deviceInfo.host, this.deviceInfo.port || CHROMECAST_PORT)
+        socket = tls.createConnection(this.deviceInfo.port || CHROMECAST_PORT, this.deviceInfo.host)
+        console.log('[Chromecast] tls.createConnection returned successfully')
+      } catch (err) {
+        clearTimeout(timer)
+        this._connecting = false
+        this._connectPromise = null
+        this._connectResolve = null
+        this._connectReject = null
+        this.emit('connectionStateChanged', 'error')
+        this.emit('error', err)
+        reject(err)
+        return
+      }
+
       this._socket = socket
+
+      // Fix 5: Add early handshake timeout (native TLS can hang)
+      const handshakeTimeout = setTimeout(() => {
+        if (!this._connected && socket && this._activeConnectToken === token) {
+          console.error('[Chromecast] TLS handshake timeout')
+          try { socket.destroy?.() } catch {}
+          this._handleError(new Error('TLS handshake timeout'))
+        }
+      }, 3000)
 
       const onConnect = () => {
         if (this._activeConnectToken !== token) return
         clearTimeout(timer)
+        clearTimeout(handshakeTimeout)
         this._connected = true
         this._connecting = false
         this.emit('connectionStateChanged', 'connected')
@@ -280,15 +324,18 @@ export class ChromecastDevice extends EventEmitter {
       const onError = (err) => {
         if (this._activeConnectToken !== token) return
         clearTimeout(timer)
+        clearTimeout(handshakeTimeout)
         this._handleError(err)
       }
 
       const onClose = () => {
         if (this._activeConnectToken !== token) return
         clearTimeout(timer)
+        clearTimeout(handshakeTimeout)
         this._handleDisconnect()
       }
 
+      this._socketHandlers = { onConnect, onData, onError, onClose }
       socket.on('connect', onConnect)
       socket.on('data', onData)
       socket.on('error', onError)
@@ -302,9 +349,13 @@ export class ChromecastDevice extends EventEmitter {
    * Disconnect from the device
    */
   async disconnect() {
-    this._cleanupConnection()
+    const wasConnected = this._connected
     this._connected = false
     this.emit('connectionStateChanged', 'disconnected')
+    try {
+      console.log('[Chromecast] disconnect requested, graceful:', wasConnected)
+    } catch {}
+    return this._scheduleCleanup(null, { graceful: wasConnected })
   }
 
   /**
@@ -321,61 +372,83 @@ export class ChromecastDevice extends EventEmitter {
     if (!this._connected) {
       throw new Error('Not connected')
     }
-    await this._ensureTransport()
-    if (!this._transportId) {
-      throw new Error('Chromecast transport not ready')
-    }
 
-    let mediaUrl = options.url
+    // Debounce: prevent rapid consecutive LOAD calls that cause native crashes
+    const now = Date.now()
+    if (this._loadInProgress) {
+      console.warn('[Chromecast] LOAD already in progress, ignoring duplicate play()')
+      return
+    }
+    if (now - this._lastLoadTime < this._loadDebounceMs) {
+      console.warn('[Chromecast] play() called too soon after previous LOAD, ignoring')
+      return
+    }
+    this._loadInProgress = true
+    this._lastLoadTime = now
+
     try {
-      const parsed = new URL(mediaUrl)
-      if (LOCALHOST_HOSTS.has(parsed.hostname)) {
-        const localIp = await getLocalIPv4(this.deviceInfo.host)
-        if (localIp) {
-          mediaUrl = rewriteUrlHost(mediaUrl, localIp)
-          console.log('[Chromecast] Rewriting media URL host to', localIp)
+      await this._ensureTransport()
+      if (!this._transportId) {
+        throw new Error('Chromecast transport not ready')
+      }
+
+      let mediaUrl = options.url
+      try {
+        const parsed = new URL(mediaUrl)
+        if (LOCALHOST_HOSTS.has(parsed.hostname)) {
+          const localIp = await getLocalIPv4(this.deviceInfo.host)
+          if (localIp) {
+            mediaUrl = rewriteUrlHost(mediaUrl, localIp)
+            console.log('[Chromecast] Rewriting media URL host to', localIp)
+          }
+        }
+      } catch {}
+
+      const contentType = options.contentType || 'video/mp4'
+      try {
+        const parsed = new URL(mediaUrl)
+        console.log('[Chromecast] LOAD', {
+          host: this.deviceInfo?.host,
+          contentType,
+          urlHost: parsed.host,
+        })
+      } catch {}
+      const metadata = {
+        metadataType: 0,
+        title: options.title || '',
+        images: options.thumbnail ? [{ url: options.thumbnail }] : []
+      }
+
+      // Support LIVE streamType for real-time transcoding (no seeking)
+      const streamType = options.streamType || 'BUFFERED'
+
+      const payload = {
+        type: 'LOAD',
+        requestId: this._nextRequestId(),
+        autoplay: true,
+        currentTime: options.time || 0,
+        media: {
+          contentId: mediaUrl,
+          streamType,
+          contentType,
+          metadata,
+          ...(options.duration ? { duration: options.duration } : {})
         }
       }
-    } catch {}
 
-    const contentType = options.contentType || 'video/mp4'
-    try {
-      const parsed = new URL(mediaUrl)
-      console.log('[Chromecast] LOAD', {
-        host: this.deviceInfo?.host,
-        contentType,
-        urlHost: parsed.host,
-      })
-    } catch {}
-    const metadata = {
-      metadataType: 0,
-      title: options.title || '',
-      images: options.thumbnail ? [{ url: options.thumbnail }] : []
+      console.log('[Chromecast] sending LOAD to transport', this._transportId)
+      this._sendMediaMessage(payload)
+      try {
+        this._sendMediaMessage({ type: 'GET_STATUS', requestId: this._nextRequestId() })
+      } catch {}
+      this._state.state = 'loading'
+      this.emit('playbackStateChanged', 'loading')
+    } finally {
+      // Clear load-in-progress after a short delay to allow the LOAD to complete
+      setTimeout(() => {
+        this._loadInProgress = false
+      }, 500)
     }
-
-    // Support LIVE streamType for real-time transcoding (no seeking)
-    const streamType = options.streamType || 'BUFFERED'
-
-    const payload = {
-      type: 'LOAD',
-      requestId: this._nextRequestId(),
-      autoplay: true,
-      currentTime: options.time || 0,
-      media: {
-        contentId: mediaUrl,
-        streamType,
-        contentType,
-        metadata
-      }
-    }
-
-    console.log('[Chromecast] sending LOAD to transport', this._transportId)
-    this._sendMediaMessage(payload)
-    try {
-      this._sendMediaMessage({ type: 'GET_STATUS', requestId: this._nextRequestId() })
-    } catch {}
-    this._state.state = 'loading'
-    this.emit('playbackStateChanged', 'loading')
   }
 
   /**
@@ -500,8 +573,14 @@ export class ChromecastDevice extends EventEmitter {
 
   _startStatusPolling() {
     if (this._statusTimer) return
+    let pollCount = 0
     this._statusTimer = setInterval(() => {
       if (this._connected && this._transportId && this._socket) {
+        pollCount++
+        // Log every 6th poll (every 30 seconds) to confirm polling is active
+        if (pollCount % 6 === 0) {
+          console.log('[Chromecast] Status poll #' + pollCount + ' (connected:', this._connected, ')')
+        }
         try {
           this._sendMediaMessage({ type: 'GET_STATUS', requestId: this._nextRequestId() })
         } catch (err) {
@@ -519,8 +598,10 @@ export class ChromecastDevice extends EventEmitter {
   }
 
   _sendCastMessage(namespace, payload, destinationId) {
+    // Guard socket writes with null/connection checks
     if (!this._socket || !this._connected) {
-      throw new Error('Not connected')
+      console.warn('[Chromecast] Cannot send message: not connected')
+      return
     }
 
     // Check if socket is still writable
@@ -540,6 +621,7 @@ export class ChromecastDevice extends EventEmitter {
       this._socket.write(message)
     } catch (err) {
       // Socket may have closed between check and write
+      console.error('[Chromecast] Socket write error:', err?.message || err)
       this._handleError(err)
     }
   }
@@ -605,10 +687,27 @@ export class ChromecastDevice extends EventEmitter {
   }
 
   _handleAppData(data) {
+    // Fix 2: Add buffer size limit to prevent unbounded memory growth
+    const MAX_BUFFER_SIZE = 10 * 1024 * 1024 // 10MB limit
+
+    if (this._buffer.length + data.length > MAX_BUFFER_SIZE) {
+      console.error('[Chromecast] Buffer overflow, disconnecting')
+      this._handleError(new Error('Buffer overflow'))
+      return
+    }
+
     this._buffer = Buffer.concat([this._buffer, data])
 
     while (this._buffer.length >= 4) {
       const length = this._buffer.readUInt32BE(0)
+
+      // Sanity check: reject obviously invalid lengths
+      if (length > MAX_BUFFER_SIZE) {
+        console.error('[Chromecast] Invalid message length:', length)
+        this._handleError(new Error('Invalid message length'))
+        return
+      }
+
       if (this._buffer.length < 4 + length) break
 
       const payload = this._buffer.slice(4, 4 + length)
@@ -665,7 +764,7 @@ export class ChromecastDevice extends EventEmitter {
       }
 
       if (Array.isArray(status.applications)) {
-        const app = status.applications.find((entry) => entry.appId === DEFAULT_MEDIA_RECEIVER_APP_ID) || status.applications[0]
+        const app = status.applications.find((entry) => entry.appId === DEFAULT_MEDIA_RECEIVER_APP_ID)
         if (app?.transportId) {
           this._transportId = app.transportId
           console.log('[Chromecast] using transportId', this._transportId)
@@ -679,7 +778,12 @@ export class ChromecastDevice extends EventEmitter {
   _handleMedia(payload) {
     if (payload.type === 'MEDIA_STATUS') {
       try {
-        console.log('[Chromecast] MEDIA_STATUS', JSON.stringify(payload.status?.[0] || payload.status || {}))
+        const s = payload.status?.[0] || payload.status || {}
+        // Log key fields for debugging drops
+        console.log('[Chromecast] MEDIA_STATUS playerState:', s.playerState,
+          'idleReason:', s.idleReason || 'none',
+          'time:', s.currentTime?.toFixed(1) || 0,
+          'buffering:', s.playerState === 'BUFFERING' ? 'YES' : 'no')
       } catch {}
       const status = Array.isArray(payload.status) ? payload.status[0] : null
       if (!status) return
@@ -718,18 +822,120 @@ export class ChromecastDevice extends EventEmitter {
 
   _handleError(err) {
     if (!err) return
+    const wasConnected = this._connected
     this._connected = false
     this.emit('connectionStateChanged', 'error')
     this.emit('error', err)
-    this._cleanupConnection(err)
+    try {
+      console.warn('[Chromecast] socket error, graceful:', wasConnected, err?.message || err)
+    } catch {}
+    this._scheduleCleanup(err, { graceful: wasConnected })
   }
 
   _handleDisconnect() {
     if (!this._connected && !this._connecting) return
-    this._cleanupConnection(new Error('Connection closed'))
+    const wasConnected = this._connected
     this._connected = false
     this._connecting = false
     this.emit('connectionStateChanged', 'disconnected')
+    try {
+      console.warn('[Chromecast] socket closed, graceful:', wasConnected)
+    } catch {}
+    this._scheduleCleanup(new Error('Connection closed'), { graceful: wasConnected })
+  }
+
+  _scheduleCleanup(err, options = {}) {
+    const graceful = options?.graceful === true
+    if (graceful) this._gracefulClose = true
+
+    if (!this._cleanupPromise) {
+      this._cleanupPromise = new Promise((resolve) => {
+        this._cleanupResolve = resolve
+      })
+    }
+
+    if (this._cleanupScheduled || this._cleanupInProgress) return this._cleanupPromise
+    this._cleanupScheduled = true
+    try {
+      console.log('[Chromecast] cleanup scheduled, graceful:', graceful)
+    } catch {}
+    setTimeout(() => {
+      this._cleanupScheduled = false
+      Promise.resolve(this._cleanupConnection(err)).catch(() => {})
+    }, 0)
+    return this._cleanupPromise
+  }
+
+  _detachSocketHandlers(socket) {
+    const handlers = this._socketHandlers
+    if (!handlers || !socket?.off) {
+      this._socketHandlers = null
+      return
+    }
+    try {
+      socket.off('connect', handlers.onConnect)
+      socket.off('data', handlers.onData)
+      socket.off('error', handlers.onError)
+      socket.off('close', handlers.onClose)
+    } catch {}
+    this._socketHandlers = null
+  }
+
+  _closeSocket() {
+    const socket = this._socket
+    if (!socket) return Promise.resolve()
+    this._socket = null
+    this._detachSocketHandlers(socket)
+
+    return new Promise((resolve) => {
+      let settled = false
+      let closeTimer = null
+      const finish = () => {
+        if (settled) return
+        settled = true
+        if (closeTimer) {
+          clearTimeout(closeTimer)
+          closeTimer = null
+        }
+        try {
+          console.log('[Chromecast] socket cleanup finished')
+        } catch {}
+        resolve()
+      }
+
+      const shouldEnd = this._gracefulClose && typeof socket.end === 'function'
+      if (shouldEnd) {
+        try {
+          console.log('[Chromecast] socket end requested')
+        } catch {}
+        try {
+          socket.once?.('close', finish)
+        } catch {}
+
+        try {
+          socket.end?.()
+        } catch {}
+
+        closeTimer = setTimeout(() => {
+          try {
+            console.warn('[Chromecast] socket end timeout, forcing destroy')
+          } catch {}
+          try {
+            socket.destroy?.()
+          } catch {}
+          finish()
+        }, 1500)
+        return
+      }
+
+      try {
+        console.log('[Chromecast] socket destroy requested (non-graceful)')
+      } catch {}
+      try {
+        socket.destroy?.()
+      } catch {}
+      finish()
+    })
   }
 
   _finalizeConnect(err) {
@@ -751,27 +957,35 @@ export class ChromecastDevice extends EventEmitter {
     }
   }
 
-  _cleanupConnection(err) {
+  async _cleanupConnection(err) {
     if (this._cleanupInProgress) return
     this._cleanupInProgress = true
-    this._stopHeartbeat()
-    this._stopStatusPolling()
+    try {
+      this._stopHeartbeat()
+      this._stopStatusPolling()
 
-    if (this._socket) {
       try {
-        this._socket.removeAllListeners?.()
-        this._socket.destroy()
+        console.log('[Chromecast] cleanup start, graceful:', this._gracefulClose, err?.message || err)
       } catch {}
-      this._socket = null
-    }
+      await this._closeSocket()
 
-    this._buffer = Buffer.alloc(0)
-    this._transportId = null
-    this._mediaSessionId = null
-    this._launchWaiters = []
-    this._activeConnectToken = 0
-    this._finalizeConnect(err || new Error('Connection closed'))
-    this._cleanupInProgress = false
+      this._buffer = Buffer.alloc(0)
+      this._transportId = null
+      this._mediaSessionId = null
+      this._launchWaiters = []
+      this._activeConnectToken = 0
+      this._finalizeConnect(err || new Error('Connection closed'))
+    } finally {
+      this._cleanupInProgress = false
+      this._gracefulClose = false
+      try {
+        console.log('[Chromecast] cleanup done')
+      } catch {}
+      const resolve = this._cleanupResolve
+      this._cleanupResolve = null
+      this._cleanupPromise = null
+      resolve?.()
+    }
   }
 }
 

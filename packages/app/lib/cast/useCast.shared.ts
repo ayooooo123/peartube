@@ -118,8 +118,29 @@ function isChromecastSupported(options: { url: string; contentType: string; titl
 function showCastError(message: string) {
   try {
     console.error('[useCast] Chromecast:', message)
+    if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert(message)
+      return
+    }
     Alert.alert('Chromecast', message)
   } catch {}
+}
+
+function normalizeVolumeToCast(volume: number | undefined): number {
+  if (!Number.isFinite(volume)) return 1
+  if ((volume as number) <= 1) {
+    return Math.max(0, Math.min(1, volume as number))
+  }
+  const percent = Math.max(0, Math.min(100, Math.floor(volume as number)))
+  return percent / 100
+}
+
+function normalizeVolumeFromCast(volume: number | undefined): number {
+  if (!Number.isFinite(volume)) return 100
+  if ((volume as number) <= 1) {
+    return Math.round((volume as number) * 100)
+  }
+  return Math.round(volume as number)
 }
 
 type ConnectedDeviceListener = (device: CastDevice | null) => void
@@ -322,6 +343,8 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       }
     } catch (err) {
       console.error('[useCast] startDiscovery failed:', err)
+    } finally {
+      setIsDiscovering(false)
     }
   }, [rpc, available])
 
@@ -457,7 +480,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
         title: options.title || '',
         thumbnail: options.thumbnail || '',
         time: Math.floor(options.time || 0),
-        volume: playbackState.volume,
+        volume: normalizeVolumeToCast(playbackState.volume),
         duration: options.duration || 0,
       })
 
@@ -535,7 +558,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
 
     try {
       const normalizedVolume = Math.max(0, Math.min(100, Math.floor(volume)))
-      await rpc.castSetVolume({ volume: normalizedVolume })
+      await rpc.castSetVolume({ volume: normalizeVolumeToCast(normalizedVolume) })
       setPlaybackState(prev => ({ ...prev, volume: normalizedVolume }))
     } catch (err) {
       console.error('[useCast] setVolume failed:', err)
@@ -554,7 +577,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
             state: result.state || 'idle',
             currentTime: result.currentTime || 0,
             duration: result.duration || 0,
-            volume: result.volume ?? 100,
+            volume: normalizeVolumeFromCast(result.volume),
           })
         }
       } catch (err) {

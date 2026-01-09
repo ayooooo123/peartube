@@ -12,12 +12,30 @@ import { createBackendContext } from '@peartube/backend/orchestrator'
 import { loadDrive } from '@peartube/backend/storage'
 import path from 'bare-path'
 import fs from 'bare-fs'
+import os from 'bare-os'
 import b4a from 'b4a'
 import http1 from 'bare-http1'
+import * as transcoder from './transcoder.mjs'
+import * as hlsTranscoder from './hls-transcoder.mjs'
 
 // Get IPC from BareKit, args from Bare
 const { IPC } = BareKit
 const storagePath = Bare.argv[0] || ''
+const workerBundlePath = Bare.argv[1] || ''
+
+if (workerBundlePath) {
+  globalThis.__PEARTUBE_WORKER_PATH__ = workerBundlePath
+  console.log('[Backend] Downloader worker path:', workerBundlePath)
+}
+
+// Log helper that forwards to React Native via eventLog
+function backendLog(msg) {
+  console.log(msg)
+  // Will be called after rpc is initialized
+  if (rpc?.eventLog) {
+    try { rpc.eventLog({ message: msg }) } catch {}
+  }
+}
 
 // Debug: Log storagePath to identify initialization issues
 console.log('[Backend] Raw storagePath from Bare.argv[0]:', storagePath || '(empty)')
@@ -39,6 +57,7 @@ let castProxyServer = null
 let castProxyPort = 0
 let castProxyReady = null
 const castProxySessions = new Map()
+const castProxyPlaylistLogged = new Set()
 const CAST_PROXY_TTL_MS = 30 * 60 * 1000
 
 let CastContext = null
@@ -48,9 +67,20 @@ let castContext = null
 
 const CAST_LOCALHOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '::1'])
 
+// Note: Transcoding HTTP server is provided by transcoder.mjs
+
+function normalizeCastVolume(volume) {
+  const value = typeof volume === 'number' && Number.isFinite(volume) ? volume : 1
+  if (value > 1) {
+    return Math.max(0, Math.min(100, value)) / 100
+  }
+  return Math.max(0, Math.min(1, value))
+}
+
 function cleanupCastProxySessions(now = Date.now()) {
   for (const [token, entry] of castProxySessions.entries()) {
-    if (now - entry.createdAt > CAST_PROXY_TTL_MS) {
+    const lastSeen = entry.lastAccessAt || entry.createdAt
+    if (now - lastSeen > CAST_PROXY_TTL_MS) {
       castProxySessions.delete(token)
     }
   }
@@ -72,11 +102,30 @@ async function ensureCastProxyServer() {
   if (castProxyPort) return castProxyPort
   if (castProxyReady) return castProxyReady
 
+  const resetProxyState = () => {
+    castProxyPort = 0
+    castProxyReady = null
+    castProxyServer = null
+  }
+
   castProxyReady = new Promise((resolve, reject) => {
+    const setCorsHeaders = (res) => {
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'Range,Content-Type,Accept,Origin')
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Length,Content-Range,Accept-Ranges')
+    }
+
     castProxyServer = http1.createServer((req, res) => {
       try {
         console.log('[CastProxy] incoming', req.method || 'GET', req.url || '/')
       } catch {}
+      setCorsHeaders(res)
+      if ((req.method || '').toUpperCase() === 'OPTIONS') {
+        res.statusCode = 204
+        res.end()
+        return
+      }
       const now = Date.now()
       cleanupCastProxySessions(now)
       const base = 'http://localhost'
@@ -89,6 +138,112 @@ async function ensureCastProxyServer() {
       }
       const parts = parsed.pathname.split('/').filter(Boolean)
       const token = parts[0] === 'cast' ? parts[1] : null
+      const extraSegments = parts[0] === 'cast' ? parts.slice(2) : []
+      if (extraSegments.some((seg) => seg === '.' || seg === '..')) {
+        res.statusCode = 400
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('Invalid cast proxy path.')
+        return
+      }
+      const extraPath = extraSegments.join('/')
+      const isIndexRequest = extraPath.endsWith('index.m3u8')
+      const isStreamRequest = extraPath.endsWith('stream.m3u8')
+
+      const hostHeader = req.headers?.host
+      const baseUrl = hostHeader ? `http://${hostHeader}` : ''
+      const rewriteHlsPlaylist = (body) => {
+        const lines = body.split(/\r?\n/)
+        const segments = []
+        let targetDuration = null
+        let mediaSequence = null
+        let pendingInf = null
+        let maxDuration = 0
+
+        const rewriteUri = (trimmed) => {
+          let pathPart = trimmed
+          let query = ''
+          if (/^https?:\/\//i.test(trimmed)) {
+            try {
+              const parsedUrl = new URL(trimmed)
+              pathPart = parsedUrl.pathname || ''
+              query = parsedUrl.search || ''
+            } catch {
+              pathPart = trimmed
+            }
+          } else {
+            const qIndex = trimmed.indexOf('?')
+            if (qIndex !== -1) {
+              pathPart = trimmed.slice(0, qIndex)
+              query = trimmed.slice(qIndex)
+            }
+          }
+          if (pathPart.startsWith('/')) {
+            pathPart = path.posix.basename(pathPart)
+          }
+          pathPart = pathPart.replace(/^\.?\//, '').replace(/^(\.\.\/)+/, '')
+          if (!pathPart) return ''
+          return `${pathPart}${query}`
+        }
+
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          if (trimmed.startsWith('#EXT-X-TARGETDURATION:')) {
+            targetDuration = trimmed.split(':')[1]?.trim() || null
+            continue
+          }
+          if (trimmed.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
+            const raw = trimmed.split(':')[1]?.trim()
+            const parsed = raw ? Number(raw) : NaN
+            if (!Number.isNaN(parsed)) mediaSequence = parsed
+            continue
+          }
+          if (trimmed.startsWith('#EXTINF:')) {
+            pendingInf = trimmed
+            const raw = trimmed.split(':')[1]?.split(',')[0]?.trim()
+            const parsed = raw ? Number(raw) : NaN
+            if (!Number.isNaN(parsed)) {
+              maxDuration = Math.max(maxDuration, parsed)
+            }
+            continue
+          }
+          if (trimmed.startsWith('#')) continue
+
+          const rewritten = rewriteUri(trimmed)
+          if (!rewritten) continue
+          if (pendingInf) {
+            segments.push({ inf: pendingInf, uri: rewritten })
+          }
+          pendingInf = null
+        }
+
+        const maxSegments = 10000  // Keep all segments (desktop uses same value)
+        const dropCount = Math.max(0, segments.length - maxSegments)
+        const kept = segments.slice(-maxSegments)
+        let seq = mediaSequence
+        if (seq == null && kept.length) {
+          const match = kept[0].uri.match(/(\d+)(?:\D+)?$/)
+          if (match) seq = Number(match[1])
+        }
+        if (seq == null) seq = 0
+        seq += dropCount
+
+        const output = ['#EXTM3U', '#EXT-X-VERSION:3']
+        const targetDurationValue = Math.max(
+          targetDuration ? Number(targetDuration) || 0 : 0,
+          Math.ceil(maxDuration || 0)
+        )
+        if (targetDurationValue > 0) {
+          output.push(`#EXT-X-TARGETDURATION:${targetDurationValue}`)
+        }
+        output.push(`#EXT-X-MEDIA-SEQUENCE:${seq}`)
+        for (const seg of kept) {
+          output.push(seg.inf)
+          output.push(seg.uri)
+        }
+        output.push('')
+        return output.join('\r\n')
+      }
 
       if (!token || !castProxySessions.has(token)) {
         console.warn('[CastProxy] missing token or session', token || 'none')
@@ -99,6 +254,9 @@ async function ensureCastProxyServer() {
       }
 
       const entry = castProxySessions.get(token)
+      if (entry) {
+        entry.lastAccessAt = Date.now()
+      }
       const target = entry ? buildLocalProxyTarget(entry.url) : null
       if (!target) {
         console.warn('[CastProxy] invalid target url for token', token)
@@ -112,15 +270,96 @@ async function ensureCastProxyServer() {
         console.log('[CastProxy] request from', remote, '->', target.host)
       } catch {}
 
+      const method = (req.method || 'GET').toUpperCase()
+      let targetPathname = target.pathname
+      // For index.m3u8 requests, DON'T modify the path - fetch original source
+      // The index handler will generate a master playlist pointing to stream.m3u8
+      // For stream.m3u8 requests, also use original path (source serves the actual playlist)
+      if (extraPath && !isIndexRequest && !isStreamRequest) {
+        const basePath = target.pathname || '/'
+        const pathApi = path.posix || path
+        const baseDir = pathApi.extname(basePath) ? pathApi.dirname(basePath) : basePath
+        targetPathname = pathApi.join(baseDir, extraPath)
+      }
+      const targetPath = `${targetPathname}${target.search || ''}`
+      const headers = {}
+      if (req.headers?.range) {
+        headers.range = req.headers.range
+      }
       const proxyReq = http1.request({
-        method: req.method || 'GET',
+        method,
         hostname: target.hostname,
         port: target.port || 80,
-        path: `${target.pathname}${target.search}`,
-        headers: {
-          range: req.headers?.range,
-        },
+        path: targetPath,
+        headers,
       }, (proxyRes) => {
+        const contentType = (proxyRes.headers?.['content-type'] || '').toString()
+        const isM3u8 = extraPath.endsWith('.m3u8')
+          || targetPathname.endsWith('.m3u8')
+          || contentType.includes('mpegurl')
+
+        if (isIndexRequest && (proxyRes.statusCode || 200) < 400) {
+          let body = ''
+          proxyRes.setEncoding('utf8')
+          proxyRes.on('data', (chunk) => { body += chunk })
+          proxyRes.on('end', () => {
+            const streamUrl = baseUrl
+              ? `${baseUrl}/cast/${token}/stream.m3u8`
+              : `/cast/${token}/stream.m3u8`
+            const master = [
+              '#EXTM3U',
+              '#EXT-X-VERSION:3',
+              '#EXT-X-STREAM-INF:BANDWIDTH=6000000',
+              streamUrl,
+              ''
+            ].join('\r\n')
+            res.statusCode = 200
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
+            res.setHeader('Content-Length', Buffer.byteLength(master))
+            res.setHeader('Cache-Control', 'no-cache')
+            setCorsHeaders(res)
+            res.end(master)
+          })
+          proxyRes.on('error', (err) => {
+            console.warn('[CastProxy] upstream response error:', err?.message || err)
+            if (!res.headersSent) {
+              res.statusCode = 502
+              res.end('Cast proxy upstream error')
+            }
+          })
+          return
+        }
+
+        if (isM3u8 && (proxyRes.statusCode || 200) < 400) {
+          let body = ''
+          proxyRes.setEncoding('utf8')
+          proxyRes.on('data', (chunk) => { body += chunk })
+          proxyRes.on('end', () => {
+            const rewritten = rewriteHlsPlaylist(body)
+            const logKey = `${token}:${isStreamRequest ? 'stream' : 'index'}`
+            if (!castProxyPlaylistLogged.has(logKey)) {
+              castProxyPlaylistLogged.add(logKey)
+              const preview = rewritten.split(/\r?\n/).slice(0, 8).join('\n')
+              console.log('[CastProxy] playlist sample:\n' + preview)
+            }
+            const out = Buffer.from(rewritten, 'utf8')
+            res.statusCode = proxyRes.statusCode || 200
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
+            res.setHeader('Content-Length', out.byteLength)
+            res.setHeader('Cache-Control', 'no-cache')
+            setCorsHeaders(res)
+            res.end(out)
+          })
+          proxyRes.on('error', (err) => {
+            console.warn('[CastProxy] upstream response error:', err?.message || err)
+            if (!res.headersSent) {
+              res.statusCode = 502
+              res.end('Cast proxy upstream error')
+            }
+          })
+          return
+        }
+
         res.statusCode = proxyRes.statusCode || 502
         try {
           console.log('[CastProxy] upstream status', proxyRes.statusCode, 'len', proxyRes.headers?.['content-length'] || 'unknown')
@@ -132,7 +371,50 @@ async function ensureCastProxyServer() {
             }
           }
         }
-        proxyRes.pipe(res)
+        setCorsHeaders(res)
+
+        // Use manual piping with error handling instead of .pipe() to prevent
+        // "Writable stream closed prematurely" crashes when Chromecast disconnects
+        let pipeCleanedUp = false
+        const cleanupPipe = () => {
+          if (pipeCleanedUp) return
+          pipeCleanedUp = true
+          try { proxyRes.unpipe?.(res) } catch {}
+          try { proxyRes.destroy?.() } catch {}
+        }
+
+        proxyRes.on('error', (err) => {
+          console.warn('[CastProxy] upstream response error:', err?.message || err)
+          cleanupPipe()
+        })
+        res.on('error', (err) => {
+          console.warn('[CastProxy] client response error:', err?.message || err)
+          cleanupPipe()
+        })
+        res.on('close', () => {
+          // Client closed connection, clean up upstream
+          cleanupPipe()
+        })
+
+        proxyRes.on('data', (chunk) => {
+          if (pipeCleanedUp) return
+          try {
+            const canWrite = res.write(chunk)
+            if (!canWrite && !pipeCleanedUp) {
+              proxyRes.pause?.()
+              res.once('drain', () => {
+                if (!pipeCleanedUp) proxyRes.resume?.()
+              })
+            }
+          } catch (err) {
+            console.warn('[CastProxy] write error:', err?.message || err)
+            cleanupPipe()
+          }
+        })
+        proxyRes.on('end', () => {
+          if (pipeCleanedUp) return
+          try { res.end() } catch {}
+        })
       })
 
       proxyReq.on('error', (err) => {
@@ -146,16 +428,22 @@ async function ensureCastProxyServer() {
         res.end()
       })
 
-      if (req.method === 'HEAD') {
-        proxyReq.end()
-      } else {
+      const hasBody = !['GET', 'HEAD', 'OPTIONS'].includes(method)
+        && (req.headers?.['content-length'] || req.headers?.['transfer-encoding'])
+      if (hasBody) {
         req.pipe(proxyReq)
+      } else {
+        proxyReq.end()
       }
     })
 
     castProxyServer.on('error', (err) => {
       console.error('[CastProxy] server error:', err?.message || err)
+      resetProxyState()
       reject(err)
+    })
+    castProxyServer.on('close', () => {
+      resetProxyState()
     })
 
     castProxyServer.listen(0, '0.0.0.0', () => {
@@ -255,8 +543,17 @@ async function createCastProxyUrl(targetHost, sourceUrl) {
   console.log('[Backend] Cast proxy local IP selected:', localIp, 'targetHost:', targetHost || 'unknown')
   cleanupCastProxySessions()
   const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
-  castProxySessions.set(token, { url: sourceUrl, createdAt: Date.now() })
-  return `http://${localIp}:${castProxyPort}/cast/${token}`
+  const now = Date.now()
+  // Check if source is HLS content - Chromecast needs .m3u8 extension for HLS
+  const isHls = sourceUrl.endsWith('.m3u8') || sourceUrl.includes('.m3u8?')
+  console.log('[Backend] Cast proxy sourceUrl:', sourceUrl?.slice(0, 100), 'isHls:', isHls)
+  castProxySessions.set(token, { url: sourceUrl, isHls, createdAt: now, lastAccessAt: now })
+  // For HLS: add index.m3u8 so Chromecast recognizes it as HLS
+  // For non-HLS: no extension needed, Content-Type header is enough
+  const suffix = isHls ? '/index.m3u8' : ''
+  const proxyUrl = `http://${localIp}:${castProxyPort}/cast/${token}${suffix}`
+  console.log('[Backend] Cast proxy created:', proxyUrl)
+  return proxyUrl
 }
 
 async function loadBareFcast() {
@@ -318,7 +615,8 @@ function getCastContext() {
 
     castContext.on('timeChanged', (time) => {
       try {
-        rpc?.eventCastTimeUpdate?.({ currentTime: time })
+        // compact-encoding uint requires positive integers (>=1), so clamp 0 to 1
+        rpc?.eventCastTimeUpdate?.({ currentTime: Math.max(1, Math.floor(time || 0)) })
       } catch {}
     })
 
@@ -460,7 +758,7 @@ try {
 }
 
 // Helps confirm which backend bundle is actually running on device.
-const BACKEND_BUNDLE_VERSION = 'mw-sync-debug-2025-12-15'
+const BACKEND_BUNDLE_VERSION = 'add-audio-fifo-v4'
 console.log('[Backend] Bundle version:', BACKEND_BUNDLE_VERSION)
 
 // Initialize backend
@@ -1230,13 +1528,15 @@ rpc.onCastAddManualDevice(async (req) => {
 })
 
 rpc.onCastConnect(async (req) => {
-  if (!castContext) {
-    return { success: false, error: 'Cast not initialized' }
+  await loadBareFcast()
+  if (!CastContext) {
+    return { success: false, error: castLoadError || 'bare-fcast not available' }
   }
+  const ctx = getCastContext()
   let deviceInfo = null
   try {
     try {
-      const devices = castContext.getDevices?.() || []
+      const devices = ctx.getDevices?.() || []
       const device = devices.find((d) => d.id === req.deviceId)
       if (device) {
         console.log('[Backend] Cast connect:', device.name, device.protocol, device.host + ':' + device.port)
@@ -1245,7 +1545,7 @@ rpc.onCastConnect(async (req) => {
         console.log('[Backend] Cast connect: device not found for', req.deviceId)
       }
     } catch {}
-    await castContext.connect(req.deviceId)
+    await ctx.connect(req.deviceId)
     return deviceInfo ? {
       success: true,
       device: {
@@ -1266,67 +1566,346 @@ rpc.onCastDisconnect(async () => {
   try {
     await castContext.disconnect()
     castProxySessions.clear()
+
+    // Cleanup active transcode session (try HLS first, then legacy)
+    if (activeCastTranscodeId) {
+      hlsSessionsWithLoadSent.delete(activeCastTranscodeId) // Clear LOAD tracking
+      try {
+        hlsTranscoder.stopHlsTranscode(activeCastTranscodeId)
+        console.log('[Backend] Cleaned up HLS transcode session:', activeCastTranscodeId)
+      } catch {
+        try {
+          transcoder.stopTranscode(activeCastTranscodeId)
+          console.log('[Backend] Cleaned up legacy transcode session:', activeCastTranscodeId)
+        } catch {}
+      }
+      activeCastTranscodeId = null
+    }
+
     return { success: true }
   } catch (err) {
     return { success: false, error: err?.message }
   }
 })
 
+// Active transcode session for casting
+let activeCastTranscodeId = null
+
+// Track which HLS sessions have already sent LOAD to Chromecast
+// Key: sessionId, Value: true
+const hlsSessionsWithLoadSent = new Map()
+
+// Guard against concurrent/repeated castPlay calls
+let castPlayInProgress = false
+let lastCastPlayTime = 0
+const CAST_PLAY_DEBOUNCE_MS = 2000 // Minimum 2 seconds between cast plays
+
 rpc.onCastPlay(async (req) => {
-  if (!castContext?.isConnected()) {
-    return { success: false, error: 'Not connected to cast device' }
+  // Debounce: prevent rapid repeated calls - return success to avoid error UI
+  const now = Date.now()
+  if (now - lastCastPlayTime < CAST_PLAY_DEBOUNCE_MS) {
+    console.log('[Backend] Cast play: DEBOUNCED - too soon after last call (' + (now - lastCastPlayTime) + 'ms), returning success to avoid error')
+    return { success: true } // Silent ignore - don't show error to user
   }
+
+  // Prevent concurrent calls - return success to avoid error UI
+  if (castPlayInProgress) {
+    console.log('[Backend] Cast play: BLOCKED - another cast play is already in progress, returning success to avoid error')
+    return { success: true } // Silent ignore - don't show error to user
+  }
+
+  castPlayInProgress = true
+  lastCastPlayTime = now
+
   try {
+    if (!castContext?.isConnected()) {
+      return { success: false, error: 'Not connected to cast device' }
+    }
+
     let url = req.url
-    try {
-      const protocol = castContext?._connectedDevice?.deviceInfo?.protocol
-      if (protocol === 'chromecast') {
-        let usedProxy = false
+    let contentType = req.contentType
+    let currentTranscodeSessionId = null  // Track session ID for cleanup logic (needs function scope)
+
+    const protocol = castContext?._connectedDevice?.deviceInfo?.protocol
+    const deviceHost = castContext?._connectedDevice?.deviceInfo?.host
+
+    // For Chromecast, probe the media and transcode if needed
+    if (protocol === 'chromecast') {
+      console.log('[Backend] Cast play: probing media for Chromecast compatibility...')
+
+      // Load bare-ffmpeg lazily (not at startup to avoid potential init issues)
+      let ffmpegLoaded = false
+      try {
+        ffmpegLoaded = await transcoder.loadBareFfmpeg()
+      } catch (loadErr) {
+        console.warn('[Backend] Cast play: bare-ffmpeg load failed:', loadErr?.message)
+      }
+
+      if (ffmpegLoaded) {
+        try {
+          const probeResult = await transcoder.probeMedia(req.url, req.title)
+          console.log('[Backend] Probe result:', {
+            video: probeResult.videoCodec,
+            audio: probeResult.audioCodec,
+            container: probeResult.container,
+            needsTranscode: probeResult.needsTranscode,
+            needsRemux: probeResult.needsRemux,
+            reason: probeResult.reason,
+          })
+
+          const needsProcessing = probeResult.needsTranscode || probeResult.needsRemux
+
+          if (needsProcessing) {
+            // Use HLS transcoding for real-time streaming
+            // Chromecast can start playing as soon as first segments are ready
+            console.log('[Backend] Cast play: HLS transcoding needed -', probeResult.reason)
+
+            // Check if video is fully synced before attempting transcode
+            // This is ADVISORY ONLY - we don't block casting based on sync status
+            // If still downloading from P2P peers, transcoding may fail when it catches up
+            // but TempFileReader now handles this gracefully (returns EOF instead of crashing)
+            let isVideoComplete = true // Default to true - assume cached
+            let syncStatus = null
+            try {
+              syncStatus = await api.checkVideoSync(req.url)
+              console.log('[Backend] Cast play: video sync status -',
+                syncStatus.progress + '%',
+                '(' + syncStatus.availableBlocks + '/' + syncStatus.totalBlocks + ' blocks)',
+                syncStatus.isComplete ? 'COMPLETE' : 'INCOMPLETE',
+                syncStatus.assumed ? '(ASSUMED)' : '')
+
+              isVideoComplete = syncStatus.isComplete
+
+              // Just log a warning if not synced, but don't block
+              if (!syncStatus.isComplete && !syncStatus.assumed) {
+                const sizeMB = Math.round((syncStatus.byteLength || 0) / 1024 / 1024)
+                const downloadedMB = Math.round(sizeMB * syncStatus.progress / 100)
+                console.warn('[Backend] Cast play: Video may not be fully synced!',
+                  downloadedMB + 'MB /', sizeMB + 'MB downloaded.',
+                  'Proceeding anyway - TempFileReader will handle gracefully.')
+              }
+            } catch (syncErr) {
+              console.warn('[Backend] Cast play: Could not check sync status:', syncErr?.message)
+              // Continue anyway - sync check is best-effort, assume complete
+              isVideoComplete = true
+              syncStatus = null
+            }
+
+            // ============================================
+            // HLS Streaming (Chromecast compatible)
+            // ============================================
+            try {
+              console.log('[Backend] Cast play: starting HLS transcode...')
+              const result = await hlsTranscoder.startHlsTranscode(req.url, {
+                title: req.title || '',
+                store: ctx.store,
+                isVideoComplete,
+                // Direct Hypercore access (HypercoreIOReader) - bypasses HTTP for synced videos
+                blobInfo: syncStatus?.blobInfo || null,
+                blobsCoreKey: syncStatus?.blobsCoreKey || null,
+                onProgress: (sessionId, percent) => {
+                  if (percent % 10 === 0) {
+                    console.log(`[Backend] HLS transcode progress: ${percent}%`)
+                  }
+                }
+              })
+
+              if (!result.success) {
+                console.error('[Backend] Cast play: HLS transcode failed:', result.error)
+                // Fall through to try direct play
+                throw new Error(result.error)
+              }
+
+              // Store session ID for cleanup logic (declared outside try block)
+              currentTranscodeSessionId = result.sessionId
+
+              console.log('[Backend] Cast play: HLS transcode started, session:', result.sessionId, 'hlsUrl:', result.hlsUrl, 'reused:', result.reused || false)
+
+              // Skip wait if reusing existing session - segments already exist
+              if (result.reused) {
+                console.log('[Backend] Cast play: Reusing existing session, skipping segment wait')
+                // Still verify we have segments
+                const status = hlsTranscoder.getHlsStatus(result.sessionId)
+                console.log('[Backend] Cast play: Reused session has', status?.segments || 0, 'segments')
+
+                // CRITICAL: If we already sent LOAD for this session, don't send another one
+                // Sending multiple LOADs causes rapid state changes in Chromecast which can
+                // lead to memory corruption in the native cast module
+                if (hlsSessionsWithLoadSent.has(result.sessionId)) {
+                  console.log('[Backend] Cast play: LOAD already sent for this session, skipping duplicate LOAD')
+                  return { success: true }
+                }
+              } else {
+                // Wait for at least 1 segment before sending to Chromecast for instant casting
+                const MIN_SEGMENTS = 1
+                const MAX_WAIT_MS = 30000 // 30 second timeout
+                const POLL_INTERVAL_MS = 500
+                console.log('[Backend] Cast play: Waiting for', MIN_SEGMENTS, 'HLS segments...')
+
+                const waitStart = Date.now()
+                let segmentCount = 0
+                let playlistReady = false
+                while (Date.now() - waitStart < MAX_WAIT_MS) {
+                  const status = hlsTranscoder.getHlsStatus(result.sessionId)
+                  segmentCount = status?.segments || 0
+                  playlistReady = status?.playlistReady || false
+
+                  const ready = segmentCount >= MIN_SEGMENTS && playlistReady
+
+                  if (ready) {
+                    console.log('[Backend] Cast play:', segmentCount, 'segments ready, playlistReady:', playlistReady)
+                    break
+                  }
+
+                  if (status?.status === 'error') {
+                    throw new Error(status.error || 'Transcode failed while waiting for segments')
+                  }
+
+                  // Log progress every few seconds
+                  const elapsed = Date.now() - waitStart
+                  if (elapsed % 3000 < POLL_INTERVAL_MS) {
+                    console.log('[Backend] Cast play: waiting...', segmentCount, '/', MIN_SEGMENTS, 'segments, playlistReady:', playlistReady, 'elapsed:', Math.round(elapsed/1000) + 's')
+                  }
+
+                  await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
+                }
+
+                if (segmentCount < MIN_SEGMENTS) {
+                  console.warn('[Backend] Cast play: Timeout waiting for segments, proceeding anyway with', segmentCount, 'segments')
+                }
+              } // end else (not reused)
+
+              // Get the HLS URL
+              // HYBRID APPROACH: Use bare-http1 for PLAYLIST (dynamic, refreshes each fetch)
+              // The playlist content contains BlobServer URLs for SEGMENTS (static, safe)
+              // This avoids the immutable blob issue where Chromecast can't see new segments
+              const localIp = await getLocalIPv4ForTarget(deviceHost)
+              let hlsUrl = result.hlsUrl
+
+              if (localIp) {
+                hlsUrl = hlsUrl.replace('127.0.0.1', localIp)
+                console.log('[Backend] Cast play: using bare-http1 playlist URL with LAN IP:', hlsUrl)
+              } else {
+                console.warn('[Backend] Cast play: could not get local IP for HLS URL rewrite')
+              }
+
+              url = hlsUrl
+              contentType = 'application/x-mpegurl'
+              // Note: activeCastTranscodeId is set later after cleanup to avoid cleaning up current session
+              console.log('[Backend] Cast play: using HLS URL', url)
+            } catch (transcodeErr) {
+              console.error('[Backend] Cast play: HLS transcode error:', transcodeErr?.message || transcodeErr)
+              // Fall through to try direct play
+              throw transcodeErr
+            }
+          }
+        } catch (probeErr) {
+          console.warn('[Backend] Cast play: probe/transcode failed, trying direct play:', probeErr?.message)
+          // Fall through to regular play
+        }
+      } else {
+        console.log('[Backend] Cast play: bare-ffmpeg not available, skipping transcode check')
+      }
+
+      // Set up proxy for the URL (original or transcoded)
+      // Skip proxy for HLS - the HLS server handles both playlist and segments
+      // Proxy would break relative segment URLs in the playlist
+      if (contentType === 'application/x-mpegurl') {
+        console.log('[Backend] Cast play: skipping proxy for HLS (direct access to segments needed)')
+      } else {
         try {
           await ensureCastProxyServer()
-          const deviceHost = castContext?._connectedDevice?.deviceInfo?.host
-          const proxyUrl = await createCastProxyUrl(deviceHost, req.url)
+          const proxyUrl = await createCastProxyUrl(deviceHost, url)
           if (proxyUrl) {
             url = proxyUrl
-            usedProxy = true
             console.log('[Backend] Cast play: using proxy URL', proxyUrl)
           }
         } catch (err) {
           console.warn('[Backend] Cast proxy init failed:', err?.message || err)
-        }
-        if (!usedProxy) {
-          const parsed = new URL(req.url)
-          if (CAST_LOCALHOSTS.has(parsed.hostname)) {
-            const deviceHost = castContext?._connectedDevice?.deviceInfo?.host
-            const localIp = await getLocalIPv4ForTarget(deviceHost)
-            if (localIp) {
-              url = rewriteUrlHost(req.url, localIp)
-              console.log('[Backend] Cast play: rewrote host to', localIp)
+          // Try direct IP rewrite
+          try {
+            const parsed = new URL(url)
+            if (CAST_LOCALHOSTS.has(parsed.hostname)) {
+              const localIp = await getLocalIPv4ForTarget(deviceHost)
+              if (localIp) {
+                url = rewriteUrlHost(url, localIp)
+                console.log('[Backend] Cast play: rewrote host to', localIp)
+              }
             }
-          }
+          } catch {}
         }
       }
-    } catch {}
+    }
+
     try {
       let host = 'unknown'
       try {
         const parsed = new URL(url)
         host = parsed.host
       } catch {}
-      const protocol = castContext?._connectedDevice?.deviceInfo?.protocol
-      console.log('[Backend] Cast play:', protocol || 'unknown', 'contentType:', req.contentType, 'host:', host)
+      console.log('[Backend] Cast play:', protocol || 'unknown', 'contentType:', contentType, 'host:', host)
     } catch {}
+
+    // Use LIVE stream type for real-time HLS transcoding
+    const streamType = 'LIVE'
+
+    // IMPORTANT: Stop any current media first to clear Chromecast's cached state
+    // Otherwise Chromecast may keep polling the old URL instead of loading new one
+    try {
+      console.log('[Backend] Cast play: Stopping current media before loading new...')
+      await castContext.stop()
+      // Small delay to ensure Chromecast processes the stop
+      await new Promise(resolve => setTimeout(resolve, 200))
+    } catch (stopErr) {
+      console.log('[Backend] Cast play: Stop before load failed (ok if nothing playing):', stopErr?.message)
+    }
+
+    // Cleanup any PREVIOUS HLS transcode sessions (not the current one!)
+    // currentTranscodeSessionId is set in the try block above, or null if no transcode
+    const previousSessionId = activeCastTranscodeId
+    if (previousSessionId && previousSessionId !== currentTranscodeSessionId) {
+      console.log('[Backend] Cast play: Cleaning up previous transcode session:', previousSessionId)
+      try {
+        hlsTranscoder.stopHlsTranscode(previousSessionId)
+      } catch {}
+    }
+    // Update tracking to current session
+    if (currentTranscodeSessionId) {
+      activeCastTranscodeId = currentTranscodeSessionId
+    }
+
+    console.log('[Backend] Cast play: >>> SENDING LOAD TO CHROMECAST <<<')
+    console.log('[Backend] Cast play: URL:', url)
+    console.log('[Backend] Cast play: contentType:', contentType, 'streamType:', streamType || 'BUFFERED')
+
     await castContext.play({
       url,
-      contentType: req.contentType,
+      contentType,
       title: req.title,
       thumbnail: req.thumbnail,
       time: req.time,
-      volume: req.volume,
+      volume: normalizeCastVolume(req.volume),
+      streamType,
     })
+
+    console.log('[Backend] Cast play: >>> LOAD SENT SUCCESSFULLY <<<')
+
+    // Track that LOAD was sent for this HLS session to prevent duplicate LOADs
+    if (activeCastTranscodeId && contentType === 'application/x-mpegurl') {
+      hlsSessionsWithLoadSent.set(activeCastTranscodeId, true)
+      console.log('[Backend] Cast play: Marked session', activeCastTranscodeId, 'as LOAD sent')
+    }
+
+    // Update debounce time AFTER load completes (not at start) to properly gate subsequent calls
+    lastCastPlayTime = Date.now()
+
     return { success: true }
   } catch (err) {
+    console.error('[Backend] Cast play error:', err?.message || err)
     return { success: false, error: err?.message }
+  } finally {
+    // Ensure flag is reset even if something unexpected happens
+    castPlayInProgress = false
   }
 })
 
@@ -1361,6 +1940,22 @@ rpc.onCastStop(async () => {
   try {
     await castContext.stop()
     castProxySessions.clear()
+
+    // Cleanup active transcode session (try HLS first, then legacy)
+    if (activeCastTranscodeId) {
+      hlsSessionsWithLoadSent.delete(activeCastTranscodeId) // Clear LOAD tracking
+      try {
+        hlsTranscoder.stopHlsTranscode(activeCastTranscodeId)
+        console.log('[Backend] Cleaned up HLS transcode session:', activeCastTranscodeId)
+      } catch {
+        try {
+          transcoder.stopTranscode(activeCastTranscodeId)
+          console.log('[Backend] Cleaned up legacy transcode session:', activeCastTranscodeId)
+        } catch {}
+      }
+      activeCastTranscodeId = null
+    }
+
     return { success: true }
   } catch (err) {
     return { success: false, error: err?.message }
@@ -1384,7 +1979,7 @@ rpc.onCastSetVolume(async (req) => {
     return { success: false, error: 'Not connected' }
   }
   try {
-    await castContext.setVolume(req.volume)
+    await castContext.setVolume(normalizeCastVolume(req.volume))
     return { success: true }
   } catch (err) {
     return { success: false, error: err?.message }
@@ -1392,19 +1987,21 @@ rpc.onCastSetVolume(async (req) => {
 })
 
 rpc.onCastGetState(async () => {
+  // compact-encoding uint requires positive integers (>=1)
+  // For optional uint fields, omit them or use 1 as minimum
   if (!castContext) {
-    return { state: 'idle', currentTime: 0, duration: 0, volume: 1.0 }
+    return { state: 'idle' }  // omit zero uint fields
   }
   try {
     const state = castContext.getPlaybackState()
-    return {
-      state: state.state || 'idle',
-      currentTime: state.currentTime || 0,
-      duration: state.duration || 0,
-      volume: state.volume ?? 1.0,
-    }
+    const result = { state: state.state || 'idle' }
+    // Only include uint fields if they're positive
+    if (state.currentTime > 0) result.currentTime = Math.floor(state.currentTime)
+    if (state.duration > 0) result.duration = Math.floor(state.duration)
+    if (state.volume > 0) result.volume = Math.floor(state.volume * 100)  // convert 0-1 to 0-100
+    return result
   } catch {
-    return { state: 'idle', currentTime: 0, duration: 0, volume: 1.0 }
+    return { state: 'idle' }
   }
 })
 
@@ -1418,9 +2015,86 @@ rpc.onMpvLoadFile(async () => ({ success: false, error: 'MPV not supported on mo
 rpc.onMpvPlay(async () => ({ success: false, error: 'MPV not supported on mobile' }))
 rpc.onMpvPause(async () => ({ success: false, error: 'MPV not supported on mobile' }))
 rpc.onMpvSeek(async () => ({ success: false, error: 'MPV not supported on mobile' }))
-rpc.onMpvGetState(async () => ({ success: false, currentTime: 0, duration: 0, paused: true }))
+rpc.onMpvGetState(async () => ({ success: false, paused: true }))  // omit zero uint fields
 rpc.onMpvRenderFrame(async () => ({ success: false, error: 'MPV not supported on mobile' }))
 rpc.onMpvDestroy(async () => ({ success: false, error: 'MPV not supported on mobile' }))
+
+// ============================================
+// Transcode handlers (for Chromecast compatibility)
+// ============================================
+
+// NOTE: bare-ffmpeg is loaded lazily when Chromecast transcoding is needed.
+// DO NOT load it eagerly - on Android, the native module can crash during initialization
+// which would take down the entire backend. Lazy loading allows FCast and normal playback
+// to work even if bare-ffmpeg has issues.
+console.log('[Backend] bare-ffmpeg will be loaded lazily when needed for Chromecast')
+
+if (typeof rpc.onTranscodeStart === 'function') {
+  rpc.onTranscodeStart(async (req) => {
+    console.log('[HRPC] transcodeStart:', req.sourceUrl)
+    try {
+      const onProgress = (sessionId, percent) => {
+        try {
+          rpc.eventTranscodeProgress?.({
+            sessionId,
+            percent,
+            bytesWritten: 0,
+          })
+        } catch {}
+      }
+
+      const result = await transcoder.startTranscode(req.sourceUrl, {
+        duration: req.duration || 0,
+        title: req.title || '',
+        onProgress
+      })
+
+      return {
+        success: result.success,
+        sessionId: result.sessionId || '',
+        transcodeUrl: result.transcodeUrl || '',
+        error: result.error || '',
+      }
+    } catch (err) {
+      console.error('[HRPC] transcodeStart failed:', err?.message)
+      return { success: false, error: err?.message || 'Transcode start failed' }
+    }
+  })
+} else {
+  console.warn('[HRPC] transcodeStart handler not available')
+}
+
+if (typeof rpc.onTranscodeStop === 'function') {
+  rpc.onTranscodeStop(async (req) => {
+    console.log('[HRPC] transcodeStop:', req.sessionId)
+    try {
+      const result = transcoder.stopTranscode(req.sessionId)
+      return { success: result.success, error: result.error || '' }
+    } catch (err) {
+      return { success: false, error: err?.message || 'Stop failed' }
+    }
+  })
+} else {
+  console.warn('[HRPC] transcodeStop handler not available')
+}
+
+if (typeof rpc.onTranscodeStatus === 'function') {
+  rpc.onTranscodeStatus(async (req) => {
+    try {
+      const status = transcoder.getStatus(req.sessionId)
+      return {
+        status: status.status || '',
+        progress: status.progress || 0,
+        bytesWritten: status.bytesWritten || 0,
+        error: status.error || '',
+      }
+    } catch (err) {
+      return { status: 'error', progress: 0, bytesWritten: 0, error: err?.message || 'Status check failed' }
+    }
+  })
+} else {
+  console.warn('[HRPC] transcodeStatus handler not available')
+}
 
 // Event handlers (client -> server, usually no-ops)
 rpc.onEventReady(() => {
@@ -1440,6 +2114,7 @@ rpc.onEventUploadProgress(() => {})
 rpc.onEventFeedUpdate(() => {})
 rpc.onEventLog(() => {})
 rpc.onEventVideoStats(() => {})
+rpc.onEventTranscodeProgress(() => {})
 
 console.log('[Backend] HRPC handlers registered')
 
@@ -1451,6 +2126,17 @@ try {
 } catch (e) {
   console.error('[Backend] Failed to send eventReady:', e.message)
 }
+
+// Pre-load bare-ffmpeg at startup for faster cast response
+backendLog('[Backend] Pre-loading bare-ffmpeg...')
+Promise.all([
+  transcoder.loadBareFfmpeg(),
+  hlsTranscoder.loadBareFfmpeg()
+]).then(([legacyLoaded, hlsLoaded]) => {
+  backendLog('[Backend] bare-ffmpeg pre-load: legacy=' + legacyLoaded + ', hls=' + hlsLoaded)
+}).catch(err => {
+  backendLog('[Backend] bare-ffmpeg pre-load error: ' + (err?.message || err))
+})
 
 // Keep discovery fresh: ask peers for feeds periodically and persist cache
 setInterval(() => {

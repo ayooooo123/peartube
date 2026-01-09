@@ -23,7 +23,7 @@
     "typecheck": "npm run typecheck --prefix packages/platform",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx --quiet",
     "lint:fix": "npm run lint -- --fix",
-    "install:all": "npm install && npm install --prefix packages/app --legacy-peer-deps"
+    "install:all": "npm install && npm install --prefix packages/backend && npm install --prefix packages/app --legacy-peer-deps"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.41.0",

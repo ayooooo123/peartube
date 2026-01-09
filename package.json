@@ -44,7 +44,9 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "bare-ffmpeg": "^1.0.0",
+    "bare-ffmpeg": "file:packages/bare-ffmpeg",
+    "bare-ipc": "^1.1.1",
+    "bare-worker": "^4.1.0",
     "expo": "~54.0.25",
     "react": "19.1.0",
     "react-native": "0.81.5"

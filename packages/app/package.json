@@ -6,6 +6,7 @@
   "scripts": {
     "start": "expo start",
     "android": "npm run bundle:backend && expo run:android",
+    "setup:android": "bash ./scripts/setup-android.sh",
     "ios:prepare": "bash ./scripts/create-xcframeworks.sh",
     "ios": "pkill -f metro || true; rm -rf /tmp/metro-* || true; npm run bundle:backend && npm run ios:prepare && npx pod-install && expo run:ios",
     "web": "expo start --web",

@@ -1,3 +1,4 @@
+# 🚨🚨🚨 HIGHLY EXPERIMENTAL 🚨🚨🚨
 # PearTube
 
 A decentralized P2P video streaming platform built on the Pear runtime and Hypercore Protocol.

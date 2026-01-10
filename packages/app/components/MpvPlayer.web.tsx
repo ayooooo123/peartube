@@ -30,6 +30,160 @@ export interface MpvPlayerRef {
   getDuration: () => number
 }
 
+interface Html5FallbackProps extends MpvPlayerProps {
+  error?: string | null
+}
+
+/**
+ * HTML5 Video Fallback - Used when mpv is not available
+ * Supports MP4/WebM/H.264/AAC but not MKV/HEVC/AC3/DTS
+ */
+const Html5VideoFallback = forwardRef<MpvPlayerRef, Html5FallbackProps>(({
+  url,
+  autoPlay = true,
+  onProgress,
+  onPlaying,
+  onPaused,
+  onEnded,
+  onError,
+  onCanPlay,
+  style,
+  error: mpvError,
+}, ref) => {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [showWarning, setShowWarning] = useState(true)
+  const [videoError, setVideoError] = useState<string | null>(null)
+
+  useImperativeHandle(ref, () => ({
+    play: () => { videoRef.current?.play() },
+    pause: () => { videoRef.current?.pause() },
+    seek: (time: number) => {
+      if (videoRef.current) videoRef.current.currentTime = time
+    },
+    getCurrentTime: () => videoRef.current?.currentTime || 0,
+    getDuration: () => videoRef.current?.duration || 0,
+  }))
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    const handleTimeUpdate = () => {
+      onProgress?.({ currentTime: video.currentTime, duration: video.duration || 0 })
+    }
+    const handlePlay = () => onPlaying?.()
+    const handlePause = () => onPaused?.()
+    const handleEnded = () => onEnded?.()
+    const handleCanPlay = () => {
+      setShowWarning(false)
+      onCanPlay?.()
+    }
+    const handleError = () => {
+      const errorMsg = 'This video format is not supported by your browser. MKV, HEVC, AC3, and DTS require mpv to be installed.'
+      setVideoError(errorMsg)
+      onError?.(errorMsg)
+    }
+
+    video.addEventListener('timeupdate', handleTimeUpdate)
+    video.addEventListener('play', handlePlay)
+    video.addEventListener('pause', handlePause)
+    video.addEventListener('ended', handleEnded)
+    video.addEventListener('canplay', handleCanPlay)
+    video.addEventListener('error', handleError)
+
+    return () => {
+      video.removeEventListener('timeupdate', handleTimeUpdate)
+      video.removeEventListener('play', handlePlay)
+      video.removeEventListener('pause', handlePause)
+      video.removeEventListener('ended', handleEnded)
+      video.removeEventListener('canplay', handleCanPlay)
+      video.removeEventListener('error', handleError)
+    }
+  }, [onProgress, onPlaying, onPaused, onEnded, onCanPlay, onError])
+
+  if (videoError) {
+    return (
+      <div style={{
+        ...style,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#000',
+        color: '#fff',
+        padding: 24,
+        textAlign: 'center',
+      }}>
+        <span style={{ color: '#f97316', fontSize: 18, marginBottom: 12 }}>Unsupported Format</span>
+        <span style={{ color: '#9ca3af', fontSize: 14, maxWidth: 400, lineHeight: 1.5 }}>
+          {videoError}
+        </span>
+        <span style={{ color: '#6b7280', fontSize: 12, marginTop: 16 }}>
+          Install mpv: <code style={{ background: '#374151', padding: '2px 6px', borderRadius: 4 }}>
+            {typeof navigator !== 'undefined' && navigator.platform?.includes('Linux')
+              ? 'sudo apt install mpv'
+              : 'brew install mpv'}
+          </code>
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%', ...style }}>
+      {showWarning && (
+        <div style={{
+          position: 'absolute',
+          top: 8,
+          left: 8,
+          right: 8,
+          background: 'rgba(251, 146, 60, 0.9)',
+          color: '#000',
+          padding: '8px 12px',
+          borderRadius: 6,
+          fontSize: 12,
+          zIndex: 10,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}>
+          <span>⚠️</span>
+          <span>
+            mpv not available - using browser player. Some formats (MKV, HEVC, AC3) may not work.
+          </span>
+          <button
+            onClick={() => setShowWarning(false)}
+            style={{
+              marginLeft: 'auto',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: 4,
+              color: '#000',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      <video
+        ref={videoRef}
+        src={url}
+        autoPlay={autoPlay}
+        controls={false}
+        style={{
+          width: '100%',
+          height: '100%',
+          backgroundColor: '#000',
+          objectFit: 'contain',
+        }}
+      />
+    </div>
+  )
+})
+
+Html5VideoFallback.displayName = 'Html5VideoFallback'
+
 export const MpvPlayer = forwardRef<MpvPlayerRef, MpvPlayerProps>(({
   url,
   autoPlay = true,
@@ -338,18 +492,22 @@ export const MpvPlayer = forwardRef<MpvPlayerRef, MpvPlayerProps>(({
     )
   }
 
-  if (!mpvAvailable || error) {
+  // Fallback to HTML5 video when mpv is not available
+  if (mpvAvailable === false) {
     return (
-      <div style={{
-        ...style,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#000',
-        color: '#f00',
-      }}>
-        <span>Error: {error || 'bare-mpv not available'}</span>
-      </div>
+      <Html5VideoFallback
+        ref={ref}
+        url={url}
+        autoPlay={autoPlay}
+        onProgress={onProgress}
+        onPlaying={onPlaying}
+        onPaused={onPaused}
+        onEnded={onEnded}
+        onError={onError}
+        onCanPlay={onCanPlay}
+        style={style}
+        error={error}
+      />
     )
   }
 

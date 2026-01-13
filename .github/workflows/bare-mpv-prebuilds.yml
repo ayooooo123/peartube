@@ -1,0 +1,163 @@
+name: Build bare-mpv prebuilds
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.1.1)'
+        required: false
+        default: ''
+  push:
+    paths:
+      - 'packages/bare-mpv/**'
+    branches:
+      - main
+
+jobs:
+  build-macos:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14       # ARM64 runner
+            arch: arm64
+            prebuild_dir: darwin-arm64
+          - os: macos-13       # x64 runner
+            arch: x64
+            prebuild_dir: darwin-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install mpv via Homebrew
+        run: brew install mpv
+
+      - name: Install dependencies
+        working-directory: packages/bare-mpv
+        run: npm install
+
+      - name: Build native addon
+        working-directory: packages/bare-mpv
+        run: |
+          npx bare-make generate
+          npx bare-make build
+          npx bare-make install
+
+      - name: Upload prebuild artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuild-${{ matrix.prebuild_dir }}
+          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/
+
+  build-linux:
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            prebuild_dir: linux-x64
+            docker_platform: linux/amd64
+          - arch: arm64
+            prebuild_dir: linux-arm64
+            docker_platform: linux/arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (for ARM64 emulation)
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build in Docker container
+        run: |
+          docker run --rm --platform ${{ matrix.docker_platform }} \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace/packages/bare-mpv \
+            node:20-bookworm \
+            bash -c "
+              apt-get update && apt-get install -y libmpv-dev cmake ninja-build
+              npm install
+              npx bare-make generate
+              npx bare-make build
+              npx bare-make install
+            "
+
+      - name: Upload prebuild artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuild-${{ matrix.prebuild_dir }}
+          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/
+
+  build-windows:
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            prebuild_dir: win32-x64
+          - arch: arm64
+            prebuild_dir: win32-arm64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download libmpv dev package
+        shell: pwsh
+        run: |
+          # Download mpv dev package from shinchiro's builds
+          $mpvUrl = "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-${{ matrix.arch }}-latest.7z/download"
+          Invoke-WebRequest -Uri $mpvUrl -OutFile mpv-dev.7z -UserAgent "Wget"
+          7z x mpv-dev.7z -oC:\mpv-dev
+
+      - name: Install dependencies
+        working-directory: packages/bare-mpv
+        run: npm install
+
+      - name: Build native addon
+        working-directory: packages/bare-mpv
+        env:
+          MPV_HOME: C:\mpv-dev
+        run: |
+          npx bare-make generate
+          npx bare-make build
+          npx bare-make install
+
+      - name: Upload prebuild artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuild-${{ matrix.prebuild_dir }}
+          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/
+
+  collect-prebuilds:
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all prebuilds
+        uses: actions/download-artifact@v4
+        with:
+          path: packages/bare-mpv/prebuilds/
+          pattern: prebuild-*
+          merge-multiple: true
+
+      - name: List prebuilds
+        run: find packages/bare-mpv/prebuilds -name "*.bare" -ls
+
+      - name: Create prebuilds archive
+        run: |
+          cd packages/bare-mpv
+          tar -czvf bare-mpv-prebuilds.tar.gz prebuilds/
+
+      - name: Upload combined prebuilds
+        uses: actions/upload-artifact@v4
+        with:
+          name: bare-mpv-prebuilds-all
+          path: packages/bare-mpv/bare-mpv-prebuilds.tar.gz

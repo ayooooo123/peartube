@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "schema": [
     {
       "name": "empty",
@@ -4962,6 +4962,99 @@
           "required": false,
           "type": "uint",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "transcode-settings",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "videoToolboxDecodeEnabled",
+          "required": false,
+          "type": "bool",
+          "version": 5
+        },
+        {
+          "name": "videoToolboxDecodeLocked",
+          "required": false,
+          "type": "bool",
+          "version": 5
+        },
+        {
+          "name": "videoToolboxDecodeDefault",
+          "required": false,
+          "type": "bool",
+          "version": 5
+        },
+        {
+          "name": "videoToolboxDecodeSource",
+          "required": false,
+          "type": "string",
+          "version": 5
+        }
+      ]
+    },
+    {
+      "name": "get-transcode-settings-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": []
+    },
+    {
+      "name": "get-transcode-settings-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "settings",
+          "required": true,
+          "type": "@peartube/transcode-settings",
+          "version": 5
+        }
+      ]
+    },
+    {
+      "name": "set-transcode-settings-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "videoToolboxDecodeEnabled",
+          "required": false,
+          "type": "bool",
+          "version": 5
+        }
+      ]
+    },
+    {
+      "name": "set-transcode-settings-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 5
+        },
+        {
+          "name": "settings",
+          "required": true,
+          "type": "@peartube/transcode-settings",
+          "version": 5
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 5
         }
       ]
     }

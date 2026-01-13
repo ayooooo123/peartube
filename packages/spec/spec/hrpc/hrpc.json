@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "schema": [
     {
       "id": 0,
@@ -1251,6 +1251,32 @@
         "send": true
       },
       "version": 1
+    },
+    {
+      "id": 33,
+      "name": "@peartube/get-transcode-settings",
+      "request": {
+        "name": "@peartube/get-transcode-settings-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/get-transcode-settings-response",
+        "stream": false
+      },
+      "version": 5
+    },
+    {
+      "id": 34,
+      "name": "@peartube/set-transcode-settings",
+      "request": {
+        "name": "@peartube/set-transcode-settings-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/set-transcode-settings-response",
+        "stream": false
+      },
+      "version": 5
     }
   ]
 }

@@ -9,7 +9,8 @@
   },
   "devDependencies": {
     "bare-make": "^1.6.3",
-    "cmake-bare": "^1.7.6"
+    "cmake-bare": "^1.7.6",
+    "cmake-ports": "^1.5.10"
   },
   "engines": {
     "bare": ">=2.0.0"
@@ -19,6 +20,8 @@
     "binding.cc",
     "index.js",
     "CMakeLists.txt",
+    "cmake",
+    "vendor/mpv",
     "prebuilds"
   ]
 }

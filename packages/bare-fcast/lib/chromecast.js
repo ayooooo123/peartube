@@ -240,6 +240,8 @@ export class ChromecastDevice extends EventEmitter {
     this._loadInProgress = false
     this._lastLoadTime = 0
     this._loadDebounceMs = 1000 // Minimum 1 second between LOAD calls
+    this._recentWrites = []
+    this._recentWriteLimit = 128
   }
 
   /**
@@ -597,9 +599,26 @@ export class ChromecastDevice extends EventEmitter {
     }
   }
 
+  _isSocketWritable() {
+    const socket = this._socket
+    if (!socket || socket.destroyed) return false
+    if (!socket._handle) return false
+    const raw = socket.socket
+    if (raw?.readyState && raw.readyState !== 'open') return false
+    return true
+  }
+
+  _retainWriteBuffer(buffer) {
+    if (!buffer) return
+    this._recentWrites.push(buffer)
+    if (this._recentWrites.length > this._recentWriteLimit) {
+      this._recentWrites.shift()
+    }
+  }
+
   _sendCastMessage(namespace, payload, destinationId) {
     // Guard socket writes with null/connection checks
-    if (!this._socket || !this._connected) {
+    if (!this._connected || !this._isSocketWritable()) {
       console.warn('[Chromecast] Cannot send message: not connected')
       return
     }
@@ -618,6 +637,7 @@ export class ChromecastDevice extends EventEmitter {
     })
 
     try {
+      this._retainWriteBuffer(message)
       this._socket.write(message)
     } catch (err) {
       // Socket may have closed between check and write
@@ -887,6 +907,13 @@ export class ChromecastDevice extends EventEmitter {
     this._socket = null
     this._detachSocketHandlers(socket)
 
+    if (socket.destroyed || !socket._handle) {
+      try {
+        console.log('[Chromecast] socket already destroyed, skipping close')
+      } catch {}
+      return Promise.resolve()
+    }
+
     return new Promise((resolve) => {
       let settled = false
       let closeTimer = null
@@ -972,6 +999,7 @@ export class ChromecastDevice extends EventEmitter {
       this._buffer = Buffer.alloc(0)
       this._transportId = null
       this._mediaSessionId = null
+      this._recentWrites = []
       this._launchWaiters = []
       this._activeConnectToken = 0
       this._finalizeConnect(err || new Error('Connection closed'))

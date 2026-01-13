@@ -460,6 +460,15 @@ RootLayout
 1. Check for `Component.web.tsx` files
 2. Desktop uses web export which loads `.web.tsx` via Metro
 
+### Pear HLS transcode crash (macOS)
+
+**Cause:** VideoToolbox hardware decode can corrupt memory in the local `bare-ffmpeg` fork when the HW→SW transfer format is invalid (common with 10-bit HEVC).
+
+**Solution:**
+1. Disable VideoToolbox decode: **Settings → Transcoding → VideoToolbox Decode (Pear)**
+2. Or set `PEARTUBE_ENABLE_VT_DECODE=0` to lock it off
+3. If enabling, pick the transfer format from `hwFramesCtx.getConstraints().validSwFormats` and transfer into a dedicated software frame before scaling.
+
 ---
 
 ## Key Files Reference

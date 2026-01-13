@@ -22,7 +22,10 @@ try {
   await import('./build/workers/core/index.js')
   console.log('[PearTube] Backend HRPC server started')
 } catch (err) {
-  console.error('[PearTube] Failed to start backend HRPC server:', err?.message || err)
+  console.error('[PearTube] Failed to start backend HRPC server:', err?.stack || err?.message || err)
+  if (err?.cause) {
+    console.error('[PearTube] HRPC server error cause:', err.cause?.stack || err.cause?.message || err.cause)
+  }
 }
 
 pipe.on('close', () => {

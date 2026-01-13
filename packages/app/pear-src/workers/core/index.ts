@@ -10,53 +10,18 @@
 import fs from 'bare-fs';
 import path from 'bare-path';
 import os from 'bare-os';
-import env from 'bare-env';
 import pipe from 'pear-pipe';
 import { spawn } from 'bare-subprocess';
 import b4a from 'b4a';
 import http1 from 'bare-http1';
-import https from 'bare-https';
-import { fileURLToPath } from 'url-file-url';
+// @ts-ignore - backend transcode modules are JavaScript
+import * as transcoder from '@peartube/backend/transcode/transcoder';
+// @ts-ignore - backend transcode modules are JavaScript
+import * as hlsTranscoder from '@peartube/backend/transcode/hls-transcoder';
 
 // Platform detection - bare-mpv is desktop-only (no Android/iOS prebuilds)
 const currentPlatform = os.platform();
 const isMpvSupported = currentPlatform === 'darwin' || currentPlatform === 'linux' || currentPlatform === 'win32';
-
-// bare-ffmpeg for fast native transcoding
-let ffmpeg: any = null;
-let ffmpegLoadError: string | null = null;
-let ffmpegLoadPromise: Promise<void> | null = null;
-
-async function loadBareFfmpeg(): Promise<void> {
-  if (ffmpeg || ffmpegLoadError) return;
-  if (ffmpegLoadPromise) return ffmpegLoadPromise;
-  ffmpegLoadPromise = (async () => {
-    let lastError: any;
-    if (typeof require === 'function') {
-      try {
-        const mod = require('bare-ffmpeg');
-        ffmpeg = mod?.default ?? mod;
-        console.log('[Worker] bare-ffmpeg loaded');
-        return;
-      } catch (err: any) {
-        lastError = err;
-      }
-    }
-    try {
-      const mod = await import('bare-ffmpeg');
-      ffmpeg = (mod as any)?.default ?? mod;
-      console.log('[Worker] bare-ffmpeg loaded');
-      return;
-    } catch (err: any) {
-      lastError = err;
-    }
-    ffmpegLoadError = lastError?.message || 'Unknown error';
-    console.warn('[Worker] bare-ffmpeg not available:', ffmpegLoadError);
-  })();
-  return ffmpegLoadPromise;
-}
-
-void loadBareFfmpeg();
 
 // bare-mpv for universal codec playback (AC3, DTS, etc.)
 let MpvPlayer: any = null;
@@ -116,15 +81,9 @@ let mpvFrameServerReady: Promise<number> | null = null;
 let castProxyServer: any = null;
 let castProxyPort = 0;
 let castProxyReady: Promise<number> | null = null;
-const castProxySessions = new Map<string, { url: string; createdAt: number; lastAccessAt?: number; transcodeSessionId?: string }>();
+const castProxySessions = new Map<string, { url: string; createdAt: number; lastAccessAt?: number; transcodeSessionId?: string; isHls?: boolean }>();
 const CAST_PROXY_TTL_MS = 30 * 60 * 1000;
 const castProxyPlaylistLogged = new Set<string>();
-
-// Transcode module (runs inline - bare-worker doesn't work in Pear sandbox)
-let transcoderInitialized = false;
-let transcoderHttpPort = 0;
-
-type TranscodeOutputFormat = 'mp4' | 'mpegts' | 'hls';
 
 interface TranscodeSession {
   id: string;
@@ -132,13 +91,11 @@ interface TranscodeSession {
   cacheKey: string;
   status: 'pending' | 'transcoding' | 'complete' | 'error';
   progress: number;
-  servingUrl?: string;
-  outputFormat?: TranscodeOutputFormat;
-  contentType?: string;
+  transcodeUrl?: string;
   proxyUrl?: string;
   error?: string;
   mode: 'transcode' | 'audio' | 'remux';  // 'audio' = video copy + audio transcode (fast)
-  duration?: number;  // Full video duration from ffprobe for BUFFERED seeking
+  duration?: number;  // Full video duration from probe for BUFFERED seeking
 }
 const transcodeSessions = new Map<string, TranscodeSession>();
 
@@ -627,1101 +584,16 @@ async function createCastProxyUrl(targetHost: string | undefined, sourceUrl: str
   console.log('[Worker] Cast proxy local IP selected:', localIp, 'targetHost:', targetHost || 'unknown');
   cleanupCastProxySessions();
   const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-  castProxySessions.set(token, { url: sourceUrl, createdAt: Date.now(), lastAccessAt: Date.now(), transcodeSessionId });
-  return `http://${localIp}:${castProxyPort}/cast/${token}`;
+  const now = Date.now();
+  const isHls = sourceUrl.endsWith('.m3u8') || sourceUrl.includes('.m3u8?');
+  castProxySessions.set(token, { url: sourceUrl, createdAt: now, lastAccessAt: now, transcodeSessionId, isHls });
+  const suffix = isHls ? '/index.m3u8' : '';
+  return `http://${localIp}:${castProxyPort}/cast/${token}${suffix}`;
 }
 
 // ============================================
-// Inline Transcoder Module
-// (bare-worker doesn't work in Pear's sandboxed environment)
+// Transcode Integration (shared backend module)
 // ============================================
-
-interface InternalTranscodeSession {
-  id: string;
-  outputPath: string;
-  outputDir?: string;
-  inputUrl: string;
-  status: 'starting' | 'transcoding' | 'complete' | 'error';
-  progress: number;
-  duration: number;
-  outputFormat: TranscodeOutputFormat;
-  contentType: string;
-  error?: string;
-  mode: 'transcode' | 'audio' | 'remux';  // 'audio' = video copy + audio transcode (fast)
-}
-
-const transcoder = (() => {
-  const sessions = new Map<string, InternalTranscodeSession>();
-  let httpServer: any = null;
-  let httpPort = 0;
-
-  // Parse range header for HTTP range requests
-  function parseRangeHeader(rangeHeader: string | undefined, fileSize: number): { start: number, end: number } | null {
-    if (!rangeHeader || !rangeHeader.startsWith('bytes=')) return null;
-    const range = rangeHeader.slice(6);
-    const [startStr, endStr] = range.split('-');
-    const start = parseInt(startStr, 10) || 0;
-    const end = endStr ? parseInt(endStr, 10) : fileSize - 1;
-    if (start >= fileSize || end >= fileSize || start > end) return null;
-    return { start, end };
-  }
-
-  // Handle HTTP requests for transcoded files
-  // Supports both completed files and growing files (live transcoding)
-  function handleRequest(req: any, res: any) {
-    const rawUrl = typeof req.url === 'string' ? req.url : '/';
-    const pathOnly = rawUrl.split('?')[0] || '/';
-    const match = pathOnly.match(/^\/transcode\/([^\/]+)(\/.*)?$/);
-    if (!match) {
-      res.statusCode = 404;
-      res.end('Not found');
-      return;
-    }
-
-    const sessionId = match[1];
-    const suffix = match[2] || '';
-    const session = sessions.get(sessionId);
-
-    if (!session) {
-      res.statusCode = 404;
-      res.end('Session not found');
-      return;
-    }
-
-    try {
-      const isComplete = session.status === 'complete';
-
-      if (session.outputFormat === 'hls') {
-        const relativePath = suffix && suffix !== '/' ? suffix.slice(1) : 'index.m3u8';
-        if (relativePath.includes('..')) {
-          res.statusCode = 400;
-          res.end('Invalid path');
-          return;
-        }
-        const baseDir = session.outputDir || path.dirname(session.outputPath);
-        const filePath = path.normalize(path.join(baseDir, relativePath));
-        const resolvedBase = path.resolve(baseDir);
-        const resolvedFile = path.resolve(filePath);
-        if (!resolvedFile.startsWith(resolvedBase)) {
-          res.statusCode = 400;
-          res.end('Invalid path');
-          return;
-        }
-        if (!fs.existsSync(resolvedFile)) {
-          res.statusCode = 503;
-          res.setHeader('Retry-After', '1');
-          res.end('HLS segment not ready');
-          return;
-        }
-        const ext = path.extname(resolvedFile).toLowerCase();
-        const contentType =
-          ext === '.m3u8'
-            ? 'application/vnd.apple.mpegurl'
-            : ext === '.ts'
-              ? 'video/mp2t'
-              : 'application/octet-stream';
-        const stat = fs.statSync(resolvedFile);
-        res.statusCode = 200;
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Content-Length', stat.size);
-        if (ext === '.m3u8') {
-          res.setHeader('Cache-Control', 'no-cache');
-        }
-        const stream = fs.createReadStream(resolvedFile);
-        stream.pipe(res);
-        return;
-      }
-
-      // For completed files, serve with Content-Length
-      if (isComplete) {
-        if (!fs.existsSync(session.outputPath)) {
-          res.statusCode = 404;
-          res.end('Output file not ready');
-          return;
-        }
-        const stat = fs.statSync(session.outputPath);
-        const fileSize = stat.size;
-        const range = parseRangeHeader(req.headers?.range, fileSize);
-
-        res.setHeader('Content-Type', session.contentType || 'video/mp4');
-        res.setHeader('Accept-Ranges', 'bytes');
-
-        if (range) {
-          res.statusCode = 206;
-          res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${fileSize}`);
-          res.setHeader('Content-Length', range.end - range.start + 1);
-          const stream = fs.createReadStream(session.outputPath, { start: range.start, end: range.end });
-          stream.pipe(res);
-        } else {
-          res.statusCode = 200;
-          res.setHeader('Content-Length', fileSize);
-          const stream = fs.createReadStream(session.outputPath);
-          stream.pipe(res);
-        }
-        return;
-      }
-
-      // For growing files (live transcoding), stream data as it becomes available
-      // This is how VLC handles Chromecast streaming
-      console.log('[Transcoder] Streaming growing file to Chromecast, status:', session.status);
-      res.setHeader('Content-Type', session.contentType || 'video/mp4');
-      res.setHeader('Transfer-Encoding', 'chunked');
-      res.statusCode = 200;
-
-      let position = 0;
-      let noDataCount = 0;
-      const MAX_NO_DATA_ITERATIONS = 120; // ~60 seconds max wait for new data
-
-      const streamData = () => {
-        // Check if response is still valid
-        if (res.destroyed || res.writableEnded) {
-          console.log('[Transcoder] Response closed, stopping stream');
-          return;
-        }
-
-        // Re-fetch session to get current status
-        const currentSession = sessions.get(sessionId);
-        if (!currentSession) {
-          console.log('[Transcoder] Session gone, closing stream');
-          try { res.end(); } catch {}
-          return;
-        }
-
-        try {
-          if (!fs.existsSync(currentSession.outputPath)) {
-            // File not created yet
-            noDataCount++;
-            if (noDataCount >= MAX_NO_DATA_ITERATIONS) {
-              console.warn('[Transcoder] File never created, closing stream');
-              try { res.end(); } catch {}
-              return;
-            }
-            setTimeout(streamData, 500);
-            return;
-          }
-
-          const stat = fs.statSync(currentSession.outputPath);
-          const currentSize = stat.size;
-
-          if (currentSize > position) {
-            // New data available, read and send it
-            noDataCount = 0;
-            const bytesToRead = Math.min(currentSize - position, 1024 * 1024); // Max 1MB per chunk
-            const buffer = Buffer.alloc(bytesToRead);
-            const fd = fs.openSync(currentSession.outputPath, 'r');
-            fs.readSync(fd, buffer, 0, bytesToRead, position);
-            fs.closeSync(fd);
-
-            position += bytesToRead;
-
-            res.write(Buffer.from(buffer), (err: any) => {
-              if (err) {
-                console.warn('[Transcoder] Write error:', err?.message);
-                return;
-              }
-              // Continue streaming quickly when there's data
-              setTimeout(streamData, 50);
-            });
-          } else if (currentSession.status === 'complete') {
-            // Transcoding finished, close the response
-            console.log('[Transcoder] Transcode complete, closing stream. Total bytes sent:', position);
-            try { res.end(); } catch {}
-          } else if (currentSession.status === 'error') {
-            // Error occurred
-            console.warn('[Transcoder] Transcode error, closing stream:', currentSession.error);
-            try { res.end(); } catch {}
-          } else {
-            // No new data yet, wait and retry
-            noDataCount++;
-            if (noDataCount >= MAX_NO_DATA_ITERATIONS) {
-              console.warn('[Transcoder] No data for too long, closing stream');
-              try { res.end(); } catch {}
-              return;
-            }
-            setTimeout(streamData, 500);
-          }
-        } catch (err: any) {
-          console.error('[Transcoder] Stream error:', err?.message);
-          try { res.end(); } catch {}
-        }
-      };
-
-      // Start streaming
-      streamData();
-    } catch (err: any) {
-      console.error('[Transcoder] Error serving file:', err?.message);
-      res.statusCode = 500;
-      res.end('Error serving file');
-    }
-  }
-
-  // VLC-style streaming transcode: FFmpeg reads from URL directly (no pre-download)
-  // This enables real-time transcoding while downloading, like VLC does for Chromecast
-  async function streamingTranscodeFromUrl(
-    session: InternalTranscodeSession,
-    inputUrl: string,
-    mode: 'transcode' | 'audio' | 'remux',
-    onProgress?: (percent: number) => void
-  ): Promise<void> {
-    console.log(`[Transcoder] VLC-style streaming ${mode} from URL:`, inputUrl);
-    const useHls = session.outputFormat === 'hls';
-    const hlsSegmentSeconds = 2;
-    const hlsDir = useHls ? (session.outputDir || path.dirname(session.outputPath)) : undefined;
-    if (useHls && hlsDir) {
-      try {
-        if (!fs.existsSync(hlsDir)) {
-          fs.mkdirSync(hlsDir, { recursive: true });
-        }
-      } catch (err: any) {
-        console.warn('[Transcoder] Failed to ensure HLS output dir:', err?.message || err);
-        throw err;
-      }
-    }
-
-    return new Promise((resolve, reject) => {
-      // Build FFmpeg args based on mode
-      const platform = os.platform();
-      const args = [
-        '-y',
-        '-hide_banner',
-        '-loglevel', 'info',
-      ];
-
-      // Add hardware-accelerated decoding for supported platforms
-      if (platform === 'darwin') {
-        // macOS: Use VideoToolbox for hardware decoding (HEVC, H.264, etc.)
-        args.push('-hwaccel', 'videotoolbox');
-      }
-
-      args.push('-i', inputUrl);
-
-      const useMpegTs = session.outputFormat === 'mpegts';
-      if (mode === 'remux') {
-        // Just copy streams, change container to MP4
-        args.push('-c:v', 'copy', '-c:a', 'copy');
-      } else if (mode === 'audio') {
-        // Copy video, transcode audio to AAC (preserve original channel layout)
-        args.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k');
-      } else {
-        // Full transcode: H.264 + AAC with hardware acceleration when available
-        if (useHls || useMpegTs) {
-          // Use software x264 for MPEG-TS to maximize Chromecast compatibility.
-          args.push(
-            '-c:v', 'libx264',
-            '-preset', 'veryfast',
-            '-tune', 'zerolatency',
-            '-profile:v', 'main',
-            '-level:v', '4.0',
-            '-pix_fmt', 'yuv420p',
-            '-b:v', '4M',
-            '-maxrate', '5M',
-            '-bufsize', '10M',
-            '-g', '48',
-            '-keyint_min', '48',
-            '-sc_threshold', '0',
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-ac', '2',
-            '-ar', '48000'
-          );
-        } else if (platform === 'darwin') {
-          // macOS: Use VideoToolbox hardware encoder (GPU accelerated)
-          console.log('[Transcoder] Using VideoToolbox hardware acceleration (macOS)');
-          args.push(
-            '-c:v', 'h264_videotoolbox',
-            '-profile:v', 'main',
-            '-level:v', '4.0',
-            '-b:v', '6M',            // VideoToolbox works better with slightly higher bitrate
-            '-maxrate', '8M',
-            '-pix_fmt', 'nv12',      // VideoToolbox prefers nv12
-            '-allow_sw', '1',        // Allow software fallback if HW fails
-            '-realtime', '1',        // Optimize for real-time encoding
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-ar', '48000'
-          );
-          if (useHls || useMpegTs) {
-            args.push(
-              '-g', String(hlsSegmentSeconds * 60),
-              '-force_key_frames', `expr:gte(t,n_forced*${hlsSegmentSeconds})`
-            );
-          }
-        } else if (platform === 'linux') {
-          // Linux: Try VAAPI or NVENC, fallback to software
-          console.log('[Transcoder] Using software encoding (Linux - TODO: add VAAPI/NVENC)');
-          args.push(
-            '-c:v', 'libx264',
-            '-preset', 'veryfast',
-            '-profile:v', 'main',
-            '-level:v', '4.0',
-            '-pix_fmt', 'yuv420p',
-            '-b:v', '4M',
-            '-maxrate', '5M',
-            '-bufsize', '10M',
-            '-g', '50',
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-ar', '48000'
-          );
-        } else if (platform === 'win32') {
-          // Windows: Try NVENC or QSV, fallback to software
-          console.log('[Transcoder] Using software encoding (Windows - TODO: add NVENC/QSV)');
-          args.push(
-            '-c:v', 'libx264',
-            '-preset', 'veryfast',
-            '-profile:v', 'main',
-            '-level:v', '4.0',
-            '-pix_fmt', 'yuv420p',
-            '-b:v', '4M',
-            '-maxrate', '5M',
-            '-bufsize', '10M',
-            '-g', '50',
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-ar', '48000'
-          );
-        } else {
-          // Unknown platform: software encoding
-          args.push(
-            '-c:v', 'libx264',
-            '-preset', 'veryfast',
-            '-profile:v', 'main',
-            '-level:v', '4.0',
-            '-pix_fmt', 'yuv420p',
-            '-b:v', '4M',
-            '-maxrate', '5M',
-            '-bufsize', '10M',
-            '-g', '50',
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-ar', '48000'
-          );
-        }
-      }
-
-      if (useHls) {
-        const segmentTemplate = 'seg_%05d.ts';
-        const playlistName = path.basename(session.outputPath);
-        args.push(
-          '-f', 'hls',
-          '-hls_time', String(hlsSegmentSeconds),
-          '-hls_list_size', '10000', // Keep many segments for Chromecast buffer
-          '-hls_flags', 'append_list+omit_endlist', // Append mode keeps all segments
-          '-hls_segment_filename', segmentTemplate,
-          playlistName
-        );
-      } else if (useMpegTs) {
-        // MPEG-TS is more robust for LIVE Chromecast playback.
-        args.push(
-          '-bsf:v', 'h264_mp4toannexb',
-          '-f', 'mpegts',
-          '-muxdelay', '0',
-          '-muxpreload', '0',
-          '-mpegts_flags', '+pat_pmt_at_frames',
-          session.outputPath
-        );
-      } else {
-        // Fragmented MP4 for streaming - enables playback before transcode completes
-        args.push(
-          '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-          '-frag_duration', '1000000',  // 1 second fragments
-          '-f', 'mp4',
-          session.outputPath
-        );
-      }
-
-      console.log('[Transcoder] FFmpeg args:', args.join(' '));
-
-      const spawnOptions = useHls && hlsDir ? { cwd: hlsDir } : undefined;
-      const proc = spawn('ffmpeg', args, spawnOptions);
-      let lastProgress = 0;
-      let duration = 0;
-
-      proc.stderr.on('data', (chunk: Buffer) => {
-        const msg = chunk.toString();
-
-        // Parse duration from input analysis
-        const durationMatch = msg.match(/Duration:\s*(\d+):(\d+):(\d+)/);
-        if (durationMatch && duration === 0) {
-          duration = parseInt(durationMatch[1]) * 3600 +
-                     parseInt(durationMatch[2]) * 60 +
-                     parseInt(durationMatch[3]);
-          session.duration = duration;
-        }
-
-        // Parse current time for progress
-        const timeMatch = msg.match(/time=(\d+):(\d+):(\d+)/);
-        if (timeMatch && duration > 0) {
-          const currentTime = parseInt(timeMatch[1]) * 3600 +
-                              parseInt(timeMatch[2]) * 60 +
-                              parseInt(timeMatch[3]);
-          const progress = Math.min(99, Math.round((currentTime / duration) * 100));
-          if (progress > lastProgress) {
-            lastProgress = progress;
-            session.progress = progress;
-            onProgress?.(progress);
-          }
-        }
-
-        // Check for errors
-        if (msg.includes('Error') || msg.includes('error') || msg.includes('Invalid')) {
-          console.warn('[Transcoder] FFmpeg warning/error:', msg.trim());
-        }
-      });
-
-      proc.on('exit', (code: number) => {
-        if (code === 0) {
-          session.progress = 100;
-          onProgress?.(100);
-          console.log('[Transcoder] Streaming transcode complete');
-          resolve();
-        } else {
-          reject(new Error(`FFmpeg exited with code ${code}`));
-        }
-      });
-
-      proc.on('error', (err: Error) => {
-        reject(new Error(`FFmpeg spawn error: ${err.message}`));
-      });
-    });
-  }
-
-  // Download source to temp file (streaming to disk, not memory)
-  async function downloadToTempFile(url: string, destPath: string, onProgress?: (bytes: number) => void): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const protocol = url.startsWith('https') ? https : http1;
-
-      const doRequest = (requestUrl: string) => {
-        const req = protocol.get(requestUrl, (res: any) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            doRequest(res.headers.location);
-            return;
-          }
-          if (res.statusCode !== 200) {
-            reject(new Error(`HTTP ${res.statusCode}`));
-            return;
-          }
-
-          const writeStream = fs.createWriteStream(destPath);
-          let bytesWritten = 0;
-
-          res.on('data', (chunk: Buffer) => {
-            writeStream.write(Buffer.from(chunk));
-            bytesWritten += chunk.length;
-            onProgress?.(bytesWritten);
-          });
-
-          res.on('end', () => {
-            writeStream.end(() => {
-              console.log('[Transcoder] Download complete:', bytesWritten, 'bytes');
-              resolve(bytesWritten);
-            });
-          });
-
-          res.on('error', (err: Error) => {
-            writeStream.destroy();
-            reject(err);
-          });
-        });
-        req.on('error', reject);
-      };
-
-      doRequest(url);
-    });
-  }
-
-  // Create streaming IOContext that reads from file with onread/onseek callbacks
-  function createFileReadIOContext(filePath: string, fileSize: number): any {
-    const fd = fs.openSync(filePath, 'r');
-    let currentPos = 0;
-
-    const ioContext = new ffmpeg.IOContext(16384, {
-      onread: (buffer: Buffer) => {
-        if (currentPos >= fileSize) return 0; // EOF
-        const bytesToRead = Math.min(buffer.length, fileSize - currentPos);
-        const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, currentPos);
-        currentPos += bytesRead;
-        return bytesRead;
-      },
-      onseek: (offset: number, whence: number) => {
-        const SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2, AVSEEK_SIZE = 0x10000;
-        if (whence === AVSEEK_SIZE) return fileSize;
-        if (whence === SEEK_SET) currentPos = offset;
-        else if (whence === SEEK_CUR) currentPos += offset;
-        else if (whence === SEEK_END) currentPos = fileSize + offset;
-        return currentPos;
-      }
-    });
-
-    // Attach cleanup function
-    (ioContext as any)._cleanup = () => {
-      try { fs.closeSync(fd); } catch (e) {}
-    };
-
-    return ioContext;
-  }
-
-  // Create streaming IOContext that writes to file with onwrite callback
-  function createFileWriteIOContext(filePath: string): { io: any, getSize: () => number } {
-    const fd = fs.openSync(filePath, 'w');
-    let bytesWritten = 0;
-
-    const ioContext = new ffmpeg.IOContext(Buffer.alloc(16384), {
-      onwrite: (chunk: Buffer) => {
-        fs.writeSync(fd, Buffer.from(chunk));
-        bytesWritten += chunk.length;
-      }
-    });
-
-    // Attach cleanup function
-    (ioContext as any)._cleanup = () => {
-      try { fs.closeSync(fd); } catch (e) {}
-    };
-
-    return {
-      io: ioContext,
-      getSize: () => bytesWritten
-    };
-  }
-
-  // Remux using bare-ffmpeg with streaming I/O
-  async function remuxWithStreaming(session: InternalTranscodeSession, inputPath: string, inputSize: number): Promise<void> {
-    if (!ffmpeg) throw new Error('bare-ffmpeg not loaded');
-    console.log('[Transcoder] Starting streaming remux');
-
-    const inputIO = createFileReadIOContext(inputPath, inputSize);
-    const inputFmt = new ffmpeg.InputFormatContext(inputIO);
-    await inputFmt.openInput();
-    await inputFmt.findStreamInfo();
-
-    const { io: outputIO, getSize } = createFileWriteIOContext(session.outputPath);
-    const outputFmt = new ffmpeg.OutputFormatContext('mp4', outputIO);
-
-    for (let i = 0; i < inputFmt.streams.length; i++) {
-      outputFmt.addStream(inputFmt.streams[i].codecParameters);
-    }
-
-    await outputFmt.writeHeader({ movflags: 'frag_keyframe+empty_moov+default_base_moof' });
-
-    const packet = new ffmpeg.Packet();
-    let packetsProcessed = 0;
-
-    while (true) {
-      const ret = await inputFmt.readFrame(packet);
-      if (ret < 0) break;
-      packetsProcessed++;
-      if (packetsProcessed % 100 === 0) {
-        session.progress = Math.min(95, (packetsProcessed / 1000) * 10);
-      }
-      await outputFmt.writeFrame(packet);
-      packet.unref();
-    }
-
-    await outputFmt.writeTrailer();
-
-    // Cleanup
-    inputIO._cleanup?.();
-    outputIO._cleanup?.();
-
-    console.log('[Transcoder] Remux complete, output size:', getSize());
-  }
-
-  // Audio-only transcode (copy video stream, transcode audio to AAC) - FAST!
-  async function transcodeAudioWithStreaming(session: InternalTranscodeSession, inputPath: string, inputSize: number): Promise<void> {
-    if (!ffmpeg) throw new Error('bare-ffmpeg not loaded');
-    console.log('[Transcoder] Starting audio-only transcode (video copy)');
-
-    const inputIO = createFileReadIOContext(inputPath, inputSize);
-    const inputFmt = new ffmpeg.InputFormatContext(inputIO);
-    await inputFmt.openInput();
-    await inputFmt.findStreamInfo();
-
-    const { io: outputIO, getSize } = createFileWriteIOContext(session.outputPath);
-    const outputFmt = new ffmpeg.OutputFormatContext('mp4', outputIO);
-
-    let audioStreamIndex = -1;
-    let audioDecoder: any = null;
-    let audioEncoder: any = null;
-    let resampler: any = null;
-
-    // Set up streams
-    for (let i = 0; i < inputFmt.streams.length; i++) {
-      const inStream = inputFmt.streams[i];
-      const codecType = inStream.codecParameters.codecType;
-
-      if (codecType === ffmpeg.constants.mediaTypes.AUDIO && audioStreamIndex === -1) {
-        audioStreamIndex = i;
-        const decoderCodec = new ffmpeg.Codec(inStream.codecParameters.id);
-        audioDecoder = new ffmpeg.CodecContext(decoderCodec);
-        audioDecoder.setParameters(inStream.codecParameters);
-        await audioDecoder.open();
-
-        const encoderCodec = new ffmpeg.Codec(ffmpeg.constants.codecs.AAC);
-        audioEncoder = new ffmpeg.CodecContext(encoderCodec);
-        audioEncoder.sampleRate = 48000;
-        audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO;
-        audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP;
-        audioEncoder.bitRate = 192000;
-        await audioEncoder.open();
-
-        if (audioDecoder.sampleRate !== audioEncoder.sampleRate ||
-            audioDecoder.channelLayout !== audioEncoder.channelLayout ||
-            audioDecoder.sampleFormat !== audioEncoder.sampleFormat) {
-          resampler = new ffmpeg.Resampler(
-            audioDecoder.channelLayout, audioDecoder.sampleFormat, audioDecoder.sampleRate,
-            audioEncoder.channelLayout, audioEncoder.sampleFormat, audioEncoder.sampleRate
-          );
-        }
-        outputFmt.addStream(audioEncoder.codecParameters);
-      } else {
-        // Copy video and other streams directly
-        outputFmt.addStream(inStream.codecParameters);
-      }
-    }
-
-    await outputFmt.writeHeader({ movflags: 'frag_keyframe+empty_moov+default_base_moof' });
-
-    const packet = new ffmpeg.Packet();
-    const frame = new ffmpeg.Frame();
-    let packetsProcessed = 0;
-
-    while (true) {
-      const ret = await inputFmt.readFrame(packet);
-      if (ret < 0) break;
-      packetsProcessed++;
-      if (packetsProcessed % 100 === 0) {
-        session.progress = Math.min(95, (packetsProcessed / 1000) * 10);
-      }
-
-      if (packet.streamIndex === audioStreamIndex && audioDecoder && audioEncoder) {
-        // Transcode audio
-        await audioDecoder.sendPacket(packet);
-        while (true) {
-          const decRet = await audioDecoder.receiveFrame(frame);
-          if (decRet < 0) break;
-          let processedFrame = frame;
-          if (resampler) processedFrame = await resampler.convert(frame);
-          await audioEncoder.sendFrame(processedFrame);
-          const outPacket = new ffmpeg.Packet();
-          while (true) {
-            const encRet = await audioEncoder.receivePacket(outPacket);
-            if (encRet < 0) break;
-            await outputFmt.writeFrame(outPacket);
-            outPacket.unref();
-          }
-          frame.unref();
-        }
-      } else {
-        // Copy video/other packets directly (no transcoding)
-        await outputFmt.writeFrame(packet);
-      }
-      packet.unref();
-    }
-
-    // Flush audio encoder
-    if (audioEncoder) {
-      await audioEncoder.sendFrame(null);
-      const flushPacket = new ffmpeg.Packet();
-      while (true) {
-        const encRet = await audioEncoder.receivePacket(flushPacket);
-        if (encRet < 0) break;
-        await outputFmt.writeFrame(flushPacket);
-        flushPacket.unref();
-      }
-    }
-
-    await outputFmt.writeTrailer();
-    inputIO._cleanup?.();
-    outputIO._cleanup?.();
-    console.log('[Transcoder] Audio transcode complete, output size:', getSize());
-  }
-
-  // Full transcode with streaming I/O (video to H.264, audio to AAC)
-  async function transcodeWithStreaming(session: InternalTranscodeSession, inputPath: string, inputSize: number): Promise<void> {
-    if (!ffmpeg) throw new Error('bare-ffmpeg not loaded');
-    console.log('[Transcoder] Starting full transcode with streaming I/O');
-
-    const inputIO = createFileReadIOContext(inputPath, inputSize);
-    const inputFmt = new ffmpeg.InputFormatContext(inputIO);
-    await inputFmt.openInput();
-    await inputFmt.findStreamInfo();
-
-    const { io: outputIO, getSize } = createFileWriteIOContext(session.outputPath);
-    const outputFmt = new ffmpeg.OutputFormatContext('mp4', outputIO);
-
-    let videoStreamIndex = -1;
-    let audioStreamIndex = -1;
-    let videoDecoder: any = null;
-    let videoEncoder: any = null;
-    let audioDecoder: any = null;
-    let audioEncoder: any = null;
-    let scaler: any = null;
-    let resampler: any = null;
-
-    for (let i = 0; i < inputFmt.streams.length; i++) {
-      const inStream = inputFmt.streams[i];
-      const codecType = inStream.codecParameters.codecType;
-
-      if (codecType === ffmpeg.constants.mediaTypes.VIDEO && videoStreamIndex === -1) {
-        videoStreamIndex = i;
-        const decoderCodec = new ffmpeg.Codec(inStream.codecParameters.id);
-        videoDecoder = new ffmpeg.CodecContext(decoderCodec);
-        videoDecoder.setParameters(inStream.codecParameters);
-        await videoDecoder.open();
-
-        // Try hardware encoder first (VideoToolbox on macOS, NVENC on NVIDIA)
-        let useHardware = false;
-        const platform = os.platform();
-        let encoderCodec: any;
-
-        if (platform === 'darwin') {
-          try {
-            encoderCodec = new ffmpeg.Codec('h264_videotoolbox');
-            console.log('[Transcoder] Trying VideoToolbox hardware encoder...');
-            useHardware = true;
-          } catch (e: any) {
-            console.log('[Transcoder] VideoToolbox not available:', e?.message || e);
-          }
-        } else if (platform === 'linux' || platform === 'win32') {
-          try {
-            encoderCodec = new ffmpeg.Codec('h264_nvenc');
-            console.log('[Transcoder] Trying NVENC hardware encoder...');
-            useHardware = true;
-          } catch (e: any) {
-            console.log('[Transcoder] NVENC not available:', e?.message || e);
-          }
-        }
-
-        if (!encoderCodec) {
-          encoderCodec = new ffmpeg.Codec(ffmpeg.constants.codecs.H264);
-          console.log('[Transcoder] Using software x264 encoder');
-        }
-
-        videoEncoder = new ffmpeg.CodecContext(encoderCodec);
-        videoEncoder.width = videoDecoder.width;
-        videoEncoder.height = videoDecoder.height;
-        videoEncoder.pixelFormat = ffmpeg.constants.pixelFormats.YUV420P;
-        videoEncoder.timeBase = { num: 1, den: 30 };
-        videoEncoder.bitRate = 6000000; // 6 Mbps (slightly lower for faster encoding)
-        videoEncoder.gopSize = 30;
-        videoEncoder.maxBFrames = 2;
-
-        if (!useHardware) {
-          // Software encoder - use ultrafast preset for speed
-          videoEncoder.setOption('profile', 'high');
-          videoEncoder.setOption('level', '4.1');
-          videoEncoder.setOption('preset', 'ultrafast');
-          videoEncoder.setOption('tune', 'zerolatency');
-        }
-
-        try {
-          await videoEncoder.open();
-          console.log('[Transcoder] Encoder opened:', useHardware ? 'hardware' : 'software (ultrafast)');
-        } catch (hwErr: any) {
-          if (useHardware) {
-            console.warn('[Transcoder] Hardware encoder failed to open, falling back to software:', hwErr?.message);
-            // Fallback to software
-            encoderCodec = new ffmpeg.Codec(ffmpeg.constants.codecs.H264);
-            videoEncoder = new ffmpeg.CodecContext(encoderCodec);
-            videoEncoder.width = videoDecoder.width;
-            videoEncoder.height = videoDecoder.height;
-            videoEncoder.pixelFormat = ffmpeg.constants.pixelFormats.YUV420P;
-            videoEncoder.timeBase = { num: 1, den: 30 };
-            videoEncoder.bitRate = 6000000;
-            videoEncoder.gopSize = 30;
-            videoEncoder.maxBFrames = 2;
-            videoEncoder.setOption('profile', 'high');
-            videoEncoder.setOption('level', '4.1');
-            videoEncoder.setOption('preset', 'ultrafast');
-            videoEncoder.setOption('tune', 'zerolatency');
-            await videoEncoder.open();
-            console.log('[Transcoder] Fallback to software encoder successful');
-          } else {
-            throw hwErr;
-          }
-        }
-
-        if (videoDecoder.pixelFormat !== videoEncoder.pixelFormat) {
-          scaler = new ffmpeg.Scaler(
-            videoDecoder.width, videoDecoder.height, videoDecoder.pixelFormat,
-            videoEncoder.width, videoEncoder.height, videoEncoder.pixelFormat
-          );
-        }
-        outputFmt.addStream(videoEncoder.codecParameters);
-
-      } else if (codecType === ffmpeg.constants.mediaTypes.AUDIO && audioStreamIndex === -1) {
-        audioStreamIndex = i;
-        const decoderCodec = new ffmpeg.Codec(inStream.codecParameters.id);
-        audioDecoder = new ffmpeg.CodecContext(decoderCodec);
-        audioDecoder.setParameters(inStream.codecParameters);
-        await audioDecoder.open();
-
-        const encoderCodec = new ffmpeg.Codec(ffmpeg.constants.codecs.AAC);
-        audioEncoder = new ffmpeg.CodecContext(encoderCodec);
-        audioEncoder.sampleRate = 48000;
-        audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO;
-        audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP;
-        audioEncoder.bitRate = 192000;
-        await audioEncoder.open();
-
-        if (audioDecoder.sampleRate !== audioEncoder.sampleRate ||
-            audioDecoder.channelLayout !== audioEncoder.channelLayout ||
-            audioDecoder.sampleFormat !== audioEncoder.sampleFormat) {
-          resampler = new ffmpeg.Resampler(
-            audioDecoder.channelLayout, audioDecoder.sampleFormat, audioDecoder.sampleRate,
-            audioEncoder.channelLayout, audioEncoder.sampleFormat, audioEncoder.sampleRate
-          );
-        }
-        outputFmt.addStream(audioEncoder.codecParameters);
-      }
-    }
-
-    await outputFmt.writeHeader({ movflags: 'frag_keyframe+empty_moov+default_base_moof' });
-
-    const packet = new ffmpeg.Packet();
-    const frame = new ffmpeg.Frame();
-    let packetsProcessed = 0;
-
-    while (true) {
-      const ret = await inputFmt.readFrame(packet);
-      if (ret < 0) break;
-      packetsProcessed++;
-      if (packetsProcessed % 50 === 0) {
-        session.progress = Math.min(95, packetsProcessed / 20);
-      }
-
-      if (packet.streamIndex === videoStreamIndex && videoDecoder && videoEncoder) {
-        await videoDecoder.sendPacket(packet);
-        while (true) {
-          const decRet = await videoDecoder.receiveFrame(frame);
-          if (decRet < 0) break;
-          let processedFrame = frame;
-          if (scaler) processedFrame = await scaler.scale(frame);
-          await videoEncoder.sendFrame(processedFrame);
-          const outPacket = new ffmpeg.Packet();
-          while (true) {
-            const encRet = await videoEncoder.receivePacket(outPacket);
-            if (encRet < 0) break;
-            outPacket.streamIndex = 0;
-            await outputFmt.writeFrame(outPacket);
-            outPacket.unref();
-          }
-          frame.unref();
-        }
-      } else if (packet.streamIndex === audioStreamIndex && audioDecoder && audioEncoder) {
-        await audioDecoder.sendPacket(packet);
-        while (true) {
-          const decRet = await audioDecoder.receiveFrame(frame);
-          if (decRet < 0) break;
-          let processedFrame = frame;
-          if (resampler) processedFrame = await resampler.convert(frame);
-          await audioEncoder.sendFrame(processedFrame);
-          const outPacket = new ffmpeg.Packet();
-          while (true) {
-            const encRet = await audioEncoder.receivePacket(outPacket);
-            if (encRet < 0) break;
-            outPacket.streamIndex = 1;
-            await outputFmt.writeFrame(outPacket);
-            outPacket.unref();
-          }
-          frame.unref();
-        }
-      }
-      packet.unref();
-    }
-
-    // Flush encoders
-    if (videoEncoder) {
-      await videoEncoder.sendFrame(null);
-      const flushPacket = new ffmpeg.Packet();
-      while (true) {
-        const encRet = await videoEncoder.receivePacket(flushPacket);
-        if (encRet < 0) break;
-        flushPacket.streamIndex = 0;
-        await outputFmt.writeFrame(flushPacket);
-        flushPacket.unref();
-      }
-    }
-    if (audioEncoder) {
-      await audioEncoder.sendFrame(null);
-      const flushPacket = new ffmpeg.Packet();
-      while (true) {
-        const encRet = await audioEncoder.receivePacket(flushPacket);
-        if (encRet < 0) break;
-        flushPacket.streamIndex = 1;
-        await outputFmt.writeFrame(flushPacket);
-        flushPacket.unref();
-      }
-    }
-
-    await outputFmt.writeTrailer();
-
-    // Cleanup
-    inputIO._cleanup?.();
-    outputIO._cleanup?.();
-
-    console.log('[Transcoder] Transcode complete, output size:', getSize());
-  }
-
-  return {
-    async initHttpServer(): Promise<number> {
-      if (httpServer && httpPort > 0) return httpPort;
-      return new Promise((resolve, reject) => {
-        try {
-          httpServer = http1.createServer(handleRequest);
-          httpServer.listen(0, '127.0.0.1', () => {
-            const addr = httpServer.address();
-            httpPort = typeof addr === 'object' ? addr.port : 0;
-            console.log('[Transcoder] HTTP server listening on port:', httpPort);
-            resolve(httpPort);
-          });
-        } catch (err: any) {
-          console.error('[Transcoder] Failed to start HTTP server:', err?.message);
-          reject(err);
-        }
-      });
-    },
-
-    async startTranscode(
-      id: string,
-      inputUrl: string,
-      mode: 'transcode' | 'audio' | 'remux',
-      onProgress?: (sessionId: string, progress: number) => void,
-      options?: { outputFormat?: TranscodeOutputFormat }
-    ): Promise<{ sessionId: string, servingUrl: string }> {
-      const port = await this.initHttpServer();
-      const tmpDir = os.tmpdir();
-      const outputFormat: TranscodeOutputFormat = options?.outputFormat || 'mp4';
-      const outputExt = outputFormat === 'mpegts' ? 'ts' : outputFormat === 'hls' ? 'm3u8' : 'mp4';
-      const outputDir = outputFormat === 'hls' ? path.join(tmpDir, `transcode_${id}_hls`) : undefined;
-      if (outputDir) {
-        try {
-          if (!fs.existsSync(outputDir)) {
-            try {
-              fs.mkdirSync(outputDir);
-            } catch (err: any) {
-              if (err?.code !== 'EEXIST') {
-                throw err;
-              }
-            }
-          }
-        } catch (err: any) {
-          console.warn('[Transcoder] Failed to create output dir:', err?.message || err);
-          throw err;
-        }
-      }
-      const outputPath = outputDir
-        ? path.join(outputDir, `index.${outputExt}`)
-        : path.join(tmpDir, `transcode_${id}.${outputExt}`);
-      const contentType =
-        outputFormat === 'mpegts'
-          ? 'video/mp2t'
-          : outputFormat === 'hls'
-            ? 'application/x-mpegURL'
-            : 'video/mp4';
-
-      const session: InternalTranscodeSession = {
-        id, outputPath, inputUrl,
-        status: 'starting', progress: 0, duration: 0, mode,
-        outputFormat,
-        outputDir,
-        contentType,
-      };
-      sessions.set(id, session);
-
-      // VLC-style: Start transcoding in background - FFmpeg reads directly from URL
-      // No pre-download needed! This enables real-time transcoding like VLC.
-      (async () => {
-        try {
-          session.status = 'transcoding';
-
-          // Stream transcode: FFmpeg reads URL directly, outputs fragmented MP4
-          // Chromecast can start playing as soon as first fragments are written
-          console.log(`[Transcoder] Starting VLC-style streaming ${mode}...`);
-          await streamingTranscodeFromUrl(
-            session,
-            inputUrl,
-            mode,
-            (progress) => onProgress?.(id, progress)
-          );
-
-          session.status = 'complete';
-          session.progress = 100;
-          onProgress?.(id, 100);
-        } catch (err: any) {
-          console.error('[Transcoder] Error:', err?.message || err);
-          session.status = 'error';
-          session.error = err?.message || 'Transcode failed';
-        }
-      })();
-
-      // Progress reporting
-      if (onProgress) {
-        const progressInterval = setInterval(() => {
-          const s = sessions.get(id);
-          if (!s || s.status === 'complete' || s.status === 'error') {
-            clearInterval(progressInterval);
-            return;
-          }
-          onProgress(id, s.progress);
-        }, 1000);
-      }
-
-      return { sessionId: id, servingUrl: `http://127.0.0.1:${port}/transcode/${id}` };
-    },
-
-    stopTranscode(sessionId: string): void {
-      const session = sessions.get(sessionId);
-      if (session) {
-        try {
-          if (session.outputDir) {
-            if (fs.existsSync(session.outputDir)) {
-              if (typeof (fs as any).rmSync === 'function') {
-                (fs as any).rmSync(session.outputDir, { recursive: true, force: true });
-              } else if (typeof (fs as any).rmdirSync === 'function') {
-                (fs as any).rmdirSync(session.outputDir, { recursive: true });
-              }
-            }
-          } else if (fs.existsSync(session.outputPath)) {
-            fs.unlinkSync(session.outputPath);
-          }
-        } catch (err) {
-          console.warn('[Transcoder] Failed to clean up files:', err);
-        }
-        sessions.delete(sessionId);
-      }
-    },
-
-    getSessionStatus(sessionId: string): InternalTranscodeSession | null {
-      return sessions.get(sessionId) || null;
-    },
-
-    getHttpPort(): number {
-      return httpPort;
-    }
-  };
-})();
-
-// ============================================
-// Transcode Worker Integration
-// ============================================
-
-// Initialize inline transcoder (bare-worker doesn't work in Pear sandbox)
-async function ensureTranscoder(): Promise<number> {
-  if (transcoderInitialized && transcoderHttpPort > 0) {
-    return transcoderHttpPort;
-  }
-
-  try {
-    transcoderHttpPort = await transcoder.initHttpServer();
-    transcoderInitialized = true;
-    console.log('[Transcoder] initialized on port:', transcoderHttpPort);
-    return transcoderHttpPort;
-  } catch (err: any) {
-    console.error('[Transcoder] failed to initialize:', err?.message || err);
-    throw err;
-  }
-}
 
 // Progress callback for transcoding
 function handleTranscodeProgress(sessionId: string, progress: number) {
@@ -1751,645 +623,15 @@ function cleanupTranscodeSessions() {
     }
   }
   transcodeSessions.clear();
-}
 
-// Check if content type/codec requires transcoding for Chromecast
-// Chromecast supports: H.264 (up to 4.1), AAC, MP3
-// Chromecast does NOT support: HEVC/H.265, VP9 (on some devices), AC3, DTS, MKV container
-const CHROMECAST_UNSUPPORTED_CONTENT_TYPES = [
-  'video/x-matroska',
-  'video/mkv',
-  'video/hevc',
-  'video/x-hevc',
-  'audio/ac3',
-  'audio/eac3',
-  'audio/dts',
-];
-
-const CHROMECAST_UNSUPPORTED_EXTENSIONS = [
-  '.mkv',
-  '.avi',
-  '.wmv',
-  '.flv',
-  '.ts',
-  '.m2ts',
-];
-
-// Chromecast supported video codecs
-const CHROMECAST_SUPPORTED_VIDEO_CODECS = [
-  'h264', 'avc1', 'avc',
-  'vp8',
-  'vp9', // Some Chromecasts support VP9
-];
-
-// Chromecast supported audio codecs
-const CHROMECAST_SUPPORTED_AUDIO_CODECS = [
-  'aac', 'mp4a',
-  'mp3', 'mp3float',
-  'vorbis',
-  'opus',
-  'flac', // Chromecast Ultra supports FLAC
-];
-
-interface ProbeResult {
-  videoCodec: string | null;
-  audioCodec: string | null;
-  videoProfile: string | null;  // H.264 profile (Baseline, Main, High, High 10, etc.)
-  videoLevel: number | null;     // H.264 level (4.1, 5.0, etc.)
-  container: string | null;      // Detected container format (mp4, mkv, etc.)
-  duration: number;
-  needsTranscode: boolean;       // Any codec needs re-encoding
-  needsVideoTranscode: boolean;  // Video specifically needs re-encoding
-  needsAudioTranscode: boolean;  // Audio specifically needs re-encoding
-  needsRemux: boolean;           // Just need container change (fast copy)
-  reason: string;
-}
-
-// Download partial file for probing (first N bytes via Range request)
-async function downloadPartialForProbe(url: string, maxBytes: number): Promise<Buffer> {
-  const httpMod = url.startsWith('https://')
-    ? await import('bare-https')
-    : await import('bare-http1');
-  const http = (httpMod as any).default || httpMod;
-
-  return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url);
-    const options = {
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port || (url.startsWith('https://') ? 443 : 80),
-      path: parsedUrl.pathname + parsedUrl.search,
-      headers: { Range: `bytes=0-${maxBytes - 1}` },
-    };
-
-    const req = http.get(options, (res: any) => {
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
-
-      res.on('data', (chunk: Buffer) => {
-        chunks.push(chunk);
-        totalBytes += chunk.length;
-        if (totalBytes >= maxBytes) {
-          try { res.destroy(); } catch {}
-        }
-      });
-
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-      res.on('error', reject);
-    });
-
-    req.on('error', reject);
-    setTimeout(() => {
-      try { req.destroy(); } catch {}
-      reject(new Error('Probe download timeout'));
-    }, 15000);
-  });
-}
-
-// Probe media using bare-ffmpeg (works on all platforms including Android)
-async function probeWithBareFFmpeg(url: string): Promise<ProbeResult> {
-  const result: ProbeResult = {
-    videoCodec: null,
-    audioCodec: null,
-    videoProfile: null,
-    videoLevel: null,
-    container: null,
-    duration: 0,
-    needsTranscode: false,
-    needsVideoTranscode: false,
-    needsAudioTranscode: false,
-    needsRemux: false,
-    reason: '',
-  };
-
-  try {
-    const ffmpegMod = await import('bare-ffmpeg');
-    const ffmpeg = (ffmpegMod as any).default || ffmpegMod;
-
-    // For HTTP URLs, download a portion for probing
-    let inputBuffer: Buffer;
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      // Download first 2MB for probing (enough for headers + codec info)
-      inputBuffer = await downloadPartialForProbe(url, 2 * 1024 * 1024);
-      console.log('[Worker] Downloaded', inputBuffer.length, 'bytes for probe');
-    } else {
-      // Local file - read first 2MB
-      const fsMod = await import('bare-fs');
-      const fs = (fsMod as any).default || fsMod;
-      const filePath = url.replace(/^file:\/\//, '');
-      const stats = await fs.promises.stat(filePath);
-      const fd = await fs.promises.open(filePath, 'r');
-      const readSize = Math.min(2 * 1024 * 1024, stats.size);
-      inputBuffer = Buffer.alloc(readSize);
-      await fd.read(inputBuffer, 0, readSize, 0);
-      await fd.close();
-    }
-
-    if (!inputBuffer || inputBuffer.length === 0) {
-      throw new Error('Empty input buffer for probe');
-    }
-
-    // Create IO context from buffer (simple buffer-based API)
-    const ioContext = new ffmpeg.IOContext(inputBuffer);
-    const inputFmt = new ffmpeg.InputFormatContext(ioContext);
-    await inputFmt.openInput();
-
-    // Get container format
-    result.container = inputFmt.inputFormat?.name?.toLowerCase() || null;
-    console.log('[Worker] Probe container:', result.container);
-
-    // Try to get best streams first (most reliable method)
+  if (activeCastTranscodeId) {
     try {
-      const videoStream = inputFmt.getBestStream?.(ffmpeg.constants?.mediaTypes?.VIDEO ?? 0);
-      const audioStream = inputFmt.getBestStream?.(ffmpeg.constants?.mediaTypes?.AUDIO ?? 1);
-
-      if (videoStream?.codecParameters) {
-        const cp = videoStream.codecParameters;
-        result.videoCodec = cp.codecName?.toLowerCase() || null;
-        if (cp.profile !== undefined && cp.profile >= 0) {
-          result.videoProfile = String(cp.profile);
-        }
-        if (cp.level !== undefined && cp.level > 0) {
-          result.videoLevel = cp.level / 10;
-        }
-        console.log('[Worker] Probe video:', result.videoCodec, 'profile:', result.videoProfile, 'level:', result.videoLevel);
-      }
-
-      if (audioStream?.codecParameters) {
-        result.audioCodec = audioStream.codecParameters.codecName?.toLowerCase() || null;
-        console.log('[Worker] Probe audio:', result.audioCodec);
-      }
-    } catch (streamErr: any) {
-      console.warn('[Worker] getBestStream failed, trying streams array:', streamErr?.message);
-
-      // Fallback: iterate streams array
-      for (const stream of inputFmt.streams || []) {
-        const cp = stream.codecParameters;
-        if (!cp) continue;
-
-        const mediaType = cp.type ?? cp.codecType;
-        const codecName = cp.codecName || stream.codec?.name;
-
-        if ((mediaType === 0 || mediaType === 'video') && !result.videoCodec) {
-          result.videoCodec = codecName?.toLowerCase() || null;
-          if (cp.profile !== undefined && cp.profile >= 0) {
-            result.videoProfile = String(cp.profile);
-          }
-          if (cp.level !== undefined && cp.level > 0) {
-            result.videoLevel = cp.level / 10;
-          }
-          console.log('[Worker] Probe video (fallback):', result.videoCodec);
-        } else if ((mediaType === 1 || mediaType === 'audio') && !result.audioCodec) {
-          result.audioCodec = codecName?.toLowerCase() || null;
-          console.log('[Worker] Probe audio (fallback):', result.audioCodec);
-        }
-      }
-    }
-
-    // Get duration from format context
-    if (inputFmt.duration && inputFmt.duration > 0) {
-      result.duration = inputFmt.duration / 1000000; // Convert from microseconds
-    }
-
-    // Clean up
-    try { inputFmt.close?.(); } catch {}
-
-    // Check if transcoding needed (uses existing function)
-    checkTranscodeNeeded(result, url);
-
-  } catch (err: any) {
-    console.error('[Worker] bare-ffmpeg probe error:', err?.message || err);
-    result.reason = `Probe failed: ${err?.message || 'unknown'}`;
-  }
-
-  return result;
-}
-
-// Probe a media file to get codec information
-async function probeMediaCodecs(url: string): Promise<ProbeResult> {
-  // Try bare-ffmpeg first (works on all platforms including Android)
-  try {
-    console.log('[Worker] Probing with bare-ffmpeg:', url.substring(0, 80) + '...');
-    const result = await probeWithBareFFmpeg(url);
-    if (result.videoCodec || result.audioCodec) {
-      console.log('[Worker] Probe success (bare-ffmpeg):', result.videoCodec, result.audioCodec, 'container:', result.container);
-      return result;
-    }
-    console.warn('[Worker] bare-ffmpeg probe returned no codecs, trying ffprobe');
-  } catch (err: any) {
-    console.warn('[Worker] bare-ffmpeg probe failed:', err?.message || err, '- trying ffprobe');
-  }
-
-  // Fallback to spawn-based probe (desktop only - ffprobe/ffmpeg CLI tools)
-  return new Promise((resolve) => {
-    const result: ProbeResult = {
-      videoCodec: null,
-      audioCodec: null,
-      videoProfile: null,
-      videoLevel: null,
-      container: null,
-      duration: 0,
-      needsTranscode: false,
-      needsVideoTranscode: false,
-      needsAudioTranscode: false,
-      needsRemux: false,
-      reason: '',
-    };
-
-    try {
-      // Use ffprobe if available, otherwise ffmpeg -i
-      const args = [
-        '-v', 'quiet',
-        '-print_format', 'json',
-        '-show_streams',
-        '-show_format',
-        url
-      ];
-
-      const proc = spawn('ffprobe', args);
-      let stdout = '';
-      let stderr = '';
-
-      proc.stdout?.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-
-      proc.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-
-      proc.on('exit', (code: number) => {
-        if (code !== 0) {
-          console.warn('[Worker] ffprobe failed, trying ffmpeg -i');
-          // Fallback to ffmpeg -i
-          probeWithFfmpeg(url).then(resolve);
-          return;
-        }
-
-        try {
-          const data = JSON.parse(stdout);
-
-          // Extract container format
-          if (data.format?.format_name) {
-            result.container = data.format.format_name.toLowerCase();
-          }
-
-          // Extract codec info from streams
-          for (const stream of data.streams || []) {
-            if (stream.codec_type === 'video' && !result.videoCodec) {
-              result.videoCodec = stream.codec_name?.toLowerCase() || null;
-              // Extract H.264 profile and level
-              if (stream.profile) {
-                result.videoProfile = stream.profile;
-              }
-              if (stream.level !== undefined) {
-                // FFprobe returns level as integer (41 = 4.1, 50 = 5.0)
-                result.videoLevel = stream.level / 10;
-              }
-            }
-            if (stream.codec_type === 'audio' && !result.audioCodec) {
-              result.audioCodec = stream.codec_name?.toLowerCase() || null;
-            }
-          }
-
-          // Extract duration from format
-          if (data.format?.duration) {
-            result.duration = parseFloat(data.format.duration) || 0;
-          }
-
-          // Check if transcoding/remuxing is needed
-          checkTranscodeNeeded(result, url);
-          resolve(result);
-        } catch (err) {
-          console.warn('[Worker] Failed to parse ffprobe output:', err);
-          resolve(result);
-        }
-      });
-
-      proc.on('error', () => {
-        // ffprobe not available, try ffmpeg
-        probeWithFfmpeg(url).then(resolve);
-      });
-
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        try { proc.kill(); } catch {}
-        resolve(result);
-      }, 10000);
-
-    } catch (err) {
-      console.error('[Worker] Probe error:', err);
-      resolve(result);
-    }
-  });
-}
-
-// Fallback probe using ffmpeg -i
-async function probeWithFfmpeg(url: string): Promise<ProbeResult> {
-  return new Promise((resolve) => {
-    const result: ProbeResult = {
-      videoCodec: null,
-      audioCodec: null,
-      videoProfile: null,
-      videoLevel: null,
-      container: null,
-      duration: 0,
-      needsTranscode: false,
-      needsVideoTranscode: false,
-      needsAudioTranscode: false,
-      needsRemux: false,
-      reason: '',
-    };
-
-    try {
-      const args = ['-i', url, '-f', 'null', '-'];
-      const proc = spawn('ffmpeg', args);
-      let stderr = '';
-
-      proc.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-
-      proc.on('exit', () => {
-        // Parse ffmpeg output for codec info
-        // Example: Stream #0:0: Video: h264 (High), yuv420p, 1920x1080
-        // Example: Stream #0:0: Video: h264 (High 4:4:4 Predictive) (avc1 / 0x31637661), yuv444p10le
-        // Example: Stream #0:1: Audio: ac3, 48000 Hz, 5.1, fltp, 640 kb/s
-
-        // Extended regex to capture profile in parentheses
-        const videoMatch = stderr.match(/Stream.*Video:\s*(\w+)(?:\s*\(([^)]+)\))?/i);
-        if (videoMatch) {
-          result.videoCodec = videoMatch[1].toLowerCase();
-          // Extract profile from parentheses (e.g., "High", "High 10", "Main")
-          if (videoMatch[2]) {
-            const profile = videoMatch[2].split(/[,\/]/)[0].trim();
-            result.videoProfile = profile;
-          }
-        }
-
-        const audioMatch = stderr.match(/Stream.*Audio:\s*(\w+)/i);
-        if (audioMatch) {
-          result.audioCodec = audioMatch[1].toLowerCase();
-        }
-
-        const durationMatch = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
-        if (durationMatch) {
-          result.duration =
-            parseInt(durationMatch[1]) * 3600 +
-            parseInt(durationMatch[2]) * 60 +
-            parseFloat(durationMatch[3]);
-        }
-
-        // Try to extract container from "Input #0, matroska,webm" or "Input #0, mp4"
-        const containerMatch = stderr.match(/Input\s*#\d+,\s*([^,\s]+)/i);
-        if (containerMatch) {
-          result.container = containerMatch[1].toLowerCase();
-        }
-
-        checkTranscodeNeeded(result, url);
-        resolve(result);
-      });
-
-      proc.on('error', (err) => {
-        console.warn('[Worker] ffmpeg probe error:', err);
-        resolve(result);
-      });
-
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        try { proc.kill(); } catch {}
-        resolve(result);
-      }, 10000);
-
-    } catch (err) {
-      console.error('[Worker] Probe with ffmpeg error:', err);
-      resolve(result);
-    }
-  });
-}
-
-// Chromecast-compatible containers (can play directly)
-const CHROMECAST_SUPPORTED_CONTAINERS = [
-  'mp4', 'mov', 'm4v', 'm4a',  // MPEG-4 family
-  'webm',                       // WebM
-  'mp3',                        // MP3 audio
-];
-
-// H.264 profiles that are NOT supported by Chromecast
-// High 10 = 10-bit color, High 4:4:4 = 4:4:4 chroma subsampling
-const H264_UNSUPPORTED_PROFILES = [
-  'high 10',
-  'high10',
-  'high 4:4:4',
-  'high444',
-  'high 4:4:4 predictive',
-];
-
-// Check if the probed codecs need transcoding or remuxing for Chromecast
-function checkTranscodeNeeded(result: ProbeResult, url?: string): void {
-  const transcodeReasons: string[] = [];
-  const remuxReasons: string[] = [];
-
-  let videoNeedsTranscode = false;
-  let audioNeedsTranscode = false;
-  let videoCodecSupported = true;
-  let audioCodecSupported = true;
-
-  // Check video codec
-  if (result.videoCodec) {
-    const isSupported = CHROMECAST_SUPPORTED_VIDEO_CODECS.some(
-      codec => result.videoCodec!.includes(codec)
-    );
-    if (!isSupported) {
-      transcodeReasons.push(`video codec '${result.videoCodec}' not supported`);
-      videoNeedsTranscode = true;
-      videoCodecSupported = false;
-    }
-  }
-
-  // Check H.264 profile (High 10, High 4:4:4 not supported)
-  if (result.videoProfile && result.videoCodec?.includes('h264')) {
-    const profileLower = result.videoProfile.toLowerCase();
-    if (H264_UNSUPPORTED_PROFILES.some(p => profileLower.includes(p))) {
-      transcodeReasons.push(`H.264 profile '${result.videoProfile}' not supported (10-bit or 4:4:4)`);
-      videoNeedsTranscode = true;
-      videoCodecSupported = false;
-    }
-  }
-
-  // Check H.264 level (above 4.1 is poorly supported on many Chromecasts)
-  if (result.videoLevel && result.videoCodec?.includes('h264')) {
-    if (result.videoLevel > 4.2) {
-      transcodeReasons.push(`H.264 level ${result.videoLevel} too high (max ~4.1-4.2)`);
-      videoNeedsTranscode = true;
-      videoCodecSupported = false;
-    }
-  }
-
-  // Check audio codec
-  if (result.audioCodec) {
-    const isSupported = CHROMECAST_SUPPORTED_AUDIO_CODECS.some(
-      codec => result.audioCodec!.includes(codec)
-    );
-    if (!isSupported) {
-      transcodeReasons.push(`audio codec '${result.audioCodec}' not supported`);
-      audioNeedsTranscode = true;
-      audioCodecSupported = false;
-    }
-  }
-
-  // Check container format
-  let containerSupported = true;
-  if (result.container) {
-    containerSupported = CHROMECAST_SUPPORTED_CONTAINERS.some(
-      c => result.container!.includes(c)
-    );
-    if (!containerSupported) {
-      remuxReasons.push(`container '${result.container}' not supported`);
-    }
-  } else if (url) {
-    // Fallback: check URL extension
-    try {
-      const urlLower = url.toLowerCase();
-      const hasUnsupportedExt = CHROMECAST_UNSUPPORTED_EXTENSIONS.some(ext => urlLower.endsWith(ext));
-      if (hasUnsupportedExt) {
-        containerSupported = false;
-        remuxReasons.push('container extension not supported');
-      }
+      hlsTranscoder.stopHlsTranscode(activeCastTranscodeId);
     } catch {}
+    hlsSessionsWithLoadSent.delete(activeCastTranscodeId);
+    activeCastTranscodeId = null;
+    activeCastSourceKey = null;
   }
-
-  // Set granular flags
-  result.needsVideoTranscode = videoNeedsTranscode;
-  result.needsAudioTranscode = audioNeedsTranscode;
-
-  // Determine what's needed
-  if (videoNeedsTranscode || audioNeedsTranscode) {
-    // At least one codec needs transcoding
-    result.needsTranscode = true;
-    result.needsRemux = false;
-    result.reason = transcodeReasons.join(', ');
-  } else if (!containerSupported && videoCodecSupported && audioCodecSupported) {
-    // Codecs are fine, just need to change container (fast remux)
-    result.needsTranscode = false;
-    result.needsRemux = true;
-    result.reason = remuxReasons.join(', ');
-  } else {
-    result.needsTranscode = false;
-    result.needsRemux = false;
-    result.reason = '';
-  }
-}
-
-// Quick check based on content type/extension (for initial filtering)
-function mightNeedTranscode(contentType?: string, url?: string): boolean {
-  // Check content type
-  if (contentType) {
-    const lowerType = contentType.toLowerCase();
-    if (CHROMECAST_UNSUPPORTED_CONTENT_TYPES.some(t => lowerType.includes(t))) {
-      return true;
-    }
-  }
-
-  // Check file extension from URL
-  if (url) {
-    try {
-      const urlObj = new URL(url);
-      const pathname = urlObj.pathname.toLowerCase();
-      if (CHROMECAST_UNSUPPORTED_EXTENSIONS.some(ext => pathname.endsWith(ext))) {
-        return true;
-      }
-    } catch {
-      // Invalid URL, ignore
-    }
-  }
-
-  return false;
-}
-
-// Find existing transcode session by source URL
-function findTranscodeSessionByKey(cacheKey: string): TranscodeSession | null {
-  for (const session of transcodeSessions.values()) {
-    if (session.cacheKey === cacheKey && session.status !== 'error') {
-      return session;
-    }
-  }
-  return null;
-}
-
-// Wait for transcode to reach minimum progress or have output file ready for playback
-// With VLC-style streaming, output file starts immediately with fragmented MP4
-async function waitForTranscodeProgress(sessionId: string, minProgress: number, timeoutMs: number = 30000): Promise<boolean> {
-  const startTime = Date.now();
-  const MIN_FILE_SIZE = 64 * 1024; // 64KB minimum (fMP4 header + some fragments)
-
-  while (Date.now() - startTime < timeoutMs) {
-    const session = transcodeSessions.get(sessionId);
-    if (!session) return false;
-    if (session.status === 'error') return false;
-    if (session.status === 'complete') return true;
-    if (session.progress >= minProgress) return true;
-
-    // VLC-style: Check if output file exists and has content (fragmented MP4 starts writing immediately)
-    const internalSession = transcoder.getSessionStatus(sessionId);
-    if (internalSession?.status === 'error') {
-      session.status = 'error';
-      session.error = internalSession.error || 'Transcode failed';
-      return false;
-    }
-    if (internalSession?.outputPath) {
-      try {
-        const stat = fs.statSync(internalSession.outputPath);
-        if (internalSession.outputFormat === 'hls') {
-          if (stat.size > 32) {
-            const baseDir = internalSession.outputDir || path.dirname(internalSession.outputPath);
-            const playlist = fs.readFileSync(internalSession.outputPath, 'utf8');
-            const playlistLines = playlist
-              .split(/\r?\n/)
-              .map((line) => line.trim())
-              .filter((line) => line.length > 0);
-            const lastLine = playlistLines[playlistLines.length - 1] || '';
-            if (lastLine.startsWith('#')) {
-              // Playlist mid-write, wait for a URI to end the file.
-              continue;
-            }
-
-            const segmentLines = playlistLines.filter((line) => !line.startsWith('#'));
-            // Wait for 3 segments (~6 seconds at 2s/segment) before starting cast
-            const MIN_HLS_SEGMENTS = 3;
-            console.log(`[Worker] HLS: ${segmentLines.length}/${MIN_HLS_SEGMENTS} segments ready`);
-            if (segmentLines.length >= MIN_HLS_SEGMENTS) {
-              const segmentLine = segmentLines[segmentLines.length - 1];
-              if (/^https?:\/\//i.test(segmentLine)) {
-                console.log('[Worker] HLS playlist references remote segments, proceeding with cast');
-                return true;
-              }
-
-              const segmentPath = segmentLine.startsWith('/')
-                ? segmentLine
-                : path.join(baseDir, segmentLine);
-              if (fs.existsSync(segmentPath)) {
-                const segStat = fs.statSync(segmentPath);
-                if (segStat.size > 0) {
-                  console.log(`[Worker] HLS ready: ${segmentLines.length} segments (~${segmentLines.length * 2}s buffer), starting cast`);
-                  return true;
-                }
-              } else {
-                console.log(`[Worker] HLS: waiting for segment file ${path.basename(segmentPath)}`);
-              }
-            }
-          }
-        } else if (stat.size >= MIN_FILE_SIZE) {
-          console.log(`[Worker] Output file ready (${stat.size} bytes), proceeding with cast`);
-          return true;
-        }
-      } catch (e) {
-        // File doesn't exist yet, keep waiting
-      }
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 300)); // Check more frequently
-  }
-  return false;
 }
 
 // Import the orchestrator from backend
@@ -2404,6 +646,16 @@ import HRPC from '@peartube/spec';
 declare const Pear: any;
 
 console.log('[Worker] PearTube Desktop Worker starting...');
+
+const workerBaseDir =
+  (typeof Pear?.config?.dir === 'string' && Pear.config.dir.trim())
+    ? Pear.config.dir
+    : os.cwd();
+const hypercoreWorkerPath = workerBaseDir
+  ? path.join(workerBaseDir, 'build/workers/hypercore-reader-worker.mjs')
+  : './build/workers/hypercore-reader-worker.mjs';
+(globalThis as any).__PEARTUBE_HYPERCORE_WORKER_PATH__ = hypercoreWorkerPath;
+console.log('[Worker] Hypercore worker path:', hypercoreWorkerPath);
 
 // ============================================
 // Initialize Backend using Orchestrator
@@ -2485,383 +737,256 @@ function getMimeTypeFromPath(filePath: string): string {
   return videoTypes[ext] || 'video/mp4';
 }
 
-// FFmpeg availability check (cached)
-let ffmpegAvailable: boolean | null = null;
+let bareFfmpegModule: any = null;
+let bareFfmpegPromise: Promise<any> | null = null;
 
-async function checkFFmpeg(): Promise<boolean> {
-  if (ffmpegAvailable !== null) return ffmpegAvailable;
+async function loadBareFfmpegModule(): Promise<any> {
+  if (bareFfmpegModule) return bareFfmpegModule;
+  if (bareFfmpegPromise) return bareFfmpegPromise;
 
-  return new Promise((resolve) => {
-    try {
-      const proc = spawn('ffmpeg', ['-version']);
-      proc.on('exit', (code: number) => {
-        ffmpegAvailable = code === 0;
-        console.log('[FFmpeg] Available:', ffmpegAvailable);
-        resolve(ffmpegAvailable);
-      });
-      proc.on('error', () => {
-        ffmpegAvailable = false;
-        resolve(false);
-      });
-    } catch {
-      ffmpegAvailable = false;
-      resolve(false);
+  bareFfmpegPromise = (async () => {
+    let lastError: any;
+    if (typeof require === 'function') {
+      try {
+        const mod = require('bare-ffmpeg');
+        bareFfmpegModule = mod?.default ?? mod;
+        return bareFfmpegModule;
+      } catch (err: any) {
+        lastError = err;
+      }
     }
-  });
-}
-
-// Generate thumbnail from video file using FFmpeg and store in Hyperblobs
-async function generateThumbnail(filePath: string, videoId: string, channel: any): Promise<{ thumbnailBlobId: string; thumbnailBlobsCoreKey: string } | null> {
-  const args = [
-    '-ss', '1',
-    '-i', filePath,
-    '-vframes', '1',
-    '-vf', 'scale=640:-1',
-    '-q:v', '2',
-    '-f', 'image2pipe',
-    '-vcodec', 'mjpeg',
-    'pipe:1'
-  ];
-
-  return new Promise((resolve) => {
     try {
-      const proc = spawn('ffmpeg', args);
-      const chunks: Buffer[] = [];
-
-      proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
-      proc.stderr.on('data', () => {}); // Ignore ffmpeg progress
-
-      proc.on('exit', async (code: number) => {
-        if (code === 0 && chunks.length > 0) {
-          try {
-            const thumbBuf = Buffer.concat(chunks);
-            // Store in Hyperblobs
-            if (!channel.blobs) {
-              console.warn('[Worker] Channel blobs not available for thumbnail');
-              resolve(null);
-              return;
-            }
-            const blobResult = await channel.putBlob(thumbBuf);
-            console.log('[Worker] Thumbnail stored in Hyperblobs, blobId:', blobResult.id);
-            resolve({
-              thumbnailBlobId: blobResult.id,
-              thumbnailBlobsCoreKey: channel.blobsKeyHex
-            });
-          } catch (err: any) {
-            console.warn('[Worker] Thumbnail storage failed:', err?.message);
-            resolve(null);
-          }
-        } else {
-          resolve(null);
-        }
-      });
-
-      proc.on('error', () => resolve(null));
-    } catch {
-      resolve(null);
-    }
-  });
-}
-
-/**
- * Check if video has audio codec that browsers can't play (AC3, DTS, etc.)
- * Returns the codec name if transcoding is needed, null otherwise
- */
-async function getAudioCodec(filePath: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    try {
-      const args = [
-        '-v', 'quiet',
-        '-select_streams', 'a:0',
-        '-show_entries', 'stream=codec_name',
-        '-of', 'csv=p=0',
-        filePath
-      ];
-
-      const proc = spawn('ffprobe', args);
-      let stdout = '';
-
-      proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-      proc.stderr.on('data', () => {}); // Ignore
-
-      proc.on('exit', (code: number) => {
-        if (code === 0) {
-          const codec = stdout.trim().toLowerCase();
-          resolve(codec || null);
-        } else {
-          resolve(null);
-        }
-      });
-
-      proc.on('error', () => resolve(null));
-    } catch {
-      resolve(null);
-    }
-  });
-}
-
-/**
- * Check if audio codec needs transcoding for browser playback
- */
-function needsAudioTranscode(codec: string | null): boolean {
-  if (!codec) return false;
-  // Codecs that browsers can't play
-  const unsupportedCodecs = ['ac3', 'eac3', 'dts', 'dca', 'truehd', 'mlp'];
-  return unsupportedCodecs.includes(codec.toLowerCase());
-}
-
-/**
- * Transcode video to MP4 with AAC audio using bare-ffmpeg (native, fast)
- * Falls back to ffmpeg subprocess if bare-ffmpeg unavailable
- * Returns path to transcoded file, or null on failure
- */
-async function transcodeToMP4(inputPath: string, onProgress?: (percent: number) => void): Promise<string | null> {
-  const tempDir = os.tmpdir();
-  const baseName = path.basename(inputPath, path.extname(inputPath));
-  const timestamp = Date.now();
-  const outputPath = path.join(tempDir, `${baseName}_transcoded_${timestamp}.mp4`);
-
-  console.log('[Worker] Transcoding audio to AAC:', inputPath);
-
-  // Try bare-ffmpeg first (native, faster)
-  if (ffmpeg) {
-    try {
-      const result = await transcodeWithBareFFmpeg(inputPath, outputPath, onProgress);
-      if (result) return result;
+      const mod = await import('bare-ffmpeg');
+      bareFfmpegModule = (mod as any)?.default ?? mod;
+      return bareFfmpegModule;
     } catch (err: any) {
-      console.warn('[Worker] bare-ffmpeg transcode failed, falling back to subprocess:', err?.message);
+      lastError = err;
     }
-  }
+    throw lastError || new Error('Failed to load bare-ffmpeg');
+  })();
 
-  // Fallback to ffmpeg subprocess
-  return transcodeWithSubprocess(inputPath, outputPath, onProgress);
+  return bareFfmpegPromise;
 }
 
-/**
- * Transcode using bare-ffmpeg native bindings
- */
-async function transcodeWithBareFFmpeg(inputPath: string, outputPath: string, onProgress?: (percent: number) => void): Promise<string | null> {
-  console.log('[Worker] Using bare-ffmpeg native transcode');
+// Generate thumbnail from video file using bare-ffmpeg and store in Hyperblobs
+async function generateThumbnail(filePath: string, videoId: string, channel: any): Promise<{ thumbnailBlobId: string; thumbnailBlobsCoreKey: string } | null> {
+  let fd: number | null = null;
+  let inputIO: any = null;
+  let inputFmt: any = null;
+  let decoder: any = null;
+  let packet: any = null;
+  let frame: any = null;
+  let scaler: any = null;
+  let scaledFrame: any = null;
+  let outputIO: any = null;
+  let outputFmt: any = null;
+  let encoder: any = null;
+  let outPacket: any = null;
 
-  const inputData = fs.readFileSync(inputPath);
-  const inputIO = new ffmpeg.IOContext(inputData);
-  const inputFormat = new ffmpeg.InputFormatContext(inputIO);
+  try {
+    const ffmpeg = await loadBareFfmpegModule();
+    const stats = fs.statSync(filePath);
+    const fileSize = stats.size;
+    let offset = 0;
 
-  const videoStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.VIDEO);
-  const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO);
+    fd = fs.openSync(filePath, 'r');
+    inputIO = new ffmpeg.IOContext(4096, {
+      onread: (buffer: Buffer) => {
+        const read = fs.readSync(fd as number, buffer, 0, buffer.length, offset);
+        if (read <= 0) return 0;
+        offset += read;
+        return read;
+      },
+      onseek: (o: number, whence: number) => {
+        if (whence === ffmpeg.constants.seek.SIZE) return fileSize;
+        if (whence === ffmpeg.constants.seek.SET) offset = o;
+        else if (whence === ffmpeg.constants.seek.CUR) offset += o;
+        else if (whence === ffmpeg.constants.seek.END) offset = fileSize + o;
+        else return -1;
+        return offset;
+      }
+    });
 
-  if (!videoStream) {
-    throw new Error('No video stream found');
-  }
-
-  console.log('[Worker] Video codec:', videoStream.codecParameters.id);
-  console.log('[Worker] Audio codec:', audioStream?.codecParameters?.id || 'none');
-
-  // Prepare output buffer
-  const outputChunks: Buffer[] = [];
-  const outputIO = new ffmpeg.IOContext(1024 * 1024, {
-    onwrite: (chunk: Buffer) => {
-      outputChunks.push(Buffer.from(chunk));
-      return chunk.length;
+    inputFmt = new ffmpeg.InputFormatContext(inputIO);
+    const videoStream = inputFmt.getBestStream(ffmpeg.constants.mediaTypes.VIDEO);
+    if (!videoStream) {
+      throw new Error('No video stream found for thumbnail');
     }
-  });
 
-  const outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO);
+    decoder = videoStream.decoder();
+    decoder.timeBase = videoStream.timeBase;
+    decoder.open();
 
-  // Copy video stream directly
-  const outVideoStream = outputFormat.createStream();
-  outVideoStream.codecParameters.copyFrom(videoStream.codecParameters);
-  outVideoStream.timeBase = videoStream.timeBase;
+    packet = new ffmpeg.Packet();
+    frame = new ffmpeg.Frame();
 
-  // Set up audio transcoding to AAC
-  let audioDecoder: any = null;
-  let audioEncoder: any = null;
-  let resampler: any = null;
-  let outAudioStream: any = null;
+    const targetSeconds = 1;
+    const timeBase = videoStream.timeBase || { numerator: 1, denominator: 1 };
+    let selected = false;
 
-  if (audioStream) {
-    outAudioStream = outputFormat.createStream();
-    outAudioStream.codecParameters.type = ffmpeg.constants.mediaTypes.AUDIO;
-    outAudioStream.codecParameters.id = ffmpeg.constants.codecs.AAC;
-    outAudioStream.codecParameters.sampleRate = audioStream.codecParameters.sampleRate || 48000;
-    outAudioStream.codecParameters.channelLayout = ffmpeg.constants.channelLayouts.STEREO;
-    outAudioStream.codecParameters.format = ffmpeg.constants.sampleFormats.FLTP;
-    outAudioStream.timeBase = { numerator: 1, denominator: outAudioStream.codecParameters.sampleRate };
+    while (inputFmt.readFrame(packet)) {
+      if (packet.streamIndex !== videoStream.index) {
+        packet.unref();
+        continue;
+      }
 
-    // Decoder for input audio
-    const decoderCodec = new ffmpeg.Codec(audioStream.codecParameters.id);
-    audioDecoder = new ffmpeg.CodecContext(decoderCodec);
-    audioDecoder.sampleRate = audioStream.codecParameters.sampleRate;
-    audioDecoder.channelLayout = audioStream.codecParameters.channelLayout;
-    audioDecoder.sampleFormat = audioStream.codecParameters.format;
-    audioDecoder.timeBase = audioStream.timeBase;
-    audioDecoder.open();
-
-    // Encoder for AAC output
-    const encoderCodec = new ffmpeg.Codec(ffmpeg.constants.codecs.AAC);
-    audioEncoder = new ffmpeg.CodecContext(encoderCodec);
-    audioEncoder.sampleRate = outAudioStream.codecParameters.sampleRate;
-    audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO;
-    audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP;
-    audioEncoder.timeBase = outAudioStream.timeBase;
-    audioEncoder.open();
-
-    // Resampler for format conversion
-    resampler = new ffmpeg.Resampler(
-      audioDecoder.sampleRate,
-      audioDecoder.channelLayout,
-      audioDecoder.sampleFormat,
-      audioEncoder.sampleRate,
-      audioEncoder.channelLayout,
-      audioEncoder.sampleFormat
-    );
-  }
-
-  // Write header
-  outputFormat.writeHeader();
-
-  // Process packets
-  const packet = new ffmpeg.Packet();
-  const frame = new ffmpeg.Frame();
-  const resampledFrame = new ffmpeg.Frame();
-  const outputPacket = new ffmpeg.Packet();
-
-  if (outAudioStream) {
-    resampledFrame.format = ffmpeg.constants.sampleFormats.FLTP;
-    resampledFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO;
-    resampledFrame.sampleRate = audioEncoder.sampleRate;
-    resampledFrame.nbSamples = 1024;
-    resampledFrame.alloc();
-  }
-
-  let packetCount = 0;
-  let totalPackets = 0;
-
-  // First pass to count packets for progress
-  while (inputFormat.readFrame(packet)) {
-    totalPackets++;
-    packet.unref();
-  }
-
-  // Reset to beginning
-  inputIO.destroy();
-  inputFormat.destroy();
-
-  const inputData2 = fs.readFileSync(inputPath);
-  const inputIO2 = new ffmpeg.IOContext(inputData2);
-  const inputFormat2 = new ffmpeg.InputFormatContext(inputIO2);
-  const videoStream2 = inputFormat2.getBestStream(ffmpeg.constants.mediaTypes.VIDEO);
-  const audioStream2 = inputFormat2.getBestStream(ffmpeg.constants.mediaTypes.AUDIO);
-
-  // Process packets
-  while (inputFormat2.readFrame(packet)) {
-    packetCount++;
-
-    if (packet.streamIndex === videoStream2.index) {
-      packet.streamIndex = outVideoStream.index;
-      outputFormat.writeFrame(packet);
-    } else if (audioStream2 && packet.streamIndex === audioStream2.index && outAudioStream && audioDecoder && audioEncoder) {
-      packet.timeBase = audioStream2.timeBase;
-
-      if (audioDecoder.sendPacket(packet)) {
-        while (audioDecoder.receiveFrame(frame)) {
-          const samplesConverted = resampler.convert(frame, resampledFrame);
-          resampledFrame.nbSamples = samplesConverted;
-          resampledFrame.pts = frame.pts;
-          resampledFrame.timeBase = frame.timeBase;
-
-          if (audioEncoder.sendFrame(resampledFrame)) {
-            while (audioEncoder.receivePacket(outputPacket)) {
-              outputPacket.streamIndex = outAudioStream.index;
-              outputFormat.writeFrame(outputPacket);
-              outputPacket.unref();
-            }
+      if (decoder.sendPacket(packet)) {
+        while (decoder.receiveFrame(frame)) {
+          const pts = frame.pts ?? 0;
+          const seconds = timeBase.denominator
+            ? (pts * timeBase.numerator) / timeBase.denominator
+            : 0;
+          if (seconds >= targetSeconds || pts === 0) {
+            selected = true;
+            break;
           }
         }
       }
+      packet.unref();
+      if (selected) break;
     }
-    packet.unref();
 
-    // Report progress
-    if (totalPackets > 0 && packetCount % 100 === 0) {
-      const percent = Math.round((packetCount / totalPackets) * 100);
-      onProgress?.(percent);
+    if (!selected) {
+      throw new Error('No frame decoded for thumbnail');
     }
-  }
 
-  // Flush encoder
-  if (audioEncoder) {
-    audioEncoder.sendFrame(null);
-    while (audioEncoder.receivePacket(outputPacket)) {
-      outputPacket.streamIndex = outAudioStream.index;
-      outputFormat.writeFrame(outputPacket);
-      outputPacket.unref();
-    }
-  }
+    const targetWidth = 640;
+    const targetHeight = Math.max(1, Math.round(frame.height * (targetWidth / frame.width)));
 
-  outputFormat.writeTrailer();
-  onProgress?.(100);
+    scaler = new ffmpeg.Scaler(
+      frame.format,
+      frame.width,
+      frame.height,
+      ffmpeg.constants.pixelFormats.YUVJ420P,
+      targetWidth,
+      targetHeight
+    );
 
-  // Write output file
-  const outputBuffer = Buffer.concat(outputChunks);
-  fs.writeFileSync(outputPath, outputBuffer);
+    scaledFrame = new ffmpeg.Frame();
+    scaledFrame.width = targetWidth;
+    scaledFrame.height = targetHeight;
+    scaledFrame.format = ffmpeg.constants.pixelFormats.YUVJ420P;
+    scaledFrame.alloc();
+    scaler.scale(frame, scaledFrame);
+    scaledFrame.pts = 0;
 
-  // Cleanup
-  inputFormat2.destroy();
-  outputFormat.destroy();
-  if (audioDecoder) audioDecoder.destroy();
-  if (audioEncoder) audioEncoder.destroy();
-  if (resampler) resampler.destroy();
-  frame.destroy();
-  resampledFrame.destroy();
-  inputIO2.destroy();
-  outputIO.destroy();
-
-  console.log('[Worker] bare-ffmpeg transcode complete:', outputPath);
-  return outputPath;
-}
-
-/**
- * Fallback: Transcode using ffmpeg subprocess
- */
-async function transcodeWithSubprocess(inputPath: string, outputPath: string, onProgress?: (percent: number) => void): Promise<string | null> {
-  console.log('[Worker] Using ffmpeg subprocess transcode');
-
-  // Get duration for progress
-  const duration = await new Promise<number>((resolve) => {
-    const proc = spawn('ffprobe', ['-v', 'quiet', '-show_entries', 'format=duration', '-of', 'csv=p=0', inputPath]);
-    let stdout = '';
-    proc.stdout.on('data', (c: Buffer) => { stdout += c.toString(); });
-    proc.on('exit', () => resolve(parseFloat(stdout.trim()) || 0));
-    proc.on('error', () => resolve(0));
-  });
-
-  return new Promise((resolve) => {
-    const args = [
-      '-y', '-i', inputPath,
-      '-c:v', 'copy',
-      '-c:a', 'aac', '-b:a', '192k',
-      '-movflags', '+faststart',
-      outputPath
-    ];
-
-    const proc = spawn('ffmpeg', args);
-
-    proc.stderr.on('data', (chunk: Buffer) => {
-      const msg = chunk.toString();
-      const timeMatch = msg.match(/time=(\d+):(\d+):(\d+)/);
-      if (timeMatch && duration > 0 && onProgress) {
-        const secs = parseInt(timeMatch[1]) * 3600 + parseInt(timeMatch[2]) * 60 + parseInt(timeMatch[3]);
-        onProgress(Math.min(99, Math.round((secs / duration) * 100)));
+    const outputChunks: Buffer[] = [];
+    outputIO = new ffmpeg.IOContext(32 * 1024, {
+      onwrite: (buffer: Buffer) => {
+        outputChunks.push(Buffer.from(buffer));
+        return buffer.length;
       }
     });
 
-    proc.on('exit', (code: number) => {
-      onProgress?.(100);
-      resolve(code === 0 ? outputPath : null);
-    });
-    proc.on('error', () => resolve(null));
+    outputFmt = new ffmpeg.OutputFormatContext('mjpeg', outputIO);
+    const outStream = outputFmt.createStream();
+    outStream.codecParameters.id = ffmpeg.constants.codecs.MJPEG;
+    outStream.codecParameters.type = ffmpeg.constants.mediaTypes.VIDEO;
+    outStream.codecParameters.width = targetWidth;
+    outStream.codecParameters.height = targetHeight;
+    outStream.codecParameters.format = ffmpeg.constants.pixelFormats.YUVJ420P;
+    outStream.timeBase = { numerator: 1, denominator: 25 };
+
+    encoder = outStream.encoder();
+    encoder.timeBase = outStream.timeBase;
+    encoder.open();
+    outStream.codecParameters.fromContext(encoder);
+
+    outputFmt.writeHeader();
+    encoder.sendFrame(scaledFrame);
+
+    outPacket = new ffmpeg.Packet();
+    while (encoder.receivePacket(outPacket)) {
+      outputFmt.writeFrame(outPacket);
+      outPacket.unref();
+    }
+
+    outputFmt.writeTrailer();
+    const thumbBuf = Buffer.concat(outputChunks);
+
+    if (!channel.blobs) {
+      console.warn('[Worker] Channel blobs not available for thumbnail');
+      return null;
+    }
+    const blobResult = await channel.putBlob(thumbBuf);
+    console.log('[Worker] Thumbnail stored in Hyperblobs, blobId:', blobResult.id);
+    return {
+      thumbnailBlobId: blobResult.id,
+      thumbnailBlobsCoreKey: channel.blobsKeyHex
+    };
+  } catch (err: any) {
+    console.warn('[Worker] Thumbnail generation failed:', err?.message || err);
+    return null;
+  } finally {
+    if (outPacket) outPacket.destroy?.();
+    if (encoder) encoder.destroy?.();
+    if (outputFmt) outputFmt.destroy?.();
+    if (outputIO) outputIO.destroy?.();
+    if (scaledFrame) scaledFrame.destroy?.();
+    if (scaler) scaler.destroy?.();
+    if (frame) frame.destroy?.();
+    if (packet) packet.destroy?.();
+    if (decoder) decoder.destroy?.();
+    if (inputFmt) inputFmt.destroy?.();
+    if (inputIO) inputIO.destroy?.();
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
+/**
+ * Transcode video to MP4 with AAC audio using bare-ffmpeg.
+ * Returns output path + session id, or null on failure.
+ */
+async function transcodeToMP4(inputPath: string, onProgress?: (percent: number) => void): Promise<{ outputPath: string; sessionId: string } | null> {
+  const title = path.basename(inputPath);
+  const result = await transcoder.startTranscode(inputPath, {
+    duration: 0,
+    title,
+    onProgress: (sessionId: string, percent: number) => {
+      onProgress?.(percent);
+    },
   });
+
+  if (!result?.success || !result.sessionId) {
+    console.warn('[Worker] Transcode start failed:', result?.error || 'unknown error');
+    return null;
+  }
+
+  if (!result.outputPath) {
+    console.warn('[Worker] Transcode did not return output path');
+    try { transcoder.stopTranscode(result.sessionId); } catch {}
+    return null;
+  }
+
+  const sessionId = result.sessionId;
+  const outputPath = result.outputPath;
+  const timeoutMs = 30 * 60 * 1000; // 30 minutes
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeoutMs) {
+    const status = transcoder.getStatus(sessionId);
+    if (status.error) {
+      console.warn('[Worker] Transcode status error:', status.error);
+      try { transcoder.stopTranscode(sessionId); } catch {}
+      return null;
+    }
+    if (status.status === 'complete') {
+      onProgress?.(100);
+      return { outputPath, sessionId };
+    }
+    if (status.status === 'error') {
+      console.warn('[Worker] Transcode failed:', status.error || 'unknown error');
+      try { transcoder.stopTranscode(sessionId); } catch {}
+      return null;
+    }
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+
+  console.warn('[Worker] Transcode timed out');
+  try { transcoder.stopTranscode(sessionId); } catch {}
+  return null;
 }
 
 // Allowed video file extensions
@@ -2967,6 +1092,27 @@ const ipcPipe = injectedPipe || pipe();
 if (!ipcPipe) {
   console.error('[Worker] Failed to get IPC pipe');
   throw new Error('No IPC pipe');
+}
+
+let sawInvalidPipeChunk = false;
+const originalPipeOn = typeof ipcPipe.on === 'function' ? ipcPipe.on.bind(ipcPipe) : null;
+if (originalPipeOn) {
+  ipcPipe.on = (event: any, listener: any) => {
+    if (event === 'data' && typeof listener === 'function') {
+      const wrapped = (chunk: any) => {
+        if (chunk === undefined || chunk === null) {
+          if (!sawInvalidPipeChunk) {
+            sawInvalidPipeChunk = true;
+            console.warn('[Worker] Dropping empty IPC pipe chunk (prevents HRPC decode crash)');
+          }
+          return;
+        }
+        listener(chunk);
+      };
+      return originalPipeOn(event, wrapped);
+    }
+    return originalPipeOn(event, listener);
+  };
 }
 
 const rpc = new HRPC(ipcPipe);
@@ -3151,17 +1297,22 @@ rpc.onUploadVideo(async (req: any) => {
 
   let uploadPath = req.filePath;
   let transcodedPath: string | null = null;
+  let transcodeSessionId: string | null = null;
   let mimeType = getMimeTypeFromPath(req.filePath);
 
   // Check if audio needs transcoding (AC3, DTS, etc. -> AAC)
-  const hasFFmpeg = await checkFFmpeg();
   const shouldTranscodeAudio = false; // Disabled for desktop now that mpv is the default player.
-  if (hasFFmpeg && shouldTranscodeAudio) {
-    const audioCodec = await getAudioCodec(req.filePath);
-    console.log('[Worker] Audio codec detected:', audioCodec);
+  if (shouldTranscodeAudio) {
+    let probeResult: any = null;
+    try {
+      probeResult = await transcoder.probeMedia(req.filePath, req.title);
+      console.log('[Worker] Audio codec detected:', probeResult.audioCodec);
+    } catch (err: any) {
+      console.warn('[Worker] Audio probe failed:', err?.message || err);
+    }
 
-    if (needsAudioTranscode(audioCodec)) {
-      console.log('[Worker] Audio codec', audioCodec, 'needs transcoding to AAC');
+    if (probeResult?.needsAudioTranscode) {
+      console.log('[Worker] Audio codec', probeResult.audioCodec, 'needs transcoding to AAC');
 
       // Send initial "transcoding" status (negative progress indicates transcoding phase)
       rpc.eventUploadProgress({
@@ -3173,7 +1324,7 @@ rpc.onUploadVideo(async (req: any) => {
         eta: 0
       });
 
-      transcodedPath = await transcodeToMP4(req.filePath, (percent) => {
+      const transcodeResult = await transcodeToMP4(req.filePath, (percent) => {
         // Send transcode progress (videoId='transcoding' signals transcode phase to UI)
         rpc.eventUploadProgress({
           videoId: 'transcoding',
@@ -3185,7 +1336,9 @@ rpc.onUploadVideo(async (req: any) => {
         });
       });
 
-      if (transcodedPath) {
+      if (transcodeResult) {
+        transcodedPath = transcodeResult.outputPath;
+        transcodeSessionId = transcodeResult.sessionId;
         uploadPath = transcodedPath;
         mimeType = 'video/mp4';
         console.log('[Worker] Using transcoded file for upload:', uploadPath);
@@ -3216,16 +1369,25 @@ rpc.onUploadVideo(async (req: any) => {
   );
 
   // Clean up transcoded temp file
-  if (transcodedPath) {
+  if (transcodeSessionId) {
+    try {
+      transcoder.stopTranscode(transcodeSessionId);
+      console.log('[Worker] Cleaned up transcoded temp file');
+    } catch (err) {
+      console.warn('[Worker] Failed to cleanup transcoded file:', err);
+    }
+  } else if (transcodedPath) {
     try {
       fs.unlinkSync(transcodedPath);
       console.log('[Worker] Cleaned up transcoded temp file');
-    } catch {}
+    } catch (err) {
+      console.warn('[Worker] Failed to cleanup transcoded file:', err);
+    }
   }
 
-  // Generate thumbnail if FFmpeg available AND no custom thumbnail will be provided
-  if (result.success && result.videoId && !req.skipThumbnailGeneration && hasFFmpeg) {
-    console.log('[Worker] Generating FFmpeg thumbnail');
+  // Generate thumbnail if no custom thumbnail will be provided
+  if (result.success && result.videoId && !req.skipThumbnailGeneration) {
+    console.log('[Worker] Generating thumbnail');
     try {
       const thumbResult = await generateThumbnail(req.filePath, result.videoId, channel);
       if (thumbResult?.thumbnailBlobId) {
@@ -3523,6 +1685,15 @@ rpc.onGetSeedingStatus(async () => {
 rpc.onSetSeedingConfig(async (req: any) => {
   await api.setSeedingConfig(req.config);
   return { success: true };
+});
+
+// Transcode settings handlers
+rpc.onGetTranscodeSettings(async () => {
+  return api.getTranscodeSettings();
+});
+
+rpc.onSetTranscodeSettings(async (req: any) => {
+  return api.setTranscodeSettings(req);
 });
 
 rpc.onPinChannel(async (req: any) => {
@@ -3894,6 +2065,8 @@ let castLoadError: string | null = null;
 let castLoadPromise: Promise<void> | null = null;
 let castContext: any = null; // Singleton instance
 let activeCastTranscodeId: string | null = null; // Track active transcode for cleanup
+let activeCastSourceKey: string | null = null; // Stable source key for active cast session
+const hlsSessionsWithLoadSent = new Set<string>();
 
 // Worker-level debouncing for castPlay to prevent native crashes from concurrent calls
 let castPlayInProgress = false;
@@ -3961,7 +2134,8 @@ function getCastContext(): any {
 
     castContext.on('timeChanged', (time: number) => {
       try {
-        rpc.eventCastTimeUpdate?.({ currentTime: time });
+        // compact-encoding uint requires positive integers (>=1), clamp to avoid encoding errors
+        rpc.eventCastTimeUpdate?.({ currentTime: Math.max(1, Math.floor(time || 0)) });
       } catch {}
     });
 
@@ -4077,7 +2251,13 @@ function normalizeLocalUrlForWorker(url: string): string {
 function buildTranscodeCacheKey(url: string): string | null {
   try {
     const parsed = new URL(url);
+    const keyParam = parsed.searchParams.get('key');
+    const blobParam = parsed.searchParams.get('blob');
+    if (keyParam && blobParam) {
+      return `blob:${keyParam}:${blobParam}`;
+    }
     parsed.searchParams.delete('token');
+    parsed.searchParams.delete('type');
     const entries = Array.from(parsed.searchParams.entries());
     entries.sort((a, b) => {
       if (a[0] === b[0]) return a[1].localeCompare(b[1]);
@@ -4206,16 +2386,20 @@ rpc.onCastDisconnect(async () => {
     await castContext.disconnect();
     castProxySessions.clear();
 
-    // Clean up transcoded file cache when cast session ends
+    // Clean up active transcode session when cast session ends
     if (activeCastTranscodeId) {
       console.log('[Worker] Cleaning up transcode cache:', activeCastTranscodeId);
+      hlsSessionsWithLoadSent.delete(activeCastTranscodeId);
       try {
-        transcoder.stopTranscode(activeCastTranscodeId);
-        transcodeSessions.delete(activeCastTranscodeId);
-      } catch (e) {
-        // Ignore cleanup errors
+        hlsTranscoder.stopHlsTranscode(activeCastTranscodeId);
+      } catch {
+        try {
+          transcoder.stopTranscode(activeCastTranscodeId);
+        } catch {}
       }
+      transcodeSessions.delete(activeCastTranscodeId);
       activeCastTranscodeId = null;
+      activeCastSourceKey = null;
     }
 
     return { success: true };
@@ -4243,229 +2427,170 @@ rpc.onCastPlay(async (req: any) => {
   lastCastPlayTime = now;
 
   const requestedUrl = normalizeLocalUrlForWorker(req.url);
-  const transcodeKey = buildTranscodeCacheKey(requestedUrl) || requestedUrl;
+  const protocol = castContext?._connectedDevice?.deviceInfo?.protocol;
+  const deviceHost = castContext?._connectedDevice?.deviceInfo?.host;
+  const requestedKey = buildTranscodeCacheKey(requestedUrl) || requestedUrl;
 
-  // Clean up previous transcode session only if it doesn't match the new URL
-  if (activeCastTranscodeId) {
-    const existing = transcodeSessions.get(activeCastTranscodeId);
-    const sameKey = existing?.cacheKey === transcodeKey && existing.status !== 'error';
-    if (!sameKey) {
-      try {
-        transcoder.stopTranscode(activeCastTranscodeId);
-        transcodeSessions.delete(activeCastTranscodeId);
-      } catch (e) {
-        // Ignore cleanup errors
-      }
-      activeCastTranscodeId = null;
-    }
+  if (
+    protocol === 'chromecast' &&
+    activeCastTranscodeId &&
+    hlsSessionsWithLoadSent.has(activeCastTranscodeId) &&
+    activeCastSourceKey === requestedKey
+  ) {
+    console.log('[Worker] Cast play: HLS already active for this source, skipping reload');
+    return { success: true };
   }
 
+  let url = req.url;
+  let contentType = req.contentType;
+  let currentTranscodeSessionId: string | null = null;
+  let streamType: 'LIVE' | 'BUFFERED' = 'BUFFERED';
+
   try {
-    let url = req.url;
-    let contentType = req.contentType;
-    let isLiveTranscode = false; // Track if we're using live transcoding stream
-    let transcodeSessionDuration: number | undefined; // For BUFFERED seeking with HLS
-    const protocol = castContext?._connectedDevice?.deviceInfo?.protocol;
-    const deviceHost = castContext?._connectedDevice?.deviceInfo?.host;
-
-    // For Chromecast, probe the file and check if transcoding/remuxing is needed
     if (protocol === 'chromecast') {
-      // Always probe for actual codec info (MP4 can contain unsupported codecs like AC3/DTS)
-      console.log('[Worker] Probing media codecs for Chromecast...');
-      const probeResult = await probeMediaCodecs(requestedUrl);
-      console.log('[Worker] Probe result:', {
-        video: probeResult.videoCodec,
-        audio: probeResult.audioCodec,
-        profile: probeResult.videoProfile,
-        level: probeResult.videoLevel,
-        container: probeResult.container,
-        needsTranscode: probeResult.needsTranscode,
-        needsRemux: probeResult.needsRemux,
-        reason: probeResult.reason
-      });
+      try {
+        console.log('[Worker] Probing media for Chromecast...');
+        const probeResult = await transcoder.probeMedia(requestedUrl, req.title);
+        console.log('[Worker] Probe result:', {
+          video: probeResult.videoCodec,
+          audio: probeResult.audioCodec,
+          profile: probeResult.videoProfile,
+          level: probeResult.videoLevel,
+          container: probeResult.container,
+          duration: probeResult.duration,
+          needsTranscode: probeResult.needsTranscode,
+          needsRemux: probeResult.needsRemux,
+          reason: probeResult.reason,
+        });
 
-      // Determine processing mode - pick the fastest option
-      // Only process if actually needed (don't force remux for already-optimized MP4s)
-      let needsProcessing = probeResult.needsTranscode || probeResult.needsRemux;
-      let mode: 'transcode' | 'audio' | 'remux' = 'remux';
+        const needsProcessing = probeResult.needsTranscode || probeResult.needsRemux;
+        if (needsProcessing) {
+          console.log('[Worker] Cast play: HLS transcoding needed -', probeResult.reason);
 
-      // FALLBACK: If probe failed (no codec info) but URL has unsupported extension, force remux
-      // This ensures MKV and other non-MP4 files get processed even when probe fails
-      if (!needsProcessing && !probeResult.videoCodec && !probeResult.audioCodec) {
-        const urlLower = requestedUrl.toLowerCase();
-        const unsupportedExts = ['.mkv', '.webm', '.avi', '.mov', '.wmv', '.flv', '.ts', '.m2ts', '.mts'];
-        const hasUnsupportedExt = unsupportedExts.some(ext => urlLower.includes(ext));
-        if (hasUnsupportedExt) {
-          console.log('[Worker] Probe failed but URL has unsupported extension, forcing remux');
-          needsProcessing = true;
-          probeResult.needsRemux = true;
-          probeResult.reason = 'probe failed, assuming remux needed for ' + urlLower.split('.').pop();
-        }
-      }
+          // Check if video is fully synced before attempting transcode
+          let isVideoComplete = true;
+          let syncStatus: any = null;
+          try {
+            syncStatus = await api.checkVideoSync(requestedUrl);
+            console.log('[Worker] Cast play: video sync status -',
+              syncStatus.progress + '%',
+              '(' + syncStatus.availableBlocks + '/' + syncStatus.totalBlocks + ' blocks)',
+              syncStatus.isComplete ? 'COMPLETE' : 'INCOMPLETE',
+              syncStatus.assumed ? '(ASSUMED)' : '');
 
-      if (probeResult.needsVideoTranscode) {
-        mode = 'transcode';  // Full transcode (slowest)
-      } else if (probeResult.needsAudioTranscode) {
-        mode = 'audio';  // Audio-only transcode, video copy (fast!)
-      } else if (probeResult.needsRemux) {
-        mode = 'remux';  // Container change only (fastest)
-      }
+            isVideoComplete = syncStatus.isComplete;
 
-      if (needsProcessing) {
-        const actionNames = { remux: 'remuxing', audio: 'audio-only transcode', transcode: 'full transcode' };
-        const action = actionNames[mode];
-        const reason = probeResult.reason || 'container/extension not supported';
-        console.log(`[Worker] Cast play: ${action} needed -`, reason);
+            if (!syncStatus.isComplete && !syncStatus.assumed) {
+              const sizeMB = Math.round((syncStatus.byteLength || 0) / 1024 / 1024);
+              const downloadedMB = Math.round(sizeMB * syncStatus.progress / 100);
+              console.warn('[Worker] Cast play: Video may not be fully synced!',
+                downloadedMB + 'MB /', sizeMB + 'MB downloaded.',
+                'Proceeding anyway - TempFileReader will handle gracefully.');
+            }
+          } catch (syncErr: any) {
+            console.warn('[Worker] Cast play: Could not check sync status:', syncErr?.message);
+            isVideoComplete = true;
+            syncStatus = null;
+          }
 
-        try {
-          // Check for existing transcode session for this URL
-          let session = findTranscodeSessionByKey(transcodeKey);
+          let forceSoftwareDecode = true;
+          try {
+            const vtSettings = hlsTranscoder.getVideoToolboxDecodeSettings?.();
+            if (vtSettings?.videoToolboxDecodeLocked && vtSettings.videoToolboxDecodeEnabled) {
+              forceSoftwareDecode = false;
+            }
+          } catch {}
 
-          if (!session) {
-            // Start new transcode/remux session
-            await ensureTranscoder();
-            const id = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-            session = {
-              id,
-              inputUrl: requestedUrl,
-              cacheKey: transcodeKey,
-              status: 'pending',
-              progress: 0,
-              mode,
-              duration: probeResult.duration,  // For BUFFERED seeking
-            };
-            transcodeSessions.set(id, session);
+          const result = await hlsTranscoder.startHlsTranscode(requestedUrl, {
+            title: req.title || '',
+            store: ctx.store,
+            sourceKey: requestedKey,
+            isVideoComplete,
+            blobInfo: syncStatus?.blobInfo || null,
+            blobsCoreKey: syncStatus?.blobsCoreKey || null,
+            forceSoftwareDecode,
+            forceProgressive: true,
+            forceHypercoreStream: true,
+            onProgress: (sessionId: string, percent: number) => {
+              if (percent % 10 === 0) {
+                console.log(`[Worker] HLS transcode progress: ${percent}%`);
+              }
+            }
+          });
 
-            // Start transcoding via inline transcoder module
-            try {
-              // Use HLS for live transcoding - Chromecast needs a manifest to understand it's a growing stream
-              // Raw fMP4/MPEG-TS don't work because Chromecast doesn't know more data is coming
-              const outputFormat: TranscodeOutputFormat = 'hls';
-              const result = await transcoder.startTranscode(
-                id,
-                requestedUrl,
-                mode,
-                handleTranscodeProgress,
-                { outputFormat }
-              );
-              session.status = 'transcoding';
-              session.servingUrl = result.servingUrl;
-              session.outputFormat = outputFormat;
-              session.contentType =
-                outputFormat === 'mpegts'
-                  ? 'video/mp2t'
-                  : outputFormat === 'hls'
-                    ? 'application/vnd.apple.mpegurl'
-                    : 'video/mp4';
-            } catch (err: any) {
-              session.status = 'error';
-              session.error = err?.message || 'Failed to start transcode';
-              console.warn(`[Worker] Cast play: ${mode} failed to start:`, session.error);
+          if (!result.success) {
+            throw new Error(result.error || 'HLS transcode failed');
+          }
+
+          currentTranscodeSessionId = result.sessionId;
+
+          if (result.reused) {
+            const status = hlsTranscoder.getHlsStatus(result.sessionId);
+            console.log('[Worker] Cast play: Reused session has', status?.segments || 0, 'segments');
+
+            if (hlsSessionsWithLoadSent.has(result.sessionId)) {
+              activeCastTranscodeId = result.sessionId;
+              activeCastSourceKey = requestedKey;
+              console.log('[Worker] Cast play: LOAD already sent for this session, skipping duplicate LOAD');
+              return { success: true };
+            }
+          } else {
+            const MIN_SEGMENTS = 1;
+            const MAX_WAIT_MS = 30000;
+            const POLL_INTERVAL_MS = 500;
+            console.log('[Worker] Cast play: Waiting for', MIN_SEGMENTS, 'HLS segments...');
+
+            const waitStart = Date.now();
+            let segmentCount = 0;
+            let playlistReady = false;
+            while (Date.now() - waitStart < MAX_WAIT_MS) {
+              const status = hlsTranscoder.getHlsStatus(result.sessionId);
+              segmentCount = status?.segments || 0;
+              playlistReady = status?.playlistReady || false;
+
+              const ready = segmentCount >= MIN_SEGMENTS && playlistReady;
+              if (ready) {
+                console.log('[Worker] Cast play:', segmentCount, 'segments ready, playlistReady:', playlistReady);
+                break;
+              }
+
+              if (status?.status === 'error') {
+                throw new Error(status.error || 'Transcode failed while waiting for segments');
+              }
+
+              const elapsed = Date.now() - waitStart;
+              if (elapsed % 3000 < POLL_INTERVAL_MS) {
+                console.log('[Worker] Cast play: waiting...', segmentCount, '/', MIN_SEGMENTS, 'segments, playlistReady:', playlistReady, 'elapsed:', Math.round(elapsed / 1000) + 's');
+              }
+
+              await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+            }
+
+            if (segmentCount < MIN_SEGMENTS) {
+              console.warn('[Worker] Cast play: Timeout waiting for segments, proceeding anyway with', segmentCount, 'segments');
             }
           }
 
-          // If session is active, wait for buffer (or full completion if waitForComplete)
-            if (session && (session.status === 'transcoding' || session.status === 'complete')) {
-              // Track this transcode session for cleanup on disconnect
-              activeCastTranscodeId = session.id;
-
-            // If waitForComplete is set, wait for full transcode (enables seeking)
-              if (req.waitForComplete) {
-                console.log(`[Worker] Cast play: waiting for complete ${mode} (seeking enabled)...`);
-                const maxWait = 10 * 60 * 1000; // 10 minute max wait
-                const isComplete = await waitForTranscodeProgress(session.id, 100, maxWait);
-                if (!isComplete) {
-                  return {
-                    success: false,
-                    error: 'Transcode timed out. Try again or use live streaming mode.',
-                  };
-                }
-                console.log(`[Worker] Cast play: ${mode} complete, seeking enabled`);
-              } else {
-              // Remux is very fast (seconds), wait for completion
-              // Audio-only transcode is also fast, wait for completion
-              // Full transcode is slow, use live streaming with minimal buffer
-              if (mode === 'remux' || mode === 'audio') {
-                // Wait for full completion - remux/audio are fast enough
-                const timeout = mode === 'remux' ? 30000 : 60000; // 30s remux, 60s audio
-                console.log(`[Worker] Cast play: waiting for ${mode} to complete...`);
-                const isComplete = await waitForTranscodeProgress(session.id, 100, timeout);
-                if (!isComplete) {
-                  console.warn(`[Worker] Cast play: ${mode} timeout, falling back to live streaming`);
-                }
-                } else {
-                  // Full transcode - wait for minimal buffer
-                  const hasBuffer = await waitForTranscodeProgress(session.id, 3, 12000);
-                  if (!hasBuffer) {
-                    console.warn(`[Worker] Cast play: ${mode} buffer timeout`);
-                    if (probeResult.needsVideoTranscode) {
-                      return {
-                        success: false,
-                        error: 'Video requires transcoding which is too slow for real-time casting. Consider using a video with H.264 codec.',
-                      };
-                    }
-                  }
-                }
-              }
-
-              const currentSession = transcodeSessions.get(session.id);
-              if (currentSession?.status === 'error') {
-                return {
-                  success: false,
-                  error: currentSession.error || 'Transcode failed.',
-                };
-              }
-
-              // Create proxy URL for the processed stream
-              if (session.servingUrl) {
-                await ensureCastProxyServer();
-                let proxyUrl = session.proxyUrl;
-                if (!proxyUrl) {
-                  proxyUrl = await createCastProxyUrl(deviceHost, session.servingUrl, session.id);
-                  if (proxyUrl) {
-                    session.proxyUrl = proxyUrl;
-                  }
-                }
-                if (proxyUrl) {
-                  const baseProxyUrl = proxyUrl;
-                  let finalProxyUrl = baseProxyUrl;
-                  // Re-check session status - use BUFFERED if complete, LIVE if still processing
-                  const sessionState = transcodeSessions.get(session.id);
-                  contentType = sessionState?.contentType || 'video/mp4';
-                  if (sessionState?.outputFormat === 'hls') {
-                    finalProxyUrl = `${baseProxyUrl.replace(/\/$/, '')}/stream.m3u8`;
-                    // Use BUFFERED for HLS - allows seeking within transcoded range
-                    // Chromecast will buffer when seeking beyond available segments
-                    isLiveTranscode = false;
-                    transcodeSessionDuration = sessionState.duration;
-                  } else if (sessionState?.status === 'complete') {
-                    console.log(`[Worker] Cast play: ${mode} complete, using BUFFERED stream (seeking enabled)`);
-                    isLiveTranscode = false; // BUFFERED = seeking enabled
-                  } else {
-                  console.log(`[Worker] Cast play: using LIVE stream mode (no seeking during transcode)`);
-                  isLiveTranscode = true; // LIVE = no seeking
-                }
-                url = finalProxyUrl;
-                console.log(`[Worker] Cast play: using ${mode}ed URL via proxy`, finalProxyUrl);
-              } else {
-                console.warn(`[Worker] Cast play: failed to create proxy for ${mode} URL`);
-              }
-            }
+          let hlsUrl = result.hlsUrl;
+          const localIp = await getLocalIPv4ForTarget(deviceHost);
+          if (localIp) {
+            hlsUrl = hlsUrl.replace('127.0.0.1', localIp);
+            console.log('[Worker] Cast play: using HLS URL with LAN IP:', hlsUrl);
+          } else {
+            console.warn('[Worker] Cast play: could not get local IP for HLS URL rewrite');
           }
-        } catch (err: any) {
-          console.error(`[Worker] Cast play ${mode} error:`, err?.message || err);
-          // If video transcoding is required, return error instead of falling back
-          if (mode === 'transcode' && probeResult.needsVideoTranscode) {
-            return {
-              success: false,
-              error: 'Failed to transcode video: ' + (err?.message || 'unknown error'),
-            };
-          }
+
+          url = hlsUrl;
+          contentType = 'application/x-mpegurl';
+          streamType = 'LIVE';
         }
+      } catch (probeErr: any) {
+        console.warn('[Worker] Cast play: probe/transcode failed, trying direct play:', probeErr?.message);
       }
 
-      // If not transcoding (or transcoding failed), use regular proxy
-      if (url === req.url) {
+      if (contentType === 'application/x-mpegurl') {
+        console.log('[Worker] Cast play: skipping proxy for HLS (direct access to segments needed)');
+      } else {
         let usedDirect = false;
         try {
           const parsed = new URL(req.url);
@@ -4508,7 +2633,6 @@ rpc.onCastPlay(async (req: any) => {
       }
     }
 
-    // Log final URL info
     try {
       let host = 'unknown';
       try {
@@ -4518,6 +2642,43 @@ rpc.onCastPlay(async (req: any) => {
       console.log('[Worker] Cast play:', protocol || 'unknown', 'contentType:', contentType, 'host:', host);
     } catch {}
 
+    // IMPORTANT: Stop any current media first to clear Chromecast's cached state
+    // Otherwise Chromecast may keep polling the old URL instead of loading new one
+    try {
+      console.log('[Worker] Cast play: Stopping current media before loading new...');
+      await castContext.stop();
+      // Small delay to ensure Chromecast processes the stop
+      await new Promise(resolve => setTimeout(resolve, 200));
+    } catch (stopErr: any) {
+      console.log('[Worker] Cast play: Stop before load failed (ok if nothing playing):', stopErr?.message);
+    }
+
+    const previousSessionId = activeCastTranscodeId;
+    if (previousSessionId && previousSessionId !== currentTranscodeSessionId) {
+      if (!currentTranscodeSessionId && activeCastSourceKey === requestedKey) {
+        console.log('[Worker] Cast play: Keeping existing HLS session for same source');
+      } else {
+        console.log('[Worker] Cast play: Cleaning up previous transcode session:', previousSessionId);
+        hlsSessionsWithLoadSent.delete(previousSessionId);
+        try {
+          hlsTranscoder.stopHlsTranscode(previousSessionId);
+        } catch {
+          try {
+            transcoder.stopTranscode(previousSessionId);
+          } catch {}
+        }
+        if (!currentTranscodeSessionId) {
+          activeCastTranscodeId = null;
+          activeCastSourceKey = null;
+        }
+      }
+    }
+
+    if (currentTranscodeSessionId) {
+      activeCastTranscodeId = currentTranscodeSessionId;
+      activeCastSourceKey = requestedKey;
+    }
+
     await castContext.play({
       url,
       contentType,
@@ -4525,18 +2686,21 @@ rpc.onCastPlay(async (req: any) => {
       thumbnail: req.thumbnail,
       time: req.time || 0,
       volume: normalizeCastVolume(req.volume),
-      streamType: isLiveTranscode ? 'LIVE' : 'BUFFERED',
-      duration: transcodeSessionDuration, // For BUFFERED HLS seeking
+      streamType,
     });
+
+    if (activeCastTranscodeId && contentType === 'application/x-mpegurl') {
+      hlsSessionsWithLoadSent.add(activeCastTranscodeId);
+    }
+
+    lastCastPlayTime = Date.now();
     return { success: true };
   } catch (err: any) {
     return { success: false, error: err?.message };
   } finally {
-    // Always clear the in-progress flag to allow future play calls
     castPlayInProgress = false;
   }
 });
-
 rpc.onCastPause(async () => {
   if (!castContext?.isConnected()) {
     return { success: false, error: 'Not connected' };
@@ -4569,16 +2733,20 @@ rpc.onCastStop(async () => {
     await castContext.stop();
     castProxySessions.clear();
 
-    // Clean up transcoded file cache when cast stops
+    // Clean up active transcode session when cast stops
     if (activeCastTranscodeId) {
       console.log('[Worker] Cleaning up transcode cache on stop:', activeCastTranscodeId);
+      hlsSessionsWithLoadSent.delete(activeCastTranscodeId);
       try {
-        transcoder.stopTranscode(activeCastTranscodeId);
-        transcodeSessions.delete(activeCastTranscodeId);
-      } catch (e) {
-        // Ignore cleanup errors
+        hlsTranscoder.stopHlsTranscode(activeCastTranscodeId);
+      } catch {
+        try {
+          transcoder.stopTranscode(activeCastTranscodeId);
+        } catch {}
       }
+      transcodeSessions.delete(activeCastTranscodeId);
       activeCastTranscodeId = null;
+      activeCastSourceKey = null;
     }
 
     return { success: true };
@@ -4612,19 +2780,23 @@ rpc.onCastSetVolume(async (req: any) => {
 });
 
 rpc.onCastGetState(async () => {
+  // compact-encoding uint requires positive integers (>=1)
+  // For optional uint fields, omit them or use 1 as minimum
   if (!castContext) {
-    return { state: 'idle', currentTime: 0, duration: 0, volume: 1.0 };
+    return { state: 'idle' }; // omit zero uint fields
   }
   try {
     const state = castContext.getPlaybackState();
-    return {
-      state: state.state || 'idle',
-      currentTime: state.currentTime || 0,
-      duration: state.duration || 0,
-      volume: state.volume ?? 1.0,
+    const result: { state: string; currentTime?: number; duration?: number; volume?: number } = {
+      state: state.state || 'idle'
     };
+    // Only include uint fields if they're positive
+    if (state.currentTime > 0) result.currentTime = Math.floor(state.currentTime);
+    if (state.duration > 0) result.duration = Math.floor(state.duration);
+    if (state.volume > 0) result.volume = Math.floor(state.volume * 100); // convert 0-1 to 0-100
+    return result;
   } catch {
-    return { state: 'idle', currentTime: 0, duration: 0, volume: 1.0 };
+    return { state: 'idle' };
   }
 });
 
@@ -4645,48 +2817,39 @@ rpc.onEventCastTimeUpdate?.(() => {});
 
 rpc.onTranscodeStart(async (req: any) => {
   try {
-    await ensureTranscoder();
-
-    // Generate unique session ID
-    const id = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-    // Determine mode based on content type or default to transcode
-    const mode: 'transcode' | 'audio' | 'remux' = req.mode || 'transcode';
-
-    // Create session
     const sourceUrl = normalizeLocalUrlForWorker(req.sourceUrl);
     const cacheKey = buildTranscodeCacheKey(sourceUrl) || sourceUrl;
-    const session: TranscodeSession = {
-      id,
-      inputUrl: sourceUrl,
-      cacheKey,
-      status: 'pending',
-      progress: 0,
-      mode,
-    };
-    transcodeSessions.set(id, session);
 
-    // Start transcoding via inline transcoder module
-    try {
-      const result = await transcoder.startTranscode(
-        id,
-        sourceUrl,
-        mode,
-        handleTranscodeProgress
-      );
-      session.status = 'transcoding';
-      session.servingUrl = result.servingUrl;
-    } catch (err: any) {
-      session.status = 'error';
-      session.error = err?.message || 'Failed to start transcode';
-      return { success: false, error: session.error };
+    const onProgress = (sessionId: string, percent: number) => {
+      handleTranscodeProgress(sessionId, percent);
+    };
+
+    const result = await transcoder.startTranscode(sourceUrl, {
+      duration: req.duration || 0,
+      title: req.title || '',
+      onProgress,
+    });
+
+    if (!result?.success) {
+      return { success: false, error: result?.error || 'Failed to start transcode' };
     }
 
-    console.log('[Worker] Transcode started:', id, 'url:', session.servingUrl);
+    const session: TranscodeSession = {
+      id: result.sessionId,
+      inputUrl: sourceUrl,
+      cacheKey,
+      status: 'transcoding',
+      progress: 0,
+      mode: req.mode || 'transcode',
+      transcodeUrl: result.transcodeUrl,
+    };
+    transcodeSessions.set(result.sessionId, session);
+
+    console.log('[Worker] Transcode started:', result.sessionId, 'url:', result.transcodeUrl);
     return {
       success: true,
-      sessionId: id,
-      transcodeUrl: session.servingUrl,
+      sessionId: result.sessionId,
+      transcodeUrl: result.transcodeUrl,
     };
   } catch (err: any) {
     console.error('[Worker] Transcode start error:', err?.message || err);
@@ -4696,17 +2859,10 @@ rpc.onTranscodeStart(async (req: any) => {
 
 rpc.onTranscodeStop(async (req: any) => {
   try {
-    const session = transcodeSessions.get(req.sessionId);
-    if (!session) {
-      return { success: false, error: 'Session not found' };
-    }
-
-    // Stop transcoding via inline transcoder module
-    transcoder.stopTranscode(req.sessionId);
-
+    const result = transcoder.stopTranscode(req.sessionId);
     transcodeSessions.delete(req.sessionId);
     console.log('[Worker] Transcode stopped:', req.sessionId);
-    return { success: true };
+    return { success: result.success, error: result.error || '' };
   } catch (err: any) {
     console.error('[Worker] Transcode stop error:', err?.message || err);
     return { success: false, error: err?.message || 'Failed to stop transcode' };
@@ -4714,16 +2870,17 @@ rpc.onTranscodeStop(async (req: any) => {
 });
 
 rpc.onTranscodeStatus(async (req: any) => {
-  const session = transcodeSessions.get(req.sessionId);
-  if (!session) {
-    return { status: 'not_found', progress: 0, bytesWritten: 0 };
+  try {
+    const status = transcoder.getStatus(req.sessionId);
+    return {
+      status: status.status || '',
+      progress: status.progress || 0,
+      bytesWritten: status.bytesWritten || 0,
+      error: status.error || '',
+    };
+  } catch (err: any) {
+    return { status: 'error', progress: 0, bytesWritten: 0, error: err?.message || 'Status failed' };
   }
-  return {
-    status: session.status,
-    progress: session.progress,
-    bytesWritten: 0, // Will be updated from worker events
-    error: session.error,
-  };
 });
 
 // Transcode progress event handler (client->server, no-op)

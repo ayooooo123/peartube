@@ -59,3 +59,21 @@ packages/desktop/*.html
 packages/desktop/(tabs)/
 packages/desktop/video/
 *.tgz
+
+# OpenProse state
+.prose/
+
+# Build caches
+**/.cache/
+
+# OpenProse workflows
+*.prose
+
+# OpenProse state
+.prose/
+
+# Build caches
+**/.cache/
+
+# OpenProse workflows
+*.prose

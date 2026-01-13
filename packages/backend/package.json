@@ -17,7 +17,10 @@
     "./api": "./src/api.js",
     "./identity": "./src/identity.js",
     "./upload": "./src/upload.js",
-    "./types": "./src/types.js"
+    "./types": "./src/types.js",
+    "./transcode": "./src/transcode/index.js",
+    "./transcode/transcoder": "./src/transcode/transcoder.mjs",
+    "./transcode/hls-transcoder": "./src/transcode/hls-transcoder.mjs"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -31,6 +34,14 @@
     "blind-pairing": "^2.3.1",
     "blind-peer": "^3.0.1",
     "blind-peering": "^1.15.0",
+    "bare-channel": "^5.2.2",
+    "bare-ffmpeg": "file:../bare-ffmpeg",
+    "bare-fs": "^4.5.2",
+    "bare-http1": "^4.2.0",
+    "bare-https": "^2.1.1",
+    "bare-os": "^3.6.2",
+    "bare-path": "^3.0.0",
+    "bare-worker": "^4.1.3",
     "compact-encoding": "^2.18.0",
     "corestore": "^7.7.0",
     "hyperbee": "^2.26.5",

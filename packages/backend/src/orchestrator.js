@@ -16,6 +16,7 @@ import { SeedingManager } from './seeding.js';
 import { createApi } from './api.js';
 import { createIdentityManager } from './identity.js';
 import { createUploadManager } from './upload.js';
+import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/hls-transcoder.mjs';
 
 /**
  * @typedef {Object} BackendConfig
@@ -125,6 +126,30 @@ export async function createBackendContext(config) {
 
   // Phase 5: Initialize seeding manager (fast - just loads config from db)
   await seedingManager.init();
+
+  // Phase 5.5: Load transcode settings (optional)
+  try {
+    const stored = await ctx.metaDb.get('transcode-settings').catch(() => null);
+    const storedEnabled = stored?.value?.videoToolboxDecodeEnabled;
+    const storedHwMap = stored?.value?.videoToolboxHwMapEnabled;
+    let appliedSettings = getVideoToolboxDecodeSettings();
+    let hasStored = false;
+    if (typeof storedEnabled === 'boolean') {
+      appliedSettings = setVideoToolboxDecodeEnabled(storedEnabled, 'stored');
+      hasStored = true;
+    }
+    if (typeof storedHwMap === 'boolean') {
+      appliedSettings = setVideoToolboxHwMapEnabled(storedHwMap, 'stored');
+      hasStored = true;
+    }
+    if (hasStored) {
+      console.log('[Orchestrator] Transcode settings loaded:', appliedSettings);
+    } else {
+      console.log('[Orchestrator] Transcode settings default:', appliedSettings);
+    }
+  } catch (e) {
+    console.log('[Orchestrator] Transcode settings load skipped:', e?.message);
+  }
 
   // Phase 6: Load identities (fast - reads from disk, needed before eventReady)
   console.log('[Orchestrator] Loading identities...');

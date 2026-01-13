@@ -531,6 +531,43 @@ function rewriteUrlHost(url, host) {
   }
 }
 
+function normalizeLocalUrlForCast(url) {
+  try {
+    const parsed = new URL(url)
+    if (CAST_LOCALHOSTS.has(parsed.hostname)) {
+      parsed.hostname = '127.0.0.1'
+      return parsed.toString()
+    }
+  } catch {}
+  return url
+}
+
+function buildTranscodeCacheKey(url) {
+  try {
+    const parsed = new URL(url)
+    const keyParam = parsed.searchParams.get('key')
+    const blobParam = parsed.searchParams.get('blob')
+    if (keyParam && blobParam) {
+      return `blob:${keyParam}:${blobParam}`
+    }
+    parsed.searchParams.delete('token')
+    parsed.searchParams.delete('type')
+    const entries = Array.from(parsed.searchParams.entries())
+    entries.sort((a, b) => {
+      if (a[0] === b[0]) return a[1].localeCompare(b[1])
+      return a[0].localeCompare(b[0])
+    })
+    const params = new URLSearchParams()
+    for (const [key, value] of entries) {
+      params.append(key, value)
+    }
+    parsed.search = params.toString()
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
 async function createCastProxyUrl(targetHost, sourceUrl) {
   const localIp = await getLocalIPv4ForTarget(targetHost)
   if (!localIp || !castProxyPort) {
@@ -1354,6 +1391,17 @@ rpc.onSetSeedingConfig(async (req) => {
   return { success: true }
 })
 
+// Transcode settings handlers
+rpc.onGetTranscodeSettings(async () => {
+  console.log('[HRPC] getTranscodeSettings')
+  return api.getTranscodeSettings()
+})
+
+rpc.onSetTranscodeSettings(async (req) => {
+  console.log('[HRPC] setTranscodeSettings')
+  return api.setTranscodeSettings(req || {})
+})
+
 rpc.onPinChannel(async (req) => {
   console.log('[HRPC] pinChannel:', req.channelKey?.slice(0, 16))
   await api.pinChannel(req.channelKey)
@@ -1580,6 +1628,7 @@ rpc.onCastDisconnect(async () => {
         } catch {}
       }
       activeCastTranscodeId = null
+      activeCastSourceKey = null
     }
 
     return { success: true }
@@ -1590,6 +1639,7 @@ rpc.onCastDisconnect(async () => {
 
 // Active transcode session for casting
 let activeCastTranscodeId = null
+let activeCastSourceKey = null
 
 // Track which HLS sessions have already sent LOAD to Chromecast
 // Key: sessionId, Value: true
@@ -1628,37 +1678,40 @@ rpc.onCastPlay(async (req) => {
 
     const protocol = castContext?._connectedDevice?.deviceInfo?.protocol
     const deviceHost = castContext?._connectedDevice?.deviceInfo?.host
+    const requestedUrl = normalizeLocalUrlForCast(req.url)
+    const requestedKey = buildTranscodeCacheKey(requestedUrl) || requestedUrl
+
+    if (
+      protocol === 'chromecast' &&
+      activeCastTranscodeId &&
+      hlsSessionsWithLoadSent.has(activeCastTranscodeId) &&
+      activeCastSourceKey === requestedKey
+    ) {
+      console.log('[Backend] Cast play: HLS already active for this source, skipping reload')
+      return { success: true }
+    }
 
     // For Chromecast, probe the media and transcode if needed
     if (protocol === 'chromecast') {
       console.log('[Backend] Cast play: probing media for Chromecast compatibility...')
 
-      // Load bare-ffmpeg lazily (not at startup to avoid potential init issues)
-      let ffmpegLoaded = false
       try {
-        ffmpegLoaded = await transcoder.loadBareFfmpeg()
-      } catch (loadErr) {
-        console.warn('[Backend] Cast play: bare-ffmpeg load failed:', loadErr?.message)
-      }
+        const probeResult = await transcoder.probeMedia(requestedUrl, req.title)
+        console.log('[Backend] Probe result:', {
+          video: probeResult.videoCodec,
+          audio: probeResult.audioCodec,
+          container: probeResult.container,
+          needsTranscode: probeResult.needsTranscode,
+          needsRemux: probeResult.needsRemux,
+          reason: probeResult.reason,
+        })
 
-      if (ffmpegLoaded) {
-        try {
-          const probeResult = await transcoder.probeMedia(req.url, req.title)
-          console.log('[Backend] Probe result:', {
-            video: probeResult.videoCodec,
-            audio: probeResult.audioCodec,
-            container: probeResult.container,
-            needsTranscode: probeResult.needsTranscode,
-            needsRemux: probeResult.needsRemux,
-            reason: probeResult.reason,
-          })
+        const needsProcessing = probeResult.needsTranscode || probeResult.needsRemux
 
-          const needsProcessing = probeResult.needsTranscode || probeResult.needsRemux
-
-          if (needsProcessing) {
-            // Use HLS transcoding for real-time streaming
-            // Chromecast can start playing as soon as first segments are ready
-            console.log('[Backend] Cast play: HLS transcoding needed -', probeResult.reason)
+        if (needsProcessing) {
+          // Use HLS transcoding for real-time streaming
+          // Chromecast can start playing as soon as first segments are ready
+          console.log('[Backend] Cast play: HLS transcoding needed -', probeResult.reason)
 
             // Check if video is fully synced before attempting transcode
             // This is ADVISORY ONLY - we don't block casting based on sync status
@@ -1667,7 +1720,7 @@ rpc.onCastPlay(async (req) => {
             let isVideoComplete = true // Default to true - assume cached
             let syncStatus = null
             try {
-              syncStatus = await api.checkVideoSync(req.url)
+              syncStatus = await api.checkVideoSync(requestedUrl)
               console.log('[Backend] Cast play: video sync status -',
                 syncStatus.progress + '%',
                 '(' + syncStatus.availableBlocks + '/' + syncStatus.totalBlocks + ' blocks)',
@@ -1696,9 +1749,10 @@ rpc.onCastPlay(async (req) => {
             // ============================================
             try {
               console.log('[Backend] Cast play: starting HLS transcode...')
-              const result = await hlsTranscoder.startHlsTranscode(req.url, {
+              const result = await hlsTranscoder.startHlsTranscode(requestedUrl, {
                 title: req.title || '',
                 store: ctx.store,
+                sourceKey: requestedKey,
                 isVideoComplete,
                 // Direct Hypercore access (HypercoreIOReader) - bypasses HTTP for synced videos
                 blobInfo: syncStatus?.blobInfo || null,
@@ -1732,6 +1786,8 @@ rpc.onCastPlay(async (req) => {
                 // Sending multiple LOADs causes rapid state changes in Chromecast which can
                 // lead to memory corruption in the native cast module
                 if (hlsSessionsWithLoadSent.has(result.sessionId)) {
+                  activeCastTranscodeId = result.sessionId
+                  activeCastSourceKey = requestedKey
                   console.log('[Backend] Cast play: LOAD already sent for this session, skipping duplicate LOAD')
                   return { success: true }
                 }
@@ -1798,13 +1854,10 @@ rpc.onCastPlay(async (req) => {
               // Fall through to try direct play
               throw transcodeErr
             }
-          }
-        } catch (probeErr) {
-          console.warn('[Backend] Cast play: probe/transcode failed, trying direct play:', probeErr?.message)
-          // Fall through to regular play
         }
-      } else {
-        console.log('[Backend] Cast play: bare-ffmpeg not available, skipping transcode check')
+      } catch (probeErr) {
+        console.warn('[Backend] Cast play: probe/transcode failed, trying direct play:', probeErr?.message)
+        // Fall through to regular play
       }
 
       // Set up proxy for the URL (original or transcoded)
@@ -1864,14 +1917,24 @@ rpc.onCastPlay(async (req) => {
     // currentTranscodeSessionId is set in the try block above, or null if no transcode
     const previousSessionId = activeCastTranscodeId
     if (previousSessionId && previousSessionId !== currentTranscodeSessionId) {
-      console.log('[Backend] Cast play: Cleaning up previous transcode session:', previousSessionId)
-      try {
-        hlsTranscoder.stopHlsTranscode(previousSessionId)
-      } catch {}
+      if (!currentTranscodeSessionId && activeCastSourceKey === requestedKey) {
+        console.log('[Backend] Cast play: Keeping existing HLS session for same source')
+      } else {
+        console.log('[Backend] Cast play: Cleaning up previous transcode session:', previousSessionId)
+        hlsSessionsWithLoadSent.delete(previousSessionId)
+        try {
+          hlsTranscoder.stopHlsTranscode(previousSessionId)
+        } catch {}
+        if (!currentTranscodeSessionId) {
+          activeCastTranscodeId = null
+          activeCastSourceKey = null
+        }
+      }
     }
     // Update tracking to current session
     if (currentTranscodeSessionId) {
       activeCastTranscodeId = currentTranscodeSessionId
+      activeCastSourceKey = requestedKey
     }
 
     console.log('[Backend] Cast play: >>> SENDING LOAD TO CHROMECAST <<<')
@@ -1954,6 +2017,7 @@ rpc.onCastStop(async () => {
         } catch {}
       }
       activeCastTranscodeId = null
+      activeCastSourceKey = null
     }
 
     return { success: true }

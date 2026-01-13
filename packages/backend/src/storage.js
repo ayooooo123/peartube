@@ -924,7 +924,9 @@ export async function getVideoUrl(ctx, driveKey, videoPath, options = {}) {
   // Generate direct blob URL (no redirect needed)
   const url = ctx.blobServer.getLink(blobsKey, {
     blob: blob,
-    type: mimeType
+    type: mimeType,
+    host: ctx.blobServerHost || '127.0.0.1',
+    port: ctx.blobServer?.port || ctx.blobServerPort
   });
 
   console.log('[Storage] Direct blob URL:', url);
@@ -1015,7 +1017,9 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
   try {
     const url = ctx.blobServer.getLink(blobsCore.key, {
       blob,
-      type: mimeType
+      type: mimeType,
+      host: ctx.blobServerHost || '127.0.0.1',
+      port: ctx.blobServer?.port || ctx.blobServerPort
     });
     console.log('[Storage] Direct blob URL (hyperblobs):', url);
     return { url };

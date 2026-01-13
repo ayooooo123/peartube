@@ -39,6 +39,9 @@ export {
 // Video Upload
 export { createUploadManager } from './upload.js';
 
+// Transcoding (bare-ffmpeg)
+export * as transcode from './transcode/index.js';
+
 // Multi-writer channels (Autobase)
 export { MultiWriterChannel, ChannelPairer } from './channel/index.js';
 

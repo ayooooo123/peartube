@@ -578,6 +578,48 @@ ns.register({
   ]
 })
 
+// ============================================
+// Transcode Settings
+// ============================================
+
+ns.register({
+  name: 'transcode-settings',
+  fields: [
+    { name: 'videoToolboxDecodeEnabled', type: 'bool', required: true },
+    { name: 'videoToolboxDecodeLocked', type: 'bool', required: false },
+    { name: 'videoToolboxDecodeDefault', type: 'bool', required: false },
+    { name: 'videoToolboxDecodeSource', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-transcode-settings-request',
+  fields: []
+})
+
+ns.register({
+  name: 'get-transcode-settings-response',
+  fields: [
+    { name: 'settings', type: '@peartube/transcode-settings', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-transcode-settings-request',
+  fields: [
+    { name: 'videoToolboxDecodeEnabled', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'set-transcode-settings-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'settings', type: '@peartube/transcode-settings', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
 ns.register({
   name: 'pin-channel-request',
   fields: [
@@ -2088,6 +2130,19 @@ rpcNs.register({
   name: 'set-seeding-config',
   request: { name: '@peartube/set-seeding-config-request', stream: false },
   response: { name: '@peartube/set-seeding-config-response', stream: false }
+})
+
+// Transcode settings commands
+rpcNs.register({
+  name: 'get-transcode-settings',
+  request: { name: '@peartube/get-transcode-settings-request', stream: false },
+  response: { name: '@peartube/get-transcode-settings-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'set-transcode-settings',
+  request: { name: '@peartube/set-transcode-settings-request', stream: false },
+  response: { name: '@peartube/set-transcode-settings-response', stream: false }
 })
 
 rpcNs.register({

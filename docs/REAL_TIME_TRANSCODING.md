@@ -56,6 +56,9 @@ The transcoding system is built across multiple layers:
 └─────────────────┘
 ```
 
+**Bare-FFmpeg fork:** PearTube uses a local fork at `packages/bare-ffmpeg` (git submodule).
+All runtime behavior and fixes should be validated against that fork, not upstream npm.
+
 ## 1. Device Discovery (mDNS)
 
 ### Service Discovery (`packages/bare-fcast/lib/discovery.js`)
@@ -292,6 +295,24 @@ while (videoEncoder.receivePacket(packet)) {
 1. `h264_mediacodec` - Android hardware encoding
 2. `h264_videotoolbox` - iOS/macOS hardware encoding
 3. `libx264` - Software encoding (GPL build)
+
+#### VideoToolbox Decode (Pear Desktop)
+
+Pear desktop uses `h264_videotoolbox` for hardware encode. Hardware **decode** via VideoToolbox is optional and **disabled by default** on Pear because it can corrupt memory in `bare-ffmpeg` under sustained HLS transcode workloads.
+
+- **Settings toggle:** `Settings → Transcoding → VideoToolbox Decode (Pear)`
+- **Settings toggle:** `Settings → Transcoding → VideoToolbox HW Map (Pear)` (switches transfer method; defaults to On for Pear)
+- **Env overrides:** `PEARTUBE_ENABLE_VT_DECODE=1|0`, `PEARTUBE_ENABLE_VT_HWMAP=1|0` (lock the toggles)
+
+**If you enable hardware decode:**
+- Use `hwFramesCtx.getConstraints()` to choose a valid software transfer format before `transferData()`.
+- Do **not** assume `NV12` is always valid (HEVC 10-bit often requires `P010`).
+- Do **not** pre-allocate the destination frame for `transferData()`/`hwMap()`; set format and let FFmpeg populate it.
+- After transfer/mapping, use the **actual** transfer frame format/size for scaling decisions.
+- Transfer into a dedicated software frame, then scale/convert to encoder format if needed.
+- **Scope:** Pear desktop only; mobile uses MediaCodec decode/encode
+
+If you need to experiment with hardware decode, enable it via the toggle or env var and watch for `SIGTRAP`/malloc corruption crashes in Pear.
 
 **Critical Fixes for Hardware Encoders**:
 

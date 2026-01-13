@@ -173,3 +173,23 @@ If the backend correctly computes a value but the UI receives a different value:
 | Schema Definition | `packages/spec/schema.cjs` | (same) |
 | Generated Messages | `packages/spec/spec/hrpc/messages.js` | (same) |
 | Domain Logic | `packages/backend/src/` | (same, imported) |
+
+---
+
+## Lesson: VideoToolbox Decode Can Corrupt Memory on Pear
+
+During HLS transcoding on Pear (macOS), enabling VideoToolbox **hardware decode** can trigger malloc corruption crashes (SIGTRAP). The root cause is typically an invalid hardware → software transfer path in `bare-ffmpeg` (local fork), not the JS layer.
+
+**What to do:**
+- Default to **software decode** on Pear unless you are actively validating VideoToolbox.
+- Use **Settings → Transcoding → VideoToolbox Decode (Pear)** for controlled testing.
+- **Env override:** `PEARTUBE_ENABLE_VT_DECODE=1|0` (locks the UI toggle).
+- If you must test hardware decode, keep runs short and capture crash reports.
+
+**Safer hardware-decode path (when enabled):**
+- Prefer **HW map** (`av_hwframe_map`) over `transferData` if you see `Invalid argument` transfer errors.
+- **Env override:** `PEARTUBE_ENABLE_VT_HWMAP=1|0` (locks HW Map toggle).
+- Select the transfer format from `hwFramesCtx.getConstraints().validSwFormats`.
+- Do **not** hardcode `NV12`; HEVC 10-bit often requires `P010`.
+- **Do not pre-allocate** the transfer frame for VideoToolbox; set format/size and let FFmpeg map/allocate.
+- Always use the **actual transfer frame** format/size when deciding whether to scale.

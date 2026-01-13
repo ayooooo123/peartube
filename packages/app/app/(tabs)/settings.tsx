@@ -2,7 +2,7 @@
  * Settings Tab - App and channel settings
  */
 import { useState, useEffect, useCallback } from 'react'
-import { View, Text, ScrollView, Alert, Share, Clipboard, Pressable, TextInput, Platform } from 'react-native'
+import { View, Text, ScrollView, Alert, Share, Clipboard, Pressable, TextInput, Platform, Switch } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
@@ -16,6 +16,17 @@ interface StorageStats {
   maxGB: number
   seedCount: number
   pinnedCount: number
+}
+
+interface TranscodeSettings {
+  videoToolboxDecodeEnabled: boolean
+  videoToolboxDecodeLocked?: boolean
+  videoToolboxDecodeDefault?: boolean
+  videoToolboxDecodeSource?: string
+  videoToolboxHwMapEnabled?: boolean
+  videoToolboxHwMapLocked?: boolean
+  videoToolboxHwMapDefault?: boolean
+  videoToolboxHwMapSource?: string
 }
 
 export default function SettingsScreen() {
@@ -38,6 +49,10 @@ export default function SettingsScreen() {
   const [pairInviteCode, setPairInviteCode] = useState('')
   const [pairDeviceName, setPairDeviceName] = useState('')
   const [pairing, setPairing] = useState(false)
+  const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
+  const canManageTranscodeSettings = isPear && typeof (rpc as any)?.getTranscodeSettings === 'function'
+  const [transcodeSettings, setTranscodeSettings] = useState<TranscodeSettings | null>(null)
+  const [transcodeSettingsLoading, setTranscodeSettingsLoading] = useState(false)
 
   // Check if channel is published
   const checkPublishStatus = useCallback(async () => {
@@ -86,6 +101,75 @@ export default function SettingsScreen() {
   useEffect(() => {
     loadDevices()
   }, [loadDevices])
+
+  const loadTranscodeSettings = useCallback(async () => {
+    if (!canManageTranscodeSettings) return
+    setTranscodeSettingsLoading(true)
+    try {
+      const res = await (rpc as any).getTranscodeSettings()
+      setTranscodeSettings(res?.settings || null)
+    } catch (err) {
+      console.error('[Settings] Failed to load transcode settings:', err)
+    } finally {
+      setTranscodeSettingsLoading(false)
+    }
+  }, [canManageTranscodeSettings, rpc])
+
+  useEffect(() => {
+    loadTranscodeSettings()
+  }, [loadTranscodeSettings])
+
+  const handleVideoToolboxDecodeToggle = async (enabled: boolean) => {
+    if (!canManageTranscodeSettings) return
+    setTranscodeSettings((prev) => ({
+      ...(prev || { videoToolboxDecodeEnabled: enabled }),
+      videoToolboxDecodeEnabled: enabled,
+    }))
+    setTranscodeSettingsLoading(true)
+    try {
+      const res = await (rpc as any).setTranscodeSettings({ videoToolboxDecodeEnabled: enabled })
+      if (res?.success === false) {
+        throw new Error(res?.error || 'Failed to update transcode settings')
+      }
+      setTranscodeSettings(res?.settings || null)
+    } catch (err: any) {
+      console.error('[Settings] Failed to update transcode settings:', err)
+      if (Platform.OS === 'web') {
+        window.alert(err?.message || 'Failed to update transcode settings')
+      } else {
+        Alert.alert('Error', err?.message || 'Failed to update transcode settings')
+      }
+      await loadTranscodeSettings()
+    } finally {
+      setTranscodeSettingsLoading(false)
+    }
+  }
+
+  const handleVideoToolboxHwMapToggle = async (enabled: boolean) => {
+    if (!canManageTranscodeSettings) return
+    setTranscodeSettings((prev) => ({
+      ...(prev || { videoToolboxDecodeEnabled: false, videoToolboxHwMapEnabled: enabled }),
+      videoToolboxHwMapEnabled: enabled,
+    }))
+    setTranscodeSettingsLoading(true)
+    try {
+      const res = await (rpc as any).setTranscodeSettings({ videoToolboxHwMapEnabled: enabled })
+      if (res?.success === false) {
+        throw new Error(res?.error || 'Failed to update transcode settings')
+      }
+      setTranscodeSettings(res?.settings || null)
+    } catch (err: any) {
+      console.error('[Settings] Failed to update transcode settings:', err)
+      if (Platform.OS === 'web') {
+        window.alert(err?.message || 'Failed to update transcode settings')
+      } else {
+        Alert.alert('Error', err?.message || 'Failed to update transcode settings')
+      }
+      await loadTranscodeSettings()
+    } finally {
+      setTranscodeSettingsLoading(false)
+    }
+  }
 
   const createInvite = async () => {
     if (!rpc || !identity?.driveKey) return
@@ -707,6 +791,99 @@ export default function SettingsScreen() {
 
         {/* Divider */}
         <View className="h-2 bg-pear-bg-card" />
+
+        {canManageTranscodeSettings ? (
+          <>
+            {/* Transcoding Section */}
+            <View className="px-5 py-5">
+              <Text className="text-caption-medium text-pear-text-muted mb-4 uppercase tracking-wide">Transcoding</Text>
+
+              <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-label text-pear-text">VideoToolbox Decode (Pear)</Text>
+                    <Text className="text-caption text-pear-text-muted mt-0.5">
+                      Use hardware decode on Pear to reduce CPU load. Disable if you see crashes or unstable playback.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={!!transcodeSettings?.videoToolboxDecodeEnabled}
+                    onValueChange={handleVideoToolboxDecodeToggle}
+                    disabled={transcodeSettingsLoading || !!transcodeSettings?.videoToolboxDecodeLocked}
+                    trackColor={{ false: colors.border, true: colors.primary }}
+                    thumbColor={colors.text}
+                  />
+                </View>
+
+                {transcodeSettingsLoading ? (
+                  <Text className="text-caption text-pear-text-muted mt-3">Loading transcode settings...</Text>
+                ) : transcodeSettings ? (
+                  <>
+                    {transcodeSettings.videoToolboxDecodeLocked ? (
+                      <Text className="text-caption text-pear-text-muted mt-3">
+                        Locked by environment override (PEARTUBE_ENABLE_VT_DECODE).
+                      </Text>
+                    ) : null}
+                  <Text className="text-caption text-pear-text-muted mt-3">
+                    Default: {transcodeSettings.videoToolboxDecodeDefault ? 'On' : 'Off'} • Source: {transcodeSettings.videoToolboxDecodeSource}
+                  </Text>
+                </>
+              ) : (
+                <Text className="text-caption text-pear-text-muted mt-3">Transcode settings unavailable.</Text>
+              )}
+
+              <View className="mt-4 pt-4 border-t border-pear-border">
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-1 pr-4">
+                    <Text className="text-label text-pear-text">VideoToolbox HW Map (Pear)</Text>
+                    <Text className="text-caption text-pear-text-muted mt-0.5">
+                      Map hardware frames for read-only access instead of copying. Use for troubleshooting transferData errors.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={!!transcodeSettings?.videoToolboxHwMapEnabled}
+                    onValueChange={handleVideoToolboxHwMapToggle}
+                    disabled={
+                      transcodeSettingsLoading ||
+                      !!transcodeSettings?.videoToolboxHwMapLocked ||
+                      !transcodeSettings?.videoToolboxDecodeEnabled
+                    }
+                    trackColor={{ false: colors.border, true: colors.primary }}
+                    thumbColor={colors.text}
+                  />
+                </View>
+
+                {transcodeSettingsLoading ? (
+                  <Text className="text-caption text-pear-text-muted mt-3">Loading transcode settings...</Text>
+                ) : transcodeSettings ? (
+                  <>
+                    {transcodeSettings.videoToolboxHwMapLocked ? (
+                      <Text className="text-caption text-pear-text-muted mt-3">
+                        Locked by environment override (PEARTUBE_ENABLE_VT_HWMAP).
+                      </Text>
+                    ) : null}
+                    {!transcodeSettings.videoToolboxDecodeEnabled ? (
+                      <Text className="text-caption text-pear-text-muted mt-3">
+                        Enable VideoToolbox Decode to apply this setting.
+                      </Text>
+                    ) : null}
+                    <Text className="text-caption text-pear-text-muted mt-3">
+                      Default: {transcodeSettings.videoToolboxHwMapDefault ? 'On' : 'Off'} • Source: {transcodeSettings.videoToolboxHwMapSource}
+                    </Text>
+                  </>
+                ) : null}
+              </View>
+            </View>
+
+              <Text className="text-caption text-pear-text-muted">
+                Applies to Pear desktop only. Changes take effect for new transcode sessions.
+              </Text>
+            </View>
+
+            {/* Divider */}
+            <View className="h-2 bg-pear-bg-card" />
+          </>
+        ) : null}
 
         {/* About Section */}
         <View className="px-5 py-5">

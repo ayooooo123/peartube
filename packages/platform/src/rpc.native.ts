@@ -64,6 +64,8 @@ declare const HRPC: new (stream: any) => {
   hideChannel(req: { channelKey: string }): Promise<any>;
   unsubscribeChannel(req: { channelKey: string }): Promise<any>;
   setVideoThumbnailFromFile(req: { videoId: string; filePath: string }): Promise<any>;
+  getTranscodeSettings(req: {}): Promise<any>;
+  setTranscodeSettings(req: { videoToolboxDecodeEnabled?: boolean; videoToolboxHwMapEnabled?: boolean }): Promise<any>;
   getStorageStats(req: {}): Promise<any>;
   setStorageLimit(req: { maxGB: number }): Promise<any>;
   clearCache(req: {}): Promise<any>;
@@ -869,6 +871,15 @@ export const rpc = {
 
   async pickImageFile() {
     return ensureRPC().pickImageFile({});
+  },
+
+  // Transcode settings (Pear troubleshooting)
+  async getTranscodeSettings() {
+    return ensureRPC().getTranscodeSettings({});
+  },
+
+  async setTranscodeSettings(req: { videoToolboxDecodeEnabled?: boolean; videoToolboxHwMapEnabled?: boolean }) {
+    return ensureRPC().setTranscodeSettings(req);
   },
 
   // Storage management

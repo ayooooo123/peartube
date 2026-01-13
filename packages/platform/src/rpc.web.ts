@@ -438,6 +438,15 @@ export const rpc = {
     return ensureRPC().pickImageFile({});
   },
 
+  // Transcode settings (Pear troubleshooting)
+  async getTranscodeSettings() {
+    return ensureRPC().getTranscodeSettings({});
+  },
+
+  async setTranscodeSettings(req: { videoToolboxDecodeEnabled?: boolean; videoToolboxHwMapEnabled?: boolean }) {
+    return ensureRPC().setTranscodeSettings(req);
+  },
+
   // Storage management
   async getStorageStats(): Promise<{ usedBytes: number; maxBytes: number; usedGB: string; maxGB: number; seedCount: number; pinnedCount: number }> {
     return ensureRPC().getStorageStats({});

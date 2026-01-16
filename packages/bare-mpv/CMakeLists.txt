@@ -31,7 +31,6 @@ meson_buildtype(buildtype)
 set(mpv_prefix "${CMAKE_CURRENT_BINARY_DIR}/_ports/mpv")
 set(mpv_source_copy "${mpv_prefix}/src/mpv")
 set(mpv_build_dir "${mpv_prefix}/build")
-set(mpv_patch "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ports/mpv/patches/0001-libplacebo-option.patch")
 set(mpv_lib_name "${CMAKE_STATIC_LIBRARY_PREFIX}mpv${CMAKE_STATIC_LIBRARY_SUFFIX}")
 set(mpv_lib_path "${mpv_prefix}/lib/${mpv_lib_name}")
 
@@ -176,9 +175,7 @@ ExternalProject_Add(
       -DMPV_SOURCE_DIR=${MPV_SOURCE_DIR}
       -DMPV_SOURCE_COPY=${mpv_source_copy}
       -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ports/mpv/copy-source.cmake"
-  PATCH_COMMAND
-    ${CMAKE_COMMAND} -E chdir "${mpv_source_copy}"
-    ${CMAKE_COMMAND} -DPATCHES=${mpv_patch} -P "${CMAKE_CURRENT_SOURCE_DIR}/node_modules/cmake-ports/patch.cmake"
+  PATCH_COMMAND ""
   CONFIGURE_COMMAND
     ${CMAKE_COMMAND} -E env ${env} ${meson} setup ${mpv_meson_args}
   BUILD_COMMAND

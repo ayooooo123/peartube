@@ -13,39 +13,51 @@ on:
     branches:
       - main
 
+env:
+  SKIP_POSTINSTALL: 1
+
 jobs:
   build-macos:
     strategy:
       matrix:
         include:
-          - os: macos-14       # ARM64 runner
+          - os: macos-14
             arch: arm64
             prebuild_dir: darwin-arm64
-          - os: macos-13       # x64 runner
+          - os: macos-13
             arch: x64
             prebuild_dir: darwin-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install mpv via Homebrew
-        run: brew install mpv
+      - name: Install build prerequisites
+        run: |
+          brew install meson ninja pkg-config nasm
 
-      - name: Install dependencies
+      - name: Install npm dependencies
         working-directory: packages/bare-mpv
         run: npm install
 
-      - name: Build native addon
+      - name: Build native addon (static mpv from vendor)
         working-directory: packages/bare-mpv
         run: |
           npx bare-make generate
           npx bare-make build
           npx bare-make install
+
+      - name: Verify prebuild was created
+        working-directory: packages/bare-mpv
+        run: |
+          ls -la prebuilds/${{ matrix.prebuild_dir }}/
+          file prebuilds/${{ matrix.prebuild_dir }}/bare-mpv.bare
 
       - name: Upload prebuild artifact
         uses: actions/upload-artifact@v4
@@ -66,6 +78,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up QEMU (for ARM64 emulation)
         if: matrix.arch == 'arm64'
@@ -76,13 +90,26 @@ jobs:
           docker run --rm --platform ${{ matrix.docker_platform }} \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace/packages/bare-mpv \
+            -e SKIP_POSTINSTALL=1 \
             node:20-bookworm \
             bash -c "
-              apt-get update && apt-get install -y libmpv-dev cmake ninja-build
+              set -ex
+              apt-get update
+              apt-get install -y \
+                cmake ninja-build pkg-config \
+                meson python3-pip \
+                nasm \
+                libdrm-dev \
+                libasound2-dev \
+                libpulse-dev
+              
               npm install
               npx bare-make generate
               npx bare-make build
               npx bare-make install
+              
+              ls -la prebuilds/${{ matrix.prebuild_dir }}/
+              file prebuilds/${{ matrix.prebuild_dir }}/bare-mpv.bare
             "
 
       - name: Upload prebuild artifact
@@ -97,37 +124,61 @@ jobs:
         include:
           - arch: x64
             prebuild_dir: win32-x64
+            msys_arch: MINGW64
           - arch: arm64
             prebuild_dir: win32-arm64
+            msys_arch: CLANGARM64
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msys_arch }}
+          update: true
+          install: >-
+            base-devel
+            git
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-python
 
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Download libmpv dev package
-        shell: pwsh
-        run: |
-          # Download mpv dev package from shinchiro's builds
-          $mpvUrl = "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-${{ matrix.arch }}-latest.7z/download"
-          Invoke-WebRequest -Uri $mpvUrl -OutFile mpv-dev.7z -UserAgent "Wget"
-          7z x mpv-dev.7z -oC:\mpv-dev
-
-      - name: Install dependencies
+      - name: Install npm dependencies
         working-directory: packages/bare-mpv
+        shell: pwsh
+        env:
+          SKIP_POSTINSTALL: 1
         run: npm install
 
       - name: Build native addon
         working-directory: packages/bare-mpv
         env:
-          MPV_HOME: C:\mpv-dev
+          SKIP_POSTINSTALL: 1
         run: |
           npx bare-make generate
           npx bare-make build
           npx bare-make install
+
+      - name: Verify prebuild
+        working-directory: packages/bare-mpv
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path prebuilds/${{ matrix.prebuild_dir }}/ -Recurse
 
       - name: Upload prebuild artifact
         uses: actions/upload-artifact@v4
@@ -149,7 +200,12 @@ jobs:
           merge-multiple: true
 
       - name: List prebuilds
-        run: find packages/bare-mpv/prebuilds -name "*.bare" -ls
+        run: |
+          echo "=== All prebuilds ==="
+          find packages/bare-mpv/prebuilds -name "*.bare" -exec ls -lh {} \;
+          echo ""
+          echo "=== File types ==="
+          find packages/bare-mpv/prebuilds -name "*.bare" -exec file {} \;
 
       - name: Create prebuilds archive
         run: |

@@ -4,12 +4,17 @@
   "description": "Bare native addon for libmpv video playback",
   "main": "index.js",
   "scripts": {
-    "build": "bare-make",
+    "postinstall": "node scripts/postinstall.js",
+    "build": "bare-make generate && bare-make build && bare-make install",
+    "build:generate": "bare-make generate",
+    "build:compile": "bare-make build",
+    "build:install": "bare-make install",
     "test": "bare test.js"
   },
   "devDependencies": {
     "bare-make": "^1.6.3",
     "cmake-bare": "^1.7.6",
+    "cmake-meson": "^1.1.0",
     "cmake-ports": "^1.5.10"
   },
   "engines": {
@@ -21,6 +26,7 @@
     "index.js",
     "CMakeLists.txt",
     "cmake",
+    "scripts",
     "vendor/mpv",
     "prebuilds"
   ]

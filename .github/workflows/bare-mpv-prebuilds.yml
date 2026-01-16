@@ -46,6 +46,16 @@ jobs:
         working-directory: packages/bare-mpv
         run: npm install
 
+      - name: Initialize mpv copy as git repo for patching
+        working-directory: packages/bare-mpv
+        run: |
+          mkdir -p build/_ports/mpv/src/mpv
+          cp -R vendor/mpv/. build/_ports/mpv/src/mpv/
+          cd build/_ports/mpv/src/mpv
+          git init
+          git add -A
+          git commit -m "initial"
+
       - name: Build native addon (static mpv from vendor)
         working-directory: packages/bare-mpv
         run: |
@@ -99,11 +109,24 @@ jobs:
                 cmake ninja-build pkg-config \
                 meson python3-pip \
                 nasm \
+                clang lld \
                 libdrm-dev \
                 libasound2-dev \
                 libpulse-dev
               
               npm install
+              
+              # Initialize mpv copy as git repo for patching
+              mkdir -p build/_ports/mpv/src/mpv
+              cp -R vendor/mpv/. build/_ports/mpv/src/mpv/
+              cd build/_ports/mpv/src/mpv
+              git init
+              git config user.email 'ci@example.com'
+              git config user.name 'CI'
+              git add -A
+              git commit -m 'initial'
+              cd /workspace/packages/bare-mpv
+              
               npx bare-make generate
               npx bare-make build
               npx bare-make install
@@ -125,13 +148,12 @@ jobs:
           - arch: x64
             prebuild_dir: win32-x64
             msys_arch: MINGW64
+            pkg_prefix: mingw-w64-x86_64
           - arch: arm64
             prebuild_dir: win32-arm64
             msys_arch: CLANGARM64
+            pkg_prefix: mingw-w64-clang-aarch64
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -145,13 +167,14 @@ jobs:
           install: >-
             base-devel
             git
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-meson
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-nasm
-            mingw-w64-x86_64-python
+            ${{ matrix.pkg_prefix }}-toolchain
+            ${{ matrix.pkg_prefix }}-cmake
+            ${{ matrix.pkg_prefix }}-ninja
+            ${{ matrix.pkg_prefix }}-meson
+            ${{ matrix.pkg_prefix }}-pkg-config
+            ${{ matrix.pkg_prefix }}-nasm
+            ${{ matrix.pkg_prefix }}-python
+            ${{ matrix.pkg_prefix }}-clang
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -160,10 +183,22 @@ jobs:
 
       - name: Install npm dependencies
         working-directory: packages/bare-mpv
-        shell: pwsh
         env:
           SKIP_POSTINSTALL: 1
         run: npm install
+
+      - name: Initialize mpv copy as git repo for patching
+        working-directory: packages/bare-mpv
+        shell: bash
+        run: |
+          mkdir -p build/_ports/mpv/src/mpv
+          cp -R vendor/mpv/. build/_ports/mpv/src/mpv/
+          cd build/_ports/mpv/src/mpv
+          git init
+          git config user.email 'ci@example.com'
+          git config user.name 'CI'
+          git add -A
+          git commit -m "initial"
 
       - name: Build native addon
         working-directory: packages/bare-mpv
@@ -176,7 +211,6 @@ jobs:
 
       - name: Verify prebuild
         working-directory: packages/bare-mpv
-        shell: pwsh
         run: |
           Get-ChildItem -Path prebuilds/${{ matrix.prebuild_dir }}/ -Recurse
 

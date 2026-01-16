@@ -46,17 +46,6 @@ jobs:
         working-directory: packages/bare-mpv
         run: npm install
 
-      - name: Initialize mpv copy as git repo for patching
-        working-directory: packages/bare-mpv
-        run: |
-          mkdir -p build/_ports/mpv/src/mpv
-          cp -R vendor/mpv/. build/_ports/mpv/src/mpv/
-          cd build/_ports/mpv/src/mpv
-          rm -f .git
-          git init
-          git add -A
-          git commit -m "initial"
-
       - name: Build native addon (static mpv from vendor)
         working-directory: packages/bare-mpv
         run: |
@@ -115,21 +104,9 @@ jobs:
                 libasound2-dev \
                 libpulse-dev
               
-              npm install
-              
-            # Initialize mpv copy as git repo for patching
-            mkdir -p build/_ports/mpv/src/mpv
-            cp -R vendor/mpv/. build/_ports/mpv/src/mpv/
-            cd build/_ports/mpv/src/mpv
-            rm -f .git
-            git init
-            git config user.email 'ci@example.com'
-            git config user.name 'CI'
-            git add -A
-            git commit -m 'initial'
-            cd /workspace/packages/bare-mpv
-              
-              npx bare-make generate
+            npm install
+            
+            npx bare-make generate
               npx bare-make build
               npx bare-make install
               
@@ -188,20 +165,6 @@ jobs:
         env:
           SKIP_POSTINSTALL: 1
         run: npm install
-
-      - name: Initialize mpv copy as git repo for patching
-        working-directory: packages/bare-mpv
-        shell: bash
-        run: |
-          mkdir -p build/_ports/mpv/src/mpv
-          cp -R vendor/mpv/. build/_ports/mpv/src/mpv/
-          cd build/_ports/mpv/src/mpv
-          rm -f .git
-          git init
-          git config user.email 'ci@example.com'
-          git config user.name 'CI'
-          git add -A
-          git commit -m "initial"
 
       - name: Build native addon
         working-directory: packages/bare-mpv

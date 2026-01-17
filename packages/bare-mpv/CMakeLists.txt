@@ -184,11 +184,23 @@ ExternalProject_Add(
     ${CMAKE_COMMAND} -E env ${env} ${meson} install -C "${mpv_build_dir}"
   INSTALL_BYPRODUCTS
     "${mpv_lib_path}"
-  DEPENDS
-    ${ffmpeg}
-    ${libass}
-    ${libplacebo}
-    ${freetype}
+)
+
+# cmake-ports sets *_PREFIX cache variables but doesn't expose target names.
+# Extract target names from the PREFIX paths (target = last path component).
+cmake_path(GET ffmpeg_PREFIX FILENAME ffmpeg_target)
+cmake_path(GET libass_PREFIX FILENAME libass_target)
+cmake_path(GET libplacebo_PREFIX FILENAME libplacebo_target)
+cmake_path(GET freetype_PREFIX FILENAME freetype_target)
+
+# ExternalProject DEPENDS creates target-level dependencies but doesn't ensure
+# the configure step waits for dependencies to be installed first (ninja runs them
+# in parallel). Explicitly make mpv configure wait for dependencies' install steps.
+ExternalProject_Add_StepDependencies(mpv_ext configure
+  ${ffmpeg_target}-install
+  ${libass_target}-install
+  ${libplacebo_target}-install
+  ${freetype_target}-install
 )
 
 add_library(mpv STATIC IMPORTED GLOBAL)

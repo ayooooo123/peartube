@@ -1,5 +1,18 @@
 include_guard(GLOBAL)
 
+set(libdrm_args
+  -Dcairo-tests=disabled
+  -Dman-pages=disabled
+  -Dvalgrind=disabled
+  -Dinstall-test-programs=false
+  -Dudev=true
+)
+
+# Enable PIC for static libraries on Linux (required for linking into shared objects)
+if(LINUX)
+  list(APPEND libdrm_args -Db_staticpic=true)
+endif()
+
 declare_port(
   "git:gitlab.freedesktop.org/mesa/drm#libdrm-2.4.128"
   libdrm
@@ -7,11 +20,7 @@ declare_port(
   BYPRODUCTS
     lib/libdrm.a
   ARGS
-    -Dcairo-tests=disabled
-    -Dman-pages=disabled
-    -Dvalgrind=disabled
-    -Dinstall-test-programs=false
-    -Dudev=true
+    ${libdrm_args}
 )
 
 add_library(drm STATIC IMPORTED GLOBAL)

@@ -55,6 +55,7 @@ list(APPEND env
 set(libass_args
   --disable-shared
   --enable-static
+  --with-pic
   --disable-fontconfig
   --disable-fribidi
   --disable-harfbuzz

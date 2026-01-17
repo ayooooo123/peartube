@@ -24,7 +24,8 @@ jobs:
           - os: macos-14
             arch: arm64
             prebuild_dir: darwin-arm64
-          - os: macos-15
+          # macos-13 is Intel (x64), macos-14+ are Apple Silicon (arm64)
+          - os: macos-13
             arch: x64
             prebuild_dir: darwin-x64
     runs-on: ${{ matrix.os }}
@@ -63,7 +64,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.prebuild_dir }}
-          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}
+          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/bare-mpv.bare
 
   build-linux:
     strategy:
@@ -124,7 +125,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.prebuild_dir }}
-          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}
+          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/bare-mpv.bare
 
   collect-prebuilds:
     needs: [build-macos, build-linux]
@@ -136,29 +137,22 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download darwin-arm64 prebuild
+      - name: Download all prebuilds
         uses: actions/download-artifact@v4
         with:
-          name: prebuild-darwin-arm64
-          path: packages/bare-mpv/prebuilds/darwin-arm64
+          pattern: prebuild-*
+          path: packages/bare-mpv/prebuilds
+          merge-multiple: false
 
-      - name: Download darwin-x64 prebuild
-        uses: actions/download-artifact@v4
-        with:
-          name: prebuild-darwin-x64
-          path: packages/bare-mpv/prebuilds/darwin-x64
-
-      - name: Download linux-x64 prebuild
-        uses: actions/download-artifact@v4
-        with:
-          name: prebuild-linux-x64
-          path: packages/bare-mpv/prebuilds/linux-x64
-
-      - name: Download linux-arm64 prebuild
-        uses: actions/download-artifact@v4
-        with:
-          name: prebuild-linux-arm64
-          path: packages/bare-mpv/prebuilds/linux-arm64
+      - name: Move prebuilds to correct directories
+        run: |
+          cd packages/bare-mpv/prebuilds
+          for dir in prebuild-*; do
+            target="${dir#prebuild-}"
+            mkdir -p "$target"
+            mv "$dir/bare-mpv.bare" "$target/"
+            rmdir "$dir"
+          done
 
       - name: List prebuilds
         run: |

@@ -131,7 +131,7 @@ set(mpv_meson_args
   -Dgl-cocoa=disabled
   -Dmacos-cocoa-cb=disabled
 
-  -Dlibplacebo=enabled
+  # Note: libplacebo is now a required dependency in mpv, not an option
   -Dvulkan=disabled
   -Dshaderc=disabled
   -Dspirv-cross=disabled

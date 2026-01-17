@@ -143,9 +143,13 @@ class HypercoreReader {
 
     let data = null
     try {
-      data = await this.core.get(index)
+      const timeoutMs = 5000
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Block read timeout')), timeoutMs)
+      )
+      data = await Promise.race([this.core.get(index), timeoutPromise])
     } catch (err) {
-      console.error('[HypercoreWorker] core.get failed at', index, err?.message || err)
+      console.error('[HypercoreWorker] core.get failed at block', index, ':', err?.message || err)
     }
 
     if (!data) return null

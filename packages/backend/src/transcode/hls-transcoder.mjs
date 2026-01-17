@@ -656,9 +656,8 @@ async function handleHttpRequest(req, res) {
 
       // Log every playlist request to track Chromecast polling
       const segmentLines = playlist.split('\n').filter(l => l.startsWith('segment') || l.startsWith('http')).length
-      logDebug('[HlsTranscoder] Playlist request - totalSegs:', stats.totalSegments,
-        'inPlaylist:', segmentLines, 'highest:', highestSeg, 'complete:', stats.isComplete,
-        'hostForPlaylist:', hostHeader)
+      console.log('[HlsTranscoder] Playlist request - totalSegs:', stats.totalSegments,
+        'inPlaylist:', segmentLines, 'highest:', highestSeg, 'complete:', stats.isComplete)
 
       res.statusCode = 200
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
@@ -674,7 +673,7 @@ async function handleHttpRequest(req, res) {
 
     if (requestType === 'segment') {
       const highestAvailable = segmentManager.getHighestSegmentIndex()
-      logDebug('[HlsTranscoder] Segment request:', segmentIndex, 'highest available:', highestAvailable)
+      console.log('[HlsTranscoder] Segment request:', segmentIndex, 'highest available:', highestAvailable)
 
       // NOTE: Removed transcodingBusy check - completed segments are immutable and safe to serve
       // The old check was returning 503 for almost ALL requests during active transcoding,
@@ -2282,6 +2281,8 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
     let audioBasePtsMs = null  // First audio packet PTS (set once)
     let audioPtsOffset = null  // Offset in encoder timebase units (applied once)
     let audioSamplesOutput = 0  // Track samples output by encoder for PTS calculation
+    let audioInputSamplesTotal = 0  // Track INPUT samples for accurate PTS (avoids resampler drift)
+    let audioInputSampleRate = 0  // Input sample rate (set from first frame)
     let noKeyframeWarned = false
 
     while (inputFormat.readFrame(packet)) {
@@ -2738,6 +2739,7 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
                   'sampleRate:', audioFrame.sampleRate, 'format:', audioFrame.format,
                   'channels:', audioFrame.channelLayout?.nbChannels, 'layoutMask:', audioFrame.channelLayout?.mask)
                 firstAudioFrame = false
+                audioInputSampleRate = audioFrame.sampleRate || 48000
 
                 // CRITICAL: Recreate resampler with ACTUAL frame properties
                 // Decoder properties before first frame may be incorrect
@@ -2789,8 +2791,11 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
                   'layoutMask=' + resampledFrame.channelLayout?.mask)
               }
 
-                // Ensure resampledFrame has enough capacity for worst-case resampler output
+                // Track input samples for accurate PTS calculation (before resampling)
                 const inputSamples = audioFrame.nbSamples || 0
+                audioInputSamplesTotal += inputSamples
+
+                // Ensure resampledFrame has enough capacity for worst-case resampler output
                 const resamplerDelay = resampler.delay || 0
                 const inRate = resampler.inputSampleRate || audioFrame.sampleRate || 48000
                 const outRate = resampler.outputSampleRate || audioEncoder.sampleRate || 48000
@@ -2869,14 +2874,23 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
                   break
                 }
 
-                // Set frame PTS for encoder - use audioSamplesOutput for consistent timing
+                // Use output sample count for PTS - this is correct as long as we output
+                // exactly the right number of samples. The encoder timebase is 1/48000,
+                // so PTS = sample_count means time = sample_count/48000 seconds.
                 encoderFrame.pts = audioSamplesOutput
                 encoderFrame.timeBase = audioEncoder.timeBase
                 encoderFrame.nbSamples = aacFrameSize
 
-                if (audioFrameCount <= 5) {
-                  console.log('[HlsTranscoder] Sending encoderFrame: nbSamples=', encoderFrame.nbSamples,
-                    'pts=', encoderFrame.pts, 'FIFO remaining:', audioFifo.size)
+                if (audioFrameCount <= 5 || audioFrameCount % 1000 === 0) {
+                  const encoderRate = audioEncoder.sampleRate || 48000
+                  const inputRate = audioInputSampleRate || encoderRate
+                  const inputTimeSec = audioInputSamplesTotal / inputRate
+                  const outputTimeSec = audioSamplesOutput / encoderRate
+                  const drift = (outputTimeSec - inputTimeSec) * 1000
+                  console.log('[HlsTranscoder] Audio frame: pts=', encoderFrame.pts,
+                    'inputSamples=', audioInputSamplesTotal, 'outputSamples=', audioSamplesOutput,
+                    'inputTime=', inputTimeSec.toFixed(3) + 's', 'outputTime=', outputTimeSec.toFixed(3) + 's',
+                    'drift=', drift.toFixed(1) + 'ms')
                 }
 
                 if (audioEncoder.sendFrame(encoderFrame)) {
@@ -3265,43 +3279,16 @@ export async function startHlsTranscode(sourceUrl, options = {}) {
 
       let inputIO = null
 
-      // Option 1: Direct Hypercore access (fastest, no HTTP overhead)
-      // Requires: blobInfo, blobsCoreKey, store
-      // NOTE: We don't require isVideoComplete - let isFullySynced() make the actual check
-      // because checkVideoSync() can give false negatives due to sampling/contiguousLength issues
-      const wantHypercoreStream = forceHypercoreStream ||
-        (typeof process !== 'undefined' && process?.env?.PEARTUBE_HYPERCORE_STREAM === '1')
+      // HypercoreChannelReader DISABLED: Worker thread opens read-only Corestore which can't
+      // access blocks from the main process's writable store. Falls back to TempFileReader (HTTP).
+      // TODO: Investigate IPC-based block passing or shared Corestore access.
+      let hypercoreStreamError = 'HypercoreChannelReader disabled - using HTTP streaming'
+      console.log('[HlsTranscoder] Using TempFileReader (HTTP) for input')
+
+      // HypercoreIOReader for small, fully-synced videos (preloads all blocks into memory)
       const allowPreload = !forceHypercoreStream
-      let hypercoreStreamError = null
-
-      if (wantHypercoreStream && (!blobInfo || !blobsCoreKey || !store)) {
-        hypercoreStreamError = 'Missing blobInfo/blobsCoreKey/store for Hypercore streaming'
-      } else if (blobInfo && blobsCoreKey && store) {
-
-        if (wantHypercoreStream) {
-          if (!store?.storage?.path) {
-            hypercoreStreamError = 'Hypercore stream requested but storage path unavailable'
-            console.warn('[HlsTranscoder] Hypercore stream requested but storage path unavailable, skipping')
-          } else {
-            if (!isVideoComplete) {
-              console.warn('[HlsTranscoder] Hypercore stream requested before sync complete; streaming directly from Hypercore')
-            }
-            try {
-              console.log('[HlsTranscoder] Attempting HypercoreChannelReader (no preload)...')
-              const streamReader = new HypercoreChannelReader(store.storage.path, blobsCoreKey, blobInfo)
-              await streamReader.start()
-              inputIO = streamReader.createIOContext(ffmpeg)
-              session.hypercoreStreamReader = streamReader
-              console.log('[HlsTranscoder] HypercoreChannelReader ready')
-            } catch (err) {
-              hypercoreStreamError = err?.message || 'HypercoreChannelReader failed'
-              console.warn('[HlsTranscoder] HypercoreChannelReader failed:', err?.message)
-            }
-          }
-        }
-
-        if (!inputIO && allowPreload) {
-          if (blobInfo.byteLength > hypercoreDirectMaxBytes) {
+      if (!inputIO && allowPreload && blobInfo && blobsCoreKey && store) {
+        if (blobInfo.byteLength > hypercoreDirectMaxBytes) {
             console.log('[HlsTranscoder] Skipping HypercoreIOReader for large video:', Math.round(blobInfo.byteLength / 1024 / 1024) + 'MB',
               '(limit', Math.round(hypercoreDirectMaxBytes / 1024 / 1024) + 'MB)')
           } else {
@@ -3392,9 +3379,8 @@ export async function startHlsTranscode(sourceUrl, options = {}) {
         }
       }
 
-      if (forceHypercoreStream && wantHypercoreStream && !inputIO) {
-        throw new Error(hypercoreStreamError || 'Hypercore streaming requested but unavailable')
-      }
+      // forceHypercoreStream is ignored since HypercoreChannelReader is disabled
+      // The HypercoreIOReader (preload) path will be used for small videos if available
 
       // Option 2: HTTP temp file reader (fallback)
       if (!inputIO) {

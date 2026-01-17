@@ -1,5 +1,27 @@
 include_guard(GLOBAL)
 
+set(libplacebo_args
+  -Dvulkan=disabled
+  -Dvk-proc-addr=disabled
+  -Dglslang=disabled
+  -Dshaderc=disabled
+  -Dlcms=disabled
+  -Ddovi=disabled
+  -Dlibdovi=disabled
+  -Ddemos=false
+  -Dtests=false
+  -Dbench=false
+  -Dfuzz=false
+  -Dunwind=disabled
+  -Dxxhash=disabled
+  -Ddebug-abort=false
+)
+
+# Enable PIC for static libraries on Linux (required for linking into shared objects)
+if(LINUX)
+  list(APPEND libplacebo_args -Db_staticpic=true)
+endif()
+
 declare_port(
   "git:code.videolan.org/videolan/libplacebo#master"
   libplacebo
@@ -7,20 +29,7 @@ declare_port(
   BYPRODUCTS
     lib/libplacebo.a
   ARGS
-    -Dvulkan=disabled
-    -Dvk-proc-addr=disabled
-    -Dglslang=disabled
-    -Dshaderc=disabled
-    -Dlcms=disabled
-    -Ddovi=disabled
-    -Dlibdovi=disabled
-    -Ddemos=false
-    -Dtests=false
-    -Dbench=false
-    -Dfuzz=false
-    -Dunwind=disabled
-    -Dxxhash=disabled
-    -Ddebug-abort=false
+    ${libplacebo_args}
 )
 
 add_library(placebo STATIC IMPORTED GLOBAL)

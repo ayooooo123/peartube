@@ -165,6 +165,11 @@ set(mpv_meson_args
   -Dswift-build=disabled
 )
 
+# Enable PIC for static libraries on Linux (required for linking into shared objects)
+if(LINUX)
+  list(APPEND mpv_meson_args -Db_staticpic=true)
+endif()
+
 ExternalProject_Add(
   mpv_ext
   PREFIX "${mpv_prefix}"

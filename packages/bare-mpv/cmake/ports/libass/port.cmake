@@ -52,6 +52,20 @@ list(APPEND env
   "PKG_CONFIG_PATH=${pkg_config_path}"
 )
 
+set(libass_args
+  --disable-shared
+  --enable-static
+  --disable-fontconfig
+  --disable-fribidi
+  --disable-harfbuzz
+)
+
+# On Linux, there's no system font provider (DirectWrite on Windows, CoreText on macOS)
+# so we need to explicitly disable the requirement
+if(LINUX)
+  list(APPEND libass_args --disable-require-system-font-provider)
+endif()
+
 declare_port(
   "https://github.com/libass/libass/releases/download/0.17.1/libass-0.17.1.tar.xz"
   libass
@@ -60,11 +74,7 @@ declare_port(
   BYPRODUCTS
     lib/libass.a
   ARGS
-    --disable-shared
-    --enable-static
-    --disable-fontconfig
-    --disable-fribidi
-    --disable-harfbuzz
+    ${libass_args}
   ENV ${env}
 )
 

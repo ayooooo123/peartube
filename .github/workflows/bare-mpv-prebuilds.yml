@@ -40,7 +40,7 @@ jobs:
 
       - name: Install build prerequisites
         run: |
-          brew install meson ninja pkg-config nasm
+          brew install meson ninja pkg-config nasm fribidi harfbuzz fontconfig automake
 
       - name: Install npm dependencies
         working-directory: packages/bare-mpv
@@ -63,7 +63,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.prebuild_dir }}
-          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/
+          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}
 
   build-linux:
     strategy:
@@ -91,22 +91,28 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace/packages/bare-mpv \
             -e SKIP_POSTINSTALL=1 \
+            -e CI=true \
             node:20-bookworm \
             bash -c "
               set -ex
               apt-get update
               apt-get install -y \
                 cmake ninja-build pkg-config \
-                meson python3-pip \
-                nasm \
+                python3-pip python3-venv \
+                nasm patch \
                 clang lld \
                 libdrm-dev \
                 libasound2-dev \
-                libpulse-dev
+                libpulse-dev \
+                libfribidi-dev \
+                libharfbuzz-dev \
+                libfontconfig1-dev
               
-            npm install
-            
-            npx bare-make generate
+              pip3 install --break-system-packages meson
+              
+              npm install
+              
+              npx bare-make generate
               npx bare-make build
               npx bare-make install
               
@@ -118,86 +124,41 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.prebuild_dir }}
-          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/
-
-  build-windows:
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            prebuild_dir: win32-x64
-            msys_arch: MINGW64
-            pkg_prefix: mingw-w64-x86_64
-          - arch: arm64
-            prebuild_dir: win32-arm64
-            msys_arch: CLANGARM64
-            pkg_prefix: mingw-w64-clang-aarch64
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: ${{ matrix.msys_arch }}
-          update: true
-          install: >-
-            base-devel
-            git
-            ${{ matrix.pkg_prefix }}-toolchain
-            ${{ matrix.pkg_prefix }}-cmake
-            ${{ matrix.pkg_prefix }}-ninja
-            ${{ matrix.pkg_prefix }}-meson
-            ${{ matrix.pkg_prefix }}-pkg-config
-            ${{ matrix.pkg_prefix }}-nasm
-            ${{ matrix.pkg_prefix }}-python
-            ${{ matrix.pkg_prefix }}-clang
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install npm dependencies
-        working-directory: packages/bare-mpv
-        env:
-          SKIP_POSTINSTALL: 1
-        run: npm install
-
-      - name: Build native addon
-        working-directory: packages/bare-mpv
-        env:
-          SKIP_POSTINSTALL: 1
-        run: |
-          npx bare-make generate
-          npx bare-make build
-          npx bare-make install
-
-      - name: Verify prebuild
-        working-directory: packages/bare-mpv
-        run: |
-          Get-ChildItem -Path prebuilds/${{ matrix.prebuild_dir }}/ -Recurse
-
-      - name: Upload prebuild artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: prebuild-${{ matrix.prebuild_dir }}
-          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/
+          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}
 
   collect-prebuilds:
-    needs: [build-macos, build-linux, build-windows]
+    needs: [build-macos, build-linux]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download all prebuilds
+      - name: Download darwin-arm64 prebuild
         uses: actions/download-artifact@v4
         with:
-          path: packages/bare-mpv/prebuilds/
-          pattern: prebuild-*
-          merge-multiple: true
+          name: prebuild-darwin-arm64
+          path: packages/bare-mpv/prebuilds/darwin-arm64
+
+      - name: Download darwin-x64 prebuild
+        uses: actions/download-artifact@v4
+        with:
+          name: prebuild-darwin-x64
+          path: packages/bare-mpv/prebuilds/darwin-x64
+
+      - name: Download linux-x64 prebuild
+        uses: actions/download-artifact@v4
+        with:
+          name: prebuild-linux-x64
+          path: packages/bare-mpv/prebuilds/linux-x64
+
+      - name: Download linux-arm64 prebuild
+        uses: actions/download-artifact@v4
+        with:
+          name: prebuild-linux-arm64
+          path: packages/bare-mpv/prebuilds/linux-arm64
 
       - name: List prebuilds
         run: |
@@ -207,13 +168,14 @@ jobs:
           echo "=== File types ==="
           find packages/bare-mpv/prebuilds -name "*.bare" -exec file {} \;
 
-      - name: Create prebuilds archive
+      - name: Commit prebuilds to repository
         run: |
-          cd packages/bare-mpv
-          tar -czvf bare-mpv-prebuilds.tar.gz prebuilds/
-
-      - name: Upload combined prebuilds
-        uses: actions/upload-artifact@v4
-        with:
-          name: bare-mpv-prebuilds-all
-          path: packages/bare-mpv/bare-mpv-prebuilds.tar.gz
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/bare-mpv/prebuilds/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore(bare-mpv): update prebuilds [skip ci]"
+            git push
+          fi

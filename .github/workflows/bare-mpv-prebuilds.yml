@@ -24,8 +24,7 @@ jobs:
           - os: macos-14
             arch: arm64
             prebuild_dir: darwin-arm64
-          # macos-13 is Intel (x64), macos-14+ are Apple Silicon (arm64)
-          - os: macos-13
+          - os: macos-15-large
             arch: x64
             prebuild_dir: darwin-x64
     runs-on: ${{ matrix.os }}

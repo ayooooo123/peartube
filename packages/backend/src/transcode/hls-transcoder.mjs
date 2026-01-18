@@ -3376,7 +3376,6 @@ export async function startHlsTranscode(sourceUrl, options = {}) {
               hypercoreReader = null
             }
           }
-        }
       }
 
       // forceHypercoreStream is ignored since HypercoreChannelReader is disabled

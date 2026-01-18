@@ -320,7 +320,12 @@ export class ChromecastDevice extends EventEmitter {
 
       const onData = (data) => {
         if (this._activeConnectToken !== token && !this._connected) return
-        this._handleAppData(data)
+        try {
+          this._handleAppData(data)
+        } catch (err) {
+          console.error('[Chromecast] onData error:', err?.message || err)
+          // Don't re-throw - socket handlers must not throw or they crash the app
+        }
       }
 
       const onError = (err) => {

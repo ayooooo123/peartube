@@ -18,16 +18,7 @@ env:
 
 jobs:
   build-macos:
-    strategy:
-      matrix:
-        include:
-          - os: macos-14
-            arch: arm64
-            prebuild_dir: darwin-arm64
-          - os: macos-15-large
-            arch: x64
-            prebuild_dir: darwin-x64
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,14 +47,14 @@ jobs:
       - name: Verify prebuild was created
         working-directory: packages/bare-mpv
         run: |
-          ls -la prebuilds/${{ matrix.prebuild_dir }}/
-          file prebuilds/${{ matrix.prebuild_dir }}/bare-mpv.bare
+          ls -la prebuilds/darwin-arm64/
+          file prebuilds/darwin-arm64/bare-mpv.bare
 
       - name: Upload prebuild artifact
         uses: actions/upload-artifact@v4
         with:
-          name: prebuild-${{ matrix.prebuild_dir }}
-          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/bare-mpv.bare
+          name: prebuild-darwin-arm64
+          path: packages/bare-mpv/prebuilds/darwin-arm64/bare-mpv.bare
 
   build-linux:
     strategy:

@@ -2584,8 +2584,10 @@ rpc.onCastPlay(async (req: any) => {
 
           url = hlsUrl;
           contentType = 'application/x-mpegurl';
-          // Use LIVE mode for growing playlists - segments are added as transcoding progresses
-          streamType = 'LIVE';
+          // Use BUFFERED mode - LIVE mode has a 16-segment buffer limit on Chromecast
+          // that causes playback to stall around 2 minutes. BUFFERED mode allows
+          // unlimited buffering and works better for progressive HLS transcoding.
+          streamType = 'BUFFERED';
         }
       } catch (probeErr: any) {
         console.warn('[Worker] Cast play: probe/transcode failed, trying direct play:', probeErr?.message);

@@ -16,7 +16,7 @@ import fs from 'bare-fs'
 import path from 'bare-path'
 
 // Segment duration targets - Chromecast needs ~20s buffer before playback starts
-const TARGET_SEGMENT_DURATION = 8 // Target 8 seconds (3 segments = 24s buffer)
+const TARGET_SEGMENT_DURATION = 4 // Target 4 seconds (smaller segments for Chromecast buffer limits)
 const MAX_SEGMENT_DURATION = 10   // Hard cap at 10 seconds
 
 // Storage settings
@@ -395,7 +395,10 @@ export class HlsSegmentManager {
     // Load from disk - fs.readFileSync should return a new buffer
     if (segment.diskPath) {
       try {
-        return fs.readFileSync(segment.diskPath)
+        console.log('[HlsSegmentManager] Reading segment', segment.index, 'from disk:', segment.diskPath)
+        const data = fs.readFileSync(segment.diskPath)
+        console.log('[HlsSegmentManager] Read segment', segment.index, 'from disk:', data.length, 'bytes')
+        return data
       } catch (err) {
         console.error('[HlsSegmentManager] Failed to read segment from disk:', err.message)
         return null
@@ -515,9 +518,11 @@ export class HlsSegmentManager {
     const lastSegmentIndex = playlistSegments[playlistSegments.length - 1].index
 
     // Build playlist - minimal tags for maximum Chromecast compatibility
+    // EVENT type tells player that segments will be appended (not removed) - important for live streams
     const lines = [
       '#EXTM3U',
       '#EXT-X-VERSION:3',
+      '#EXT-X-PLAYLIST-TYPE:EVENT',
       `#EXT-X-TARGETDURATION:${targetDuration}`,
       `#EXT-X-MEDIA-SEQUENCE:${firstSegmentIndex}`
     ]
@@ -530,7 +535,7 @@ export class HlsSegmentManager {
       } else {
         lines.push(`segment${segment.index}.ts`)
       }
-      lines.push('') // Ensure newline after each segment URL
+      // NOTE: Do NOT add empty lines - some HLS parsers (including Chromecast) may be confused by them
     }
 
     // Log segment count for debugging playlist updates

@@ -655,9 +655,11 @@ async function handleHttpRequest(req, res) {
         logDebug('[HlsTranscoder] ... (more lines)')
       }
 
-      // Log every playlist request to track Chromecast polling
+      // Log every playlist request with timestamp to track Chromecast polling frequency
       const segmentLines = playlist.split('\n').filter(l => l.startsWith('segment') || l.startsWith('http')).length
-      console.log('[HlsTranscoder] Playlist request - totalSegs:', stats.totalSegments,
+      const now = new Date()
+      const timestamp = now.toISOString().slice(11, 23) // HH:MM:SS.mmm
+      console.log('[HlsTranscoder] [' + timestamp + '] Playlist request - totalSegs:', stats.totalSegments,
         'inPlaylist:', segmentLines, 'highest:', highestSeg, 'complete:', stats.isComplete)
 
       res.statusCode = 200
@@ -696,6 +698,7 @@ async function handleHttpRequest(req, res) {
         res.end('Segment not found')
         return
       }
+      console.log('[HlsTranscoder] Serving segment', segmentIndex, 'size:', Math.round(segmentData.length / 1024), 'KB')
 
       const segLen = segmentData.length
       const range = parseRange(req.headers?.range, segLen)
@@ -703,6 +706,18 @@ async function handleHttpRequest(req, res) {
       res.setHeader('Accept-Ranges', 'bytes')
       res.setHeader('Content-Type', 'video/mp2t')
       res.setHeader('Cache-Control', 'max-age=3600')
+
+      // Track response completion for debugging Chromecast stalls
+      const segIdx = segmentIndex
+      res.on('finish', () => {
+        console.log('[HlsTranscoder] Segment', segIdx, 'response FINISHED (data flushed to kernel)')
+      })
+      res.on('close', () => {
+        console.log('[HlsTranscoder] Segment', segIdx, 'response CLOSED (connection closed)')
+      })
+      res.on('error', (err) => {
+        console.error('[HlsTranscoder] Segment', segIdx, 'response ERROR:', err?.message || err)
+      })
 
       if (range) {
         const sliceLen = range.end - range.start + 1
@@ -947,7 +962,7 @@ async function hlsRemux(session, inputIO, segmentManager, totalSize, onProgress)
     let segmentIndex = 0
     let segmentStartPts = 0
     let lastKeyframePts = 0
-    const TARGET_SEGMENT_DURATION = 8.0 // Target ~8 second segments (3 segs = 24s buffer for Chromecast)
+    const TARGET_SEGMENT_DURATION = 4.0 // Target ~4 second segments (smaller for Chromecast buffer limits)
 
     // Finalize current segment and start a new one
     const finalizeSegment = async (endPts) => {
@@ -1687,7 +1702,7 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
         ['profile', 'constrained_baseline'],
         ['level', '4.0'],          // Level 4.0 for baseline compatibility
         // Bitrate and GOP settings
-        ['b', '8000000'],          // 8 Mbps bitrate
+        ['b', '4000000'],          // 4 Mbps bitrate (reduced for Chromecast buffer limits)
         ['g', '48'],               // GOP size in frames
         ['i-frame-interval', '2'], // MediaCodec-specific: keyframe every 2 seconds
       ]
@@ -2262,7 +2277,7 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
     let segmentIndex = 0
     let segmentStartPts = 0  // In seconds, for segment duration calculation
     let lastKeyframePts = 0
-    const TARGET_SEGMENT_DURATION = 8.0
+    const TARGET_SEGMENT_DURATION = 4.0  // Target 4s segments (smaller for Chromecast buffer limits)
 
     // Create the ONE continuous muxer (used for entire stream)
     continuousMuxer = createContinuousMuxer(hasAudio)

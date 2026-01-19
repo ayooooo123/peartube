@@ -1065,6 +1065,14 @@ async function probeWithBareFFmpeg(url) {
       if (cp.level !== undefined && cp.level > 0) {
         result.videoLevel = cp.level / 10
       }
+      // Get duration from video stream (in stream timebase units)
+      // Stream duration is in timebase units, need to convert to seconds
+      if (videoStream.duration && videoStream.duration > 0 && videoStream.timeBase) {
+        const tb = videoStream.timeBase
+        if (tb.denominator > 0) {
+          result.duration = (videoStream.duration * tb.numerator) / tb.denominator
+        }
+      }
     }
 
     if (audioStream?.codecParameters) {
@@ -1072,8 +1080,12 @@ async function probeWithBareFFmpeg(url) {
       result.audioCodec = cp.codecName?.toLowerCase() || mapCodecIdToName(cp.id, 'audio')
     }
 
-    if (inputFmt.duration && inputFmt.duration > 0) {
-      result.duration = inputFmt.duration / 1000000
+    // Fallback: try to get duration from audio stream if video didn't have it
+    if (result.duration === 0 && audioStream?.duration && audioStream.duration > 0 && audioStream.timeBase) {
+      const tb = audioStream.timeBase
+      if (tb.denominator > 0) {
+        result.duration = (audioStream.duration * tb.numerator) / tb.denominator
+      }
     }
   } finally {
     const ownsIO = !!inputFmt

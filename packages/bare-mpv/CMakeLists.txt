@@ -156,6 +156,8 @@ set(mpv_meson_args
   -Dsndio=disabled
   -Doss-audio=disabled
   -Dpipewire=disabled
+  -Dpulse=disabled
+  -Dalsa=enabled
   -Dsdl2-audio=disabled
   -Dsdl2-video=disabled
 

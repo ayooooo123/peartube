@@ -946,7 +946,7 @@ async function hlsRemux(session, inputIO, segmentManager, totalSize, onProgress)
     let segmentIndex = 0
     let segmentStartPts = 0
     let lastKeyframePts = 0
-    const TARGET_SEGMENT_DURATION = 2.0 // Target ~2 second segments for faster startup
+    const TARGET_SEGMENT_DURATION = 8.0 // Target ~8 second segments (3 segs = 24s buffer for Chromecast)
 
     // Finalize current segment and start a new one
     const finalizeSegment = async (endPts) => {
@@ -2261,7 +2261,7 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
     let segmentIndex = 0
     let segmentStartPts = 0  // In seconds, for segment duration calculation
     let lastKeyframePts = 0
-    const TARGET_SEGMENT_DURATION = 2.0
+    const TARGET_SEGMENT_DURATION = 8.0
 
     // Create the ONE continuous muxer (used for entire stream)
     continuousMuxer = createContinuousMuxer(hasAudio)

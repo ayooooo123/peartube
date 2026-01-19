@@ -15,9 +15,9 @@
 import fs from 'bare-fs'
 import path from 'bare-path'
 
-// Segment duration targets
-const TARGET_SEGMENT_DURATION = 2 // Target 2 seconds
-const MAX_SEGMENT_DURATION = 4    // Hard cap at 4 seconds
+// Segment duration targets - Chromecast needs ~20s buffer before playback starts
+const TARGET_SEGMENT_DURATION = 8 // Target 8 seconds (3 segments = 24s buffer)
+const MAX_SEGMENT_DURATION = 10   // Hard cap at 10 seconds
 
 // Storage settings
 const MAX_MEMORY_SEGMENTS = 30     // Keep 30 most recent in memory (~150MB)
@@ -514,9 +514,7 @@ export class HlsSegmentManager {
     const firstSegmentIndex = playlistSegments[0].index
     const lastSegmentIndex = playlistSegments[playlistSegments.length - 1].index
 
-    // Build playlist
-    // Desktop-compatible simple playlist format
-    // Chromecast works better with minimal tags (no EVENT/START/INDEPENDENT-SEGMENTS)
+    // Build playlist - minimal tags for maximum Chromecast compatibility
     const lines = [
       '#EXTM3U',
       '#EXT-X-VERSION:3',

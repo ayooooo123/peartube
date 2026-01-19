@@ -418,6 +418,8 @@ export class ChromecastDevice extends EventEmitter {
           host: this.deviceInfo?.host,
           contentType,
           urlHost: parsed.host,
+          streamType: options.streamType,
+          duration: options.duration,
         })
       } catch {}
       const metadata = {

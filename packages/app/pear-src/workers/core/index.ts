@@ -2445,12 +2445,14 @@ rpc.onCastPlay(async (req: any) => {
   let contentType = req.contentType;
   let currentTranscodeSessionId: string | null = null;
   let streamType: 'LIVE' | 'BUFFERED' = 'BUFFERED';
+  let mediaDuration: number | undefined;
 
   try {
     if (protocol === 'chromecast') {
       try {
         console.log('[Worker] Probing media for Chromecast...');
         const probeResult = await transcoder.probeMedia(requestedUrl, req.title);
+        mediaDuration = probeResult.duration;
         console.log('[Worker] Probe result:', {
           video: probeResult.videoCodec,
           audio: probeResult.audioCodec,
@@ -2582,6 +2584,7 @@ rpc.onCastPlay(async (req: any) => {
 
           url = hlsUrl;
           contentType = 'application/x-mpegurl';
+          // Use LIVE mode for growing playlists - segments are added as transcoding progresses
           streamType = 'LIVE';
         }
       } catch (probeErr: any) {
@@ -2687,6 +2690,7 @@ rpc.onCastPlay(async (req: any) => {
       time: req.time || 0,
       volume: normalizeCastVolume(req.volume),
       streamType,
+      duration: mediaDuration,
     });
 
     if (activeCastTranscodeId && contentType === 'application/x-mpegurl') {

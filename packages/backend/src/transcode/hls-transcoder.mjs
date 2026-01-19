@@ -23,6 +23,7 @@ import { getHttpFileSize } from './http-file-size.mjs'
 import TempFileReader from './temp-file-reader.mjs'
 import { HypercoreIOReader } from './hypercore-io-reader.mjs'
 import HypercoreChannelReader from './hypercore-channel-reader.mjs'
+import { HypercoreStreamReader } from './hypercore-stream-reader.mjs'
 import { probeMedia } from './transcoder.mjs'
 
 console.log('[HlsTranscoder] Module loaded')
@@ -3378,10 +3379,25 @@ export async function startHlsTranscode(sourceUrl, options = {}) {
           }
       }
 
-      // forceHypercoreStream is ignored since HypercoreChannelReader is disabled
-      // The HypercoreIOReader (preload) path will be used for small videos if available
+      // Option 2: HypercoreStreamReader for large, fully-synced videos (on-demand block loading)
+      if (!inputIO && blobInfo && blobsCoreKey && store && isVideoComplete) {
+        console.log('[HlsTranscoder] Attempting HypercoreStreamReader for large video...')
+        try {
+          const blobsCore = store.get(Buffer.from(blobsCoreKey, 'hex'))
+          await blobsCore.ready()
 
-      // Option 2: HTTP temp file reader (fallback)
+          const hypercoreStreamReader = new HypercoreStreamReader(blobsCore, blobInfo)
+          await hypercoreStreamReader.initialize()
+
+          inputIO = hypercoreStreamReader.createIOContext(ffmpeg)
+          session.hypercoreStreamReader = hypercoreStreamReader
+          console.log('[HlsTranscoder] HypercoreStreamReader initialized successfully')
+        } catch (err) {
+          console.warn('[HlsTranscoder] HypercoreStreamReader failed:', err?.message)
+        }
+      }
+
+      // Option 3: HTTP temp file reader (fallback)
       if (!inputIO) {
         console.log('[HlsTranscoder] Using TempFileReader (HTTP)')
 
@@ -3410,7 +3426,7 @@ export async function startHlsTranscode(sourceUrl, options = {}) {
       session.status = 'transcoding'
       session.inputIO = inputIO
       const inputSource = session.hypercoreStreamReader
-        ? 'HypercoreChannelReader'
+        ? 'HypercoreStreamReader'
         : (session.hypercoreReader ? 'HypercoreIOReader' : 'TempFileReader')
       console.log('[HlsTranscoder] Input source:', inputSource, 'inputIO:', !!inputIO)
 

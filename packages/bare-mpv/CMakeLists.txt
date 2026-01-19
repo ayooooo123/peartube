@@ -157,7 +157,6 @@ set(mpv_meson_args
   -Doss-audio=disabled
   -Dpipewire=disabled
   -Dpulse=disabled
-  -Dalsa=enabled
   -Dsdl2-audio=disabled
   -Dsdl2-video=disabled
 
@@ -167,8 +166,9 @@ set(mpv_meson_args
   -Dswift-build=disabled
 )
 
-# Enable PIC for static libraries on Linux (required for linking into shared objects)
+# Linux-specific: enable ALSA audio, PIC for static libraries
 if(LINUX)
+  list(APPEND mpv_meson_args -Dalsa=enabled)
   list(APPEND mpv_meson_args -Db_staticpic=true)
 endif()
 

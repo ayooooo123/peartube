@@ -155,7 +155,6 @@ set(mpv_meson_args
   -Djack=disabled
   -Dsndio=disabled
   -Doss-audio=disabled
-  -Dpipewire=disabled
   -Dpulse=disabled
   -Dsdl2-audio=disabled
   -Dsdl2-video=disabled
@@ -166,9 +165,10 @@ set(mpv_meson_args
   -Dswift-build=disabled
 )
 
-# Linux-specific: enable ALSA audio, PIC for static libraries
+# Linux-specific: use PipeWire for audio (modern, stable ABI across distros), enable PIC
 if(LINUX)
-  list(APPEND mpv_meson_args -Dalsa=enabled)
+  list(APPEND mpv_meson_args -Dpipewire=enabled)
+  list(APPEND mpv_meson_args -Dalsa=disabled)
   list(APPEND mpv_meson_args -Db_staticpic=true)
 endif()
 

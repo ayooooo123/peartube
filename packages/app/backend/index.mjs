@@ -931,8 +931,10 @@ rpc.onCreateIdentity(async (req) => {
   return {
     identity: {
       publicKey: result.publicKey,
+      driveKey: result.driveKey,
       name: req.name || 'New Channel',
-      seedPhrase: result.mnemonic || ''
+      seedPhrase: result.mnemonic || '',
+      isActive: true
     }
   }
 })

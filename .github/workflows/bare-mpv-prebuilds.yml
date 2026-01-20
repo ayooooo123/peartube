@@ -93,8 +93,8 @@ jobs:
                 nasm patch \
                 clang lld \
                 libdrm-dev \
-                libasound2-dev \
-                libpulse-dev \
+                libpipewire-0.3-dev \
+                libspa-0.2-dev \
                 libfribidi-dev \
                 libharfbuzz-dev \
                 libfontconfig1-dev

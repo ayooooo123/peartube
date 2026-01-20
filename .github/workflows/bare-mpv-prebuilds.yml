@@ -83,23 +83,22 @@ jobs:
             -w /workspace/packages/bare-mpv \
             -e SKIP_POSTINSTALL=1 \
             -e CI=true \
-            node:20-bookworm \
+            fedora:41 \
             bash -c "
               set -ex
-              apt-get update
-              apt-get install -y \
+              dnf install -y \
+                nodejs npm \
                 cmake ninja-build pkg-config \
-                python3-pip python3-venv \
+                python3-pip \
                 nasm patch \
                 clang lld \
-                libdrm-dev \
-                libpipewire-0.3-dev \
-                libspa-0.2-dev \
-                libfribidi-dev \
-                libharfbuzz-dev \
-                libfontconfig1-dev
+                libdrm-devel \
+                pipewire-devel \
+                fribidi-devel \
+                harfbuzz-devel \
+                fontconfig-devel
               
-              pip3 install --break-system-packages meson
+              pip3 install meson
               
               npm install
               

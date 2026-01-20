@@ -604,7 +604,18 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
 export async function createChannel(ctx, options = {}) {
   if (!ctx.channels) ctx.channels = new Map()
 
+  // CRITICAL: On mobile/Bare, creating Autobase with no bootstrap key (i.e. "new" mode)
+  // hangs forever at `await base.ready()`. The "open by key" path works fine.
+  // Workaround: pre-create a bootstrap core to obtain a key, then pass it to Autobase.
+  // This forces the working "open by key" codepath instead of the broken "new" codepath.
+  const bootstrapName = `peartube-channel-${b4a.toString(crypto.randomBytes(16), 'hex')}`
+  const bootstrapCore = ctx.store.get({ name: bootstrapName })
+  await bootstrapCore.ready()
+  const bootstrapKey = bootstrapCore.key
+  console.log('[Storage] createChannel: using bootstrap key:', b4a.toString(bootstrapKey, 'hex').slice(0, 16))
+
   const ch = new MultiWriterChannel(ctx.store, {
+    key: bootstrapKey,
     encrypt: Boolean(options.encrypt),
     swarm: ctx.swarm  // Pass swarm for early replication setup
   })

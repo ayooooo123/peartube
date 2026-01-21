@@ -165,10 +165,11 @@ set(mpv_meson_args
   -Dswift-build=disabled
 )
 
-# Linux-specific: use PipeWire for audio (modern, stable ABI across distros), enable PIC
+# Linux-specific: use ALSA for audio (most stable ABI across distros), enable PIC
+# ALSA's libasound has maintained ABI stability for decades, unlike PipeWire/PulseAudio
 if(LINUX)
-  list(APPEND mpv_meson_args -Dpipewire=enabled)
-  list(APPEND mpv_meson_args -Dalsa=disabled)
+  list(APPEND mpv_meson_args -Dpipewire=disabled)
+  list(APPEND mpv_meson_args -Dalsa=enabled)
   list(APPEND mpv_meson_args -Db_staticpic=true)
 endif()
 

@@ -93,7 +93,7 @@ jobs:
                 nasm patch automake autoconf libtool \
                 clang lld \
                 libdrm-devel \
-                pipewire-devel \
+                alsa-lib-devel \
                 fribidi-devel \
                 harfbuzz-devel \
                 fontconfig-devel

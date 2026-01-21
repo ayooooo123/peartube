@@ -90,7 +90,7 @@ jobs:
                 nodejs npm git \
                 cmake ninja-build pkg-config \
                 python3-pip \
-                nasm patch \
+                nasm patch automake autoconf libtool \
                 clang lld \
                 libdrm-devel \
                 pipewire-devel \

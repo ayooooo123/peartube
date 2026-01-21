@@ -87,7 +87,7 @@ jobs:
             bash -c "
               set -ex
               dnf install -y \
-                nodejs npm \
+                nodejs npm git \
                 cmake ninja-build pkg-config \
                 python3-pip \
                 nasm patch \

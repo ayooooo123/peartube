@@ -133,13 +133,13 @@ function decodeCastMessage(buffer) {
   }
 
   return {
-    protocolVersion: fields[1] ?? 0,
-    sourceId: fields[2]?.toString('utf8'),
-    destinationId: fields[3]?.toString('utf8'),
-    namespace: fields[4]?.toString('utf8'),
-    payloadType: fields[5] ?? 0,
+    protocolVersion: (fields[1] != null) ? fields[1] : 0,
+    sourceId: fields[2] ? fields[2].toString('utf8') : undefined,
+    destinationId: fields[3] ? fields[3].toString('utf8') : undefined,
+    namespace: fields[4] ? fields[4].toString('utf8') : undefined,
+    payloadType: (fields[5] != null) ? fields[5] : 0,
     payloadUtf8: fields[6] ? fields[6].toString('utf8') : null,
-    payloadBinary: fields[7] ?? null
+    payloadBinary: (fields[7] != null) ? fields[7] : null
   }
 }
 
@@ -169,7 +169,7 @@ async function getLocalIPv4(targetHost) {
 
   try {
     const mod = await import('udx-native')
-    const UDX = mod?.default || mod
+    const UDX = (mod && mod.default) ? mod.default : mod
     const udx = new UDX()
     let fallback = null
 
@@ -298,7 +298,7 @@ export class ChromecastDevice extends EventEmitter {
       const handshakeTimeout = setTimeout(() => {
         if (!this._connected && socket && this._activeConnectToken === token) {
           console.error('[Chromecast] TLS handshake timeout')
-          try { socket.destroy?.() } catch {}
+          try { if (socket.destroy) socket.destroy() } catch (e) {}
           this._handleError(new Error('TLS handshake timeout'))
         }
       }, 3000)
@@ -323,7 +323,7 @@ export class ChromecastDevice extends EventEmitter {
         try {
           this._handleAppData(data)
         } catch (err) {
-          console.error('[Chromecast] onData error:', err?.message || err)
+          console.error('[Chromecast] onData error:', (err && err.message) ? err.message : err)
           // Don't re-throw - socket handlers must not throw or they crash the app
         }
       }
@@ -415,15 +415,17 @@ export class ChromecastDevice extends EventEmitter {
       try {
         const parsed = new URL(mediaUrl)
         console.log('[Chromecast] LOAD', {
-          host: this.deviceInfo?.host,
+          host: (this.deviceInfo && this.deviceInfo.host) ? this.deviceInfo.host : undefined,
           contentType,
           urlHost: parsed.host,
           streamType: options.streamType,
           duration: options.duration,
         })
-      } catch {}
+      } catch (e) {}
+      // Use MovieMediaMetadata (type 1) for video content
+      // This provides proper movie-style UI with auto-hiding title overlay
       const metadata = {
-        metadataType: 0,
+        metadataType: 1,  // MovieMediaMetadata (0=Generic, 1=Movie, 2=TvShow, 3=MusicTrack, 4=Photo)
         title: options.title || '',
         images: options.thumbnail ? [{ url: options.thumbnail }] : []
       }
@@ -611,7 +613,7 @@ export class ChromecastDevice extends EventEmitter {
     if (!socket || socket.destroyed) return false
     if (!socket._handle) return false
     const raw = socket.socket
-    if (raw?.readyState && raw.readyState !== 'open') return false
+    if (raw && raw.readyState && raw.readyState !== 'open') return false
     return true
   }
 
@@ -648,7 +650,7 @@ export class ChromecastDevice extends EventEmitter {
       this._socket.write(message)
     } catch (err) {
       // Socket may have closed between check and write
-      console.error('[Chromecast] Socket write error:', err?.message || err)
+      console.error('[Chromecast] Socket write error:', (err && err.message) ? err.message : err)
       this._handleError(err)
     }
   }
@@ -746,7 +748,7 @@ export class ChromecastDevice extends EventEmitter {
   }
 
   _handleMessage(message) {
-    if (!message?.namespace || !message.payloadUtf8) return
+    if (!message || !message.namespace || !message.payloadUtf8) return
 
     let payload
     try {
@@ -776,12 +778,12 @@ export class ChromecastDevice extends EventEmitter {
 
   _handleReceiver(payload) {
     if (payload.type === 'RECEIVER_STATUS' && payload.status) {
+      const apps = payload.status.applications || []
       try {
-        console.log('[Chromecast] RECEIVER_STATUS apps:', payload.status.applications?.map((app) => ({
-          appId: app.appId,
-          transportId: app.transportId
-        })) || []);
-      } catch {}
+        console.log('[Chromecast] RECEIVER_STATUS apps:', apps.map(function(app) {
+          return { appId: app.appId, transportId: app.transportId }
+        }))
+      } catch (e) {}
       const status = payload.status
       if (status.volume && typeof status.volume.level === 'number') {
         if (this._state.volume !== status.volume.level) {
@@ -790,29 +792,84 @@ export class ChromecastDevice extends EventEmitter {
         }
       }
 
-      if (Array.isArray(status.applications)) {
-        const app = status.applications.find((entry) => entry.appId === DEFAULT_MEDIA_RECEIVER_APP_ID)
-        if (app?.transportId) {
-          this._transportId = app.transportId
+      if (Array.isArray(apps)) {
+        const mediaApp = apps.find(function(entry) { return entry.appId === DEFAULT_MEDIA_RECEIVER_APP_ID })
+        if (mediaApp && mediaApp.transportId) {
+          this._transportId = mediaApp.transportId
           console.log('[Chromecast] using transportId', this._transportId)
-          this._sendConnect(app.transportId)
-          this._launchWaiters.splice(0).forEach((resolve) => resolve(app.transportId))
+          this._sendConnect(mediaApp.transportId)
+          this._launchWaiters.splice(0).forEach(function(resolve) { resolve(mediaApp.transportId) })
+        } else if (this._transportId && this._state.state === 'loading') {
+          const otherApps = apps.filter(function(a) { return a.appId !== DEFAULT_MEDIA_RECEIVER_APP_ID })
+          if (otherApps.length > 0) {
+            console.error('[Chromecast] Media receiver app replaced while loading! New apps:', otherApps.map(function(a) { return a.appId }))
+            console.error('[Chromecast] This indicates LOAD failed silently - Chromecast could not fetch the media URL')
+            this._state.state = 'error'
+            this.emit('playbackStateChanged', 'error')
+            this.emit('error', new Error('Chromecast LOAD failed - media receiver app was replaced'))
+          }
         }
       }
     }
   }
 
   _handleMedia(payload) {
-    if (payload.type === 'MEDIA_STATUS') {
+    // Log ALL media namespace messages for debugging
+    if (payload.type && payload.type !== 'MEDIA_STATUS') {
+      console.log('[Chromecast] Media message type:', payload.type)
       try {
-        const s = payload.status?.[0] || payload.status || {}
-        // Log key fields for debugging drops
+        console.log('[Chromecast] Media message payload:', JSON.stringify(payload))
+      } catch (e) {
+        console.log('[Chromecast] Media message keys:', Object.keys(payload))
+      }
+    }
+
+    // Handle LOAD_FAILED explicitly
+    if (payload.type === 'LOAD_FAILED') {
+      console.error('[Chromecast] LOAD_FAILED received!')
+      try {
+        console.error('[Chromecast] LOAD_FAILED details:', JSON.stringify(payload))
+      } catch (e) {}
+      this._state.state = 'error'
+      this.emit('playbackStateChanged', 'error')
+      this.emit('error', new Error('Chromecast LOAD_FAILED'))
+      return
+    }
+
+    // Handle LOAD_CANCELLED
+    if (payload.type === 'LOAD_CANCELLED') {
+      console.warn('[Chromecast] LOAD_CANCELLED received')
+      this._state.state = 'stopped'
+      this.emit('playbackStateChanged', 'stopped')
+      return
+    }
+
+    // Handle INVALID_REQUEST
+    if (payload.type === 'INVALID_REQUEST') {
+      console.error('[Chromecast] INVALID_REQUEST received!')
+      try {
+        console.error('[Chromecast] INVALID_REQUEST details:', JSON.stringify(payload))
+      } catch (e) {}
+      this.emit('error', new Error('Chromecast INVALID_REQUEST: ' + (payload.reason || 'unknown')))
+      return
+    }
+
+    if (payload.type === 'MEDIA_STATUS') {
+      // Handle status as array or object (Chromecast can send either)
+      const status = Array.isArray(payload.status)
+        ? payload.status[0]
+        : (payload.status && typeof payload.status === 'object' ? payload.status : null)
+
+      // Log key fields for debugging - use status if available
+      try {
+        const s = status || {}
+        const timeStr = (typeof s.currentTime === 'number') ? s.currentTime.toFixed(1) : '0'
         console.log('[Chromecast] MEDIA_STATUS playerState:', s.playerState,
           'idleReason:', s.idleReason || 'none',
-          'time:', s.currentTime?.toFixed(1) || 0,
+          'time:', timeStr,
           'buffering:', s.playerState === 'BUFFERING' ? 'YES' : 'no')
-      } catch {}
-      const status = Array.isArray(payload.status) ? payload.status[0] : null
+      } catch (e) {}
+
       if (!status) return
 
       if (typeof status.mediaSessionId === 'number') {
@@ -838,9 +895,38 @@ export class ChromecastDevice extends EventEmitter {
         if (status.playerState === 'IDLE' && status.idleReason) {
           console.warn('[Chromecast] Media idle reason:', status.idleReason)
           if (status.idleReason === 'ERROR') {
-            const errType = status?.error?.type || 'unknown'
-            console.warn('[Chromecast] Media error:', errType)
-            this.emit('error', new Error(`Chromecast media error: ${errType}`))
+            try {
+              console.warn('[Chromecast] Full MEDIA_STATUS on ERROR:', JSON.stringify(status))
+            } catch (e) {
+              console.warn('[Chromecast] Full MEDIA_STATUS keys:', Object.keys(status))
+            }
+            let errType = 'unknown'
+            let detailedCode = null
+            try {
+              errType = (status.extendedStatus && status.extendedStatus.playerState)
+                || (status.error && status.error.type)
+                || (status.media && status.media.contentId ? 'LOAD_FAILED' : 'unknown')
+              detailedCode = (status.extendedStatus && status.extendedStatus.media && status.extendedStatus.media.customData && status.extendedStatus.media.customData.errorCode)
+                || (status.error && status.error.detailedErrorCode)
+                || (status.error && status.error.reason)
+                || null
+            } catch (e) {}
+            console.warn('[Chromecast] Media error type:', errType)
+            if (detailedCode) {
+              console.warn('[Chromecast] Media error detailedCode:', detailedCode)
+            }
+            try {
+              if (status.error) {
+                console.warn('[Chromecast] Media error details:', JSON.stringify(status.error))
+              }
+              if (status.extendedStatus) {
+                console.warn('[Chromecast] Media extendedStatus:', JSON.stringify(status.extendedStatus))
+              }
+            } catch (e) {}
+            const errMsg = detailedCode
+              ? 'Chromecast media error: ' + errType + ' (' + detailedCode + ')'
+              : 'Chromecast media error: ' + errType
+            this.emit('error', new Error(errMsg))
           }
         }
       }
@@ -854,7 +940,7 @@ export class ChromecastDevice extends EventEmitter {
     this.emit('connectionStateChanged', 'error')
     this.emit('error', err)
     try {
-      console.warn('[Chromecast] socket error, graceful:', wasConnected, err?.message || err)
+      console.warn('[Chromecast] socket error, graceful:', wasConnected, (err && err.message) ? err.message : err)
     } catch {}
     this._scheduleCleanup(err, { graceful: wasConnected })
   }
@@ -871,8 +957,9 @@ export class ChromecastDevice extends EventEmitter {
     this._scheduleCleanup(new Error('Connection closed'), { graceful: wasConnected })
   }
 
-  _scheduleCleanup(err, options = {}) {
-    const graceful = options?.graceful === true
+  _scheduleCleanup(err, options) {
+    options = options || {}
+    const graceful = options.graceful === true
     if (graceful) this._gracefulClose = true
 
     if (!this._cleanupPromise) {
@@ -895,7 +982,7 @@ export class ChromecastDevice extends EventEmitter {
 
   _detachSocketHandlers(socket) {
     const handlers = this._socketHandlers
-    if (!handlers || !socket?.off) {
+    if (!handlers || !socket || !socket.off) {
       this._socketHandlers = null
       return
     }
@@ -943,20 +1030,20 @@ export class ChromecastDevice extends EventEmitter {
           console.log('[Chromecast] socket end requested')
         } catch {}
         try {
-          socket.once?.('close', finish)
-        } catch {}
+          if (socket.once) socket.once('close', finish)
+        } catch (e) {}
 
         try {
-          socket.end?.()
-        } catch {}
+          if (socket.end) socket.end()
+        } catch (e) {}
 
-        closeTimer = setTimeout(() => {
+        closeTimer = setTimeout(function() {
           try {
             console.warn('[Chromecast] socket end timeout, forcing destroy')
-          } catch {}
+          } catch (e) {}
           try {
-            socket.destroy?.()
-          } catch {}
+            if (socket.destroy) socket.destroy()
+          } catch (e) {}
           finish()
         }, 1500)
         return
@@ -964,10 +1051,10 @@ export class ChromecastDevice extends EventEmitter {
 
       try {
         console.log('[Chromecast] socket destroy requested (non-graceful)')
-      } catch {}
+      } catch (e) {}
       try {
-        socket.destroy?.()
-      } catch {}
+        if (socket.destroy) socket.destroy()
+      } catch (e) {}
       finish()
     })
   }
@@ -985,9 +1072,9 @@ export class ChromecastDevice extends EventEmitter {
     }
     this._connecting = false
     if (err) {
-      reject?.(err)
+      if (reject) reject(err)
     } else {
-      resolve?.()
+      if (resolve) resolve()
     }
   }
 
@@ -999,8 +1086,8 @@ export class ChromecastDevice extends EventEmitter {
       this._stopStatusPolling()
 
       try {
-        console.log('[Chromecast] cleanup start, graceful:', this._gracefulClose, err?.message || err)
-      } catch {}
+        console.log('[Chromecast] cleanup start, graceful:', this._gracefulClose, (err && err.message) ? err.message : err)
+      } catch (e) {}
       await this._closeSocket()
 
       this._buffer = Buffer.alloc(0)
@@ -1019,7 +1106,7 @@ export class ChromecastDevice extends EventEmitter {
       const resolve = this._cleanupResolve
       this._cleanupResolve = null
       this._cleanupPromise = null
-      resolve?.()
+      if (resolve) resolve()
     }
   }
 }

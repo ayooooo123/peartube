@@ -99,6 +99,31 @@ const safeUnref = (obj) => {
 }
 
 /**
+ * Copy codec parameters from source to destination stream
+ * Works around missing copyFrom() in some bare-ffmpeg versions
+ */
+function copyCodecParameters(destCP, srcCP) {
+  if (typeof destCP.copyFrom === 'function') {
+    destCP.copyFrom(srcCP)
+    return
+  }
+  // Manual copy of common properties
+  if (srcCP.id !== undefined) destCP.id = srcCP.id
+  if (srcCP.type !== undefined) destCP.type = srcCP.type
+  if (srcCP.codecName !== undefined) destCP.codecName = srcCP.codecName
+  if (srcCP.profile !== undefined) destCP.profile = srcCP.profile
+  if (srcCP.level !== undefined) destCP.level = srcCP.level
+  if (srcCP.width !== undefined) destCP.width = srcCP.width
+  if (srcCP.height !== undefined) destCP.height = srcCP.height
+  if (srcCP.format !== undefined) destCP.format = srcCP.format
+  if (srcCP.bitRate !== undefined) destCP.bitRate = srcCP.bitRate
+  if (srcCP.sampleRate !== undefined) destCP.sampleRate = srcCP.sampleRate
+  if (srcCP.nbChannels !== undefined) destCP.nbChannels = srcCP.nbChannels
+  if (srcCP.channelLayout !== undefined) destCP.channelLayout = srcCP.channelLayout
+  if (srcCP.extraData && srcCP.extraData.length > 0) destCP.extraData = srcCP.extraData
+}
+
+/**
  * Parse MPEG-TS buffer to extract PAT and PMT packets for HLS segment injection.
  * PAT (PID 0) must be first for players to locate PMT -> audio/video streams.
  * 
@@ -841,6 +866,7 @@ async function detectTranscodeNeeded(url, title = '') {
 
 /**
  * HLS Remux - Copy streams to MPEGTS with bitstream filters
+ * Pure stream copy - no transcoding. For audio transcoding, use hlsTranscodeVideo instead.
  */
 async function hlsRemux(session, inputIO, segmentManager, totalSize, onProgress) {
   console.log('[HlsTranscoder] Starting HLS remux...')
@@ -917,7 +943,7 @@ async function hlsRemux(session, inputIO, segmentManager, totalSize, onProgress)
 
     // Copy video stream
     const outVideoStream = outputFormat.createStream()
-    outVideoStream.codecParameters.copyFrom(videoStream.codecParameters)
+    copyCodecParameters(outVideoStream.codecParameters, videoStream.codecParameters)
     outVideoStream.timeBase = videoStream.timeBase
 
     // Create bitstream filter for H.264 -> Annex B
@@ -925,8 +951,8 @@ async function hlsRemux(session, inputIO, segmentManager, totalSize, onProgress)
     if (isH264 && ffmpeg.BitstreamFilter) {
       try {
         bsf = new ffmpeg.BitstreamFilter('h264_mp4toannexb')
-        bsf.codecParameters = videoStream.codecParameters
-        bsf.timeBase = videoStream.timeBase
+        bsf.setInputCodecParameters(videoStream.codecParameters)
+        bsf.inputTimeBase = videoStream.timeBase
         bsf.init()
         console.log('[HlsTranscoder] Using h264_mp4toannexb bitstream filter')
       } catch (err) {
@@ -939,7 +965,7 @@ async function hlsRemux(session, inputIO, segmentManager, totalSize, onProgress)
     let outAudioStream = null
     if (audioStream) {
       outAudioStream = outputFormat.createStream()
-      outAudioStream.codecParameters.copyFrom(audioStream.codecParameters)
+      copyCodecParameters(outAudioStream.codecParameters, audioStream.codecParameters)
       outAudioStream.timeBase = audioStream.timeBase
     }
 
@@ -1052,6 +1078,7 @@ async function hlsRemux(session, inputIO, segmentManager, totalSize, onProgress)
             outputFormat.writeFrame(packet)
           }
         } else if (audioStream && outAudioStream && packet.streamIndex === audioStream.index) {
+          // Copy audio packet directly
           packet.streamIndex = outAudioStream.index
           outputFormat.writeFrame(packet)
         }
@@ -3467,15 +3494,22 @@ export async function startHlsTranscode(sourceUrl, options = {}) {
         if (onProgress) onProgress(sessionId, pct)
       }
 
-      // Use transcode path when video OR audio needs transcoding
-      // HEVC video -> H.264, E-AC3/DDP/DTS audio -> AAC
-      const needsTranscode = detection.needsVideoTranscode || detection.needsAudioTranscode
-      console.log('[HlsTranscoder] Transcode decision: needsVideo=' + detection.needsVideoTranscode + 
-        ' needsAudio=' + detection.needsAudioTranscode + ' -> ' + (needsTranscode ? 'TRANSCODE' : 'REMUX'))
+      // Routing decision:
+      // - needsVideoTranscode OR needsAudioTranscode: Use hlsTranscodeVideo (full decode/encode pipeline)
+      //   Audio transcoding in remux path is complex and error-prone, so route to full transcode
+      // - neither: Use hlsRemux (pure stream copy)
+      const needsVideoTranscode = detection.needsVideoTranscode
+      const needsAudioTranscode = detection.needsAudioTranscode
+      const useFullTranscode = needsVideoTranscode || needsAudioTranscode
+      console.log('[HlsTranscoder] Transcode decision: needsVideo=' + needsVideoTranscode + 
+        ' needsAudio=' + needsAudioTranscode + 
+        ' -> ' + (useFullTranscode ? 'FULL_TRANSCODE' : 'REMUX'))
 
-      if (needsTranscode) {
+      if (useFullTranscode) {
+        // Full video transcode (handles both video and audio transcoding)
         await hlsTranscodeVideo(session, inputIO, segmentManager, fileSize, progressCallback)
       } else {
+        // Fast remux (pure stream copy, no transcoding)
         await hlsRemux(session, inputIO, segmentManager, fileSize, progressCallback)
       }
 

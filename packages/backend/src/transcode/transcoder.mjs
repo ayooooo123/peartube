@@ -103,6 +103,30 @@ export function isAvailable() {
 }
 
 /**
+ * Copy codec parameters from source to destination stream
+ * Works around missing copyFrom() in some bare-ffmpeg versions
+ */
+function copyCodecParameters(destCP, srcCP) {
+  if (typeof destCP.copyFrom === 'function') {
+    destCP.copyFrom(srcCP)
+    return
+  }
+  if (srcCP.id !== undefined) destCP.id = srcCP.id
+  if (srcCP.type !== undefined) destCP.type = srcCP.type
+  if (srcCP.codecName !== undefined) destCP.codecName = srcCP.codecName
+  if (srcCP.profile !== undefined) destCP.profile = srcCP.profile
+  if (srcCP.level !== undefined) destCP.level = srcCP.level
+  if (srcCP.width !== undefined) destCP.width = srcCP.width
+  if (srcCP.height !== undefined) destCP.height = srcCP.height
+  if (srcCP.format !== undefined) destCP.format = srcCP.format
+  if (srcCP.bitRate !== undefined) destCP.bitRate = srcCP.bitRate
+  if (srcCP.sampleRate !== undefined) destCP.sampleRate = srcCP.sampleRate
+  if (srcCP.nbChannels !== undefined) destCP.nbChannels = srcCP.nbChannels
+  if (srcCP.channelLayout !== undefined) destCP.channelLayout = srcCP.channelLayout
+  if (srcCP.extraData && srcCP.extraData.length > 0) destCP.extraData = srcCP.extraData
+}
+
+/**
  * Get load error if any
  */
 export function getLoadError() {
@@ -560,6 +584,54 @@ async function httpRangeReadSync(url, start, length) {
 
     req.end()
   })
+}
+
+/**
+ * Check if MP4 moov atom is at end of file (HTTP source)
+ * Returns true if moov is NOT in first 32KB (indicating non-faststart MP4)
+ */
+async function checkMoovAtEnd(url, fileSize) {
+  if (fileSize < 32 * 1024) return false
+  try {
+    const headerData = await httpRangeReadSync(url, 0, Math.min(32 * 1024, fileSize))
+    return !findMoovInBuffer(headerData)
+  } catch (e) {
+    console.warn('[Transcoder] moov check failed:', e.message)
+    return false
+  }
+}
+
+/**
+ * Check if MP4 moov atom is at end of file (local file)
+ */
+async function checkMoovAtEndFile(filePath, fileSize) {
+  if (fileSize < 32 * 1024) return false
+  try {
+    const fd = fs.openSync(filePath, 'r')
+    const headerData = Buffer.alloc(Math.min(32 * 1024, fileSize))
+    fs.readSync(fd, headerData, 0, headerData.length, 0)
+    fs.closeSync(fd)
+    return !findMoovInBuffer(headerData)
+  } catch (e) {
+    console.warn('[Transcoder] moov check failed:', e.message)
+    return false
+  }
+}
+
+/**
+ * Search for 'moov' atom in buffer (MP4 box structure)
+ */
+function findMoovInBuffer(buffer) {
+  const moovTag = Buffer.from('moov')
+  for (let i = 0; i < buffer.length - 8; i++) {
+    if (buffer[i + 4] === moovTag[0] &&
+        buffer[i + 5] === moovTag[1] &&
+        buffer[i + 6] === moovTag[2] &&
+        buffer[i + 7] === moovTag[3]) {
+      return true
+    }
+  }
+  return false
 }
 
 /**
@@ -1024,26 +1096,35 @@ async function probeWithBareFFmpeg(url) {
   const result = {
     videoCodec: null,
     audioCodec: null,
+    audioChannels: 0,
     videoProfile: null,
     videoLevel: null,
     container: null,
     duration: 0,
+    fileSize: 0,
+    moovAtEnd: false,
   }
 
   let inputIO = null
   let inputFmt = null
+  let fileSize = 0
 
   try {
     if (url.startsWith('http://') || url.startsWith('https://')) {
-      const fileSize = await getHttpContentLength(url)
+      fileSize = await getHttpContentLength(url)
       if (!fileSize) {
         throw new Error('Probe failed: could not determine content length')
       }
+      result.fileSize = fileSize
+      result.moovAtEnd = await checkMoovAtEnd(url, fileSize)
       inputIO = await prepareHttpStreamingIOContext(url, fileSize)
     } else {
       const filePath = url.replace(/^file:\/\//, '')
       const stats = fs.statSync(filePath)
-      inputIO = createFileReadIOContext(filePath, stats.size)
+      fileSize = stats.size
+      result.fileSize = fileSize
+      result.moovAtEnd = await checkMoovAtEndFile(filePath, fileSize)
+      inputIO = createFileReadIOContext(filePath, fileSize)
     }
 
     inputFmt = new ffmpeg.InputFormatContext(inputIO)
@@ -1078,6 +1159,10 @@ async function probeWithBareFFmpeg(url) {
     if (audioStream?.codecParameters) {
       const cp = audioStream.codecParameters
       result.audioCodec = cp.codecName?.toLowerCase() || mapCodecIdToName(cp.id, 'audio')
+      // Get audio channel count for surround sound detection
+      if (cp.channelLayout && cp.channelLayout.nbChannels) {
+        result.audioChannels = cp.channelLayout.nbChannels
+      }
     }
 
     // Fallback: try to get duration from audio stream if video didn't have it
@@ -1107,6 +1192,7 @@ export async function probeMedia(url, title = '', options = {}) {
   const result = {
     videoCodec: null,
     audioCodec: null,
+    audioChannels: 0,
     videoProfile: null,
     videoLevel: null,
     container: null,
@@ -1203,6 +1289,13 @@ function checkTranscodeNeeded(result) {
     }
   }
 
+  // Check audio channels - Chromecast Default Media Receiver doesn't handle 5.1+ in HLS/MPEGTS well
+  // Force stereo downmix for surround sound (>2 channels)
+  if (result.audioChannels > 2 && !result.needsAudioTranscode) {
+    result.needsAudioTranscode = true
+    reasons.push(`Audio has ${result.audioChannels} channels (surround), needs stereo downmix for Chromecast`)
+  }
+
   // Check container - MKV needs remux even if codecs are compatible
   if (result.container) {
     const containerNeedsRemux = result.container.includes('matroska') ||
@@ -1213,6 +1306,26 @@ function checkTranscodeNeeded(result) {
     if (containerNeedsRemux && !result.needsVideoTranscode) {
       result.needsRemux = true
       reasons.push(`Container ${result.container} needs remux to MP4`)
+    }
+  }
+
+  // Check for moov atom at end - problematic for HTTP streaming to Chromecast
+  // Large files (>500MB) with moov at end need remux to faststart format
+  const LARGE_FILE_THRESHOLD = 500 * 1024 * 1024
+  if (result.moovAtEnd && result.fileSize > LARGE_FILE_THRESHOLD) {
+    if (!result.needsVideoTranscode && !result.needsRemux) {
+      result.needsRemux = true
+      reasons.push(`Large file (${Math.round(result.fileSize / 1024 / 1024)}MB) with moov at end needs remux`)
+    }
+  }
+
+  // Very large files (>1GB) need HLS for reliable Chromecast streaming
+  // With BitstreamFilter available, we can use fast remux (h264_mp4toannexb converts AVCC->Annex B)
+  const VERY_LARGE_FILE_THRESHOLD = 1024 * 1024 * 1024
+  if (result.fileSize > VERY_LARGE_FILE_THRESHOLD) {
+    if (!result.needsVideoTranscode && !result.needsRemux) {
+      result.needsRemux = true
+      reasons.push(`Very large file (${Math.round(result.fileSize / 1024 / 1024)}MB) needs HLS for reliable streaming`)
     }
   }
 
@@ -1275,14 +1388,14 @@ async function remuxWithBareFFmpeg(session, inputSource, onProgress) {
 
     // Copy video stream
     const outVideoStream = outputFormat.createStream()
-    outVideoStream.codecParameters.copyFrom(videoStream.codecParameters)
+    copyCodecParameters(outVideoStream.codecParameters, videoStream.codecParameters)
     outVideoStream.timeBase = videoStream.timeBase
 
     // Copy audio stream if present
     let outAudioStream = null
     if (audioStream) {
       outAudioStream = outputFormat.createStream()
-      outAudioStream.codecParameters.copyFrom(audioStream.codecParameters)
+      copyCodecParameters(outAudioStream.codecParameters, audioStream.codecParameters)
       outAudioStream.timeBase = audioStream.timeBase
     }
 
@@ -1377,7 +1490,7 @@ async function transcodeAudioWithBareFFmpeg(session, inputSource, onProgress) {
 
     // Copy video stream
     const outVideoStream = outputFormat.createStream()
-    outVideoStream.codecParameters.copyFrom(videoStream.codecParameters)
+    copyCodecParameters(outVideoStream.codecParameters, videoStream.codecParameters)
     outVideoStream.timeBase = videoStream.timeBase
 
     // Set up audio transcoding to AAC

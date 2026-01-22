@@ -250,7 +250,10 @@ target_link_libraries(
 )
 
 if(LINUX)
+  # Link VA-API for hardware video decode
   target_link_libraries(${bare_mpv} PRIVATE va va-drm drm)
+  # Link ALSA for audio output (mpv's ao_alsa requires libasound)
+  target_link_libraries(${bare_mpv} PRIVATE asound)
 endif()
 
 if(UNIX AND NOT APPLE)

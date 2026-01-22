@@ -259,6 +259,7 @@ function WatchPageView({
   const [isSeeking, setIsSeeking] = useState(false)
   const [seekPosition, setSeekPosition] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [isRelatedCollapsed, setIsRelatedCollapsed] = useState(false)
 
   // Casting
   const cast = useCast()
@@ -833,6 +834,28 @@ function WatchPageView({
       <div style={watchStyles.content}>
         {/* Main column - video + info */}
         <div style={watchStyles.mainColumn}>
+          <div
+            style={{
+              ...watchStyles.relatedToggleRow,
+              paddingRight: isRelatedCollapsed ? 72 : 0,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setIsRelatedCollapsed((prev) => !prev)}
+              style={watchStyles.relatedToggleButton}
+              aria-label={isRelatedCollapsed ? 'Show related videos' : 'Hide related videos'}
+            >
+              <Feather
+                name={isRelatedCollapsed ? 'chevron-left' : 'chevron-right'}
+                size={16}
+                color={colors.textMuted}
+              />
+              <span style={watchStyles.relatedToggleLabel}>
+                {isRelatedCollapsed ? 'Show related' : 'Hide related'}
+              </span>
+            </button>
+          </div>
           {/* Video player */}
           <div style={watchStyles.videoWrapper} ref={videoWrapperRef} onClick={() => toggleControls()}>
             {error ? (
@@ -1197,32 +1220,34 @@ function WatchPageView({
         </div>
 
         {/* Sidebar - related videos */}
-        <div style={watchStyles.sidebar}>
-          <h3 style={watchStyles.sidebarTitle}>Related Videos</h3>
-          {relatedVideos.length === 0 ? (
-            <p style={{ color: colors.textMuted, fontSize: 14 }}>No related videos</p>
-          ) : (
-            <div style={watchStyles.relatedList}>
-              {relatedVideos.map((v) => (
-                <div
-                  key={v.id}
-                  style={watchStyles.relatedCard}
-                  onClick={() => onVideoClick(v)}
-                >
-                  <div style={watchStyles.relatedThumb}>
-                    <span style={watchStyles.relatedThumbText}>{v.title.charAt(0).toUpperCase()}</span>
+        {!isRelatedCollapsed && (
+          <div style={watchStyles.sidebar}>
+            <h3 style={watchStyles.sidebarTitle}>Related Videos</h3>
+            {relatedVideos.length === 0 ? (
+              <p style={{ color: colors.textMuted, fontSize: 14 }}>No related videos</p>
+            ) : (
+              <div style={watchStyles.relatedList}>
+                {relatedVideos.map((v) => (
+                  <div
+                    key={v.id}
+                    style={watchStyles.relatedCard}
+                    onClick={() => onVideoClick(v)}
+                  >
+                    <div style={watchStyles.relatedThumb}>
+                      <span style={watchStyles.relatedThumbText}>{v.title.charAt(0).toUpperCase()}</span>
+                    </div>
+                    <div style={watchStyles.relatedInfo}>
+                      <span style={watchStyles.relatedTitle}>{v.title}</span>
+                      <span style={watchStyles.relatedMeta}>
+                        {channelMeta[v.channelKey]?.name || 'Channel'}
+                      </span>
+                    </div>
                   </div>
-                  <div style={watchStyles.relatedInfo}>
-                    <span style={watchStyles.relatedTitle}>{v.title}</span>
-                    <span style={watchStyles.relatedMeta}>
-                      {channelMeta[v.channelKey]?.name || 'Channel'}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Back button */}
         <button onClick={onBack} style={watchStyles.closeButton} aria-label="Back to Home">
@@ -1757,6 +1782,26 @@ const watchStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     gap: 12,
+  },
+  relatedToggleRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+  },
+  relatedToggleButton: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 10px',
+    borderRadius: 999,
+    border: `1px solid ${colors.border}`,
+    backgroundColor: colors.bgSecondary,
+    color: colors.textMuted,
+    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 600,
+  },
+  relatedToggleLabel: {
+    lineHeight: 1,
   },
   relatedCard: {
     display: 'flex',

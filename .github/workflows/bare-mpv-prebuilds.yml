@@ -87,7 +87,7 @@ jobs:
             bash -c "
               set -ex
               dnf install -y \
-                nodejs npm git file \
+                nodejs npm git file patchelf \
                 cmake ninja-build pkg-config \
                 python3-pip \
                 nasm patch automake autoconf libtool \
@@ -106,15 +106,37 @@ jobs:
               npx bare-make build
               npx bare-make install
               
-              ls -la prebuilds/${{ matrix.prebuild_dir }}/
-              file prebuilds/${{ matrix.prebuild_dir }}/bare-mpv.bare
+              # Bundle libasound.so with the prebuild for portability
+              PREBUILD_DIR=prebuilds/${{ matrix.prebuild_dir }}
+              BARE_FILE=\$PREBUILD_DIR/bare-mpv.bare
+              
+              # Find and copy libasound
+              LIBASOUND=\$(ldd \$BARE_FILE | grep libasound | awk '{print \$3}')
+              if [ -n \"\$LIBASOUND\" ]; then
+                cp \$LIBASOUND \$PREBUILD_DIR/
+                # Set RPATH to look in same directory as the .bare file
+                patchelf --set-rpath '\$ORIGIN' \$BARE_FILE
+                echo 'Bundled libasound.so and set RPATH'
+              fi
+              
+              # Also bundle libdrm if dynamically linked
+              LIBDRM=\$(ldd \$BARE_FILE | grep libdrm | awk '{print \$3}')
+              if [ -n \"\$LIBDRM\" ]; then
+                cp \$LIBDRM \$PREBUILD_DIR/
+                echo 'Bundled libdrm.so'
+              fi
+              
+              ls -la \$PREBUILD_DIR/
+              file \$PREBUILD_DIR/*
+              echo '=== Dependencies after bundling ==='
+              ldd \$BARE_FILE || true
             "
 
       - name: Upload prebuild artifact
         uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.prebuild_dir }}
-          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/bare-mpv.bare
+          path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/
 
   collect-prebuilds:
     needs: [build-macos, build-linux]
@@ -139,8 +161,9 @@ jobs:
           for dir in prebuild-*; do
             target="${dir#prebuild-}"
             mkdir -p "$target"
-            mv "$dir/bare-mpv.bare" "$target/"
-            rmdir "$dir"
+            # Move all files (bare-mpv.bare and any bundled .so files)
+            mv "$dir"/* "$target/" 2>/dev/null || true
+            rmdir "$dir" 2>/dev/null || true
           done
 
       - name: List prebuilds
@@ -155,10 +178,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Add all prebuild files including bundled .so libraries
           git add packages/bare-mpv/prebuilds/
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore(bare-mpv): update prebuilds [skip ci]"
+            git commit -m "chore(bare-mpv): update prebuilds with bundled libs [skip ci]"
             git push
           fi

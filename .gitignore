@@ -77,3 +77,4 @@ packages/desktop/video/
 
 # OpenProse workflows
 *.prose
+logfile

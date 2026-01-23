@@ -2460,6 +2460,8 @@ rpc.onCastPlay(async (req: any) => {
           level: probeResult.videoLevel,
           container: probeResult.container,
           duration: probeResult.duration,
+          fileSize: probeResult.fileSize ? Math.round(probeResult.fileSize / 1024 / 1024) + 'MB' : 'unknown',
+          moovAtEnd: probeResult.moovAtEnd,
           needsTranscode: probeResult.needsTranscode,
           needsRemux: probeResult.needsRemux,
           reason: probeResult.reason,

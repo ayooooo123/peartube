@@ -9,7 +9,7 @@ import { Stack } from 'expo-router'
 import { StatusBar, View, Platform, AppState, AppStateStatus } from 'react-native'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
-import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData } from '@/lib/VideoPlayerContext'
+import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData, playbackActiveEmitter } from '@/lib/VideoPlayerContext'
 import { DownloadsProvider } from '@/lib/DownloadsContext'
 import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
@@ -68,7 +68,8 @@ export default function RootLayout() {
       const subscription = AppState.addEventListener('change', handleAppStateChange)
       return () => {
         subscription.remove()
-        if (platformRPC) {
+        // Don't terminate worklet if playback is active (e.g., during PiP)
+        if (platformRPC && !playbackActiveEmitter.isActive) {
           platformRPC.terminatePlatformRPC()
         }
       }
@@ -148,7 +149,7 @@ export default function RootLayout() {
       }
     })
 
-    return unsubscribe
+    return () => { unsubscribe() }
   }, [ready])
 
   // Cleanup any running pollers on unmount
@@ -163,20 +164,20 @@ export default function RootLayout() {
     if (!platformRPC) return
 
     if (nextState === 'background') {
-      // Suspend networking instead of terminating entire backend
-      // This is faster to resume and saves battery while keeping state
+      if (playbackActiveEmitter.isActive) {
+        console.log('[App] Skipping network suspend - playback is active')
+        return
+      }
       console.log('[App] Suspending network for background')
       platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
         console.log('[App] suspendNetwork error:', err?.message)
       })
     } else if (nextState === 'active') {
-      // Resume networking when returning to foreground
       console.log('[App] Resuming network from foreground')
       platformRPC.rpc?.resumeNetwork?.().catch((err: any) => {
         console.log('[App] resumeNetwork error:', err?.message)
       })
 
-      // If backend was terminated (shouldn't happen with suspend/resume), reinitialize
       if (!platformRPC.isInitialized()) {
         console.log('[App] Backend not initialized, reinitializing...')
         initNativeBackend()

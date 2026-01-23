@@ -84,6 +84,8 @@ declare const HRPC: new (stream: any) => {
   castSetVolume(req: { volume: number }): Promise<any>;
   castGetState(req: {}): Promise<any>;
   castIsConnected(req: {}): Promise<any>;
+  suspendNetwork(req: {}): Promise<any>;
+  resumeNetwork(req: {}): Promise<any>;
   onEventReady(handler: (data: any) => void): void;
   onEventError(handler: (data: any) => void): void;
   onEventVideoStats(handler: (data: any) => void): void;
@@ -990,6 +992,15 @@ export const rpc = {
       ? { videoId: videoIdOrReq, filePath: filePath! }
       : videoIdOrReq;
     return ensureRPC().setVideoThumbnailFromFile(req);
+  },
+
+  // Network lifecycle (background playback)
+  async suspendNetwork(): Promise<{ success: boolean }> {
+    return (ensureRPC() as any).suspendNetwork({});
+  },
+
+  async resumeNetwork(): Promise<{ success: boolean }> {
+    return (ensureRPC() as any).resumeNetwork({});
   },
 };
 

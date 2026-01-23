@@ -1,11 +1,7 @@
-/**
- * VideoPlayerContext - Global video player state management
- * Enables mini player functionality across the app
- * Uses VLC player for broad codec support
- */
 import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react'
-import { Platform } from 'react-native'
+import { Platform, AppState, AppStateStatus } from 'react-native'
 import type { VideoData, VideoStats } from '@peartube/core'
+import * as MediaSession from '../modules/expo-media-session/src'
 
 // Re-export types for backwards compatibility
 export type { VideoData, VideoStats } from '@peartube/core'
@@ -40,6 +36,13 @@ export const videoLoadEventEmitter = {
   }
 }
 
+// Playback active state emitter - used by _layout.tsx to decide whether to suspend network
+let isPlaybackActive = false
+export const playbackActiveEmitter = {
+  get isActive() { return isPlaybackActive },
+  set(active: boolean) { isPlaybackActive = active },
+}
+
 // Player mode
 export type PlayerMode = 'hidden' | 'mini' | 'fullscreen'
 
@@ -54,6 +57,7 @@ interface VideoPlayerContextType {
   playerMode: PlayerMode
   videoStats: VideoStats | null
   playbackSession: number
+  isInPipMode: boolean
 
   // Playback position
   currentTime: number
@@ -112,6 +116,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const [playerMode, setPlayerMode] = useState<PlayerMode>('hidden')
   const [videoStats, setVideoStats] = useState<VideoStats | null>(null)
   const [playbackSession, setPlaybackSession] = useState(0)
+  const [isInPipMode, setIsInPipMode] = useState(false)
 
   // Playback position state
   const [currentTime, setCurrentTime] = useState(0)
@@ -129,6 +134,231 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Ref for current video - updated synchronously to avoid race conditions with stats events
   const currentVideoRef = useRef<VideoData | null>(null)
+
+  // Background playback tracking refs
+  const wasPlayingWhenBackgroundedRef = useRef(false)
+  const isBackgroundedRef = useRef(false)
+  const isInPipModeRef = useRef(false)
+  const wasPlayingWhenPipEnteredRef = useRef(false)
+  const currentTimeRef = useRef(0)
+  const durationRef = useRef(0)
+  const isPlayingRef = useRef(false)
+  const playbackRateRef = useRef(1)
+
+  // Keep refs in sync with state for async access in AppState callbacks
+  useEffect(() => { currentTimeRef.current = currentTime }, [currentTime])
+  useEffect(() => { durationRef.current = duration }, [duration])
+  useEffect(() => {
+    isPlayingRef.current = isPlaying
+    playbackActiveEmitter.set(currentVideo !== null && (isPlaying || isInPipMode))
+  }, [isPlaying, currentVideo, isInPipMode])
+  useEffect(() => { playbackRateRef.current = playbackRate }, [playbackRate])
+
+  const mediaSessionActiveRef = useRef(false)
+  const setMediaSessionActive = useCallback((active: boolean) => {
+    if (Platform.OS === 'web') return
+    if (mediaSessionActiveRef.current === active) return
+    mediaSessionActiveRef.current = active
+    if (active) {
+      console.log('[VideoPlayerContext] Activating media session')
+    } else {
+      console.log('[VideoPlayerContext] Deactivating media session')
+    }
+    MediaSession.setActive(active).catch((e) => {
+      console.warn('[VideoPlayerContext] Failed to set media session active:', e)
+    })
+  }, [])
+
+  // Activate media session while a video is loaded (keeps lock screen controls visible)
+  useEffect(() => {
+    if (Platform.OS === 'web') return
+    const shouldBeActive = currentVideo !== null
+    setMediaSessionActive(shouldBeActive)
+  }, [currentVideo, setMediaSessionActive])
+
+  // Keep Now Playing metadata up to date for lock screen/notification
+  useEffect(() => {
+    if (Platform.OS === 'web') return
+    if (!currentVideo) return
+    MediaSession.setNowPlaying({
+      title: currentVideo.title || 'Video',
+      artist: currentVideo.channel?.name || 'PearTube',
+      duration,
+      artworkUrl: currentVideo.thumbnailUrl ?? undefined,
+    }).catch(() => {})
+  }, [currentVideo?.id, currentVideo?.title, currentVideo?.thumbnailUrl, currentVideo?.channel?.name, duration])
+
+  // Ensure playback state reflects play/pause changes even if VLC events lag
+  useEffect(() => {
+    if (Platform.OS === 'web') return
+    if (!mediaSessionActiveRef.current) return
+    MediaSession.setPlaybackState({
+      isPlaying,
+      position: currentTimeRef.current,
+      duration: durationRef.current,
+      rate: playbackRateRef.current,
+    }).catch(() => {})
+  }, [isPlaying])
+
+  // AppState listener for background/foreground transitions (mobile only)
+  useEffect(() => {
+    if (Platform.OS === 'web') return
+
+    const handleAppStateChange = async (nextState: AppStateStatus) => {
+      const goingToBackground = nextState === 'background' || nextState === 'inactive'
+      const comingToForeground = nextState === 'active'
+
+      if (goingToBackground && !isBackgroundedRef.current) {
+        isBackgroundedRef.current = true
+        wasPlayingWhenBackgroundedRef.current = isPlayingRef.current
+        console.log('[VideoPlayerContext] Going to background, wasPlaying:', isPlayingRef.current)
+      } else if (comingToForeground && isBackgroundedRef.current) {
+        isBackgroundedRef.current = false
+        console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current)
+
+        if (wasPlayingWhenBackgroundedRef.current && durationRef.current > 0) {
+          const seekValue = currentTimeRef.current / durationRef.current
+          setSeekPosition(seekValue)
+          setTimeout(() => setSeekPosition(undefined), 100)
+        }
+      }
+    }
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange)
+    return () => subscription.remove()
+  }, [])
+
+  // MediaSession remote command listener (mobile only)
+  useEffect(() => {
+    if (Platform.OS === 'web') return
+
+    const subscription = MediaSession.addRemoteCommandListener((event) => {
+      console.log('[VideoPlayerContext] Remote command received:', event.command)
+      const resumeFromRemote = () => {
+        if (Platform.OS === 'ios' && durationRef.current > 0) {
+          const seekValue = currentTimeRef.current / durationRef.current
+          setSeekPosition(seekValue)
+          setTimeout(() => {
+            setSeekPosition(undefined)
+            setIsPlaying(true)
+          }, 100)
+        } else {
+          setIsPlaying(true)
+        }
+      }
+      switch (event.command) {
+        case 'play':
+          console.log('[VideoPlayerContext] Setting isPlaying = true')
+          resumeFromRemote()
+          break
+        case 'pause':
+          console.log('[VideoPlayerContext] Setting isPlaying = false')
+          setIsPlaying(false)
+          break
+        case 'stop':
+          console.log('[VideoPlayerContext] Stopping playback')
+          setIsPlaying(false)
+          break
+        case 'togglePlayPause':
+          console.log('[VideoPlayerContext] Toggling play/pause')
+          if (isPlayingRef.current) {
+            setIsPlaying(false)
+          } else {
+            resumeFromRemote()
+          }
+          break
+        case 'skipForward':
+          if (durationRef.current > 0) {
+            const newTime = Math.min(currentTimeRef.current + 10, durationRef.current)
+            setSeekPosition(newTime / durationRef.current)
+            setCurrentTime(newTime)
+            setTimeout(() => setSeekPosition(undefined), 100)
+          }
+          break
+        case 'skipBackward':
+          if (durationRef.current > 0) {
+            const newTime = Math.max(currentTimeRef.current - 10, 0)
+            setSeekPosition(newTime / durationRef.current)
+            setCurrentTime(newTime)
+            setTimeout(() => setSeekPosition(undefined), 100)
+          }
+          break
+        case 'seekTo':
+          if (event.position !== undefined && durationRef.current > 0) {
+            setSeekPosition(event.position / durationRef.current)
+            setCurrentTime(event.position)
+            setTimeout(() => setSeekPosition(undefined), 100)
+          }
+          break
+      }
+    })
+
+    return () => subscription.remove()
+  }, [])
+
+  // Audio interruption listener (iOS only) - Android relies on remote commands from AudioFocus
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return
+
+    const subscription = MediaSession.addAudioInterruptionListener((event) => {
+      if (event.type === 'began') {
+        wasPlayingWhenBackgroundedRef.current = isPlayingRef.current
+        setIsPlaying(false)
+      } else if (event.type === 'ended' && event.shouldResume) {
+        if (wasPlayingWhenBackgroundedRef.current) {
+          setIsPlaying(true)
+        }
+      }
+    })
+
+    return () => subscription.remove()
+  }, [])
+
+  // Route change listener (headphone unplug) - mobile only
+  useEffect(() => {
+    if (Platform.OS === 'web') return
+
+    const subscription = MediaSession.addAudioRouteChangeListener((event: MediaSession.AudioRouteChangeEvent) => {
+      if (event.reason === 'oldDeviceUnavailable') {
+        setIsPlaying(false)
+      }
+    })
+
+    return () => subscription.remove()
+  }, [])
+
+  // PiP mode change listener (Android only) - resume playback when entering PiP
+  // VLC's onHostPause pauses playback, so we immediately resume when we detect PiP entry
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+
+    const subscription = MediaSession.addPictureInPictureListener((event) => {
+      const wasInPip = isInPipModeRef.current
+      isInPipModeRef.current = event.isInPictureInPicture
+      setIsInPipMode(event.isInPictureInPicture)
+
+      console.log('[VideoPlayerContext] PiP mode changed:', event.isInPictureInPicture, 'wasPlaying:', wasPlayingWhenBackgroundedRef.current)
+
+      if (event.isInPictureInPicture) {
+        wasPlayingWhenPipEnteredRef.current = isPlayingRef.current
+        if (wasPlayingWhenPipEnteredRef.current) {
+          // VLC can emit a host-pause during PiP entry; re-assert playback if we were playing.
+          setTimeout(() => {
+            setIsPlaying(true)
+          }, 100)
+        }
+      } else if (wasInPip) {
+        console.log('[VideoPlayerContext] Exiting PiP, ensuring playback continues')
+        if (wasPlayingWhenPipEnteredRef.current) {
+          setTimeout(() => {
+            setIsPlaying(true)
+          }, 100)
+        }
+      }
+    })
+
+    return () => subscription.remove()
+  }, [])
 
   // Subscribe to video stats events from backend
   useEffect(() => {
@@ -183,8 +413,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         })
       }
     })
-    return unsubscribe
-  }, []) // No dependencies - ref is used for synchronous access
+    return () => { unsubscribe() }
+  }, [])
 
   // Load and play a new video (triggers overlay to fullscreen)
   const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {
@@ -245,7 +475,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }
   }, [currentTime, duration])
 
-  // Close video completely
   const closeVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Closing video')
     try {
@@ -260,7 +489,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setVideoStats(null)
     setCurrentTime(0)
     setDuration(0)
-  }, [])
+    if (Platform.OS !== 'web') {
+      MediaSession.clearNowPlaying().catch(() => {})
+      setMediaSessionActive(false)
+    }
+    mediaSessionActiveRef.current = false
+  }, [setMediaSessionActive])
 
   // Minimize to mini player - video keeps playing, just changes UI mode
   const minimizePlayer = useCallback(() => {
@@ -321,16 +555,28 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // VLC handles this via the rate prop
   }, [])
 
-  // VLC callbacks
+  const lastMediaSessionUpdateRef = useRef(0)
   const onProgress = useCallback((data: { currentTime: number; duration: number }) => {
-    // VLC reports time in milliseconds
-    setCurrentTime(data.currentTime / 1000)
-    if (data.duration > 0) {
-      setDuration(data.duration / 1000)
+    const timeS = data.currentTime / 1000
+    const durationS = data.duration > 0 ? data.duration / 1000 : 0
+    setCurrentTime(timeS)
+    if (durationS > 0) {
+      setDuration(durationS)
     }
-    // Some platforms never emit onPlaying; clear loading once playback advances.
     if (data.currentTime > 0) {
       setIsLoading((prev) => (prev ? false : prev))
+    }
+    if (Platform.OS !== 'web' && mediaSessionActiveRef.current) {
+      const now = Date.now()
+      if (now - lastMediaSessionUpdateRef.current > 1000) {
+        lastMediaSessionUpdateRef.current = now
+        MediaSession.setPlaybackState({
+          isPlaying: isPlayingRef.current,
+          position: timeS,
+          duration: durationS,
+          rate: playbackRateRef.current,
+        }).catch(() => {})
+      }
     }
   }, [])
 
@@ -338,11 +584,27 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     console.log('[VideoPlayerContext] VLC playing')
     setIsLoading(false)
     setIsPlaying(true)
+    if (Platform.OS !== 'web') {
+      MediaSession.setPlaybackState({
+        isPlaying: true,
+        position: currentTimeRef.current,
+        duration: durationRef.current,
+        rate: playbackRateRef.current,
+      }).catch(() => {})
+    }
   }, [])
 
   const onPaused = useCallback(() => {
     console.log('[VideoPlayerContext] VLC paused')
     setIsPlaying(false)
+    if (Platform.OS !== 'web') {
+      MediaSession.setPlaybackState({
+        isPlaying: false,
+        position: currentTimeRef.current,
+        duration: durationRef.current,
+        rate: playbackRateRef.current,
+      }).catch(() => {})
+    }
   }, [])
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
@@ -356,6 +618,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const onEnded = useCallback(() => {
     console.log('[VideoPlayerContext] VLC ended')
     setIsPlaying(false)
+    if (Platform.OS !== 'web') {
+      MediaSession.setPlaybackState({
+        isPlaying: false,
+        position: durationRef.current,
+        duration: durationRef.current,
+        rate: playbackRateRef.current,
+      }).catch(() => {})
+    }
   }, [])
 
   const onError = useCallback((error: any) => {
@@ -378,6 +648,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     progress,
     playbackRate,
     playbackSession,
+    isInPipMode,
     vlcSeekPosition: seekPosition,
     playerRef,
     loadAndPlayVideo,

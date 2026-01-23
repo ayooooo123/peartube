@@ -5,7 +5,7 @@
  * Uses VLC player for broad codec support
  */
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
-import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput } from 'react-native'
+import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput, AppState } from 'react-native'
 import { rpc } from '@peartube/platform/rpc'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
@@ -35,6 +35,7 @@ import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { useDownloads } from '@/lib/DownloadsContext'
 import { colors } from '@/lib/colors'
+import * as MediaSession from '../modules/expo-media-session/src'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { useCast } from '@/lib/cast'
 import { CastButton, DevicePickerModal } from '@/components/cast'
@@ -292,9 +293,10 @@ export function VideoPlayerOverlay() {
     playerRef,
     currentTime,
     duration,
-    progress: playbackProgress, // 0-1 playback progress
+    progress: playbackProgress,
     playbackRate,
     vlcSeekPosition,
+    isInPipMode,
     pauseVideo,
     resumeVideo,
     closeVideo,
@@ -338,12 +340,22 @@ export function VideoPlayerOverlay() {
   const [seekPosition, setSeekPosition] = useState(0)
   const progressBarRef = useRef<View>(null)
   const progressBarWidth = useRef(0)
+  const videoWrapperRef = useRef<View>(null)
+  const [pipSupported, setPipSupported] = useState<boolean | null>(null)
 
   // State for showing custom controls overlay
   const [showControls, setShowControls] = useState(false)
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   // State for true fullscreen (landscape, hidden UI)
   const [isLandscapeFullscreen, setIsLandscapeFullscreen] = useState(false)
+  const pipEnterInFlightRef = useRef(false)
+  const autoPipEnabledRef = useRef(false)
+  
+  // Desktop mini player drag state
+  const [miniPlayerCorner, setMiniPlayerCorner] = useState<'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'>('bottom-right')
+  const [isDraggingMiniPlayer, setIsDraggingMiniPlayer] = useState(false)
+  const [miniPlayerDragOffset, setMiniPlayerDragOffset] = useState({ x: 0, y: 0 })
+  const miniPlayerDragStartRef = useRef({ x: 0, y: 0, cornerX: 0, cornerY: 0 })
   const [pendingLandscapeExit, setPendingLandscapeExit] = useState(false)
   const isLandscapeFullscreenShared = useSharedValue(false)
   const [channelMetaName, setChannelMetaName] = useState<string | null>(null)
@@ -780,6 +792,86 @@ export function VideoPlayerOverlay() {
     }
   }, [isCasting, currentVideo?.channelKey, currentVideo?.id, videoUrl, rpc, cast])
 
+  // Check PiP support once on Android
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    let cancelled = false
+    MediaSession.isPictureInPictureSupported?.()
+      .then((supported) => {
+        if (!cancelled) setPipSupported(supported)
+      })
+      .catch(() => {
+        if (!cancelled) setPipSupported(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Report video bounds to native for PiP source rect
+  const updatePipSourceRect = useCallback(() => {
+    if (Platform.OS !== 'android' || playerMode !== 'fullscreen' || !currentVideo) return
+    if (pipSupported === false || isInPipMode) return
+
+    const screen = Dimensions.get('screen')
+    const fallbackWidth = screen.width
+    const fallbackHeight = Math.round(fallbackWidth * 9 / 16)
+    const fallbackRect = {
+      x: 0,
+      y: insets.top,
+      width: fallbackWidth,
+      height: fallbackHeight,
+    }
+
+    const applyRect = (rect: { x: number; y: number; width: number; height: number }) => {
+      MediaSession.setPictureInPictureSourceRect(rect)
+    }
+
+    const node = videoWrapperRef.current as any
+    if (node?.measureInWindow) {
+      node.measureInWindow((x: number, y: number, width: number, height: number) => {
+        const valid =
+          Number.isFinite(x) &&
+          Number.isFinite(y) &&
+          Number.isFinite(width) &&
+          Number.isFinite(height) &&
+          x >= 0 &&
+          y >= 0 &&
+          width > 0 &&
+          height > 0
+        if (valid) {
+          const topInset = Math.max(0, Math.round(insets.top))
+          const adjustedHeight = Math.max(0, Math.round(height) - topInset)
+          applyRect({
+            x: Math.round(x),
+            y: Math.round(y) + topInset,
+            width: Math.round(width),
+            height: adjustedHeight > 0 ? adjustedHeight : Math.round(height),
+          })
+          return
+        }
+        applyRect(fallbackRect)
+      })
+      return
+    }
+
+    applyRect(fallbackRect)
+  }, [playerMode, currentVideo, insets.top, pipSupported, isInPipMode])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    if (playerMode === 'fullscreen' && currentVideo && pipSupported !== false && !isCasting) {
+      setTimeout(updatePipSourceRect, 100)
+    }
+  }, [playerMode, currentVideo, pipSupported, isCasting, updatePipSourceRect])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    if (pipSupported === false) return
+    if (isInPipMode) return
+    setTimeout(updatePipSourceRect, 200)
+  }, [pipSupported, isInPipMode, updatePipSourceRect])
+
   // Show controls temporarily
   const showControlsTemporarily = useCallback(() => {
     setShowControls(true)
@@ -1013,12 +1105,11 @@ export function VideoPlayerOverlay() {
       top,
       height,
       zIndex: 1000,
+      bottom: undefined,
     }
-  })
+  }, [screenHeight, miniPlayerBottom, fullscreenHeight])
 
-  // Animated styles for the video
   const videoStyle = useAnimatedStyle(() => {
-    // In landscape fullscreen, fill the container
     if (isLandscapeFullscreenShared.value) {
       return {
         width: landscapeWidth.value,
@@ -1043,8 +1134,9 @@ export function VideoPlayerOverlay() {
     return {
       width,
       height,
+      flex: undefined,
     }
-  })
+  }, [screenWidth, videoHeight, insets.top])
 
   // Animated styles for mini player info (fades out when expanding)
   const miniInfoStyle = useAnimatedStyle(() => {
@@ -1087,9 +1179,7 @@ export function VideoPlayerOverlay() {
     return { opacity }
   })
 
-  // Video player style - adds top padding for status bar/notch in fullscreen (portrait only)
   const videoPlayerStyle = useAnimatedStyle(() => {
-    // In landscape, fill the container (no top padding - status bar hidden)
     if (isLandscapeFullscreenShared.value) {
       return {
         position: 'absolute',
@@ -1114,7 +1204,7 @@ export function VideoPlayerOverlay() {
       right: 0,
       bottom: 0,
     }
-  })
+  }, [insets.top])
 
   // Progress bar style - positions at bottom, adjusts for landscape
   const progressBarStyle = useAnimatedStyle(() => {
@@ -1320,7 +1410,6 @@ export function VideoPlayerOverlay() {
     if ((playerMode === 'mini' || playerMode === 'hidden') && isLandscapeFullscreen) {
       if (!pendingLandscapeExit) {
         setPendingLandscapeExit(true)
-        // Return to portrait when exiting fullscreen
         ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch((err) => {
           console.error('[VideoPlayer] Failed to lock portrait on mode change:', err)
           isLandscapeFullscreenShared.value = false
@@ -1331,6 +1420,48 @@ export function VideoPlayerOverlay() {
       }
     }
   }, [playerMode, isLandscapeFullscreen, pendingLandscapeExit])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    if (pipSupported === false) return
+    const canAutoPip = typeof Platform.Version === 'number' && Platform.Version >= 31
+    const shouldEnableAutoPip =
+      pipSupported !== false &&
+      playerMode === 'fullscreen' &&
+      currentVideo !== null &&
+      !isCasting
+    const shouldAutoPip = canAutoPip && shouldEnableAutoPip
+    autoPipEnabledRef.current = shouldAutoPip
+    if (shouldEnableAutoPip) {
+      updatePipSourceRect()
+    }
+    if (!canAutoPip || isInPipMode) return
+    console.log('[VideoPlayerOverlay] Auto-PiP effect, playerMode:', playerMode, 'hasVideo:', !!currentVideo, 'enabling:', shouldAutoPip)
+    MediaSession.setAutoPictureInPicture(shouldAutoPip)
+      .then(() => console.log('[VideoPlayerOverlay] Auto-PiP set:', shouldAutoPip))
+      .catch((err) => console.error('[VideoPlayerOverlay] Auto-PiP failed:', err))
+  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, updatePipSourceRect])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    const canAutoPip = typeof Platform.Version === 'number' && Platform.Version >= 31
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        pipEnterInFlightRef.current = false
+        return
+      }
+      if (pipEnterInFlightRef.current) return
+      if (canAutoPip && autoPipEnabledRef.current) return
+      if (pipSupported === false) return
+      if (!currentVideo || playerMode !== 'fullscreen' || isCasting || isInPipMode) return
+      pipEnterInFlightRef.current = true
+      MediaSession.enterPictureInPicture?.().catch(() => {})
+      setTimeout(() => {
+        pipEnterInFlightRef.current = false
+      }, 1000)
+    })
+    return () => subscription.remove()
+  }, [currentVideo, playerMode, isCasting, isInPipMode, pipSupported])
 
   // Downloads context for browser-style download manager
   const { addDownload, downloads } = useDownloads()
@@ -1396,7 +1527,321 @@ export function VideoPlayerOverlay() {
     `Channel ${currentVideo.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
 
-  // Desktop: YouTube-style layout (not fullscreen overlay)
+  // Desktop mini player dimensions
+  const DESKTOP_MINI_WIDTH = 320
+  const DESKTOP_MINI_HEIGHT = 180
+  const DESKTOP_MINI_PADDING = 24
+  const DESKTOP_MINI_CONTROLS_HEIGHT = 48
+
+  // Calculate mini player position based on corner
+  const getMiniPlayerPosition = () => {
+    const baseX = miniPlayerCorner.includes('right') ? screenWidth - DESKTOP_MINI_WIDTH - DESKTOP_MINI_PADDING - sidebarWidth : DESKTOP_MINI_PADDING
+    const baseY = miniPlayerCorner.includes('bottom') ? screenHeight - DESKTOP_MINI_HEIGHT - DESKTOP_MINI_CONTROLS_HEIGHT - DESKTOP_MINI_PADDING - 108 : DESKTOP_MINI_PADDING + 108
+    
+    if (isDraggingMiniPlayer) {
+      return {
+        x: baseX + miniPlayerDragOffset.x,
+        y: baseY + miniPlayerDragOffset.y,
+      }
+    }
+    return { x: baseX, y: baseY }
+  }
+
+  // Handle mini player drag start
+  const handleMiniPlayerDragStart = (e: React.MouseEvent) => {
+    e.preventDefault()
+    setIsDraggingMiniPlayer(true)
+    const pos = getMiniPlayerPosition()
+    miniPlayerDragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      cornerX: pos.x,
+      cornerY: pos.y,
+    }
+    
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - miniPlayerDragStartRef.current.x
+      const deltaY = moveEvent.clientY - miniPlayerDragStartRef.current.y
+      setMiniPlayerDragOffset({ x: deltaX, y: deltaY })
+    }
+    
+    const handleMouseUp = (upEvent: MouseEvent) => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      
+      const finalX = miniPlayerDragStartRef.current.cornerX + (upEvent.clientX - miniPlayerDragStartRef.current.x)
+      const finalY = miniPlayerDragStartRef.current.cornerY + (upEvent.clientY - miniPlayerDragStartRef.current.y)
+      
+      const centerX = finalX + DESKTOP_MINI_WIDTH / 2
+      const centerY = finalY + (DESKTOP_MINI_HEIGHT + DESKTOP_MINI_CONTROLS_HEIGHT) / 2
+      const screenCenterX = (screenWidth - sidebarWidth) / 2 + sidebarWidth
+      const screenCenterY = screenHeight / 2
+      
+      const isRight = centerX > screenCenterX
+      const isBottom = centerY > screenCenterY
+      
+      const newCorner = `${isBottom ? 'bottom' : 'top'}-${isRight ? 'right' : 'left'}` as typeof miniPlayerCorner
+      setMiniPlayerCorner(newCorner)
+      setMiniPlayerDragOffset({ x: 0, y: 0 })
+      setIsDraggingMiniPlayer(false)
+    }
+    
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }
+
+  // Desktop mini player mode
+  if (isDesktop && Platform.OS === 'web' && playerMode === 'mini') {
+    const miniPos = getMiniPlayerPosition()
+    
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          left: miniPos.x,
+          top: miniPos.y,
+          width: DESKTOP_MINI_WIDTH,
+          zIndex: 9999,
+          borderRadius: 12,
+          overflow: 'hidden',
+          backgroundColor: colors.bg,
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3)',
+          border: `1px solid ${colors.border}`,
+          cursor: isDraggingMiniPlayer ? 'grabbing' : 'default',
+          userSelect: 'none',
+          transition: isDraggingMiniPlayer ? 'none' : 'left 0.2s ease, top 0.2s ease',
+        }}
+      >
+        {/* Drag handle - top bar */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 32,
+            cursor: isDraggingMiniPlayer ? 'grabbing' : 'grab',
+            zIndex: 10,
+          }}
+          onMouseDown={handleMiniPlayerDragStart}
+        />
+        
+        {/* Video container */}
+        <div
+          style={{
+            width: DESKTOP_MINI_WIDTH,
+            height: DESKTOP_MINI_HEIGHT,
+            backgroundColor: '#000',
+            position: 'relative',
+          }}
+        >
+          {isCasting ? (
+            <div style={{ ...desktopStyles.castPlaceholder, height: DESKTOP_MINI_HEIGHT }}>
+              <Feather name="cast" color={colors.primary} size={24} />
+              <span style={{ fontSize: 12, color: colors.textMuted }}>Casting...</span>
+            </div>
+          ) : videoUrl ? (
+            <MpvPlayer
+              key={`mpv-mini:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
+              ref={playerRef}
+              url={videoUrl}
+              autoPlay
+              onCanPlay={onPlaying}
+              onPaused={onPaused}
+              onPlaying={onPlaying}
+              onEnded={onEnded}
+              onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
+              onProgress={(data) => onProgress?.({
+                currentTime: data.currentTime * 1000,
+                duration: data.duration * 1000,
+              } as any)}
+              style={{ width: '100%', height: '100%' }}
+            />
+          ) : (
+            <div style={{ ...desktopStyles.placeholder, height: DESKTOP_MINI_HEIGHT }}>
+              <span style={{ fontSize: 32, color: colors.primary, fontWeight: '600' }}>
+                {currentVideo.title.charAt(0).toUpperCase()}
+              </span>
+            </div>
+          )}
+          
+          {/* Hover overlay with play/pause */}
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: 'rgba(0, 0, 0, 0.3)',
+              opacity: 0,
+              transition: 'opacity 0.15s ease',
+            }}
+            className="mini-player-overlay"
+            onClick={handlePlayPause}
+          >
+            <div
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: 24,
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              {effectiveIsPlaying ? (
+                <Ionicons name="pause" color="#fff" size={24} />
+              ) : (
+                <Ionicons name="play" color="#fff" size={24} />
+              )}
+            </div>
+          </div>
+          
+          {/* Progress bar at bottom of video */}
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: 3,
+              backgroundColor: 'rgba(255, 255, 255, 0.2)',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${effectiveProgress * 100}%`,
+                backgroundColor: colors.primary,
+                transition: 'width 0.1s linear',
+              }}
+            />
+          </div>
+        </div>
+        
+        {/* Controls bar */}
+        <div
+          style={{
+            height: DESKTOP_MINI_CONTROLS_HEIGHT,
+            padding: '8px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            backgroundColor: colors.bgSecondary,
+          }}
+        >
+          {/* Title and channel */}
+          <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={maximizePlayer}>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: '500',
+                color: colors.text,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {currentVideo.title}
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: colors.textMuted,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {channelName}
+            </div>
+          </div>
+          
+          {/* Control buttons */}
+          <button
+            onClick={handlePlayPause}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 16,
+              border: 'none',
+              backgroundColor: 'transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'background-color 0.15s ease',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = colors.bgHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+          >
+            {effectiveIsPlaying ? (
+              <Ionicons name="pause" color={colors.text} size={18} />
+            ) : (
+              <Ionicons name="play" color={colors.text} size={18} />
+            )}
+          </button>
+          
+          <button
+            onClick={maximizePlayer}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 16,
+              border: 'none',
+              backgroundColor: 'transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'background-color 0.15s ease',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = colors.bgHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+            title="Expand"
+          >
+            <Feather name="chevron-up" color={colors.text} size={18} />
+          </button>
+          
+          <button
+            onClick={closeVideo}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 16,
+              border: 'none',
+              backgroundColor: 'transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'background-color 0.15s ease',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = colors.bgHover)}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+            title="Close"
+          >
+            <Feather name="x" color={colors.text} size={18} />
+          </button>
+        </div>
+        
+        {/* CSS for hover effect on video overlay */}
+        <style>{`
+          .mini-player-overlay:hover {
+            opacity: 1 !important;
+          }
+        `}</style>
+      </div>
+    )
+  }
+
+  // Desktop: YouTube-style layout (fullscreen overlay)
   if (isDesktop && Platform.OS === 'web') {
     return (
       <div style={{ ...desktopStyles.overlay, left: sidebarWidth, transition: 'left 0.2s ease' }}>
@@ -1657,6 +2102,11 @@ export function VideoPlayerOverlay() {
             </div>
           </div>
 
+          {/* Minimize button */}
+          <button onClick={minimizePlayer} style={desktopStyles.minimizeButton} aria-label="Minimize">
+            <Feather name="minus" color={colors.text} size={24} />
+          </button>
+          
           {/* Close button */}
           <button onClick={closeVideo} style={desktopStyles.closeButton} aria-label="Close">
             <Feather name="x" color={colors.text} size={24} />
@@ -1701,6 +2151,7 @@ export function VideoPlayerOverlay() {
             }}
             style={StyleSheet.absoluteFill}
             paused={!isPlaying}
+            playInBackground={true}
             rate={playbackRate}
             seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
             resizeMode="contain"
@@ -1741,12 +2192,18 @@ export function VideoPlayerOverlay() {
     )
   }
 
+
+
   // Render - all styles are animated, no React state conditionals in JSX to prevent VLC remounting
   const content = (
     <Animated.View style={[styles.container, containerStyle]}>
           {/* Video area - wrapped with GestureDetector for pull-down-to-minimize */}
           <GestureDetector gesture={composedGesture}>
-          <Animated.View style={[styles.videoWrapper, videoStyle]}>
+          <Animated.View 
+            ref={videoWrapperRef}
+            style={[styles.videoWrapper, videoStyle]}
+            onLayout={updatePipSourceRect}
+          >
             {/* Background - fills the parent container */}
             <Pressable
               style={styles.videoBackground}
@@ -1756,24 +2213,20 @@ export function VideoPlayerOverlay() {
                 {renderVideoPlayer()}
               </Animated.View>
 
-              {/* Loading overlay */}
-            {showLoadingOverlay && (
+            {showLoadingOverlay && !isInPipMode && (
               <View style={styles.loadingOverlay}>
                 <ActivityIndicator color="white" size="large" />
                 <Text style={styles.loadingText}>{loadingLabel}</Text>
               </View>
             )}
 
-            {/* Custom controls overlay - shown on tap in fullscreen or landscape */}
-            {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && (
+            {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
               <View style={styles.controlsOverlay}>
-                {/* Seek backward */}
                 <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('left')}>
                   <Feather name="rotate-ccw" color="#fff" size={32} />
                   <Text style={styles.controlButtonText}>10s</Text>
                 </Pressable>
 
-                {/* Play/Pause */}
                 <Pressable style={styles.controlButtonLarge} onPress={handlePlayPause}>
                   {effectiveIsPlaying ? (
                     <Ionicons name="pause" color="#fff" size={48} />
@@ -1782,7 +2235,6 @@ export function VideoPlayerOverlay() {
                   )}
                 </Pressable>
 
-                {/* Seek forward */}
                 <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('right')}>
                   <Feather name="rotate-cw" color="#fff" size={32} />
                   <Text style={styles.controlButtonText}>10s</Text>
@@ -1790,8 +2242,7 @@ export function VideoPlayerOverlay() {
               </View>
             )}
 
-            {/* Seek feedback overlay */}
-            {seekFeedback && (
+            {seekFeedback && !isInPipMode && (
               <View style={[
                 styles.seekFeedback,
                 seekFeedback === 'left' ? styles.seekFeedbackLeft : styles.seekFeedbackRight
@@ -1806,8 +2257,7 @@ export function VideoPlayerOverlay() {
             )}
           </Pressable>
 
-          {/* Fullscreen minimize button - only show with controls, not in landscape */}
-          {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && (
+          {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
             <Animated.View style={[styles.minimizeButton, fullscreenContentStyle]}>
               <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
                 <Feather name="chevron-down" color="#fff" size={28} />
@@ -1815,8 +2265,7 @@ export function VideoPlayerOverlay() {
             </Animated.View>
           )}
 
-          {/* Speed control button - only show with controls */}
-          {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && (
+          {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
             <Animated.View style={[styles.speedButton, fullscreenContentStyle]}>
               <Pressable onPress={cyclePlaybackSpeed} style={styles.speedButtonInner}>
                 <Text style={styles.speedButtonText}>{playbackRate}x</Text>
@@ -1824,8 +2273,7 @@ export function VideoPlayerOverlay() {
             </Animated.View>
           )}
 
-          {/* Cast button - show with controls */}
-          {playerMode === 'fullscreen' && showControls && (
+          {playerMode === 'fullscreen' && showControls && !isInPipMode && (
             <Animated.View style={[styles.castButton, fullscreenContentStyle]}>
               <Pressable onPress={handleCastPress} style={styles.castButtonInner}>
                 <Feather name="cast" color={cast.isConnected ? colors.primary : "#fff"} size={22} />
@@ -1833,11 +2281,9 @@ export function VideoPlayerOverlay() {
             </Animated.View>
           )}
 
-          {/* Fullscreen button - only show with controls */}
-          {playerMode === 'fullscreen' && showControls && (
+          {playerMode === 'fullscreen' && showControls && !isInPipMode && (
             <Animated.View style={fullscreenButtonStyle}>
               <Pressable onPress={toggleLandscapeFullscreen} style={styles.fullscreenButtonInner}>
-                {/* Icon changes based on state but doesn't affect VLC */}
                 {isLandscapeFullscreen ? (
                   <Feather name="minimize" color="#fff" size={22} />
                 ) : (
@@ -1847,67 +2293,64 @@ export function VideoPlayerOverlay() {
             </Animated.View>
           )}
 
-          {/* YouTube-style thin progress bar - always visible, seekable */}
-          <Animated.View
-            style={progressBarStyle}
-            ref={progressBarRef}
-            onLayout={(e) => {
-              progressBarWidth.current = e.nativeEvent.layout.width
-            }}
-            onTouchStart={(e) => {
-              const locationX = e.nativeEvent.locationX
-              const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
-              setIsSeeking(true)
-              setSeekPosition(progress * effectiveDuration)
-            }}
-            onTouchMove={(e) => {
-              if (isSeeking) {
+          {!isInPipMode && (
+            <Animated.View
+              style={progressBarStyle}
+              ref={progressBarRef}
+              onLayout={(e) => {
+                progressBarWidth.current = e.nativeEvent.layout.width
+              }}
+              onTouchStart={(e) => {
                 const locationX = e.nativeEvent.locationX
                 const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
+                setIsSeeking(true)
                 setSeekPosition(progress * effectiveDuration)
-              }
-            }}
-            onTouchEnd={() => {
-              if (isSeeking) {
-                if (isCasting) {
-                  cast.seek(seekPosition)
-                } else {
-                  seekTo(seekPosition)
+              }}
+              onTouchMove={(e) => {
+                if (isSeeking) {
+                  const locationX = e.nativeEvent.locationX
+                  const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
+                  setSeekPosition(progress * effectiveDuration)
                 }
-                setIsSeeking(false)
-              }
-            }}
-          >
-            {/* Time preview bubble when seeking */}
-            {isSeeking && (
-              <View style={[
-                styles.seekTimePreview,
-                { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
-              ]}>
-                <Text style={styles.seekTimeText}>{formatDuration(seekPosition)}</Text>
+              }}
+              onTouchEnd={() => {
+                if (isSeeking) {
+                  if (isCasting) {
+                    cast.seek(seekPosition)
+                  } else {
+                    seekTo(seekPosition)
+                  }
+                  setIsSeeking(false)
+                }
+              }}
+            >
+              {isSeeking && (
+                <View style={[
+                  styles.seekTimePreview,
+                  { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
+                ]}>
+                  <Text style={styles.seekTimeText}>{formatDuration(seekPosition)}</Text>
+                </View>
+              )}
+              <View style={[styles.thinProgressBg, isSeeking && styles.thinProgressBgActive]}>
+                <View
+                  style={[
+                    styles.thinProgressFill,
+                    isSeeking && styles.thinProgressFillActive,
+                    { width: `${(isSeeking ? seekPosition / (effectiveDuration || 1) : effectiveProgress) * 100}%` }
+                  ]}
+                />
               </View>
-            )}
-            {/* Progress bar - expands when seeking */}
-            <View style={[styles.thinProgressBg, isSeeking && styles.thinProgressBgActive]}>
-              <View
-                style={[
-                  styles.thinProgressFill,
-                  isSeeking && styles.thinProgressFillActive,
-                  { width: `${(isSeeking ? seekPosition / (effectiveDuration || 1) : effectiveProgress) * 100}%` }
-                ]}
-              />
-            </View>
-            {/* Scrubber handle - only visible when seeking */}
-            {isSeeking && (
-              <View style={[
-                styles.scrubberHandle,
-                { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
-              ]} />
-            )}
-          </Animated.View>
+              {isSeeking && (
+                <View style={[
+                  styles.scrubberHandle,
+                  { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
+                ]} />
+              )}
+            </Animated.View>
+          )}
 
-          {/* Time display - only show with controls */}
-          {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && (
+          {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
             <Animated.View style={timeDisplayStyle}>
               <Text style={styles.timeText}>
                 {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
@@ -1917,8 +2360,7 @@ export function VideoPlayerOverlay() {
         </Animated.View>
         </GestureDetector>
 
-        {/* Mini player info row - hidden in landscape (and during landscape exit gating) */}
-        {!isLandscapeFullscreen && !pendingLandscapeExit && (
+        {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
           <Animated.View style={[styles.miniInfo, miniInfoStyle]}>
             <Pressable onPress={maximizePlayer} style={StyleSheet.absoluteFill}>
               <View style={styles.miniInfoText}>
@@ -1933,8 +2375,7 @@ export function VideoPlayerOverlay() {
           </Animated.View>
         )}
 
-        {/* Mini player controls - hidden in landscape (and during landscape exit gating) */}
-        {!isLandscapeFullscreen && !pendingLandscapeExit && (
+        {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
           <Animated.View style={[styles.miniControls, miniControlsStyle]}>
             <Pressable style={styles.miniControlButton} onPress={handlePlayPause}>
               {effectiveIsPlaying ? (
@@ -1949,15 +2390,13 @@ export function VideoPlayerOverlay() {
           </Animated.View>
         )}
 
-        {/* Mini player progress bar - hidden in landscape (and during landscape exit gating) */}
-        {!isLandscapeFullscreen && !pendingLandscapeExit && (
+        {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
           <Animated.View style={[styles.miniProgressBar, miniInfoStyle]}>
             <View style={[styles.miniProgressFill, { width: `${effectiveProgress * 100}%` }]} />
           </Animated.View>
         )}
 
-        {/* Fullscreen content - hidden in landscape (and during landscape exit gating) */}
-        {!isLandscapeFullscreen && !pendingLandscapeExit && (
+        {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
           <Animated.View style={[styles.fullscreenContent, fullscreenContentStyle]}>
           <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
             {/* P2P Stats - show on native and Pear desktop */}
@@ -3242,6 +3681,22 @@ const desktopStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    transition: 'background-color 0.15s ease',
+  },
+  minimizeButton: {
+    position: 'absolute',
+    top: 24,
+    right: 72,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.bgSecondary,
+    border: 'none',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    transition: 'background-color 0.15s ease',
   },
   // P2P Stats styles (old simplified version)
   statsSection: {

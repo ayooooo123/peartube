@@ -53,7 +53,8 @@
         }
       ],
       "./plugins/withAndroidPiP.js",
-      "./plugins/withMainActivityPiPCallback.js"
+      "./plugins/withMainActivityPiPCallback.js",
+      "./plugins/withAndroidAbiSplits.js"
     ]
   }
 }

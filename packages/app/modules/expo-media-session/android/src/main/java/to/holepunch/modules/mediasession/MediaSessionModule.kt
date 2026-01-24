@@ -83,8 +83,8 @@ object PipBridge {
 }
 
 class MediaSessionModule : Module() {
-    // Use source rect hints to align PiP content with the actual video bounds.
-    private val useSourceRectHint = true
+    // Disable source rect hints - they can cause zoom issues if rect doesn't match video bounds
+    private val useSourceRectHint = false
     private var mediaSession: MediaSessionCompat? = null
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -529,7 +529,7 @@ class MediaSessionModule : Module() {
         val builder = PictureInPictureParams.Builder()
             .setAspectRatio(Rational(16, 9))
             .setAutoEnterEnabled(enabled)
-            .setSeamlessResizeEnabled(true)
+            .setSeamlessResizeEnabled(false)
         
         if (useSourceRectHint) {
             pipSourceRect?.let { rect ->
@@ -565,7 +565,7 @@ class MediaSessionModule : Module() {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(Rational(16, 9))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setSeamlessResizeEnabled(true)
+                builder.setSeamlessResizeEnabled(false)
             }
             builder.setActions(buildPipActions(activity))
             activity.setPictureInPictureParams(builder.build())
@@ -605,19 +605,24 @@ class MediaSessionModule : Module() {
         android.util.Log.d("MediaSession", "PiP mode changed (callback): $isInPip")
         sendPipEvent(activity, isInPip)
         
-        if (isInPip && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            refreshPipParams(activity)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             forceLayoutRefresh(activity)
             Handler(Looper.getMainLooper()).postDelayed({
-                refreshPipParams(activity)
+                forceLayoutRefresh(activity)
+                sendPipEvent(activity, isInPip)
+            }, 50)
+            Handler(Looper.getMainLooper()).postDelayed({
                 forceLayoutRefresh(activity)
                 sendPipEvent(activity, isInPip)
             }, 150)
             Handler(Looper.getMainLooper()).postDelayed({
-                refreshPipParams(activity)
                 forceLayoutRefresh(activity)
                 sendPipEvent(activity, isInPip)
             }, 350)
+            
+            if (isInPip) {
+                refreshPipParams(activity)
+            }
         }
     }
 
@@ -684,7 +689,7 @@ class MediaSessionModule : Module() {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(Rational(16, 9))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setSeamlessResizeEnabled(true)
+                builder.setSeamlessResizeEnabled(false)
             }
             if (useSourceRectHint) {
                 pipSourceRect?.let { rect ->

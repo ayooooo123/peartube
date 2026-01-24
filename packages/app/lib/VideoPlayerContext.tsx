@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react'
 import { Platform, AppState, AppStateStatus } from 'react-native'
 import type { VideoData, VideoStats } from '@peartube/core'
 import * as MediaSession from '../modules/expo-media-session/src'
@@ -58,6 +58,10 @@ interface VideoPlayerContextType {
   videoStats: VideoStats | null
   playbackSession: number
   isInPipMode: boolean
+  pipWindowSize: { width: number; height: number } | null
+  
+  // Unified PiP gating - single source of truth for whether PiP should be enabled
+  shouldEnablePip: boolean
 
   // Playback position
   currentTime: number
@@ -117,6 +121,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const [videoStats, setVideoStats] = useState<VideoStats | null>(null)
   const [playbackSession, setPlaybackSession] = useState(0)
   const [isInPipMode, setIsInPipMode] = useState(false)
+  const [pipWindowSize, setPipWindowSize] = useState<{ width: number; height: number } | null>(null)
 
   // Playback position state
   const [currentTime, setCurrentTime] = useState(0)
@@ -249,21 +254,26 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       switch (event.command) {
         case 'play':
           console.log('[VideoPlayerContext] Setting isPlaying = true')
+          try { playerRef.current?.resume?.(true) } catch {}
           resumeFromRemote()
           break
         case 'pause':
           console.log('[VideoPlayerContext] Setting isPlaying = false')
+          try { playerRef.current?.resume?.(false) } catch {}
           setIsPlaying(false)
           break
         case 'stop':
           console.log('[VideoPlayerContext] Stopping playback')
+          try { playerRef.current?.resume?.(false) } catch {}
           setIsPlaying(false)
           break
         case 'togglePlayPause':
           console.log('[VideoPlayerContext] Toggling play/pause')
           if (isPlayingRef.current) {
+            try { playerRef.current?.resume?.(false) } catch {}
             setIsPlaying(false)
           } else {
+            try { playerRef.current?.resume?.(true) } catch {}
             resumeFromRemote()
           }
           break
@@ -336,6 +346,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       const wasInPip = isInPipModeRef.current
       isInPipModeRef.current = event.isInPictureInPicture
       setIsInPipMode(event.isInPictureInPicture)
+      if (event.isInPictureInPicture && event.width && event.height) {
+        setPipWindowSize({ width: event.width, height: event.height })
+      } else if (!event.isInPictureInPicture) {
+        setPipWindowSize(null)
+      }
 
       console.log('[VideoPlayerContext] PiP mode changed:', event.isInPictureInPicture, 'wasPlaying:', wasPlayingWhenBackgroundedRef.current)
 
@@ -633,8 +648,15 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setIsLoading(false)
   }, [])
 
-  // Calculate progress percentage
   const progress = duration > 0 ? currentTime / duration : 0
+  
+  const shouldEnablePip = useMemo(() => {
+    if (Platform.OS !== 'android') return false
+    if (!currentVideo) return false
+    if (playerMode !== 'fullscreen') return false
+    if (isInPipMode) return false
+    return true
+  }, [currentVideo, playerMode, isInPipMode])
 
   const contextValue: VideoPlayerContextType = {
     currentVideo,
@@ -649,6 +671,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     playbackRate,
     playbackSession,
     isInPipMode,
+    pipWindowSize,
+    shouldEnablePip,
     vlcSeekPosition: seekPosition,
     playerRef,
     loadAndPlayVideo,

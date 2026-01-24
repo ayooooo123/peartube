@@ -232,15 +232,18 @@ export function addAudioRouteChangeListener(
  * @returns Subscription that can be removed
  */
 export function addPictureInPictureListener(
-  listener: (event: { isInPictureInPicture: boolean }) => void
+  listener: (event: { isInPictureInPicture: boolean; width?: number; height?: number }) => void
 ): Subscription {
   if (!emitter) {
     return { remove: () => {} }
   }
-  return (emitter as any).addListener('onPictureInPictureChanged', (event: { isInPictureInPicture: boolean }) => {
+  return (emitter as any).addListener(
+    'onPictureInPictureChanged',
+    (event: { isInPictureInPicture: boolean; width?: number; height?: number }) => {
     console.log('[MediaSession JS] PiP changed event received:', event)
     listener(event)
-  })
+    }
+  )
 }
 
 export default {

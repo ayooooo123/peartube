@@ -235,7 +235,8 @@ function ChannelInfo({ channelName, channelInitial }: { channelName: string, cha
 
 export function VideoPlayerOverlay() {
   const insets = useSafeAreaInsets()
-  const { width: screenWidth, height: screenHeight } = useWindowDimensions()
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions()
+  const screenMetrics = Dimensions.get('screen')
   const { isDesktop, isPear } = usePlatform()
 
   // Debug log on mount
@@ -250,7 +251,6 @@ export function VideoPlayerOverlay() {
 
   const { isCollapsed } = useSidebar()
   const { identity } = useApp()
-  const isWindowLandscape = screenWidth > screenHeight
   const exitGateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const exitGateLastSnapshotRef = useRef<string | null>(null)
   const exitGateStableCountRef = useRef(0)
@@ -275,12 +275,6 @@ export function VideoPlayerOverlay() {
 
   // Dynamic sidebar width for desktop overlay positioning
   const sidebarWidth = isCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH
-
-  const videoHeight = Math.round(screenWidth * 9 / 16)
-
-  // Desktop video dimensions (YouTube-style - video takes ~70% width, max 1280px)
-  const desktopVideoWidth = Math.min(screenWidth * 0.65, 1280)
-  const desktopVideoHeight = Math.round(desktopVideoWidth * 9 / 16)
 
   const {
     currentVideo,
@@ -312,6 +306,34 @@ export function VideoPlayerOverlay() {
     onEnded,
     onError,
   } = useVideoPlayerContext()
+
+  const wasInPipRef = useRef(false)
+  const [isPipExitTransition, setIsPipExitTransition] = useState(false)
+
+  useEffect(() => {
+    if (isInPipMode) {
+      wasInPipRef.current = true
+    } else if (wasInPipRef.current) {
+      wasInPipRef.current = false
+      setIsPipExitTransition(true)
+      setTimeout(() => {
+        setIsPipExitTransition(false)
+      }, 150)
+    }
+  }, [isInPipMode])
+
+  const useScreenFallback = isPipExitTransition || (!isInPipMode && (
+    windowWidth < screenMetrics.width * 0.8 || windowHeight < screenMetrics.height * 0.8
+  ))
+  const screenWidth = useScreenFallback ? screenMetrics.width : windowWidth
+  const screenHeight = useScreenFallback ? screenMetrics.height : windowHeight
+  const isWindowLandscape = screenWidth > screenHeight
+
+  const videoHeight = Math.round(screenWidth * 9 / 16)
+
+  // Desktop video dimensions (YouTube-style - video takes ~70% width, max 1280px)
+  const desktopVideoWidth = Math.min(screenWidth * 0.65, 1280)
+  const desktopVideoHeight = Math.round(desktopVideoWidth * 9 / 16)
 
   useEffect(() => {
     if (!currentVideo || playerMode === 'hidden') return
@@ -905,6 +927,11 @@ export function VideoPlayerOverlay() {
   const animProgress = useSharedValue(0)
   const translateY = useSharedValue(0)
   const isGestureActive = useSharedValue(false)
+  const isInPipModeShared = useSharedValue(false)
+  
+  useEffect(() => {
+    isInPipModeShared.value = isInPipMode || isPipExitTransition
+  }, [isInPipMode, isPipExitTransition])
 
   // Calculate positions using measured tab bar metrics (preferred) with a safe fallback.
   // Pixel/Android gesture nav can report a non-zero bottom inset; never ignore it.
@@ -1180,7 +1207,7 @@ export function VideoPlayerOverlay() {
   })
 
   const videoPlayerStyle = useAnimatedStyle(() => {
-    if (isLandscapeFullscreenShared.value) {
+    if (isLandscapeFullscreenShared.value || isInPipModeShared.value) {
       return {
         position: 'absolute',
         top: 0,
@@ -2155,6 +2182,7 @@ export function VideoPlayerOverlay() {
             rate={playbackRate}
             seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
             resizeMode="contain"
+            autoAspectRatio={true}
             onProgress={onProgress}
             onPlaying={onPlaying}
             onPaused={onPaused}
@@ -2194,14 +2222,28 @@ export function VideoPlayerOverlay() {
 
 
 
+  const pipExitContainerStyle = isPipExitTransition ? {
+    position: 'absolute' as const,
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1000,
+  } : undefined
+
+  const pipExitVideoStyle = isPipExitTransition ? {
+    width: screenWidth,
+    height: videoHeight + insets.top,
+  } : undefined
+
   // Render - all styles are animated, no React state conditionals in JSX to prevent VLC remounting
   const content = (
-    <Animated.View style={[styles.container, containerStyle]}>
+    <Animated.View style={[styles.container, containerStyle, pipExitContainerStyle]}>
           {/* Video area - wrapped with GestureDetector for pull-down-to-minimize */}
           <GestureDetector gesture={composedGesture}>
           <Animated.View 
             ref={videoWrapperRef}
-            style={[styles.videoWrapper, videoStyle]}
+            style={[styles.videoWrapper, videoStyle, pipExitVideoStyle]}
             onLayout={updatePipSourceRect}
           >
             {/* Background - fills the parent container */}

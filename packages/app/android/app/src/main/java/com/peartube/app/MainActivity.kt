@@ -9,6 +9,8 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnable
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 
 import expo.modules.ReactActivityDelegateWrapper
+import android.content.res.Configuration
+import to.holepunch.modules.mediasession.PipBridge
 
 class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,5 +59,10 @@ class MainActivity : ReactActivity() {
       // Use the default back button implementation on Android S
       // because it's doing more than [Activity.moveTaskToBack] in fact.
       super.invokeDefaultOnBackPressed()
+  }
+
+  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+      super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+      PipBridge.onPictureInPictureModeChanged(this, isInPictureInPictureMode, newConfig)
   }
 }

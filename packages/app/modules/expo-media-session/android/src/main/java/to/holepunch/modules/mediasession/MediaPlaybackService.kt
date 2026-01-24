@@ -22,6 +22,7 @@ class MediaPlaybackService : Service() {
     }
     
     private var mediaSessionToken: MediaSessionCompat.Token? = null
+    private var isForeground = false
     
     override fun onBind(intent: Intent?): IBinder? = null
     
@@ -32,23 +33,55 @@ class MediaPlaybackService : Service() {
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         android.util.Log.d("MediaPlaybackService", "onStartCommand: action=${intent?.action}")
-        
         mediaSessionToken = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent?.getParcelableExtra("mediaSessionToken", MediaSessionCompat.Token::class.java)
         } else {
             @Suppress("DEPRECATION")
             intent?.getParcelableExtra("mediaSessionToken")
+        } ?: mediaSessionToken
+
+        when (intent?.action) {
+            MediaSessionModule.ACTION_PIP_PLAY -> {
+                android.util.Log.d("MediaPlaybackService", "PiP play action received")
+                ensureForeground()
+                PipServiceBridge.onPlay()
+                return START_NOT_STICKY
+            }
+            MediaSessionModule.ACTION_PIP_PAUSE -> {
+                android.util.Log.d("MediaPlaybackService", "PiP pause action received")
+                ensureForeground()
+                PipServiceBridge.onPause()
+                return START_NOT_STICKY
+            }
+            MediaSessionModule.ACTION_PIP_REWIND -> {
+                android.util.Log.d("MediaPlaybackService", "PiP rewind action received")
+                ensureForeground()
+                PipServiceBridge.onRewind()
+                return START_NOT_STICKY
+            }
+            MediaSessionModule.ACTION_PIP_FORWARD -> {
+                android.util.Log.d("MediaPlaybackService", "PiP forward action received")
+                ensureForeground()
+                PipServiceBridge.onForward()
+                return START_NOT_STICKY
+            }
         }
-        
-        val notification = buildNotification()
-        startForeground(NOTIFICATION_ID, notification)
-        
+
+        ensureForeground()
         return START_NOT_STICKY
     }
     
     override fun onDestroy() {
         super.onDestroy()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        isForeground = false
+    }
+
+    private fun ensureForeground() {
+        if (isForeground) return
+        val notification = buildNotification()
+        startForeground(NOTIFICATION_ID, notification)
+        isForeground = true
     }
     
     private fun createNotificationChannel() {
@@ -131,5 +164,35 @@ class MediaPlaybackService : Service() {
         }
         
         return builder.build()
+    }
+}
+
+object PipServiceBridge {
+    private var moduleInstance: MediaSessionModule? = null
+    
+    fun register(module: MediaSessionModule) {
+        moduleInstance = module
+    }
+    
+    fun unregister(module: MediaSessionModule) {
+        if (moduleInstance === module) {
+            moduleInstance = null
+        }
+    }
+    
+    fun onPlay() {
+        moduleInstance?.handlePipPlay()
+    }
+    
+    fun onPause() {
+        moduleInstance?.handlePipPause()
+    }
+    
+    fun onRewind() {
+        moduleInstance?.handlePipRewind()
+    }
+    
+    fun onForward() {
+        moduleInstance?.handlePipForward()
     }
 }

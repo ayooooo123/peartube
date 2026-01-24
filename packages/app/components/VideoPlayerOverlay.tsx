@@ -310,6 +310,8 @@ export function VideoPlayerOverlay() {
   const wasInPipRef = useRef(false)
   const [isPipExitTransition, setIsPipExitTransition] = useState(false)
 
+  const justExitedPip = !isInPipMode && wasInPipRef.current
+
   useEffect(() => {
     if (isInPipMode) {
       wasInPipRef.current = true
@@ -318,12 +320,14 @@ export function VideoPlayerOverlay() {
       setIsPipExitTransition(true)
       setTimeout(() => {
         setIsPipExitTransition(false)
-      }, 150)
+      }, 500)
     }
   }, [isInPipMode])
 
-  const useScreenFallback = isPipExitTransition || (!isInPipMode && (
-    windowWidth < screenMetrics.width * 0.8 || windowHeight < screenMetrics.height * 0.8
+  const isPipExiting = isPipExitTransition || justExitedPip
+
+  const useScreenFallback = isPipExiting || (!isInPipMode && (
+    windowWidth < screenMetrics.width * 0.5 || windowHeight < screenMetrics.height * 0.5
   ))
   const screenWidth = useScreenFallback ? screenMetrics.width : windowWidth
   const screenHeight = useScreenFallback ? screenMetrics.height : windowHeight
@@ -928,16 +932,35 @@ export function VideoPlayerOverlay() {
   const translateY = useSharedValue(0)
   const isGestureActive = useSharedValue(false)
   const isInPipModeShared = useSharedValue(false)
+  const screenWidthShared = useSharedValue(screenWidth)
+  const screenHeightShared = useSharedValue(screenHeight)
+  const videoHeightShared = useSharedValue(videoHeight)
+  const insetTopShared = useSharedValue(insets.top)
+  const insetBottomShared = useSharedValue(insets.bottom)
   
-  useEffect(() => {
-    isInPipModeShared.value = isInPipMode || isPipExitTransition
-  }, [isInPipMode, isPipExitTransition])
+  isInPipModeShared.value = isInPipMode || isPipExiting
+  screenWidthShared.value = screenWidth
+  screenHeightShared.value = screenHeight
+  videoHeightShared.value = videoHeight
+  insetTopShared.value = insets.top
+  insetBottomShared.value = insets.bottom
+  
+  if (playerMode === 'fullscreen') {
+    animProgress.value = 1
+  }
+  
+
 
   // Calculate positions using measured tab bar metrics (preferred) with a safe fallback.
   // Pixel/Android gesture nav can report a non-zero bottom inset; never ignore it.
   const expectedTabBarHeight = TAB_BAR_HEIGHT + Math.max(insets.bottom, reportedTabBarPadding || 0)
   const miniPlayerBottom = Math.max(reportedTabBarHeight || 0, expectedTabBarHeight)
   const fullscreenTop = insets.top
+  
+  const miniPlayerBottomShared = useSharedValue(miniPlayerBottom)
+  useEffect(() => {
+    miniPlayerBottomShared.value = miniPlayerBottom
+  }, [miniPlayerBottom])
 
   // When exiting landscape fullscreen, keep rendering the fullscreen container until window dimensions AND insets settle.
   // The tricky part: StatusBar visibility + safe area insets can lag behind the orientation lock by a few frames.
@@ -1095,9 +1118,9 @@ export function VideoPlayerOverlay() {
   // Animated styles for the container
   // On Android, add bottom inset to fullscreen height so it covers the navigation bar
   const fullscreenHeight = Platform.OS === 'android' ? screenHeight + insets.bottom : screenHeight
+  const isAndroid = Platform.OS === 'android'
 
   const containerStyle = useAnimatedStyle(() => {
-    // In landscape fullscreen, fill the entire screen
     if (isLandscapeFullscreenShared.value) {
       return {
         position: 'absolute',
@@ -1110,18 +1133,32 @@ export function VideoPlayerOverlay() {
       }
     }
 
-    // Interpolate position for portrait mode (mini <-> fullscreen)
+    if (isInPipModeShared.value) {
+      return {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        zIndex: 1000,
+      }
+    }
+
+    const fullscreenHeightShared = isAndroid 
+      ? screenHeightShared.value + insetBottomShared.value 
+      : screenHeightShared.value
+
     const top = interpolate(
       animProgress.value,
       [0, 1],
-      [screenHeight - miniPlayerBottom - MINI_PLAYER_HEIGHT, 0],
+      [screenHeightShared.value - miniPlayerBottomShared.value - MINI_PLAYER_HEIGHT, 0],
       Extrapolation.CLAMP
     )
 
     const height = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PLAYER_HEIGHT, fullscreenHeight],
+      [MINI_PLAYER_HEIGHT, fullscreenHeightShared],
       Extrapolation.CLAMP
     )
 
@@ -1134,7 +1171,7 @@ export function VideoPlayerOverlay() {
       zIndex: 1000,
       bottom: undefined,
     }
-  }, [screenHeight, miniPlayerBottom, fullscreenHeight])
+  }, [])
 
   const videoStyle = useAnimatedStyle(() => {
     if (isLandscapeFullscreenShared.value) {
@@ -1144,17 +1181,25 @@ export function VideoPlayerOverlay() {
       }
     }
 
+    if (isInPipModeShared.value) {
+      return {
+        width: screenWidthShared.value,
+        height: screenHeightShared.value,
+        flex: undefined,
+      }
+    }
+
     const width = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_VIDEO_WIDTH, screenWidth],
+      [MINI_VIDEO_WIDTH, screenWidthShared.value],
       Extrapolation.CLAMP
     )
 
     const height = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PLAYER_HEIGHT, videoHeight + insets.top],
+      [MINI_PLAYER_HEIGHT, videoHeightShared.value + insetTopShared.value],
       Extrapolation.CLAMP
     )
 
@@ -1163,7 +1208,7 @@ export function VideoPlayerOverlay() {
       height,
       flex: undefined,
     }
-  }, [screenWidth, videoHeight, insets.top])
+  }, [])
 
   // Animated styles for mini player info (fades out when expanding)
   const miniInfoStyle = useAnimatedStyle(() => {
@@ -1220,7 +1265,7 @@ export function VideoPlayerOverlay() {
     const topPadding = interpolate(
       animProgress.value,
       [0, 1],
-      [0, insets.top],
+      [0, insetTopShared.value],
       Extrapolation.CLAMP
     )
 
@@ -1231,7 +1276,7 @@ export function VideoPlayerOverlay() {
       right: 0,
       bottom: 0,
     }
-  }, [insets.top])
+  }, [])
 
   // Progress bar style - positions at bottom, adjusts for landscape
   const progressBarStyle = useAnimatedStyle(() => {
@@ -2222,7 +2267,7 @@ export function VideoPlayerOverlay() {
 
 
 
-  const pipExitContainerStyle = isPipExitTransition ? {
+  const pipExitContainerStyle = isPipExiting ? {
     position: 'absolute' as const,
     left: 0,
     top: 0,
@@ -2231,7 +2276,7 @@ export function VideoPlayerOverlay() {
     zIndex: 1000,
   } : undefined
 
-  const pipExitVideoStyle = isPipExitTransition ? {
+  const pipExitVideoStyle = isPipExiting ? {
     width: screenWidth,
     height: videoHeight + insets.top,
   } : undefined

@@ -41,8 +41,10 @@ import { useCast } from '@/lib/cast'
 import { CastButton, DevicePickerModal } from '@/components/cast'
 
 // Constants
-const MINI_PLAYER_HEIGHT = 64
-const MINI_VIDEO_WIDTH = 120
+const MINI_PIP_WIDTH = 240
+const MINI_PIP_HEIGHT = 135
+const MINI_PIP_MARGIN = 12
+const MINI_PIP_CORNER_RADIUS = 8
 const TAB_BAR_HEIGHT = 42
 const ANIMATION_DURATION = 300
 
@@ -291,6 +293,9 @@ export function VideoPlayerOverlay() {
     playbackRate,
     vlcSeekPosition,
     isInPipMode,
+    setIsInPipMode,
+    pipWindowSize,
+    setPipWindowSize,
     pauseVideo,
     resumeVideo,
     closeVideo,
@@ -329,11 +334,17 @@ export function VideoPlayerOverlay() {
   const useScreenFallback = isPipExiting || (!isInPipMode && (
     windowWidth < screenMetrics.width * 0.5 || windowHeight < screenMetrics.height * 0.5
   ))
-  const screenWidth = useScreenFallback ? screenMetrics.width : windowWidth
-  const screenHeight = useScreenFallback ? screenMetrics.height : windowHeight
+  const pipSize = isInPipMode && pipWindowSize && pipWindowSize.width > 0 && pipWindowSize.height > 0
+    ? pipWindowSize
+    : null
+
+  const baseScreenWidth = useScreenFallback ? screenMetrics.width : windowWidth
+  const baseScreenHeight = useScreenFallback ? screenMetrics.height : windowHeight
+  const screenWidth = pipSize ? pipSize.width : baseScreenWidth
+  const screenHeight = pipSize ? pipSize.height : baseScreenHeight
   const isWindowLandscape = screenWidth > screenHeight
 
-  const videoHeight = Math.round(screenWidth * 9 / 16)
+  const videoHeight = pipSize ? pipSize.height : Math.round(screenWidth * 9 / 16)
 
   // Desktop video dimensions (YouTube-style - video takes ~70% width, max 1280px)
   const desktopVideoWidth = Math.min(screenWidth * 0.65, 1280)
@@ -429,8 +440,7 @@ export function VideoPlayerOverlay() {
     }
   }, [effectiveCurrentTime, isSeeking])
 
-  // Debug: log cast state on every render
-  console.log('[VideoPlayerOverlay] RENDER - cast.available:', cast.available, 'playerMode:', playerMode, 'showControls:', showControls)
+
 
   const COMMENTS_PER_PAGE = 25
 
@@ -866,13 +876,11 @@ export function VideoPlayerOverlay() {
           width > 0 &&
           height > 0
         if (valid) {
-          const topInset = Math.max(0, Math.round(insets.top))
-          const adjustedHeight = Math.max(0, Math.round(height) - topInset)
           applyRect({
             x: Math.round(x),
-            y: Math.round(y) + topInset,
+            y: Math.round(y),
             width: Math.round(width),
-            height: adjustedHeight > 0 ? adjustedHeight : Math.round(height),
+            height: Math.round(height),
           })
           return
         }
@@ -921,11 +929,19 @@ export function VideoPlayerOverlay() {
         showControlsTemporarily()
       }
     } else if (playerMode === 'mini') {
-      // Tap on video thumbnail in mini mode -> maximize
-      maximizePlayer()
+      showControlsTemporarily()
     }
-  }, [playerMode, isLandscapeFullscreen, showControls, showControlsTemporarily, maximizePlayer])
+  }, [playerMode, isLandscapeFullscreen, showControls, showControlsTemporarily])
 
+  const handleVlcPipStatusChanged = useCallback((event: { isInPictureInPicture: boolean; width: number; height: number }) => {
+    console.log('[VideoPlayerOverlay] VLC PiP status changed:', event.isInPictureInPicture, event.width, event.height)
+    setIsInPipMode(event.isInPictureInPicture)
+    if (event.isInPictureInPicture && event.width > 0 && event.height > 0) {
+      setPipWindowSize({ width: event.width, height: event.height })
+    } else if (!event.isInPictureInPicture) {
+      setPipWindowSize(null)
+    }
+  }, [setIsInPipMode, setPipWindowSize])
 
   // Animation progress: 0 = mini, 1 = fullscreen
   const animProgress = useSharedValue(0)
@@ -938,16 +954,23 @@ export function VideoPlayerOverlay() {
   const insetTopShared = useSharedValue(insets.top)
   const insetBottomShared = useSharedValue(insets.bottom)
   
-  isInPipModeShared.value = isInPipMode || isPipExiting
-  screenWidthShared.value = screenWidth
-  screenHeightShared.value = screenHeight
-  videoHeightShared.value = videoHeight
-  insetTopShared.value = insets.top
-  insetBottomShared.value = insets.bottom
+  const miniPipX = useSharedValue(screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN)
+  const miniPipY = useSharedValue(screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - TAB_BAR_HEIGHT - insets.bottom)
+  const miniPipStartX = useSharedValue(0)
+  const miniPipStartY = useSharedValue(0)
   
-  if (playerMode === 'fullscreen') {
-    animProgress.value = 1
-  }
+  useEffect(() => {
+    isInPipModeShared.value = isInPipMode || isPipExiting
+    screenWidthShared.value = screenWidth
+    screenHeightShared.value = screenHeight
+    videoHeightShared.value = videoHeight
+    insetTopShared.value = insets.top
+    insetBottomShared.value = insets.bottom
+    
+    if (playerMode === 'fullscreen') {
+      animProgress.value = 1
+    }
+  }, [isInPipMode, isPipExiting, screenWidth, screenHeight, videoHeight, insets.top, insets.bottom, playerMode])
   
 
 
@@ -961,6 +984,15 @@ export function VideoPlayerOverlay() {
   useEffect(() => {
     miniPlayerBottomShared.value = miniPlayerBottom
   }, [miniPlayerBottom])
+
+  useEffect(() => {
+    if (playerMode === 'mini') {
+      const safeRight = screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN
+      const safeBottom = screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN
+      miniPipX.value = safeRight
+      miniPipY.value = safeBottom
+    }
+  }, [screenWidth, screenHeight, playerMode])
 
   // When exiting landscape fullscreen, keep rendering the fullscreen container until window dimensions AND insets settle.
   // The tricky part: StatusBar visibility + safe area insets can lag behind the orientation lock by a few frames.
@@ -1058,61 +1090,57 @@ export function VideoPlayerOverlay() {
     }
   }, [currentVideo?.channelKey])
 
-  // Animate when playerMode changes
   useEffect(() => {
     if (playerMode === 'fullscreen') {
-      animProgress.value = withSpring(1, SPRING_CONFIG)
+      animProgress.value = withTiming(1, { duration: 250 })
     } else if (playerMode === 'mini') {
-      animProgress.value = withSpring(0, SPRING_CONFIG)
+      animProgress.value = withTiming(0, { duration: 250 })
     }
   }, [playerMode])
 
-  // Pan gesture for dragging between states
-  // Disabled in landscape mode to prevent interfering with video controls
   const panGesture = Gesture.Pan()
     .enabled(!isLandscapeFullscreen)
-    .activeOffsetY([-10, 10]) // Require 10px vertical drag before activating (prevents tap from triggering)
     .onStart(() => {
       isGestureActive.value = true
+      miniPipStartX.value = miniPipX.value
+      miniPipStartY.value = miniPipY.value
     })
     .onUpdate((event) => {
-      // Calculate progress based on drag
-      const totalDistance = screenHeight - miniPlayerBottom - fullscreenTop - MINI_PLAYER_HEIGHT
-      const dragProgress = -event.translationY / totalDistance
+      if (animProgress.value < 0.5) {
+        const safeTop = insetTopShared.value + MINI_PIP_MARGIN
+        const safeBottom = screenHeightShared.value - MINI_PIP_HEIGHT - MINI_PIP_MARGIN
+        const safeLeft = MINI_PIP_MARGIN
+        const safeRight = screenWidthShared.value - MINI_PIP_WIDTH - MINI_PIP_MARGIN
 
-      if (playerMode === 'fullscreen') {
-        // Dragging down from fullscreen
-        animProgress.value = Math.max(0, Math.min(1, 1 + dragProgress))
+        const newX = miniPipStartX.value + event.translationX
+        const newY = miniPipStartY.value + event.translationY
+
+        miniPipX.value = Math.max(safeLeft, Math.min(safeRight, newX))
+        miniPipY.value = Math.max(safeTop, Math.min(safeBottom, newY))
       } else {
-        // Dragging up from mini
-        animProgress.value = Math.max(0, Math.min(1, dragProgress))
+        const totalDistance = screenHeightShared.value - miniPlayerBottomShared.value - insetTopShared.value - MINI_PIP_HEIGHT
+        const dragProgress = -event.translationY / totalDistance
+        animProgress.value = Math.max(0, Math.min(1, 1 + dragProgress))
       }
     })
     .onEnd((event) => {
       isGestureActive.value = false
-      const velocity = event.velocityY
 
-      // Determine final state based on progress and velocity
-      if (velocity > 500) {
-        // Fast swipe down -> minimize
-        animProgress.value = withSpring(0, SPRING_CONFIG)
-        runOnJS(minimizePlayer)()
-      } else if (velocity < -500) {
-        // Fast swipe up -> maximize
-        animProgress.value = withSpring(1, SPRING_CONFIG)
-        runOnJS(maximizePlayer)()
-      } else if (animProgress.value > 0.5) {
-        // Past halfway -> fullscreen
-        animProgress.value = withSpring(1, SPRING_CONFIG)
-        runOnJS(maximizePlayer)()
-      } else {
-        // Below halfway -> mini
-        animProgress.value = withSpring(0, SPRING_CONFIG)
-        runOnJS(minimizePlayer)()
+      if (animProgress.value >= 0.5) {
+        const velocity = event.velocityY
+        if (velocity > 500) {
+          animProgress.value = withTiming(0, { duration: 200 })
+          runOnJS(minimizePlayer)()
+        } else if (animProgress.value > 0.5) {
+          animProgress.value = withTiming(1, { duration: 200 })
+          runOnJS(maximizePlayer)()
+        } else {
+          animProgress.value = withTiming(0, { duration: 200 })
+          runOnJS(minimizePlayer)()
+        }
       }
     })
 
-  // Only pan gesture; mini expand is triggered by tapping the mini info row (see render)
   const composedGesture = panGesture
 
   // Animated styles for the container
@@ -1130,6 +1158,7 @@ export function VideoPlayerOverlay() {
         height: landscapeHeight.value,
         zIndex: 9999,
         backgroundColor: '#000',
+        borderRadius: 0,
       }
     }
 
@@ -1141,6 +1170,7 @@ export function VideoPlayerOverlay() {
         top: 0,
         bottom: 0,
         zIndex: 1000,
+        borderRadius: 0,
       }
     }
 
@@ -1148,28 +1178,55 @@ export function VideoPlayerOverlay() {
       ? screenHeightShared.value + insetBottomShared.value 
       : screenHeightShared.value
 
-    const top = interpolate(
+    const width = interpolate(
       animProgress.value,
       [0, 1],
-      [screenHeightShared.value - miniPlayerBottomShared.value - MINI_PLAYER_HEIGHT, 0],
+      [MINI_PIP_WIDTH, screenWidthShared.value],
       Extrapolation.CLAMP
     )
 
     const height = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PLAYER_HEIGHT, fullscreenHeightShared],
+      [MINI_PIP_HEIGHT, fullscreenHeightShared],
+      Extrapolation.CLAMP
+    )
+
+    const left = interpolate(
+      animProgress.value,
+      [0, 1],
+      [miniPipX.value, 0],
+      Extrapolation.CLAMP
+    )
+
+    const top = interpolate(
+      animProgress.value,
+      [0, 1],
+      [miniPipY.value, 0],
+      Extrapolation.CLAMP
+    )
+
+    const borderRadius = interpolate(
+      animProgress.value,
+      [0, 1],
+      [MINI_PIP_CORNER_RADIUS, 0],
       Extrapolation.CLAMP
     )
 
     return {
       position: 'absolute',
-      left: 0,
-      right: 0,
+      left,
       top,
+      width,
       height,
-      zIndex: 1000,
-      bottom: undefined,
+      zIndex: 9999,
+      borderRadius,
+      overflow: 'hidden',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: animProgress.value < 0.5 ? 0.4 : 0,
+      shadowRadius: 8,
+      elevation: animProgress.value < 0.5 ? 10 : 0,
     }
   }, [])
 
@@ -1192,14 +1249,14 @@ export function VideoPlayerOverlay() {
     const width = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_VIDEO_WIDTH, screenWidthShared.value],
+      [MINI_PIP_WIDTH, screenWidthShared.value],
       Extrapolation.CLAMP
     )
 
     const height = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PLAYER_HEIGHT, videoHeightShared.value + insetTopShared.value],
+      [MINI_PIP_HEIGHT, videoHeightShared.value + insetTopShared.value],
       Extrapolation.CLAMP
     )
 
@@ -1499,7 +1556,7 @@ export function VideoPlayerOverlay() {
     const canAutoPip = typeof Platform.Version === 'number' && Platform.Version >= 31
     const shouldEnableAutoPip =
       pipSupported !== false &&
-      playerMode === 'fullscreen' &&
+      (playerMode === 'fullscreen' || playerMode === 'mini') &&
       currentVideo !== null &&
       !isCasting
     const shouldAutoPip = canAutoPip && shouldEnableAutoPip
@@ -1525,7 +1582,7 @@ export function VideoPlayerOverlay() {
       if (pipEnterInFlightRef.current) return
       if (canAutoPip && autoPipEnabledRef.current) return
       if (pipSupported === false) return
-      if (!currentVideo || playerMode !== 'fullscreen' || isCasting || isInPipMode) return
+      if (!currentVideo || (playerMode !== 'fullscreen' && playerMode !== 'mini') || isCasting || isInPipMode) return
       pipEnterInFlightRef.current = true
       MediaSession.enterPictureInPicture?.().catch(() => {})
       setTimeout(() => {
@@ -1533,7 +1590,7 @@ export function VideoPlayerOverlay() {
       }, 1000)
     })
     return () => subscription.remove()
-  }, [currentVideo, playerMode, isCasting, isInPipMode, pipSupported])
+  }, [currentVideo, playerMode, isCasting, isInPipMode, pipSupported, playerRef])
 
   // Downloads context for browser-style download manager
   const { addDownload, downloads } = useDownloads()
@@ -2228,12 +2285,15 @@ export function VideoPlayerOverlay() {
             seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
             resizeMode="contain"
             autoAspectRatio={true}
+            pictureInPictureEnabled={Platform.OS === 'android'}
+            playInPictureInPicture={true}
             onProgress={onProgress}
             onPlaying={onPlaying}
             onPaused={onPaused}
             onBuffering={onBuffering}
             onEnd={onEnded}
             onError={onError}
+            onPictureInPictureStatusChanged={handleVlcPipStatusChanged}
           />
         )}
         {Platform.OS === 'web' && isPear && videoUrl && (
@@ -2444,44 +2504,32 @@ export function VideoPlayerOverlay() {
               </Text>
             </Animated.View>
           )}
+
+          {/* Mini PiP controls - INSIDE GestureDetector so pan gesture works through them */}
+          {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && showControls && (
+            <Animated.View style={[styles.miniPipOverlay, miniInfoStyle]} pointerEvents="box-none">
+              <View style={styles.miniPipTopRow} pointerEvents="box-none">
+                <Pressable style={styles.miniPipSmallButton} onPress={closeVideo}>
+                  <Feather name="x" size={16} color="#fff" />
+                </Pressable>
+                <Pressable style={styles.miniPipSmallButton} onPress={maximizePlayer}>
+                  <Feather name="maximize-2" size={16} color="#fff" />
+                </Pressable>
+              </View>
+              <Pressable style={styles.miniPipPlayButton} onPress={handlePlayPause}>
+                <Ionicons name={effectiveIsPlaying ? 'pause' : 'play'} size={28} color="#fff" />
+              </Pressable>
+            </Animated.View>
+          )}
+
+          {/* Mini PiP progress bar - always visible when mini */}
+          {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
+            <Animated.View style={[styles.miniPipProgressBar, miniInfoStyle]} pointerEvents="none">
+              <View style={[styles.miniPipProgressFill, { width: `${effectiveProgress * 100}%` }]} />
+            </Animated.View>
+          )}
         </Animated.View>
         </GestureDetector>
-
-        {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
-          <Animated.View style={[styles.miniInfo, miniInfoStyle]}>
-            <Pressable onPress={maximizePlayer} style={StyleSheet.absoluteFill}>
-              <View style={styles.miniInfoText}>
-                <Text style={styles.miniTitle} numberOfLines={1}>
-                  {currentVideo.title}
-                </Text>
-                <Text style={styles.miniChannel} numberOfLines={1}>
-                  {channelName}
-                </Text>
-              </View>
-            </Pressable>
-          </Animated.View>
-        )}
-
-        {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
-          <Animated.View style={[styles.miniControls, miniControlsStyle]}>
-            <Pressable style={styles.miniControlButton} onPress={handlePlayPause}>
-              {effectiveIsPlaying ? (
-                <Ionicons name="pause" color={colors.text} size={24} />
-              ) : (
-                <Ionicons name="play" color={colors.text} size={24} />
-              )}
-            </Pressable>
-            <Pressable style={styles.miniControlButton} onPress={closeVideo}>
-              <Feather name="x" color={colors.text} size={24} />
-            </Pressable>
-          </Animated.View>
-        )}
-
-        {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
-          <Animated.View style={[styles.miniProgressBar, miniInfoStyle]}>
-            <View style={[styles.miniProgressFill, { width: `${effectiveProgress * 100}%` }]} />
-          </Animated.View>
-        )}
 
         {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
           <Animated.View style={[styles.fullscreenContent, fullscreenContentStyle]}>
@@ -2521,7 +2569,6 @@ export function VideoPlayerOverlay() {
                 onPress={() => toggleReaction('dislike')}
               />
               <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="share-2" color={color} size={size} />} label="Share" />
-              {console.log('[VideoPlayerOverlay] cast.available:', cast.available)}
               {cast.available && (
                 <ActionButton
                   icon={({ color, size }: { color: string; size: number }) => <Feather name="cast" color={color} size={size} />}
@@ -3099,10 +3146,10 @@ const styles = StyleSheet.create({
   // Mini player styles
   miniInfo: {
     position: 'absolute',
-    left: MINI_VIDEO_WIDTH,
+    left: MINI_PIP_WIDTH,
     right: 100,
     top: 0,
-    height: MINI_PLAYER_HEIGHT,
+    height: MINI_PIP_HEIGHT,
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
@@ -3124,7 +3171,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 8,
     top: 0,
-    height: MINI_PLAYER_HEIGHT,
+    height: MINI_PIP_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -3143,6 +3190,48 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.1)',
   },
   miniProgressFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+  },
+  miniPipOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  miniPipTopRow: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    right: 8,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  miniPipSmallButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  miniPipPlayButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  miniPipProgressBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  miniPipProgressFill: {
     height: '100%',
     backgroundColor: colors.primary,
   },

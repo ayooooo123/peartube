@@ -58,7 +58,9 @@ interface VideoPlayerContextType {
   videoStats: VideoStats | null
   playbackSession: number
   isInPipMode: boolean
+  setIsInPipMode: (value: boolean) => void
   pipWindowSize: { width: number; height: number } | null
+  setPipWindowSize: (value: { width: number; height: number } | null) => void
   
   // Unified PiP gating - single source of truth for whether PiP should be enabled
   shouldEnablePip: boolean
@@ -145,6 +147,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const isBackgroundedRef = useRef(false)
   const isInPipModeRef = useRef(false)
   const wasPlayingWhenPipEnteredRef = useRef(false)
+  const lastPipEventTimeRef = useRef(0)
+  const pipStateUpdateRafRef = useRef<number | null>(null)
   const currentTimeRef = useRef(0)
   const durationRef = useRef(0)
   const isPlayingRef = useRef(false)
@@ -337,42 +341,62 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     return () => subscription.remove()
   }, [])
 
-  // PiP mode change listener (Android only) - resume playback when entering PiP
-  // VLC's onHostPause pauses playback, so we immediately resume when we detect PiP entry
   useEffect(() => {
     if (Platform.OS !== 'android') return
 
     const subscription = MediaSession.addPictureInPictureListener((event) => {
+      const now = Date.now()
       const wasInPip = isInPipModeRef.current
-      isInPipModeRef.current = event.isInPictureInPicture
-      setIsInPipMode(event.isInPictureInPicture)
-      if (event.isInPictureInPicture && event.width && event.height) {
-        setPipWindowSize({ width: event.width, height: event.height })
-      } else if (!event.isInPictureInPicture) {
-        setPipWindowSize(null)
+      
+      if (event.isInPictureInPicture === wasInPip && now - lastPipEventTimeRef.current < 100) {
+        return
       }
-
-      console.log('[VideoPlayerContext] PiP mode changed:', event.isInPictureInPicture, 'wasPlaying:', wasPlayingWhenBackgroundedRef.current)
-
-      if (event.isInPictureInPicture) {
-        wasPlayingWhenPipEnteredRef.current = isPlayingRef.current
-        if (wasPlayingWhenPipEnteredRef.current) {
-          // VLC can emit a host-pause during PiP entry; re-assert playback if we were playing.
-          setTimeout(() => {
-            setIsPlaying(true)
-          }, 100)
-        }
-      } else if (wasInPip) {
-        console.log('[VideoPlayerContext] Exiting PiP, ensuring playback continues')
-        if (wasPlayingWhenPipEnteredRef.current) {
-          setTimeout(() => {
-            setIsPlaying(true)
-          }, 100)
-        }
+      lastPipEventTimeRef.current = now
+      
+      if (pipStateUpdateRafRef.current !== null) {
+        cancelAnimationFrame(pipStateUpdateRafRef.current)
       }
+      
+      pipStateUpdateRafRef.current = requestAnimationFrame(() => {
+        pipStateUpdateRafRef.current = null
+        isInPipModeRef.current = event.isInPictureInPicture
+        setIsInPipMode(event.isInPictureInPicture)
+        if (event.isInPictureInPicture && event.width && event.height) {
+          setPipWindowSize({ width: event.width, height: event.height })
+        } else if (!event.isInPictureInPicture) {
+          setPipWindowSize(null)
+        }
+
+        console.log('[VideoPlayerContext] PiP mode changed:', event.isInPictureInPicture, 'wasPlaying:', wasPlayingWhenBackgroundedRef.current)
+
+        if (event.isInPictureInPicture) {
+          const wasPlaying = isPlayingRef.current || wasPlayingWhenBackgroundedRef.current
+          wasPlayingWhenPipEnteredRef.current = wasPlaying
+          console.log('[VideoPlayerContext] Entering PiP, wasPlaying:', wasPlaying, 'isPlaying:', isPlayingRef.current, 'wasPlayingWhenBackgrounded:', wasPlayingWhenBackgroundedRef.current)
+          if (wasPlaying) {
+            setTimeout(() => {
+              console.log('[VideoPlayerContext] Resuming playback in PiP')
+              setIsPlaying(true)
+            }, 150)
+          }
+        } else if (wasInPip) {
+          console.log('[VideoPlayerContext] Exiting PiP, maximizing player and ensuring playback continues')
+          setPlayerMode('fullscreen')
+          if (wasPlayingWhenPipEnteredRef.current) {
+            setTimeout(() => {
+              setIsPlaying(true)
+            }, 100)
+          }
+        }
+      })
     })
 
-    return () => subscription.remove()
+    return () => {
+      subscription.remove()
+      if (pipStateUpdateRafRef.current !== null) {
+        cancelAnimationFrame(pipStateUpdateRafRef.current)
+      }
+    }
   }, [])
 
   // Subscribe to video stats events from backend
@@ -511,9 +535,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     mediaSessionActiveRef.current = false
   }, [setMediaSessionActive])
 
-  // Minimize to mini player - video keeps playing, just changes UI mode
   const minimizePlayer = useCallback(() => {
-    console.log('[VideoPlayerContext] Minimizing to mini player')
+    console.log('[VideoPlayerContext] Minimizing to in-app mini player')
     setPlayerMode('mini')
   }, [])
 
@@ -671,7 +694,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     playbackRate,
     playbackSession,
     isInPipMode,
+    setIsInPipMode,
     pipWindowSize,
+    setPipWindowSize,
     shouldEnablePip,
     vlcSeekPosition: seekPosition,
     playerRef,

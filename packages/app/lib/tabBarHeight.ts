@@ -34,7 +34,7 @@ export function useTabBarMetrics() {
   useEffect(() => {
     const listener = () => setMetrics(getTabBarMetrics())
     listeners.add(listener)
-    return () => listeners.delete(listener)
+    return () => { listeners.delete(listener) }
   }, [])
 
   return metrics

@@ -14,9 +14,11 @@ import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from './desktop/co
 import { useApp } from '@/lib/AppContext'
 
 // VLC player for iOS/Android
+// Using VLCPlayerSurface (SurfaceView) for better PiP compatibility on Android
 let VLCPlayer: any = null
 if (Platform.OS !== 'web') {
-  VLCPlayer = require('react-native-vlc-media-player').VLCPlayer
+  // VLCPlayer = require('react-native-vlc-media-player').VLCPlayer // TextureView
+  VLCPlayer = require('react-native-vlc-media-player').VLCPlayerSurface // SurfaceView - better for PiP
 }
 
 // MpvPlayer for Pear Desktop (universal codec support)
@@ -906,6 +908,8 @@ export function VideoPlayerOverlay() {
     setTimeout(updatePipSourceRect, 200)
   }, [pipSupported, isInPipMode, updatePipSourceRect])
 
+  // Native overlay disabled - testing simple padding approach
+
   // Show controls temporarily
   const showControlsTemporarily = useCallback(() => {
     setShowControls(true)
@@ -1174,8 +1178,9 @@ export function VideoPlayerOverlay() {
       }
     }
 
-    const fullscreenHeightShared = isAndroid 
-      ? screenHeightShared.value + insetBottomShared.value 
+    // On Android, reduce height by insetTop since we're starting below the status bar
+    const fullscreenHeightShared = isAndroid
+      ? screenHeightShared.value + insetBottomShared.value - insetTopShared.value
       : screenHeightShared.value
 
     const width = interpolate(
@@ -1199,10 +1204,12 @@ export function VideoPlayerOverlay() {
       Extrapolation.CLAMP
     )
 
+    // On Android, fullscreen starts below status bar to avoid camera cutout
+    const fullscreenTop = isAndroid ? insetTopShared.value : 0
     const top = interpolate(
       animProgress.value,
       [0, 1],
-      [miniPipY.value, 0],
+      [miniPipY.value, fullscreenTop],
       Extrapolation.CLAMP
     )
 
@@ -1256,7 +1263,7 @@ export function VideoPlayerOverlay() {
     const height = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PIP_HEIGHT, videoHeightShared.value + insetTopShared.value],
+      [MINI_PIP_HEIGHT, videoHeightShared.value],
       Extrapolation.CLAMP
     )
 
@@ -1308,32 +1315,13 @@ export function VideoPlayerOverlay() {
     return { opacity }
   })
 
-  const videoPlayerStyle = useAnimatedStyle(() => {
-    if (isLandscapeFullscreenShared.value || isInPipModeShared.value) {
-      return {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-      }
-    }
-
-    const topPadding = interpolate(
-      animProgress.value,
-      [0, 1],
-      [0, insetTopShared.value],
-      Extrapolation.CLAMP
-    )
-
-    return {
-      position: 'absolute',
-      top: topPadding,
-      left: 0,
-      right: 0,
-      bottom: 0,
-    }
-  }, [])
+  const videoPlayerStyle = useAnimatedStyle(() => ({
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  }), [])
 
   // Progress bar style - positions at bottom, adjusts for landscape
   const progressBarStyle = useAnimatedStyle(() => {
@@ -2359,6 +2347,8 @@ export function VideoPlayerOverlay() {
               <Animated.View style={videoPlayerStyle}>
                 {renderVideoPlayer()}
               </Animated.View>
+
+            {/* Video plays edge-to-edge (YouTube-style) - no status bar overlay */}
 
             {showLoadingOverlay && !isInPipMode && (
               <View style={styles.loadingOverlay}>

@@ -177,6 +177,51 @@ export async function setPictureInPictureSourceRect(rect: { x: number; y: number
 }
 
 /**
+ * Set the aspect ratio for PiP window (Android only).
+ * Call this when video dimensions become known.
+ *
+ * @param width - Video width in pixels
+ * @param height - Video height in pixels
+ */
+export async function setPictureInPictureAspectRatio(width: number, height: number): Promise<void> {
+  if (Platform.OS !== 'android' || !(MediaSessionNative as any).setPictureInPictureAspectRatio) {
+    return
+  }
+  console.log('[MediaSession JS] setPictureInPictureAspectRatio:', width, 'x', height)
+  return (MediaSessionNative as any).setPictureInPictureAspectRatio(width, height)
+}
+
+/**
+ * Enable/disable the native status bar overlay (Android only).
+ *
+ * When enabled, a black bar is shown over the status bar area to prevent
+ * video from playing behind the camera cutout. The overlay is automatically
+ * hidden during PiP transitions to prevent black bars in the PiP window.
+ *
+ * Call with `true` when entering fullscreen video mode.
+ * Call with `false` when exiting fullscreen video mode.
+ *
+ * @param enabled - Whether the overlay should be visible
+ */
+export async function setStatusBarOverlayEnabled(enabled: boolean): Promise<void> {
+  if (Platform.OS !== 'android') {
+    console.log('[MediaSession JS] setStatusBarOverlayEnabled: not Android, skipping')
+    return
+  }
+  if (!(MediaSessionNative as any).setStatusBarOverlayEnabled) {
+    console.log('[MediaSession JS] setStatusBarOverlayEnabled: function not available on native module')
+    return
+  }
+  console.log('[MediaSession JS] setStatusBarOverlayEnabled: calling native with enabled=', enabled)
+  try {
+    await (MediaSessionNative as any).setStatusBarOverlayEnabled(enabled)
+    console.log('[MediaSession JS] setStatusBarOverlayEnabled: native call succeeded')
+  } catch (err) {
+    console.error('[MediaSession JS] setStatusBarOverlayEnabled: native call failed:', err)
+  }
+}
+
+/**
  * Subscribe to remote control commands (play, pause, seek, skip, etc.)
  * from lock screen, notification, headset buttons, etc.
  * 
@@ -226,20 +271,32 @@ export function addAudioRouteChangeListener(
 }
 
 /**
+ * PiP event payload.
+ * - isPreparing: true when PiP entry is about to happen (gives JS time to update layout)
+ * - isInPictureInPicture: true when actually in PiP mode
+ */
+export interface PictureInPictureEvent {
+  isInPictureInPicture: boolean
+  isPreparing?: boolean
+  width?: number
+  height?: number
+}
+
+/**
  * Subscribe to PiP state changes (Android only).
- * 
- * @param listener - Callback receiving { isInPictureInPicture: boolean }
+ *
+ * @param listener - Callback receiving PictureInPictureEvent
  * @returns Subscription that can be removed
  */
 export function addPictureInPictureListener(
-  listener: (event: { isInPictureInPicture: boolean; width?: number; height?: number }) => void
+  listener: (event: PictureInPictureEvent) => void
 ): Subscription {
   if (!emitter) {
     return { remove: () => {} }
   }
   return (emitter as any).addListener(
     'onPictureInPictureChanged',
-    (event: { isInPictureInPicture: boolean; width?: number; height?: number }) => {
+    (event: PictureInPictureEvent) => {
     console.log('[MediaSession JS] PiP changed event received:', event)
     listener(event)
     }
@@ -254,6 +311,8 @@ export default {
   enterPictureInPicture,
   isPictureInPictureSupported,
   setAutoPictureInPicture,
+  setPictureInPictureAspectRatio,
+  setStatusBarOverlayEnabled,
   addRemoteCommandListener,
   addAudioInterruptionListener,
   addAudioRouteChangeListener,

@@ -79,9 +79,17 @@ class MediaPlaybackService : Service() {
 
     private fun ensureForeground() {
         if (isForeground) return
-        val notification = buildNotification()
-        startForeground(NOTIFICATION_ID, notification)
-        isForeground = true
+        try {
+            val notification = buildNotification()
+            startForeground(NOTIFICATION_ID, notification)
+            isForeground = true
+        } catch (e: Exception) {
+            // On Android 12+, startForeground may fail if app is in background
+            // (e.g., after a crash when system tries to restart the service)
+            android.util.Log.w("MediaPlaybackService", "Failed to start foreground: ${e.message}")
+            // Stop the service gracefully instead of crashing
+            stopSelf()
+        }
     }
     
     private fun createNotificationChannel() {
@@ -195,4 +203,5 @@ object PipServiceBridge {
     fun onForward() {
         moduleInstance?.handlePipForward()
     }
+    
 }

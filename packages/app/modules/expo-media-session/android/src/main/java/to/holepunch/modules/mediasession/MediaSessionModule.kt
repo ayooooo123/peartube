@@ -1,6 +1,7 @@
 package to.holepunch.modules.mediasession
 
 import android.app.Activity
+import android.app.Application
 import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
@@ -16,6 +17,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.support.v4.media.MediaMetadataCompat
@@ -218,6 +220,8 @@ class MediaSessionModule : Module(), PictureInPictureListener {
     private var pendingLayoutRunnable: Runnable? = null
     private var pipAspectRatioWidth: Int = 16
     private var pipAspectRatioHeight: Int = 9
+    private var activityLifecycleCallback: Application.ActivityLifecycleCallbacks? = null
+    @Volatile private var isActivityResumed: Boolean = false
 
     override fun definition() = ModuleDefinition {
         Name("MediaSession")
@@ -342,11 +346,13 @@ class MediaSessionModule : Module(), PictureInPictureListener {
             PipBridge.register(this@MediaSessionModule)
             PipServiceBridge.register(this@MediaSessionModule)
             attachPipFragment()
+            registerActivityLifecycleCallback()
             // Native overlay disabled - PipHostActivity handles PiP in a separate window
             // so the React Native layout with inset offsets doesn't affect the PiP snapshot
         }
 
         OnDestroy {
+            unregisterActivityLifecycleCallback()
             PipBridge.unregister(this@MediaSessionModule)
             PipServiceBridge.unregister(this@MediaSessionModule)
             detachPipFragment()
@@ -561,6 +567,74 @@ class MediaSessionModule : Module(), PictureInPictureListener {
             @Suppress("DEPRECATION")
             audioManager?.abandonAudioFocus(null)
         }
+    }
+
+    /**
+     * Registers an Application.ActivityLifecycleCallbacks to detect when the user
+     * leaves the app (presses home/recents). This is a workaround because the Expo
+     * Package system's ReactActivityLifecycleListener isn't being loaded for our module.
+     *
+     * We detect "user leave" by tracking:
+     * 1. Activity was in RESUMED state
+     * 2. Activity is being PAUSED
+     * 3. It's NOT a configuration change
+     * 4. We're NOT already in PiP
+     * 5. Auto-PiP is enabled
+     */
+    private fun registerActivityLifecycleCallback() {
+        val context = appContext.reactContext ?: return
+        val application = context.applicationContext as? Application ?: return
+
+        activityLifecycleCallback = object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityResumed(activity: Activity) {
+                if (activity.javaClass.name.contains("MainActivity")) {
+                    isActivityResumed = true
+                    android.util.Log.d("MediaSession", "ActivityLifecycle: onResumed")
+                }
+            }
+
+            override fun onActivityPaused(activity: Activity) {
+                if (!activity.javaClass.name.contains("MainActivity")) return
+
+                android.util.Log.d("MediaSession", "ActivityLifecycle: onPaused, isChangingConfigurations=${activity.isChangingConfigurations}, isAutoPipEnabled=$isAutoPipEnabled, wasInPipMode=$wasInPipMode")
+
+                // Only trigger PiP if:
+                // 1. We were resumed (not coming from background)
+                // 2. Not a configuration change (rotation, etc)
+                // 3. Auto-PiP is enabled
+                // 4. Not already in PiP mode
+                if (isActivityResumed &&
+                    !activity.isChangingConfigurations &&
+                    isAutoPipEnabled &&
+                    !wasInPipMode) {
+
+                    android.util.Log.d("MediaSession", "ActivityLifecycle: Triggering PiP entry via PipBridge")
+                    PipBridge.onUserLeaveHint(activity)
+                }
+
+                isActivityResumed = false
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityStarted(activity: Activity) {}
+            override fun onActivityStopped(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        }
+
+        application.registerActivityLifecycleCallbacks(activityLifecycleCallback)
+        android.util.Log.d("MediaSession", "Registered ActivityLifecycleCallbacks for PiP detection")
+    }
+
+    private fun unregisterActivityLifecycleCallback() {
+        val context = appContext.reactContext ?: return
+        val application = context.applicationContext as? Application ?: return
+
+        activityLifecycleCallback?.let {
+            application.unregisterActivityLifecycleCallbacks(it)
+            android.util.Log.d("MediaSession", "Unregistered ActivityLifecycleCallbacks")
+        }
+        activityLifecycleCallback = null
     }
 
     private fun handleAudioFocusChange(focusChange: Int) {

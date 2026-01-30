@@ -66,15 +66,18 @@ class MainActivity : ReactActivity() {
       PipBridge.onPictureInPictureModeChanged(this, isInPictureInPictureMode, newConfig)
   }
 
+  // region PiP Entry - DO NOT REMOVE
   /**
    * Called when the user is about to leave the activity (e.g., pressing home button).
-   * This triggers PiP entry via PipBridge, which delegates to VLC's PipHostActivity
-   * for clean picture-in-picture without layout artifacts.
+   * This triggers PiP entry via PipBridge -> VlcPipEntryHandler -> PipHostActivity.
    *
-   * IMPORTANT: This method is critical for PiP to work. Do not remove it.
+   * WARNING: This method is REQUIRED for Picture-in-Picture to work.
+   * Without it, PiP will not be triggered when the user presses the home button.
    */
+  @Suppress("RedundantOverride", "unused")
   override fun onUserLeaveHint() {
       super.onUserLeaveHint()
       PipBridge.onUserLeaveHint(this)
   }
+  // endregion
 }

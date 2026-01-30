@@ -1,7 +1,8 @@
 {
   "platforms": ["android", "ios"],
   "android": {
-    "modules": ["to.holepunch.modules.mediasession.MediaSessionModule"]
+    "modules": ["to.holepunch.modules.mediasession.MediaSessionModule"],
+    "package": "to.holepunch.modules.mediasession.MediaSessionPackage"
   },
   "ios": {
     "modules": ["MediaSessionModule"]

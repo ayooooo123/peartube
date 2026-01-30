@@ -65,4 +65,14 @@ class MainActivity : ReactActivity() {
       super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
       PipBridge.onPictureInPictureModeChanged(this, isInPictureInPictureMode, newConfig)
   }
+
+  /**
+   * Called when the user is about to leave the activity (e.g., pressing home button).
+   * This triggers PiP entry via PipBridge, which delegates to VLC's PipHostActivity
+   * for clean picture-in-picture without layout artifacts.
+   */
+  override fun onUserLeaveHint() {
+      super.onUserLeaveHint()
+      PipBridge.onUserLeaveHint(this)
+  }
 }

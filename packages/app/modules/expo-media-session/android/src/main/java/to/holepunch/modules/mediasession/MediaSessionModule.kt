@@ -643,30 +643,16 @@ class MediaSessionModule : Module(), PictureInPictureListener {
 
         val context = appContext.reactContext ?: return false
 
-        // Try external handler first (e.g., VLC's PipHostActivity)
-        // This provides clean PiP without React Native layout artifacts
+        // Use external handler (VLC's PipHostActivity) for clean PiP
+        // without React Native layout artifacts causing 50/50 video issue.
+        // We intentionally DO NOT fall back to activity-level PiP since
+        // it captures the entire activity window including RN layout offsets.
         if (PipBridge.enterPipViaExternalHandler(context)) {
             return true
         }
 
-        // Fallback to activity-level PiP (may have layout issues)
-        val activity = appContext.currentActivity ?: return false
-        android.util.Log.d("MediaSession", "enterPiP: Using fallback activity-level PiP")
-
-        val builder = PictureInPictureParams.Builder()
-            .setAspectRatio(getPipAspectRatio())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builder.setSeamlessResizeEnabled(false)
-        }
-        if (useSourceRectHint) {
-            pipSourceRect?.let { rect ->
-                if (!rect.isEmpty) {
-                    builder.setSourceRectHint(rect)
-                }
-            }
-        }
-
-        return activity.enterPictureInPictureMode(builder.build())
+        android.util.Log.w("MediaSession", "enterPiP: No external handler available, PiP not entered")
+        return false
     }
 
     private fun setAutoPiP(enabled: Boolean) {
@@ -801,32 +787,15 @@ class MediaSessionModule : Module(), PictureInPictureListener {
     internal fun enterPiPFromCallback(activity: Activity) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
-        // Try external handler first (e.g., VLC's PipHostActivity)
-        // This provides clean PiP without React Native layout artifacts
+        // Use external handler (VLC's PipHostActivity) for clean PiP.
+        // We intentionally DO NOT fall back to activity-level PiP since
+        // it captures the entire activity window including RN layout offsets,
+        // causing the 50/50 video issue (half video, half black).
         if (PipBridge.enterPipViaExternalHandler(activity)) {
             return
         }
 
-        // Fallback to activity-level PiP
-        android.util.Log.d("MediaSession", "enterPiPFromCallback: Using fallback activity-level PiP")
-        try {
-            val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(getPipAspectRatio())
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setSeamlessResizeEnabled(false)
-            }
-            if (useSourceRectHint) {
-                pipSourceRect?.let { rect ->
-                    if (!rect.isEmpty) {
-                        builder.setSourceRectHint(rect)
-                    }
-                }
-            }
-            builder.setActions(buildPipActions(activity))
-            activity.enterPictureInPictureMode(builder.build())
-        } catch (e: Exception) {
-            android.util.Log.e("MediaSession", "Failed to enter PiP: ${e.message}")
-        }
+        android.util.Log.w("MediaSession", "enterPiPFromCallback: No external handler available, PiP not entered")
     }
     
     private fun setupStatusBarOverlay() {

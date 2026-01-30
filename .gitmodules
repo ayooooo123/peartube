@@ -5,3 +5,6 @@
 	path = packages/bare-mpv/vendor/mpv
 	url = https://github.com/mpv-player/mpv.git
 	branch = master
+[submodule "packages/app/vendor/react-native-vlc-media-player"]
+	path = packages/app/vendor/react-native-vlc-media-player
+	url = https://github.com/ayooooo123/react-native-vlc-media-player.git

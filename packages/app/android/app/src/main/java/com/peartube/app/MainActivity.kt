@@ -70,6 +70,8 @@ class MainActivity : ReactActivity() {
    * Called when the user is about to leave the activity (e.g., pressing home button).
    * This triggers PiP entry via PipBridge, which delegates to VLC's PipHostActivity
    * for clean picture-in-picture without layout artifacts.
+   *
+   * IMPORTANT: This method is critical for PiP to work. Do not remove it.
    */
   override fun onUserLeaveHint() {
       super.onUserLeaveHint()

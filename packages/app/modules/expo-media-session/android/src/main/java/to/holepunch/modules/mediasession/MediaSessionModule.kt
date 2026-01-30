@@ -725,8 +725,11 @@ class MediaSessionModule : Module(), PictureInPictureListener {
         val activity = appContext.currentActivity ?: return
         val builder = PictureInPictureParams.Builder()
             .setAspectRatio(getPipAspectRatio())
-            .setAutoEnterEnabled(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // IMPORTANT: Never use setAutoEnterEnabled(true) - it bypasses onUserLeaveHint
+            // and enters activity-level PiP directly, causing the 50/50 video issue.
+            // We handle PiP entry manually via onUserLeaveHint -> PipHostActivity.
+            builder.setAutoEnterEnabled(false)
             builder.setSeamlessResizeEnabled(false)
         }
         if (useSourceRectHint) {
@@ -958,9 +961,10 @@ class MediaSessionModule : Module(), PictureInPictureListener {
                 .setAspectRatio(getPipAspectRatio())
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setSeamlessResizeEnabled(false)
-                if (isAutoPipEnabled) {
-                    builder.setAutoEnterEnabled(true)
-                }
+                // IMPORTANT: Never use setAutoEnterEnabled(true) - it bypasses onUserLeaveHint
+                // and enters activity-level PiP directly, causing the 50/50 video issue.
+                // We handle PiP entry manually via onUserLeaveHint -> PipHostActivity.
+                builder.setAutoEnterEnabled(false)
             }
             if (useSourceRectHint) {
                 pipSourceRect?.let { rect ->

@@ -5,7 +5,7 @@
  * Uses VLC player for broad codec support
  */
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
-import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput, AppState } from 'react-native'
+import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput } from 'react-native'
 import { rpc } from '@peartube/platform/rpc'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
@@ -14,11 +14,9 @@ import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from './desktop/co
 import { useApp } from '@/lib/AppContext'
 
 // VLC player for iOS/Android
-// Using VLCPlayerSurface (SurfaceView) for better PiP compatibility on Android
 let VLCPlayer: any = null
 if (Platform.OS !== 'web') {
-  // VLCPlayer = require('react-native-vlc-media-player').VLCPlayer // TextureView
-  VLCPlayer = require('react-native-vlc-media-player').VLCPlayerSurface // SurfaceView - better for PiP
+  VLCPlayer = require('react-native-vlc-media-player').VLCPlayer
 }
 
 // MpvPlayer for Pear Desktop (universal codec support)
@@ -333,41 +331,54 @@ export function VideoPlayerOverlay() {
     onBuffering,
     onEnded,
     onError,
+    onVideoStateChange,
   } = useVideoPlayerContext()
 
+  // Simplified PiP state tracking - trust the native event, don't over-engineer
+  // Complex early detection and long transition buffers were fighting VLC's surface handling
   const wasInPipRef = useRef(false)
-  const [isPipExitTransition, setIsPipExitTransition] = useState(false)
-
-  const justExitedPip = !isInPipMode && wasInPipRef.current
 
   useEffect(() => {
     if (isInPipMode) {
       wasInPipRef.current = true
     } else if (wasInPipRef.current) {
       wasInPipRef.current = false
-      setIsPipExitTransition(true)
-      setTimeout(() => {
-        setIsPipExitTransition(false)
-      }, 500)
+      autoPipEnabledRef.current = false  // Reset overlay pattern on PiP exit
     }
   }, [isInPipMode])
 
-  const isPipExiting = isPipExitTransition || justExitedPip
-
-  const useScreenFallback = isPipExiting || (!isInPipMode && (
+  // Use screen fallback only when window dimensions are clearly stale (much smaller than screen)
+  // This handles the brief moment when useWindowDimensions returns PiP-sized values after exit
+  const useScreenFallback = !isInPipMode && (
     windowWidth < screenMetrics.width * 0.5 || windowHeight < screenMetrics.height * 0.5
-  ))
-  const pipSize = isInPipMode && pipWindowSize && pipWindowSize.width > 0 && pipWindowSize.height > 0
-    ? pipWindowSize
-    : null
+  )
 
+  // In PiP mode, use window dimensions directly - don't override with pipWindowSize
+  // The native pipWindowSize values can be wrong (full screen size instead of PiP size)
+  // React Native's useWindowDimensions gives us the actual window size
   const baseScreenWidth = useScreenFallback ? screenMetrics.width : windowWidth
   const baseScreenHeight = useScreenFallback ? screenMetrics.height : windowHeight
-  const screenWidth = pipSize ? pipSize.width : baseScreenWidth
-  const screenHeight = pipSize ? pipSize.height : baseScreenHeight
+  const screenWidth = baseScreenWidth
+  const screenHeight = baseScreenHeight
   const isWindowLandscape = screenWidth > screenHeight
 
-  const videoHeight = pipSize ? pipSize.height : Math.round(screenWidth * 9 / 16)
+  // Always use 16:9 for video height calculation - don't special case PiP
+  // In PiP mode, the container fills the window and VLC handles aspect ratio via resizeMode="contain"
+  const videoHeight = Math.round(screenWidth * 9 / 16)
+
+  // Debug logging for PiP layout issues
+  if (isInPipMode && Platform.OS === 'android') {
+    console.log('[VideoPlayerOverlay] PiP layout:', {
+      isInPipMode,
+      useScreenFallback,
+      screenWidth,
+      screenHeight,
+      videoHeight,
+      windowWidth,
+      windowHeight,
+      playerMode,
+    })
+  }
 
   // Desktop video dimensions (YouTube-style - video takes ~70% width, max 1280px)
   const desktopVideoWidth = Math.min(screenWidth * 0.65, 1280)
@@ -866,68 +877,21 @@ export function VideoPlayerOverlay() {
     }
   }, [])
 
-  // Report video bounds to native for PiP source rect
+  // Set simple PiP source rect once - let OS handle the rest
+  // No need to constantly update on layout changes
   const updatePipSourceRect = useCallback(() => {
-    if (Platform.OS !== 'android' || playerMode !== 'fullscreen' || !currentVideo) return
+    if (Platform.OS !== 'android') return
     if (pipSupported === false || isInPipMode) return
 
+    // Simple fixed rect - OS handles animation from current position
     const screen = Dimensions.get('screen')
-    const fallbackWidth = screen.width
-    const fallbackHeight = Math.round(fallbackWidth * 9 / 16)
-    // On Android, video starts below status bar (at y: insets.top)
-    const fallbackRect = {
+    MediaSession.setPictureInPictureSourceRect({
       x: 0,
-      y: insets.top,
-      width: fallbackWidth,
-      height: fallbackHeight,
-    }
-
-    const applyRect = (rect: { x: number; y: number; width: number; height: number }) => {
-      MediaSession.setPictureInPictureSourceRect(rect)
-    }
-
-    const node = videoWrapperRef.current as any
-    if (node?.measureInWindow) {
-      node.measureInWindow((x: number, y: number, width: number, height: number) => {
-        const valid =
-          Number.isFinite(x) &&
-          Number.isFinite(y) &&
-          Number.isFinite(width) &&
-          Number.isFinite(height) &&
-          x >= 0 &&
-          y >= 0 &&
-          width > 0 &&
-          height > 0
-        if (valid) {
-          applyRect({
-            x: Math.round(x),
-            y: Math.round(y),
-            width: Math.round(width),
-            height: Math.round(height),
-          })
-          return
-        }
-        applyRect(fallbackRect)
-      })
-      return
-    }
-
-    applyRect(fallbackRect)
-  }, [playerMode, currentVideo, insets.top, pipSupported, isInPipMode])
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    if (playerMode === 'fullscreen' && currentVideo && pipSupported !== false && !isCasting) {
-      setTimeout(updatePipSourceRect, 100)
-    }
-  }, [playerMode, currentVideo, pipSupported, isCasting, updatePipSourceRect])
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    if (pipSupported === false) return
-    if (isInPipMode) return
-    setTimeout(updatePipSourceRect, 200)
-  }, [pipSupported, isInPipMode, updatePipSourceRect])
+      y: 0,
+      width: screen.width,
+      height: Math.round(screen.width * 9 / 16),
+    })
+  }, [pipSupported, isInPipMode])
 
   // Native overlay disabled - testing simple padding approach
 
@@ -969,12 +933,26 @@ export function VideoPlayerOverlay() {
     }
   }, [setIsInPipMode, setPipWindowSize])
 
+  // Handle video load - set PiP aspect ratio to match actual video dimensions
+  const handleVideoLoad = useCallback((info: { duration?: number; videoSize?: { width: number; height: number } }) => {
+    const width = info?.videoSize?.width
+    const height = info?.videoSize?.height
+    console.log('[VideoPlayerOverlay] Video loaded with dimensions:', width, 'x', height)
+
+    // Update Android PiP aspect ratio to match video dimensions
+    // This prevents zoom/stretch when entering PiP mode
+    if (Platform.OS === 'android' && width && height && width > 0 && height > 0) {
+      MediaSession.setPictureInPictureAspectRatio(width, height)
+    }
+  }, [])
+
   // Animation progress: 0 = mini, 1 = fullscreen
   // Initialize based on playerMode to avoid layout flash on first render
   const animProgress = useSharedValue(playerMode === 'fullscreen' ? 1 : 0)
   const translateY = useSharedValue(0)
   const isGestureActive = useSharedValue(false)
   const isInPipModeShared = useSharedValue(false)
+  const isAutoPipEnabledShared = useSharedValue(false)
   const screenWidthShared = useSharedValue(screenWidth)
   const screenHeightShared = useSharedValue(screenHeight)
   const videoHeightShared = useSharedValue(videoHeight)
@@ -998,7 +976,9 @@ export function VideoPlayerOverlay() {
   // CRITICAL: Update shared values SYNCHRONOUSLY during render, NOT in useEffect
   // useEffect runs AFTER the render commit, so worklets would see stale values
   // This is especially important for PiP mode where dimensions change rapidly
-  isInPipModeShared.value = isInPipMode || isPipExiting
+  // Trust the native isInPipMode event directly - don't add complex detection logic
+  isInPipModeShared.value = isInPipMode
+  isAutoPipEnabledShared.value = autoPipEnabledRef.current
   screenWidthShared.value = screenWidth
   screenHeightShared.value = screenHeight
   videoHeightShared.value = videoHeight
@@ -1010,8 +990,6 @@ export function VideoPlayerOverlay() {
   if (playerMode === 'fullscreen' && !isInPipMode) {
     animProgress.value = 1
   }
-  
-
 
   // Calculate positions using measured tab bar metrics (preferred) with a safe fallback.
   // Pixel/Android gesture nav can report a non-zero bottom inset; never ignore it.
@@ -1323,8 +1301,7 @@ export function VideoPlayerOverlay() {
     }
 
     if (isInPipModeShared.value) {
-      // In PiP mode (and during PiP exit transition), fill the window completely
-      // Use zIndex: 9999 to ensure we stay on top during transition
+      // In PiP mode: fill the small PiP window completely
       return {
         position: 'absolute',
         left: 0,
@@ -1337,11 +1314,9 @@ export function VideoPlayerOverlay() {
       }
     }
 
-    // On Android, reduce height by insetTop since we're starting below the status bar
+    // Fullscreen container fills entire window to show video + content below
     const isAndroid = Platform.OS === 'android'
-    const fullscreenHeightShared = isAndroid
-      ? screenHeightShared.value + insetBottomShared.value - insetTopShared.value
-      : screenHeightShared.value + insetBottomShared.value
+    const fullscreenHeightShared = screenHeightShared.value + insetBottomShared.value
 
     const width = interpolate(
       animProgress.value,
@@ -1364,13 +1339,12 @@ export function VideoPlayerOverlay() {
       Extrapolation.CLAMP
     )
 
-    // On Android, fullscreen starts below status bar to avoid camera cutout
-    // PiP is handled via PipHostActivity which creates a separate window
-    const fullscreenTop = isAndroid ? insetTopShared.value : 0
+    // Fullscreen video starts at top=0 (fills entire window)
+    // This prevents the 50/50 PiP issue where video appears offset
     const top = interpolate(
       animProgress.value,
       [0, 1],
-      [miniPipY.value, fullscreenTop],
+      [miniPipY.value, 0],
       Extrapolation.CLAMP
     )
 
@@ -1416,11 +1390,12 @@ export function VideoPlayerOverlay() {
     }
 
     if (isInPipModeShared.value) {
-      // In PiP mode, use explicit dimensions from shared values
+      // In PiP mode: use flex to fill container naturally
+      // Don't set explicit dimensions - let the container (which fills PiP window) control size
       return {
-        width: screenWidthShared.value,
-        height: screenHeightShared.value,
-        flex: undefined,
+        flex: 1,
+        width: '100%',
+        height: '100%',
       }
     }
 
@@ -1431,6 +1406,7 @@ export function VideoPlayerOverlay() {
       Extrapolation.CLAMP
     )
 
+    // Normal video height - same activity shrinks for PiP (single-player architecture)
     const height = interpolate(
       animProgress.value,
       [0, 1],
@@ -1462,6 +1438,9 @@ export function VideoPlayerOverlay() {
   }, [])
 
   // Animated styles for fullscreen content (fades in when expanding)
+  // KEY: When auto-PiP enabled, position as absolute overlay starting at videoHeight.
+  // This creates the illusion of "video at top, comments below" while the actual
+  // Fullscreen content (comments, info) - simple flex layout
   const fullscreenContentStyle = useAnimatedStyle(() => {
     'worklet'
     const opacity = interpolate(
@@ -1489,8 +1468,21 @@ export function VideoPlayerOverlay() {
     return { opacity }
   }, [])
 
-  // Video player always fills from top: 0 - this ensures PiP captures correctly
+  // Video player positioning - always fill container
+  // VLC handles aspect ratio internally (letterboxing)
   const videoPlayerStyle = useAnimatedStyle(() => {
+    'worklet'
+    return {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+    }
+  }, [])
+
+  // Controls overlay positioning - always fill the container
+  const controlsOverlayStyle = useAnimatedStyle(() => {
     'worklet'
     return {
       position: 'absolute',
@@ -1722,18 +1714,17 @@ export function VideoPlayerOverlay() {
   useEffect(() => {
     if (Platform.OS !== 'android') return
     if (pipSupported === false) return
-    const canAutoPip = typeof Platform.Version === 'number' && Platform.Version >= 31
     const shouldEnableAutoPip =
       pipSupported !== false &&
       (playerMode === 'fullscreen' || playerMode === 'mini') &&
       currentVideo !== null &&
       !isCasting
-    const shouldAutoPip = canAutoPip && shouldEnableAutoPip
+    const shouldAutoPip = shouldEnableAutoPip
     autoPipEnabledRef.current = shouldAutoPip
     if (shouldEnableAutoPip) {
       updatePipSourceRect()
     }
-    if (!canAutoPip || isInPipMode) return
+    if (isInPipMode) return
     console.log('[VideoPlayerOverlay] Auto-PiP effect, playerMode:', playerMode, 'hasVideo:', !!currentVideo, 'enabling:', shouldAutoPip)
     MediaSession.setAutoPictureInPicture(shouldAutoPip)
       .then(() => console.log('[VideoPlayerOverlay] Auto-PiP set:', shouldAutoPip))
@@ -1741,8 +1732,7 @@ export function VideoPlayerOverlay() {
   }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, updatePipSourceRect])
 
   // PiP entry is handled natively via onUserLeaveHint in MainActivity
-  // which launches PipHostActivity - a separate window with only the video surface
-  // This avoids the 50/50 issue because PipHostActivity doesn't include React Native layouts
+  // Same activity shrinks, same player continues (single-player architecture)
 
   // Downloads context for browser-style download manager
   const { addDownload, downloads } = useDownloads()
@@ -2436,16 +2426,15 @@ export function VideoPlayerOverlay() {
             rate={playbackRate}
             seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
             resizeMode="contain"
-            autoAspectRatio={true}
-            pictureInPictureEnabled={Platform.OS === 'android'}
-            playInPictureInPicture={true}
+            autoAspectRatio={false}
+            onLoad={handleVideoLoad}
             onProgress={onProgress}
             onPlaying={onPlaying}
             onPaused={onPaused}
             onBuffering={onBuffering}
             onEnd={onEnded}
             onError={onError}
-            onPictureInPictureStatusChanged={handleVlcPipStatusChanged}
+            onVideoStateChange={onVideoStateChange}
           />
         )}
         {Platform.OS === 'web' && isPear && videoUrl && (
@@ -2479,31 +2468,14 @@ export function VideoPlayerOverlay() {
 
 
 
-  const pipExitContainerStyle = isPipExiting ? {
-    position: 'absolute' as const,
-    left: 0,
-    top: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 1000,
-  } : undefined
-
-  // During PiP exit transition, use consistent video dimensions
-  // PipHostActivity handles actual PiP, this is just for transition smoothness
-  const pipExitVideoStyle = isPipExiting ? {
-    width: screenWidth,
-    height: videoHeight,
-  } : undefined
-
   // Render - all styles are animated, no React state conditionals in JSX to prevent VLC remounting
   const content = (
-    <Animated.View style={[styles.container, containerStyle, pipExitContainerStyle]}>
+    <Animated.View style={[styles.container, containerStyle]}>
           {/* Video area - wrapped with GestureDetector for pull-down-to-minimize */}
           <GestureDetector gesture={composedGesture}>
           <Animated.View
             ref={videoWrapperRef}
-            style={[styles.videoWrapper, videoStyle, pipExitVideoStyle]}
-            onLayout={updatePipSourceRect}
+            style={[styles.videoWrapper, videoStyle]}
           >
             {/* Background - fills the parent container */}
             <Pressable
@@ -2524,7 +2496,7 @@ export function VideoPlayerOverlay() {
             )}
 
             {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
-              <View style={styles.controlsOverlay}>
+              <Animated.View style={[styles.controlsOverlayBase, controlsOverlayStyle]}>
                 <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('left')}>
                   <Feather name="rotate-ccw" color="#fff" size={32} />
                   <Text style={styles.controlButtonText}>10s</Text>
@@ -2542,7 +2514,7 @@ export function VideoPlayerOverlay() {
                   <Feather name="rotate-cw" color="#fff" size={32} />
                   <Text style={styles.controlButtonText}>10s</Text>
                 </Pressable>
-              </View>
+              </Animated.View>
             )}
 
             {seekFeedback && !isInPipMode && (
@@ -2696,7 +2668,9 @@ export function VideoPlayerOverlay() {
         </GestureDetector>
 
         {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
-          <Animated.View style={[styles.fullscreenContent, fullscreenContentStyle]}>
+          <Animated.View
+            style={[styles.fullscreenContent, fullscreenContentStyle]}
+          >
           <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
             {/* P2P Stats - show on native and Pear desktop */}
             {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={videoStats} />}
@@ -3069,9 +3043,8 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 14,
   },
-  // Custom controls overlay
-  controlsOverlay: {
-    ...StyleSheet.absoluteFillObject,
+  // Custom controls overlay - positioning handled by controlsOverlayStyle animated style
+  controlsOverlayBase: {
     backgroundColor: 'rgba(0,0,0,0.4)',
     flexDirection: 'row',
     justifyContent: 'center',
@@ -3416,14 +3389,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   // Fullscreen content styles
+  // Black background ensures PiP shows video + black (not video + colored content)
+  // when native hideNonVideoContent hides the ScrollView
   fullscreenContent: {
     flex: 1,
+    backgroundColor: '#000',
   },
   scrollContent: {
     flex: 1,
+    backgroundColor: '#000',
   },
   videoInfo: {
     padding: 16,
+    backgroundColor: '#000',
   },
   videoTitle: {
     color: colors.text,
@@ -3440,6 +3418,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingVertical: 12,
+    backgroundColor: '#000',
     paddingHorizontal: 8,
     borderTopWidth: 1,
     borderBottomWidth: 1,

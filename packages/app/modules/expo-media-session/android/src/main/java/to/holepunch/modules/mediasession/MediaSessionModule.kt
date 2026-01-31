@@ -11,7 +11,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
-import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -25,7 +24,6 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Rational
 import androidx.core.content.ContextCompat
-import androidx.fragment.app.FragmentActivity
 import androidx.media.session.MediaButtonReceiver
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -37,58 +35,17 @@ import kotlinx.coroutines.withContext
 import java.net.URL
 
 /**
- * Interface for external PiP handlers (like VLC) to register themselves.
- * This allows PipHostActivity to be launched without direct module dependencies.
- */
-interface PipEntryHandler {
-    fun canEnterPip(): Boolean
-    fun enterPip(context: Context)
-}
-
-/**
- * Singleton bridge for PiP callbacks from MainActivity.
- * MainActivity calls these static methods; the module instance receives the events.
+ * Simplified PiP bridge for MainActivity callbacks.
+ *
+ * VLC Android's approach: Set the correct aspect ratio BEFORE entering PiP,
+ * then let Android handle the window sizing. Don't fight VLC's surface handling.
  */
 object PipBridge {
     private var moduleInstance: MediaSessionModule? = null
     private var pipEnabled: Boolean = false
-    private var statusBarOverlay: android.view.View? = null
-    private var overlayEnabled: Boolean = false  // Whether overlay should be visible (controlled by JS)
 
-    // External PiP handler (e.g., VLC's PipHostActivity launcher)
-    @Volatile
-    private var pipEntryHandler: PipEntryHandler? = null
-
-    /**
-     * Register an external PiP handler (called by VLC or other video players).
-     * When registered, this handler will be used instead of activity-level PiP.
-     */
-    @JvmStatic
-    fun registerPipEntryHandler(handler: PipEntryHandler?) {
-        pipEntryHandler = handler
-        android.util.Log.d("PipBridge", "PiP entry handler registered: ${handler != null}")
-    }
-
-    /**
-     * Check if an external handler can enter PiP.
-     */
-    fun canExternalHandlerEnterPip(): Boolean {
-        return pipEntryHandler?.canEnterPip() == true
-    }
-
-    /**
-     * Enter PiP using the external handler if available.
-     * Returns true if handler was used, false otherwise.
-     */
-    fun enterPipViaExternalHandler(context: Context): Boolean {
-        val handler = pipEntryHandler
-        if (handler != null && handler.canEnterPip()) {
-            android.util.Log.d("PipBridge", "Entering PiP via external handler")
-            handler.enterPip(context)
-            return true
-        }
-        return false
-    }
+    @Volatile private var pipAspectRatioWidth: Int = 16
+    @Volatile private var pipAspectRatioHeight: Int = 9
 
     fun register(module: MediaSessionModule) {
         moduleInstance = module
@@ -102,107 +59,117 @@ object PipBridge {
 
     fun setPipEnabled(enabled: Boolean) {
         pipEnabled = enabled
+        android.util.Log.d("PipBridge", "setPipEnabled: $enabled")
+
+        // On Android 12+, set PiP params with autoEnterEnabled so the system
+        // handles PiP entry automatically when user presses home
+        moduleInstance?.updateActivityPipParams(enabled)
     }
 
+    @JvmStatic
     fun isPipEnabled(): Boolean = pipEnabled
 
-    fun isOverlayEnabled(): Boolean = overlayEnabled
+    @JvmStatic
+    fun setPipAspectRatio(width: Int, height: Int) {
+        if (width > 0 && height > 0) {
+            pipAspectRatioWidth = width
+            pipAspectRatioHeight = height
+            android.util.Log.d("PipBridge", "setPipAspectRatio: ${width}x${height}")
 
-    /**
-     * Register the native status bar overlay view from MainActivity
-     */
-    fun setStatusBarOverlay(overlay: android.view.View?) {
-        statusBarOverlay = overlay
-        android.util.Log.d("PipBridge", "setStatusBarOverlay: overlay=${overlay != null}, overlayEnabled=$overlayEnabled")
-        // Apply current state
-        updateOverlayVisibility()
-    }
-
-    /**
-     * Called from JS to enable/disable the overlay (e.g., only show in fullscreen video mode)
-     */
-    fun setOverlayEnabled(enabled: Boolean) {
-        android.util.Log.d("PipBridge", "setOverlayEnabled: enabled=$enabled, overlay=${statusBarOverlay != null}")
-        overlayEnabled = enabled
-        updateOverlayVisibility()
-    }
-
-    /**
-     * Force hide the overlay (used before PiP snapshot)
-     * Must be synchronous to ensure overlay is hidden before PiP takes its snapshot
-     */
-    fun hideOverlay() {
-        android.util.Log.d("PipBridge", "hideOverlay called")
-        // Set visibility directly - onUserLeaveHint is called on main thread
-        // so we can safely modify the view without posting
-        statusBarOverlay?.visibility = android.view.View.GONE
-    }
-
-    /**
-     * Show the overlay if it should be visible (overlayEnabled && not in PiP)
-     */
-    fun showOverlay() {
-        android.util.Log.d("PipBridge", "showOverlay called, overlayEnabled=$overlayEnabled")
-        if (overlayEnabled) {
-            statusBarOverlay?.let { overlay ->
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    overlay.visibility = android.view.View.VISIBLE
-                }
+            // Update activity PiP params with new aspect ratio
+            if (pipEnabled) {
+                moduleInstance?.updateActivityPipParams(true)
             }
         }
     }
 
-    private fun updateOverlayVisibility() {
-        val overlay = statusBarOverlay
-        if (overlay == null) {
-            android.util.Log.w("PipBridge", "updateOverlayVisibility: overlay is null!")
-            return
+    @JvmStatic
+    fun getPipAspectRatio(): Rational {
+        // Use stored dimensions directly, clamping to Android's allowed range
+        var w = pipAspectRatioWidth
+        var h = pipAspectRatioHeight
+
+        // Ensure valid dimensions
+        if (w <= 0 || h <= 0) {
+            w = 16
+            h = 9
         }
-        val newVisibility = if (overlayEnabled) android.view.View.VISIBLE else android.view.View.GONE
-        android.util.Log.d("PipBridge", "updateOverlayVisibility: overlayEnabled=$overlayEnabled, setting visibility to ${if (newVisibility == android.view.View.VISIBLE) "VISIBLE" else "GONE"}")
-        android.os.Handler(android.os.Looper.getMainLooper()).post {
-            overlay.visibility = newVisibility
-            android.util.Log.d("PipBridge", "updateOverlayVisibility: visibility set, overlay.visibility=${overlay.visibility}")
+
+        // Android allows aspect ratios roughly between 1:2.39 and 2.39:1
+        val ratio = w.toFloat() / h.toFloat()
+        if (ratio < 0.42f) {
+            // Too tall, clamp to 1:2.39
+            w = 100
+            h = 239
+        } else if (ratio > 2.39f) {
+            // Too wide, clamp to 2.39:1
+            w = 239
+            h = 100
         }
+
+        android.util.Log.d("PipBridge", "getPipAspectRatio: returning ${w}x${h}")
+        return Rational(w, h)
     }
 
     /**
-     * Called from MainActivity.onUserLeaveHint() when user is about to leave the app.
-     * We use this to enter PiP mode manually for all Android versions to have
-     * control over the layout before the PiP snapshot is taken.
+     * Called from MainActivity.onUserLeaveHint().
+     * On Android 12+, PiP auto-enters via setAutoEnterEnabled(true) in setPictureInPictureParams.
+     * On older versions (API 26-30), we manually call enterPictureInPictureMode here.
      */
     fun onUserLeaveHint(activity: Activity) {
+        android.util.Log.d("PipBridge", "onUserLeaveHint: pipEnabled=$pipEnabled")
+
         if (!pipEnabled) {
             android.util.Log.d("PipBridge", "onUserLeaveHint: PiP not enabled, skipping")
             return
         }
 
-        android.util.Log.d("PipBridge", "onUserLeaveHint: hiding overlay and entering PiP")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            android.util.Log.d("PipBridge", "onUserLeaveHint: PiP requires API 26+")
+            return
+        }
 
-        // Hide the status bar overlay BEFORE entering PiP (synchronous)
-        // This ensures the PiP snapshot doesn't include the black bar
-        hideOverlay()
+        // On Android 12+, auto-enter is handled by setAutoEnterEnabled(true)
+        // We set this in updateActivityPipParams(), so no manual entry needed
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            android.util.Log.d("PipBridge", "onUserLeaveHint: Android 12+, auto-enter handled by system")
+            return
+        }
 
-        moduleInstance?.enterPiPFromCallback(activity)
+        if (activity.isInPictureInPictureMode) {
+            android.util.Log.d("PipBridge", "onUserLeaveHint: already in PiP, skipping")
+            return
+        }
+
+        // Manual PiP entry for Android 8-11 (API 26-30)
+        try {
+            val aspectRatio = getPipAspectRatio()
+
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(aspectRatio)
+
+            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
+            builder.setActions(actions)
+
+            val params = builder.build()
+            val result = activity.enterPictureInPictureMode(params)
+            android.util.Log.d("PipBridge", "onUserLeaveHint: enterPictureInPictureMode returned $result")
+        } catch (e: Exception) {
+            android.util.Log.e("PipBridge", "onUserLeaveHint: failed", e)
+        }
     }
 
     /**
      * Called from MainActivity.onPictureInPictureModeChanged().
+     * Just notify JS layer of the state change - don't touch VLC's surface.
      */
-    fun onPictureInPictureModeChanged(activity: Activity, isInPictureInPictureMode: Boolean, newConfig: Configuration?) {
-        android.util.Log.d("PipBridge", "onPictureInPictureModeChanged: $isInPictureInPictureMode")
-
-        // Restore overlay visibility when exiting PiP
-        if (!isInPictureInPictureMode) {
-            showOverlay()
-        }
-
-        moduleInstance?.onPipModeChangedFromCallback(activity, isInPictureInPictureMode)
+    fun notifyPipModeChanged(activity: Activity, isInPip: Boolean) {
+        android.util.Log.d("PipBridge", "notifyPipModeChanged: $isInPip")
+        moduleInstance?.sendPipEvent(activity, isInPip)
     }
 }
 
-class MediaSessionModule : Module(), PictureInPictureListener {
-    private val useSourceRectHint = true
+class MediaSessionModule : Module() {
     private var mediaSession: MediaSessionCompat? = null
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -211,17 +178,11 @@ class MediaSessionModule : Module(), PictureInPictureListener {
     private var currentMetadata: MediaMetadataCompat.Builder = MediaMetadataCompat.Builder()
     private var currentPlaybackState: PlaybackStateCompat.Builder = PlaybackStateCompat.Builder()
     private var wasInPipMode = false
-    private var pipSourceRect: android.graphics.Rect? = null
     private var lastIsPlaying: Boolean? = null
     private var currentIsPlaying: Boolean = false
     private var isAutoPipEnabled: Boolean = false
-    private var pipFragment: PictureInPictureFragment? = null
-    private var pendingLayoutHandler: Handler? = null
-    private var pendingLayoutRunnable: Runnable? = null
     private var pipAspectRatioWidth: Int = 16
     private var pipAspectRatioHeight: Int = 9
-    private var activityLifecycleCallback: Application.ActivityLifecycleCallbacks? = null
-    @Volatile private var isActivityResumed: Boolean = false
 
     override fun definition() = ModuleDefinition {
         Name("MediaSession")
@@ -309,17 +270,6 @@ class MediaSessionModule : Module(), PictureInPictureListener {
             promise.resolve(supported)
         }
 
-        AsyncFunction("setPictureInPictureSourceRect") { rect: Map<String, Double>, promise: Promise ->
-            CoroutineScope(Dispatchers.Main).launch {
-                try {
-                    setPipSourceRect(rect)
-                    promise.resolve(null)
-                } catch (e: Exception) {
-                    promise.reject("PIP_ERROR", e.message ?: "Failed to set PiP source rect", e)
-                }
-            }
-        }
-
         AsyncFunction("setPictureInPictureAspectRatio") { width: Int, height: Int, promise: Promise ->
             CoroutineScope(Dispatchers.Main).launch {
                 try {
@@ -331,31 +281,24 @@ class MediaSessionModule : Module(), PictureInPictureListener {
             }
         }
 
-        AsyncFunction("setStatusBarOverlayEnabled") { enabled: Boolean, promise: Promise ->
-            CoroutineScope(Dispatchers.Main).launch {
-                try {
-                    PipBridge.setOverlayEnabled(enabled)
-                    promise.resolve(null)
-                } catch (e: Exception) {
-                    promise.reject("OVERLAY_ERROR", e.message ?: "Failed to set overlay enabled", e)
-                }
-            }
+        // Kept for backwards compatibility but does nothing now
+        AsyncFunction("setPictureInPictureSourceRect") { _: Map<String, Double>, promise: Promise ->
+            promise.resolve(null)
+        }
+
+        // Kept for backwards compatibility but does nothing now
+        AsyncFunction("setStatusBarOverlayEnabled") { _: Boolean, promise: Promise ->
+            promise.resolve(null)
         }
 
         OnCreate {
             PipBridge.register(this@MediaSessionModule)
             PipServiceBridge.register(this@MediaSessionModule)
-            attachPipFragment()
-            registerActivityLifecycleCallback()
-            // Native overlay disabled - PipHostActivity handles PiP in a separate window
-            // so the React Native layout with inset offsets doesn't affect the PiP snapshot
         }
 
         OnDestroy {
-            unregisterActivityLifecycleCallback()
             PipBridge.unregister(this@MediaSessionModule)
             PipServiceBridge.unregister(this@MediaSessionModule)
-            detachPipFragment()
             cleanup()
         }
     }
@@ -458,7 +401,8 @@ class MediaSessionModule : Module(), PictureInPictureListener {
         mediaSession?.setPlaybackState(currentPlaybackState.build())
         mediaSession?.setMetadata(currentMetadata.build())
         updateNotification()
-        
+
+        // Update PiP actions when play state changes
         if (playStateChanged && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val activity = appContext.currentActivity
             if (activity != null && activity.isInPictureInPictureMode) {
@@ -495,12 +439,10 @@ class MediaSessionModule : Module(), PictureInPictureListener {
         }
 
         override fun onSkipToNext() {
-            android.util.Log.d("MediaSession", "onSkipToNext callback")
             sendEvent("onRemoteCommand", mapOf("command" to "nextTrack"))
         }
 
         override fun onSkipToPrevious() {
-            android.util.Log.d("MediaSession", "onSkipToPrevious callback")
             sendEvent("onRemoteCommand", mapOf("command" to "previousTrack"))
         }
 
@@ -509,20 +451,18 @@ class MediaSessionModule : Module(), PictureInPictureListener {
         }
 
         override fun onFastForward() {
-            android.util.Log.d("MediaSession", "onFastForward callback")
             sendEvent("onRemoteCommand", mapOf("command" to "skipForward", "interval" to 10))
         }
 
         override fun onRewind() {
-            android.util.Log.d("MediaSession", "onRewind callback")
             sendEvent("onRemoteCommand", mapOf("command" to "skipBackward", "interval" to 10))
         }
     }
-    
+
     private fun updatePipPlayState(isPlaying: Boolean) {
         if (currentIsPlaying == isPlaying) return
         currentIsPlaying = isPlaying
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val activity = appContext.currentActivity
             if (activity != null && activity.isInPictureInPictureMode) {
@@ -567,74 +507,6 @@ class MediaSessionModule : Module(), PictureInPictureListener {
             @Suppress("DEPRECATION")
             audioManager?.abandonAudioFocus(null)
         }
-    }
-
-    /**
-     * Registers an Application.ActivityLifecycleCallbacks to detect when the user
-     * leaves the app (presses home/recents). This is a workaround because the Expo
-     * Package system's ReactActivityLifecycleListener isn't being loaded for our module.
-     *
-     * We detect "user leave" by tracking:
-     * 1. Activity was in RESUMED state
-     * 2. Activity is being PAUSED
-     * 3. It's NOT a configuration change
-     * 4. We're NOT already in PiP
-     * 5. Auto-PiP is enabled
-     */
-    private fun registerActivityLifecycleCallback() {
-        val context = appContext.reactContext ?: return
-        val application = context.applicationContext as? Application ?: return
-
-        activityLifecycleCallback = object : Application.ActivityLifecycleCallbacks {
-            override fun onActivityResumed(activity: Activity) {
-                if (activity.javaClass.name.contains("MainActivity")) {
-                    isActivityResumed = true
-                    android.util.Log.d("MediaSession", "ActivityLifecycle: onResumed")
-                }
-            }
-
-            override fun onActivityPaused(activity: Activity) {
-                if (!activity.javaClass.name.contains("MainActivity")) return
-
-                android.util.Log.d("MediaSession", "ActivityLifecycle: onPaused, isChangingConfigurations=${activity.isChangingConfigurations}, isAutoPipEnabled=$isAutoPipEnabled, wasInPipMode=$wasInPipMode")
-
-                // Only trigger PiP if:
-                // 1. We were resumed (not coming from background)
-                // 2. Not a configuration change (rotation, etc)
-                // 3. Auto-PiP is enabled
-                // 4. Not already in PiP mode
-                if (isActivityResumed &&
-                    !activity.isChangingConfigurations &&
-                    isAutoPipEnabled &&
-                    !wasInPipMode) {
-
-                    android.util.Log.d("MediaSession", "ActivityLifecycle: Triggering PiP entry via PipBridge")
-                    PipBridge.onUserLeaveHint(activity)
-                }
-
-                isActivityResumed = false
-            }
-
-            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
-            override fun onActivityStarted(activity: Activity) {}
-            override fun onActivityStopped(activity: Activity) {}
-            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
-            override fun onActivityDestroyed(activity: Activity) {}
-        }
-
-        application.registerActivityLifecycleCallbacks(activityLifecycleCallback)
-        android.util.Log.d("MediaSession", "Registered ActivityLifecycleCallbacks for PiP detection")
-    }
-
-    private fun unregisterActivityLifecycleCallback() {
-        val context = appContext.reactContext ?: return
-        val application = context.applicationContext as? Application ?: return
-
-        activityLifecycleCallback?.let {
-            application.unregisterActivityLifecycleCallbacks(it)
-            android.util.Log.d("MediaSession", "Unregistered ActivityLifecycleCallbacks")
-        }
-        activityLifecycleCallback = null
     }
 
     private fun handleAudioFocusChange(focusChange: Int) {
@@ -714,398 +586,133 @@ class MediaSessionModule : Module(), PictureInPictureListener {
 
     private fun enterPiP(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        val activity = appContext.currentActivity ?: return false
 
-        val context = appContext.reactContext ?: return false
+        try {
+            val aspectRatio = getPipAspectRatio()
 
-        // Use external handler (VLC's PipHostActivity) for clean PiP
-        // without React Native layout artifacts causing 50/50 video issue.
-        // We intentionally DO NOT fall back to activity-level PiP since
-        // it captures the entire activity window including RN layout offsets.
-        if (PipBridge.enterPipViaExternalHandler(context)) {
-            return true
-        }
-
-        android.util.Log.w("MediaSession", "enterPiP: No external handler available, PiP not entered")
-        return false
-    }
-
-    private fun setAutoPiP(enabled: Boolean) {
-        android.util.Log.d("MediaSession", "setAutoPiP called: enabled=$enabled, SDK=${Build.VERSION.SDK_INT}, aspect ratio: ${getPipAspectRatio()}")
-
-        isAutoPipEnabled = enabled
-        PipBridge.setPipEnabled(enabled)
-
-        val activity = appContext.currentActivity
-        if (activity == null) {
-            android.util.Log.e("MediaSession", "No current activity for PiP")
-            return
-        }
-
-        // Don't use setAutoEnterEnabled - we handle PiP entry manually via onUserLeaveHint
-        // This gives us control over layout timing before the PiP snapshot
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(getPipAspectRatio())
+                .setAspectRatio(aspectRatio)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setAutoEnterEnabled(false)
                 builder.setSeamlessResizeEnabled(false)
             }
 
-            if (useSourceRectHint) {
-                pipSourceRect?.let { rect ->
-                    if (!rect.isEmpty) {
-                        builder.setSourceRectHint(rect)
-                    }
-                }
+            builder.setActions(buildPipActions(activity))
+
+            return activity.enterPictureInPictureMode(builder.build())
+        } catch (e: Exception) {
+            android.util.Log.e("MediaSession", "enterPiP: failed", e)
+            return false
+        }
+    }
+
+    private fun setAutoPiP(enabled: Boolean) {
+        android.util.Log.d("MediaSession", "setAutoPiP: enabled=$enabled")
+
+        isAutoPipEnabled = enabled
+        PipBridge.setPipEnabled(enabled)
+    }
+
+    /**
+     * Update the activity's PiP params so the system knows we support PiP.
+     * On Android 12+, this enables auto-enter PiP when user presses home.
+     */
+    internal fun updateActivityPipParams(enabled: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+
+        val activity = appContext.currentActivity ?: return
+
+        try {
+            val aspectRatio = PipBridge.getPipAspectRatio()
+
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(aspectRatio)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                builder.setSeamlessResizeEnabled(false)
+                // This is the key - auto-enter PiP when going to background
+                builder.setAutoEnterEnabled(enabled)
             }
 
             builder.setActions(buildPipActions(activity))
+
             activity.setPictureInPictureParams(builder.build())
-            android.util.Log.d("MediaSession", "setAutoPiP: using manual PiP entry via onUserLeaveHint")
+            android.util.Log.d("MediaSession", "updateActivityPipParams: enabled=$enabled, aspectRatio=$aspectRatio")
+        } catch (e: Exception) {
+            android.util.Log.e("MediaSession", "updateActivityPipParams: failed", e)
         }
     }
-    
-    private fun setPipSourceRect(rect: Map<String, Double>) {
-        val context = appContext.reactContext ?: return
-        val density = context.resources.displayMetrics.density
-        
-        val x = ((rect["x"] ?: 0.0) * density).toInt()
-        val y = ((rect["y"] ?: 0.0) * density).toInt()
-        val width = ((rect["width"] ?: 0.0) * density).toInt()
-        val height = ((rect["height"] ?: 0.0) * density).toInt()
-        
-        val newRect = android.graphics.Rect(x, y, x + width, y + height)
-        
-        val rectChanged = pipSourceRect?.let { oldRect ->
-            val tolerance = 5
-            !(Math.abs(oldRect.left - newRect.left) < tolerance &&
-                Math.abs(oldRect.top - newRect.top) < tolerance &&
-                Math.abs(oldRect.width() - newRect.width()) < tolerance &&
-                Math.abs(oldRect.height() - newRect.height()) < tolerance)
-        } ?: true
-        
-        pipSourceRect = newRect
-        if (rectChanged) {
-            android.util.Log.d("MediaSession", "setPipSourceRect: dp(${rect["x"]}, ${rect["y"]}, ${rect["width"]}, ${rect["height"]}) -> px($x, $y, $width, $height) density=$density")
-        }
-        
-        if (isAutoPipEnabled && !wasInPipMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            reapplyPipParams()
-        }
-    }
-    
-    private fun reapplyPipParams() {
-        val activity = appContext.currentActivity ?: return
-        val builder = PictureInPictureParams.Builder()
-            .setAspectRatio(getPipAspectRatio())
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // IMPORTANT: Never use setAutoEnterEnabled(true) - it bypasses onUserLeaveHint
-            // and enters activity-level PiP directly, causing the 50/50 video issue.
-            // We handle PiP entry manually via onUserLeaveHint -> PipHostActivity.
-            builder.setAutoEnterEnabled(false)
-            builder.setSeamlessResizeEnabled(false)
-        }
-        if (useSourceRectHint) {
-            pipSourceRect?.let { rect ->
-                if (!rect.isEmpty) {
-                    builder.setSourceRectHint(rect)
-                }
-            }
-        }
-        builder.setActions(buildPipActions(activity))
-        activity.setPictureInPictureParams(builder.build())
-        android.util.Log.d("MediaSession", "reapplyPipParams: updated with sourceRect=$pipSourceRect")
-    }
-    
+
     private fun setPipAspectRatio(width: Int, height: Int) {
         if (width > 0 && height > 0) {
             pipAspectRatioWidth = width
             pipAspectRatioHeight = height
+            PipBridge.setPipAspectRatio(width, height)
             android.util.Log.d("MediaSession", "setPipAspectRatio: $width x $height")
-            if (isAutoPipEnabled && !wasInPipMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                reapplyPipParams()
-            }
         }
     }
-    
+
     private fun getPipAspectRatio(): Rational {
-        return Rational(pipAspectRatioWidth, pipAspectRatioHeight)
+        val ratio = Rational(pipAspectRatioWidth, pipAspectRatioHeight)
+        val min = 0.418f
+        val max = 2.39f
+        val clamped = ratio.toFloat().coerceIn(min, max)
+        return Rational((clamped * 1000).toInt(), 1000)
     }
 
-    /**
-     * Set the display cutout mode for the current activity window.
-     * When enabled (fullscreen video), use NEVER to avoid rendering behind cutout.
-     * When disabled (or entering PiP), use SHORT_EDGES for edge-to-edge rendering.
-     */
-    private fun setDisplayCutoutMode(avoidCutout: Boolean) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
-
-        val activity = appContext.currentActivity ?: return
-        val window = activity.window ?: return
-
-        val mode = if (avoidCutout) {
-            android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
-        } else {
-            android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-        }
-
-        android.util.Log.d("MediaSession", "setDisplayCutoutMode: avoidCutout=$avoidCutout, mode=${if (avoidCutout) "NEVER" else "SHORT_EDGES"}")
-
-        window.attributes = window.attributes.apply {
-            layoutInDisplayCutoutMode = mode
-        }
-
-        // Force the window to re-layout with new cutout mode
-        window.decorView.requestApplyInsets()
-        window.decorView.requestLayout()
-    }
-
-    internal fun enterPiPFromCallback(activity: Activity) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-
-        // Use external handler (VLC's PipHostActivity) for clean PiP.
-        // We intentionally DO NOT fall back to activity-level PiP since
-        // it captures the entire activity window including RN layout offsets,
-        // causing the 50/50 video issue (half video, half black).
-        if (PipBridge.enterPipViaExternalHandler(activity)) {
-            return
-        }
-
-        android.util.Log.w("MediaSession", "enterPiPFromCallback: No external handler available, PiP not entered")
-    }
-    
-    private fun setupStatusBarOverlay() {
-        val activity = appContext.currentActivity ?: return
-        val window = activity.window ?: return
-        val decorView = window.decorView as? android.view.ViewGroup ?: return
-
-        // Get status bar height
-        var statusBarHeight = 0
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val insets = decorView.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.statusBars())
-            statusBarHeight = insets?.top ?: 0
-        }
-        if (statusBarHeight <= 0) {
-            val resourceId = activity.resources.getIdentifier("status_bar_height", "dimen", "android")
-            if (resourceId > 0) {
-                statusBarHeight = activity.resources.getDimensionPixelSize(resourceId)
-            }
-        }
-        if (statusBarHeight <= 0) {
-            statusBarHeight = (24 * activity.resources.displayMetrics.density).toInt()
-        }
-
-        android.util.Log.d("MediaSession", "setupStatusBarOverlay: height=$statusBarHeight")
-
-        // Create overlay view
-        val overlay = android.view.View(activity).apply {
-            setBackgroundColor(android.graphics.Color.BLACK)
-            visibility = android.view.View.GONE  // Start hidden, JS controls visibility
-            tag = "StatusBarOverlay"
-        }
-
-        // Add to DecorView
-        val params = android.widget.FrameLayout.LayoutParams(
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-            statusBarHeight
-        ).apply {
-            gravity = android.view.Gravity.TOP
-        }
-
-        Handler(Looper.getMainLooper()).post {
-            try {
-                decorView.addView(overlay, params)
-                PipBridge.setStatusBarOverlay(overlay)
-                android.util.Log.d("MediaSession", "Status bar overlay added successfully")
-            } catch (e: Exception) {
-                android.util.Log.e("MediaSession", "Failed to add status bar overlay: ${e.message}")
-            }
-        }
-    }
-
-    private fun attachPipFragment() {
-        (appContext.currentActivity as? FragmentActivity)?.let { activity ->
-            if (pipFragment != null) return@let
-            pipFragment = PictureInPictureFragment().also { fragment ->
-                fragment.setListener(this)
-                activity.supportFragmentManager
-                    .beginTransaction()
-                    .add(fragment, PictureInPictureFragment.TAG)
-                    .commitAllowingStateLoss()
-            }
-            android.util.Log.d("MediaSession", "PiP Fragment attached")
-        }
-    }
-    
-    private fun detachPipFragment() {
-        (appContext.currentActivity as? FragmentActivity)?.let { activity ->
-            pipFragment?.let { fragment ->
-                activity.supportFragmentManager
-                    .beginTransaction()
-                    .remove(fragment)
-                    .commitAllowingStateLoss()
-            }
-            pipFragment = null
-            android.util.Log.d("MediaSession", "PiP Fragment detached")
-        }
-    }
-    
-    override fun onPictureInPictureModeChange(activity: Activity?, isInPip: Boolean) {
-        if (activity == null) return
-        handlePipModeChange(activity, isInPip)
-    }
-    
-    internal fun onPipModeChangedFromCallback(activity: Activity, isInPip: Boolean) {
-        handlePipModeChange(activity, isInPip)
-    }
-    
-    private fun handlePipModeChange(activity: Activity, isInPip: Boolean) {
-        if (isInPip == wasInPipMode) return
-
-        wasInPipMode = isInPip
-        android.util.Log.d("MediaSession", "PiP mode changed: $isInPip")
-
-        pendingLayoutRunnable?.let { pendingLayoutHandler?.removeCallbacks(it) }
-
-        // VLC handles PiP layout internally via native callbacks
-        // We only need to refresh PiP params for the play/pause button state
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (isInPip) {
-                refreshPipParams(activity)
-            } else {
-                // Exiting PiP - request layout refresh to restore full-screen layout
-                pendingLayoutHandler = Handler(Looper.getMainLooper())
-                pendingLayoutRunnable = Runnable {
-                    requestLayoutRefresh(activity)
-                }
-                pendingLayoutHandler?.postDelayed(pendingLayoutRunnable!!, 100)
-            }
-        }
-
-        sendPipEvent(activity, isInPip)
-    }
-
-    private fun sendPipEvent(activity: Activity, isInPip: Boolean) {
-        val (width, height) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = activity.windowManager.currentWindowMetrics.bounds
-            Pair(bounds.width(), bounds.height())
-        } else {
-            val decorView = activity.window?.decorView
-            Pair(decorView?.width ?: 0, decorView?.height ?: 0)
-        }
-        sendEvent(
-            "onPictureInPictureChanged",
-            mapOf(
-                "isInPictureInPicture" to isInPip,
-                "width" to width,
-                "height" to height
-            )
-        )
-    }
-
-    private fun requestLayoutRefresh(activity: Activity) {
-        try {
-            val decorView = activity.window?.decorView ?: return
-            decorView.post {
-                decorView.requestLayout()
-                decorView.invalidate()
-            }
-            android.util.Log.d("MediaSession", "Layout refresh requested")
-        } catch (e: Exception) {
-            android.util.Log.e("MediaSession", "Failed to request layout refresh: ${e.message}")
-        }
-    }
-
-    private fun getWindowSize(activity: Activity): Pair<Int, Int> {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = activity.windowManager.currentWindowMetrics.bounds
-            Pair(bounds.width(), bounds.height())
-        } else {
-            val displayMetrics = activity.resources.displayMetrics
-            Pair(displayMetrics.widthPixels, displayMetrics.heightPixels)
-        }
-    }
-    
     private fun refreshPipParams(activity: Activity) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        
+        if (!activity.isInPictureInPictureMode) return
+
         try {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(getPipAspectRatio())
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setSeamlessResizeEnabled(false)
-                // IMPORTANT: Never use setAutoEnterEnabled(true) - it bypasses onUserLeaveHint
-                // and enters activity-level PiP directly, causing the 50/50 video issue.
-                // We handle PiP entry manually via onUserLeaveHint -> PipHostActivity.
-                builder.setAutoEnterEnabled(false)
             }
-            if (useSourceRectHint) {
-                pipSourceRect?.let { rect ->
-                    if (!rect.isEmpty) {
-                        builder.setSourceRectHint(rect)
-                    }
-                }
-            }
+
             builder.setActions(buildPipActions(activity))
             activity.setPictureInPictureParams(builder.build())
-            android.util.Log.d("MediaSession", "Refreshed PiP params with sourceRect=$pipSourceRect, autoEnter=$isAutoPipEnabled")
         } catch (e: Exception) {
-            android.util.Log.e("MediaSession", "Failed to refresh PiP params: ${e.message}")
+            android.util.Log.e("MediaSession", "refreshPipParams failed: ${e.message}")
         }
     }
-    
-    private fun buildPipActions(activity: Activity): List<RemoteAction> {
+
+    internal fun buildPipActions(activity: Activity): List<RemoteAction> {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return emptyList()
-        
+
         val context = activity.applicationContext
         val actions = mutableListOf<RemoteAction>()
-        
-        android.util.Log.d("MediaSession", "buildPipActions: currentIsPlaying=$currentIsPlaying")
-        
+
+        // Rewind action
         val rewindIntent = Intent(context, MediaPlaybackService::class.java).apply {
             action = ACTION_PIP_REWIND
         }
-        val rewindPendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PendingIntent.getForegroundService(
-                context,
-                REQUEST_REWIND,
-                rewindIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        } else {
-            PendingIntent.getService(
-                context,
-                REQUEST_REWIND,
-                rewindIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        }
+        val rewindPendingIntent = PendingIntent.getForegroundService(
+            context,
+            REQUEST_REWIND,
+            rewindIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         actions.add(RemoteAction(
             Icon.createWithResource(context, android.R.drawable.ic_media_rew),
             "Rewind",
             "Rewind 10 seconds",
             rewindPendingIntent
         ))
-        
+
+        // Play/Pause action
         val playPauseIntent = Intent(context, MediaPlaybackService::class.java).apply {
             action = if (currentIsPlaying) ACTION_PIP_PAUSE else ACTION_PIP_PLAY
         }
-        val playPausePendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PendingIntent.getForegroundService(
-                context,
-                REQUEST_PLAY_PAUSE,
-                playPauseIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        } else {
-            PendingIntent.getService(
-                context,
-                REQUEST_PLAY_PAUSE,
-                playPauseIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        }
+        val playPausePendingIntent = PendingIntent.getForegroundService(
+            context,
+            REQUEST_PLAY_PAUSE,
+            playPauseIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val playPauseIcon = if (currentIsPlaying) {
             Icon.createWithResource(context, android.R.drawable.ic_media_pause)
         } else {
@@ -1113,58 +720,69 @@ class MediaSessionModule : Module(), PictureInPictureListener {
         }
         val playPauseLabel = if (currentIsPlaying) "Pause" else "Play"
         actions.add(RemoteAction(playPauseIcon, playPauseLabel, playPauseLabel, playPausePendingIntent))
-        
+
+        // Forward action
         val forwardIntent = Intent(context, MediaPlaybackService::class.java).apply {
             action = ACTION_PIP_FORWARD
         }
-        val forwardPendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            PendingIntent.getForegroundService(
-                context,
-                REQUEST_FORWARD,
-                forwardIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        } else {
-            PendingIntent.getService(
-                context,
-                REQUEST_FORWARD,
-                forwardIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        }
+        val forwardPendingIntent = PendingIntent.getForegroundService(
+            context,
+            REQUEST_FORWARD,
+            forwardIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         actions.add(RemoteAction(
             Icon.createWithResource(context, android.R.drawable.ic_media_ff),
             "Forward",
             "Forward 10 seconds",
             forwardPendingIntent
         ))
-        
-        android.util.Log.d("MediaSession", "buildPipActions: built ${actions.size} actions")
+
         return actions
     }
-    
+
+    internal fun sendPipEvent(activity: Activity, isInPip: Boolean) {
+        val (width, height) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = activity.windowManager.currentWindowMetrics.bounds
+            Pair(bounds.width(), bounds.height())
+        } else {
+            val decorView = activity.window?.decorView
+            Pair(decorView?.width ?: 0, decorView?.height ?: 0)
+        }
+
+        android.util.Log.d("MediaSession", "sendPipEvent: isInPip=$isInPip, dimensions=${width}x${height}")
+
+        wasInPipMode = isInPip
+
+        sendEvent("onPictureInPictureChanged", mapOf(
+            "isInPictureInPicture" to isInPip,
+            "width" to width,
+            "height" to height
+        ))
+    }
+
     internal fun handlePipPlay() {
         android.util.Log.d("MediaSession", "handlePipPlay")
         updatePipPlayState(true)
         sendEvent("onRemoteCommand", mapOf("command" to "play"))
     }
-    
+
     internal fun handlePipPause() {
         android.util.Log.d("MediaSession", "handlePipPause")
         updatePipPlayState(false)
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }
-    
+
     internal fun handlePipRewind() {
         android.util.Log.d("MediaSession", "handlePipRewind")
         sendEvent("onRemoteCommand", mapOf("command" to "skipBackward", "interval" to 10))
     }
-    
+
     internal fun handlePipForward() {
         android.util.Log.d("MediaSession", "handlePipForward")
         sendEvent("onRemoteCommand", mapOf("command" to "skipForward", "interval" to 10))
     }
-    
+
     private fun cleanup() {
         if (isSessionActive) {
             abandonAudioFocus()
@@ -1176,13 +794,13 @@ class MediaSessionModule : Module(), PictureInPictureListener {
             isSessionActive = false
         }
     }
-    
+
     companion object {
         const val ACTION_PIP_PLAY = "to.holepunch.mediasession.PIP_PLAY"
         const val ACTION_PIP_PAUSE = "to.holepunch.mediasession.PIP_PAUSE"
         const val ACTION_PIP_REWIND = "to.holepunch.mediasession.PIP_REWIND"
         const val ACTION_PIP_FORWARD = "to.holepunch.mediasession.PIP_FORWARD"
-        
+
         private const val REQUEST_PLAY_PAUSE = 1
         private const val REQUEST_REWIND = 2
         private const val REQUEST_FORWARD = 3

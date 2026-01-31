@@ -61,23 +61,21 @@ class MainActivity : ReactActivity() {
       super.invokeDefaultOnBackPressed()
   }
 
-  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
-      super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-      PipBridge.onPictureInPictureModeChanged(this, isInPictureInPictureMode, newConfig)
-  }
-
-  // region PiP Entry - DO NOT REMOVE
   /**
-   * Called when the user is about to leave the activity (e.g., pressing home button).
-   * This triggers PiP entry via PipBridge -> VlcPipEntryHandler -> PipHostActivity.
-   *
-   * WARNING: This method is REQUIRED for Picture-in-Picture to work.
-   * Without it, PiP will not be triggered when the user presses the home button.
+   * Called when user presses home button. VLC Android's approach:
+   * Enter PiP with correct aspect ratio already set.
    */
-  @Suppress("RedundantOverride", "unused")
   override fun onUserLeaveHint() {
       super.onUserLeaveHint()
+      android.util.Log.d("MainActivity", "onUserLeaveHint")
       PipBridge.onUserLeaveHint(this)
   }
-  // endregion
+
+  /**
+   * Called when PiP mode changes. Just notify JS layer.
+   */
+  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+      super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+      PipBridge.notifyPipModeChanged(this, isInPictureInPictureMode)
+  }
 }

@@ -65,6 +65,9 @@ interface VideoPlayerContextType {
   // Unified PiP gating - single source of truth for whether PiP should be enabled
   shouldEnablePip: boolean
 
+  // Video dimensions (from VLC onNewVideoLayout)
+  videoAspectRatio: number | null
+
   // Playback position
   currentTime: number
   duration: number
@@ -99,6 +102,7 @@ interface VideoPlayerContextType {
   onBuffering: (data: { isBuffering: boolean }) => void
   onEnded: () => void
   onError: (error: any) => void
+  onVideoStateChange: (data: { type?: string; mVideoWidth?: number; mVideoHeight?: number }) => void
 }
 
 const VideoPlayerContext = createContext<VideoPlayerContextType | null>(null)
@@ -124,6 +128,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const [playbackSession, setPlaybackSession] = useState(0)
   const [isInPipMode, setIsInPipMode] = useState(false)
   const [pipWindowSize, setPipWindowSize] = useState<{ width: number; height: number } | null>(null)
+  const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null)
 
   // Playback position state
   const [currentTime, setCurrentTime] = useState(0)
@@ -153,10 +158,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const durationRef = useRef(0)
   const isPlayingRef = useRef(false)
   const playbackRateRef = useRef(1)
+  
+  // Throttled UI state update interval (ms) - ~4fps for seek bar updates
+  const UI_UPDATE_INTERVAL = 250
+  const lastUIUpdateRef = useRef(0)
 
-  // Keep refs in sync with state for async access in AppState callbacks
-  useEffect(() => { currentTimeRef.current = currentTime }, [currentTime])
-  useEffect(() => { durationRef.current = duration }, [duration])
+  // Refs are now the source of truth for high-frequency values
+  // State is only updated at throttled intervals for UI components
   useEffect(() => {
     isPlayingRef.current = isPlaying
     playbackActiveEmitter.set(currentVideo !== null && (isPlaying || isInPipMode))
@@ -344,19 +352,23 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   useEffect(() => {
     if (Platform.OS !== 'android') return
 
-    const subscription = MediaSession.addPictureInPictureListener((event) => {
+    const subscription = MediaSession.addPictureInPictureListener((event: MediaSession.PictureInPictureEvent & {
+      currentTimeMs?: number
+      durationMs?: number
+      isPlaying?: boolean
+    }) => {
       const now = Date.now()
       const wasInPip = isInPipModeRef.current
-      
+
       if (event.isInPictureInPicture === wasInPip && now - lastPipEventTimeRef.current < 100) {
         return
       }
       lastPipEventTimeRef.current = now
-      
+
       if (pipStateUpdateRafRef.current !== null) {
         cancelAnimationFrame(pipStateUpdateRafRef.current)
       }
-      
+
       pipStateUpdateRafRef.current = requestAnimationFrame(() => {
         pipStateUpdateRafRef.current = null
         isInPipModeRef.current = event.isInPictureInPicture
@@ -380,10 +392,16 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
             }, 150)
           }
         } else if (wasInPip) {
-          console.log('[VideoPlayerContext] Exiting PiP, maximizing player and ensuring playback continues')
+          console.log('[VideoPlayerContext] Exiting PiP, maximizing player')
+
+          // Single-player architecture: same player continues, position is already synced
           setPlayerMode('fullscreen')
-          if (wasPlayingWhenPipEnteredRef.current) {
+
+          // Resume playback if was playing when entering PiP
+          const shouldPlay = wasPlayingWhenPipEnteredRef.current
+          if (shouldPlay) {
             setTimeout(() => {
+              console.log('[VideoPlayerContext] Resuming playback after PiP exit')
               setIsPlaying(true)
             }, 100)
           }
@@ -474,6 +492,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setIsLoading(true)
     setCurrentTime(0)
     setDuration(0)
+    setVideoAspectRatio(null)
     // Emit load event so _layout.tsx can trigger prefetch
     videoLoadEventEmitter.emit(video)
   }, [])
@@ -489,17 +508,15 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setIsPlaying(false)
   }, [])
 
-  // Resume video
   const resumeVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Resuming video')
 
     // On iOS, do a seek while still paused to reinitialize audio, then resume
     // This avoids visible jitter since video isn't playing during the seek
-    if (Platform.OS === 'ios' && duration > 0) {
-      const seekValue = currentTime / duration
+    if (Platform.OS === 'ios' && durationRef.current > 0) {
+      const seekValue = currentTimeRef.current / durationRef.current
       setSeekPosition(seekValue)
 
-      // Wait for seek to process, then resume
       setTimeout(() => {
         setSeekPosition(undefined)
         setIsPlaying(true)
@@ -512,7 +529,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         } catch {}
       }
     }
-  }, [currentTime, duration])
+  }, [])
 
   const closeVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Closing video')
@@ -546,45 +563,45 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setPlayerMode('fullscreen')
   }, [])
 
-  // Seek to specific time (in seconds)
   const seekTo = useCallback((time: number) => {
-    if (duration <= 0) return
-    const clampedTime = Math.max(0, Math.min(time, duration))
+    const dur = durationRef.current
+    if (dur <= 0) return
+    const clampedTime = Math.max(0, Math.min(time, dur))
     if (Platform.OS === 'web') {
       try {
         playerRef.current?.seek?.(clampedTime)
       } catch {}
+      currentTimeRef.current = clampedTime
       setCurrentTime(clampedTime)
       return
     }
-    const seekValue = clampedTime / duration // VLC seek uses 0-1 range
+    const seekValue = clampedTime / dur
     console.log('[VideoPlayerContext] Seeking to:', clampedTime, 'seconds, seek prop:', seekValue)
-    // Set the seek position - VLC will see this as the seek prop
     setSeekPosition(seekValue)
+    currentTimeRef.current = clampedTime
     setCurrentTime(clampedTime)
-    // Clear after VLC processes the seek (so we can seek to same position again later)
     setTimeout(() => setSeekPosition(undefined), 100)
-  }, [duration])
+  }, [])
 
-  // Seek by relative amount (positive = forward, negative = backward)
   const seekBy = useCallback((delta: number) => {
-    if (duration <= 0) return
-    const newTime = Math.max(0, Math.min(currentTime + delta, duration))
+    const dur = durationRef.current
+    if (dur <= 0) return
+    const newTime = Math.max(0, Math.min(currentTimeRef.current + delta, dur))
     if (Platform.OS === 'web') {
       try {
         playerRef.current?.seek?.(newTime)
       } catch {}
+      currentTimeRef.current = newTime
       setCurrentTime(newTime)
       return
     }
-    const seekValue = newTime / duration // VLC seek uses 0-1 range
+    const seekValue = newTime / dur
     console.log('[VideoPlayerContext] Seeking by:', delta, 'to:', newTime, 'seek prop:', seekValue)
-    // Set the seek position - VLC will see this as the seek prop
     setSeekPosition(seekValue)
+    currentTimeRef.current = newTime
     setCurrentTime(newTime)
-    // Clear after VLC processes the seek (so we can seek to same position again later)
     setTimeout(() => setSeekPosition(undefined), 100)
-  }, [currentTime, duration])
+  }, [])
 
   // Set playback speed
   const setPlaybackRate = useCallback((rate: number) => {
@@ -597,24 +614,37 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const onProgress = useCallback((data: { currentTime: number; duration: number }) => {
     const timeS = data.currentTime / 1000
     const durationS = data.duration > 0 ? data.duration / 1000 : 0
-    setCurrentTime(timeS)
+    
+    currentTimeRef.current = timeS
     if (durationS > 0) {
-      setDuration(durationS)
+      durationRef.current = durationS
     }
+    
     if (data.currentTime > 0) {
       setIsLoading((prev) => (prev ? false : prev))
     }
-    if (Platform.OS !== 'web' && mediaSessionActiveRef.current) {
-      const now = Date.now()
-      if (now - lastMediaSessionUpdateRef.current > 1000) {
-        lastMediaSessionUpdateRef.current = now
-        MediaSession.setPlaybackState({
-          isPlaying: isPlayingRef.current,
-          position: timeS,
-          duration: durationS,
-          rate: playbackRateRef.current,
-        }).catch(() => {})
+    
+    const now = Date.now()
+    const shouldUpdateUI = now - lastUIUpdateRef.current >= UI_UPDATE_INTERVAL
+    if (shouldUpdateUI) {
+      lastUIUpdateRef.current = now
+      setCurrentTime(timeS)
+      if (durationS > 0) {
+        setDuration(durationS)
       }
+    }
+    
+    const shouldUpdateMediaSession = Platform.OS !== 'web' && 
+      mediaSessionActiveRef.current && 
+      now - lastMediaSessionUpdateRef.current > 1000
+    if (shouldUpdateMediaSession) {
+      lastMediaSessionUpdateRef.current = now
+      MediaSession.setPlaybackState({
+        isPlaying: isPlayingRef.current,
+        position: timeS,
+        duration: durationS,
+        rate: playbackRateRef.current,
+      }).catch(() => {})
     }
   }, [])
 
@@ -671,6 +701,19 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setIsLoading(false)
   }, [])
 
+  const onVideoStateChange = useCallback((data: { type?: string; mVideoWidth?: number; mVideoHeight?: number }) => {
+    if (data.type === 'onNewVideoLayout' && data.mVideoWidth && data.mVideoHeight && data.mVideoWidth > 0 && data.mVideoHeight > 0) {
+      const aspectRatio = data.mVideoWidth / data.mVideoHeight
+      console.log('[VideoPlayerContext] Video dimensions:', data.mVideoWidth, 'x', data.mVideoHeight, '- aspect ratio:', aspectRatio.toFixed(3))
+      setVideoAspectRatio(aspectRatio)
+      if (Platform.OS === 'android') {
+        // VLC Android approach: Set PiP aspect ratio from actual video dimensions
+        // This prevents zoom/stretch - Android will letterbox if needed
+        MediaSession.setPictureInPictureAspectRatio(data.mVideoWidth, data.mVideoHeight).catch(() => {})
+      }
+    }
+  }, [])
+
   const progress = duration > 0 ? currentTime / duration : 0
   
   const shouldEnablePip = useMemo(() => {
@@ -698,6 +741,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     pipWindowSize,
     setPipWindowSize,
     shouldEnablePip,
+    videoAspectRatio,
     vlcSeekPosition: seekPosition,
     playerRef,
     loadAndPlayVideo,
@@ -717,6 +761,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     onBuffering,
     onEnded,
     onError,
+    onVideoStateChange,
   }
 
   return (

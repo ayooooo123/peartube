@@ -5,11 +5,13 @@ import expo.modules.core.interfaces.Package
 import expo.modules.core.interfaces.ReactActivityLifecycleListener
 
 /**
- * Expo Package that registers the MediaSession lifecycle listener.
- * This allows the module to receive onUserLeaveHint callbacks for PiP entry.
+ * Expo Package for MediaSession module.
+ *
+ * Note: PiP callbacks are now handled directly in MainActivity via the
+ * withMainActivityPiPCallback config plugin, so no lifecycle listener is needed.
  */
 class MediaSessionPackage : Package {
     override fun createReactActivityLifecycleListeners(activityContext: Context?): List<ReactActivityLifecycleListener> {
-        return listOf(MediaSessionReactActivityLifecycleListener())
+        return emptyList()
     }
 }

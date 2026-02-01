@@ -360,26 +360,35 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       const now = Date.now()
       const wasInPip = isInPipModeRef.current
 
-      if (event.isInPictureInPicture === wasInPip && now - lastPipEventTimeRef.current < 100) {
+      console.log('[VideoPlayerContext] PiP event raw:', event.isInPictureInPicture, 'wasInPip:', wasInPip, 'width:', event.width, 'height:', event.height)
+
+      // Only debounce if BOTH boolean AND dimensions are identical
+      // This ensures dimension changes are always processed, even if boolean is the same
+      const sameState = event.isInPictureInPicture === wasInPip
+      const sameDimensions = event.width === pipWindowSize?.width && event.height === pipWindowSize?.height
+      const tooSoon = now - lastPipEventTimeRef.current < 100
+
+      if (sameState && sameDimensions && tooSoon) {
+        console.log('[VideoPlayerContext] PiP event debounced (identical state+dimensions)')
         return
       }
       lastPipEventTimeRef.current = now
 
-      if (pipStateUpdateRafRef.current !== null) {
-        cancelAnimationFrame(pipStateUpdateRafRef.current)
+      // Update ref immediately to prevent race conditions
+      isInPipModeRef.current = event.isInPictureInPicture
+
+      // Update state immediately - RAF doesn't fire in PiP/background mode
+      setIsInPipMode(event.isInPictureInPicture)
+      if (event.isInPictureInPicture && event.width && event.height) {
+        setPipWindowSize({ width: event.width, height: event.height })
+      } else if (!event.isInPictureInPicture) {
+        setPipWindowSize(null)
       }
 
-      pipStateUpdateRafRef.current = requestAnimationFrame(() => {
-        pipStateUpdateRafRef.current = null
-        isInPipModeRef.current = event.isInPictureInPicture
-        setIsInPipMode(event.isInPictureInPicture)
-        if (event.isInPictureInPicture && event.width && event.height) {
-          setPipWindowSize({ width: event.width, height: event.height })
-        } else if (!event.isInPictureInPicture) {
-          setPipWindowSize(null)
-        }
+      console.log('[VideoPlayerContext] PiP mode changed:', event.isInPictureInPicture, 'wasPlaying:', wasPlayingWhenBackgroundedRef.current)
 
-        console.log('[VideoPlayerContext] PiP mode changed:', event.isInPictureInPicture, 'wasPlaying:', wasPlayingWhenBackgroundedRef.current)
+      // Use setTimeout instead of RAF - RAF doesn't fire in PiP/background mode
+      setTimeout(() => {
 
         if (event.isInPictureInPicture) {
           const wasPlaying = isPlayingRef.current || wasPlayingWhenBackgroundedRef.current
@@ -411,9 +420,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
     return () => {
       subscription.remove()
-      if (pipStateUpdateRafRef.current !== null) {
-        cancelAnimationFrame(pipStateUpdateRafRef.current)
-      }
     }
   }, [])
 

@@ -185,3 +185,84 @@ Fix: Define `firstSegmentIndex`/`lastSegmentIndex` in `packages/app/backend/hls-
 Check logs for:
 `[Backend] Bundle version: add-audio-fifo-v4`
 `[HlsTranscoder] TRANSCODER_VERSION: add-audio-fifo-v4`
+
+---
+
+## Android Picture-in-Picture (PiP) with VLC
+
+### Second PiP Entry Zoom Issue
+
+**Problem:** First PiP entry works, but subsequent entries show zoomed/incorrectly sized video.
+
+**Root Cause:** When `mNativePipWidthPx` and `mNativePipHeightPx` are already set to the PiP dimensions (e.g., 527x297), calling `holder.setFixedSize(527, 297)` with the SAME dimensions doesn't trigger `surfaceChanged()` because Android detects no change.
+
+**Fix:** Before setting new PiP dimensions, check if they're the same as current. If so, reset first:
+```java
+boolean dimensionsChanged = (mNativePipWidthPx != widthPx || mNativePipHeightPx != heightPx);
+if (!dimensionsChanged && mNativePipWidthPx > 0) {
+    // Force reset to ensure surfaceChanged fires
+    mNativePipWidthPx = 0;
+    mNativePipHeightPx = 0;
+    holder.setSizeFromLayout();  // Reset to layout-based sizing
+}
+// Then set the actual dimensions
+mNativePipWidthPx = widthPx;
+mNativePipHeightPx = heightPx;
+holder.setFixedSize(widthPx, heightPx);
+```
+
+### JS-Side Debounce Breaking Dimension Updates
+
+**Problem:** JS side debounce at lines 365-368 of `VideoPlayerContext.tsx` only checked the boolean `isInPictureInPicture`, not the dimensions. This meant PiP resize events (same boolean, different dimensions) were dropped.
+
+**Fix:** Check both state AND dimensions in debounce logic:
+```typescript
+const sameState = event.isInPictureInPicture === wasInPip
+const sameDimensions = event.width === pipWindowSize?.width && event.height === pipWindowSize?.height
+const tooSoon = now - lastPipEventTimeRef.current < 100
+
+if (sameState && sameDimensions && tooSoon) {
+  return  // Only skip if BOTH are identical
+}
+```
+
+### VLC Sizing API Calls
+
+**Key APIs for PiP sizing:**
+- `vlcOut.setWindowSize(width, height)` - Sets the window/surface size VLC renders to
+- `mMediaPlayer.setScale(0)` - Best fit (auto-scale to window)
+- `mMediaPlayer.setAspectRatio(width + ":" + height)` - Force aspect ratio to match container
+- `mMediaPlayer.updateVideoSurfaces()` - Tells VLC to re-evaluate and re-render
+
+**Important:** `mVideoWidth` and `mVideoHeight` member variables are used by VLC internally. When entering PiP, update these to match the PiP container size.
+
+### Avoid Hacky Delay Loops
+
+**Problem:** Original code had multiple `postDelayed()` loops (50ms, 150ms, 300ms, 500ms, 800ms, 1200ms) that were unreliable and could corrupt `mVideoWidth/mVideoHeight`.
+
+**Better approach:** Use event-driven callbacks:
+- `surfaceChanged()` - Called when SurfaceHolder dimensions change
+- `onNewVideoLayout()` - VLC callback when video layout changes
+- Single 100ms delayed re-apply as backup (not multiple)
+
+### Key Files for Android PiP
+
+| File | Purpose |
+|------|---------|
+| `ReactVlcPlayerView.java` | VLC SurfaceView with PiP sizing logic |
+| `VlcPlayerBridge.java` | Native module bridge for PiP commands |
+| `PipBridge.java` | Android PiP API integration |
+| `VideoPlayerContext.tsx` | JS state management for PiP mode |
+
+### Debugging PiP Issues
+
+Add logging with `VLC_PIP` tag and filter with:
+```bash
+adb logcat -s VLC_PIP:D
+```
+
+Key log points:
+- `applyPipSizeFromNative` - Entering PiP with dimensions
+- `clearPipSizeFromNative` - Exiting PiP
+- `surfaceChanged` - Surface dimension changes
+- `onLayoutChange` - View layout changes

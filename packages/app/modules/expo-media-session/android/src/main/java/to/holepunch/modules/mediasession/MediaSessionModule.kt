@@ -161,11 +161,11 @@ object PipBridge {
 
     /**
      * Called from MainActivity.onPictureInPictureModeChanged().
-     * Just notify JS layer of the state change - don't touch VLC's surface.
+     * Notify JS layer of the state change.
      */
-    fun notifyPipModeChanged(activity: Activity, isInPip: Boolean) {
-        android.util.Log.d("PipBridge", "notifyPipModeChanged: $isInPip")
-        moduleInstance?.sendPipEvent(activity, isInPip)
+    fun notifyPipModeChanged(activity: Activity, isInPip: Boolean, newConfig: Configuration? = null) {
+        android.util.Log.d("PipBridge", "notifyPipModeChanged: isInPip=$isInPip")
+        moduleInstance?.sendPipEvent(activity, isInPip, newConfig)
     }
 }
 
@@ -741,16 +741,29 @@ class MediaSessionModule : Module() {
         return actions
     }
 
-    internal fun sendPipEvent(activity: Activity, isInPip: Boolean) {
-        val (width, height) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+    internal fun sendPipEvent(activity: Activity, isInPip: Boolean, newConfig: Configuration? = null) {
+        // Send dp values to JS - React Native styles use dp, not pixels
+        val density = activity.resources.displayMetrics.density
+        val (width, height) = if (newConfig != null && isInPip) {
+            // Configuration gives us dp values directly
+            android.util.Log.d("MediaSession", "sendPipEvent: using Configuration: ${newConfig.screenWidthDp}dp x ${newConfig.screenHeightDp}dp")
+            Pair(newConfig.screenWidthDp, newConfig.screenHeightDp)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Window metrics are in pixels, convert to dp
             val bounds = activity.windowManager.currentWindowMetrics.bounds
-            Pair(bounds.width(), bounds.height())
+            val wDp = (bounds.width() / density).toInt()
+            val hDp = (bounds.height() / density).toInt()
+            android.util.Log.d("MediaSession", "sendPipEvent: using WindowMetrics: ${bounds.width()}x${bounds.height()}px -> ${wDp}x${hDp}dp")
+            Pair(wDp, hDp)
         } else {
+            // DecorView dimensions are in pixels, convert to dp
             val decorView = activity.window?.decorView
-            Pair(decorView?.width ?: 0, decorView?.height ?: 0)
+            val wDp = ((decorView?.width ?: 0) / density).toInt()
+            val hDp = ((decorView?.height ?: 0) / density).toInt()
+            Pair(wDp, hDp)
         }
 
-        android.util.Log.d("MediaSession", "sendPipEvent: isInPip=$isInPip, dimensions=${width}x${height}")
+        android.util.Log.d("MediaSession", "sendPipEvent: isInPip=$isInPip, dimensions=${width}x${height}dp")
 
         wasInPipMode = isInPip
 

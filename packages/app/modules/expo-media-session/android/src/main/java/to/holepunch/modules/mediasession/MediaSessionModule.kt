@@ -161,11 +161,118 @@ object PipBridge {
 
     /**
      * Called from MainActivity.onPictureInPictureModeChanged().
-     * Notify JS layer of the state change.
+     * Notifies both VLC player (directly, bypassing React) and JS layer.
      */
+    @JvmStatic
     fun notifyPipModeChanged(activity: Activity, isInPip: Boolean, newConfig: Configuration? = null) {
         android.util.Log.d("PipBridge", "notifyPipModeChanged: isInPip=$isInPip")
+
+        // Notify VLC player directly via reflection (bypasses React prop batching for immediate resize)
+        // We use reflection because expo-media-session module doesn't have a direct dependency on VLC module
+        val density = activity.resources.displayMetrics.density
+        val widthDp = newConfig?.screenWidthDp ?: 0
+        val heightDp = newConfig?.screenHeightDp ?: 0
+        notifyVlcPlayerBridge(isInPip, widthDp, heightDp, density)
+
+        // Also apply transform directly to all SurfaceViews with a small delay
+        // This ensures the transform is applied after Android finishes PiP transition
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        handler.postDelayed({
+            applySurfaceViewTransforms(activity, isInPip, newConfig)
+        }, 50) // Small delay to let Android settle
+
+        // Still send event to JS for state management
         moduleInstance?.sendPipEvent(activity, isInPip, newConfig)
+    }
+
+    /**
+     * Apply scale transforms directly to SurfaceViews at the Activity level.
+     * This bypasses React Native's layout system entirely.
+     */
+    private fun applySurfaceViewTransforms(activity: Activity, isInPip: Boolean, newConfig: Configuration?) {
+        val surfaceViews = findSurfaceViews(activity.window.decorView)
+        android.util.Log.d("PipBridge", "applySurfaceViewTransforms: found ${surfaceViews.size} SurfaceViews, isInPip=$isInPip")
+
+        for (sv in surfaceViews) {
+            if (isInPip && newConfig != null) {
+                val viewWidth = sv.width
+                val viewHeight = sv.height
+                if (viewWidth <= 0 || viewHeight <= 0) continue
+
+                // Calculate PiP window size from Configuration
+                val density = activity.resources.displayMetrics.density
+                val pipWidth = (newConfig.screenWidthDp * density).toInt()
+                val pipHeight = (newConfig.screenHeightDp * density).toInt()
+
+                // Check if View already matches PiP dimensions (within 10px tolerance)
+                val viewMatchesPip = kotlin.math.abs(viewWidth - pipWidth) < 10 && kotlin.math.abs(viewHeight - pipHeight) < 10
+                if (viewMatchesPip) {
+                    // View already resized to PiP, no transform needed
+                    android.util.Log.d("PipBridge", "applySurfaceViewTransforms: view=${viewWidth}x${viewHeight} already matches pip=${pipWidth}x${pipHeight}, skipping transform")
+                    continue
+                }
+
+                // Calculate scale - use width scale so video fills PiP width
+                val scaleX = pipWidth.toFloat() / viewWidth
+                val scaleY = pipHeight.toFloat() / viewHeight
+                val viewIsLandscape = viewWidth >= viewHeight
+                val scale = scaleX  // Always use width scale
+
+                // Apply transform with pivot at top-left
+                sv.pivotX = 0f
+                sv.pivotY = 0f
+                sv.scaleX = scale
+                sv.scaleY = scale
+
+                android.util.Log.d("PipBridge", "applySurfaceViewTransforms: view=${viewWidth}x${viewHeight} pip=${pipWidth}x${pipHeight} scale=$scale viewLandscape=$viewIsLandscape")
+            } else {
+                // Reset transforms
+                sv.scaleX = 1f
+                sv.scaleY = 1f
+                sv.pivotX = sv.width / 2f
+                sv.pivotY = sv.height / 2f
+                android.util.Log.d("PipBridge", "applySurfaceViewTransforms: reset transform")
+            }
+        }
+    }
+
+    /**
+     * Find all SurfaceViews in the view hierarchy.
+     */
+    private fun findSurfaceViews(view: android.view.View): List<android.view.SurfaceView> {
+        val result = mutableListOf<android.view.SurfaceView>()
+        if (view is android.view.SurfaceView) {
+            result.add(view)
+        }
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                result.addAll(findSurfaceViews(view.getChildAt(i)))
+            }
+        }
+        return result
+    }
+
+    /**
+     * Notify VLC player of PiP mode change via reflection.
+     * This bypasses React's prop batching for immediate resize.
+     */
+    private fun notifyVlcPlayerBridge(isInPip: Boolean, widthDp: Int, heightDp: Int, density: Float) {
+        try {
+            val bridgeClass = Class.forName("com.yuanzhou.vlc.vlcplayer.VlcPlayerBridge")
+            val method = bridgeClass.getMethod(
+                "notifyPipModeChanged",
+                Boolean::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Float::class.javaPrimitiveType
+            )
+            method.invoke(null, isInPip, widthDp, heightDp, density)
+            android.util.Log.d("PipBridge", "notifyVlcPlayerBridge: called successfully")
+        } catch (e: ClassNotFoundException) {
+            android.util.Log.d("PipBridge", "notifyVlcPlayerBridge: VlcPlayerBridge not available")
+        } catch (e: Exception) {
+            android.util.Log.e("PipBridge", "notifyVlcPlayerBridge: failed", e)
+        }
     }
 }
 

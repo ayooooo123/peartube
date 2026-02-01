@@ -152,6 +152,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const isBackgroundedRef = useRef(false)
   const isInPipModeRef = useRef(false)
   const wasPlayingWhenPipEnteredRef = useRef(false)
+  const playerModeBeforePipRef = useRef<PlayerMode>('fullscreen')
   const lastPipEventTimeRef = useRef(0)
   const pipStateUpdateRafRef = useRef<number | null>(null)
   const currentTimeRef = useRef(0)
@@ -393,7 +394,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         if (event.isInPictureInPicture) {
           const wasPlaying = isPlayingRef.current || wasPlayingWhenBackgroundedRef.current
           wasPlayingWhenPipEnteredRef.current = wasPlaying
-          console.log('[VideoPlayerContext] Entering PiP, wasPlaying:', wasPlaying, 'isPlaying:', isPlayingRef.current, 'wasPlayingWhenBackgrounded:', wasPlayingWhenBackgroundedRef.current)
+          // Save the current playerMode to restore on PiP exit
+          playerModeBeforePipRef.current = playerMode
+          console.log('[VideoPlayerContext] Entering PiP, wasPlaying:', wasPlaying, 'playerMode:', playerMode)
           if (wasPlaying) {
             setTimeout(() => {
               console.log('[VideoPlayerContext] Resuming playback in PiP')
@@ -401,10 +404,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
             }, 150)
           }
         } else if (wasInPip) {
-          console.log('[VideoPlayerContext] Exiting PiP, maximizing player')
+          // Restore the playerMode that was active before PiP entry
+          const modeToRestore = playerModeBeforePipRef.current
+          console.log('[VideoPlayerContext] Exiting PiP, restoring playerMode:', modeToRestore)
 
           // Single-player architecture: same player continues, position is already synced
-          setPlayerMode('fullscreen')
+          setPlayerMode(modeToRestore)
 
           // Resume playback if was playing when entering PiP
           const shouldPlay = wasPlayingWhenPipEnteredRef.current

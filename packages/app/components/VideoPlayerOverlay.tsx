@@ -1440,12 +1440,44 @@ export function VideoPlayerOverlay() {
   }, [])
 
   // Animated styles for fullscreen content (fades in when expanding)
-  // KEY: When auto-PiP enabled, position as absolute overlay starting at videoHeight.
-  // This creates the illusion of "video at top, comments below" while the actual
-  // Fullscreen content (comments, info) - simple flex layout
+  // Uses absolute positioning to avoid flex layout issues with animated parent containers.
+  // Positioned at top: videoHeight to start exactly where the video ends.
   const fullscreenContentStyle = useAnimatedStyle(() => {
     'worklet'
-    const opacity = interpolate(
+    // When in fullscreen mode (animProgress = 1), always show content at full opacity
+    // The interpolation is only for the mini->fullscreen animation transition
+    const isFullscreen = animProgress.value >= 0.95
+    const opacity = isFullscreen ? 1 : interpolate(
+      animProgress.value,
+      [0.5, 1],
+      [0, 1],
+      Extrapolation.CLAMP
+    )
+
+    // Calculate top position - video height for fullscreen, mini pip height for mini
+    const top = interpolate(
+      animProgress.value,
+      [0, 1],
+      [MINI_PIP_HEIGHT, videoHeightShared.value],
+      Extrapolation.CLAMP
+    )
+
+    return {
+      position: 'absolute',
+      top,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      opacity,
+      display: animProgress.value < 0.3 ? 'none' : 'flex',
+    }
+  }, [])
+
+  // Opacity-only style for overlay buttons (minimize, speed, cast) - no position overrides
+  const fullscreenButtonsOpacityStyle = useAnimatedStyle(() => {
+    'worklet'
+    const isFullscreen = animProgress.value >= 0.95
+    const opacity = isFullscreen ? 1 : interpolate(
       animProgress.value,
       [0.5, 1],
       [0, 1],
@@ -1587,6 +1619,9 @@ export function VideoPlayerOverlay() {
       opacity,
     }
   }, [])
+
+  // Note: videoAreaStyle wrapper removed - fullscreenContent now uses absolute positioning
+  // with top: videoHeight to position content below video, avoiding flex layout issues
 
   // Handle play/pause
   const handlePlayPause = useCallback(() => {
@@ -2424,10 +2459,12 @@ export function VideoPlayerOverlay() {
             }}
             style={
               // During Android PiP: resize the view to match PiP window dimensions
-              // This fixes the zoom issue - VLC renders to fit the actual view size
+              // After PiP exit: use explicit 16:9 dimensions to avoid full-height layout issues
               isInPipMode && Platform.OS === 'android' && pipWindowSize
                 ? { width: pipWindowSize.width, height: pipWindowSize.height, position: 'absolute' as const, top: 0, left: 0 }
-                : StyleSheet.absoluteFill
+                : Platform.OS === 'android'
+                  ? { width: screenWidth, height: videoHeight, position: 'absolute' as const, top: 0, left: 0 }
+                  : StyleSheet.absoluteFill
             }
             paused={!isPlaying}
             playInBackground={true}
@@ -2479,12 +2516,9 @@ export function VideoPlayerOverlay() {
     )
   }
 
-
-
   // Render - all styles are animated, no React state conditionals in JSX to prevent VLC remounting
   const content = (
     <Animated.View style={[styles.container, containerStyle]}>
-          {/* Video area - wrapped with GestureDetector for pull-down-to-minimize */}
           <GestureDetector gesture={composedGesture}>
           <Animated.View
             ref={videoWrapperRef}
@@ -2546,7 +2580,7 @@ export function VideoPlayerOverlay() {
           </Pressable>
 
           {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
-            <Animated.View style={[styles.minimizeButton, fullscreenContentStyle]}>
+            <Animated.View style={[styles.minimizeButton, fullscreenButtonsOpacityStyle]}>
               <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
                 <Feather name="chevron-down" color="#fff" size={28} />
               </Pressable>
@@ -2554,7 +2588,7 @@ export function VideoPlayerOverlay() {
           )}
 
           {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
-            <Animated.View style={[styles.speedButton, fullscreenContentStyle]}>
+            <Animated.View style={[styles.speedButton, fullscreenButtonsOpacityStyle]}>
               <Pressable onPress={cyclePlaybackSpeed} style={styles.speedButtonInner}>
                 <Text style={styles.speedButtonText}>{playbackRate}x</Text>
               </Pressable>
@@ -2562,7 +2596,7 @@ export function VideoPlayerOverlay() {
           )}
 
           {playerMode === 'fullscreen' && showControls && !isInPipMode && (
-            <Animated.View style={[styles.castButton, fullscreenContentStyle]}>
+            <Animated.View style={[styles.castButton, fullscreenButtonsOpacityStyle]}>
               <Pressable onPress={handleCastPress} style={styles.castButtonInner}>
                 <Feather name="cast" color={cast.isConnected ? colors.primary : "#fff"} size={22} />
               </Pressable>
@@ -3405,7 +3439,8 @@ const styles = StyleSheet.create({
   // Black background ensures PiP shows video + black (not video + colored content)
   // when native hideNonVideoContent hides the ScrollView
   fullscreenContent: {
-    flex: 1,
+    // Position is set by animated style (absolute with top: videoHeight)
+    // No flex needed since we use explicit positioning
     backgroundColor: '#000',
   },
   scrollContent: {

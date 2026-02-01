@@ -72,10 +72,22 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-   * Called when PiP mode changes. Just notify JS layer.
+   * Called when PiP mode changes. Just notify JS layer with new config for accurate dimensions.
    */
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
       super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-      PipBridge.notifyPipModeChanged(this, isInPictureInPictureMode)
+      PipBridge.notifyPipModeChanged(this, isInPictureInPictureMode, newConfig)
+  }
+
+  /**
+   * Called when configuration changes (including PiP window resize).
+   * Re-notify PipBridge when resizing while in PiP mode.
+   */
+  override fun onConfigurationChanged(newConfig: Configuration) {
+      super.onConfigurationChanged(newConfig)
+      if (isInPictureInPictureMode) {
+          android.util.Log.d("MainActivity", "onConfigurationChanged while in PiP: ${newConfig.screenWidthDp}x${newConfig.screenHeightDp}dp")
+          PipBridge.notifyPipModeChanged(this, true, newConfig)
+      }
   }
 }

@@ -2,6 +2,10 @@
 
 This document provides everything needed to understand and develop the PearTube project - a decentralized P2P video streaming platform built on Pear Runtime and Hypercore Protocol.
 
+## Agent Instructions
+
+Builds, installs, and deploy commands may be run when explicitly requested.
+
 ## Table of Contents
 
 - [Project Overview](#project-overview)

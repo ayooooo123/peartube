@@ -5,7 +5,7 @@
  * which uses the bare-fcast module to handle FCast and Chromecast protocols.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Alert } from 'react-native'
 import { useApp } from '@/lib/AppContext'
 
@@ -589,12 +589,14 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     return () => clearInterval(interval)
   }, [rpc, connectedDevice])
 
-  return {
+  const isConnected = connectedDevice !== null
+
+  return useMemo(() => ({
     available,
     isDiscovering,
     devices,
     connectedDevice,
-    isConnected: connectedDevice !== null,
+    isConnected,
     playbackState,
     transcodeStatus,
     startDiscovery,
@@ -608,7 +610,26 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     stop,
     seek,
     setVolume,
-  }
+  }), [
+    available,
+    isDiscovering,
+    devices,
+    connectedDevice,
+    isConnected,
+    playbackState,
+    transcodeStatus,
+    startDiscovery,
+    stopDiscovery,
+    addManualDevice,
+    connect,
+    disconnect,
+    play,
+    pause,
+    resume,
+    stop,
+    seek,
+    setVolume,
+  ])
 }
 
 export default useCast

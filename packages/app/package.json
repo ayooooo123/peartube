@@ -4,7 +4,7 @@
   "description": "PearTube - P2P video streaming app (mobile + desktop)",
   "main": "expo-router/entry",
   "scripts": {
-        "start": "expo start",
+    "start": "expo start",
     "android": "npm run bundle:backend && (cat android/local.properties 2>/dev/null > /tmp/local.properties.bak || true) && expo prebuild --platform android --clean && (cat /tmp/local.properties.bak > android/local.properties 2>/dev/null || echo \"sdk.dir=$HOME/Library/Android/sdk\" > android/local.properties) && expo run:android",
     "setup:android": "bash ./scripts/setup-android.sh",
     "ios:prepare": "bash ./scripts/create-xcframeworks.sh",
@@ -105,7 +105,7 @@
     "react-native-safe-area-context": "^5.4.0",
     "react-native-screens": "^4.18.0",
     "react-native-svg": "^15.15.0",
-    "react-native-vlc-media-player": "^1.0.98",
+    "react-native-vlc-media-player": "file:./vendor/react-native-vlc-media-player",
     "react-native-web": "^0.19.13",
     "react-native-worklets": "^0.6.1",
     "script-linker": "^2.5.4"
@@ -130,7 +130,7 @@
     "hyperdispatch": "^1.4.2",
     "hyperdrive": "^13.0.2",
     "hyperswarm": "^4.15.1",
-        "prettier": "^3.3.3",
+    "prettier": "^3.3.3",
     "protomux": "^3.10.1",
     "ready-resource": "^1.2.0",
     "semver": "^7.7.3",

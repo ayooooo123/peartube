@@ -9,10 +9,9 @@ import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWind
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-// VLC player for iOS/Android
 let VLCPlayer: any = null
 if (Platform.OS !== 'web') {
-  VLCPlayer = require('react-native-vlc-media-player').VLCPlayer
+  VLCPlayer = require('react-native-vlc-media-player').VLCPlayerSurface
 }
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
@@ -290,6 +289,7 @@ export default function VideoPlayerScreen() {
     minimizePlayer,
     loadAndPlayVideo,
     setIsLoading,
+    isInPipMode,
     // VLC callbacks
     onProgress,
     onPlaying,
@@ -544,7 +544,7 @@ export default function VideoPlayerScreen() {
               )
             ) : (
               <View style={{ width: screenWidth, height: videoHeight }}>
-                {isFocused && VLCPlayer && (
+                {isFocused && !isInPipMode && VLCPlayer && (
                   <VLCPlayer
                     key={`${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
                     ref={playerRef}

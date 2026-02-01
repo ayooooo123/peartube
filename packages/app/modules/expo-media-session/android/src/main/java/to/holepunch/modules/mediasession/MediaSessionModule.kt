@@ -27,6 +27,7 @@ import androidx.core.content.ContextCompat
 import androidx.media.session.MediaButtonReceiver
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import kotlin.math.roundToInt
 import expo.modules.kotlin.Promise
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -200,9 +201,10 @@ object PipBridge {
                 if (viewWidth <= 0 || viewHeight <= 0) continue
 
                 // Calculate PiP window size from Configuration
+                // Use roundToInt() to match React Native's rounding behavior (vs truncation)
                 val density = activity.resources.displayMetrics.density
-                val pipWidth = (newConfig.screenWidthDp * density).toInt()
-                val pipHeight = (newConfig.screenHeightDp * density).toInt()
+                val pipWidth = (newConfig.screenWidthDp * density).roundToInt()
+                val pipHeight = (newConfig.screenHeightDp * density).roundToInt()
 
                 // Check if View already matches PiP dimensions (within 10px tolerance)
                 val viewMatchesPip = kotlin.math.abs(viewWidth - pipWidth) < 10 && kotlin.math.abs(viewHeight - pipHeight) < 10

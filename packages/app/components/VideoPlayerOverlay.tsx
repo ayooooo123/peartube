@@ -370,6 +370,8 @@ export function VideoPlayerOverlay() {
   if (isInPipMode && Platform.OS === 'android') {
     console.log('[VideoPlayerOverlay] PiP layout:', {
       isInPipMode,
+      pipWindowSize,
+      pipContainerSize: isInPipMode && pipWindowSize ? pipWindowSize : undefined,
       useScreenFallback,
       screenWidth,
       screenHeight,
@@ -2420,13 +2422,19 @@ export function VideoPlayerOverlay() {
                 '--avcodec-threads=0',
               ],
             }}
-            style={StyleSheet.absoluteFill}
+            style={
+              // During Android PiP: resize the view to match PiP window dimensions
+              // This fixes the zoom issue - VLC renders to fit the actual view size
+              isInPipMode && Platform.OS === 'android' && pipWindowSize
+                ? { width: pipWindowSize.width, height: pipWindowSize.height, position: 'absolute' as const, top: 0, left: 0 }
+                : StyleSheet.absoluteFill
+            }
             paused={!isPlaying}
             playInBackground={true}
             rate={playbackRate}
             seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
             resizeMode="contain"
-            autoAspectRatio={false}
+            autoAspectRatio={true}
             onLoad={handleVideoLoad}
             onProgress={onProgress}
             onPlaying={onPlaying}
@@ -2435,6 +2443,11 @@ export function VideoPlayerOverlay() {
             onEnd={onEnded}
             onError={onError}
             onVideoStateChange={onVideoStateChange}
+            pipContainerSize={
+              isInPipMode && Platform.OS === 'android' && pipWindowSize
+                ? pipWindowSize
+                : null
+            }
           />
         )}
         {Platform.OS === 'web' && isPear && videoUrl && (

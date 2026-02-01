@@ -1,13 +1,37 @@
 const { withMainActivity } = require('@expo/config-plugins');
-const { mergeContents } = require('@expo/config-plugins/build/utils/generateCode');
 
 const IMPORT_BLOCK = `import android.content.res.Configuration
 import to.holepunch.modules.mediasession.PipBridge`;
 
 const PIP_CALLBACK_BLOCK = `
+  /**
+   * Called when user presses home button. VLC Android's approach:
+   * Enter PiP with correct aspect ratio already set.
+   */
+  override fun onUserLeaveHint() {
+      super.onUserLeaveHint()
+      android.util.Log.d("MainActivity", "onUserLeaveHint")
+      PipBridge.onUserLeaveHint(this)
+  }
+
+  /**
+   * Called when PiP mode changes. Just notify JS layer with new config for accurate dimensions.
+   */
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
       super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-      PipBridge.onPictureInPictureModeChanged(this, isInPictureInPictureMode, newConfig)
+      PipBridge.notifyPipModeChanged(this, isInPictureInPictureMode, newConfig)
+  }
+
+  /**
+   * Called when configuration changes (including PiP window resize).
+   * Re-notify PipBridge when resizing while in PiP mode.
+   */
+  override fun onConfigurationChanged(newConfig: Configuration) {
+      super.onConfigurationChanged(newConfig)
+      if (isInPictureInPictureMode) {
+          android.util.Log.d("MainActivity", "onConfigurationChanged while in PiP")
+          PipBridge.notifyPipModeChanged(this, true, newConfig)
+      }
   }`;
 
 function withMainActivityPiPCallback(config) {

@@ -153,6 +153,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const isInPipModeRef = useRef(false)
   const wasPlayingWhenPipEnteredRef = useRef(false)
   const playerModeBeforePipRef = useRef<PlayerMode>('fullscreen')
+  const playerModeRef = useRef<PlayerMode>(playerMode)  // Sync ref for PiP handler
   const lastPipEventTimeRef = useRef(0)
   const pipStateUpdateRafRef = useRef<number | null>(null)
   const currentTimeRef = useRef(0)
@@ -171,6 +172,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     playbackActiveEmitter.set(currentVideo !== null && (isPlaying || isInPipMode))
   }, [isPlaying, currentVideo, isInPipMode])
   useEffect(() => { playbackRateRef.current = playbackRate }, [playbackRate])
+  useEffect(() => { playerModeRef.current = playerMode }, [playerMode])
 
   const mediaSessionActiveRef = useRef(false)
   const setMediaSessionActive = useCallback((active: boolean) => {
@@ -388,15 +390,21 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
       console.log('[VideoPlayerContext] PiP mode changed:', event.isInPictureInPicture, 'wasPlaying:', wasPlayingWhenBackgroundedRef.current)
 
+      // Capture playerMode SYNCHRONOUSLY before setTimeout - the closure captures stale values
+      // because this useEffect has empty deps []
+      if (event.isInPictureInPicture) {
+        // Save playerMode now, not inside setTimeout where it would be stale
+        playerModeBeforePipRef.current = playerModeRef.current
+        console.log('[VideoPlayerContext] Entering PiP, saving playerMode:', playerModeRef.current)
+      }
+
       // Use setTimeout instead of RAF - RAF doesn't fire in PiP/background mode
       setTimeout(() => {
 
         if (event.isInPictureInPicture) {
           const wasPlaying = isPlayingRef.current || wasPlayingWhenBackgroundedRef.current
           wasPlayingWhenPipEnteredRef.current = wasPlaying
-          // Save the current playerMode to restore on PiP exit
-          playerModeBeforePipRef.current = playerMode
-          console.log('[VideoPlayerContext] Entering PiP, wasPlaying:', wasPlaying, 'playerMode:', playerMode)
+          console.log('[VideoPlayerContext] Entering PiP, wasPlaying:', wasPlaying, 'playerMode:', playerModeBeforePipRef.current)
           if (wasPlaying) {
             setTimeout(() => {
               console.log('[VideoPlayerContext] Resuming playback in PiP')

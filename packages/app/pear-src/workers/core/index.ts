@@ -768,8 +768,7 @@ async function loadBareFfmpegModule(): Promise<any> {
   return bareFfmpegPromise;
 }
 
-// Generate thumbnail from video file using bare-ffmpeg and store in Hyperblobs
-async function generateThumbnail(filePath: string, videoId: string, channel: any): Promise<{ thumbnailBlobId: string; thumbnailBlobsCoreKey: string } | null> {
+async function generateThumbnailWithBareFfmpeg(filePath: string): Promise<Buffer | null> {
   let fd: number | null = null;
   let inputIO: any = null;
   let inputFmt: any = null;
@@ -809,34 +808,50 @@ async function generateThumbnail(filePath: string, videoId: string, channel: any
 
     inputFmt = new ffmpeg.InputFormatContext(inputIO);
     const videoStream = inputFmt.getBestStream(ffmpeg.constants.mediaTypes.VIDEO);
-    if (!videoStream) {
-      throw new Error('No video stream found for thumbnail');
-    }
+    if (!videoStream) throw new Error('No video stream found');
+
+    const codecId = videoStream.codecParameters?.id;
+    console.log('[Worker] Thumbnail: codec id =', codecId);
 
     decoder = videoStream.decoder();
+    if (!decoder) throw new Error('No decoder available for this codec');
     decoder.timeBase = videoStream.timeBase;
     decoder.open();
 
     packet = new ffmpeg.Packet();
     frame = new ffmpeg.Frame();
 
-    const targetSeconds = 1;
     const timeBase = videoStream.timeBase || { numerator: 1, denominator: 1 };
+    const targetSeconds = 30;
     let selected = false;
+    let frameCount = 0;
+    const maxFrames = 1000;
 
-    while (inputFmt.readFrame(packet)) {
+    let lastValidFormat = -1;
+    let lastValidWidth = 0;
+    let lastValidHeight = 0;
+
+    while (inputFmt.readFrame(packet) && frameCount < maxFrames) {
       if (packet.streamIndex !== videoStream.index) {
         packet.unref();
         continue;
       }
-
       if (decoder.sendPacket(packet)) {
         while (decoder.receiveFrame(frame)) {
+          frameCount++;
+          
+          if (!frame.width || !frame.height || frame.format < 0) {
+            console.warn(`[Worker] Skipping invalid frame: width=${frame.width} height=${frame.height} format=${frame.format}`);
+            continue;
+          }
+          
+          lastValidFormat = frame.format;
+          lastValidWidth = frame.width;
+          lastValidHeight = frame.height;
+          
           const pts = frame.pts ?? 0;
-          const seconds = timeBase.denominator
-            ? (pts * timeBase.numerator) / timeBase.denominator
-            : 0;
-          if (seconds >= targetSeconds || pts === 0) {
+          const seconds = timeBase.denominator ? (pts * timeBase.numerator) / timeBase.denominator : 0;
+          if (seconds >= targetSeconds) {
             selected = true;
             break;
           }
@@ -846,20 +861,20 @@ async function generateThumbnail(filePath: string, videoId: string, channel: any
       if (selected) break;
     }
 
-    if (!selected) {
-      throw new Error('No frame decoded for thumbnail');
+    if (!selected && lastValidFormat >= 0) {
+      selected = true;
+    }
+
+    if (!selected || lastValidFormat < 0) {
+      throw new Error(`No valid frame decoded: format=${lastValidFormat}`);
     }
 
     const targetWidth = 640;
     const targetHeight = Math.max(1, Math.round(frame.height * (targetWidth / frame.width)));
 
     scaler = new ffmpeg.Scaler(
-      frame.format,
-      frame.width,
-      frame.height,
-      ffmpeg.constants.pixelFormats.YUVJ420P,
-      targetWidth,
-      targetHeight
+      frame.format, frame.width, frame.height,
+      ffmpeg.constants.pixelFormats.YUVJ420P, targetWidth, targetHeight
     );
 
     scaledFrame = new ffmpeg.Frame();
@@ -902,12 +917,37 @@ async function generateThumbnail(filePath: string, videoId: string, channel: any
     }
 
     outputFmt.writeTrailer();
-    const thumbBuf = Buffer.concat(outputChunks);
+    return Buffer.concat(outputChunks);
+  } finally {
+    if (outPacket) outPacket.destroy?.();
+    if (encoder) encoder.destroy?.();
+    if (outputFmt) outputFmt.destroy?.();
+    // outputIO ownership transferred to outputFmt - don't destroy separately
+    if (scaledFrame) scaledFrame.destroy?.();
+    if (scaler) scaler.destroy?.();
+    if (frame) frame.destroy?.();
+    if (packet) packet.destroy?.();
+    if (decoder) decoder.destroy?.();
+    if (inputFmt) inputFmt.destroy?.();
+    // inputIO ownership transferred to inputFmt - don't destroy separately
+    if (fd !== null) try { fs.closeSync(fd); } catch {}
+  }
+}
+
+async function generateThumbnail(filePath: string, videoId: string, channel: any): Promise<{ thumbnailBlobId: string; thumbnailBlobsCoreKey: string } | null> {
+  try {
+    const thumbBuf = await generateThumbnailWithBareFfmpeg(filePath);
+
+    if (!thumbBuf) {
+      console.warn('[Worker] Thumbnail generation failed');
+      return null;
+    }
 
     if (!channel.blobs) {
       console.warn('[Worker] Channel blobs not available for thumbnail');
       return null;
     }
+
     const blobResult = await channel.putBlob(thumbBuf);
     console.log('[Worker] Thumbnail stored in Hyperblobs, blobId:', blobResult.id);
     return {
@@ -917,21 +957,6 @@ async function generateThumbnail(filePath: string, videoId: string, channel: any
   } catch (err: any) {
     console.warn('[Worker] Thumbnail generation failed:', err?.message || err);
     return null;
-  } finally {
-    if (outPacket) outPacket.destroy?.();
-    if (encoder) encoder.destroy?.();
-    if (outputFmt) outputFmt.destroy?.();
-    if (outputIO) outputIO.destroy?.();
-    if (scaledFrame) scaledFrame.destroy?.();
-    if (scaler) scaler.destroy?.();
-    if (frame) frame.destroy?.();
-    if (packet) packet.destroy?.();
-    if (decoder) decoder.destroy?.();
-    if (inputFmt) inputFmt.destroy?.();
-    if (inputIO) inputIO.destroy?.();
-    if (fd !== null) {
-      try { fs.closeSync(fd); } catch {}
-    }
   }
 }
 

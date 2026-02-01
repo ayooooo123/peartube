@@ -254,6 +254,95 @@ if (sameState && sameDimensions && tooSoon) {
 | `PipBridge.java` | Android PiP API integration |
 | `VideoPlayerContext.tsx` | JS state management for PiP mode |
 
+### Initial PiP Entry Zoom Issue (SOLVED)
+
+**Problem:** First PiP entry shows video zoomed/cropped. It only fixes when user drags/moves the PiP window.
+
+**Root Cause:** React Native throttles UI updates when app is backgrounded/in PiP mode. The Surface resizes immediately, but the View stays at fullscreen dimensions until user interaction forces a re-render.
+
+**The Challenge:**
+1. Native `onPictureInPictureModeChanged` fires
+2. We can resize the Surface immediately (528x298)
+3. But React Native View stays at fullscreen (960x540)
+4. Android stretches the smaller Surface to fill the larger View = **ZOOM**
+5. Calling `setLayoutParams()`, `requestLayout()`, `invalidate()` don't work - React Native controls the View
+
+**The Solution: Transform-Based Approach**
+
+Instead of fighting React Native's layout system, apply a **scale transform** to the View:
+
+```java
+public void applyPipSizeFromNative(int widthPx, int heightPx) {
+    mNativePipWidthPx = widthPx;
+    mNativePipHeightPx = heightPx;
+
+    int viewWidth = getWidth();
+    int viewHeight = getHeight();
+
+    if (viewWidth > 0 && viewHeight > 0) {
+        // Calculate scale based on width (landscape PiP is width-constrained)
+        float scale = (float) widthPx / viewWidth;
+
+        // Set pivot to top-left and apply uniform scale
+        setPivotX(0);
+        setPivotY(0);
+        setScaleX(scale);
+        setScaleY(scale);
+    }
+}
+```
+
+**How it works:**
+- View stays at fullscreen (960x540) as React Native wants
+- Transform scales it down visually to PiP size (528x298)
+- Android's PiP window clips to show only the scaled content
+- Video appears correctly sized immediately!
+
+**Transform Clearing (Critical):**
+
+When React Native finally resizes the View (on drag or later), clear the transform to avoid double-scaling:
+
+```java
+// In surfaceChanged, onLayoutChange, AND onPreDraw listener:
+boolean viewMatchesPip = Math.abs(width - mNativePipWidthPx) < 10
+                      && Math.abs(height - mNativePipHeightPx) < 10;
+
+if (viewMatchesPip && (getScaleX() != 1.0f || getScaleY() != 1.0f)) {
+    setScaleX(1.0f);
+    setScaleY(1.0f);
+    setPivotX(width / 2f);
+    setPivotY(height / 2f);
+}
+```
+
+Three places clear the transform to catch all timing scenarios:
+1. `surfaceChanged()` - when Surface resizes
+2. `onLayoutChange()` - when View resizes
+3. `OnPreDrawListener` - catches the frame BEFORE it's drawn (fastest)
+
+**Remaining Minor Issue:**
+
+When dragging/resizing PiP window, there's a very brief stutter (1-2 frames) where video appears in top-left corner before transform clears. This is cosmetic and clears almost instantly.
+
+**JS-Side Changes Required:**
+
+Also save/restore `playerMode` on PiP entry/exit so user returns to correct state:
+
+```typescript
+// On PiP enter:
+playerModeBeforePipRef.current = playerMode
+
+// On PiP exit:
+setPlayerMode(playerModeBeforePipRef.current)  // Not always 'fullscreen'
+```
+
+**Why Transform Works When Layout Doesn't:**
+
+- `setLayoutParams()` - React Native intercepts and overrides
+- `requestLayout()` - React Native doesn't process in background
+- `setScaleX/Y()` - **Visual-only transform**, doesn't affect layout, React Native doesn't care
+- The transform is applied at render time, before the frame is drawn to screen
+
 ### Debugging PiP Issues
 
 Add logging with `VLC_PIP` tag and filter with:
@@ -261,8 +350,30 @@ Add logging with `VLC_PIP` tag and filter with:
 adb logcat -s VLC_PIP:D
 ```
 
+Also check PipBridge and MediaSession logs:
+```bash
+adb logcat | grep -E "VLC_PIP|PipBridge|MediaSession|VideoPlayerContext"
+```
+
 Key log points:
-- `applyPipSizeFromNative` - Entering PiP with dimensions
-- `clearPipSizeFromNative` - Exiting PiP
-- `surfaceChanged` - Surface dimension changes
-- `onLayoutChange` - View layout changes
+- `applyPipSizeFromNative` - Entering PiP, shows transform scale applied
+- `clearPipSizeFromNative` - Exiting PiP, transform cleared
+- `surfaceChanged` - Surface dimension changes, shows if transform was cleared
+- `onLayoutChange` - View layout changes, shows scale value
+- `onPreDraw: View matches PiP, clearing transform` - Transform cleared before frame draw
+- `Manager.setPipContainerSize` - React Native prop reaching native (if never appears = RN throttled)
+
+**Log Pattern for Successful PiP Entry:**
+```
+applyPipSizeFromNative: 528x298 px (view: 960x540)
+applyPipSizeFromNative: applied transform scale=0.55 viewLandscape=true
+surfaceChanged: 528x298 nativePip=528x298 scale=0.55
+  → If View matches, expect: "clearing transform"
+  → If View still fullscreen, transform stays, video still looks correct
+```
+
+**Log Pattern for PiP Exit:**
+```
+clearPipSizeFromNative
+clearPipSizeFromNative: reset transforms to identity
+```

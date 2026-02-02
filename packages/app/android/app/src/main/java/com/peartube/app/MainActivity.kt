@@ -86,7 +86,7 @@ class MainActivity : ReactActivity() {
   override fun onConfigurationChanged(newConfig: Configuration) {
       super.onConfigurationChanged(newConfig)
       if (isInPictureInPictureMode) {
-          android.util.Log.d("MainActivity", "onConfigurationChanged while in PiP: ${newConfig.screenWidthDp}x${newConfig.screenHeightDp}dp")
+          android.util.Log.d("MainActivity", "onConfigurationChanged while in PiP")
           PipBridge.notifyPipModeChanged(this, true, newConfig)
       }
   }

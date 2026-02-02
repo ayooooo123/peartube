@@ -147,6 +147,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Ref for current video - updated synchronously to avoid race conditions with stats events
   const currentVideoRef = useRef<VideoData | null>(null)
 
+  // Ref for video URL - used for error debugging
+  const videoUrlRef = useRef<string | null>(null)
+
   // Background playback tracking refs
   const wasPlayingWhenBackgroundedRef = useRef(false)
   const isBackgroundedRef = useRef(false)
@@ -501,8 +504,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       playerRef.current?.pause?.()
     } catch {}
     setPlaybackSession((prev) => prev + 1)
-    // Update ref synchronously FIRST (before emitting event)
+    // Update refs synchronously FIRST (before emitting event)
     currentVideoRef.current = video
+    videoUrlRef.current = url
     setCurrentVideo(video)
     setVideoUrl(url)
     setIsPlaying(true)
@@ -557,6 +561,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       playerRef.current?.pause?.()
     } catch {}
     currentVideoRef.current = null
+    videoUrlRef.current = null
     setCurrentVideo(null)
     setVideoUrl(null)
     setIsPlaying(false)
@@ -716,7 +721,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const onError = useCallback((error: any) => {
-    console.error('[VideoPlayerContext] VLC error:', error)
+    console.error('[VideoPlayerContext] VLC error:', error, 'URL:', videoUrlRef.current)
     setIsLoading(false)
   }, [])
 

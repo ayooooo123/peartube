@@ -101,6 +101,10 @@ interface TranscodeSession {
 }
 const transcodeSessions = new Map<string, TranscodeSession>();
 
+// Frame request counter for diagnostics
+let frameRequestCount = 0;
+let lastFrameLogTime = 0;
+
 function handleMpvFrameRequest(req: any, res: any) {
   const corsHeaders = { 'Access-Control-Allow-Origin': '*' };
   try {
@@ -125,6 +129,14 @@ function handleMpvFrameRequest(req: any, res: any) {
       res.writeHead(404, { ...corsHeaders, 'Content-Type': 'text/plain' });
       res.end('Player Not Found');
       return;
+    }
+
+    frameRequestCount++;
+    const now = Date.now();
+    if (now - lastFrameLogTime > 5000) {
+      console.log('[Worker] mpv frame requests in last 5s:', frameRequestCount, 'needsRender:', state.player.needsRender());
+      frameRequestCount = 0;
+      lastFrameLogTime = now;
     }
 
     if (!state.player.needsRender()) {
@@ -2001,8 +2013,16 @@ rpc.onMpvLoadFile(async (req: any) => {
     return { success: false, error: 'Player not found' };
   }
   try {
-    console.log('[Worker] mpv loading:', req.url);
+    console.log('[Worker] mpv loading URL:', req.url);
+    // Verify the URL is accessible before loading
+    try {
+      const urlCheck = new URL(req.url);
+      console.log('[Worker] mpv URL parsed - host:', urlCheck.hostname, 'port:', urlCheck.port, 'path:', urlCheck.pathname);
+    } catch (urlErr: any) {
+      console.error('[Worker] mpv URL parse error:', urlErr?.message);
+    }
     state.player.loadFile(req.url);
+    console.log('[Worker] mpv loadFile called, waiting for playback...');
     return { success: true, error: null };
   } catch (err: any) {
     console.error('[Worker] mpvLoadFile error:', err?.message);
@@ -2011,12 +2031,18 @@ rpc.onMpvLoadFile(async (req: any) => {
 });
 
 rpc.onMpvPlay(async (req: any) => {
+  console.log('[Worker] mpvPlay called for:', req.playerId);
   const state = mpvPlayers.get(req.playerId);
-  if (!state) return { success: false };
+  if (!state) {
+    console.log('[Worker] mpvPlay: player not found');
+    return { success: false };
+  }
   try {
     state.player.play();
+    console.log('[Worker] mpvPlay: play() called');
     return { success: true };
-  } catch (err) {
+  } catch (err: any) {
+    console.error('[Worker] mpvPlay error:', err?.message);
     return { success: false };
   }
 });

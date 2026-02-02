@@ -1,0 +1,214 @@
+# Dependabot configuration for PearTube monorepo
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Root package.json
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      # Group all patch updates for auto-merge
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      # Group Holepunch stack updates
+      holepunch:
+        patterns:
+          - "hypercore*"
+          - "hyperbee*"
+          - "hyperdrive*"
+          - "hyperswarm*"
+          - "hyperblobs*"
+          - "hyperdb*"
+          - "autobase*"
+          - "corestore*"
+          - "protomux*"
+      # Group bare-* packages
+      bare:
+        patterns:
+          - "bare-*"
+      # Group Expo/React Native
+      expo-react-native:
+        patterns:
+          - "expo*"
+          - "react"
+          - "react-dom"
+          - "react-native*"
+          - "@react-navigation/*"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+
+  # Backend package
+  - package-ecosystem: "npm"
+    directory: "/packages/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      holepunch:
+        patterns:
+          - "hypercore*"
+          - "hyperbee*"
+          - "hyperdrive*"
+          - "hyperswarm*"
+          - "hyperblobs*"
+          - "hyperdb*"
+          - "autobase*"
+          - "corestore*"
+          - "protomux*"
+      bare:
+        patterns:
+          - "bare-*"
+    commit-message:
+      prefix: "deps(backend)"
+    labels:
+      - "dependencies"
+      - "backend"
+
+  # App package (mobile + desktop)
+  - package-ecosystem: "npm"
+    directory: "/packages/app"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      holepunch:
+        patterns:
+          - "hypercore*"
+          - "hyperbee*"
+          - "hyperdrive*"
+          - "hyperswarm*"
+          - "autobase*"
+          - "corestore*"
+      expo:
+        patterns:
+          - "expo*"
+          - "@expo/*"
+      react-native:
+        patterns:
+          - "react-native*"
+          - "@react-navigation/*"
+    commit-message:
+      prefix: "deps(app)"
+    labels:
+      - "dependencies"
+      - "app"
+
+  # Pear desktop source
+  - package-ecosystem: "npm"
+    directory: "/packages/app/pear-src"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      holepunch:
+        patterns:
+          - "hypercore*"
+          - "hyperbee*"
+          - "hyperdrive*"
+          - "hyperswarm*"
+          - "autobase*"
+          - "corestore*"
+      pear:
+        patterns:
+          - "pear-*"
+      bare:
+        patterns:
+          - "bare-*"
+    commit-message:
+      prefix: "deps(pear)"
+    labels:
+      - "dependencies"
+      - "desktop"
+
+  # Platform package
+  - package-ecosystem: "npm"
+    directory: "/packages/platform"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+    commit-message:
+      prefix: "deps(platform)"
+    labels:
+      - "dependencies"
+
+  # Core package
+  - package-ecosystem: "npm"
+    directory: "/packages/core"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+    commit-message:
+      prefix: "deps(core)"
+    labels:
+      - "dependencies"
+
+  # Spec package
+  - package-ecosystem: "npm"
+    directory: "/packages/spec"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+    commit-message:
+      prefix: "deps(spec)"
+    labels:
+      - "dependencies"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "ci"

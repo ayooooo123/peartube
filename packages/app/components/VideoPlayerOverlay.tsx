@@ -4,7 +4,7 @@
  * Uses react-native-reanimated for smooth 60fps animations
  * Uses VLC player for broad codec support
  */
-import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
+import { useCallback, useEffect, useState, useRef, useMemo, memo } from 'react'
 import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput } from 'react-native'
 import { rpc } from '@peartube/platform/rpc'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -113,7 +113,8 @@ function formatDuration(seconds: number): string {
 }
 
 // P2P Stats Bar Component - All stats with clean design
-function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
+// Memoized to prevent re-renders when parent VideoPlayerOverlay updates frequently
+const P2PStatsBar = memo(function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   const { rpc: appRpc } = useApp()
   const [globalPeers, setGlobalPeers] = useState(0)
 
@@ -209,10 +210,10 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
       )}
     </View>
   )
-}
+})
 
-// Action Button Component
-function ActionButton({ icon: Icon, label, onPress, active, loading }: {
+// Action Button Component - Memoized to prevent re-renders during playback
+const ActionButton = memo(function ActionButton({ icon: Icon, label, onPress, active, loading }: {
   icon: any
   label: string
   onPress?: () => void
@@ -229,11 +230,11 @@ function ActionButton({ icon: Icon, label, onPress, active, loading }: {
       <Text style={[styles.actionLabel, active && styles.actionLabelActive]}>{label}</Text>
     </Pressable>
   )
-}
+})
 
 
-// Channel Info Component
-function ChannelInfo({ channelName, channelInitial }: { channelName: string, channelInitial: string }) {
+// Channel Info Component - Memoized since channel info rarely changes
+const ChannelInfo = memo(function ChannelInfo({ channelName, channelInitial }: { channelName: string, channelInitial: string }) {
   return (
     <View style={styles.channelRow}>
       <View style={styles.channelAvatar}>
@@ -248,7 +249,7 @@ function ChannelInfo({ channelName, channelInitial }: { channelName: string, cha
       </Pressable>
     </View>
   )
-}
+})
 
 
 export function VideoPlayerOverlay() {

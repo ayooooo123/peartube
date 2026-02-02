@@ -10,6 +10,7 @@
 import HRPC from '@peartube/spec'
 import { createBackendContext } from '@peartube/backend/orchestrator'
 import { loadDrive } from '@peartube/backend/storage'
+import { generateAndStoreThumbnail } from '@peartube/backend/thumbnail'
 import path from 'bare-path'
 import fs from 'bare-fs'
 import os from 'bare-os'
@@ -1107,6 +1108,28 @@ rpc.onUploadVideo(async (req) => {
   // Note: uploadManager.uploadFromPath already calls channel.addVideo internally
   if (!result?.success) {
     console.error('[HRPC] Upload failed:', result?.error)
+  }
+
+  // Generate thumbnail using bare-media (unified with desktop)
+  if (result?.success && result?.videoId && !req.skipThumbnailGeneration) {
+    console.log('[HRPC] Generating thumbnail with bare-media')
+    try {
+      const thumbResult = await generateAndStoreThumbnail(filePath, result.videoId, channel, {
+        frameIndex: 300 // ~10 seconds at 30fps
+      })
+      if (thumbResult?.thumbnailBlobId) {
+        console.log('[HRPC] Thumbnail stored with blobId:', thumbResult.thumbnailBlobId)
+        // Update video metadata with thumbnail info
+        await channel.updateVideo(result.videoId, {
+          thumbnailBlobId: thumbResult.thumbnailBlobId,
+          thumbnailBlobsCoreKey: thumbResult.thumbnailBlobsCoreKey
+        })
+      }
+    } catch (thumbErr) {
+      console.warn('[HRPC] Thumbnail generation failed:', thumbErr?.message || thumbErr)
+    }
+  } else if (req.skipThumbnailGeneration) {
+    console.log('[HRPC] Skipping thumbnail - custom thumbnail will be uploaded')
   }
 
   console.log('[HRPC] Returning upload response')

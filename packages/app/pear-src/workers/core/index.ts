@@ -18,6 +18,8 @@ import http1 from 'bare-http1';
 import * as transcoder from '@peartube/backend/transcode/transcoder';
 // @ts-ignore - backend transcode modules are JavaScript
 import * as hlsTranscoder from '@peartube/backend/transcode/hls-transcoder';
+// @ts-ignore - backend thumbnail module
+import { generateAndStoreThumbnail } from '@peartube/backend/thumbnail';
 
 // Platform detection - bare-mpv is desktop-only (no Android/iOS prebuilds)
 const currentPlatform = os.platform();
@@ -1119,6 +1121,18 @@ if (!ipcPipe) {
   throw new Error('No IPC pipe');
 }
 
+// WORKAROUND: Empty pipe chunk crash prevention
+// =============================================
+// pear-pipe can emit null/undefined chunks under certain conditions (e.g., during
+// rapid connect/disconnect cycles or when the main process terminates unexpectedly).
+// HRPC's compact-encoding decoder crashes when it receives these invalid chunks
+// because it expects a valid Buffer.
+//
+// This wrapper filters out null/undefined chunks before they reach HRPC.
+// The warning is logged only once to avoid log spam.
+//
+// Root cause: pear-pipe doesn't validate chunks before emitting 'data' events.
+// Upstream fix deferred - this wrapper is sufficient and low-overhead.
 let sawInvalidPipeChunk = false;
 const originalPipeOn = typeof ipcPipe.on === 'function' ? ipcPipe.on.bind(ipcPipe) : null;
 if (originalPipeOn) {
@@ -1412,9 +1426,12 @@ rpc.onUploadVideo(async (req: any) => {
 
   // Generate thumbnail if no custom thumbnail will be provided
   if (result.success && result.videoId && !req.skipThumbnailGeneration) {
-    console.log('[Worker] Generating thumbnail');
+    console.log('[Worker] Generating thumbnail with bare-media');
     try {
-      const thumbResult = await generateThumbnail(req.filePath, result.videoId, channel);
+      // Use unified bare-media thumbnail generation
+      const thumbResult = await generateAndStoreThumbnail(req.filePath, result.videoId, channel, {
+        frameIndex: 300 // ~10 seconds at 30fps
+      });
       if (thumbResult?.thumbnailBlobId) {
         console.log('[Worker] Thumbnail stored with blobId:', thumbResult.thumbnailBlobId);
         // Update video metadata with thumbnail info
@@ -1427,7 +1444,7 @@ rpc.onUploadVideo(async (req: any) => {
       console.warn('[Worker] Thumbnail generation failed:', thumbErr?.message);
     }
   } else if (req.skipThumbnailGeneration) {
-    console.log('[Worker] Skipping FFmpeg thumbnail - custom thumbnail will be uploaded');
+    console.log('[Worker] Skipping thumbnail - custom thumbnail will be uploaded');
   }
 
   console.log('[Worker] Upload result:', JSON.stringify({ success: result.success, videoId: result.videoId, blobId: result.metadata?.blobId }));

@@ -10,6 +10,7 @@ import b4a from 'b4a'
 
 import { fromHex, toHex, prefixedKey } from './util.js'
 import { validateOp } from './op-schemas.js'
+import { verifyOpAuthor } from './op-signing.js'
 import { CommentsChannel } from './comments-channel.js'
 import { ReactionsManager } from './reactions.js'
 import { WatchEventLogger } from '../recommendations/watch-events.js'
@@ -90,6 +91,21 @@ export class MultiWriterChannel extends ReadyResource {
     /** @type {Map<string, {count: number, windowStartMs: number}>} */
     this._localRateLimits = new Map()
 
+    // CRITICAL: Queue connections that arrive before base is ready
+    // This prevents the race condition where connections arrive during _open()
+    // but before we can call base.replicate()
+    /** @type {Set<any>} Connections received before base.ready() */
+    this._pendingConnections = new Set()
+    /** @type {boolean} Whether base is ready for replication */
+    this._baseReady = false
+
+    // Set up early connection handler immediately if swarm is available
+    // This ensures we capture ALL connections, even those that arrive
+    // before _open() completes
+    if (this.swarm) {
+      this._setupEarlyConnectionHandler()
+    }
+
     this.ready().catch(() => {})
   }
 
@@ -165,6 +181,75 @@ export class MultiWriterChannel extends ReadyResource {
     }
   }
 
+  /**
+   * Set up connection handler immediately to capture connections before base.ready().
+   * Connections are queued until the base is ready, then replicated.
+   * This fixes the race condition where connections arrive during _open().
+   * @private
+   */
+  _setupEarlyConnectionHandler() {
+    if (this._earlyHandlerSetup) return
+    this._earlyHandlerSetup = true
+
+    const swarm = this.swarm
+    if (!swarm) return
+
+    // Handler that either replicates immediately (if base ready) or queues
+    this._earlyConnectionHandler = (conn) => {
+      if (this._replicatedConns.has(conn)) return
+
+      if (this._baseReady && this.base) {
+        // Base is ready, replicate immediately
+        this._replicatedConns.add(conn)
+        try {
+          this.base.replicate(conn)
+          console.log('[Channel] Early handler: replicated on connection for:', this.keyHex?.slice(0, 16))
+        } catch (err) {
+          console.log('[Channel] Early handler: replicate error:', err?.message)
+        }
+      } else {
+        // Base not ready, queue for later
+        this._pendingConnections.add(conn)
+        console.log('[Channel] Early handler: queued connection (base not ready), pending:', this._pendingConnections.size)
+
+        // Clean up if connection closes before we can use it
+        conn.once('close', () => {
+          this._pendingConnections.delete(conn)
+        })
+      }
+    }
+
+    swarm.on('connection', this._earlyConnectionHandler)
+    console.log('[Channel] Early connection handler installed')
+  }
+
+  /**
+   * Process connections that were queued before base.ready().
+   * @private
+   */
+  _processPendingConnections() {
+    if (!this._baseReady || !this.base || this._pendingConnections.size === 0) return
+
+    console.log('[Channel] Processing', this._pendingConnections.size, 'pending connections for:', this.keyHex?.slice(0, 16))
+
+    let replicated = 0
+    for (const conn of this._pendingConnections) {
+      if (this._replicatedConns.has(conn)) continue
+      if (conn.destroyed) continue
+
+      this._replicatedConns.add(conn)
+      try {
+        this.base.replicate(conn)
+        replicated++
+      } catch (err) {
+        console.log('[Channel] Pending connection replicate error:', err?.message)
+      }
+    }
+
+    this._pendingConnections.clear()
+    console.log('[Channel] Processed pending connections:', replicated, 'replicated for:', this.keyHex?.slice(0, 16))
+  }
+
   async _safeUpdate(opts = {}) {
     const { syncPublicBee = true, ...updateOpts } = opts || {}
     const channelId = this.keyHex?.slice(0, 16) || 'unknown'
@@ -177,7 +262,7 @@ export class MultiWriterChannel extends ReadyResource {
       try {
         await Promise.race([
           this._channelDiscovery.flushed(),
-          new Promise(resolve => setTimeout(resolve, 5000))  // 5s max wait
+          new Promise(resolve => setTimeout(resolve, 8000))  // 8s max wait for P2P discovery
         ])
         this._discoveryFlushed = true
         const connsAfter = this.swarm?.connections?.size || 0
@@ -359,8 +444,19 @@ export class MultiWriterChannel extends ReadyResource {
     await this.view.ready()
     console.log('[Channel] _open: view.ready() took', Date.now() - viewReadyStart, 'ms')
 
-    // CRITICAL: Set up Autobase replication BEFORE base.update()
-    // Without this, base.update() can't receive data from peers
+    // CRITICAL: Mark base as ready and process any pending connections
+    // This must happen BEFORE base.update() so we can receive data from peers
+    this._baseReady = true
+
+    // Set up early handler now if swarm was passed after constructor
+    if (this.swarm && !this._earlyHandlerSetup) {
+      this._setupEarlyConnectionHandler()
+    }
+
+    // Process connections that arrived before base.ready()
+    this._processPendingConnections()
+
+    // Also replicate on any existing swarm connections we haven't handled yet
     if (this.swarm && this.swarm.connections?.size > 0) {
       console.log('[Channel] _open: setting up replication on', this.swarm.connections.size, 'existing connections BEFORE update')
       for (const conn of this.swarm.connections) {
@@ -603,6 +699,14 @@ export class MultiWriterChannel extends ReadyResource {
     if (!validation.valid) {
       console.warn('[Channel] Invalid op:', validation.error, 'op:', op.type, 'skipping')
       return // Skip invalid ops to maintain forward compatibility
+    }
+
+    // SECURITY: Verify the operation author matches the node's writer key
+    // This prevents users from forging ops with fake author keys
+    const authorResult = verifyOpAuthor(op, node)
+    if (!authorResult.valid) {
+      console.warn('[Channel] Rejecting op: author verification failed -', authorResult.reason)
+      return // Skip forged operations
     }
 
     // ACL Enforcement: Verify op is from an authorized writer

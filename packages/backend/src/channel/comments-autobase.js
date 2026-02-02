@@ -14,6 +14,7 @@ import b4a from 'b4a'
 import crypto from 'hypercore-crypto'
 import ReadyResource from 'ready-resource'
 import { prefixedKey } from './util.js'
+import { verifyOpAuthor, getOpAuthorKey } from './op-signing.js'
 
 const CURRENT_SCHEMA_VERSION = 1
 
@@ -854,6 +855,14 @@ export class CommentsAutobase extends ReadyResource {
 
   async _applyOp(op, view, host, node) {
     if (!op || typeof op !== 'object') return
+
+    // SECURITY: Verify the operation author matches the node's writer key
+    // This prevents users from forging ops with fake authorKeyHex values
+    const authorResult = verifyOpAuthor(op, node)
+    if (!authorResult.valid) {
+      console.log('[CommentsAutobase] Rejecting op: author verification failed -', authorResult.reason)
+      return // Skip this operation
+    }
 
     const opType = op.type
     switch (opType) {

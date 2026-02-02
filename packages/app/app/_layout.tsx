@@ -12,6 +12,7 @@ import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData, playbackActiveEmitter } from '@/lib/VideoPlayerContext'
 import { DownloadsProvider } from '@/lib/DownloadsContext'
 import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { colors } from '@/lib/colors'
@@ -552,27 +553,29 @@ export default function RootLayout() {
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <GluestackUIProvider mode="dark">
-        <PlatformProvider>
-          <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
-          <AppContext.Provider value={contextValue}>
-            <DownloadsProvider>
-              <VideoPlayerProvider>
-                <View style={{ flex: 1 }}>
-                  <Stack
-                    screenOptions={{
-                      headerShown: false,
-                      contentStyle: { backgroundColor: colors.bg },
-                    }}
-                  />
-                </View>
-                <VideoPlayerOverlay />
-              </VideoPlayerProvider>
-            </DownloadsProvider>
-          </AppContext.Provider>
-        </PlatformProvider>
-      </GluestackUIProvider>
-    </GestureHandlerRootView>
+    <ErrorBoundary onRetry={retryBackend}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <GluestackUIProvider mode="dark">
+          <PlatformProvider>
+            <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+            <AppContext.Provider value={contextValue}>
+              <DownloadsProvider>
+                <VideoPlayerProvider>
+                  <View style={{ flex: 1 }}>
+                    <Stack
+                      screenOptions={{
+                        headerShown: false,
+                        contentStyle: { backgroundColor: colors.bg },
+                      }}
+                    />
+                  </View>
+                  <VideoPlayerOverlay />
+                </VideoPlayerProvider>
+              </DownloadsProvider>
+            </AppContext.Provider>
+          </PlatformProvider>
+        </GluestackUIProvider>
+      </GestureHandlerRootView>
+    </ErrorBoundary>
   )
 }

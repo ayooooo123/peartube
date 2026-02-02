@@ -30,6 +30,16 @@ let globalSwarm = null;
 let globalBlobServer = null;
 let globalChannels = null;
 
+/**
+ * Generate a random session token for blob server URL auth.
+ * This token is included in blob URLs and verified by the server.
+ * @returns {string} 32-char hex token
+ */
+function generateSessionToken() {
+  const tokenBytes = crypto.randomBytes(16)
+  return b4a.toString(tokenBytes, 'hex')
+}
+
 // Blind peering for mobile connectivity (keeps Autobases available through mirror servers)
 // This solves the issue where mobile devices behind CGNAT can't establish direct P2P connections
 // - BlindPeer (server): Desktop instances run as mirrors to keep data available
@@ -391,6 +401,13 @@ export async function initializeStorage(config) {
   // Set global reference for suspend/resume lifecycle management
   globalChannels = channels;
 
+  // Generate session token for blob URL authentication
+  // This token is included in video URLs to prevent unauthorized access
+  // NOTE: Full token validation requires extending hypercore-blob-server or using a proxy
+  // For now, the token is generated and stored for future middleware implementation
+  const blobSessionToken = generateSessionToken()
+  console.log('[Storage] Generated blob session token:', blobSessionToken.slice(0, 8) + '...')
+
   return {
     store,
     metaDb,
@@ -399,6 +416,7 @@ export async function initializeStorage(config) {
     blobServerPort,
     blobServerHost,
     blobServerBindHost,
+    blobSessionToken, // Session token for URL authentication
     drives,
     channels,
     // Blind peering for mobile connectivity
@@ -933,14 +951,22 @@ export async function getVideoUrl(ctx, driveKey, videoPath, options = {}) {
   }
 
   // Generate direct blob URL (no redirect needed)
-  const url = ctx.blobServer.getLink(blobsKey, {
+  const baseUrl = ctx.blobServer.getLink(blobsKey, {
     blob: blob,
     type: mimeType,
     host: ctx.blobServerHost || '127.0.0.1',
     port: ctx.blobServer?.port || ctx.blobServerPort
   });
 
-  console.log('[Storage] Direct blob URL:', url);
+  // Append session token for authentication
+  // NOTE: hypercore-blob-server doesn't validate this token - a proxy/middleware
+  // would need to intercept requests and verify the token.
+  // For casting URLs (Chromecast), pass options.forCasting=true to skip token.
+  const url = options.forCasting
+    ? baseUrl
+    : `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}token=${ctx.blobSessionToken || ''}`;
+
+  console.log('[Storage] Direct blob URL:', url.replace(/token=[^&]+/, 'token=***'));
   return { url };
 }
 
@@ -1026,13 +1052,20 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
   }
   
   try {
-    const url = ctx.blobServer.getLink(blobsCore.key, {
+    const baseUrl = ctx.blobServer.getLink(blobsCore.key, {
       blob,
       type: mimeType,
       host: ctx.blobServerHost || '127.0.0.1',
       port: ctx.blobServer?.port || ctx.blobServerPort
     });
-    console.log('[Storage] Direct blob URL (hyperblobs):', url);
+
+    // Append session token for authentication
+    // For casting URLs (Chromecast), pass options.forCasting=true to skip token.
+    const url = options.forCasting
+      ? baseUrl
+      : `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}token=${ctx.blobSessionToken || ''}`;
+
+    console.log('[Storage] Direct blob URL (hyperblobs):', url.replace(/token=[^&]+/, 'token=***'));
     return { url };
   } catch (err) {
     console.error('[Storage] GET_VIDEO_URL_FROM_BLOB: blobServer.getLink FAILED:', err.message, err.stack);

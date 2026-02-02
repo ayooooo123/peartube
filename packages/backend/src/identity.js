@@ -9,53 +9,54 @@ import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 import Hyperdrive from 'hyperdrive';
 import { createChannel, loadChannel, loadDrive } from './storage.js'
+import { logger } from './logger.js'
+
+// BIP39 mnemonic library from Holepunch - standard 2048 word list with proper derivation
+import * as bip39 from 'bip39-mnemonic';
+
+const log = logger('Identity')
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
  * @typedef {import('./types.js').Identity} Identity
  */
 
-// Simplified BIP39-like word list (real BIP39 has 2048 words)
-const WORD_LIST = [
-  'abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract',
-  'absurd', 'abuse', 'access', 'accident', 'account', 'accuse', 'achieve', 'acid',
-  'acoustic', 'acquire', 'across', 'act', 'action', 'actor', 'actress', 'actual',
-  'adapt', 'add', 'addict', 'address', 'adjust', 'admit', 'adult', 'advance',
-  'advice', 'aerobic', 'affair', 'afford', 'afraid', 'again', 'age', 'agent',
-  'agree', 'ahead', 'aim', 'air', 'airport', 'aisle', 'alarm', 'album',
-  'alcohol', 'alert', 'alien', 'all', 'alley', 'allow', 'almost', 'alone',
-  'alpha', 'already', 'also', 'alter', 'always', 'amateur', 'amazing', 'among',
-  'amount', 'amused', 'analyst', 'anchor', 'ancient', 'anger', 'angle', 'angry',
-  'animal', 'ankle', 'announce', 'annual', 'another', 'answer', 'antenna', 'antique',
-  'anxiety', 'any', 'apart', 'apology', 'appear', 'apple', 'approve', 'april',
-  'arch', 'arctic', 'area', 'arena', 'argue', 'arm', 'armed', 'armor',
-  'army', 'around', 'arrange', 'arrest', 'arrive', 'arrow', 'art', 'artefact'
-];
-
 /**
- * Generate a BIP39-like mnemonic phrase
+ * Generate a proper BIP39 mnemonic phrase
+ * Uses the standard 2048-word English word list with checksum validation.
+ *
  * @param {number} [wordCount=12] - Number of words (12 or 24)
  * @returns {string} Space-separated mnemonic phrase
  */
 export function generateMnemonic(wordCount = 12) {
-  const words = [];
-  for (let i = 0; i < wordCount; i++) {
-    const idx = Math.floor(Math.random() * WORD_LIST.length);
-    words.push(WORD_LIST[idx]);
-  }
-  return words.join(' ');
+  // Generate appropriate entropy: 16 bytes for 12 words, 32 bytes for 24 words
+  const entropyBytes = wordCount === 24 ? 32 : 16;
+  const entropy = bip39.generateEntropy(entropyBytes);
+  return bip39.entropyToMnemonic(entropy);
 }
 
 /**
- * Derive a keypair from a mnemonic phrase
- * @param {string} mnemonic - Space-separated mnemonic phrase
+ * Derive a keypair from a mnemonic phrase using proper BIP39 derivation.
+ *
+ * @param {string} mnemonic - Space-separated mnemonic phrase (BIP39)
+ * @param {string} [passphrase=''] - Optional BIP39 passphrase for additional security
  * @returns {{publicKey: Buffer, secretKey: Buffer}} Keypair
  */
-export function keypairFromMnemonic(mnemonic) {
-  // Simple derivation - hash the mnemonic to get seed
-  // In production, use proper BIP39 derivation
-  const seed = Buffer.from(mnemonic, 'utf-8');
+export function keypairFromMnemonic(mnemonic, passphrase = '') {
+  // BIP39 derivation using PBKDF2
+  // mnemonicToSeed returns a 64-byte seed, we use first 32 bytes for ed25519
+  const seed = bip39.mnemonicToSeed(mnemonic, passphrase);
   return crypto.keyPair(seed.slice(0, 32));
+}
+
+/**
+ * Validate a mnemonic phrase
+ * @param {string} mnemonic - Space-separated mnemonic phrase
+ * @returns {boolean} True if valid BIP39 mnemonic
+ */
+export function validateMnemonic(mnemonic) {
+  if (!mnemonic || typeof mnemonic !== 'string') return false;
+  return bip39.validateMnemonic(mnemonic);
 }
 
 /**
@@ -81,7 +82,7 @@ export function createIdentityManager({ ctx }) {
       const stored = await ctx.metaDb.get('identities');
       if (stored && stored.value) {
         identities = stored.value;
-        console.log(`[Identity] Loaded ${identities.length} identities`);
+        log.info(` Loaded ${identities.length} identities`);
       }
 
       // Load active identity
@@ -128,7 +129,7 @@ export function createIdentityManager({ ctx }) {
      * @returns {Promise<{success: boolean, publicKey: string, driveKey: string, mnemonic?: string}>}
      */
     async createIdentity(name, generateMnem = true) {
-      console.log('[Identity] Creating identity:', name);
+      log.info(' Creating identity:', name);
 
       // Check if corestore is in a valid state
       if (!ctx.store) {
@@ -137,7 +138,7 @@ export function createIdentityManager({ ctx }) {
       if (ctx.store.closed) {
         throw new Error('Corestore is closed - storage may have been terminated');
       }
-      console.log('[Identity] Corestore state: opened=', ctx.store.opened, 'closed=', ctx.store.closed);
+      log.info(' Corestore state: opened=', ctx.store.opened, 'closed=', ctx.store.closed);
 
       let keypair;
       let mnemonic;
@@ -150,7 +151,7 @@ export function createIdentityManager({ ctx }) {
       }
 
       const publicKey = b4a.toString(keypair.publicKey, 'hex');
-      console.log('[Identity] Generated keypair:', publicKey.slice(0, 16));
+      log.info(' Generated keypair:', publicKey.slice(0, 16));
 
       // Create the channel's multi-writer metadata log (Autobase)
       const { channel, channelKeyHex, encryptionKeyHex } = await createChannel(ctx, { encrypt: false })
@@ -182,8 +183,8 @@ export function createIdentityManager({ ctx }) {
         identity.isActive = true;
       }
 
-      console.log('[Identity] Created:', publicKey.slice(0, 16));
-      console.log('[Identity] Channel key:', channelKeyHex.slice(0, 16));
+      log.info(' Created:', publicKey.slice(0, 16));
+      log.info(' Channel key:', channelKeyHex.slice(0, 16));
 
       return {
         success: true,
@@ -244,7 +245,7 @@ export function createIdentityManager({ ctx }) {
      * @returns {Promise<{success: boolean, publicKey: string, driveKey: string, message?: string}>}
      */
     async recoverIdentity(mnemonic, name) {
-      console.log('[Identity] Recovering from mnemonic');
+      log.info(' Recovering from mnemonic');
 
       const keypair = keypairFromMnemonic(mnemonic);
       const publicKey = b4a.toString(keypair.publicKey, 'hex');
@@ -344,7 +345,7 @@ export function createIdentityManager({ ctx }) {
       }));
 
       await this.saveIdentities();
-      console.log('[Identity] Active identity set to:', publicKey.slice(0, 16));
+      log.info(' Active identity set to:', publicKey.slice(0, 16));
     },
 
     /**
@@ -358,7 +359,7 @@ export function createIdentityManager({ ctx }) {
           try {
             await loadChannel(ctx, identity.channelKey, { encryptionKeyHex: identity.channelEncryptionKey || null })
           } catch (err) {
-            console.error('[Identity] Failed to load channel:', identity.channelKey?.slice(0, 16), err.message)
+            log.error(' Failed to load channel:', identity.channelKey?.slice(0, 16), err.message)
           }
         }
 
@@ -367,7 +368,7 @@ export function createIdentityManager({ ctx }) {
           try {
             await loadDrive(ctx, identity.legacyDriveKey, { waitForSync: false })
           } catch (err) {
-            console.error('[Identity] Failed to load legacy drive:', identity.legacyDriveKey?.slice(0, 16), err.message)
+            log.error(' Failed to load legacy drive:', identity.legacyDriveKey?.slice(0, 16), err.message)
           }
         }
       }
@@ -394,7 +395,7 @@ export function createIdentityManager({ ctx }) {
             continue
           }
 
-          console.log('[Identity] Migrating legacy channel:', legacyDriveKey.slice(0, 16))
+          log.info(' Migrating legacy channel:', legacyDriveKey.slice(0, 16))
           const legacyDrive = await loadDrive(ctx, legacyDriveKey, { waitForSync: true, syncTimeout: 15000 })
 
           // Create new multi-writer channel
@@ -440,7 +441,7 @@ export function createIdentityManager({ ctx }) {
               })
             }
           } catch (e) {
-            console.log('[Identity] Video migration warning:', e?.message)
+            log.info(' Video migration warning:', e?.message)
           }
 
           // Ensure this device has a writable blob drive for future uploads
@@ -457,9 +458,9 @@ export function createIdentityManager({ ctx }) {
             migratedAt: Date.now()
           })
 
-          console.log('[Identity] Migration complete:', legacyDriveKey.slice(0, 16), '->', channelKeyHex.slice(0, 16))
+          log.info(' Migration complete:', legacyDriveKey.slice(0, 16), '->', channelKeyHex.slice(0, 16))
         } catch (err) {
-          console.error('[Identity] Migration failed for', legacyDriveKey?.slice(0, 16), err?.message)
+          log.error(' Migration failed for', legacyDriveKey?.slice(0, 16), err?.message)
         }
       }
 

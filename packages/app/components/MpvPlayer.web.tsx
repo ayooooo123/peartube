@@ -433,8 +433,9 @@ export const MpvPlayer = forwardRef<MpvPlayerRef, MpvPlayerProps>(({
         }
 
         // Load video
-        console.log('[MpvPlayer] Loading:', url)
+        console.log('[MpvPlayer] Loading URL:', url)
         const loadResult = await rpc.mpvLoadFile({ playerId, url })
+        console.log('[MpvPlayer] Load result:', loadResult)
         if (!loadResult.success) {
           throw new Error(loadResult.error || 'Failed to load file')
         }

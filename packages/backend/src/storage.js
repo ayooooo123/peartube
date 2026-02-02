@@ -951,20 +951,14 @@ export async function getVideoUrl(ctx, driveKey, videoPath, options = {}) {
   }
 
   // Generate direct blob URL (no redirect needed)
-  const baseUrl = ctx.blobServer.getLink(blobsKey, {
+  // NOTE: hypercore-blob-server.getLink() already includes a token parameter for access control
+  // Do NOT append additional tokens - it causes malformed URLs with duplicate token params
+  const url = ctx.blobServer.getLink(blobsKey, {
     blob: blob,
     type: mimeType,
     host: ctx.blobServerHost || '127.0.0.1',
     port: ctx.blobServer?.port || ctx.blobServerPort
   });
-
-  // Append session token for authentication
-  // NOTE: hypercore-blob-server doesn't validate this token - a proxy/middleware
-  // would need to intercept requests and verify the token.
-  // For casting URLs (Chromecast), pass options.forCasting=true to skip token.
-  const url = options.forCasting
-    ? baseUrl
-    : `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}token=${ctx.blobSessionToken || ''}`;
 
   console.log('[Storage] Direct blob URL:', url.replace(/token=[^&]+/, 'token=***'));
   return { url };
@@ -1052,18 +1046,14 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
   }
   
   try {
-    const baseUrl = ctx.blobServer.getLink(blobsCore.key, {
+    // NOTE: hypercore-blob-server.getLink() already includes a token parameter for access control
+    // Do NOT append additional tokens - it causes malformed URLs with duplicate token params
+    const url = ctx.blobServer.getLink(blobsCore.key, {
       blob,
       type: mimeType,
       host: ctx.blobServerHost || '127.0.0.1',
       port: ctx.blobServer?.port || ctx.blobServerPort
     });
-
-    // Append session token for authentication
-    // For casting URLs (Chromecast), pass options.forCasting=true to skip token.
-    const url = options.forCasting
-      ? baseUrl
-      : `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}token=${ctx.blobSessionToken || ''}`;
 
     console.log('[Storage] Direct blob URL (hyperblobs):', url.replace(/token=[^&]+/, 'token=***'));
     return { url };

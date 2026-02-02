@@ -6,7 +6,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 API_AVAILABLE(ios(15.0))
-@interface VLCPiPPlayer : UIView <AVPictureInPictureSampleBufferPlaybackDelegate>
+@interface VLCPiPPlayer : UIView <AVPictureInPictureSampleBufferPlaybackDelegate, AVPictureInPictureControllerDelegate>
 
 @property (nonatomic, strong, readonly) VLCMediaPlayer *mediaPlayer;
 @property (nonatomic, strong, readonly, nullable) AVPictureInPictureController *pipController;

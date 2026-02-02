@@ -33,7 +33,8 @@ export { createApi } from './api.js';
 export {
   createIdentityManager,
   generateMnemonic,
-  keypairFromMnemonic
+  keypairFromMnemonic,
+  validateMnemonic
 } from './identity.js';
 
 // Video Upload
@@ -47,6 +48,9 @@ export { MultiWriterChannel, ChannelPairer } from './channel/index.js';
 
 // Types and constants
 export { FEED_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
+
+// Logger - structured logging with automatic secret redaction
+export { logger, setLogLevel, LogLevel } from './logger.js';
 
 // Orchestrator - one-shot initialization for all components
 export { createBackendContext } from './orchestrator.js';

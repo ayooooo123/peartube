@@ -15,6 +15,8 @@
 import fs from 'bare-fs'
 import path from 'bare-path'
 
+import { safeBufferCopy } from './ffmpeg-utils.mjs'
+
 // Segment duration targets - Chromecast needs ~20s buffer before playback starts
 const TARGET_SEGMENT_DURATION = 4 // Target 4 seconds (smaller segments for Chromecast buffer limits)
 const MAX_SEGMENT_DURATION = 10   // Hard cap at 10 seconds
@@ -113,13 +115,9 @@ export class HlsSegmentManager {
    * @param {Buffer} header - The MPEGTS header data
    */
   setMpegtsHeader(header) {
-    // CRITICAL: Manual byte-by-byte copy for maximum safety
-    const len = header.length
-    this.mpegtsHeader = Buffer.alloc(len)
-    for (let i = 0; i < len; i++) {
-      this.mpegtsHeader[i] = header[i]
-    }
-    console.log('[HlsSegmentManager] MPEGTS header set, size:', len, 'bytes')
+    // Defensive copy to prevent shared memory issues
+    this.mpegtsHeader = safeBufferCopy(header)
+    console.log('[HlsSegmentManager] MPEGTS header set, size:', this.mpegtsHeader.length, 'bytes')
   }
 
   /**
@@ -233,13 +231,8 @@ export class HlsSegmentManager {
     // Update duration tracking
     this.currentSegmentDuration = pts - this.currentSegmentStartPts
 
-    // Add packet to buffer - manual byte-by-byte copy for maximum safety
-    const len = packet.length
-    const packetCopy = Buffer.alloc(len)
-    for (let i = 0; i < len; i++) {
-      packetCopy[i] = packet[i]
-    }
-    this.packetBuffer.push(packetCopy)
+    // Add packet to buffer - defensive copy to prevent shared memory issues
+    this.packetBuffer.push(safeBufferCopy(packet))
   }
 
   /**
@@ -382,14 +375,9 @@ export class HlsSegmentManager {
       return null
     }
 
-    // Return from memory if available - manual copy for maximum safety
+    // Return from memory if available - defensive copy
     if (segment.isInMemory()) {
-      const len = segment.data.length
-      const copy = Buffer.alloc(len)
-      for (let i = 0; i < len; i++) {
-        copy[i] = segment.data[i]
-      }
-      return copy
+      return safeBufferCopy(segment.data)
     }
 
     // Load from disk - fs.readFileSync should return a new buffer

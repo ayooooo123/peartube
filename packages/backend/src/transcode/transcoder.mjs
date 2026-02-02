@@ -16,6 +16,14 @@ import path from 'bare-path'
 import os from 'bare-os'
 import http from 'bare-http1'
 
+import {
+  safeDestroy,
+  safeUnref,
+  safeBufferCopy,
+  ResourceTracker,
+  copyCodecParameters
+} from './ffmpeg-utils.mjs'
+
 console.log('[Transcoder] Module loaded')
 
 // HLS segment duration in seconds (low latency)
@@ -102,29 +110,7 @@ export function isAvailable() {
   return ffmpeg !== null
 }
 
-/**
- * Copy codec parameters from source to destination stream
- * Works around missing copyFrom() in some bare-ffmpeg versions
- */
-function copyCodecParameters(destCP, srcCP) {
-  if (typeof destCP.copyFrom === 'function') {
-    destCP.copyFrom(srcCP)
-    return
-  }
-  if (srcCP.id !== undefined) destCP.id = srcCP.id
-  if (srcCP.type !== undefined) destCP.type = srcCP.type
-  if (srcCP.codecName !== undefined) destCP.codecName = srcCP.codecName
-  if (srcCP.profile !== undefined) destCP.profile = srcCP.profile
-  if (srcCP.level !== undefined) destCP.level = srcCP.level
-  if (srcCP.width !== undefined) destCP.width = srcCP.width
-  if (srcCP.height !== undefined) destCP.height = srcCP.height
-  if (srcCP.format !== undefined) destCP.format = srcCP.format
-  if (srcCP.bitRate !== undefined) destCP.bitRate = srcCP.bitRate
-  if (srcCP.sampleRate !== undefined) destCP.sampleRate = srcCP.sampleRate
-  if (srcCP.nbChannels !== undefined) destCP.nbChannels = srcCP.nbChannels
-  if (srcCP.channelLayout !== undefined) destCP.channelLayout = srcCP.channelLayout
-  if (srcCP.extraData && srcCP.extraData.length > 0) destCP.extraData = srcCP.extraData
-}
+// copyCodecParameters imported from ffmpeg-utils.mjs
 
 /**
  * Get load error if any
@@ -1174,9 +1160,11 @@ async function probeWithBareFFmpeg(url) {
     }
   } finally {
     const ownsIO = !!inputFmt
-    if (inputFmt) inputFmt.destroy()
-    if (inputIO && inputIO._cleanup) inputIO._cleanup()
-    if (inputIO && !ownsIO) inputIO.destroy()
+    safeDestroy(inputFmt)
+    if (inputIO && inputIO._cleanup) {
+      try { inputIO._cleanup() } catch {}
+    }
+    if (inputIO && !ownsIO) safeDestroy(inputIO)
   }
 
   return result
@@ -1437,16 +1425,20 @@ async function remuxWithBareFFmpeg(session, inputSource, onProgress) {
     console.log('[Transcoder] Remux complete, output written to:', session.outputPath)
 
   } finally {
-    // Destroy ALL native objects in reverse order
-    if (packet) packet.destroy()
+    // Destroy ALL native objects in reverse order using safeDestroy
+    safeDestroy(packet)
     const outputOwnsIO = !!outputFormat
     const inputOwnsIO = !!inputFormat
-    if (outputFormat) outputFormat.destroy()
-    if (outputIO && outputIO._cleanup) outputIO._cleanup()
-    if (outputIO && !outputOwnsIO) outputIO.destroy()
-    if (inputFormat) inputFormat.destroy()
-    if (inputIO && inputIO._cleanup) inputIO._cleanup()
-    if (inputIO && !inputOwnsIO) inputIO.destroy()
+    safeDestroy(outputFormat)
+    if (outputIO && outputIO._cleanup) {
+      try { outputIO._cleanup() } catch {}
+    }
+    if (outputIO && !outputOwnsIO) safeDestroy(outputIO)
+    safeDestroy(inputFormat)
+    if (inputIO && inputIO._cleanup) {
+      try { inputIO._cleanup() } catch {}
+    }
+    if (inputIO && !inputOwnsIO) safeDestroy(inputIO)
   }
 }
 
@@ -1621,22 +1613,26 @@ async function transcodeAudioWithBareFFmpeg(session, inputSource, onProgress) {
     console.log('[Transcoder] Audio transcode complete, output written to:', session.outputPath)
 
   } finally {
-    // Destroy ALL native objects in reverse order
-    if (resampledFrame) resampledFrame.destroy()
-    if (frame) frame.destroy()
-    if (outputPacket) outputPacket.destroy()
-    if (packet) packet.destroy()
-    if (resampler) resampler.destroy()
-    if (audioEncoder) audioEncoder.destroy()
-    if (audioDecoder) audioDecoder.destroy()
+    // Destroy ALL native objects in reverse order using safeDestroy
+    safeDestroy(resampledFrame)
+    safeDestroy(frame)
+    safeDestroy(outputPacket)
+    safeDestroy(packet)
+    safeDestroy(resampler)
+    safeDestroy(audioEncoder)
+    safeDestroy(audioDecoder)
     const outputOwnsIO = !!outputFormat
     const inputOwnsIO = !!inputFormat
-    if (outputFormat) outputFormat.destroy()
-    if (outputIO && outputIO._cleanup) outputIO._cleanup()
-    if (outputIO && !outputOwnsIO) outputIO.destroy()
-    if (inputFormat) inputFormat.destroy()
-    if (inputIO && inputIO._cleanup) inputIO._cleanup()
-    if (inputIO && !inputOwnsIO) inputIO.destroy()
+    safeDestroy(outputFormat)
+    if (outputIO && outputIO._cleanup) {
+      try { outputIO._cleanup() } catch {}
+    }
+    if (outputIO && !outputOwnsIO) safeDestroy(outputIO)
+    safeDestroy(inputFormat)
+    if (inputIO && inputIO._cleanup) {
+      try { inputIO._cleanup() } catch {}
+    }
+    if (inputIO && !inputOwnsIO) safeDestroy(inputIO)
   }
 }
 
@@ -1930,27 +1926,31 @@ async function transcodeVideoWithBareFFmpeg(session, inputSource, onProgress) {
     console.log('[Transcoder] Video transcode complete, output written to:', session.outputPath)
 
   } finally {
-    // Destroy ALL native objects in reverse order
-    if (resampledFrame) resampledFrame.destroy()
-    if (audioFrame) audioFrame.destroy()
-    if (scaledFrame) scaledFrame.destroy()
-    if (videoFrame) videoFrame.destroy()
-    if (outputPacket) outputPacket.destroy()
-    if (packet) packet.destroy()
-    if (resampler) resampler.destroy()
-    if (audioEncoder) audioEncoder.destroy()
-    if (audioDecoder) audioDecoder.destroy()
-    if (scaler) scaler.destroy()
-    if (videoEncoder) videoEncoder.destroy()
-    if (videoDecoder) videoDecoder.destroy()
+    // Destroy ALL native objects in reverse order using safeDestroy
+    safeDestroy(resampledFrame)
+    safeDestroy(audioFrame)
+    safeDestroy(scaledFrame)
+    safeDestroy(videoFrame)
+    safeDestroy(outputPacket)
+    safeDestroy(packet)
+    safeDestroy(resampler)
+    safeDestroy(audioEncoder)
+    safeDestroy(audioDecoder)
+    safeDestroy(scaler)
+    safeDestroy(videoEncoder)
+    safeDestroy(videoDecoder)
     const outputOwnsIO = !!outputFormat
     const inputOwnsIO = !!inputFormat
-    if (outputFormat) outputFormat.destroy()
-    if (outputIO && outputIO._cleanup) outputIO._cleanup()
-    if (outputIO && !outputOwnsIO) outputIO.destroy()
-    if (inputFormat) inputFormat.destroy()
-    if (inputIO && inputIO._cleanup) inputIO._cleanup()
-    if (inputIO && !inputOwnsIO) inputIO.destroy()
+    safeDestroy(outputFormat)
+    if (outputIO && outputIO._cleanup) {
+      try { outputIO._cleanup() } catch {}
+    }
+    if (outputIO && !outputOwnsIO) safeDestroy(outputIO)
+    safeDestroy(inputFormat)
+    if (inputIO && inputIO._cleanup) {
+      try { inputIO._cleanup() } catch {}
+    }
+    if (inputIO && !inputOwnsIO) safeDestroy(inputIO)
   }
 }
 

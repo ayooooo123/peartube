@@ -25,6 +25,12 @@ import { HypercoreIOReader } from './hypercore-io-reader.mjs'
 import HypercoreChannelReader from './hypercore-channel-reader.mjs'
 import { HypercoreStreamReader } from './hypercore-stream-reader.mjs'
 import { probeMedia } from './transcoder.mjs'
+import {
+  safeDestroy,
+  safeUnref,
+  safeBufferCopy,
+  copyCodecParameters
+} from './ffmpeg-utils.mjs'
 
 console.log('[HlsTranscoder] Module loaded')
 
@@ -85,43 +91,7 @@ const hypercoreDirectMaxBytes = (() => {
   return 512 * 1024 * 1024
 })()
 
-// Avoid double-destroying native handles (bare-ffmpeg crashes on repeated destroy).
-const safeDestroy = (obj) => {
-  if (!obj || typeof obj.destroy !== 'function') return
-  if (Object.prototype.hasOwnProperty.call(obj, '_handle') && !obj._handle) return
-  try { obj.destroy() } catch {}
-}
-
-const safeUnref = (obj) => {
-  if (!obj || typeof obj.unref !== 'function') return
-  if (Object.prototype.hasOwnProperty.call(obj, '_handle') && !obj._handle) return
-  try { obj.unref() } catch {}
-}
-
-/**
- * Copy codec parameters from source to destination stream
- * Works around missing copyFrom() in some bare-ffmpeg versions
- */
-function copyCodecParameters(destCP, srcCP) {
-  if (typeof destCP.copyFrom === 'function') {
-    destCP.copyFrom(srcCP)
-    return
-  }
-  // Manual copy of common properties
-  if (srcCP.id !== undefined) destCP.id = srcCP.id
-  if (srcCP.type !== undefined) destCP.type = srcCP.type
-  if (srcCP.codecName !== undefined) destCP.codecName = srcCP.codecName
-  if (srcCP.profile !== undefined) destCP.profile = srcCP.profile
-  if (srcCP.level !== undefined) destCP.level = srcCP.level
-  if (srcCP.width !== undefined) destCP.width = srcCP.width
-  if (srcCP.height !== undefined) destCP.height = srcCP.height
-  if (srcCP.format !== undefined) destCP.format = srcCP.format
-  if (srcCP.bitRate !== undefined) destCP.bitRate = srcCP.bitRate
-  if (srcCP.sampleRate !== undefined) destCP.sampleRate = srcCP.sampleRate
-  if (srcCP.nbChannels !== undefined) destCP.nbChannels = srcCP.nbChannels
-  if (srcCP.channelLayout !== undefined) destCP.channelLayout = srcCP.channelLayout
-  if (srcCP.extraData && srcCP.extraData.length > 0) destCP.extraData = srcCP.extraData
-}
+// safeDestroy, safeUnref, copyCodecParameters imported from ffmpeg-utils.mjs
 
 /**
  * Parse MPEG-TS buffer to extract PAT and PMT packets for HLS segment injection.
@@ -906,11 +876,8 @@ async function hlsRemux(session, inputIO, segmentManager, totalSize, onProgress)
         const bufLen = buffer.length
         totalBytesWritten += bufLen
 
-        // CRITICAL: Manual byte-by-byte copy to guarantee no shared memory
-        const bufCopy = Buffer.alloc(bufLen)
-        for (let i = 0; i < bufLen; i++) {
-          bufCopy[i] = buffer[i]
-        }
+        // Defensive copy to guarantee no shared memory
+        const bufCopy = safeBufferCopy(buffer)
 
         // Extract PAT+PMT from first write for segment header injection
         if (!cachedPatPmt && bufLen >= 188) {
@@ -1403,10 +1370,8 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
       const io = new ffmpeg.IOContext(1024 * 1024, {
         onwrite: (data) => {
           totalWriteCount++
-          // Copy buffer to avoid shared memory issues
-          const copy = Buffer.alloc(data.length)
-          for (let i = 0; i < data.length; i++) copy[i] = data[i]
-          segmentBuffer.push(copy)
+          // Defensive copy to avoid shared memory issues
+          segmentBuffer.push(safeBufferCopy(data))
           return data.length
         }
       })

@@ -36,6 +36,7 @@ const MAX_CONCURRENT_FETCHES = 3
 
 // Prefetch ahead distance for sequential reads
 const PREFETCH_AHEAD = 8 * 1024 * 1024 // 8MB ahead
+const EAGAIN = -11
 
 /**
  * Represents a cached byte range
@@ -404,63 +405,16 @@ export class StreamingHttpReader {
       return cached.length
     }
 
-    // Cache miss - need to fetch synchronously
-    // WARNING: This busy-wait can deadlock on BareKit because it blocks the event loop
-    console.warn('[StreamingHttpReader] CACHE MISS at', Math.round(this.currentPos / 1024 / 1024) + 'MB - this may cause deadlock on mobile')
-    // This is tricky because FFmpeg needs sync reads but HTTP is async
-    // We use a busy-wait approach (not ideal but necessary)
+    // Cache miss - queue fetch and return EAGAIN so FFmpeg can retry without blocking the event loop
+    console.warn('[StreamingHttpReader] CACHE MISS at', Math.round(this.currentPos / 1024 / 1024) + 'MB - queuing fetch')
 
-    // Queue the fetch with larger chunk size
     const fetchSize = Math.max(toRead, CHUNK_SIZE)
-    const fetchPromise = this.fetchRange(this.currentPos, fetchSize, PRIORITY_HIGH)
+    this.fetchRange(this.currentPos, fetchSize, PRIORITY_HIGH)
+      .catch(err => {
+        console.error('[StreamingHttpReader] Sync read fetch error:', err?.message || err)
+      })
 
-    // Busy-wait for fetch to complete
-    let data = null
-    let error = null
-    let done = false
-
-    fetchPromise
-      .then(d => { data = d; done = true })
-      .catch(e => { error = e; done = true })
-
-    // Spin wait with longer intervals to reduce CPU burn
-    // Note: This is still problematic on mobile (BareKit) because
-    // the spin blocks the JS event loop preventing HTTP callbacks
-    const startTime = Date.now()
-    const timeout = 60000 // 60 second timeout (longer for slow connections)
-    let spinCount = 0
-
-    while (!done) {
-      // Check timeout
-      if (Date.now() - startTime > timeout) {
-        console.error('[StreamingHttpReader] Sync read timeout at', Math.round(this.currentPos / 1024 / 1024) + 'MB after', Math.round((Date.now() - startTime) / 1000) + 's')
-        return -1 // Error
-      }
-
-      // Yield to allow async callbacks to run
-      // Longer interval = less CPU burn but slower response
-      const spinStart = Date.now()
-      while (Date.now() - spinStart < 5) {
-        // Spin for 5ms (increased from 1ms)
-      }
-
-      spinCount++
-      // Log progress every ~1 second
-      if (spinCount % 200 === 0 && !done) {
-        console.log('[StreamingHttpReader] Waiting for data at', Math.round(this.currentPos / 1024 / 1024) + 'MB...', Math.round((Date.now() - startTime) / 1000) + 's')
-      }
-    }
-
-    if (error) {
-      console.error('[StreamingHttpReader] Sync read error:', error.message)
-      return -1
-    }
-
-    // Read from newly cached data
-    const actualRead = Math.min(data.length, toRead)
-    data.copy(buffer, 0, 0, actualRead)
-    this.currentPos += actualRead
-    return actualRead
+    return EAGAIN
   }
 
   /**

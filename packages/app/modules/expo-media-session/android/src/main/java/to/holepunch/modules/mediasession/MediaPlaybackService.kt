@@ -7,9 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.os.Build
+import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import android.support.v4.media.session.MediaControllerCompat
 import androidx.core.app.NotificationCompat
 import androidx.media.session.MediaButtonReceiver
 
@@ -17,7 +19,7 @@ class MediaPlaybackService : Service() {
     
     companion object {
         private const val NOTIFICATION_ID = 1001
-        private const val CHANNEL_ID = "peartube_media_playback"
+        private const val CHANNEL_ID = "peartube_media_playback_v2"
         private const val CHANNEL_NAME = "Media Playback"
     }
     
@@ -40,7 +42,15 @@ class MediaPlaybackService : Service() {
             intent?.getParcelableExtra("mediaSessionToken")
         } ?: mediaSessionToken
 
+        if (mediaSessionToken == null) {
+            mediaSessionToken = MediaSessionRegistry.getSession()?.sessionToken
+        }
+
         when (intent?.action) {
+            "UPDATE_NOTIFICATION" -> {
+                updateNotification()
+                return START_NOT_STICKY
+            }
             MediaSessionModule.ACTION_PIP_PLAY -> {
                 android.util.Log.d("MediaPlaybackService", "PiP play action received")
                 ensureForeground()
@@ -81,7 +91,11 @@ class MediaPlaybackService : Service() {
         if (isForeground) return
         try {
             val notification = buildNotification()
-            startForeground(NOTIFICATION_ID, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
             isForeground = true
         } catch (e: Exception) {
             // On Android 12+, startForeground may fail if app is in background
@@ -97,7 +111,7 @@ class MediaPlaybackService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "Shows media playback controls"
                 setShowBadge(false)
@@ -119,13 +133,25 @@ class MediaPlaybackService : Service() {
             )
         }
         
+        val controller = mediaSessionToken?.let { token ->
+            try {
+                MediaControllerCompat(this, token)
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        val title = controller?.metadata?.getString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_TITLE)
+        val artist = controller?.metadata?.getString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_ARTIST)
+        val isPlaying = controller?.playbackState?.state == PlaybackStateCompat.STATE_PLAYING
+
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("PearTube")
-            .setContentText("Playing video")
+            .setContentTitle(title ?: "PearTube")
+            .setContentText(artist ?: if (isPlaying) "Playing video" else "Paused")
             .setOngoing(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
         
         contentIntent?.let { builder.setContentIntent(it) }
@@ -172,6 +198,16 @@ class MediaPlaybackService : Service() {
         }
         
         return builder.build()
+    }
+
+    private fun updateNotification() {
+        val notification = buildNotification()
+        val manager = getSystemService(NotificationManager::class.java)
+        if (manager != null) {
+            manager.notify(NOTIFICATION_ID, notification)
+        } else {
+            ensureForeground()
+        }
     }
 }
 

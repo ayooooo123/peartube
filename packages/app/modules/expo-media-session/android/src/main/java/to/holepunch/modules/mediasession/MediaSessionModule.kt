@@ -44,6 +44,7 @@ import java.net.URL
 object PipBridge {
     private var moduleInstance: MediaSessionModule? = null
     private var pipEnabled: Boolean = false
+    @Volatile private var lastIsInPip: Boolean = false
 
     @Volatile private var pipAspectRatioWidth: Int = 16
     @Volatile private var pipAspectRatioHeight: Int = 9
@@ -182,8 +183,18 @@ object PipBridge {
             applySurfaceViewTransforms(activity, isInPip, newConfig)
         }, 50) // Small delay to let Android settle
 
+        if (lastIsInPip && !isInPip) {
+            notifyPipDismissed()
+        }
+        lastIsInPip = isInPip
+
         // Still send event to JS for state management
         moduleInstance?.sendPipEvent(activity, isInPip, newConfig)
+    }
+
+    fun notifyPipDismissed() {
+        android.util.Log.d("PipBridge", "notifyPipDismissed: pausing playback")
+        moduleInstance?.handlePipPause()
     }
 
     /**
@@ -403,6 +414,7 @@ class MediaSessionModule : Module() {
         OnCreate {
             PipBridge.register(this@MediaSessionModule)
             PipServiceBridge.register(this@MediaSessionModule)
+            MediaSessionRegistry.setCallback(mediaSessionCallback)
         }
 
         OnDestroy {
@@ -416,26 +428,20 @@ class MediaSessionModule : Module() {
         val context = appContext.reactContext ?: return
 
         if (active) {
-            if (mediaSession == null) {
-                val componentName = ComponentName(context, androidx.media.session.MediaButtonReceiver::class.java)
-                mediaSession = MediaSessionCompat(context, "PearTubeMediaSession", componentName, null).apply {
-                    setCallback(mediaSessionCallback)
-                    setFlags(
-                        MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
-                        MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
-                    )
-                }
-            }
-
+            mediaSession = MediaSessionRegistry.ensureSession(context)
+            mediaSession?.setCallback(mediaSessionCallback)
+            setSessionActivityIfAvailable(context)
             mediaSession?.isActive = true
             registerNoisyReceiver()
             startForegroundService()
+            startMediaBrowserService()
             isSessionActive = true
         } else {
             mediaSession?.isActive = false
             abandonAudioFocus()
             unregisterNoisyReceiver()
             stopForegroundService()
+            stopMediaBrowserService()
             isSessionActive = false
         }
     }
@@ -443,18 +449,23 @@ class MediaSessionModule : Module() {
     private suspend fun updateNowPlaying(metadata: Map<String, Any?>) {
         (metadata["title"] as? String)?.let {
             currentMetadata.putString(MediaMetadataCompat.METADATA_KEY_TITLE, it)
+            currentMetadata.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, it)
         }
         (metadata["artist"] as? String)?.let {
             currentMetadata.putString(MediaMetadataCompat.METADATA_KEY_ARTIST, it)
+            currentMetadata.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, it)
         }
         (metadata["album"] as? String)?.let {
             currentMetadata.putString(MediaMetadataCompat.METADATA_KEY_ALBUM, it)
+            currentMetadata.putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, it)
         }
         (metadata["duration"] as? Number)?.let {
             currentMetadata.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, (it.toDouble() * 1000).toLong())
         }
 
         (metadata["artworkUrl"] as? String)?.let { url ->
+            currentMetadata.putString(MediaMetadataCompat.METADATA_KEY_ART_URI, url)
+            currentMetadata.putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, url)
             withContext(Dispatchers.IO) {
                 try {
                     val bitmap = URL(url).openStream().use { android.graphics.BitmapFactory.decodeStream(it) }
@@ -466,7 +477,21 @@ class MediaSessionModule : Module() {
         }
 
         mediaSession?.setMetadata(currentMetadata.build())
+        MediaSessionRegistry.setMetadata(currentMetadata.build())
         updateNotification()
+    }
+
+    private fun setSessionActivityIfAvailable(context: Context) {
+        val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+        if (launchIntent != null) {
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                0,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            mediaSession?.setSessionActivity(pendingIntent)
+        }
     }
 
     private fun updatePlaybackState(state: Map<String, Any?>) {
@@ -525,6 +550,7 @@ class MediaSessionModule : Module() {
         currentPlaybackState = PlaybackStateCompat.Builder()
         mediaSession?.setMetadata(null)
         mediaSession?.setPlaybackState(null)
+        MediaSessionRegistry.setMetadata(null)
         stopForegroundService()
     }
 
@@ -915,10 +941,29 @@ class MediaSessionModule : Module() {
             abandonAudioFocus()
             unregisterNoisyReceiver()
             stopForegroundService()
+            stopMediaBrowserService()
             mediaSession?.isActive = false
             mediaSession?.release()
             mediaSession = null
             isSessionActive = false
+        }
+    }
+
+    private fun startMediaBrowserService() {
+        val context = appContext.reactContext ?: return
+        try {
+            context.startService(Intent(context, PearTubeMediaBrowserService::class.java))
+        } catch (e: Exception) {
+            android.util.Log.w("MediaSession", "Failed to start media browser service: ${e.message}")
+        }
+    }
+
+    private fun stopMediaBrowserService() {
+        val context = appContext.reactContext ?: return
+        try {
+            context.stopService(Intent(context, PearTubeMediaBrowserService::class.java))
+        } catch (e: Exception) {
+            android.util.Log.w("MediaSession", "Failed to stop media browser service: ${e.message}")
         }
     }
 

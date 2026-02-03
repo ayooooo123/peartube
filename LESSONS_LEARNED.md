@@ -338,6 +338,26 @@ setPlayerMode(playerModeBeforePipRef.current)  // Not always 'fullscreen'
 
 **Why Transform Works When Layout Doesn't:**
 
+---
+
+## Android Media Session + Kvaesitso Launcher
+
+### Launcher Filters to Music Apps
+Kvaesitso does NOT show every active media session. It filters to packages returned by:
+- `Intent.ACTION_MAIN` + `Intent.CATEGORY_APP_MUSIC`
+- `Intent("android.intent.action.MUSIC_PLAYER")`
+
+If the app doesn't declare those intent filters, Kvaesitso ignores the session even if the notification shade shows controls.
+
+### Expo Prebuild Overwrites AndroidManifest.xml
+Manual manifest edits are lost on rebuild. Use a config plugin to add:
+- `CATEGORY_APP_MUSIC` and `ACTION_MUSIC_PLAYER` intent filters on `MainActivity`
+- `MediaBrowserService` + `MediaPlaybackService`
+- `FOREGROUND_SERVICE_MEDIA_PLAYBACK` and `POST_NOTIFICATIONS` permissions
+
+### Media Notifications Need the Right Channel
+Notification channel importance is immutable after creation. If a launcher ignores low-importance media notifications, create a new channel ID with `IMPORTANCE_DEFAULT` (or higher) so the system surfaces it.
+
 - `setLayoutParams()` - React Native intercepts and overrides
 - `requestLayout()` - React Native doesn't process in background
 - `setScaleX/Y()` - **Visual-only transform**, doesn't affect layout, React Native doesn't care

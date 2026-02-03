@@ -866,7 +866,10 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           return Math.min(totalBlocks, 16)
         }
         const bytesPerBlock = totalBytes / totalBlocks
-        const headTargetBytes = 2 * 1024 * 1024
+        const minHeadBytes = 4 * 1024 * 1024
+        const maxHeadBytes = 32 * 1024 * 1024
+        const adaptiveBytes = Math.round(totalBytes * 0.02)
+        const headTargetBytes = Math.min(maxHeadBytes, Math.max(minHeadBytes, adaptiveBytes))
         const headBlocks = Math.ceil(headTargetBytes / bytesPerBlock)
         return Math.max(1, Math.min(totalBlocks, headBlocks))
       }
@@ -957,7 +960,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               totalBytes,
               initialBlocks: initialAvailable,
               downloadedBlocks: 0,
-              peerCount: core.peers?.length || ctx.swarm?.connections?.size || 0
+              peerCount: core.peers?.length || 0
             })
             videoStats.emitStats(driveKey, videoPath, true) // force=true for initial stats
           }
@@ -1016,7 +1019,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             if (videoStats) {
               videoStats.updateStats(driveKey, videoPath, {
                 downloadedBlocks,
-                peerCount: core.peers?.length || ctx.swarm?.connections?.size || 0,
+                peerCount: core.peers?.length || 0,
                 status: isComplete ? 'complete' : 'downloading',
                 initialBlocks: initialAvailable
               })
@@ -1044,7 +1047,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
 
             if (videoStats) {
               videoStats.updateStats(driveKey, videoPath, {
-                peerCount: core.peers?.length || ctx.swarm?.connections?.size || 0
+                peerCount: core.peers?.length || 0
               })
               videoStats.emitStats(driveKey, videoPath)
             }
@@ -1122,7 +1125,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             success: true,
             totalBlocks,
             totalBytes,
-            peerCount: core.peers?.length || ctx.swarm?.connections?.size || 0,
+            peerCount: core.peers?.length || 0,
             initialBlocks: initialAvailable,
             cached: wasCached,
             message: wasCached ? 'Video already fully cached' : 'Prefetch started'

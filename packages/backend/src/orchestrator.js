@@ -9,7 +9,7 @@
  *   const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
  */
 
-import { initializeStorage, loadDrive } from './storage.js';
+import { initializeStorage, loadChannel } from './storage.js';
 import { PublicFeedManager } from './public-feed.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
@@ -38,43 +38,15 @@ import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoTo
  * @property {ReturnType<typeof createUploadManager>} uploadManager - Upload manager
  */
 
-async function warmDrives(ctx, driveKeys, label) {
-  const unique = Array.from(new Set((driveKeys || []).filter(Boolean)));
+async function warmChannels(ctx, channelKeys, label) {
+  const unique = Array.from(new Set((channelKeys || []).filter(Boolean)));
   if (!unique.length) return;
   console.log(`[Orchestrator] Warming ${label}:`, unique.length);
   for (const key of unique) {
     try {
-      await loadDrive(ctx, key, { waitForSync: false });
+      await loadChannel(ctx, key);
     } catch (e) {
       console.log('[Orchestrator] Warm failed for', key.slice(0, 16), e?.message);
-    }
-  }
-}
-
-async function prefetchDriveMetadata(ctx, driveKeys, videoLimit = 1) {
-  const unique = Array.from(new Set((driveKeys || []).filter(Boolean)));
-  if (!unique.length) return;
-  for (const key of unique) {
-    try {
-      const drive = await loadDrive(ctx, key, { waitForSync: false, syncTimeout: 4000 });
-      // Touch channel metadata to pull first blocks
-      await drive.get('/channel.json').catch(() => null);
-
-      if (videoLimit > 0) {
-        let count = 0;
-        try {
-          for await (const entry of drive.readdir('/videos')) {
-            if (!entry.endsWith('.json')) continue;
-            await drive.get(`/videos/${entry}`).catch(() => null);
-            count++;
-            if (count >= videoLimit) break;
-          }
-        } catch {
-          // /videos may not exist on some drives
-        }
-      }
-    } catch (e) {
-      console.log('[Orchestrator] Prefetch skipped for', key.slice(0, 16), e?.message);
     }
   }
 }
@@ -87,7 +59,7 @@ async function prefetchDriveMetadata(ctx, driveKeys, videoLimit = 1) {
  * 2. Creates all managers (PublicFeed, Seeding, VideoStats, Identity, Upload)
  * 3. Wires up swarm connection handling for replication and feed protocol
  * 4. Starts the public feed discovery
- * 5. Loads existing identities and their channel drives (in background)
+ * 5. Loads existing identities and their channels (in background)
  *
  * @param {BackendConfig} config - Configuration options
  * @returns {Promise<BackendContext>} - All backend components
@@ -175,7 +147,7 @@ export async function createBackendContext(config) {
     videoStats
   });
 
-  // Return result - heavy drive warming happens in background
+  // Return result - heavy channel warming happens in background
   const result = {
     ctx,
     api,
@@ -198,30 +170,29 @@ export async function createBackendContext(config) {
 
   defer(async () => {
     try {
-      // Load channels/drives and run legacy migration in the background.
-      // This can be slow (sync + readdir + metadata replay) and should NOT block worker init.
+      // Load channels in the background.
+      // This can be slow (sync + metadata replay) and should NOT block worker init.
       try {
         await identityManager.loadChannelDrives();
-        await identityManager.migrateLegacyIdentities?.();
       } catch (e) {
         console.error('[Orchestrator] Identity background init error:', e?.message);
       }
 
       // Start public feed discovery
-      // Warm subscribed / pinned / seeding drives (can be slow)
+      // Warm subscribed / pinned / seeding channels (can be slow)
       try {
         const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || [];
         const subscriptionKeys = subs.map((s) => s.driveKey).filter(Boolean);
         const pinnedKeys = seedingManager.getPinnedChannels?.() || [];
         const seedKeys = seedingManager.getActiveSeeds?.().map((s) => s.driveKey).filter(Boolean) || [];
-        await warmDrives(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds');
+        await warmChannels(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds');
         // Skip prefetch - it was causing errors and slowing things down
       } catch (e) {
         console.log('[Orchestrator] Warm-up skipped:', e?.message);
       }
 
       console.log('[Orchestrator] ===== BACKGROUND INIT COMPLETE =====');
-      console.log('[Orchestrator] Drives cached:', ctx.drives.size);
+      console.log('[Orchestrator] Channels cached:', ctx.channels?.size || 0);
       console.log('[Orchestrator] Swarm connections:', ctx.swarm.connections.size);
     } catch (e) {
       console.error('[Orchestrator] Background init error:', e?.message);

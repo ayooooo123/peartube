@@ -1,7 +1,7 @@
 /**
  * VideoStatsTracker - Real-time video loading stats
  *
- * Uses Hyperdrive's built-in monitor for efficient event-driven updates.
+ * Uses Hypercore event hooks for efficient event-driven updates.
  * Tracks P2P download progress for video prefetching.
  */
 
@@ -54,7 +54,7 @@ export class VideoStatsTracker {
 
   /**
    * Normalize a video identifier for stats keys.
-   * Accepts id or path variants like /videos/<id>.mp4 or videos/<id>.mp4.
+   * Accepts id or legacy path variants like /videos/<id>.mp4 or videos/<id>.mp4.
    * @param {string} videoPath
    * @returns {string}
    */
@@ -135,7 +135,7 @@ export class VideoStatsTracker {
    * Register a monitor for a video
    * @param {string} driveKey
    * @param {string} videoPath
-   * @param {any} monitor - Hyperdrive monitor
+   * @param {any} monitor - Download monitor implementation
    * @param {() => void} [cleanup] - Cleanup function
    */
   registerMonitor(driveKey, videoPath, monitor, cleanup) {

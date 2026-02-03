@@ -4,17 +4,13 @@
  * This package contains shared code used by both mobile and desktop backends.
  */
 
-// Storage module - Corestore, Hyperdrive, BlobServer
+// Storage module - Corestore, BlobServer
 export {
   wrapStoreWithTimeout,
   initializeStorage,
-  waitForDriveSync,
-  loadDrive,
   loadChannel,
-  createDrive,
   createChannel,
-  pairDevice,
-  getVideoUrl
+  pairDevice
 } from './storage.js';
 
 // Public Feed - P2P channel discovery

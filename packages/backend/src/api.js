@@ -10,7 +10,7 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { loadDrive, createDrive, getVideoUrl, getVideoUrlFromBlob, waitForDriveSync, loadChannel, loadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel, loadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
@@ -57,12 +57,6 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     } catch {}
 
     return false
-  }
-
-  function isHyperdriveDecodeError(err) {
-    const msg = (err && err.message) ? String(err.message) : ''
-    // hypercore / hyperbee / hyperdrive tend to surface this exact message for schema mismatch or corruption
-    return msg.includes('DECODING_ERROR') || msg.includes('Decoded message is not valid')
   }
 
   async function markAsMultiWriterChannel(channelKey) {
@@ -120,6 +114,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
   // Cache recent results in the backend worker so back-navigation is instant.
   const LIST_VIDEOS_CACHE_TTL_MS = 15_000
   const CHANNEL_META_CACHE_TTL_MS = 30_000
+  /** @type {Map<string, Promise<any>>} */
+  const prefetchInFlight = new Map()
 
   /** @type {Map<string, { ts: number, value: any[] }>} */
   const listVideosCache = new Map()
@@ -149,45 +145,15 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async getChannel(driveKey) {
       console.log('[API] GET_CHANNEL:', driveKey?.slice(0, 16));
       try {
-        if (await isMultiWriterChannelKey(driveKey)) {
         const channel = await loadChannel(ctx, driveKey)
-          const meta = await channel.getMetadata()
-          return {
-            name: meta?.name || 'Channel',
-            description: meta?.description || '',
-            avatar: meta?.avatar || null,
-            createdAt: meta?.createdAt || Date.now(),
-            publicKey: meta?.createdBy || null
-          }
-        }
-
-        try {
-          const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 8000 });
-          const metaBuf = await drive.get('/channel.json');
-          if (metaBuf) {
-            const result = JSON.parse(b4a.toString(metaBuf));
-            console.log('[API] Got channel:', result.name);
-            return result;
-          }
-          return { name: 'Unknown Channel' };
-        } catch (err) {
-          // If the key is actually an Autobase (multi-writer) channel key, Hyperdrive will throw a decoding error.
-          if (isHyperdriveDecodeError(err)) {
-            console.log('[API] GET_CHANNEL: Hyperdrive decode error; retrying as multi-writer channel')
-            const channel = await loadChannel(ctx, driveKey).catch(() => null)
-            if (channel) {
-              await markAsMultiWriterChannel(driveKey)
+        await markAsMultiWriterChannel(driveKey)
         const meta = await channel.getMetadata().catch(() => null)
         return {
           name: meta?.name || 'Channel',
           description: meta?.description || '',
           avatar: meta?.avatar || null,
-                createdAt: meta?.createdAt || Date.now(),
+          createdAt: meta?.createdAt || Date.now(),
           publicKey: meta?.createdBy || null
-              }
-            }
-          }
-          throw err
         }
       } catch (err) {
         console.error('[API] GET_CHANNEL error:', err.message);
@@ -205,33 +171,10 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     async updateChannel(driveKey, name, description) {
       console.log('[API] UPDATE_CHANNEL:', driveKey?.slice(0, 16));
       try {
-        if (await isMultiWriterChannelKey(driveKey)) {
         const channel = await loadChannel(ctx, driveKey)
         await channel.updateMetadata({ name, description: description || '', avatar: null })
+        await markAsMultiWriterChannel(driveKey)
         return { success: true }
-        }
-
-        const drive = ctx.drives.get(driveKey);
-        if (!drive || !drive.writable) {
-          throw new Error('Channel not found or not writable');
-        }
-
-        // Get existing metadata
-        const metaBuf = await drive.get('/channel.json');
-        let meta = {};
-        if (metaBuf) {
-          meta = JSON.parse(b4a.toString(metaBuf));
-        }
-
-        // Update fields
-        if (name !== undefined) meta.name = name;
-        if (description !== undefined) meta.description = description;
-        meta.updatedAt = Date.now();
-
-        await drive.put('/channel.json', Buffer.from(JSON.stringify(meta)));
-        console.log('[API] Updated channel:', meta.name);
-
-        return { success: true };
       } catch (err) {
         console.error('[API] UPDATE_CHANNEL error:', err.message);
         return { success: false, error: err.message };
@@ -250,95 +193,22 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         if (cached && (Date.now() - cached.ts) < CHANNEL_META_CACHE_TTL_MS) {
           return cloneObject(cached.value)
         }
-
-        // Fast path for known multi-writer channels.
-        if (await isMultiWriterChannelKey(driveKey)) {
-          const channel = await loadChannel(ctx, driveKey)
-          const meta = await channel.getMetadata().catch(() => null)
-          const videos = await channel.listVideos().catch(() => [])
-          const result = {
-            driveKey,
-            name: meta?.name || 'Channel',
-            description: meta?.description || '',
-            avatar: meta?.avatar || null,
-            createdAt: meta?.createdAt || Date.now(),
-            publicKey: meta?.createdBy || null,
-            videoCount: videos?.length || 0
-          }
-          channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
-          return cloneObject(result)
-        }
-
-        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 8000 });
-
-        let metaBuf = null;
-        try {
-          const entryPromise = drive.entry('/channel.json', { wait: true });
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Entry fetch timeout')), 5000)
-          );
-          const entry = await Promise.race([entryPromise, timeoutPromise]);
-          if (entry) {
-            metaBuf = await drive.get('/channel.json');
-          }
-          } catch (err) {
-          console.log('[API] Entry wait error:', err.message, 'trying direct get...');
-          metaBuf = await drive.get('/channel.json');
-        }
-
-        if (metaBuf) {
-          const meta = JSON.parse(b4a.toString(metaBuf));
-
-          // Count videos
-          let videoCount = 0;
-          try {
-            for await (const entry of drive.readdir('/videos')) {
-              if (entry.endsWith('.json')) videoCount++;
-            }
-          } catch {}
-
-          console.log('[API] Got channel meta:', meta.name, 'videos:', videoCount);
-          const result = {
-            ...meta,
-            videoCount,
-            driveKey
-          };
-          channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
-          return cloneObject(result)
-        }
-
-        console.log('[API] No channel.json found for:', driveKey?.slice(0, 16));
+        const channel = await loadChannel(ctx, driveKey)
+        await markAsMultiWriterChannel(driveKey)
+        const meta = await channel.getMetadata().catch(() => null)
+        const videos = await channel.listVideos().catch(() => [])
         const result = {
           driveKey,
-          name: 'Unknown Channel',
-          description: '',
-          videoCount: 0
-        };
-        channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
-        return cloneObject(result)
-      } catch (err) {
-        // If this key is actually an Autobase (multi-writer) channel key, treating it like a Hyperdrive
-        // will surface as a decoding error. Retry as multi-writer and persist the marker.
-        if (isHyperdriveDecodeError(err)) {
-          console.log('[API] GET_CHANNEL_META: Hyperdrive decode error; retrying as multi-writer channel')
-          const channel = await loadChannel(ctx, driveKey).catch(() => null)
-          if (channel) {
-            await markAsMultiWriterChannel(driveKey)
-            const meta = await channel.getMetadata().catch(() => null)
-            const videos = await channel.listVideos().catch(() => [])
-            const result = {
-              driveKey,
           name: meta?.name || 'Channel',
           description: meta?.description || '',
           avatar: meta?.avatar || null,
-              createdAt: meta?.createdAt || Date.now(),
+          createdAt: meta?.createdAt || Date.now(),
           publicKey: meta?.createdBy || null,
           videoCount: videos?.length || 0
         }
-            channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
+        channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
         return cloneObject(result)
-          }
-        }
+      } catch (err) {
         console.error('[API] GET_CHANNEL_META error:', err.message);
         return {
           driveKey,
@@ -368,10 +238,61 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           return cloneArrayOfObjects(cached.value)
         }
 
+        const extractVideoId = (video) => {
+          if (!video) return null
+          if (video.id) return video.id
+          if (video.path && typeof video.path === 'string') {
+            const match = video.path.match(/\/videos\/([^.\/]+)/)
+            if (match?.[1]) return match[1]
+            const base = video.path.split('/').pop() || ''
+            return base.replace(/\.[^./]+$/, '') || null
+          }
+          return null
+        }
+
+        const enrichMissingBlobMeta = async (videos, fetcher) => {
+          const missing = (videos || []).filter(v => !v?.blobId || !v?.blobsCoreKey)
+          if (missing.length === 0) return videos
+
+          const MAX_ENRICH = 10
+          const ids = Array.from(new Set(
+            missing
+              .slice(0, MAX_ENRICH)
+              .map(v => extractVideoId(v))
+              .filter(Boolean)
+          ))
+          if (ids.length === 0) return videos
+
+          const metaById = new Map()
+          await Promise.all(ids.map(async (id) => {
+            try {
+              const meta = await fetcher(id)
+              if (meta) metaById.set(id, meta)
+            } catch {}
+          }))
+
+          if (metaById.size === 0) return videos
+
+          return (videos || []).map((v) => {
+            if (!v || (v.blobId && v.blobsCoreKey)) return v
+            const id = extractVideoId(v)
+            const meta = id ? metaById.get(id) : null
+            if (!meta) return v
+            return {
+              ...v,
+              blobId: v.blobId || meta.blobId,
+              blobsCoreKey: v.blobsCoreKey || meta.blobsCoreKey,
+              mimeType: v.mimeType || meta.mimeType,
+              size: v.size || meta.size,
+              byteLength: v.byteLength || meta.byteLength,
+            }
+          })
+        }
+
         // FAST PATH: If publicBeeKey is provided, read directly from PublicBee
         // This is the preferred path for public feed viewers - no Autobase sync needed
         // IMPORTANT: If publicBeeKey is provided, this is definitely a multi-writer channel,
-        // so we should NEVER fall through to the Hyperdrive path.
+        // so we should not fall back to legacy storage paths.
         if (publicBeeKey) {
           console.log('[API] LIST_VIDEOS: using PublicBee fast path')
           // Mark as multi-writer since PublicBee is only used with multi-writer channels
@@ -381,10 +302,11 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             const videos = await publicBee.listVideos()
             console.log('[API] LIST_VIDEOS: PublicBee returned', videos?.length, 'videos')
             const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
-            listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+            const enriched = await enrichMissingBlobMeta(result, (id) => publicBee.getVideo(id))
+            listVideosCache.set(driveKey, { ts: Date.now(), value: enriched })
             // YouTube-Fast: background index for search
-            backgroundIndexVideos(result, driveKey)
-            return cloneArrayOfObjects(result)
+            backgroundIndexVideos(enriched, driveKey)
+            return cloneArrayOfObjects(enriched)
           } catch (err) {
             console.log('[API] LIST_VIDEOS: PublicBee fast path failed:', err.message, '- trying channel directly')
             // If PublicBee fails, try loading the channel directly (for paired devices or when PublicBee isn't synced)
@@ -393,79 +315,34 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               const videos = await channel.listVideos()
               console.log('[API] LIST_VIDEOS: channel fallback returned', videos?.length, 'videos')
               const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
-              listVideosCache.set(driveKey, { ts: Date.now(), value: result })
+              const enriched = await enrichMissingBlobMeta(result, (id) => channel.getVideo(id))
+              listVideosCache.set(driveKey, { ts: Date.now(), value: enriched })
               // YouTube-Fast: background index for search
-              backgroundIndexVideos(result, driveKey)
-              return cloneArrayOfObjects(result)
+              backgroundIndexVideos(enriched, driveKey)
+              return cloneArrayOfObjects(enriched)
             } catch (channelErr) {
               console.log('[API] LIST_VIDEOS: channel fallback also failed:', channelErr.message)
-              // Return empty - do NOT fall through to Hyperdrive since this is a multi-writer channel
+              // Return empty - do NOT fall through to legacy paths since this is a multi-writer channel
               return []
             }
           }
         }
 
-        const isMW = await isMultiWriterChannelKey(driveKey)
-        console.log('[API] LIST_VIDEOS isMultiWriterChannel:', isMW, 'cached:', ctx.channels?.has(driveKey))
-        if (isMW) {
-          const channel = await loadChannel(ctx, driveKey)
-          console.log('[API] LIST_VIDEOS channel loaded, calling listVideos...')
+        const channel = await loadChannel(ctx, driveKey)
+        await markAsMultiWriterChannel(driveKey)
+        console.log('[API] LIST_VIDEOS channel loaded, calling listVideos...')
 
-          // IMPORTANT: Never block listVideos on network sync.
-          // Mobile has a 30s init timeout, and pairing/DHT discovery can exceed that.
-          // Return current materialized view immediately; the UI already retries.
-          const videos = await channel.listVideos()
-          console.log('[API] LIST_VIDEOS returning', videos?.length, 'videos from channel')
-          const result = (videos || []).map(v => ({ ...v, channelKey: driveKey }))
-          listVideosCache.set(driveKey, { ts: Date.now(), value: result })
-          // YouTube-Fast: background index for search
-          backgroundIndexVideos(result, driveKey)
-          return cloneArrayOfObjects(result)
-        }
-
-        // Try loading as Hyperdrive (legacy channels)
-        try {
-          const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 8000 });
-          const videos = [];
-
-          for await (const entry of drive.readdir('/videos')) {
-            if (entry.endsWith('.json')) {
-              const metaBuf = await drive.get(`/videos/${entry}`);
-              if (metaBuf) {
-                const video = JSON.parse(b4a.toString(metaBuf));
-                video.channelKey = driveKey;
-                videos.push(video);
-              }
-            }
-          }
-
-          const result = videos.sort((a, b) => b.uploadedAt - a.uploadedAt);
-          console.log('[API] Found', result.length, 'videos');
-          listVideosCache.set(driveKey, { ts: Date.now(), value: result })
-          // YouTube-Fast: background index for search
-          backgroundIndexVideos(result, driveKey)
-          return cloneArrayOfObjects(result)
-        } catch (e) {
-          console.log('[API] Error listing videos:', e.message);
-          // If the key we got from discovery is actually an Autobase channel key, Hyperdrive will throw a decoding error.
-          // Retry as multi-writer channel and persist the marker so later calls (e.g. getVideoUrl) use the correct path.
-          if (isHyperdriveDecodeError(e)) {
-            console.log('[API] LIST_VIDEOS: Hyperdrive decode error; retrying as multi-writer channel')
-            const channel = await loadChannel(ctx, driveKey).catch(() => null)
-            if (channel) {
-              await markAsMultiWriterChannel(driveKey)
-              const mwVideos = await channel.listVideos().catch(() => [])
-              console.log('[API] LIST_VIDEOS: multi-writer retry returned', mwVideos?.length || 0, 'videos')
-              const result = (mwVideos || []).map(v => ({ ...v, channelKey: driveKey }))
-              listVideosCache.set(driveKey, { ts: Date.now(), value: result })
-              // YouTube-Fast: background index for search
-              backgroundIndexVideos(result, driveKey)
-              return cloneArrayOfObjects(result)
-            }
-          }
-          // Return empty if all methods fail
-          return []
-        }
+        // IMPORTANT: Never block listVideos on network sync.
+        // Mobile has a 30s init timeout, and pairing/DHT discovery can exceed that.
+        // Return current materialized view immediately; the UI already retries.
+        const videos = await channel.listVideos()
+        console.log('[API] LIST_VIDEOS returning', videos?.length, 'videos from channel')
+        const result = (videos || []).map(v => ({ ...v, channelKey: driveKey }))
+        const enriched = await enrichMissingBlobMeta(result, (id) => channel.getVideo(id))
+        listVideosCache.set(driveKey, { ts: Date.now(), value: enriched })
+        // YouTube-Fast: background index for search
+        backgroundIndexVideos(enriched, driveKey)
+        return cloneArrayOfObjects(enriched)
       } catch (err) {
         console.error('[API] LIST_VIDEOS error:', err.message);
         return [];
@@ -477,82 +354,93 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {string} driveKey
      * @param {string} videoPath
      * @param {string} [publicBeeKey] - PublicBee key for fast viewer access
+     * @param {string} [blobId] - Direct blobId (skip metadata fetch if provided)
+     * @param {string} [blobsCoreKey] - Direct blobsCoreKey (skip metadata fetch if provided)
+     * @param {string} [mimeType] - MIME type
      * @returns {Promise<{url: string}>}
      */
-    async getVideoUrl(driveKey, videoPath, publicBeeKey) {
-      console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath, 'publicBeeKey:', publicBeeKey?.slice(0, 16));
+    async getVideoUrl(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
+      console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath);
 
-      // Use PublicBee fast path if available (for viewers)
-      if (publicBeeKey || await isMultiWriterChannelKey(driveKey)) {
-        console.log('[API] getVideoUrl: is multi-writer channel');
-      const meta = await this.getVideoData(driveKey, videoPath, publicBeeKey)
-        console.log('[API] getVideoUrl meta:', meta?.id, 'blobId:', meta?.blobId, 'blobsCoreKey:', meta?.blobsCoreKey?.slice(0, 16))
-        if (!meta) {
-          console.log('[API] getVideoUrl: no metadata found');
-          throw new Error('Video metadata not found')
-        }
+      // INSTANT PATH: If we already have blobId and blobsCoreKey, skip metadata fetch entirely
+      if (blobId && blobsCoreKey) {
+        console.log('[API] getVideoUrl: INSTANT - using direct blobId/blobsCoreKey');
 
-      if (!meta.blobId) {
-          console.log('[API] getVideoUrl: missing blobId');
-          throw new Error('Video is missing blobId (not synced yet)')
-        }
-
-        // Fast path: if we have blobsCoreKey from PublicBee, use it directly
-        if (meta.blobsCoreKey) {
-          console.log('[API] getVideoUrl: using blobsCoreKey directly from metadata');
-          const blobsKeyHex = meta.blobsCoreKey;
-          
-          // Join swarm for blobs core to ensure we can download from peers
-          if (ctx.swarm) {
-            try {
-              const keyBuf = b4a.from(blobsKeyHex, 'hex')
-              const discoveryKey = crypto.discoveryKey(keyBuf)
-              ctx.swarm.join(discoveryKey)
-              console.log('[API] getVideoUrl: joined swarm for blobs core:', blobsKeyHex.slice(0, 16));
-            } catch (err) {
-              console.log('[API] getVideoUrl: swarm join error:', err?.message);
-            }
-          }
-          
-          console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
-          return getVideoUrlFromBlob(ctx, blobsKeyHex, meta.blobId, { mimeType: meta.mimeType })
-        }
-
-        // Fallback: load channel to get blob entry (slower)
-        console.log('[API] getVideoUrl: loading channel for blob entry (slow path)');
-        const channel = await loadChannel(ctx, driveKey)
-        if (!channel) {
-          console.log('[API] getVideoUrl: failed to load channel');
-          throw new Error('Failed to load channel')
-        }
-
-        const blobEntry = await channel.getBlobEntry(meta)
-        if (!blobEntry?.blobsKey) {
-          console.log('[API] getVideoUrl: failed to get blob entry');
-          throw new Error('Video blob not accessible (not synced yet)')
-        }
-
-        // Join swarm for blobs core to ensure we can download from peers
-        if (ctx.swarm && blobEntry.blobsKey) {
+        // Join swarm in background (don't wait)
+        if (ctx.swarm) {
           try {
-            const discoveryKey = crypto.discoveryKey(blobEntry.blobsKey)
+            const keyBuf = b4a.from(blobsCoreKey, 'hex')
+            const discoveryKey = crypto.discoveryKey(keyBuf)
             ctx.swarm.join(discoveryKey)
           } catch {}
         }
 
-        const blobsKeyHex = b4a.toString(blobEntry.blobsKey, 'hex')
-        console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
-        return getVideoUrlFromBlob(ctx, blobsKeyHex, blobEntry.blobId, { mimeType: meta.mimeType })
+        // Return URL instantly
+        return getVideoUrlFromBlob(ctx, blobsCoreKey, blobId, {
+          mimeType: mimeType || 'video/mp4',
+          instant: true
+        })
       }
-      // Legacy Hyperdrive channels: accept either a full path (/videos/{id}.ext) or a video id.
-      let resolvedPath = videoPath
-      try {
-        if (typeof resolvedPath === 'string' && resolvedPath && !resolvedPath.startsWith('/')) {
-          const meta = await this.getVideoData(driveKey, resolvedPath)
-          if (meta?.path) resolvedPath = meta.path
+
+      const meta = await this.getVideoData(driveKey, videoPath, publicBeeKey)
+      console.log('[API] getVideoUrl meta:', meta?.id, 'blobId:', meta?.blobId, 'blobsCoreKey:', meta?.blobsCoreKey?.slice(0, 16))
+      if (!meta) {
+        console.log('[API] getVideoUrl: no metadata found');
+        throw new Error('Video metadata not found')
+      }
+
+      if (!meta.blobId) {
+        console.log('[API] getVideoUrl: missing blobId');
+        throw new Error('Video is missing blobId (not synced yet)')
+      }
+
+      // Fast path: if we have blobsCoreKey from PublicBee, use it directly
+      // Use instant mode for zero-wait URL generation - blob server fetches on-demand
+      if (meta.blobsCoreKey) {
+        console.log('[API] getVideoUrl: INSTANT mode - generating URL immediately');
+        const blobsKeyHex = meta.blobsCoreKey;
+
+        // Join swarm in background (don't wait)
+        if (ctx.swarm) {
+          try {
+            const keyBuf = b4a.from(blobsKeyHex, 'hex')
+            const discoveryKey = crypto.discoveryKey(keyBuf)
+            ctx.swarm.join(discoveryKey)
+          } catch {}
         }
-      } catch {}
-      return getVideoUrl(ctx, driveKey, resolvedPath);
+
+        // Return URL instantly - blob server handles fetching
+        return getVideoUrlFromBlob(ctx, blobsKeyHex, meta.blobId, {
+          mimeType: meta.mimeType,
+          instant: true  // Zero-wait mode
+        })
+      }
+
+      // Fallback: load channel to get blob entry (slower)
+      console.log('[API] getVideoUrl: loading channel for blob entry (slow path)');
+      const channel = await loadChannel(ctx, driveKey)
+      if (!channel) {
+        console.log('[API] getVideoUrl: failed to load channel');
+        throw new Error('Failed to load channel')
+      }
+
+      const blobEntry = await channel.getBlobEntry(meta)
+      if (!blobEntry?.blobsKey) {
+        console.log('[API] getVideoUrl: failed to get blob entry');
+        throw new Error('Video blob not accessible (not synced yet)')
+      }
+
+      // Join swarm for blobs core to ensure we can download from peers
+      if (ctx.swarm && blobEntry.blobsKey) {
+        try {
+          const discoveryKey = crypto.discoveryKey(blobEntry.blobsKey)
+          ctx.swarm.join(discoveryKey)
+        } catch {}
+      }
+
+      const blobsKeyHex = b4a.toString(blobEntry.blobsKey, 'hex')
+      console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
+      return getVideoUrlFromBlob(ctx, blobsKeyHex, blobEntry.blobId, { mimeType: meta.mimeType })
     },
 
     /**
@@ -665,112 +553,39 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           // Fall through to other methods if not found
         }
 
-        const isMW = await isMultiWriterChannelKey(driveKey)
-        console.log('[API] GET_VIDEO_DATA isMultiWriter:', isMW)
-        if (isMW) {
-          const channel = await loadChannel(ctx, driveKey)
-          console.log('[API] GET_VIDEO_DATA channel loaded')
-          console.log('[API] GET_VIDEO_DATA looking up id:', id)
+      const channel = await loadChannel(ctx, driveKey)
+      console.log('[API] GET_VIDEO_DATA channel loaded')
+      console.log('[API] GET_VIDEO_DATA looking up id:', id)
 
-          const v = await channel.getVideo(id)
-          console.log('[API] GET_VIDEO_DATA result:', v?.id, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
-        if (!v) return null
-        return { ...v, channelKey: driveKey }
-        }
-
-        const drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 5000 });
-
-        // videoId could be a full path like /videos/xxx.mp4 or just the id
-        let metaPath;
-        if (videoId.startsWith('/videos/')) {
-          // Extract ID from path
-          const match = videoId.match(/\/videos\/([^.]+)/);
-          if (match) {
-            metaPath = `/videos/${match[1]}.json`;
-          } else {
-            return null;
-          }
-        } else {
-          metaPath = `/videos/${videoId}.json`;
-        }
-
-        const metaBuf = await drive.get(metaPath);
-        if (metaBuf) {
-          const video = JSON.parse(b4a.toString(metaBuf));
-          video.channelKey = driveKey;
-          return video;
-        }
-        return null;
+      const v = await channel.getVideo(id)
+      console.log('[API] GET_VIDEO_DATA result:', v?.id, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
+      if (!v) return null
+      return { ...v, channelKey: driveKey }
       } catch (err) {
         console.error('[API] GET_VIDEO_DATA error:', err.message);
         return null;
       }
     },
 
-/**
-     * Delete a video from a channel drive
-     * @param {import('hyperdrive')} drive - The writable drive
+    /**
+     * Delete a video from a channel
+     * @param {string} channelKey
      * @param {string} videoId - Video ID to delete
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async deleteVideo(drive, videoId) {
-      console.log('[API] DELETE_VIDEO:', videoId);
+    async deleteVideo(channelKey, videoId) {
+      console.log('[API] DELETE_VIDEO:', channelKey?.slice(0, 16), videoId);
 
-      if (!drive || !drive.writable) {
-        return { success: false, error: 'Drive not writable' };
+      if (!channelKey) {
+        return { success: false, error: 'Channel key required' };
       }
 
       try {
-        // Delete video metadata
-        const metaPath = `/videos/${videoId}.json`;
-        const metaBuf = await drive.get(metaPath);
-
-        if (!metaBuf) {
-          return { success: false, error: 'Video not found' };
+        const channel = await loadChannel(ctx, channelKey)
+        if (!channel) {
+          return { success: false, error: 'Failed to load channel' };
         }
-
-        const meta = JSON.parse(b4a.toString(metaBuf));
-
-        // Delete the video file
-        if (meta.path) {
-          try {
-            await drive.del(meta.path);
-            console.log('[API] Deleted video file:', meta.path);
-          } catch (e) {
-            console.log('[API] Could not delete video file:', e.message);
-          }
-        }
-
-        // Delete thumbnail if exists
-        if (meta.thumbnail) {
-          try {
-            await drive.del(meta.thumbnail);
-            console.log('[API] Deleted thumbnail:', meta.thumbnail);
-          } catch (e) {
-            console.log('[API] Could not delete thumbnail:', e.message);
-          }
-        }
-
-        // Also try common thumbnail paths
-        const thumbnailPaths = [
-          `/thumbnails/${videoId}.jpg`,
-          `/thumbnails/${videoId}.png`,
-          `/thumbnails/${videoId}.webp`,
-          `/thumbnails/${videoId}.jpeg`
-        ];
-
-        for (const thumbPath of thumbnailPaths) {
-          try {
-            await drive.del(thumbPath);
-          } catch (e) {
-            // Ignore - file might not exist
-          }
-        }
-
-        // Delete the metadata file
-        await drive.del(metaPath);
-        console.log('[API] Deleted video metadata:', metaPath);
-
+        await channel.deleteVideo(videoId)
         return { success: true };
       } catch (err) {
         console.error('[API] DELETE_VIDEO error:', err.message);
@@ -855,15 +670,15 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @returns {Promise<{success: boolean}>}
      */
     async subscribeChannel(driveKey) {
-      // Don't let loadDrive hang forever - use a 5s timeout
+      // Don't let loadChannel hang forever - use a 5s timeout
       // If it times out, we still add to subscriptions (data will sync later when peers are found)
       try {
-            await Promise.race([
-          loadDrive(ctx, driveKey),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Drive load timeout')), 5000))
+        await Promise.race([
+          loadChannel(ctx, driveKey),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Channel load timeout')), 5000))
         ]);
       } catch (err) {
-        console.log('[API] subscribeChannel: drive load warning:', err.message, '- continuing anyway');
+        console.log('[API] subscribeChannel: channel load warning:', err.message, '- continuing anyway');
       }
 
       const existing = await ctx.metaDb.get('subscriptions');
@@ -905,16 +720,12 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
 
       const enriched = [];
       for (const sub of subs) {
-        const drive = ctx.drives.get(sub.driveKey);
         let name = 'Unknown';
-        if (drive) {
-          try {
-            const meta = await drive.get('/channel.json');
-            if (meta) {
-              name = JSON.parse(b4a.toString(meta)).name;
-            }
-          } catch (e) {}
-        }
+        try {
+          const channel = await loadChannel(ctx, sub.driveKey)
+          const meta = await channel?.getMetadata().catch(() => null)
+          if (meta?.name) name = meta.name
+        } catch (e) {}
         enriched.push({ ...sub, name });
       }
 
@@ -1042,10 +853,26 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @returns {Promise<Object>}
      */
     async prefetchVideo(driveKey, videoPath, publicBeeKey = null) {
-      const prefetchStart = Date.now();
+      const prefetchKey = `${driveKey}:${videoPath}`
+      const existing = prefetchInFlight.get(prefetchKey)
+      if (existing) return existing
+
+      const prefetchPromise = (async () => {
+        const prefetchStart = Date.now();
+
+      const getHeadBlockCount = (totalBlocks, totalBytes) => {
+        if (!totalBlocks || totalBlocks <= 0) return 0
+        if (!totalBytes || totalBytes <= 0) {
+          return Math.min(totalBlocks, 16)
+        }
+        const bytesPerBlock = totalBytes / totalBlocks
+        const headTargetBytes = 2 * 1024 * 1024
+        const headBlocks = Math.ceil(headTargetBytes / bytesPerBlock)
+        return Math.max(1, Math.min(totalBlocks, headBlocks))
+      }
 
       console.log('[API] ===== STARTING PREFETCH =====');
-      console.log('[API] Drive:', driveKey?.slice(0, 16));
+      console.log('[API] Channel:', driveKey?.slice(0, 16));
       console.log('[API] Path:', videoPath);
       if (publicBeeKey) {
         console.log('[API] Prefetch publicBeeKey:', publicBeeKey?.slice(0, 16));
@@ -1057,36 +884,19 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         return { success: false, error: 'Corestore is closed' };
       }
 
-      // Multi-writer channels: resolve the blob source from metadata
-      let resolvedDriveKey = driveKey
-      let resolvedPath = videoPath
-      let isMultiWriter = publicBeeKey ? true : await isMultiWriterChannelKey(driveKey)
-      let channel = null
+      // Resolve the blob source from metadata
       let blobMeta = null
-      console.log('[API] Prefetch isMultiWriter:', isMultiWriter, 'driveKey:', driveKey?.slice(0, 16))
-      if (isMultiWriter) {
-        if (publicBeeKey) {
-          await markAsMultiWriterChannel(driveKey)
+      const v = await this.getVideoData(driveKey, videoPath, publicBeeKey)
+      console.log('[API] Prefetch video data:', v?.id, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16), 'path:', v?.path)
+      if (v?.blobsCoreKey && v?.blobId) {
+        blobMeta = {
+          blobsCoreKey: v.blobsCoreKey,
+          blobId: v.blobId,
+          byteLength: v?.size || v?.byteLength || 0
         }
-        const v = await this.getVideoData(driveKey, videoPath, publicBeeKey)
-        console.log('[API] Prefetch video data:', v?.id, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16), 'path:', v?.path)
-        if (v?.blobsCoreKey && v?.blobId) {
-          blobMeta = {
-            blobsCoreKey: v.blobsCoreKey,
-            blobId: v.blobId,
-            byteLength: v?.size || v?.byteLength || 0
-          }
-          console.log('[API] Prefetch using blobsCoreKey:', v.blobsCoreKey?.slice(0, 16))
-        } else if (v?.blobsCoreKey && v?.path) {
-          // Legacy fallback if path exists.
-          resolvedDriveKey = v.blobsCoreKey
-          resolvedPath = v.path
-          console.log('[API] Prefetch using blobsCoreKey + path:', resolvedDriveKey?.slice(0, 16))
-        } else {
-          console.log('[API] Prefetch: video missing blobsCoreKey or blobId, v:', JSON.stringify(v)?.slice(0, 200))
-        }
+        console.log('[API] Prefetch using blobsCoreKey:', v.blobsCoreKey?.slice(0, 16))
       } else {
-        console.log('[API] Prefetch: using legacy drive path')
+        console.log('[API] Prefetch: video missing blobsCoreKey or blobId, v:', JSON.stringify(v)?.slice(0, 200))
       }
 
       // Clean up any existing monitor
@@ -1099,8 +909,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       }
 
       try {
-        // Multi-writer (Hyperblobs) path: prefetch directly from blobs core using blobId.
-        if (isMultiWriter && blobMeta?.blobsCoreKey && blobMeta?.blobId) {
+        // Prefetch directly from blobs core using blobId.
+        if (blobMeta?.blobsCoreKey && blobMeta?.blobId) {
           const keyBuf = b4a.from(blobMeta.blobsCoreKey, 'hex')
           const core = ctx.store.get({ key: keyBuf })
           await core.ready()
@@ -1158,6 +968,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           }
 
           const bytesPerBlock = totalBlocks > 0 ? totalBytes / totalBlocks : 0
+          const headBlocks = getHeadBlockCount(totalBlocks, totalBytes)
           let downloadedBlocks = 0
           let downloadedBytesTotal = initialAvailable * bytesPerBlock
           let downloadSpeed = 0
@@ -1254,27 +1065,54 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           }
 
           if (!wasCached) {
-            const downloadRange = core.download({ start: startBlock, end: endBlock })
-            downloadRange.done().then(() => {
-              console.log('[API] Download complete (blobs)')
-              downloadSpeed = 0
-              if (videoStats) {
-                videoStats.updateStats(driveKey, videoPath, { status: 'complete' })
-                videoStats.emitStats(driveKey, videoPath, true) // force=true for completion
-                setTimeout(() => videoStats.cleanupMonitor(driveKey, videoPath), 30000)
-              }
-            }).catch(err => {
-              if (err.message?.includes('closed') || ctx.store.closed) {
-                console.log('[API] Prefetch cancelled (corestore closed)')
-              } else {
-                console.error('[API] Prefetch error:', err.message)
-              }
-              if (videoStats) {
-                videoStats.updateStats(driveKey, videoPath, { status: 'cancelled' })
-                videoStats.emitStats(driveKey, videoPath, true) // force=true for cancellation
-                videoStats.cleanupMonitor(driveKey, videoPath)
-              }
-            })
+            let fullDownloadStarted = false
+            const startFullDownload = () => {
+              if (fullDownloadStarted) return
+              fullDownloadStarted = true
+              const downloadRange = core.download({ start: startBlock, end: endBlock })
+              downloadRange.done().then(() => {
+                console.log('[API] Download complete (blobs)')
+                downloadSpeed = 0
+                if (videoStats) {
+                  videoStats.updateStats(driveKey, videoPath, { status: 'complete' })
+                  videoStats.emitStats(driveKey, videoPath, true) // force=true for completion
+                  setTimeout(() => videoStats.cleanupMonitor(driveKey, videoPath), 30000)
+                }
+              }).catch(err => {
+                if (err.message?.includes('closed') || ctx.store.closed) {
+                  console.log('[API] Prefetch cancelled (corestore closed)')
+                } else {
+                  console.error('[API] Prefetch error:', err.message)
+                }
+                if (videoStats) {
+                  videoStats.updateStats(driveKey, videoPath, { status: 'cancelled' })
+                  videoStats.emitStats(driveKey, videoPath, true) // force=true for cancellation
+                  videoStats.cleanupMonitor(driveKey, videoPath)
+                }
+              })
+            }
+
+            if (headBlocks > 0 && headBlocks < totalBlocks) {
+              const headEnd = startBlock + headBlocks
+              console.log('[API] Prefetch head range (blobs):', headBlocks, 'blocks')
+              const headRange = core.download({ start: startBlock, end: headEnd })
+              let headTimeout = null
+              headTimeout = setTimeout(() => {
+                console.log('[API] Head prefetch slow, starting full download in parallel')
+                startFullDownload()
+              }, 1500)
+              headRange.done().then(() => {
+                console.log('[API] Head prefetch complete (blobs)')
+                if (headTimeout) clearTimeout(headTimeout)
+                startFullDownload()
+              }).catch(err => {
+                console.log('[API] Head prefetch error (blobs):', err?.message)
+                if (headTimeout) clearTimeout(headTimeout)
+                startFullDownload()
+              })
+            } else {
+              startFullDownload()
+            }
           } else if (videoStats) {
             // Keep stats fresh for cached videos so upload speeds can update.
             videoStats.emitStats(driveKey, videoPath, true) // force=true for cached videos
@@ -1291,156 +1129,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           }
         }
 
-        // Legacy Hyperdrive path
-        let drive;
-        drive = await loadDrive(ctx, resolvedDriveKey, { waitForSync: true, syncTimeout: 10000 });
-        const peerCount = ctx.swarm?.connections?.size || 0;
-        console.log('[API] Active swarm connections:', peerCount);
-
-        if (videoStats) {
-          videoStats.updateStats(driveKey, videoPath, { peerCount, status: 'resolving' });
-        }
-
-        // Get the blob entry
-        const entry = await drive.entry(resolvedPath);
-        if (!entry || !entry.value?.blob) {
-          throw new Error('Video not found in drive');
-        }
-
-        const blob = entry.value.blob;
-        console.log('[API] Blob info:', JSON.stringify(blob));
-
-        const blobsCore = await drive.getBlobs();
-        if (!blobsCore) {
-          throw new Error('Could not get blobs core');
-        }
-
-        const core = blobsCore.core;
-        const startBlock = blob.blockOffset;
-        const endBlock = blob.blockOffset + blob.blockLength;
-        const totalBlocks = blob.blockLength;
-        const totalBytes = blob.byteLength;
-
-        // Count initial blocks already available (avoid async has() pitfalls)
-        let initialAvailable = 0;
-        const fullyCached = await core.has(startBlock, endBlock);
-        if (fullyCached) {
-          initialAvailable = totalBlocks;
-        } else if (totalBlocks <= 512) {
-          for (let i = startBlock; i < endBlock; i++) {
-            if (await core.has(i)) initialAvailable++;
-          }
-        }
-        console.log(`[API] Initial: ${initialAvailable}/${totalBlocks} blocks (${Math.round(initialAvailable/totalBlocks*100)}%)`);
-
-        if (videoStats) {
-          videoStats.updateStats(driveKey, videoPath, {
-            status: initialAvailable === totalBlocks ? 'complete' : 'downloading',
-            totalBlocks,
-            totalBytes,
-            initialBlocks: initialAvailable,
-            downloadedBlocks: 0
-          });
-          videoStats.emitStats(driveKey, videoPath, true); // force=true for initial stats
-        }
-
-        // If already complete, skip download
-        if (initialAvailable === totalBlocks) {
-          console.log('[API] Already fully cached');
-          if (seedingManager) {
-            await seedingManager.addSeed(resolvedDriveKey, resolvedPath, 'watched', blob);
-          }
-          return {
-            success: true,
-            totalBlocks,
-            totalBytes,
-            peerCount,
-            cached: true,
-            message: 'Video already fully cached'
-          };
-        }
-
-        // Create monitor for progress tracking
-        const monitor = drive.monitor(resolvedPath);
-        await monitor.ready();
-
-        let lastLoggedProgress = Math.round((initialAvailable / totalBlocks) * 100);
-        let markedAsCached = false;
-
-        const onUpdate = async () => {
-          try {
-            const stats = monitor.downloadStats;
-            const downloadedBlocks = stats.blocks;
-            const totalDownloaded = initialAvailable + downloadedBlocks;
-            const progress = Math.round((totalDownloaded / totalBlocks) * 100);
-            const isComplete = totalDownloaded >= totalBlocks;
-
-            if (videoStats) {
-              videoStats.updateStats(driveKey, videoPath, {
-                downloadedBlocks,
-                peerCount: stats.peers || ctx.swarm?.connections?.size || 0,
-                status: isComplete ? 'complete' : 'downloading'
-              });
-              // Use force=true on completion, otherwise let throttle work
-              videoStats.emitStats(driveKey, videoPath, isComplete);
-            }
-
-            if (progress >= lastLoggedProgress + 10 || progress === 100) {
-              const speed = monitor.downloadSpeed();
-              console.log(`[API] Progress: ${progress}% (${totalDownloaded}/${totalBlocks} blocks, ${(speed / (1024 * 1024)).toFixed(2)} MB/s)`);
-              lastLoggedProgress = progress;
-            }
-
-            if (isComplete && !markedAsCached) {
-              markedAsCached = true;
-              console.log('[API] 100% complete');
-              if (seedingManager) {
-                await seedingManager.addSeed(resolvedDriveKey, resolvedPath, 'watched', blob);
-              }
-            }
-          } catch (e) {
-            // Ignore errors during progress check
-          }
-        };
-
-        monitor.on('update', onUpdate);
-
-        if (videoStats) {
-          videoStats.registerMonitor(driveKey, videoPath, monitor, () => monitor.off('update', onUpdate));
-        }
-
-        // Start downloading all blocks
-        const downloadRange = core.download({ start: startBlock, end: endBlock });
-
-        // Handle completion (async, don't await)
-        downloadRange.done().then(async () => {
-          console.log('[API] Download complete');
-          if (videoStats) {
-            videoStats.updateStats(driveKey, videoPath, { status: 'complete' });
-            // Clean up after delay
-            setTimeout(() => videoStats.cleanupMonitor(driveKey, videoPath), 30000);
-          }
-        }).catch(err => {
-          // Don't log as error if corestore was closed (expected during app shutdown)
-          if (err.message?.includes('closed') || ctx.store.closed) {
-            console.log('[API] Prefetch cancelled (corestore closed)');
-          } else {
-            console.error('[API] Prefetch error:', err.message);
-          }
-          if (videoStats) {
-            videoStats.updateStats(driveKey, videoPath, { status: 'cancelled' });
-            videoStats.cleanupMonitor(driveKey, videoPath);
-          }
-        });
-
-        return {
-          success: true,
-          totalBlocks,
-          totalBytes,
-          peerCount,
-          initialBlocks: initialAvailable,
-          message: 'Prefetch started'
-        };
+        return { success: false, error: 'Video missing blob metadata' }
       } catch (err) {
         console.error('[API] Prefetch error:', err.message);
         if (videoStats) {
@@ -1448,6 +1137,14 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           videoStats.cleanupMonitor(driveKey, videoPath);
         }
         return { success: false, error: err.message };
+      }
+      })()
+
+      prefetchInFlight.set(prefetchKey, prefetchPromise)
+      try {
+        return await prefetchPromise
+      } finally {
+        prefetchInFlight.delete(prefetchKey)
       }
     },
 
@@ -1788,7 +1485,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       console.log('[API] PIN_CHANNEL:', driveKey?.slice(0, 16));
       if (seedingManager && driveKey) {
         await seedingManager.pinChannel(driveKey);
-        await loadDrive(ctx, driveKey);
+        await loadChannel(ctx, driveKey);
         return { success: true };
       }
       return { success: false, error: 'Invalid request' };
@@ -1901,7 +1598,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         swarmPublicKey: ctx.swarm?.keyPair?.publicKey
           ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
           : 'unknown',
-        drivesLoaded: ctx.drives.size,
+        channelsLoaded: ctx.channels?.size || 0,
       };
     }
 

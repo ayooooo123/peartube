@@ -40,7 +40,7 @@ export class HypercoreIOReader {
     this.byteLength = blobInfo.byteLength
 
     // NOTE: blobInfo.byteOffset is the ABSOLUTE byte position in the hypercore,
-    // not the offset within the first block. For Hyperdrive videos, the blob
+    // not the offset within the first block. For blob-backed videos, the blob
     // typically starts at offset 0 of its first block.
     // We calculate the actual offset within the first block if needed.
     // For now, assume offset 0 since that's where the MKV header is found.

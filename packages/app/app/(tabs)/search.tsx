@@ -130,14 +130,22 @@ export default function SearchTab() {
     if (!rpc) return
 
     try {
-      const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
-        ? video.path
-        : video.id
+      const videoRef = video.id
+
+      // Start prefetch early to warm peers before URL resolution
+      void rpc.prefetchVideo({
+        channelKey,
+        videoId: videoRef,
+        publicBeeKey: video.publicBeeKey || undefined,
+      }).catch(() => {})
 
       const result = await rpc.getVideoUrl({
         channelKey,
         videoId: videoRef,
-        publicBeeKey: video.publicBeeKey || undefined
+        publicBeeKey: video.publicBeeKey || undefined,
+        blobId: video.blobId || undefined,
+        blobsCoreKey: video.blobsCoreKey || undefined,
+        mimeType: video.mimeType || undefined,
       })
 
       if (result?.url) {
@@ -146,7 +154,7 @@ export default function SearchTab() {
           title: video.title,
           channelKey,
           description: video.description || '',
-          path: video.path || `/videos/${video.id}`,
+          path: video.path || video.id,
           size: video.size || 0,
           uploadedAt: video.uploadedAt || Date.now(),
           thumbnail: video.thumbnail ?? undefined,

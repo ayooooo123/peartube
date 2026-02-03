@@ -9,7 +9,6 @@
 
 import HRPC from '@peartube/spec'
 import { createBackendContext } from '@peartube/backend/orchestrator'
-import { loadDrive } from '@peartube/backend/storage'
 import { generateAndStoreThumbnail } from '@peartube/backend/thumbnail'
 import path from 'bare-path'
 import fs from 'bare-fs'
@@ -861,34 +860,7 @@ function getThumbnailMime(thumbPath) {
   return 'image/jpeg'
 }
 
-// Migrate existing thumbnails to blob-backed entries (so URLs persist across restarts)
-async function migrateThumbnails(drive) {
-  try {
-    for await (const name of drive.readdir('/thumbnails').catch(() => [])) {
-      const thumbPath = `/thumbnails/${name}`
-      const entry = await drive.entry(thumbPath).catch(() => null)
-      if (entry && entry.value?.blob) continue
 
-      const buf = await drive.get(thumbPath, { wait: true, timeout: 3000 }).catch(() => null)
-      if (!buf) continue
-
-      console.log('[Backend] Migrating inline thumbnail to blob:', thumbPath)
-      await new Promise((resolve, reject) => {
-        const ws = drive.createWriteStream(thumbPath)
-        ws.on('error', reject)
-        ws.on('close', resolve)
-        ws.end(buf)
-      })
-    }
-  } catch (e) {
-    console.log('[Backend] Thumbnail migration skipped:', e?.message)
-  }
-}
-
-const activeDriveForMigration = identityManager.getActiveDrive?.()
-if (activeDriveForMigration) {
-  migrateThumbnails(activeDriveForMigration)
-}
 
 // Restore cached public feed so restart doesn't start from empty
 async function restoreFeedCache() {

@@ -138,7 +138,7 @@ export interface RPCResponse<T = unknown> {
  * A single entry in the public feed - represents a discovered channel
  */
 export interface PublicFeedEntry {
-  driveKey: string;       // Hyperdrive key (channel ID)
+  driveKey: string;       // Channel key
   addedAt: number;        // Unix timestamp when discovered
   source: 'peer' | 'local'; // How we learned about it
 }

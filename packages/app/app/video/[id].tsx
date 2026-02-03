@@ -390,10 +390,19 @@ export default function VideoPlayerScreen() {
         ? videoData.path
         : videoData.id
 
-      // Get video URL from backend
+      // Start prefetch early to warm up peers and head blocks before playback
+      if (Platform.OS !== 'web' || isPear) {
+        startPrefetch(videoRef)
+      }
+
+      // Get video URL from backend - use instant path if we have blob info
+      const videoAny = videoData as any
       const result = await rpc.getVideoUrl({
         channelKey: videoData.channelKey,
-        videoId: videoRef
+        videoId: videoRef,
+        blobId: videoAny.blobId || undefined,
+        blobsCoreKey: videoAny.blobsCoreKey || undefined,
+        mimeType: videoAny.mimeType || undefined,
       })
 
       if (result?.url) {
@@ -402,8 +411,6 @@ export default function VideoPlayerScreen() {
 
         // Start prefetch and poll for stats
         if (Platform.OS !== 'web' || isPear) {
-          // Start prefetch first, then poll after a short delay to ensure stats are initialized
-          startPrefetch()
           // Poll for stats - delay slightly to let prefetchVideo initialize stats
           setTimeout(() => startStatsPolling(), 500)
         }
@@ -424,12 +431,13 @@ export default function VideoPlayerScreen() {
     }
   }
 
-  const startPrefetch = async () => {
+  const startPrefetch = async (videoRefOverride?: string) => {
     if (!videoData || !rpc) return
     try {
-      const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
-        ? videoData.path
-        : videoData.id
+      const videoRef = videoRefOverride ||
+        ((videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
+          ? videoData.path
+          : videoData.id)
       await rpc.prefetchVideo({
         channelKey: videoData.channelKey,
         videoId: videoRef,

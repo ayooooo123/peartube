@@ -200,10 +200,20 @@ export default function SearchScreen() {
         : video.id
       console.log('[Search] Using videoRef:', videoRef)
 
+      // Start prefetch early to warm peers before URL resolution
+      void rpc.prefetchVideo({
+        channelKey,
+        videoId: videoRef,
+        publicBeeKey: video.publicBeeKey || undefined,
+      }).catch(() => {})
+
       const result = await rpc.getVideoUrl({
         channelKey,
         videoId: videoRef,
-        publicBeeKey: video.publicBeeKey || undefined
+        publicBeeKey: video.publicBeeKey || undefined,
+        blobId: video.blobId || undefined,
+        blobsCoreKey: video.blobsCoreKey || undefined,
+        mimeType: video.mimeType || undefined,
       })
       console.log('[Search] getVideoUrl result:', result)
 

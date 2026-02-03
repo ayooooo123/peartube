@@ -1563,7 +1563,7 @@ export class MultiWriterChannel extends ReadyResource {
     }
 
     // CRITICAL: Wire up Autobase replication on peer connections
-    // Unlike Hyperdrive, Autobase requires explicit base.replicate(conn) calls
+    // Autobase requires explicit base.replicate(conn) calls
     // Without this, data never syncs between peers!
     // IMPORTANT: Use idempotency check - calling replicate() twice on the same Autobase+connection can corrupt state
     this._connectionHandler = (conn) => {
@@ -1627,6 +1627,18 @@ export class MultiWriterChannel extends ReadyResource {
           const inv = await this.view.get(prefixedKey('invites', currentInv.value.idHex)).catch(() => null)
           if (!inv?.value) {
             console.log('[Channel] Invite not found')
+            return
+          }
+
+          // SECURITY: Check if invite has expired
+          if (inv.value.expires > 0 && Date.now() > inv.value.expires) {
+            console.log('[Channel] Invite expired at', new Date(inv.value.expires).toISOString())
+            // Auto-delete expired invite
+            await this.appendOp({
+              type: 'delete-invite',
+              schemaVersion: CURRENT_SCHEMA_VERSION,
+              idHex: inv.value.idHex
+            })
             return
           }
 

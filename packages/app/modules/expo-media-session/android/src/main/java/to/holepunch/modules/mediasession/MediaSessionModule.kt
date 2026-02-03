@@ -532,18 +532,21 @@ class MediaSessionModule : Module() {
         override fun onPlay() {
             android.util.Log.d("MediaSession", "onPlay callback")
             updatePipPlayState(true)
+            notifyVlcPlaybackPaused(false)
             sendEvent("onRemoteCommand", mapOf("command" to "play"))
         }
 
         override fun onPause() {
             android.util.Log.d("MediaSession", "onPause callback")
             updatePipPlayState(false)
+            notifyVlcPlaybackPaused(true)
             sendEvent("onRemoteCommand", mapOf("command" to "pause"))
         }
 
         override fun onStop() {
             android.util.Log.d("MediaSession", "onStop callback")
             updatePipPlayState(false)
+            notifyVlcPlaybackPaused(true)
             sendEvent("onRemoteCommand", mapOf("command" to "stop"))
         }
 
@@ -886,12 +889,14 @@ class MediaSessionModule : Module() {
     internal fun handlePipPlay() {
         android.util.Log.d("MediaSession", "handlePipPlay")
         updatePipPlayState(true)
+        notifyVlcPlaybackPaused(false)
         sendEvent("onRemoteCommand", mapOf("command" to "play"))
     }
 
     internal fun handlePipPause() {
         android.util.Log.d("MediaSession", "handlePipPause")
         updatePipPlayState(false)
+        notifyVlcPlaybackPaused(true)
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }
 
@@ -914,6 +919,22 @@ class MediaSessionModule : Module() {
             mediaSession?.release()
             mediaSession = null
             isSessionActive = false
+        }
+    }
+
+    private fun notifyVlcPlaybackPaused(paused: Boolean) {
+        try {
+            val bridgeClass = Class.forName("com.yuanzhou.vlc.vlcplayer.VlcPlayerBridge")
+            val method = bridgeClass.getMethod(
+                "setPlaybackPaused",
+                Boolean::class.javaPrimitiveType
+            )
+            method.invoke(null, paused)
+            android.util.Log.d("MediaSession", "notifyVlcPlaybackPaused: paused=$paused")
+        } catch (e: ClassNotFoundException) {
+            android.util.Log.d("MediaSession", "notifyVlcPlaybackPaused: VlcPlayerBridge not available")
+        } catch (e: Exception) {
+            android.util.Log.e("MediaSession", "notifyVlcPlaybackPaused: failed", e)
         }
     }
 

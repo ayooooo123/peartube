@@ -482,11 +482,21 @@ function WatchPageView({
         const videoRef = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
           ? currentVideo.path
           : currentVideo.id
-        // Get video URL from backend
+        const videoAny = currentVideo as any
+        // Start prefetch early to warm peers before URL resolution
+        void rpc.prefetchVideo({
+          channelKey,
+          videoId: videoRef,
+          publicBeeKey: videoAny.publicBeeKey || undefined,
+        }).catch(() => {})
+        // Get video URL from backend - use instant path if we have blob info
         const result = await rpc.getVideoUrl({
           channelKey: channelKey,
           videoId: videoRef,
-          publicBeeKey: (currentVideo as any).publicBeeKey || undefined,
+          publicBeeKey: videoAny.publicBeeKey || undefined,
+          blobId: videoAny.blobId || undefined,
+          blobsCoreKey: videoAny.blobsCoreKey || undefined,
+          mimeType: videoAny.mimeType || undefined,
         })
 
         if (cancelled) return
@@ -533,10 +543,14 @@ function WatchPageView({
           const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
             ? video.path
             : video.id
+          const videoAny = video as any
           const result = await rpc.getVideoUrl({
             channelKey,
             videoId: videoRef,
-            publicBeeKey: (video as any).publicBeeKey || undefined,
+            publicBeeKey: videoAny.publicBeeKey || undefined,
+            blobId: videoAny.blobId || undefined,
+            blobsCoreKey: videoAny.blobsCoreKey || undefined,
+            mimeType: videoAny.mimeType || undefined,
           })
           urlToCast = result?.url || null
         }

@@ -3,7 +3,7 @@
  *
  * This provides a simple Hyperbee-based storage for public channel data.
  * Unlike Autobase, it auto-replicates via store.replicate() without any
- * special setup - just like Hyperdrive used to work.
+ * special setup.
  *
  * Use cases:
  * - Public feed discovery (viewers load this, not the Autobase)

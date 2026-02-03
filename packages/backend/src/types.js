@@ -20,14 +20,13 @@
  * @property {number} blobServerPort - Blob server port
  * @property {string} [blobServerHost] - Blob server host
  * @property {string} [blobServerBindHost] - Blob server bind host
- * @property {Map<string, import('hyperdrive')>} drives - Loaded drives cache
  * @property {Map<string, any>} [channels] - Loaded multi-writer channels cache (keyed by channelKey hex)
  * @property {any} [wakeup] - Protomux wakeup instance for content announcements
  */
 
 /**
  * @typedef {Object} VideoStatsData
- * @property {string} driveKey - Channel/drive key
+ * @property {string} driveKey - Channel key
  * @property {string} videoPath - Path to video in drive
  * @property {'idle'|'connecting'|'resolving'|'downloading'|'complete'|'error'|'unknown'} status
  * @property {number} totalBlocks - Total blocks in video
@@ -67,7 +66,7 @@
 
 /**
  * @typedef {Object} SeedInfo
- * @property {string} driveKey - Drive key
+ * @property {string} driveKey - Channel key
  * @property {string} videoPath - Video path
  * @property {'watched'|'pinned'|'subscribed'} reason - Why this is being seeded
  * @property {number} addedAt - When added
@@ -77,7 +76,7 @@
 
 /**
  * @typedef {Object} PublicFeedEntry
- * @property {string} driveKey - Channel drive key
+ * @property {string} driveKey - Channel key
  * @property {number} addedAt - When discovered
  * @property {'peer'|'local'} source - How discovered
  */
@@ -88,13 +87,14 @@
  * @property {string} [description] - Channel description
  * @property {string} [thumbnail] - Thumbnail path
  * @property {number} [videoCount] - Number of videos
- * @property {string} [driveKey] - Drive key
+ * @property {string} [driveKey] - Channel key
  */
 
 /**
  * @typedef {Object} Identity
  * @property {string} publicKey - Identity public key
- * @property {string} [driveKey] - Associated drive key
+ * @property {string} [driveKey] - Associated channel key
+ * @property {string} [channelKey] - Associated channel key
  * @property {string} [name] - Display name
  * @property {number} createdAt - Creation timestamp
  * @property {string} [secretKey] - Secret key (if writable)
@@ -106,7 +106,7 @@
  * @property {string} id - Video ID
  * @property {string} title - Video title
  * @property {string} description - Video description
- * @property {string} path - Path in drive
+ * @property {string} path - Legacy path reference (if present)
  * @property {number} size - File size in bytes
  * @property {string} [mimeType] - MIME type
  * @property {number} uploadedAt - Upload timestamp

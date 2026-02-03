@@ -71,7 +71,7 @@ export default function HomeScreen() {
   const [feedLoading, setFeedLoading] = useState(false)
   const [peerCount, setPeerCount] = useState(0)
   const [lastFeedRefresh, setLastFeedRefresh] = useState<number | null>(null)
-  const [swarmStatus, setSwarmStatus] = useState<{ peers: number; feedConnections?: number; drives?: number } | null>(null)
+  const [swarmStatus, setSwarmStatus] = useState<{ peers: number; feedConnections?: number; channels?: number } | null>(null)
 
   // Channel viewing state
   const [viewingChannel, setViewingChannel] = useState<string | null>(null)
@@ -198,7 +198,7 @@ export default function HomeScreen() {
           setSwarmStatus({
             peers: (status as any).peerCount || (status as any).swarmConnections || 0,
             feedConnections: (status as any).feedConnections,
-            drives: (status as any).drivesLoaded,
+            channels: (status as any).channelsLoaded,
           })
         }
       } catch {}
@@ -416,11 +416,24 @@ export default function HomeScreen() {
         ? video.path
         : video.id
 
-      // Pass publicBeeKey for fast viewer access to video metadata
+      // Start prefetch early to warm peers before URL resolution
+      void rpc.prefetchVideo({
+        channelKey: video.channelKey,
+        videoId: videoRef,
+        publicBeeKey: (video as any).publicBeeKey || undefined,
+      }).catch(() => {})
+
+      // INSTANT PATH: Pass blobId and blobsCoreKey directly if available
+      // This skips metadata fetch entirely for instant playback
+      const videoAny = video as any
       const result = await rpc.getVideoUrl({
         channelKey: video.channelKey,
         videoId: videoRef,
-        publicBeeKey: (video as any).publicBeeKey || undefined
+        publicBeeKey: videoAny.publicBeeKey || undefined,
+        // Direct blob info for instant playback (no metadata fetch)
+        blobId: videoAny.blobId || undefined,
+        blobsCoreKey: videoAny.blobsCoreKey || undefined,
+        mimeType: videoAny.mimeType || undefined,
       })
 
       if (result?.url) {
@@ -446,11 +459,22 @@ export default function HomeScreen() {
         ? video.path
         : video.id
 
-      // Get video URL from backend
+      // Start prefetch early to warm peers before URL resolution
+      void rpc.prefetchVideo({
+        channelKey: video.channelKey,
+        videoId: videoRef,
+        publicBeeKey: (video as any).publicBeeKey || undefined,
+      }).catch(() => {})
+
+      // Get video URL from backend - use instant path if we have blob info
+      const videoAny = video as any
       const result = await rpc.getVideoUrl({
         channelKey: video.channelKey,
         videoId: videoRef,
-        publicBeeKey: (video as any).publicBeeKey || undefined
+        publicBeeKey: videoAny.publicBeeKey || undefined,
+        blobId: videoAny.blobId || undefined,
+        blobsCoreKey: videoAny.blobsCoreKey || undefined,
+        mimeType: videoAny.mimeType || undefined,
       })
 
       if (result?.url) {
@@ -698,9 +722,9 @@ export default function HomeScreen() {
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
                 <Text style={{ color: colors.text, fontSize: 12 }}>Channels: {feedEntries.length}</Text>
-                {swarmStatus?.drives !== undefined && (
-                  <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Drives: {swarmStatus.drives}</Text>
-                )}
+          {swarmStatus?.channels !== undefined && (
+          <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Channels: {swarmStatus.channels}</Text>
+        )}
               </View>
               {lastFeedRefresh && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>

@@ -2,13 +2,12 @@
  * Identity Management Module
  *
  * Handles identity creation, recovery, and management for PearTube.
- * Identities are linked to Hyperdrives for content publishing.
+ * Identities are linked to multi-writer channels for content publishing.
  */
 
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
-import Hyperdrive from 'hyperdrive';
-import { createChannel, loadChannel, loadDrive } from './storage.js'
+import { createChannel, loadChannel } from './storage.js'
 import { logger } from './logger.js'
 
 // BIP39 mnemonic library from Holepunch - standard 2048 word list with proper derivation
@@ -91,24 +90,28 @@ export function createIdentityManager({ ctx }) {
         activeIdentity = storedActive.value;
       }
 
-      // Normalize identities - drop malformed, mark active
+      // Normalize identities - drop malformed, mark active, STRIP SECRET KEYS
       identities = (identities || [])
         .filter(i => i && typeof i.publicKey === 'string' && i.publicKey)
-        .map(i => ({
-          ...i,
-          // Backward compat:
-          // - legacy identities used `driveKey` for the channel Hyperdrive key
-          // - multi-writer identities use `channelKey` (Autobase key)
-          channelKey: i.channelKey || null,
-          channelEncryptionKey: i.channelEncryptionKey || null,
-          legacyDriveKey: i.legacyDriveKey || (i.driveKey && !i.channelKey ? i.driveKey : null),
-          // Keep `driveKey` as the canonical "channel key" for app compatibility.
-          // Once frontend is fully migrated, this can be removed.
-          driveKey: i.channelKey || i.driveKey || null,
-          isActive: i.publicKey === activeIdentity,
-          createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0
-            ? i.createdAt : Date.now(),
-        }));
+        .map(i => {
+          // SECURITY: Remove any persisted secretKey from legacy records
+          // This is a one-time migration to improve security posture
+          const { secretKey, ...safeIdentity } = i;
+          if (secretKey) {
+            log.info(' Stripped secretKey from identity:', i.publicKey?.slice(0, 16));
+          }
+          const channelKey = i.channelKey || i.driveKey || null
+          return {
+            ...safeIdentity,
+            // Backward compat: keep driveKey as the canonical channel key for app compatibility.
+            channelKey,
+            channelEncryptionKey: i.channelEncryptionKey || null,
+            driveKey: channelKey,
+            isActive: i.publicKey === activeIdentity,
+            createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0
+              ? i.createdAt : Date.now(),
+          };
+        });
 
       // Persist normalized form
       await this.saveIdentities()
@@ -123,7 +126,7 @@ export function createIdentityManager({ ctx }) {
     },
 
     /**
-     * Create a new identity with associated Hyperdrive
+     * Create a new identity with associated channel
      * @param {string} name - Display name for the identity
      * @param {boolean} [generateMnem=true] - Whether to generate mnemonic
      * @returns {Promise<{success: boolean, publicKey: string, driveKey: string, mnemonic?: string}>}
@@ -159,16 +162,18 @@ export function createIdentityManager({ ctx }) {
       await channel.ensureLocalBlobDrive({ deviceName: name })
 
       // Create identity record
+      // SECURITY: Do NOT persist secretKey - it can be re-derived from mnemonic if needed.
+      // The mnemonic is shown once at creation time and should be backed up by the user.
+      // Storing secretKey in plaintext risks key theft if the database is compromised.
       const identity = {
         publicKey,
         // Backward-compat: expose channelKey via driveKey for existing app code.
         driveKey: channelKeyHex,
         channelKey: channelKeyHex,
         channelEncryptionKey: encryptionKeyHex,
-        legacyDriveKey: null,
         name,
         createdAt: Date.now(),
-        secretKey: b4a.toString(keypair.secretKey, 'hex'),
+        // secretKey removed for security - derive from mnemonic when needed
         isActive: false
       };
 
@@ -215,15 +220,16 @@ export function createIdentityManager({ ctx }) {
       const keypair = crypto.keyPair()
       const publicKey = b4a.toString(keypair.publicKey, 'hex')
 
+      // SECURITY: Do NOT persist secretKey - paired identities don't need local signing
+      // since they operate through the channel's multi-writer system.
       const identity = {
         publicKey,
         driveKey: channelKeyHex, // app compat: driveKey used as channel key throughout the UI
         channelKey: channelKeyHex,
         channelEncryptionKey: null,
-        legacyDriveKey: null,
         name,
         createdAt: Date.now(),
-        secretKey: b4a.toString(keypair.secretKey, 'hex'),
+        // secretKey removed for security
         isActive: true,
         paired: true,
       }
@@ -266,15 +272,16 @@ export function createIdentityManager({ ctx }) {
       await channel.updateMetadata({ name: name || `Recovered ${Date.now()}`, description: '', avatar: null })
       await channel.ensureLocalBlobDrive({ deviceName: name || '' })
 
+      // SECURITY: Do NOT persist secretKey - it can be re-derived from mnemonic.
+      // The user has proven they have the mnemonic by successfully recovering.
       const identity = {
         publicKey,
         driveKey: channelKeyHex,
         channelKey: channelKeyHex,
         channelEncryptionKey: encryptionKeyHex,
-        legacyDriveKey: null,
         name: name || `Recovered ${Date.now()}`,
         createdAt: Date.now(),
-        secretKey: b4a.toString(keypair.secretKey, 'hex'),
+        // secretKey removed for security - derive from mnemonic when needed
         recovered: true,
         isActive: false
       };
@@ -354,7 +361,6 @@ export function createIdentityManager({ ctx }) {
      */
     async loadChannelDrives() {
       for (const identity of identities) {
-        // Load multi-writer channel (new)
         if (identity.channelKey) {
           try {
             await loadChannel(ctx, identity.channelKey, { encryptionKeyHex: identity.channelEncryptionKey || null })
@@ -362,123 +368,7 @@ export function createIdentityManager({ ctx }) {
             log.error(' Failed to load channel:', identity.channelKey?.slice(0, 16), err.message)
           }
         }
-
-        // Load legacy drive if present (blob source during migration)
-        if (identity.legacyDriveKey && !ctx.drives.has(identity.legacyDriveKey)) {
-          try {
-            await loadDrive(ctx, identity.legacyDriveKey, { waitForSync: false })
-          } catch (err) {
-            log.error(' Failed to load legacy drive:', identity.legacyDriveKey?.slice(0, 16), err.message)
-          }
-        }
       }
-    },
-
-    /**
-     * Migrate legacy single-writer identity channels to multi-writer channels.
-     * This creates a new Autobase channel and references the legacy Hyperdrive as a blob source.
-     *
-     * @returns {Promise<void>}
-     */
-    async migrateLegacyIdentities() {
-      for (const identity of identities) {
-        if (identity.channelKey) continue
-        if (!identity.legacyDriveKey) continue
-
-        const legacyDriveKey = identity.legacyDriveKey
-        try {
-          const existing = await ctx.metaDb.get(`migration:${legacyDriveKey}`).catch(() => null)
-          if (existing?.value?.channelKey) {
-            identity.channelKey = existing.value.channelKey
-            identity.channelEncryptionKey = existing.value.channelEncryptionKey || null
-            identity.driveKey = identity.channelKey
-            continue
-          }
-
-          log.info(' Migrating legacy channel:', legacyDriveKey.slice(0, 16))
-          const legacyDrive = await loadDrive(ctx, legacyDriveKey, { waitForSync: true, syncTimeout: 15000 })
-
-          // Create new multi-writer channel
-          const { channel, channelKeyHex, encryptionKeyHex } = await createChannel(ctx, { encrypt: false })
-
-          // Migrate channel metadata
-          const legacyMetaBuf = await legacyDrive.get('/channel.json').catch(() => null)
-          if (legacyMetaBuf) {
-            const legacyMeta = JSON.parse(b4a.toString(legacyMetaBuf))
-            await channel.updateMetadata({
-              name: legacyMeta?.name || identity.name || 'Channel',
-              description: legacyMeta?.description || '',
-              avatar: legacyMeta?.avatar || null
-            })
-          } else {
-            await channel.updateMetadata({ name: identity.name || 'Channel', description: '', avatar: null })
-          }
-
-          // Migrate video metadata (reference legacy drive blobs)
-          try {
-            // Collect entries first since readdir returns async iterator
-            const entries = []
-            try {
-              for await (const entry of legacyDrive.readdir('/videos')) {
-                entries.push(entry)
-              }
-            } catch {
-              // /videos dir may not exist
-            }
-            for (const entry of entries) {
-              if (!entry.endsWith('.json')) continue
-              const metaBuf = await legacyDrive.get(`/videos/${entry}`).catch(() => null)
-              if (!metaBuf) continue
-              const v = JSON.parse(b4a.toString(metaBuf))
-              const id = v.id || entry.replace(/\.json$/, '')
-              await channel.addVideo({
-                ...v,
-                id,
-                channelKey: channelKeyHex,
-                blobDriveKey: legacyDriveKey,
-                // Keep legacy path for blob resolution
-                path: v.path || `/videos/${id}.mp4`
-              })
-            }
-          } catch (e) {
-            log.info(' Video migration warning:', e?.message)
-          }
-
-          // Ensure this device has a writable blob drive for future uploads
-          await channel.ensureLocalBlobDrive({ deviceName: identity.name || '' })
-
-          // Persist identity upgrade
-          identity.channelKey = channelKeyHex
-          identity.channelEncryptionKey = encryptionKeyHex
-          identity.driveKey = channelKeyHex // app compat
-
-          await ctx.metaDb.put(`migration:${legacyDriveKey}`, {
-            channelKey: channelKeyHex,
-            channelEncryptionKey: encryptionKeyHex,
-            migratedAt: Date.now()
-          })
-
-          log.info(' Migration complete:', legacyDriveKey.slice(0, 16), '->', channelKeyHex.slice(0, 16))
-        } catch (err) {
-          log.error(' Migration failed for', legacyDriveKey?.slice(0, 16), err?.message)
-        }
-      }
-
-      await this.saveIdentities()
-    },
-
-    /**
-     * Get drive for the active identity
-     * @returns {import('hyperdrive')|null}
-     */
-    getActiveDrive() {
-      const active = this.getActiveIdentity();
-      if (!active) return null;
-      // Legacy-only: return the old single-writer drive if still present
-      const full = identities.find(i => i.publicKey === active.publicKey)
-      const legacyKey = full?.legacyDriveKey
-      if (!legacyKey) return null
-      return ctx.drives.get(legacyKey) || null;
     },
 
     /**

@@ -903,7 +903,7 @@ export default function SettingsScreen() {
             <View className="w-10 h-10 rounded-lg bg-pear-bg-card items-center justify-center">
               <Feather name="external-link" color={colors.textMuted} size={20} />
             </View>
-            <Text className="flex-1 ml-4 text-body text-pear-text">Powered by Hyperswarm & Hyperdrive</Text>
+        <Text className="flex-1 ml-4 text-body text-pear-text">Powered by Hyperswarm & Hyperblobs</Text>
           </View>
         </View>
       </ScrollView>

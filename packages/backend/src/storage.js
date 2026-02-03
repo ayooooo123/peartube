@@ -1,12 +1,11 @@
 /**
- * Storage Module - Shared storage initialization and drive management
+ * Storage Module - Shared storage initialization and channel management
  *
- * Handles Corestore, Hyperbee, Hyperdrive, and BlobServer setup.
+ * Handles Corestore, Hyperbee, Hyperblobs, and BlobServer setup.
  */
 
 import Corestore from 'corestore';
 import Hyperbee from 'hyperbee';
-import Hyperdrive from 'hyperdrive';
 import BlobServer from 'hypercore-blob-server';
 import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
@@ -282,8 +281,6 @@ export async function initializeStorage(config) {
     console.log('[Storage] PEER DISCOVERED:', peerKey, 'total peers:', swarm.peers?.size || 0)
   })
 
-  // Drive cache (declare early so connection handler can access)
-  const drives = new Map();
   const channels = new Map();
 
   // Set up replication for all connections
@@ -303,7 +300,6 @@ export async function initializeStorage(config) {
     // Replicate all Hypercore data in the Corestore:
     // - Autobase cores (channel metadata, videos, comments, etc.)
     // - Hyperblobs cores (video bytes, thumbnails)
-    // - Legacy Hyperdrive cores (for backward compatibility)
     store.replicate(conn);
 
     // CRITICAL: Also replicate all loaded Autobase channels
@@ -417,7 +413,6 @@ export async function initializeStorage(config) {
     blobServerHost,
     blobServerBindHost,
     blobSessionToken, // Session token for URL authentication
-    drives,
     channels,
     // Blind peering for mobile connectivity
     blindPeering,
@@ -508,9 +503,9 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
       try {
         if (ch.discoveryKey) ctx.swarm.join(ch.discoveryKey)
         // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
-        // BEFORE any data queries (like listVideos). Unlike Hyperdrive which auto-replicates,
-        // Autobase requires explicit replication setup. Without awaiting, the race condition
-        // causes listVideos to return empty on mobile because handlers aren't registered yet.
+        // BEFORE any data queries (like listVideos). Autobase requires explicit replication
+        // setup. Without awaiting, the race condition causes listVideos to return empty on
+        // mobile because handlers aren't registered yet.
         await ch.setupPairing(ctx.swarm)
       } catch (err) {
         console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
@@ -644,7 +639,7 @@ export async function createChannel(ctx, options = {}) {
 
   ctx.channels.set(channelKeyHex, ch)
 
-  // Persist a marker so we can reliably distinguish multi-writer channels from legacy Hyperdrives.
+  // Persist a marker so we can reliably distinguish multi-writer channels.
   try {
     await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'autobase', createdAt: Date.now() })
   } catch {}
@@ -757,210 +752,60 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
 }
 
 /**
- * Helper: wait for drive to sync with timeout
- *
- * @param {import('hyperdrive')} drive - Hyperdrive instance
- * @param {number} [timeout=5000] - Timeout in ms
- * @returns {Promise<import('hyperdrive')>}
- */
-export async function waitForDriveSync(drive, timeout = 5000) {
-  const start = Date.now();
-
-  try {
-    await Promise.race([
-      drive.core.update({ wait: true }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Drive sync timeout')), timeout)
-      )
-    ]);
-  } catch (err) {
-    console.log('[Storage] Drive sync wait:', err.message);
-  }
-
-  console.log('[Storage] Drive sync took', Date.now() - start, 'ms, length:', drive.core.length);
-  return drive;
-}
-
-/**
- * Load or get an existing drive by key.
- *
- * @param {import('./types.js').StorageContext} ctx - Storage context
- * @param {string} keyHex - Drive key as hex string
+ * Get video URL from Hyperblobs - INSTANT version (no sync wait)
+ * Generates URL immediately, lets blob server fetch data on-demand.
+ * @param {Object} ctx - Storage context
+ * @param {string} blobsCoreKeyHex - Hex key of the blobs Hypercore
+ * @param {Object} blobId - Blob ID with {blockOffset, blockLength, byteOffset, byteLength}
  * @param {Object} [options]
- * @param {boolean} [options.waitForSync=false] - Wait for sync with peers
- * @param {number} [options.syncTimeout=5000] - Sync timeout in ms
- * @returns {Promise<import('hyperdrive')>}
+ * @param {string} [options.mimeType] - MIME type (default: video/mp4)
+ * @returns {{url: string}} - Returns synchronously!
  */
-export async function loadDrive(ctx, keyHex, options = {}) {
-  const { waitForSync = false, syncTimeout = 5000 } = options;
+export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
+  console.log('[Storage] GET_VIDEO_URL_INSTANT:', blobsCoreKeyHex?.slice(0, 16));
 
-  // Validate key format (must be 64 hex characters = 32 bytes)
-  if (!/^[a-f0-9]{64}$/i.test(keyHex)) {
-    throw new Error('Invalid channel key: must be 64 hex characters');
+  if (!blobsCoreKeyHex || blobsCoreKeyHex.length !== 64) {
+    throw new Error('Invalid blobsCoreKeyHex')
   }
 
-  // Check if corestore is still open
-  if (ctx.store.closed) {
-    console.error('[Storage] ERROR: Corestore is closed! Cannot load drive:', keyHex.slice(0, 16));
-    throw new Error('Corestore is closed');
+  if (!ctx.blobServer) {
+    throw new Error('BlobServer not initialized')
   }
 
-  // Return cached drive if exists
-  if (ctx.drives.has(keyHex)) {
-    const existingDrive = ctx.drives.get(keyHex);
-    if (waitForSync) {
-      await waitForDriveSync(existingDrive, syncTimeout);
+  const keyBuffer = b4a.from(blobsCoreKeyHex, 'hex')
+  const mimeType = options.mimeType || 'video/mp4'
+
+  // Parse blobId string to object if needed
+  let blob = blobId
+  if (typeof blobId === 'string') {
+    const parts = blobId.split(':').map(Number)
+    blob = {
+      blockOffset: parts[0],
+      blockLength: parts[1],
+      byteOffset: parts[2],
+      byteLength: parts[3]
     }
-    return existingDrive;
   }
 
-  // Create new drive from key
-  const keyBuf = b4a.from(keyHex, 'hex');
-  const drive = new Hyperdrive(ctx.store, keyBuf);
-  await drive.ready();
-
-  ctx.drives.set(keyHex, drive);
-
-  // Join swarm for this drive
-  const discovery = ctx.swarm.join(drive.discoveryKey);
-  // IMPORTANT: On some runtimes (notably mobile/Bare), `flushed()` can take a long time or never resolve
-  // (e.g. after app resume/restart while the network stack is still warming up). Never block callers on it.
-  try {
-    await Promise.race([
-      discovery.flushed(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('swarm join flush timeout')), 3000))
-    ])
-  } catch (err) {
-    console.log('[Storage] Swarm join flush warning:', err?.message)
-  }
-
-  console.log('[Storage] Loaded drive:', keyHex.slice(0, 8));
-
-  // Wait for initial sync if requested
-  if (waitForSync) {
-    await waitForDriveSync(drive, syncTimeout);
-  }
-
-  return drive;
-}
-
-/**
- * Create a new writable drive.
- *
- * @param {import('./types.js').StorageContext} ctx - Storage context
- * @returns {Promise<{drive: import('hyperdrive'), keyHex: string}>}
- */
-export async function createDrive(ctx) {
-  const drive = new Hyperdrive(ctx.store);
-  await drive.ready();
-
-  const keyHex = b4a.toString(drive.key, 'hex');
-  ctx.drives.set(keyHex, drive);
-
-  // Join swarm
-  const discovery = ctx.swarm.join(drive.discoveryKey);
-  try {
-    await Promise.race([
-      discovery.flushed(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('swarm join flush timeout')), 3000))
-    ])
-  } catch (err) {
-    console.log('[Storage] Swarm join flush warning:', err?.message)
-  }
-
-  console.log('[Storage] Created drive:', keyHex.slice(0, 8));
-  return { drive, keyHex };
-}
-
-/**
- * Get video blob URL from blob server.
- *
- * @param {import('./types.js').StorageContext} ctx - Storage context
- * @param {string} driveKey - Drive key
- * @param {string} videoPath - Path to video in drive
- * @param {Object} [options]
- * @param {import('hyperdrive')} [options.drive] - Pre-loaded drive (for multi-writer blob drives)
- * @returns {Promise<{url: string}>}
- */
-export async function getVideoUrl(ctx, driveKey, videoPath, options = {}) {
-  console.log('[Storage] GET_VIDEO_URL:', driveKey?.slice(0, 16), videoPath);
-
-  // Use pre-loaded drive if provided (for multi-writer blob drives)
-  // Otherwise load the drive and sync
-  let drive;
-  if (options.drive) {
-    console.log('[Storage] GET_VIDEO_URL: using pre-loaded drive');
-    drive = options.drive;
-  } else {
-    drive = await loadDrive(ctx, driveKey, { waitForSync: true, syncTimeout: 15000 });
-  }
-
-  // Best-effort: pull latest blocks for remote drives with a bounded wait.
-  // This helps public-feed playback where the blob drive is remote and has just been joined.
-  try {
-    await Promise.race([
-      drive.core.update({ wait: true }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('drive update timeout')), 15000))
-    ])
-  } catch {}
-
-  // Resolve the filename to get blob info directly.
-  // This avoids HTTP 307 redirect which can break VLC seeking.
-  //
-  // NOTE: For public-feed playback, the blob drive is often remote and metadata may not be
-  // available immediately. Use a bounded wait here so "play" works once peers are connected.
-  let entry = null
-  try {
-    entry = await drive.entry(videoPath, { wait: true, timeout: 15000 })
-  } catch (err) {
-    // Fall back to non-waiting lookup (helps on older hyperdrive builds that may not support opts)
-    try { entry = await drive.entry(videoPath) } catch {}
-  }
-  if (!entry || !entry.value?.blob) {
-    throw new Error('Video not found in drive (not synced yet)');
-  }
-
-  const blob = entry.value.blob;
-  console.log('[Storage] Resolved blob:', JSON.stringify(blob));
-
-  // Get the content key for the blobs core
-  const blobsCore = await drive.getBlobs();
-  if (!blobsCore) {
-    throw new Error('Could not get blobs core');
-  }
-  const blobsKey = blobsCore.core.key;
-
-  // Try to get MIME type from video metadata (detected during upload)
-  let mimeType = 'video/mp4'; // Default fallback
-  try {
-    // Extract videoId from path like /videos/{id}.ext
-    const match = videoPath.match(/\/videos\/([^.]+)\./);
-    if (match) {
-      const metaPath = `/videos/${match[1]}.json`;
-      const metaBuf = await drive.get(metaPath);
-      if (metaBuf) {
-        const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
-        if (meta.mimeType) {
-          mimeType = meta.mimeType;
-          console.log('[Storage] Got MIME type from metadata:', mimeType);
-        }
-      }
-    }
-  } catch (err) {
-    console.log('[Storage] Could not read video metadata, using default MIME type');
-  }
-
-  // Generate direct blob URL (no redirect needed)
-  // NOTE: hypercore-blob-server.getLink() already includes a token parameter for access control
-  // Do NOT append additional tokens - it causes malformed URLs with duplicate token params
-  const url = ctx.blobServer.getLink(blobsKey, {
-    blob: blob,
+  // Generate URL immediately - blob server fetches data on-demand
+  const url = ctx.blobServer.getLink(keyBuffer, {
+    blob,
     type: mimeType,
     host: ctx.blobServerHost || '127.0.0.1',
     port: ctx.blobServer?.port || ctx.blobServerPort
   });
 
-  console.log('[Storage] Direct blob URL:', url.replace(/token=[^&]+/, 'token=***'));
+  // Kick off background sync (don't await)
+  const blobsCore = ctx.store.get(keyBuffer)
+  blobsCore.ready().then(() => {
+    if (ctx.swarm && blobsCore.discoveryKey) {
+      try { ctx.swarm.join(blobsCore.discoveryKey) } catch {}
+    }
+    // Trigger update in background to find peers
+    blobsCore.update().catch(() => {})
+  }).catch(() => {})
+
+  console.log('[Storage] Instant URL generated:', url.replace(/token=[^&]+/, 'token=***'));
   return { url };
 }
 
@@ -971,9 +816,15 @@ export async function getVideoUrl(ctx, driveKey, videoPath, options = {}) {
  * @param {Object} blobId - Blob ID with {blockOffset, blockLength, byteOffset, byteLength}
  * @param {Object} [options]
  * @param {string} [options.mimeType] - MIME type (default: video/mp4)
+ * @param {boolean} [options.instant] - If true, return URL immediately without waiting
  * @returns {Promise<{url: string}>}
  */
 export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options = {}) {
+  // Fast path: instant URL generation
+  if (options.instant) {
+    return getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options)
+  }
+
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB:', blobsCoreKeyHex?.slice(0, 16), 'blobId:', JSON.stringify(blobId), 'keyLength:', blobsCoreKeyHex?.length);
 
   if (!blobsCoreKeyHex) {
@@ -989,11 +840,11 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: converting hex to buffer...');
   const keyBuffer = b4a.from(blobsCoreKeyHex, 'hex')
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: keyBuffer length:', keyBuffer.length, 'bytes');
-  
+
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: calling store.get...');
   const blobsCore = ctx.store.get(keyBuffer)
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: store.get returned, calling ready...');
-  
+
   await blobsCore.ready()
   console.log('[Storage] GET_VIDEO_URL_FROM_BLOB: ready() complete');
 
@@ -1012,11 +863,11 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
     }
   }
 
-  // Wait briefly for peers if needed
+  // Wait briefly for peers if needed (reduced from 15s to 5s for faster startup)
   try {
     await Promise.race([
       blobsCore.update({ wait: true }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('blobs core update timeout')), 15000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('blobs core update timeout')), 5000))
     ])
   } catch {}
 

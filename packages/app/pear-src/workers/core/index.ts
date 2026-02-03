@@ -405,10 +405,10 @@ async function ensureCastProxyServer(): Promise<number> {
       if (req.headers?.range) {
         headers.range = req.headers.range;
       }
+      const host = target.host || target.hostname
       const proxyReq = http1.request({
         method,
-        hostname: target.hostname,
-        port: target.port || 80,
+        host,
         path: targetPath,
         headers,
       }, (proxyRes: any) => {
@@ -651,8 +651,6 @@ function cleanupTranscodeSessions() {
 // Import the orchestrator from backend
 // @ts-ignore - backend-core is JavaScript
 import { createBackendContext } from '@peartube/backend/orchestrator';
-// @ts-ignore - backend-core is JavaScript
-import { loadDrive } from '@peartube/backend/storage';
 // @ts-ignore - Generated HRPC code
 import HRPC from '@peartube/spec';
 
@@ -1042,9 +1040,14 @@ async function pickVideoFile(): Promise<any> {
     const proc = spawn('osascript', ['-e', script]);
     let stdout = '';
     let stderr = '';
+    const toText = (chunk: unknown) => {
+      if (typeof chunk === 'string') return chunk
+      if (chunk instanceof Uint8Array) return Buffer.from(chunk).toString()
+      return ''
+    }
 
-    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    proc.stdout?.on('data', (chunk: unknown) => { stdout += toText(chunk); });
+    proc.stderr?.on('data', (chunk: unknown) => { stderr += toText(chunk); });
 
     proc.on('exit', (code: number) => {
       if (code === 0 && stdout.trim()) {
@@ -1068,7 +1071,9 @@ async function pickVideoFile(): Promise<any> {
       }
     });
 
-    proc.on('error', (err: Error) => reject(err));
+    proc.on('error', (err: unknown) => {
+      reject(err instanceof Error ? err : new Error(String(err)))
+    });
   });
 }
 
@@ -1083,9 +1088,14 @@ async function pickImageFile(): Promise<any> {
     const proc = spawn('osascript', ['-e', script]);
     let stdout = '';
     let stderr = '';
+    const toText = (chunk: unknown) => {
+      if (typeof chunk === 'string') return chunk
+      if (chunk instanceof Uint8Array) return Buffer.from(chunk).toString()
+      return ''
+    }
 
-    proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+    proc.stdout?.on('data', (chunk: unknown) => { stdout += toText(chunk); });
+    proc.stderr?.on('data', (chunk: unknown) => { stderr += toText(chunk); });
 
     proc.on('exit', (code: number) => {
       if (code === 0 && stdout.trim()) {
@@ -1116,7 +1126,9 @@ async function pickImageFile(): Promise<any> {
       }
     });
 
-    proc.on('error', (err: Error) => reject(err));
+    proc.on('error', (err: unknown) => {
+      reject(err instanceof Error ? err : new Error(String(err)))
+    });
   });
 }
 
@@ -2643,6 +2655,9 @@ rpc.onCastPlay(async (req: any) => {
             }
           }
 
+          if (!result.hlsUrl) {
+            throw new Error('Transcode did not return HLS URL');
+          }
           let hlsUrl = result.hlsUrl;
           const localIp = await getLocalIPv4ForTarget(deviceHost);
           if (localIp) {
@@ -2910,22 +2925,28 @@ rpc.onTranscodeStart(async (req: any) => {
       return { success: false, error: result?.error || 'Failed to start transcode' };
     }
 
+    const sessionId = result.sessionId
+    if (!sessionId) {
+      return { success: false, error: 'Missing transcode session id' };
+    }
+    const transcodeUrl = result.transcodeUrl || ''
+
     const session: TranscodeSession = {
-      id: result.sessionId,
+      id: sessionId,
       inputUrl: sourceUrl,
       cacheKey,
       status: 'transcoding',
       progress: 0,
       mode: req.mode || 'transcode',
-      transcodeUrl: result.transcodeUrl,
+      transcodeUrl,
     };
-    transcodeSessions.set(result.sessionId, session);
+    transcodeSessions.set(sessionId, session);
 
-    console.log('[Worker] Transcode started:', result.sessionId, 'url:', result.transcodeUrl);
+    console.log('[Worker] Transcode started:', sessionId, 'url:', transcodeUrl);
     return {
       success: true,
-      sessionId: result.sessionId,
-      transcodeUrl: result.transcodeUrl,
+      sessionId,
+      transcodeUrl,
     };
   } catch (err: any) {
     console.error('[Worker] Transcode start error:', err?.message || err);

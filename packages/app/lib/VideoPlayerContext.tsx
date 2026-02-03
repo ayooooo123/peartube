@@ -1,3 +1,19 @@
+/**
+ * VideoPlayerContext - Unified Video Player State Management
+ *
+ * PERFORMANCE NOTE: This context has been split into 3 separate contexts to reduce re-renders:
+ * - VideoProgressContext: High-frequency progress updates (~4Hz)
+ * - VideoControlContext: Medium-frequency control state (play/pause, mode)
+ * - VideoMetaContext: Low-frequency video metadata
+ *
+ * For new components, prefer importing the specific context you need from './video-player':
+ *   import { useVideoProgressContext } from '@/lib/video-player'  // For SeekBar
+ *   import { useVideoControlContext } from '@/lib/video-player'   // For controls
+ *   import { useVideoMetaContext } from '@/lib/video-player'      // For video info
+ *
+ * This file maintains backward compatibility by combining all contexts into one.
+ */
+
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react'
 import { Platform, AppState, AppStateStatus } from 'react-native'
 import type { VideoData, VideoStats } from '@peartube/core'
@@ -6,45 +22,26 @@ import * as MediaSession from '../modules/expo-media-session/src'
 // Re-export types for backwards compatibility
 export type { VideoData, VideoStats } from '@peartube/core'
 
-// Simple event emitter for video stats (allows RPC handler to push stats to context)
-type VideoStatsListener = (driveKey: string, videoPath: string, stats: VideoStats) => void
-const statsListeners = new Set<VideoStatsListener>()
+// Re-export split contexts for gradual migration
+export {
+  useVideoProgressContext,
+  useVideoControlContext,
+  useVideoMetaContext,
+  videoStatsEventEmitter,
+  videoLoadEventEmitter,
+  playbackActiveEmitter,
+} from './video-player'
+export type { PlayerMode } from './video-player'
 
-export const videoStatsEventEmitter = {
-  emit: (driveKey: string, videoPath: string, stats: VideoStats) => {
-    console.log('[VideoStatsEmitter] Emitting stats for', videoPath?.slice(0, 30))
-    statsListeners.forEach(listener => listener(driveKey, videoPath, stats))
-  },
-  subscribe: (listener: VideoStatsListener) => {
-    statsListeners.add(listener)
-    return () => statsListeners.delete(listener)
-  }
-}
+// Import emitters from split contexts for internal use
+import {
+  videoStatsEventEmitter as _videoStatsEventEmitter,
+  videoLoadEventEmitter as _videoLoadEventEmitter,
+  playbackActiveEmitter as _playbackActiveEmitter,
+} from './video-player'
 
-// Event emitter for video load events (triggers prefetch in _layout.tsx)
-type VideoLoadListener = (video: VideoData) => void
-const loadListeners = new Set<VideoLoadListener>()
-
-export const videoLoadEventEmitter = {
-  emit: (video: VideoData) => {
-    console.log('[VideoLoadEmitter] Video loaded:', video.title)
-    loadListeners.forEach(listener => listener(video))
-  },
-  subscribe: (listener: VideoLoadListener) => {
-    loadListeners.add(listener)
-    return () => loadListeners.delete(listener)
-  }
-}
-
-// Playback active state emitter - used by _layout.tsx to decide whether to suspend network
-let isPlaybackActive = false
-export const playbackActiveEmitter = {
-  get isActive() { return isPlaybackActive },
-  set(active: boolean) { isPlaybackActive = active },
-}
-
-// Player mode
-export type PlayerMode = 'hidden' | 'mini' | 'fullscreen'
+// Player mode (re-exported from video-player but defined here for legacy code)
+type PlayerMode = 'hidden' | 'mini' | 'fullscreen'
 
 interface VideoPlayerContextType {
   // Current video
@@ -172,7 +169,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // State is only updated at throttled intervals for UI components
   useEffect(() => {
     isPlayingRef.current = isPlaying
-    playbackActiveEmitter.set(currentVideo !== null && (isPlaying || isInPipMode))
+    _playbackActiveEmitter.set(currentVideo !== null && (isPlaying || isInPipMode))
   }, [isPlaying, currentVideo, isInPipMode])
   useEffect(() => { playbackRateRef.current = playbackRate }, [playbackRate])
   useEffect(() => { playerModeRef.current = playerMode }, [playerMode])
@@ -272,26 +269,21 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       switch (event.command) {
         case 'play':
           console.log('[VideoPlayerContext] Setting isPlaying = true')
-          try { playerRef.current?.resume?.(true) } catch {}
           resumeFromRemote()
           break
         case 'pause':
           console.log('[VideoPlayerContext] Setting isPlaying = false')
-          try { playerRef.current?.resume?.(false) } catch {}
           setIsPlaying(false)
           break
         case 'stop':
           console.log('[VideoPlayerContext] Stopping playback')
-          try { playerRef.current?.resume?.(false) } catch {}
           setIsPlaying(false)
           break
         case 'togglePlayPause':
           console.log('[VideoPlayerContext] Toggling play/pause')
           if (isPlayingRef.current) {
-            try { playerRef.current?.resume?.(false) } catch {}
             setIsPlaying(false)
           } else {
-            try { playerRef.current?.resume?.(true) } catch {}
             resumeFromRemote()
           }
           break
@@ -441,7 +433,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Subscribe to video stats events from backend
   useEffect(() => {
-    const unsubscribe = videoStatsEventEmitter.subscribe((driveKey, videoPath, stats) => {
+    const unsubscribe = _videoStatsEventEmitter.subscribe((driveKey, videoPath, stats) => {
       // Use ref for synchronous access (state may not be updated yet)
       const video = currentVideoRef.current
       console.log('[VideoPlayerContext] Stats event received, checking match:', {
@@ -451,7 +443,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         currentKey: video?.channelKey
       })
       // Only update if this is for the current video.
-      // Some layers identify a video by full drive path (`/videos/<id>.<ext>`) while others may use an id.
+      // Some layers identify a video by id while others may still use legacy path formats.
       // Normalize both before comparison so mobile/desktop stay consistent.
       const extractVideoId = (idOrPath?: string | null) => {
         if (!idOrPath) return null
@@ -512,12 +504,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setIsPlaying(true)
     setPlayerMode('fullscreen')
     setVideoStats(null)
-    setIsLoading(true)
+    // Don't show loading overlay - let video start immediately
+    // Loading state will be set by onBuffering if VLC needs to buffer
+    setIsLoading(false)
     setCurrentTime(0)
     setDuration(0)
     setVideoAspectRatio(null)
     // Emit load event so _layout.tsx can trigger prefetch
-    videoLoadEventEmitter.emit(video)
+    _videoLoadEventEmitter.emit(video)
   }, [])
 
   // Pause video
@@ -748,7 +742,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     return true
   }, [currentVideo, playerMode, isInPipMode])
 
-  const contextValue: VideoPlayerContextType = {
+  // PERFORMANCE: Memoize context value to prevent unnecessary re-renders
+  // Components consuming this context will only re-render when these specific values change
+  const contextValue = useMemo<VideoPlayerContextType>(() => ({
     currentVideo,
     videoUrl,
     isPlaying,
@@ -786,7 +782,20 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     onEnded,
     onError,
     onVideoStateChange,
-  }
+  }), [
+    // Low-frequency dependencies (video changes)
+    currentVideo, videoUrl, videoStats,
+    // Medium-frequency dependencies (control state)
+    isPlaying, isLoading, playerMode, playbackRate, playbackSession,
+    isInPipMode, pipWindowSize, shouldEnablePip, videoAspectRatio, seekPosition,
+    // High-frequency dependencies (progress - NOTE: this still causes re-renders at 4Hz)
+    currentTime, duration, progress,
+    // Callbacks (stable references via useCallback)
+    setIsInPipMode, setPipWindowSize, loadAndPlayVideo, pauseVideo, resumeVideo,
+    closeVideo, minimizePlayer, maximizePlayer, seekTo, seekBy, setPlaybackRate,
+    setVideoStats, setIsLoading, onProgress, onPlaying, onPaused, onBuffering,
+    onEnded, onError, onVideoStateChange,
+  ])
 
   return (
     <VideoPlayerContext.Provider value={contextValue}>

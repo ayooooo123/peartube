@@ -82,8 +82,7 @@ async function checkFFmpeg(): Promise<boolean> {
 }
 
 // Generate thumbnail from video file using FFmpeg
-async function generateThumbnail(filePath: string, videoId: string, drive: any): Promise<string | null> {
-  const thumbnailPath = `/thumbnails/${videoId}.jpg`;
+async function generateThumbnail(filePath: string): Promise<Buffer | null> {
 
   const args = [
     '-ss', '1',
@@ -104,18 +103,12 @@ async function generateThumbnail(filePath: string, videoId: string, drive: any):
       proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
       proc.stderr.on('data', () => {}); // Ignore ffmpeg progress
 
-      proc.on('exit', async (code: number) => {
+      proc.on('exit', (code: number) => {
         if (code === 0 && chunks.length > 0) {
-          try {
-            const thumbBuf = Buffer.concat(chunks);
-            await drive.put(thumbnailPath, thumbBuf);
-            resolve(thumbnailPath);
-          } catch {
-            resolve(null);
-          }
-        } else {
-          resolve(null);
+          resolve(Buffer.concat(chunks));
+          return;
         }
+        resolve(null);
       });
 
       proc.on('error', () => resolve(null));
@@ -308,17 +301,10 @@ rpc.onListVideos(async (req: any) => {
   const enriched = await Promise.all(videos.map(async (v: any) => {
     let thumbnailUrl = '';
     const channelKey = v.channelKey || req.channelKey;
-    if (v.thumbnail && channelKey) {
+    if (channelKey) {
       try {
-        const drive = ctx.drives.get(channelKey);
-        if (drive) {
-          const entry = await drive.entry(v.thumbnail);
-          if (entry) {
-            thumbnailUrl = ctx.blobServer.getLink(b4a.from(channelKey, 'hex'), {
-              filename: v.thumbnail.replace(/^\/+/, '')
-            });
-          }
-        }
+        const thumb = await api.getVideoThumbnail(channelKey, v.id || v.videoId)
+        if (thumb?.exists && thumb?.url) thumbnailUrl = thumb.url
       } catch {}
     }
     return {
@@ -346,11 +332,11 @@ rpc.onGetVideoUrl(async (req: any) => {
 rpc.onGetVideoData(async (req: any) => ({ video: { id: req.videoId, title: 'Unknown' } }));
 
 rpc.onUploadVideo(async (req: any) => {
-  const drive = identityManager.getActiveDrive();
-  if (!drive) throw new Error('No active identity');
+  const channel = await identityManager.getActiveChannel();
+  if (!channel) throw new Error('No active identity');
 
   const result = await uploadManager.uploadFromPath(
-    drive,
+    channel,
     req.filePath,
     { title: req.title, description: req.description, mimeType: 'video/mp4' },
     fs,
@@ -365,15 +351,9 @@ rpc.onUploadVideo(async (req: any) => {
   if (result.success && result.videoId) {
     const hasFFmpeg = await checkFFmpeg();
     if (hasFFmpeg) {
-      const thumbPath = await generateThumbnail(req.filePath, result.videoId, drive);
-      if (thumbPath) {
-        const metaPath = `/videos/${result.videoId}.json`;
-        const metaBuf = await drive.get(metaPath);
-        if (metaBuf) {
-          const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
-          meta.thumbnail = thumbPath;
-          await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-        }
+      const thumbBuf = await generateThumbnail(req.filePath);
+      if (thumbBuf) {
+        await uploadManager.setThumbnailFromBuffer(channel, result.videoId, thumbBuf, 'image/jpeg')
       }
     }
   }
@@ -383,7 +363,7 @@ rpc.onUploadVideo(async (req: any) => {
       id: result.videoId || '',
       title: req.title || '',
       description: req.description || '',
-      channelKey: b4a.toString(drive.key, 'hex'),
+      channelKey: channel.keyHex || b4a.toString(channel.key, 'hex'),
     }
   };
 });
@@ -485,74 +465,33 @@ rpc.onGetPinnedChannels(async () => {
 
 // Thumbnail handlers
 rpc.onGetVideoThumbnail(async (req: any) => {
-  const drive = ctx.drives.get(req.channelKey);
-  if (drive) {
-    const thumbPath = `/thumbnails/${req.videoId}.jpg`;
-    const entry = await drive.entry(thumbPath);
-    if (entry) {
-      const url = ctx.blobServer.getLink(b4a.from(req.channelKey, 'hex'), {
-        filename: thumbPath.replace(/^\/+/, '')
-      });
-      return { url, exists: true };
-    }
-  }
-  return { url: null, exists: false };
+  const result = await api.getVideoThumbnail(req.channelKey, req.videoId)
+  return { url: result.url || null, exists: result.exists };
 });
 
 rpc.onGetVideoMetadata(async (req: any) => {
-  const drive = ctx.drives.get(req.channelKey);
-  if (drive) {
-    const metaPath = `/videos/${req.videoId}.json`;
-    const metaBuf = await drive.get(metaPath);
-    if (metaBuf) {
-      return { video: JSON.parse(b4a.toString(metaBuf, 'utf-8')) };
-    }
-  }
-  return { video: { id: req.videoId, title: 'Unknown' } };
+  const video = await api.getVideoData(req.channelKey, req.videoId)
+  return { video: video || { id: req.videoId, title: 'Unknown' } };
 });
 
 rpc.onSetVideoThumbnail(async (req: any) => {
-  const drive = identityManager.getActiveDrive();
-  if (!drive) return { success: false };
+  const channel = await identityManager.getActiveChannel();
+  if (!channel) return { success: false };
 
   const imageBuffer = Buffer.from(req.imageData, 'base64');
-  const ext = req.mimeType?.includes('png') ? 'png' : 'jpg';
-  const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
-
-  await drive.put(thumbnailPath, imageBuffer);
-
-  // Update metadata
-  const metaPath = `/videos/${req.videoId}.json`;
-  const metaBuf = await drive.get(metaPath);
-  if (metaBuf) {
-    const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
-    meta.thumbnail = thumbnailPath;
-    await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-  }
-
-  return { success: true, thumbnailPath };
+  const mimeType = req.mimeType?.includes('png') ? 'image/png' : 'image/jpeg'
+  const result = await uploadManager.setThumbnailFromBuffer(channel, req.videoId, imageBuffer, mimeType)
+  return { success: result.success };
 });
 
 rpc.onSetVideoThumbnailFromFile(async (req: any) => {
-  const drive = identityManager.getActiveDrive();
-  if (!drive) return { success: false };
+  const channel = await identityManager.getActiveChannel();
+  if (!channel) return { success: false };
 
   const imageBuffer = fs.readFileSync(req.filePath);
-  const ext = req.filePath.toLowerCase().endsWith('.png') ? 'png' : 'jpg';
-  const thumbnailPath = `/thumbnails/${req.videoId}.${ext}`;
-
-  await drive.put(thumbnailPath, imageBuffer);
-
-  const metaPath = `/videos/${req.videoId}.json`;
-  const metaBuf = await drive.get(metaPath);
-  if (metaBuf) {
-    const meta = JSON.parse(b4a.toString(metaBuf, 'utf-8'));
-    meta.thumbnail = thumbnailPath;
-    await drive.put(metaPath, Buffer.from(JSON.stringify(meta)));
-  }
-
-  if (drive.flush) await drive.flush();
-  return { success: true };
+  const mimeType = req.filePath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg'
+  const result = await uploadManager.setThumbnailFromBuffer(channel, req.videoId, imageBuffer, mimeType)
+  return { success: result.success };
 });
 
 // Status handlers

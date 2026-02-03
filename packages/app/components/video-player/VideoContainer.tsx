@@ -143,6 +143,8 @@ export const VideoContainer = memo(
             }
           : StyleSheet.absoluteFill
 
+      const networkCachingMs = 300
+
       return (
         <VLCPlayer
           key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
@@ -151,11 +153,11 @@ export const VideoContainer = memo(
             uri: videoUrl,
             initType: 2,
             initOptions: [
-              // No caching - blob server is localhost, start immediately
-              '--network-caching=0',
-              '--file-caching=0',
-              '--live-caching=0',
-              '--disc-caching=0',
+              // Small buffer for uncached streams to avoid immediate underruns
+              `--network-caching=${networkCachingMs}`,
+              `--file-caching=${networkCachingMs}`,
+              `--live-caching=${networkCachingMs}`,
+              `--disc-caching=${networkCachingMs}`,
               '--avcodec-hw=any',
               '--avcodec-threads=0',
             ],

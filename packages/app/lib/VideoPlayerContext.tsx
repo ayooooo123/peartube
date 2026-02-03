@@ -146,6 +146,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Ref for video URL - used for error debugging
   const videoUrlRef = useRef<string | null>(null)
+  const lastClosedVideoRef = useRef<VideoData | null>(null)
+  const lastClosedUrlRef = useRef<string | null>(null)
+  const lastClosedTimeRef = useRef<number | null>(null)
+  const remotePlayWhileBackgroundedRef = useRef(false)
+  const pendingSeekSecondsRef = useRef<number | null>(null)
 
   // Background playback tracking refs
   const wasPlayingWhenBackgroundedRef = useRef(false)
@@ -156,6 +161,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const playerModeRef = useRef<PlayerMode>(playerMode)  // Sync ref for PiP handler
   const lastPipEventTimeRef = useRef(0)
   const pipStateUpdateRafRef = useRef<number | null>(null)
+  const pipTransitionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const currentTimeRef = useRef(0)
   const durationRef = useRef(0)
   const isPlayingRef = useRef(false)
@@ -187,6 +193,50 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     MediaSession.setActive(active).catch((e) => {
       console.warn('[VideoPlayerContext] Failed to set media session active:', e)
     })
+  }, [])
+
+  const restoreLastClosedVideo = useCallback((reason: string) => {
+    if (!lastClosedVideoRef.current || !lastClosedUrlRef.current) return false
+    console.log('[VideoPlayerContext] Restoring last closed video:', reason)
+    currentVideoRef.current = lastClosedVideoRef.current
+    videoUrlRef.current = lastClosedUrlRef.current
+    setCurrentVideo(lastClosedVideoRef.current)
+    setVideoUrl(lastClosedUrlRef.current)
+    setPlaybackSession((prev) => prev + 1)
+    setPlayerMode('fullscreen')
+    setIsLoading(true)
+    if (lastClosedTimeRef.current !== null) {
+      pendingSeekSecondsRef.current = lastClosedTimeRef.current
+    }
+    setIsPlaying(true)
+    return true
+  }, [])
+
+  const forceReloadPlayback = useCallback((reason: string) => {
+    const video = currentVideoRef.current
+    const url = videoUrlRef.current
+    if (!video || !url) return false
+    console.log('[VideoPlayerContext] Forcing playback reload:', reason)
+    setPlaybackSession((prev) => prev + 1)
+    setCurrentVideo(video)
+    setVideoUrl(url)
+    setPlayerMode('fullscreen')
+    setIsLoading(true)
+    pendingSeekSecondsRef.current = currentTimeRef.current
+    setIsPlaying(true)
+    return true
+  }, [])
+
+  const tryApplyPendingSeek = useCallback(() => {
+    const pending = pendingSeekSecondsRef.current
+    if (pending === null) return
+    const durationValue = durationRef.current
+    if (durationValue <= 0) return
+    const seekValue = pending / durationValue
+    setSeekPosition(seekValue)
+    setCurrentTime(pending)
+    pendingSeekSecondsRef.current = null
+    setTimeout(() => setSeekPosition(undefined), 200)
   }, [])
 
   // Activate media session while a video is loaded (keeps lock screen controls visible)
@@ -224,7 +274,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   useEffect(() => {
     if (Platform.OS === 'web') return
 
-    const handleAppStateChange = async (nextState: AppStateStatus) => {
+      const handleAppStateChange = async (nextState: AppStateStatus) => {
       const goingToBackground = nextState === 'background' || nextState === 'inactive'
       const comingToForeground = nextState === 'active'
 
@@ -235,6 +285,33 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       } else if (comingToForeground && isBackgroundedRef.current) {
         isBackgroundedRef.current = false
         console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current)
+
+        console.log('[VideoPlayerContext] Clearing PiP state on foreground')
+        isInPipModeRef.current = false
+        setIsInPipMode(false)
+        setPipWindowSize(null)
+        if (pipTransitionTimeoutRef.current) {
+          clearTimeout(pipTransitionTimeoutRef.current)
+          pipTransitionTimeoutRef.current = null
+        }
+        if (pipTransitionTimeoutRef.current) {
+          clearTimeout(pipTransitionTimeoutRef.current)
+          pipTransitionTimeoutRef.current = null
+        }
+
+        if (!currentVideoRef.current) {
+          restoreLastClosedVideo('foreground')
+        } else if (playerModeRef.current === 'hidden' && currentVideoRef.current) {
+          console.log('[VideoPlayerContext] Foreground while hidden, restoring fullscreen')
+          setPlayerMode('fullscreen')
+        }
+
+        if (remotePlayWhileBackgroundedRef.current) {
+          remotePlayWhileBackgroundedRef.current = false
+          if (!forceReloadPlayback('foreground-remote-play')) {
+            restoreLastClosedVideo('foreground-remote-play')
+          }
+        }
 
         if (wasPlayingWhenBackgroundedRef.current && durationRef.current > 0) {
           const seekValue = currentTimeRef.current / durationRef.current
@@ -255,6 +332,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     const subscription = MediaSession.addRemoteCommandListener((event) => {
       console.log('[VideoPlayerContext] Remote command received:', event.command)
       const resumeFromRemote = () => {
+        if (!currentVideoRef.current) {
+          if (!restoreLastClosedVideo('remote-play')) {
+            return
+          }
+        } else if (playerModeRef.current === 'hidden' && currentVideoRef.current) {
+          console.log('[VideoPlayerContext] Remote play while hidden, restoring fullscreen')
+          setPlayerMode('fullscreen')
+        }
         if (Platform.OS === 'ios' && durationRef.current > 0) {
           const seekValue = currentTimeRef.current / durationRef.current
           setSeekPosition(seekValue)
@@ -269,6 +354,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       switch (event.command) {
         case 'play':
           console.log('[VideoPlayerContext] Setting isPlaying = true')
+          if (isBackgroundedRef.current) {
+            remotePlayWhileBackgroundedRef.current = true
+            return
+          }
           resumeFromRemote()
           break
         case 'pause':
@@ -394,7 +483,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       }
 
       // Use setTimeout instead of RAF - RAF doesn't fire in PiP/background mode
-      setTimeout(() => {
+      if (pipTransitionTimeoutRef.current) {
+        clearTimeout(pipTransitionTimeoutRef.current)
+      }
+      pipTransitionTimeoutRef.current = setTimeout(() => {
+        if (event.isInPictureInPicture !== isInPipModeRef.current) {
+          return
+        }
 
         if (event.isInPictureInPicture) {
           const wasPlaying = isPlayingRef.current || wasPlayingWhenBackgroundedRef.current
@@ -549,6 +644,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       playerRef.current?.stop?.()
       playerRef.current?.pause?.()
     } catch {}
+    lastClosedVideoRef.current = currentVideoRef.current
+    lastClosedUrlRef.current = videoUrlRef.current
     currentVideoRef.current = null
     videoUrlRef.current = null
     setCurrentVideo(null)
@@ -665,6 +762,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     console.log('[VideoPlayerContext] VLC playing')
     setIsLoading(false)
     setIsPlaying(true)
+    tryApplyPendingSeek()
     if (Platform.OS !== 'web') {
       MediaSession.setPlaybackState({
         isPlaying: true,
@@ -673,7 +771,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         rate: playbackRateRef.current,
       }).catch(() => {})
     }
-  }, [])
+  }, [tryApplyPendingSeek])
 
   const onPaused = useCallback(() => {
     console.log('[VideoPlayerContext] VLC paused')

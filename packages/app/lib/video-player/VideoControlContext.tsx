@@ -344,11 +344,10 @@ export function VideoControlProvider({
             setTimeout(() => setIsPlayingState(true), 150)
           }
         } else if (wasInPip) {
+          setIsPlayingState(false)
+          wasPlayingWhenPipEnteredRef.current = false
           const modeToRestore = playerModeBeforePipRef.current
           setPlayerModeState(modeToRestore)
-          if (wasPlayingWhenPipEnteredRef.current) {
-            setTimeout(() => setIsPlayingState(true), 100)
-          }
         }
       })
     })

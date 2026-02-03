@@ -407,6 +407,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
             }, 150)
           }
         } else if (wasInPip) {
+          console.log('[VideoPlayerContext] PiP closed, pausing playback')
+          setIsPlaying(false)
+          wasPlayingWhenPipEnteredRef.current = false
           // Restore the playerMode that was active before PiP entry
           const modeToRestore = playerModeBeforePipRef.current
           console.log('[VideoPlayerContext] Exiting PiP, restoring playerMode:', modeToRestore)
@@ -414,14 +417,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           // Single-player architecture: same player continues, position is already synced
           setPlayerMode(modeToRestore)
 
-          // Resume playback if was playing when entering PiP
-          const shouldPlay = wasPlayingWhenPipEnteredRef.current
-          if (shouldPlay) {
-            setTimeout(() => {
-              console.log('[VideoPlayerContext] Resuming playback after PiP exit')
-              setIsPlaying(true)
-            }, 100)
-          }
         }
       })
     })

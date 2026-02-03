@@ -54,6 +54,7 @@
       ],
       "./plugins/withAndroidPiP.js",
       "./plugins/withMainActivityPiPCallback.js",
+      "./plugins/withAndroidMediaSessionServices.js",
       "./plugins/withAndroidAbiSplits.js"
     ]
   }

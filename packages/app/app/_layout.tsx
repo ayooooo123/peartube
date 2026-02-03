@@ -6,7 +6,7 @@
 import '../global.css'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Stack } from 'expo-router'
-import { StatusBar, View, Platform, AppState, AppStateStatus } from 'react-native'
+import { StatusBar, View, Platform, AppState, AppStateStatus, PermissionsAndroid } from 'react-native'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData, playbackActiveEmitter } from '@/lib/VideoPlayerContext'
@@ -73,6 +73,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (isNative) {
+      if (Platform.OS === 'android' && Platform.Version >= 33) {
+        PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS).catch(() => {})
+      }
       initNativeBackend()
 
       const subscription = AppState.addEventListener('change', handleAppStateChange)

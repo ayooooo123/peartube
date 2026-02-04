@@ -45,6 +45,7 @@ object PipBridge {
     private var moduleInstance: MediaSessionModule? = null
     private var pipEnabled: Boolean = false
     @Volatile private var lastIsInPip: Boolean = false
+    @Volatile private var surfaceViewInsetPx: Float = 0f
 
     @Volatile private var pipAspectRatioWidth: Int = 16
     @Volatile private var pipAspectRatioHeight: Int = 9
@@ -150,6 +151,11 @@ object PipBridge {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
 
+            val sourceRect = getVideoSourceRect(activity)
+            if (sourceRect != null) {
+                builder.setSourceRectHint(sourceRect)
+            }
+
             val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
             builder.setActions(actions)
 
@@ -183,9 +189,6 @@ object PipBridge {
             applySurfaceViewTransforms(activity, isInPip, newConfig)
         }, 50) // Small delay to let Android settle
 
-        if (lastIsInPip && !isInPip) {
-            notifyPipDismissed()
-        }
         lastIsInPip = isInPip
 
         // Still send event to JS for state management
@@ -195,6 +198,21 @@ object PipBridge {
     fun notifyPipDismissed() {
         android.util.Log.d("PipBridge", "notifyPipDismissed: pausing playback")
         moduleInstance?.handlePipPause()
+    }
+
+    fun setSurfaceViewInset(topInsetPx: Float) {
+        surfaceViewInsetPx = topInsetPx
+        val activity = moduleInstance?.appContext?.currentActivity ?: return
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        handler.post {
+            val surfaceViews = findSurfaceViews(activity.window.decorView)
+            for (sv in surfaceViews) {
+                if (!activity.isInPictureInPictureMode) {
+                    sv.setZOrderMediaOverlay(true)
+                    sv.translationY = surfaceViewInsetPx
+                }
+            }
+        }
     }
 
     /**
@@ -207,6 +225,7 @@ object PipBridge {
 
         for (sv in surfaceViews) {
             if (isInPip && newConfig != null) {
+                sv.setZOrderMediaOverlay(false)
                 val viewWidth = sv.width
                 val viewHeight = sv.height
                 if (viewWidth <= 0 || viewHeight <= 0) continue
@@ -219,31 +238,32 @@ object PipBridge {
 
                 // Check if View already matches PiP dimensions (within 10px tolerance)
                 val viewMatchesPip = kotlin.math.abs(viewWidth - pipWidth) < 10 && kotlin.math.abs(viewHeight - pipHeight) < 10
-                if (viewMatchesPip) {
-                    // View already resized to PiP, no transform needed
-                    android.util.Log.d("PipBridge", "applySurfaceViewTransforms: view=${viewWidth}x${viewHeight} already matches pip=${pipWidth}x${pipHeight}, skipping transform")
-                    continue
-                }
 
                 // Calculate scale - use width scale so video fills PiP width
                 val scaleX = pipWidth.toFloat() / viewWidth
                 val scaleY = pipHeight.toFloat() / viewHeight
                 val viewIsLandscape = viewWidth >= viewHeight
-                val scale = scaleX  // Always use width scale
+                val scale = if (viewMatchesPip) 1f else scaleX  // Always use width scale
 
                 // Apply transform with pivot at top-left
                 sv.pivotX = 0f
                 sv.pivotY = 0f
                 sv.scaleX = scale
                 sv.scaleY = scale
+                // Avoid applying translations during PiP drag to prevent jitter
+                sv.translationX = 0f
+                sv.translationY = 0f
 
                 android.util.Log.d("PipBridge", "applySurfaceViewTransforms: view=${viewWidth}x${viewHeight} pip=${pipWidth}x${pipHeight} scale=$scale viewLandscape=$viewIsLandscape")
             } else {
+                sv.setZOrderMediaOverlay(true)
                 // Reset transforms
                 sv.scaleX = 1f
                 sv.scaleY = 1f
                 sv.pivotX = sv.width / 2f
                 sv.pivotY = sv.height / 2f
+                sv.translationX = 0f
+                sv.translationY = surfaceViewInsetPx
                 android.util.Log.d("PipBridge", "applySurfaceViewTransforms: reset transform")
             }
         }
@@ -263,6 +283,37 @@ object PipBridge {
             }
         }
         return result
+    }
+
+    private fun getSafeInsetTopPx(activity: Activity): Int {
+        val decorView = activity.window?.decorView ?: return 0
+        val insets = androidx.core.view.ViewCompat.getRootWindowInsets(decorView)
+        if (insets != null) {
+            val cutoutTop = insets.displayCutout?.safeInsetTop ?: 0
+            val statusTop = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars()).top
+            return kotlin.math.max(cutoutTop, statusTop)
+        }
+        return 0
+    }
+
+    private fun getVideoSourceRect(activity: Activity): android.graphics.Rect? {
+        val decorView = activity.window?.decorView ?: return null
+        val surfaceViews = findSurfaceViews(decorView)
+        if (surfaceViews.isEmpty()) return null
+
+        var bestRect: android.graphics.Rect? = null
+        var bestArea = 0
+        for (sv in surfaceViews) {
+            val rect = android.graphics.Rect()
+            if (sv.getGlobalVisibleRect(rect) && rect.width() > 0 && rect.height() > 0) {
+                val area = rect.width() * rect.height()
+                if (area > bestArea) {
+                    bestArea = area
+                    bestRect = rect
+                }
+            }
+        }
+        return bestRect
     }
 
     /**
@@ -298,6 +349,7 @@ class MediaSessionModule : Module() {
     private var currentMetadata: MediaMetadataCompat.Builder = MediaMetadataCompat.Builder()
     private var currentPlaybackState: PlaybackStateCompat.Builder = PlaybackStateCompat.Builder()
     private var wasInPipMode = false
+    private var previousSystemUiFlags: Int? = null
     private var lastIsPlaying: Boolean? = null
     private var currentIsPlaying: Boolean = false
     private var isAutoPipEnabled: Boolean = false
@@ -407,7 +459,63 @@ class MediaSessionModule : Module() {
         }
 
         // Kept for backwards compatibility but does nothing now
-        AsyncFunction("setStatusBarOverlayEnabled") { _: Boolean, promise: Promise ->
+        AsyncFunction("setStatusBarOverlayEnabled") { enabled: Boolean, promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                val activity = appContext.currentActivity
+                if (activity == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+                    promise.resolve(null)
+                    return@launch
+                }
+
+                val window = activity.window ?: run {
+                    promise.resolve(null)
+                    return@launch
+                }
+
+                val params = window.attributes
+                params.layoutInDisplayCutoutMode = if (enabled) {
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+                } else {
+                    android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                }
+                window.attributes = params
+
+                val decorView = window.decorView
+                if (enabled) {
+                    if (previousSystemUiFlags == null) {
+                        previousSystemUiFlags = decorView.systemUiVisibility
+                    }
+                    val clearedFlags = decorView.systemUiVisibility and
+                        android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN.inv() and
+                        android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE.inv() and
+                        android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION.inv()
+                    decorView.systemUiVisibility = clearedFlags
+                } else {
+                    previousSystemUiFlags?.let {
+                        decorView.systemUiVisibility = it
+                    }
+                    previousSystemUiFlags = null
+                }
+
+                androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, enabled)
+                promise.resolve(null)
+            }
+        }
+
+        AsyncFunction("setSurfaceViewInset") { topInsetDp: Double, promise: Promise ->
+            val activity = appContext.currentActivity
+            val context = appContext.reactContext
+            if (context == null) {
+                promise.resolve(null)
+                return@AsyncFunction
+            }
+            val density = context.resources.displayMetrics.density
+            val insetPx = if (topInsetDp < 0 && activity != null) {
+                getSafeInsetTopPx(activity).toFloat()
+            } else {
+                (topInsetDp * density).toFloat()
+            }
+            PipBridge.setSurfaceViewInset(insetPx)
             promise.resolve(null)
         }
 
@@ -444,6 +552,17 @@ class MediaSessionModule : Module() {
             stopMediaBrowserService()
             isSessionActive = false
         }
+    }
+
+    private fun getSafeInsetTopPx(activity: Activity): Int {
+        val decorView = activity.window?.decorView ?: return 0
+        val insets = androidx.core.view.ViewCompat.getRootWindowInsets(decorView)
+        if (insets != null) {
+            val cutoutTop = insets.displayCutout?.safeInsetTop ?: 0
+            val statusTop = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars()).top
+            return kotlin.math.max(cutoutTop, statusTop)
+        }
+        return 0
     }
 
     private suspend fun updateNowPlaying(metadata: Map<String, Any?>) {
@@ -791,6 +910,39 @@ class MediaSessionModule : Module() {
         }
     }
 
+    private fun getVideoSourceRect(activity: Activity): android.graphics.Rect? {
+        val decorView = activity.window?.decorView ?: return null
+        val surfaceViews = findSurfaceViews(decorView)
+        if (surfaceViews.isEmpty()) return null
+
+        var bestRect: android.graphics.Rect? = null
+        var bestArea = 0
+        for (sv in surfaceViews) {
+            val rect = android.graphics.Rect()
+            if (sv.getGlobalVisibleRect(rect) && rect.width() > 0 && rect.height() > 0) {
+                val area = rect.width() * rect.height()
+                if (area > bestArea) {
+                    bestArea = area
+                    bestRect = rect
+                }
+            }
+        }
+        return bestRect
+    }
+
+    private fun findSurfaceViews(view: android.view.View): List<android.view.SurfaceView> {
+        val result = mutableListOf<android.view.SurfaceView>()
+        if (view is android.view.SurfaceView) {
+            result.add(view)
+        }
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                result.addAll(findSurfaceViews(view.getChildAt(i)))
+            }
+        }
+        return result
+    }
+
     private fun getPipAspectRatio(): Rational {
         val ratio = Rational(pipAspectRatioWidth, pipAspectRatioHeight)
         val min = 0.418f
@@ -806,6 +958,11 @@ class MediaSessionModule : Module() {
         try {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(getPipAspectRatio())
+
+            val sourceRect = getVideoSourceRect(activity)
+            if (sourceRect != null) {
+                builder.setSourceRectHint(sourceRect)
+            }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setSeamlessResizeEnabled(false)

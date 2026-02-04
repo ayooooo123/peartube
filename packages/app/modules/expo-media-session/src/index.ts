@@ -222,6 +222,17 @@ export async function setStatusBarOverlayEnabled(enabled: boolean): Promise<void
 }
 
 /**
+ * Shift the underlying SurfaceView by a top inset (Android only).
+ * This avoids layout changes while moving the video below the cutout.
+ */
+export async function setSurfaceViewInset(topInsetDp: number): Promise<void> {
+  if (Platform.OS !== 'android' || !(MediaSessionNative as any).setSurfaceViewInset) {
+    return
+  }
+  return (MediaSessionNative as any).setSurfaceViewInset(topInsetDp)
+}
+
+/**
  * Subscribe to remote control commands (play, pause, seek, skip, etc.)
  * from lock screen, notification, headset buttons, etc.
  * 

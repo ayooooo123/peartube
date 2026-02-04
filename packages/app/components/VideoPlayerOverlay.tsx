@@ -182,6 +182,7 @@ export function VideoPlayerOverlay() {
     } else if (wasInPipRef.current) {
       wasInPipRef.current = false
       autoPipEnabledRef.current = false  // Reset overlay pattern on PiP exit
+      showControlsTemporarily()
     }
   }, [isInPipMode])
 
@@ -1254,11 +1255,14 @@ export function VideoPlayerOverlay() {
       Extrapolation.CLAMP
     )
 
+    const cutoutInset = Platform.OS === 'android' && !isInPipModeShared.value && !isLandscapeFullscreenShared.value && animProgress.value >= 0.95
+      ? insetTopShared.value
+      : 0
     // Normal video height - same activity shrinks for PiP (single-player architecture)
     const height = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PIP_HEIGHT, videoHeightShared.value],
+      [MINI_PIP_HEIGHT, videoHeightShared.value + cutoutInset],
       Extrapolation.CLAMP
     )
 
@@ -1300,11 +1304,14 @@ export function VideoPlayerOverlay() {
       Extrapolation.CLAMP
     )
 
+    const cutoutInset = Platform.OS === 'android' && !isInPipModeShared.value && !isLandscapeFullscreenShared.value && animProgress.value >= 0.95
+      ? insetTopShared.value
+      : 0
     // Calculate top position - video height for fullscreen, mini pip height for mini
     const top = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PIP_HEIGHT, videoHeightShared.value],
+      [MINI_PIP_HEIGHT, videoHeightShared.value + cutoutInset],
       Extrapolation.CLAMP
     )
 
@@ -1349,7 +1356,6 @@ export function VideoPlayerOverlay() {
   }, [])
 
   // Video player positioning - always fill container
-  // VLC handles aspect ratio internally (letterboxing)
   const videoPlayerStyle = useAnimatedStyle(() => {
     'worklet'
     return {
@@ -1593,6 +1599,16 @@ export function VideoPlayerOverlay() {
       }
     }
   }, [playerMode, isLandscapeFullscreen, pendingLandscapeExit])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    const shouldInset = playerMode === 'fullscreen' && !isInPipMode && !isLandscapeFullscreen
+    MediaSession.setSurfaceViewInset(shouldInset ? -1 : 0).catch(() => {})
+  }, [playerMode, isInPipMode, isLandscapeFullscreen])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+  }, [])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
@@ -2382,7 +2398,6 @@ export function VideoPlayerOverlay() {
                 {renderVideoPlayer()}
               </Animated.View>
 
-            {/* Video plays edge-to-edge (YouTube-style) - no status bar overlay */}
 
             {showLoadingOverlay && !isInPipMode && (
               <View style={styles.loadingOverlay}>

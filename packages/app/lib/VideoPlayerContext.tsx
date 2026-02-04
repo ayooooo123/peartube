@@ -150,6 +150,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const lastClosedUrlRef = useRef<string | null>(null)
   const lastClosedTimeRef = useRef<number | null>(null)
   const remotePlayWhileBackgroundedRef = useRef(false)
+  const pipExitShouldResumeRef = useRef(false)
   const pendingSeekSecondsRef = useRef<number | null>(null)
 
   // Background playback tracking refs
@@ -321,12 +322,18 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       }
     }
 
-    const subscription = AppState.addEventListener('change', handleAppStateChange)
-    return () => subscription.remove()
-  }, [])
+  const subscription = AppState.addEventListener('change', handleAppStateChange)
+  return () => subscription.remove()
+}, [])
 
-  // MediaSession remote command listener (mobile only)
   useEffect(() => {
+    if (Platform.OS !== 'android') return
+    const shouldAvoidCutout = playerMode === 'fullscreen' && !isInPipMode
+    MediaSession.setStatusBarOverlayEnabled(shouldAvoidCutout).catch(() => {})
+  }, [playerMode, isInPipMode])
+
+// MediaSession remote command listener (mobile only)
+useEffect(() => {
     if (Platform.OS === 'web') return
 
     const subscription = MediaSession.addRemoteCommandListener((event) => {
@@ -362,6 +369,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           break
         case 'pause':
           console.log('[VideoPlayerContext] Setting isPlaying = false')
+          if (pipExitShouldResumeRef.current) {
+            return
+          }
           setIsPlaying(false)
           break
         case 'stop':
@@ -502,8 +512,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
             }, 150)
           }
         } else if (wasInPip) {
-          console.log('[VideoPlayerContext] PiP closed, pausing playback')
-          setIsPlaying(false)
+          const shouldResume = event.isPlaying ?? wasPlayingWhenPipEnteredRef.current
+          console.log('[VideoPlayerContext] PiP closed, restoring playback:', shouldResume)
+          pipExitShouldResumeRef.current = shouldResume
           wasPlayingWhenPipEnteredRef.current = false
           // Restore the playerMode that was active before PiP entry
           const modeToRestore = playerModeBeforePipRef.current
@@ -511,7 +522,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
           // Single-player architecture: same player continues, position is already synced
           setPlayerMode(modeToRestore)
-
+          setIsPlaying(shouldResume)
         }
       })
     })
@@ -722,6 +733,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const lastMediaSessionUpdateRef = useRef(0)
   const onProgress = useCallback((data: { currentTime: number; duration: number }) => {
+    if (Platform.OS === 'android' && pipExitShouldResumeRef.current && !isInPipModeRef.current) {
+      console.log('[VideoPlayerContext] PiP exit resume confirmed via progress')
+      pipExitShouldResumeRef.current = false
+    }
     const timeS = data.currentTime / 1000
     const durationS = data.duration > 0 ? data.duration / 1000 : 0
     
@@ -774,6 +789,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [tryApplyPendingSeek])
 
   const onPaused = useCallback(() => {
+    if (Platform.OS === 'android' && pipExitShouldResumeRef.current && !isInPipModeRef.current) {
+      console.log('[VideoPlayerContext] Ignoring pause after PiP exit')
+      return
+    }
     console.log('[VideoPlayerContext] VLC paused')
     setIsPlaying(false)
     if (Platform.OS !== 'web') {

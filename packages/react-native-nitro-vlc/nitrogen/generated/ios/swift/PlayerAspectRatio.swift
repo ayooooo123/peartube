@@ -17,18 +17,18 @@ public extension PlayerAspectRatio {
    */
   init?(fromString string: String) {
     switch string {
-      case "16:9":
-        self = .169
-      case "1:1":
-        self = .11
-      case "4:3":
-        self = .43
-      case "3:2":
-        self = .32
-      case "21:9":
-        self = .219
-      case "9:16":
-        self = .916
+      case "ratio16x9":
+        self = .ratio16x9
+      case "ratio1x1":
+        self = .ratio1x1
+      case "ratio4x3":
+        self = .ratio4x3
+      case "ratio3x2":
+        self = .ratio3x2
+      case "ratio21x9":
+        self = .ratio21x9
+      case "ratio9x16":
+        self = .ratio9x16
       default:
         return nil
     }
@@ -39,18 +39,18 @@ public extension PlayerAspectRatio {
    */
   var stringValue: String {
     switch self {
-      case .169:
-        return "16:9"
-      case .11:
-        return "1:1"
-      case .43:
-        return "4:3"
-      case .32:
-        return "3:2"
-      case .219:
-        return "21:9"
-      case .916:
-        return "9:16"
+      case .ratio16x9:
+        return "ratio16x9"
+      case .ratio1x1:
+        return "ratio1x1"
+      case .ratio4x3:
+        return "ratio4x3"
+      case .ratio3x2:
+        return "ratio3x2"
+      case .ratio21x9:
+        return "ratio21x9"
+      case .ratio9x16:
+        return "ratio9x16"
     }
   }
 }

@@ -54,7 +54,7 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
       }
     }
 
-  override var repeat: Boolean? = null
+  override var loop: Boolean? = null
 
   override var rate: Double? = null
     set(value) {
@@ -272,12 +272,12 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
 
   private fun aspectRatioString(value: PlayerAspectRatio): String {
     return when (value) {
-      PlayerAspectRatio._16_9 -> "16:9"
-      PlayerAspectRatio._1_1 -> "1:1"
-      PlayerAspectRatio._4_3 -> "4:3"
-      PlayerAspectRatio._3_2 -> "3:2"
-      PlayerAspectRatio._21_9 -> "21:9"
-      PlayerAspectRatio._9_16 -> "9:16"
+      PlayerAspectRatio.RATIO16X9 -> "16:9"
+      PlayerAspectRatio.RATIO1X1 -> "1:1"
+      PlayerAspectRatio.RATIO4X3 -> "4:3"
+      PlayerAspectRatio.RATIO3X2 -> "3:2"
+      PlayerAspectRatio.RATIO21X9 -> "21:9"
+      PlayerAspectRatio.RATIO9X16 -> "9:16"
     }
   }
 

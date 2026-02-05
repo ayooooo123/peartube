@@ -42,24 +42,24 @@ namespace margelo::nitro::nitrovlc {
     static jni::alias_ref<JPlayerAspectRatio> fromCpp(PlayerAspectRatio value) {
       static const auto clazz = javaClassStatic();
       switch (value) {
-        case PlayerAspectRatio::_16_9:
-          static const auto field_16_9 = clazz->getStaticField<JPlayerAspectRatio>("_16_9");
-          return clazz->getStaticFieldValue(field_16_9);
-        case PlayerAspectRatio::_1_1:
-          static const auto field_1_1 = clazz->getStaticField<JPlayerAspectRatio>("_1_1");
-          return clazz->getStaticFieldValue(field_1_1);
-        case PlayerAspectRatio::_4_3:
-          static const auto field_4_3 = clazz->getStaticField<JPlayerAspectRatio>("_4_3");
-          return clazz->getStaticFieldValue(field_4_3);
-        case PlayerAspectRatio::_3_2:
-          static const auto field_3_2 = clazz->getStaticField<JPlayerAspectRatio>("_3_2");
-          return clazz->getStaticFieldValue(field_3_2);
-        case PlayerAspectRatio::_21_9:
-          static const auto field_21_9 = clazz->getStaticField<JPlayerAspectRatio>("_21_9");
-          return clazz->getStaticFieldValue(field_21_9);
-        case PlayerAspectRatio::_9_16:
-          static const auto field_9_16 = clazz->getStaticField<JPlayerAspectRatio>("_9_16");
-          return clazz->getStaticFieldValue(field_9_16);
+        case PlayerAspectRatio::RATIO16X9:
+          static const auto fieldRATIO16X9 = clazz->getStaticField<JPlayerAspectRatio>("RATIO16X9");
+          return clazz->getStaticFieldValue(fieldRATIO16X9);
+        case PlayerAspectRatio::RATIO1X1:
+          static const auto fieldRATIO1X1 = clazz->getStaticField<JPlayerAspectRatio>("RATIO1X1");
+          return clazz->getStaticFieldValue(fieldRATIO1X1);
+        case PlayerAspectRatio::RATIO4X3:
+          static const auto fieldRATIO4X3 = clazz->getStaticField<JPlayerAspectRatio>("RATIO4X3");
+          return clazz->getStaticFieldValue(fieldRATIO4X3);
+        case PlayerAspectRatio::RATIO3X2:
+          static const auto fieldRATIO3X2 = clazz->getStaticField<JPlayerAspectRatio>("RATIO3X2");
+          return clazz->getStaticFieldValue(fieldRATIO3X2);
+        case PlayerAspectRatio::RATIO21X9:
+          static const auto fieldRATIO21X9 = clazz->getStaticField<JPlayerAspectRatio>("RATIO21X9");
+          return clazz->getStaticFieldValue(fieldRATIO21X9);
+        case PlayerAspectRatio::RATIO9X16:
+          static const auto fieldRATIO9X16 = clazz->getStaticField<JPlayerAspectRatio>("RATIO9X16");
+          return clazz->getStaticFieldValue(fieldRATIO9X16);
         default:
           std::string stringValue = std::to_string(static_cast<int>(value));
           throw std::invalid_argument("Invalid enum value (" + stringValue + "!");

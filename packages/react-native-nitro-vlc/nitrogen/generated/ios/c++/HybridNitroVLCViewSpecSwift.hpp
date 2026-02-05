@@ -111,12 +111,12 @@ namespace margelo::nitro::nitrovlc {
     inline void setPaused(std::optional<bool> paused) noexcept override {
       _swiftPart.setPaused(paused);
     }
-    inline std::optional<bool> getRepeat() noexcept override {
-      auto __result = _swiftPart.getRepeat();
+    inline std::optional<bool> getLoop() noexcept override {
+      auto __result = _swiftPart.getLoop();
       return __result;
     }
-    inline void setRepeat(std::optional<bool> repeat) noexcept override {
-      _swiftPart.setRepeat(repeat);
+    inline void setLoop(std::optional<bool> loop) noexcept override {
+      _swiftPart.setLoop(loop);
     }
     inline std::optional<double> getRate() noexcept override {
       auto __result = _swiftPart.getRate();

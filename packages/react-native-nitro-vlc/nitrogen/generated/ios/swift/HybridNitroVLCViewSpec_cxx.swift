@@ -180,11 +180,11 @@ open class HybridNitroVLCViewSpec_cxx {
     }
   }
   
-  public final var repeat: bridge.std__optional_bool_ {
+  public final var loop: bridge.std__optional_bool_ {
     @inline(__always)
     get {
       return { () -> bridge.std__optional_bool_ in
-        if let __unwrappedValue = self.__implementation.repeat {
+        if let __unwrappedValue = self.__implementation.loop {
           return bridge.create_std__optional_bool_(__unwrappedValue)
         } else {
           return .init()
@@ -193,7 +193,7 @@ open class HybridNitroVLCViewSpec_cxx {
     }
     @inline(__always)
     set {
-      self.__implementation.repeat = { () -> Bool? in
+      self.__implementation.loop = { () -> Bool? in
         if bridge.has_value_std__optional_bool_(newValue) {
           let __unwrapped = bridge.get_std__optional_bool_(newValue)
           return __unwrapped

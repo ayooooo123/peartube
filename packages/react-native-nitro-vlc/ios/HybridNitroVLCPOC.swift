@@ -6,7 +6,7 @@ import MobileVLCKit
 
 class HybridNitroVLCPOC: HybridNitroVLCPOCSpec {
   func getVLCVersion() throws -> String {
-    return VLCLibrary.sharedLibrary().version
+    return VLCLibrary.shared().version
   }
 }
 #endif

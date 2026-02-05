@@ -72,8 +72,8 @@ namespace margelo::nitro::nitrovlc {
       virtual void setSubtitleUri(const std::optional<std::string>& subtitleUri) = 0;
       virtual std::optional<bool> getPaused() = 0;
       virtual void setPaused(std::optional<bool> paused) = 0;
-      virtual std::optional<bool> getRepeat() = 0;
-      virtual void setRepeat(std::optional<bool> repeat) = 0;
+      virtual std::optional<bool> getLoop() = 0;
+      virtual void setLoop(std::optional<bool> loop) = 0;
       virtual std::optional<double> getRate() = 0;
       virtual void setRate(std::optional<double> rate) = 0;
       virtual std::optional<double> getSeek() = 0;

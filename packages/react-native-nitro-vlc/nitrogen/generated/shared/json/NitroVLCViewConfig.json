@@ -7,7 +7,7 @@
     "source": true,
     "subtitleUri": true,
     "paused": true,
-    "repeat": true,
+    "loop": true,
     "rate": true,
     "seek": true,
     "volume": true,

@@ -87,10 +87,10 @@ using namespace margelo::nitro::nitrovlc::views;
     swiftPart.setPaused(newViewProps.paused.value);
     newViewProps.paused.isDirty = false;
   }
-  // repeat: optional
-  if (newViewProps.repeat.isDirty) {
-    swiftPart.setRepeat(newViewProps.repeat.value);
-    newViewProps.repeat.isDirty = false;
+  // loop: optional
+  if (newViewProps.loop.isDirty) {
+    swiftPart.setLoop(newViewProps.loop.value);
+    newViewProps.loop.isDirty = false;
   }
   // rate: optional
   if (newViewProps.rate.isDirty) {

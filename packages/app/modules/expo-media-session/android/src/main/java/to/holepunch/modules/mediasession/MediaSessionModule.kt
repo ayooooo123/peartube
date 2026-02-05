@@ -208,7 +208,7 @@ object PipBridge {
             val surfaceViews = findSurfaceViews(activity.window.decorView)
             for (sv in surfaceViews) {
                 if (!activity.isInPictureInPictureMode) {
-                    sv.setZOrderMediaOverlay(true)
+                    sv.setZOrderMediaOverlay(false)
                     sv.translationY = surfaceViewInsetPx
                 }
             }
@@ -256,7 +256,7 @@ object PipBridge {
 
                 android.util.Log.d("PipBridge", "applySurfaceViewTransforms: view=${viewWidth}x${viewHeight} pip=${pipWidth}x${pipHeight} scale=$scale viewLandscape=$viewIsLandscape")
             } else {
-                sv.setZOrderMediaOverlay(true)
+                sv.setZOrderMediaOverlay(false)
                 // Reset transforms
                 sv.scaleX = 1f
                 sv.scaleY = 1f

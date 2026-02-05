@@ -1,0 +1,93 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath "com.android.tools.build:gradle:8.2.0"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22"
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "org.jetbrains.kotlin.android"
+
+def getExtOrDefault(name) {
+    return rootProject.ext.has(name) ? rootProject.ext.get(name) : project.properties["NitroVLC_" + name]
+}
+
+def getExtOrIntegerDefault(name) {
+    return rootProject.ext.has(name) ? rootProject.ext.get(name) : (project.properties["NitroVLC_" + name]).toInteger()
+}
+
+android {
+    namespace "com.margelo.nitro.com.nitrovlc"
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 24
+        targetSdk 34
+        
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs += [
+                "src/main/java",
+                "../nitrogen/generated/android/kotlin"
+            ]
+        }
+        test {
+            java.srcDirs += ["src/test/java"]
+        }
+    }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            returnDefaultValues = true
+        }
+    }
+}
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+dependencies {
+    // React Native
+    implementation "com.facebook.react:react-native:+"
+    
+    // Nitro Modules
+    implementation "com.margelo.nitro:react-native-nitro-modules:+"
+
+    // VLC
+    implementation "org.videolan.android:libvlc-all:3.6.0"
+
+    // Testing
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.robolectric:robolectric:4.11.1"
+    testImplementation "org.mockito:mockito-core:5.8.0"
+    testImplementation "org.mockito.kotlin:mockito-kotlin:5.2.1"
+    testImplementation "androidx.test:core:1.5.0"
+    testImplementation "androidx.test.ext:junit:1.1.5"
+    testImplementation "io.mockk:mockk:1.13.9"
+}

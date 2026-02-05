@@ -191,7 +191,6 @@ export const styles = StyleSheet.create({
   },
   minimizeButton: {
     position: 'absolute',
-    top: 52,
     left: 12,
     zIndex: 10,
   },
@@ -205,7 +204,6 @@ export const styles = StyleSheet.create({
   },
   speedButton: {
     position: 'absolute',
-    top: 52,
     right: 12,
     zIndex: 10,
   },
@@ -225,9 +223,9 @@ export const styles = StyleSheet.create({
   },
   castButton: {
     position: 'absolute',
-    bottom: 44,
     right: 60,
     zIndex: 10,
+    elevation: 10,
   },
   castButtonInner: {
     width: 40,
@@ -239,9 +237,9 @@ export const styles = StyleSheet.create({
   },
   fullscreenButton: {
     position: 'absolute',
-    bottom: 44,
     right: 12,
     zIndex: 10,
+    elevation: 10,
   },
   fullscreenButtonLandscape: {
     bottom: 16,
@@ -264,6 +262,7 @@ export const styles = StyleSheet.create({
     height: 32, // Larger touch target
     justifyContent: 'flex-end',
     zIndex: 15,
+    elevation: 15,
   },
   thinProgressContainerLandscape: {
     position: 'absolute',
@@ -331,6 +330,7 @@ export const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 4,
     zIndex: 10,
+    elevation: 10,
   },
   timeDisplayLandscape: {
     bottom: 16,

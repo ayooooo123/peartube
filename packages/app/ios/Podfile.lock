@@ -52,6 +52,8 @@ PODS:
   - ExpoMediaLibrary (18.2.1):
     - ExpoModulesCore
     - React-Core
+  - ExpoMediaSession (1.0.0):
+    - ExpoModulesCore
   - ExpoModulesCore (3.0.29):
     - hermes-engine
     - RCTRequired
@@ -1412,7 +1414,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - "react-native-bare-kit (0.11.5+cf70ca)":
+  - "react-native-bare-kit (0.11.5+767330)":
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2135,6 +2137,7 @@ DEPENDENCIES:
   - ExpoKeepAwake (from `../node_modules/expo-keep-awake/ios`)
   - ExpoLinking (from `../node_modules/expo-linking/ios`)
   - ExpoMediaLibrary (from `../node_modules/expo-media-library/ios`)
+  - ExpoMediaSession (from `../modules/expo-media-session/ios`)
   - ExpoModulesCore (from `../node_modules/expo-modules-core`)
   - ExpoScreenOrientation (from `../node_modules/expo-screen-orientation/ios`)
   - ExpoSharing (from `../node_modules/expo-sharing/ios`)
@@ -2180,7 +2183,7 @@ DEPENDENCIES:
   - react-native-b4a (from `../node_modules/react-native-b4a`)
   - react-native-bare-kit (from `../node_modules/react-native-bare-kit`)
   - react-native-safe-area-context (from `../node_modules/react-native-safe-area-context`)
-  - react-native-vlc-media-player (from `../node_modules/react-native-vlc-media-player`)
+  - react-native-vlc-media-player (from `../vendor/react-native-vlc-media-player`)
   - React-NativeModulesApple (from `../node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios`)
   - React-oscompat (from `../node_modules/react-native/ReactCommon/oscompat`)
   - React-perflogger (from `../node_modules/react-native/ReactCommon/reactperflogger`)
@@ -2253,6 +2256,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-linking/ios"
   ExpoMediaLibrary:
     :path: "../node_modules/expo-media-library/ios"
+  ExpoMediaSession:
+    :path: "../modules/expo-media-session/ios"
   ExpoModulesCore:
     :path: "../node_modules/expo-modules-core"
   ExpoScreenOrientation:
@@ -2343,7 +2348,7 @@ EXTERNAL SOURCES:
   react-native-safe-area-context:
     :path: "../node_modules/react-native-safe-area-context"
   react-native-vlc-media-player:
-    :path: "../node_modules/react-native-vlc-media-player"
+    :path: "../vendor/react-native-vlc-media-player"
   React-NativeModulesApple:
     :path: "../node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios"
   React-oscompat:
@@ -2436,6 +2441,7 @@ SPEC CHECKSUMS:
   ExpoKeepAwake: 55f75eca6499bb9e4231ebad6f3e9cb8f99c0296
   ExpoLinking: 8f0aaf69aa56f832913030503b6263dc6f647f37
   ExpoMediaLibrary: a3093b04365b245bb23b25b6eba84eb6ab55fecb
+  ExpoMediaSession: 63234bec6ff3f998a0930eb67d80eb5b6c032868
   ExpoModulesCore: f3da4f1ab5a8375d0beafab763739dbee8446583
   ExpoScreenOrientation: c68bd20f210d0616960638c787889e07787e5adb
   ExpoSharing: 0d983394ed4a80334bab5a0d5384f75710feb7e8
@@ -2479,7 +2485,7 @@ SPEC CHECKSUMS:
   React-Mapbuffer: 9050ee10c19f4f7fca8963d0211b2854d624973e
   React-microtasksnativemodule: f775db9e991c6f3b8ccbc02bfcde22770f96e23b
   react-native-b4a: 3f26169d6e2907c6db9b0a805806584a17e91c38
-  react-native-bare-kit: 82058ca3dce6372dd20f664d1e4118049ead34eb
+  react-native-bare-kit: d7606f226ba4fed2f579e3c23e1950e882c50b87
   react-native-safe-area-context: 37e680fc4cace3c0030ee46e8987d24f5d3bdab2
   react-native-vlc-media-player: da3308dda896d4ff7abfacadb8f981752bf9b425
   React-NativeModulesApple: 8969913947d5b576de4ed371a939455a8daf28aa
@@ -2521,6 +2527,6 @@ SPEC CHECKSUMS:
   RNWorklets: 54d8dffb7f645873a58484658ddfd4bd1a9a0bc1
   Yoga: 5934998fbeaef7845dbf698f698518695ab4cd1a
 
-PODFILE CHECKSUM: 40dfe79a77cbf51444e2927db74bff40217dae03
+PODFILE CHECKSUM: 9dd01882c8e34115bfcaafcf41010c983944eacd
 
 COCOAPODS: 1.16.2

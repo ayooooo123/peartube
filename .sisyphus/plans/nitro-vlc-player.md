@@ -70,7 +70,7 @@ Create `react-native-nitro-vlc`, a standalone Nitro Modules package that wraps M
 - [x] PearTube builds with iOS New Architecture enabled
 - [x] PearTube video playback works with `USE_NITRO_VLC=true`
 - [ ] All tests pass (`npm test`)
-- [ ] No TypeScript errors (`npx tsc --noEmit`)
+- [x] No TypeScript errors (`npx tsc --noEmit`)
 
 ### Must Have
 - Basic playback: play, pause, stop, seek (0-1 normalized)
@@ -815,7 +815,7 @@ Wave 4 (After Wave 3):
 
 ---
 
-- [ ] 10. iOS Integration Tests (Phase 1)
+- [x] 10. iOS Integration Tests (Phase 1) ✅
 
   **What to do**:
   - Write comprehensive iOS integration tests
@@ -864,7 +864,7 @@ Wave 4 (After Wave 3):
 
 ---
 
-- [ ] 11. Android Integration Tests (Phase 1)
+- [x] 11. Android Integration Tests (Phase 1) ✅
 
   **What to do**:
   - Write comprehensive Android integration tests

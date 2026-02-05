@@ -12,10 +12,10 @@
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		4958506397AA1E01F0882164 /* libPods-PearTube.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 1E3A982F26F26A64BBD30EEA /* libPods-PearTube.a */; };
 		5FF52A9B3A0951B25A874930 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 0B578897D873CF432CEB650B /* PrivacyInfo.xcprivacy */; };
-		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
-		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
 		A1B2C3D4E5F60001PIPPLYR /* VLCPiPPlayer.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60002PIPPLYR /* VLCPiPPlayer.m */; };
 		A1B2C3D4E5F60003PIPMGR /* VLCPiPPlayerManager.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60004PIPMGR /* VLCPiPPlayerManager.m */; };
+		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
+		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -25,6 +25,10 @@
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = PearTube/Info.plist; sourceTree = "<group>"; };
 		1E3A982F26F26A64BBD30EEA /* libPods-PearTube.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-PearTube.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A4BD87A92B24AAC9EFE2CB0 /* Pods-PearTube.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-PearTube.debug.xcconfig"; path = "Target Support Files/Pods-PearTube/Pods-PearTube.debug.xcconfig"; sourceTree = "<group>"; };
+		A1B2C3D4E5F60002PIPPLYR /* VLCPiPPlayer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VLCPiPPlayer.m; path = PearTube/VLCPiPPlayer.m; sourceTree = "<group>"; };
+		A1B2C3D4E5F60004PIPMGR /* VLCPiPPlayerManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VLCPiPPlayerManager.m; path = PearTube/VLCPiPPlayerManager.m; sourceTree = "<group>"; };
+		A1B2C3D4E5F60005PIPPLYH /* VLCPiPPlayer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = VLCPiPPlayer.h; path = PearTube/VLCPiPPlayer.h; sourceTree = "<group>"; };
+		A1B2C3D4E5F60006PIPMGRH /* VLCPiPPlayerManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = VLCPiPPlayerManager.h; path = PearTube/VLCPiPPlayerManager.h; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = PearTube/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
@@ -32,10 +36,6 @@
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = PearTube/AppDelegate.swift; sourceTree = "<group>"; };
 		F11748442D0722820044C1D9 /* PearTube-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "PearTube-Bridging-Header.h"; path = "PearTube/PearTube-Bridging-Header.h"; sourceTree = "<group>"; };
 		FCE34C52460043627C69822B /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-PearTube/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
-		A1B2C3D4E5F60005PIPPLYH /* VLCPiPPlayer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = VLCPiPPlayer.h; path = PearTube/VLCPiPPlayer.h; sourceTree = "<group>"; };
-		A1B2C3D4E5F60002PIPPLYR /* VLCPiPPlayer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VLCPiPPlayer.m; path = PearTube/VLCPiPPlayer.m; sourceTree = "<group>"; };
-		A1B2C3D4E5F60006PIPMGRH /* VLCPiPPlayerManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = VLCPiPPlayerManager.h; path = PearTube/VLCPiPPlayerManager.h; sourceTree = "<group>"; };
-		A1B2C3D4E5F60004PIPMGR /* VLCPiPPlayerManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VLCPiPPlayerManager.m; path = PearTube/VLCPiPPlayerManager.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -360,24 +360,36 @@
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/ReactNativeDependencies/ReactNativeDependencies.framework/ReactNativeDependencies",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/hermes-engine/Pre-built/hermes.framework/hermes",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/BareKit.framework/BareKit",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-bmp.1.0.0.framework/bare-bmp.1.0.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-buffer.3.4.2.framework/bare-buffer.3.4.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-channel.5.2.2.framework/bare-channel.5.2.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-dns.1.0.5.framework/bare-dns.1.0.5",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-dns.2.1.4.framework/bare-dns.2.1.4",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-ffmpeg.1.0.0.framework/bare-ffmpeg.1.0.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-fs.4.5.2.framework/bare-fs.4.5.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-gif.1.1.3.framework/bare-gif.1.1.3",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-heif.1.0.7.framework/bare-heif.1.0.7",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-ico.1.0.0.framework/bare-ico.1.0.0",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-image-resample.1.0.2.framework/bare-image-resample.1.0.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-jpeg.1.0.4.framework/bare-jpeg.1.0.4",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-module-lexer.1.4.7.framework/bare-module-lexer.1.4.7",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-module.6.1.2.framework/bare-module.6.1.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-module.6.1.3.framework/bare-module.6.1.3",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-os.3.6.2.framework/bare-os.3.6.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-pipe.4.1.2.framework/bare-pipe.4.1.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-png.1.0.5.framework/bare-png.1.0.5",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-structured-clone.1.5.2.framework/bare-structured-clone.1.5.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-subprocess.5.2.2.framework/bare-subprocess.5.2.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tcp.1.9.1.framework/bare-tcp.1.9.1",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tcp.2.2.2.framework/bare-tcp.2.2.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tiff.1.0.2.framework/bare-tiff.1.0.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tls.2.1.5-patched.1.framework/bare-tls.2.1.5-patched.1",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tls.2.1.5.framework/bare-tls.2.1.5",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tls.2.1.7.framework/bare-tls.2.1.7",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-type.1.1.0.framework/bare-type.1.1.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-url.2.3.2.framework/bare-url.2.3.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-webp.1.3.0.framework/bare-webp.1.3.0",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-zlib.1.3.1.framework/bare-zlib.1.3.1",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/fs-native-extensions.1.4.5.framework/fs-native-extensions.1.4.5",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/quickbit-native.2.4.8.framework/quickbit-native.2.4.8",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/rocksdb-native.3.11.4.framework/rocksdb-native.3.11.4",
@@ -401,24 +413,36 @@
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/ReactNativeDependencies.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/hermes.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/BareKit.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-bmp.1.0.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-buffer.3.4.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-channel.5.2.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-dns.1.0.5.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-dns.2.1.4.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-ffmpeg.1.0.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-fs.4.5.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-gif.1.1.3.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-heif.1.0.7.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-ico.1.0.0.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-image-resample.1.0.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-jpeg.1.0.4.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-module-lexer.1.4.7.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-module.6.1.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-module.6.1.3.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-os.3.6.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-pipe.4.1.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-png.1.0.5.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-structured-clone.1.5.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-subprocess.5.2.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tcp.1.9.1.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tcp.2.2.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tiff.1.0.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tls.2.1.5-patched.1.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tls.2.1.5.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tls.2.1.7.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-type.1.1.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-url.2.3.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-webp.1.3.0.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-zlib.1.3.1.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/fs-native-extensions.1.4.5.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/quickbit-native.2.4.8.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/rocksdb-native.3.11.4.framework",

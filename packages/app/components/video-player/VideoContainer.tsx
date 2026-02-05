@@ -12,12 +12,7 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
 import { MpvPlayer, MpvPlayerRef } from '../MpvPlayer'
 import { styles } from './styles'
-
-// VLC player for iOS/Android (conditionally loaded)
-let VLCPlayer: any = null
-if (Platform.OS !== 'web') {
-  VLCPlayer = require('react-native-vlc-media-player').VLCPlayer
-}
+import { VlcVideoView } from './VlcVideoView'
 
 export interface VideoContainerProps {
   // Video state
@@ -122,66 +117,30 @@ export const VideoContainer = memo(
     }
 
     // VLC Player for iOS/Android
-    if (Platform.OS !== 'web' && VLCPlayer) {
-      // Calculate style based on PiP state
-      const vlcStyle =
-        isInPipMode && Platform.OS === 'android' && pipWindowSize
-          ? {
-              width: pipWindowSize.width,
-              height: pipWindowSize.height,
-              position: 'absolute' as const,
-              top: 0,
-              left: 0,
-            }
-          : Platform.OS === 'android' && screenWidth && videoHeight
-          ? {
-              width: screenWidth,
-              height: videoHeight,
-              position: 'absolute' as const,
-              top: 0,
-              left: 0,
-            }
-          : StyleSheet.absoluteFill
-
+    if (Platform.OS !== 'web') {
       const networkCachingMs = 300
 
       return (
-        <VLCPlayer
-          key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-          ref={playerRef}
-          source={{
-            uri: videoUrl,
-            initType: 2,
-            initOptions: [
-              // Small buffer for uncached streams to avoid immediate underruns
-              `--network-caching=${networkCachingMs}`,
-              `--file-caching=${networkCachingMs}`,
-              `--live-caching=${networkCachingMs}`,
-              `--disc-caching=${networkCachingMs}`,
-              '--avcodec-hw=any',
-              '--avcodec-threads=0',
-            ],
-          }}
-          style={vlcStyle}
-          paused={!isPlaying}
-          playInBackground={true}
-          rate={playbackRate}
-          seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
-          resizeMode="contain"
-          autoAspectRatio={true}
+        <VlcVideoView
+          style={style}
+          playerRef={playerRef}
+          videoUrl={videoUrl}
+          playbackSession={playbackSession}
+          currentVideoKey={`${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
+          isPlaying={isPlaying}
+          playbackRate={playbackRate}
+          vlcSeekPosition={vlcSeekPosition}
+          networkCachingMs={networkCachingMs}
+          isInPipMode={isInPipMode}
+          pipWindowSize={pipWindowSize}
           onLoad={onLoad}
           onProgress={onProgress}
           onPlaying={onPlaying}
           onPaused={onPaused}
           onBuffering={onBuffering}
-          onEnd={onEnded}
+          onEnded={onEnded}
           onError={onError}
           onVideoStateChange={onVideoStateChange}
-          pipContainerSize={
-            isInPipMode && Platform.OS === 'android' && pipWindowSize
-              ? pipWindowSize
-              : null
-          }
         />
       )
     }

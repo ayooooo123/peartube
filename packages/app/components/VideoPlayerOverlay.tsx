@@ -15,12 +15,6 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from './desktop/constants'
 import { useApp } from '@/lib/AppContext'
 
-// VLC player for iOS/Android (conditionally loaded)
-let VLCPlayer: any = null
-if (Platform.OS !== 'web') {
-  VLCPlayer = require('react-native-vlc-media-player').VLCPlayer
-}
-
 // MpvPlayer for Pear Desktop
 import { MpvPlayer, MpvPlayerRef } from './MpvPlayer'
 
@@ -79,6 +73,7 @@ import {
   LoadingOverlay,
   DesktopMiniPlayer,
   VideoContainer,
+  VlcVideoView,
 } from './video-player'
 
 function showCastAlert(message: string) {
@@ -170,6 +165,7 @@ export function VideoPlayerOverlay() {
     onEnded,
     onError,
     onVideoStateChange,
+    videoAspectRatio,
   } = useVideoPlayerContext()
 
   // Simplified PiP state tracking - trust the native event, don't over-engineer
@@ -179,6 +175,11 @@ export function VideoPlayerOverlay() {
   useEffect(() => {
     if (isInPipMode) {
       wasInPipRef.current = true
+      setShowControls(true)
+      if (controlsTimeoutRef.current) {
+        clearTimeout(controlsTimeoutRef.current)
+        controlsTimeoutRef.current = null
+      }
     } else if (wasInPipRef.current) {
       wasInPipRef.current = false
       autoPipEnabledRef.current = false  // Reset overlay pattern on PiP exit
@@ -254,7 +255,7 @@ export function VideoPlayerOverlay() {
   const progressBarWidth = useRef(0)
   const videoWrapperRef = useRef<View>(null)
   const [pipSupported, setPipSupported] = useState<boolean | null>(null)
-  const [videoWrapperHeight, setVideoWrapperHeight] = useState<number | null>(null)
+  const wasInPipModeRef = useRef(false)
 
   // State for showing custom controls overlay
   const [showControls, setShowControls] = useState(false)
@@ -756,6 +757,13 @@ export function VideoPlayerOverlay() {
     }, 3000)
   }, [])
 
+  useEffect(() => {
+    if (wasInPipModeRef.current && !isInPipMode && playerMode === 'fullscreen') {
+      showControlsTemporarily()
+    }
+    wasInPipModeRef.current = isInPipMode
+  }, [isInPipMode, playerMode, showControlsTemporarily])
+
   // Toggle controls on tap (fullscreen) or maximize (mini)
   const handleVideoTap = useCallback(() => {
     if (playerMode === 'fullscreen' || isLandscapeFullscreen) {
@@ -796,18 +804,21 @@ export function VideoPlayerOverlay() {
     }
   }, [])
 
-  // Animation progress: 0 = mini, 1 = fullscreen
-  // Initialize based on playerMode to avoid layout flash on first render
-  const animProgress = useSharedValue(playerMode === 'fullscreen' ? 1 : 0)
-  const translateY = useSharedValue(0)
-  const isGestureActive = useSharedValue(false)
-  const isInPipModeShared = useSharedValue(false)
-  const isAutoPipEnabledShared = useSharedValue(false)
-  const screenWidthShared = useSharedValue(screenWidth)
-  const screenHeightShared = useSharedValue(screenHeight)
-  const videoHeightShared = useSharedValue(videoHeight)
-  const insetTopShared = useSharedValue(insets.top)
-  const insetBottomShared = useSharedValue(insets.bottom)
+   // Animation progress: 0 = mini, 1 = fullscreen
+   // Initialize based on playerMode to avoid layout flash on first render
+   const animProgress = useSharedValue(playerMode === 'fullscreen' ? 1 : 0)
+   const translateY = useSharedValue(0)
+   const isGestureActive = useSharedValue(false)
+   const isInPipModeShared = useSharedValue(false)
+   const isAutoPipEnabledShared = useSharedValue(false)
+  const isFullscreenShared = useSharedValue(playerMode === 'fullscreen')
+  const overlayInVlcViewShared = useSharedValue(Platform.OS !== 'web')
+   const screenWidthShared = useSharedValue(screenWidth)
+   const screenHeightShared = useSharedValue(screenHeight)
+   const videoHeightShared = useSharedValue(videoHeight)
+   const videoWrapperHeightShared = useSharedValue(videoHeight)
+   const insetTopShared = useSharedValue(insets.top)
+   const insetBottomShared = useSharedValue(insets.bottom)
   
   const miniPipX = useSharedValue(screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN)
   const miniPipY = useSharedValue(screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - TAB_BAR_HEIGHT - insets.bottom)
@@ -823,17 +834,18 @@ export function VideoPlayerOverlay() {
   // Using number instead of string to avoid potential worklet string comparison issues
   const gestureStartedInFullscreen = useSharedValue(0)
 
-  // CRITICAL: Update shared values SYNCHRONOUSLY during render, NOT in useEffect
-  // useEffect runs AFTER the render commit, so worklets would see stale values
-  // This is especially important for PiP mode where dimensions change rapidly
-  // Trust the native isInPipMode event directly - don't add complex detection logic
-  isInPipModeShared.value = isInPipMode
-  isAutoPipEnabledShared.value = autoPipEnabledRef.current
-  screenWidthShared.value = screenWidth
-  screenHeightShared.value = screenHeight
-  videoHeightShared.value = videoHeight
-  insetTopShared.value = insets.top
-  insetBottomShared.value = insets.bottom
+   // CRITICAL: Update shared values SYNCHRONOUSLY during render, NOT in useEffect
+   // useEffect runs AFTER the render commit, so worklets would see stale values
+   // This is especially important for PiP mode where dimensions change rapidly
+   // Trust the native isInPipMode event directly - don't add complex detection logic
+   isInPipModeShared.value = isInPipMode
+   isAutoPipEnabledShared.value = autoPipEnabledRef.current
+   isFullscreenShared.value = playerMode === 'fullscreen'
+   screenWidthShared.value = screenWidth
+   screenHeightShared.value = screenHeight
+   videoHeightShared.value = videoHeight
+   insetTopShared.value = insets.top
+   insetBottomShared.value = insets.bottom
 
   // Ensure animProgress matches playerMode on initial render and after PiP exit
   // This prevents the video from being stuck at wrong size
@@ -1327,22 +1339,29 @@ export function VideoPlayerOverlay() {
     }
   }, [])
 
-  // Opacity-only style for overlay buttons (minimize, speed, cast) - no position overrides
-  const fullscreenButtonsOpacityStyle = useAnimatedStyle(() => {
-    'worklet'
-    const isFullscreen = animProgress.value >= 0.95
-    const opacity = isFullscreen ? 1 : interpolate(
-      animProgress.value,
-      [0.5, 1],
-      [0, 1],
-      Extrapolation.CLAMP
-    )
+   // Opacity-only style for overlay buttons (minimize, speed, cast) - no position overrides
+   const fullscreenButtonsOpacityStyle = useAnimatedStyle(() => {
+     'worklet'
+     if (isFullscreenShared.value) {
+       return {
+         opacity: 1,
+         display: 'flex',
+       }
+     }
 
-    return {
-      opacity,
-      display: animProgress.value < 0.3 ? 'none' : 'flex',
-    }
-  }, [])
+     const isFullscreen = animProgress.value >= 0.95
+     const opacity = isFullscreen ? 1 : interpolate(
+       animProgress.value,
+       [0.5, 1],
+       [0, 1],
+       Extrapolation.CLAMP
+     )
+
+     return {
+       opacity,
+       display: animProgress.value < 0.3 ? 'none' : 'flex',
+     }
+   }, [])
 
   // Mini player controls opacity
   const miniControlsStyle = useAnimatedStyle(() => {
@@ -1371,7 +1390,7 @@ export function VideoPlayerOverlay() {
   // Controls overlay positioning - always fill the container
   const controlsOverlayStyle = useAnimatedStyle(() => {
     'worklet'
-    if (isLandscapeFullscreenShared.value || isInPipModeShared.value || animProgress.value < 0.95) {
+    if (overlayInVlcViewShared.value || isLandscapeFullscreenShared.value || isInPipModeShared.value || animProgress.value < 0.95) {
       return {
         position: 'absolute',
         top: 0,
@@ -1380,24 +1399,76 @@ export function VideoPlayerOverlay() {
         bottom: 0,
       }
     }
+    const wrapperHeight = overlayInVlcViewShared.value
+      ? videoHeightShared.value
+      : (videoWrapperHeightShared.value > 0
+        ? videoWrapperHeightShared.value
+        : videoHeightShared.value)
     return {
       position: 'absolute',
       top: 0,
       left: 0,
       width: screenWidthShared.value,
-      height: videoWrapperHeight ?? videoHeightShared.value,
+      height: wrapperHeight,
     }
-  }, [videoWrapperHeight])
+  }, [])
 
-  // Progress bar style - positions at bottom, adjusts for landscape
+   // Progress bar style - positions at bottom, adjusts for landscape
   const progressBarStyle = useAnimatedStyle(() => {
     'worklet'
     if (isLandscapeFullscreenShared.value) {
       return {
         position: 'absolute',
         bottom: 16,
-        left: 16,
-        right: 16,
+         left: 16,
+         right: 16,
+         height: 32,
+         justifyContent: 'flex-end',
+         zIndex: 15,
+         opacity: 1,
+       }
+     }
+
+    if (overlayInVlcViewShared.value) {
+      const opacity = interpolate(
+        animProgress.value,
+        [0.5, 1],
+        [0, 1],
+        Extrapolation.CLAMP
+      )
+      return {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: 32,
+        justifyContent: 'flex-end',
+        zIndex: 15,
+        opacity: isFullscreenShared.value ? 1 : opacity,
+      }
+    }
+
+    const cutoutInset = overlayInVlcViewShared.value
+      ? 0
+      : Platform.OS === 'android'
+        && !isInPipModeShared.value
+        && !isLandscapeFullscreenShared.value
+        && animProgress.value >= 0.95
+          ? insetTopShared.value
+          : 0
+    const baseHeight = (overlayInVlcViewShared.value
+      ? videoHeightShared.value
+      : (videoWrapperHeightShared.value > 0
+        ? videoWrapperHeightShared.value
+        : videoHeightShared.value)) + cutoutInset
+
+    if (isFullscreenShared.value) {
+      return {
+        position: 'absolute',
+        top: baseHeight - 32,
+        bottom: undefined,
+        left: 0,
+        right: 0,
         height: 32,
         justifyContent: 'flex-end',
         zIndex: 15,
@@ -1405,17 +1476,18 @@ export function VideoPlayerOverlay() {
       }
     }
 
-    // In portrait, use fullscreenContentStyle opacity
-    const opacity = interpolate(
-      animProgress.value,
-      [0.5, 1],
-      [0, 1],
-      Extrapolation.CLAMP
-    )
+      // In portrait, use fullscreenContentStyle opacity
+      const opacity = interpolate(
+        animProgress.value,
+        [0.5, 1],
+        [0, 1],
+        Extrapolation.CLAMP
+      )
 
     return {
       position: 'absolute',
-      bottom: 0,
+      top: baseHeight - 32,
+      bottom: undefined,
       left: 0,
       right: 0,
       height: 32,
@@ -1425,49 +1497,62 @@ export function VideoPlayerOverlay() {
     }
   }, [])
 
-  // Time display style - positions above progress bar
+   // Time display style - positions above progress bar
   const timeDisplayStyle = useAnimatedStyle(() => {
     'worklet'
     if (isLandscapeFullscreenShared.value) {
       return {
         position: 'absolute',
         bottom: 56,
-        left: 16,
+         left: 16,
+         backgroundColor: 'rgba(0,0,0,0.6)',
+         paddingHorizontal: 8,
+         paddingVertical: 4,
+         borderRadius: 4,
+         zIndex: 10,
+         opacity: 1,
+       }
+     }
+
+    if (overlayInVlcViewShared.value) {
+      const opacity = isFullscreenShared.value ? 1 : 0
+      return {
+        position: 'absolute',
+        bottom: 24,
+        left: 12,
         backgroundColor: 'rgba(0,0,0,0.6)',
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderRadius: 4,
         zIndex: 10,
+        opacity,
       }
     }
 
-    return {
-      position: 'absolute',
-      bottom: 24,
-      left: 12,
-      backgroundColor: 'rgba(0,0,0,0.6)',
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 4,
-      zIndex: 10,
-    }
-  }, [])
+    const cutoutInset = overlayInVlcViewShared.value
+      ? 0
+      : Platform.OS === 'android'
+        && !isInPipModeShared.value
+        && !isLandscapeFullscreenShared.value
+        && animProgress.value >= 0.95
+          ? insetTopShared.value
+          : 0
+    const baseHeight = (overlayInVlcViewShared.value
+      ? videoHeightShared.value
+      : (videoWrapperHeightShared.value > 0
+        ? videoWrapperHeightShared.value
+        : videoHeightShared.value)) + cutoutInset
 
-  // Fullscreen button style
-  const fullscreenButtonStyle = useAnimatedStyle(() => {
-    'worklet'
-    const opacity = interpolate(
-      animProgress.value,
-      [0.5, 1],
-      [0, 1],
-      Extrapolation.CLAMP
-    )
-
-    if (isLandscapeFullscreenShared.value) {
+    if (isFullscreenShared.value) {
       return {
         position: 'absolute',
-        bottom: 56,
-        right: 16,
+        top: baseHeight - 56,
+        bottom: undefined,
+        left: 12,
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 4,
         zIndex: 10,
         opacity: 1,
       }
@@ -1475,12 +1560,147 @@ export function VideoPlayerOverlay() {
 
     return {
       position: 'absolute',
-      bottom: 44,
-      right: 12,
+      top: baseHeight - 56,
+      bottom: undefined,
+      left: 12,
+      backgroundColor: 'rgba(0,0,0,0.6)',
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 4,
       zIndex: 10,
-      opacity,
+      opacity: 0,
     }
   }, [])
+
+  const actionButtonOffset = 84
+
+  const minimizeButtonStyle = useAnimatedStyle(() => {
+    'worklet'
+    if (overlayInVlcViewShared.value) {
+      return {
+        top: 12,
+      }
+    }
+    return {
+      top: insetTopShared.value + 12,
+    }
+  }, [])
+
+  const speedButtonStyle = useAnimatedStyle(() => {
+    'worklet'
+    if (overlayInVlcViewShared.value) {
+      return {
+        top: 12,
+      }
+    }
+    return {
+      top: insetTopShared.value + 12,
+    }
+  }, [])
+
+  const castButtonStyle = useAnimatedStyle(() => {
+    'worklet'
+     if (isLandscapeFullscreenShared.value) {
+       return {
+         bottom: 64,
+       }
+     }
+
+    if (overlayInVlcViewShared.value) {
+      return {
+        bottom: 24,
+      }
+    }
+
+    const cutoutInset = overlayInVlcViewShared.value
+      ? 0
+      : Platform.OS === 'android'
+        && !isInPipModeShared.value
+        && !isLandscapeFullscreenShared.value
+        && animProgress.value >= 0.95
+          ? insetTopShared.value
+          : 0
+     const baseHeight = (overlayInVlcViewShared.value
+       ? videoHeightShared.value
+       : (videoWrapperHeightShared.value > 0
+         ? videoWrapperHeightShared.value
+         : videoHeightShared.value)) + cutoutInset
+
+     return {
+       top: baseHeight - actionButtonOffset,
+     }
+    }, [])
+
+   // Fullscreen button style
+  const fullscreenButtonStyle = useAnimatedStyle(() => {
+    'worklet'
+    if (isLandscapeFullscreenShared.value) {
+      return {
+        position: 'absolute',
+        bottom: 64,
+        right: 16,
+        zIndex: 10,
+        opacity: 1,
+      }
+    }
+
+    if (overlayInVlcViewShared.value) {
+      const opacity = interpolate(
+        animProgress.value,
+        [0.5, 1],
+        [0, 1],
+        Extrapolation.CLAMP
+      )
+      return {
+        position: 'absolute',
+        bottom: 24,
+        right: 12,
+        zIndex: 10,
+        opacity: isFullscreenShared.value ? 1 : opacity,
+      }
+    }
+
+     const cutoutInset = overlayInVlcViewShared.value
+       ? 0
+       : Platform.OS === 'android'
+         && !isInPipModeShared.value
+         && !isLandscapeFullscreenShared.value
+         && animProgress.value >= 0.95
+           ? insetTopShared.value
+           : 0
+     const baseHeight = (overlayInVlcViewShared.value
+       ? videoHeightShared.value
+       : (videoWrapperHeightShared.value > 0
+         ? videoWrapperHeightShared.value
+         : videoHeightShared.value)) + cutoutInset
+
+     if (isFullscreenShared.value) {
+      return {
+        position: 'absolute',
+        top: baseHeight - actionButtonOffset,
+        bottom: undefined,
+        right: 12,
+          zIndex: 10,
+          opacity: 1,
+        }
+      }
+
+      const opacity = interpolate(
+        animProgress.value,
+        [0.5, 1],
+        [0, 1],
+        Extrapolation.CLAMP
+      )
+
+     return {
+       position: 'absolute',
+       top: baseHeight - actionButtonOffset,
+       bottom: undefined,
+       right: 12,
+       zIndex: 10,
+       opacity,
+     }
+   }, [])
 
   // Note: videoAreaStyle wrapper removed - fullscreenContent now uses absolute positioning
   // with top: videoHeight to position content below video, avoiding flex layout issues
@@ -2296,6 +2516,184 @@ export function VideoPlayerOverlay() {
     )
   }
 
+  const overlayContent = (
+    <>
+      {showLoadingOverlay && !isInPipMode && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator color="white" size="large" />
+          <Text style={styles.loadingText}>{loadingLabel}</Text>
+        </View>
+      )}
+
+      {(playerMode === 'fullscreen' || isLandscapeFullscreen) && (showControls || isInPipMode) && (
+        <Animated.View style={[styles.controlsOverlayBase, controlsOverlayStyle]}>
+          <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('left')}>
+            <Feather name="rotate-ccw" color="#fff" size={32} />
+            <Text style={styles.controlButtonText}>10s</Text>
+          </Pressable>
+
+          <Pressable style={styles.controlButtonLarge} onPress={handlePlayPause}>
+            {effectiveIsPlaying ? (
+              <Ionicons name="pause" color="#fff" size={48} />
+            ) : (
+              <Ionicons name="play" color="#fff" size={48} />
+            )}
+          </Pressable>
+
+          <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('right')}>
+            <Feather name="rotate-cw" color="#fff" size={32} />
+            <Text style={styles.controlButtonText}>10s</Text>
+          </Pressable>
+        </Animated.View>
+      )}
+
+      {seekFeedback && (
+        <View style={[
+          styles.seekFeedback,
+          seekFeedback === 'left' ? styles.seekFeedbackLeft : styles.seekFeedbackRight
+        ]}>
+          {seekFeedback === 'left' ? (
+            <Feather name="rotate-ccw" color="#fff" size={32} />
+          ) : (
+            <Feather name="rotate-cw" color="#fff" size={32} />
+          )}
+          <Text style={styles.seekFeedbackText}>10s</Text>
+        </View>
+      )}
+
+      {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
+        <Animated.View style={[styles.minimizeButton, fullscreenButtonsOpacityStyle, minimizeButtonStyle]}>
+          <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
+            <Feather name="chevron-down" color="#fff" size={28} />
+          </Pressable>
+        </Animated.View>
+      )}
+
+      {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
+        <Animated.View style={[styles.speedButton, fullscreenButtonsOpacityStyle, speedButtonStyle]}>
+          <Pressable onPress={cyclePlaybackSpeed} style={styles.speedButtonInner}>
+            <Text style={styles.speedButtonText}>{playbackRate}x</Text>
+          </Pressable>
+        </Animated.View>
+      )}
+
+      {playerMode === 'fullscreen' && showControls && !isInPipMode && (
+        <Animated.View style={[styles.castButton, fullscreenButtonsOpacityStyle, castButtonStyle]}>
+          <Pressable onPress={handleCastPress} style={styles.castButtonInner}>
+            <Feather name="cast" color={cast.isConnected ? colors.primary : "#fff"} size={22} />
+          </Pressable>
+        </Animated.View>
+      )}
+
+      {playerMode === 'fullscreen' && showControls && !isInPipMode && (
+        <Animated.View style={fullscreenButtonStyle}>
+          <Pressable onPress={toggleLandscapeFullscreen} style={styles.fullscreenButtonInner}>
+            {isLandscapeFullscreen ? (
+              <Feather name="minimize" color="#fff" size={22} />
+            ) : (
+              <Feather name="maximize" color="#fff" size={22} />
+            )}
+          </Pressable>
+        </Animated.View>
+      )}
+
+      {!isInPipMode && (
+        <Animated.View
+          style={progressBarStyle}
+          ref={progressBarRef}
+          onLayout={(e) => {
+            progressBarWidth.current = e.nativeEvent.layout.width
+          }}
+          onTouchStart={(e) => {
+            const locationX = e.nativeEvent.locationX
+            const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
+            setIsSeeking(true)
+            setSeekPosition(progress * effectiveDuration)
+          }}
+          onTouchMove={(e) => {
+            if (isSeeking) {
+              const locationX = e.nativeEvent.locationX
+              const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
+              setSeekPosition(progress * effectiveDuration)
+            }
+          }}
+          onTouchEnd={() => {
+            if (isSeeking) {
+              if (isCasting) {
+                cast.seek(seekPosition)
+              } else {
+                seekTo(seekPosition)
+              }
+              setIsSeeking(false)
+            }
+          }}
+        >
+          {isSeeking && (
+            <View style={[
+              styles.seekTimePreview,
+              { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
+            ]}>
+              <Text style={styles.seekTimeText}>{formatDuration(seekPosition)}</Text>
+            </View>
+          )}
+          <View style={[styles.thinProgressBg, isSeeking && styles.thinProgressBgActive]}>
+            <View
+              style={[
+                styles.thinProgressFill,
+                isSeeking && styles.thinProgressFillActive,
+                { width: `${(isSeeking ? seekPosition / (effectiveDuration || 1) : effectiveProgress) * 100}%` }
+              ]}
+            />
+          </View>
+          {isSeeking && (
+            <View style={[
+              styles.scrubberHandle,
+              { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
+            ]} />
+          )}
+        </Animated.View>
+      )}
+
+      {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
+        <Animated.View style={timeDisplayStyle}>
+          <Text style={styles.timeText}>
+            {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
+          </Text>
+        </Animated.View>
+      )}
+
+      {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && showControls && (
+        <Animated.View style={[styles.miniPipOverlay, miniInfoStyle]} pointerEvents="box-none">
+          <View style={styles.miniPipTopRow} pointerEvents="box-none">
+            <Pressable style={styles.miniPipSmallButton} onPress={closeVideo}>
+              <Feather name="x" size={18} color="#fff" />
+            </Pressable>
+            <Pressable style={styles.miniPipSmallButton} onPress={maximizePlayer}>
+              <Feather name="maximize-2" size={18} color="#fff" />
+            </Pressable>
+          </View>
+          <View style={styles.miniPipControlsRow}>
+            <Pressable style={styles.miniPipSkipButton} onPress={() => handleDoubleTapSeek('left')}>
+              <Feather name="rotate-ccw" size={18} color="#fff" />
+            </Pressable>
+            <Pressable style={styles.miniPipPlayButton} onPress={handlePlayPause}>
+              <Ionicons name={effectiveIsPlaying ? 'pause' : 'play'} size={28} color="#fff" />
+            </Pressable>
+            <Pressable style={styles.miniPipSkipButton} onPress={() => handleDoubleTapSeek('right')}>
+              <Feather name="rotate-cw" size={18} color="#fff" />
+            </Pressable>
+          </View>
+        </Animated.View>
+      )}
+
+      {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
+        <Animated.View style={[styles.miniPipProgressBar, miniInfoStyle]} pointerEvents="none">
+          <View style={[styles.miniPipProgressFill, { width: `${effectiveProgress * 100}%` }]} />
+        </Animated.View>
+      )}
+    </>
+  )
+
   // Mobile: Single render path - landscape uses View wrapper, portrait uses Animated.View
   // The VLCPlayer stays mounted across orientation changes for smooth transitions
   const renderVideoPlayer = () => {
@@ -2315,52 +2713,31 @@ export function VideoPlayerOverlay() {
 
     return (
       <>
-        {Platform.OS !== 'web' && videoUrl && VLCPlayer && (
-          <VLCPlayer
-            key={`${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-            ref={playerRef}
-            source={{
-              uri: videoUrl,
-              initType: 2,
-              initOptions: [
-                // Small buffer for uncached streams to avoid immediate underruns
-                `--network-caching=${networkCachingMs}`,
-                `--file-caching=${networkCachingMs}`,
-                `--live-caching=${networkCachingMs}`,
-                `--disc-caching=${networkCachingMs}`,
-                '--avcodec-hw=any',
-                '--avcodec-threads=0',
-              ],
-            }}
-            style={
-              // During Android PiP: resize the view to match PiP window dimensions
-              // After PiP exit: use explicit 16:9 dimensions to avoid full-height layout issues
-              isInPipMode && Platform.OS === 'android' && pipWindowSize
-                ? { width: pipWindowSize.width, height: pipWindowSize.height, position: 'absolute' as const, top: 0, left: 0 }
-                : Platform.OS === 'android'
-                  ? { width: screenWidth, height: videoHeight, position: 'absolute' as const, top: 0, left: 0 }
-                  : StyleSheet.absoluteFill
-            }
-            paused={!isPlaying}
-            playInBackground={true}
-            rate={playbackRate}
-            seek={vlcSeekPosition !== undefined ? vlcSeekPosition : -1}
-            resizeMode="contain"
-            autoAspectRatio={true}
+        {Platform.OS !== 'web' && videoUrl && (
+          <VlcVideoView
+            style={StyleSheet.absoluteFill}
+            playerRef={playerRef}
+            videoUrl={videoUrl}
+            playbackSession={playbackSession}
+            currentVideoKey={`${currentVideo?.channelKey || ''}:${currentVideo?.id || ''}`}
+            isPlaying={isPlaying}
+            playbackRate={playbackRate}
+            vlcSeekPosition={vlcSeekPosition}
+            networkCachingMs={networkCachingMs}
+            isInPipMode={isInPipMode}
+            pipWindowSize={pipWindowSize}
+            videoAspectRatio={videoAspectRatio}
             onLoad={handleVideoLoad}
             onProgress={onProgress}
             onPlaying={onPlaying}
             onPaused={onPaused}
             onBuffering={onBuffering}
-            onEnd={onEnded}
+            onEnded={onEnded}
             onError={onError}
             onVideoStateChange={onVideoStateChange}
-            pipContainerSize={
-              isInPipMode && Platform.OS === 'android' && pipWindowSize
-                ? pipWindowSize
-                : null
-            }
-          />
+          >
+            {overlayContent}
+          </VlcVideoView>
         )}
         {Platform.OS === 'web' && isPear && videoUrl && (
           <MpvPlayer
@@ -2400,8 +2777,8 @@ export function VideoPlayerOverlay() {
             style={[styles.videoWrapper, videoStyle]}
             onLayout={(event) => {
               const height = event.nativeEvent.layout.height
-              if (height > 0 && height !== videoWrapperHeight) {
-                setVideoWrapperHeight(height)
+              if (height > 0 && height !== videoWrapperHeightShared.value) {
+                videoWrapperHeightShared.value = height
               }
             }}
           >
@@ -2415,182 +2792,8 @@ export function VideoPlayerOverlay() {
               </Animated.View>
 
 
-            {showLoadingOverlay && !isInPipMode && (
-              <View style={styles.loadingOverlay}>
-                <ActivityIndicator color="white" size="large" />
-                <Text style={styles.loadingText}>{loadingLabel}</Text>
-              </View>
-            )}
-
-            {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
-              <Animated.View style={[styles.controlsOverlayBase, controlsOverlayStyle]}>
-                <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('left')}>
-                  <Feather name="rotate-ccw" color="#fff" size={32} />
-                  <Text style={styles.controlButtonText}>10s</Text>
-                </Pressable>
-
-                <Pressable style={styles.controlButtonLarge} onPress={handlePlayPause}>
-                  {effectiveIsPlaying ? (
-                    <Ionicons name="pause" color="#fff" size={48} />
-                  ) : (
-                    <Ionicons name="play" color="#fff" size={48} />
-                  )}
-                </Pressable>
-
-                <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('right')}>
-                  <Feather name="rotate-cw" color="#fff" size={32} />
-                  <Text style={styles.controlButtonText}>10s</Text>
-                </Pressable>
-              </Animated.View>
-            )}
-
-            {seekFeedback && !isInPipMode && (
-              <View style={[
-                styles.seekFeedback,
-                seekFeedback === 'left' ? styles.seekFeedbackLeft : styles.seekFeedbackRight
-              ]}>
-                {seekFeedback === 'left' ? (
-                  <Feather name="rotate-ccw" color="#fff" size={32} />
-                ) : (
-                  <Feather name="rotate-cw" color="#fff" size={32} />
-                )}
-                <Text style={styles.seekFeedbackText}>10s</Text>
-              </View>
-            )}
+            {Platform.OS === 'web' && overlayContent}
           </Pressable>
-
-          {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
-            <Animated.View style={[styles.minimizeButton, fullscreenButtonsOpacityStyle]}>
-              <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
-                <Feather name="chevron-down" color="#fff" size={28} />
-              </Pressable>
-            </Animated.View>
-          )}
-
-          {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
-            <Animated.View style={[styles.speedButton, fullscreenButtonsOpacityStyle]}>
-              <Pressable onPress={cyclePlaybackSpeed} style={styles.speedButtonInner}>
-                <Text style={styles.speedButtonText}>{playbackRate}x</Text>
-              </Pressable>
-            </Animated.View>
-          )}
-
-          {playerMode === 'fullscreen' && showControls && !isInPipMode && (
-            <Animated.View style={[styles.castButton, fullscreenButtonsOpacityStyle]}>
-              <Pressable onPress={handleCastPress} style={styles.castButtonInner}>
-                <Feather name="cast" color={cast.isConnected ? colors.primary : "#fff"} size={22} />
-              </Pressable>
-            </Animated.View>
-          )}
-
-          {playerMode === 'fullscreen' && showControls && !isInPipMode && (
-            <Animated.View style={fullscreenButtonStyle}>
-              <Pressable onPress={toggleLandscapeFullscreen} style={styles.fullscreenButtonInner}>
-                {isLandscapeFullscreen ? (
-                  <Feather name="minimize" color="#fff" size={22} />
-                ) : (
-                  <Feather name="maximize" color="#fff" size={22} />
-                )}
-              </Pressable>
-            </Animated.View>
-          )}
-
-          {!isInPipMode && (
-            <Animated.View
-              style={progressBarStyle}
-              ref={progressBarRef}
-              onLayout={(e) => {
-                progressBarWidth.current = e.nativeEvent.layout.width
-              }}
-              onTouchStart={(e) => {
-                const locationX = e.nativeEvent.locationX
-                const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
-                setIsSeeking(true)
-                setSeekPosition(progress * effectiveDuration)
-              }}
-              onTouchMove={(e) => {
-                if (isSeeking) {
-                  const locationX = e.nativeEvent.locationX
-                  const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
-                  setSeekPosition(progress * effectiveDuration)
-                }
-              }}
-              onTouchEnd={() => {
-                if (isSeeking) {
-                  if (isCasting) {
-                    cast.seek(seekPosition)
-                  } else {
-                    seekTo(seekPosition)
-                  }
-                  setIsSeeking(false)
-                }
-              }}
-            >
-              {isSeeking && (
-                <View style={[
-                  styles.seekTimePreview,
-                  { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
-                ]}>
-                  <Text style={styles.seekTimeText}>{formatDuration(seekPosition)}</Text>
-                </View>
-              )}
-              <View style={[styles.thinProgressBg, isSeeking && styles.thinProgressBgActive]}>
-                <View
-                  style={[
-                    styles.thinProgressFill,
-                    isSeeking && styles.thinProgressFillActive,
-                    { width: `${(isSeeking ? seekPosition / (effectiveDuration || 1) : effectiveProgress) * 100}%` }
-                  ]}
-                />
-              </View>
-              {isSeeking && (
-                <View style={[
-                  styles.scrubberHandle,
-                  { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
-                ]} />
-              )}
-            </Animated.View>
-          )}
-
-          {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
-            <Animated.View style={timeDisplayStyle}>
-              <Text style={styles.timeText}>
-                {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
-              </Text>
-            </Animated.View>
-          )}
-
-          {/* Mini PiP controls - INSIDE GestureDetector so pan gesture works through them */}
-          {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && showControls && (
-            <Animated.View style={[styles.miniPipOverlay, miniInfoStyle]} pointerEvents="box-none">
-              <View style={styles.miniPipTopRow} pointerEvents="box-none">
-                <Pressable style={styles.miniPipSmallButton} onPress={closeVideo}>
-                  <Feather name="x" size={18} color="#fff" />
-                </Pressable>
-                <Pressable style={styles.miniPipSmallButton} onPress={maximizePlayer}>
-                  <Feather name="maximize-2" size={18} color="#fff" />
-                </Pressable>
-              </View>
-              <View style={styles.miniPipControlsRow}>
-                <Pressable style={styles.miniPipSkipButton} onPress={() => handleDoubleTapSeek('left')}>
-                  <Feather name="rotate-ccw" size={18} color="#fff" />
-                </Pressable>
-                <Pressable style={styles.miniPipPlayButton} onPress={handlePlayPause}>
-                  <Ionicons name={effectiveIsPlaying ? 'pause' : 'play'} size={28} color="#fff" />
-                </Pressable>
-                <Pressable style={styles.miniPipSkipButton} onPress={() => handleDoubleTapSeek('right')}>
-                  <Feather name="rotate-cw" size={18} color="#fff" />
-                </Pressable>
-              </View>
-            </Animated.View>
-          )}
-
-          {/* Mini PiP progress bar - always visible when mini */}
-          {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
-            <Animated.View style={[styles.miniPipProgressBar, miniInfoStyle]} pointerEvents="none">
-              <View style={[styles.miniPipProgressFill, { width: `${effectiveProgress * 100}%` }]} />
-            </Animated.View>
-          )}
         </Animated.View>
         </GestureDetector>
 

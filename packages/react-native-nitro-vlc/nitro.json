@@ -8,6 +8,14 @@
     "androidNamespace": ["com", "nitrovlc"],
     "androidCxxLibName": "NitroVLC"
   },
-  "autolinking": {},
+  "autolinking": {
+    "NitroVLCView": {
+      "swift": "HybridNitroVLCView",
+      "kotlin": "HybridNitroVLCView"
+    },
+    "NitroVLCPOC": {
+      "swift": "HybridNitroVLCPOC"
+    }
+  },
   "ignorePaths": ["**/node_modules"]
 }

@@ -1,0 +1,14 @@
+NitroVlcVideoView callback/source checks
+
+File: packages/app/components/video-player/NitroVlcVideoView.tsx
+
+Matches:
+- onProgress?: (event: any) => void
+- onProgress={props.onProgress}
+- onPlaying?: () => void
+- onPlaying={handlePlaying}
+- source: NitroVLCProps['source']
+- source={props.source}
+
+LSP diagnostics:
+- packages/app/components/video-player/NitroVlcVideoView.tsx: No diagnostics found

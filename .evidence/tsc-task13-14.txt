@@ -1,0 +1,404 @@
+app/(tabs)/index.tsx(154,30): error TS2448: Block-scoped variable 'loadPublicFeed' used before its declaration.
+app/(tabs)/index.tsx(154,30): error TS2454: Variable 'loadPublicFeed' is used before being assigned.
+app/(tabs)/index.tsx(154,46): error TS2448: Block-scoped variable 'refreshFeed' used before its declaration.
+app/(tabs)/index.tsx(154,46): error TS2454: Variable 'refreshFeed' is used before being assigned.
+app/(tabs)/index.tsx(168,14): error TS2448: Block-scoped variable 'refreshFeed' used before its declaration.
+app/(tabs)/index.tsx(168,14): error TS2454: Variable 'refreshFeed' is used before being assigned.
+app/(tabs)/index.tsx(374,30): error TS2304: Cannot find name 'withTimeout'.
+app/(tabs)/index.tsx(440,26): error TS2345: Argument of type 'import("/Users/jd/projects/peartube/packages/app/components/video/VideoCard").VideoData' is not assignable to parameter of type 'import("/Users/jd/projects/peartube/packages/core/src/types/index").VideoData'.
+  Types of property 'size' are incompatible.
+    Type 'number | undefined' is not assignable to type 'number'.
+      Type 'undefined' is not assignable to type 'number'.
+app/(tabs)/index.tsx(482,26): error TS2345: Argument of type 'import("/Users/jd/projects/peartube/packages/app/components/video/VideoCard").VideoData' is not assignable to parameter of type 'import("/Users/jd/projects/peartube/packages/core/src/types/index").VideoData'.
+  Types of property 'size' are incompatible.
+    Type 'number | undefined' is not assignable to type 'number'.
+      Type 'undefined' is not assignable to type 'number'.
+app/(tabs)/index.tsx(507,9): error TS2322: Type '{ channelKey: string; channel: { name: string | undefined; } | undefined; thumbnailUrl: string | null; id: string; title: string; description: string; path: string; size: number; uploadedAt: number; mimeType?: string | undefined; duration?: number | undefined; thumbnail?: string | undefined; category?: string | unde...' is not assignable to type 'VideoData[]'.
+  Type '{ channelKey: string; channel: { name: string | undefined; } | undefined; thumbnailUrl: string | null; id: string; title: string; description: string; path: string; size: number; uploadedAt: number; mimeType?: string; duration?: number; thumbnail?: string; category?: string; }' is not assignable to type 'VideoData'.
+    Types of property 'channel' are incompatible.
+      Type '{ name: string | undefined; } | undefined' is not assignable to type '{ name: string; avatarUrl?: string | undefined; } | undefined'.
+        Type '{ name: string | undefined; }' is not assignable to type '{ name: string; avatarUrl?: string | undefined; }'.
+          Types of property 'name' are incompatible.
+            Type 'string | undefined' is not assignable to type 'string'.
+              Type 'undefined' is not assignable to type 'string'.
+app/(tabs)/index.tsx(816,13): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'void' is not assignable to type 'ReactNode'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'void' is not assignable to type 'ReactNode'.
+app/(tabs)/index.web.tsx(1256,38): error TS2538: Type 'undefined' cannot be used as an index type.
+app/(tabs)/search.tsx(146,23): error TS2339: Property 'blobId' does not exist on type 'VideoData'.
+app/(tabs)/search.tsx(147,29): error TS2339: Property 'blobsCoreKey' does not exist on type 'VideoData'.
+app/(tabs)/studio.tsx(118,22): error TS2339: Property 'dataUrl' does not exist on type '{ filePath: string; name: string; size: number; }'.
+app/(tabs)/studio.tsx(119,36): error TS2339: Property 'dataUrl' does not exist on type '{ filePath: string; name: string; size: number; }'.
+app/(tabs)/studio.tsx(120,89): error TS2339: Property 'dataUrl' does not exist on type '{ filePath: string; name: string; size: number; }'.
+app/(tabs)/studio.tsx(209,42): error TS2345: Argument of type 'number | null | undefined' is not assignable to parameter of type 'number | undefined'.
+  Type 'null' is not assignable to type 'number | undefined'.
+app/(tabs)/studio.tsx(272,26): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+app/(tabs)/studio.tsx(308,26): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+  Type 'undefined' is not assignable to type 'string'.
+app/search.tsx(214,23): error TS2339: Property 'blobId' does not exist on type 'VideoData'.
+app/search.tsx(215,29): error TS2339: Property 'blobsCoreKey' does not exist on type 'VideoData'.
+app/search.tsx(223,26): error TS2345: Argument of type '{ channelKey: string; id: string; title: string; path?: string; size?: number; uploadedAt?: number; createdAt?: number; driveKey?: string; publicBeeKey?: string | null; thumbnailUrl?: string | null; ... 6 more ...; channel?: { name: string; avatarUrl?: string; }; }' is not assignable to parameter of type 'VideoData'.
+  Types of property 'size' are incompatible.
+    Type 'number | undefined' is not assignable to type 'number'.
+      Type 'undefined' is not assignable to type 'number'.
+components/ErrorBoundary.tsx(166,19): error TS2339: Property 'red' does not exist on type '{ readonly primary: "#9147ff"; readonly primaryHover: "#772ce8"; readonly primaryLight: "rgba(145, 71, 255, 0.2)"; readonly accent: "#00f0b5"; readonly accentHover: "#00d9a4"; readonly success: "#00c853"; ... 22 more ...; readonly borderFocus: "#9147ff"; }'.
+components/MpvPlayer.web.tsx(453,25): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
+components/ui/accordion/index.tsx(3,33): error TS2307: Cannot find module '@gluestack-ui/accordion' or its corresponding type declarations.
+components/ui/accordion/index.tsx(13,20): error TS2307: Cannot find module '@expo/html-elements' or its corresponding type declarations.
+components/ui/actionsheet/index.tsx(3,20): error TS2307: Cannot find module '@expo/html-elements' or its corresponding type declarations.
+components/ui/actionsheet/index.tsx(5,35): error TS2307: Cannot find module '@gluestack-ui/actionsheet' or its corresponding type declarations.
+components/ui/alert-dialog/index.tsx(3,35): error TS2307: Cannot find module '@gluestack-ui/alert-dialog' or its corresponding type declarations.
+components/ui/alert/index.tsx(2,29): error TS2307: Cannot find module '@gluestack-ui/alert' or its corresponding type declarations.
+components/ui/avatar/index.tsx(3,30): error TS2307: Cannot find module '@gluestack-ui/avatar' or its corresponding type declarations.
+components/ui/bottomsheet/index.tsx(9,8): error TS2307: Cannot find module '@gorhom/bottom-sheet' or its corresponding type declarations.
+components/ui/checkbox/index.tsx(3,32): error TS2307: Cannot find module '@gluestack-ui/checkbox' or its corresponding type declarations.
+components/ui/divider/index.tsx(3,31): error TS2307: Cannot find module '@gluestack-ui/divider' or its corresponding type declarations.
+components/ui/fab/index.tsx(3,27): error TS2307: Cannot find module '@gluestack-ui/fab' or its corresponding type declarations.
+components/ui/grid/index.tsx(16,8): error TS2307: Cannot find module '@gluestack-ui/nativewind-utils/useBreakpointValue' or its corresponding type declarations.
+components/ui/grid/index.tsx(312,13): error TS2869: Right operand of ?? is unreachable because the left operand is never nullish.
+components/ui/heading/index.tsx(2,40): error TS2307: Cannot find module '@expo/html-elements' or its corresponding type declarations.
+components/ui/icon/index.tsx(72,7): error TS2322: Type 'true' is not assignable to type '"pointerEvents" | "children" | "ref" | "style" | "id" | "hitSlop" | "needsOffscreenAlphaCompositing" | "onLayout" | "removeClippedSubviews" | "testID" | "nativeID" | "collapsable" | ... 84 more ... | undefined'.
+components/ui/icon/index.tsx(73,7): error TS2322: Type 'true' is not assignable to type '"pointerEvents" | "children" | "ref" | "style" | "id" | "hitSlop" | "needsOffscreenAlphaCompositing" | "onLayout" | "removeClippedSubviews" | "testID" | "nativeID" | "collapsable" | ... 84 more ... | undefined'.
+components/ui/icon/index.tsx(75,7): error TS2322: Type 'true' is not assignable to type '"pointerEvents" | "children" | "ref" | "style" | "id" | "hitSlop" | "needsOffscreenAlphaCompositing" | "onLayout" | "removeClippedSubviews" | "testID" | "nativeID" | "collapsable" | ... 84 more ... | undefined'.
+components/ui/icon/index.web.tsx(115,9): error TS2322: Type 'ForwardedRef<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; }>' is not assignable to type 'Ref<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>)> | ((((instance: SVGSVGElement | null) => void | (() => VoidOrUndefinedOnly)) | RefObject<...>) & (((instance: { ...; } | ... 1 more ... | null) => void | (() => Void...'.
+  Type 'RefObject<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null>' is not assignable to type 'Ref<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>)> | ((((instance: SVGSVGElement | null) => void | (() => VoidOrUndefinedOnly)) | RefObject<...>) & (((instance: { ...; } | ... 1 more ... | null) => void | (() => Void...'.
+    Type 'RefObject<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null>' is not assignable to type 'RefObject<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>) | null>'.
+      Type 'SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null' is not assignable to type '{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>) | null'.
+        Type 'SVGSVGElement' is not assignable to type '{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>) | null'.
+          Type 'SVGSVGElement' is not assignable to type 'Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<SVGSVGElement>'.
+            Type 'SVGSVGElement' is not assignable to type 'Omit<SVGProps<SVGSVGElement>, "ref">'.
+              Types of property 'children' are incompatible.
+                Type 'HTMLCollection' is not assignable to type 'ReactNode'.
+                  Type 'HTMLCollection' is not assignable to type 'Iterable<ReactNode>'.
+                    The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+                      Type 'IteratorResult<Element, undefined>' is not assignable to type 'IteratorResult<ReactNode, any>'.
+                        Type 'IteratorYieldResult<Element>' is not assignable to type 'IteratorResult<ReactNode, any>'.
+                          Type 'IteratorYieldResult<Element>' is not assignable to type 'IteratorYieldResult<ReactNode>'.
+                            Type 'Element' is not assignable to type 'ReactNode'.
+                              Type 'Element' is missing the following properties from type 'ReactPortal': type, props, key
+components/ui/icon/index.web.tsx(127,9): error TS2322: Type 'ForwardedRef<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; }>' is not assignable to type 'Ref<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>)> | ((((instance: SVGSVGElement | null) => void | (() => VoidOrUndefinedOnly)) | RefObject<...>) & (((instance: { ...; } | ... 1 more ... | null) => void | (() => Void...'.
+  Type 'RefObject<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null>' is not assignable to type 'Ref<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>)> | ((((instance: SVGSVGElement | null) => void | (() => VoidOrUndefinedOnly)) | RefObject<...>) & (((instance: { ...; } | ... 1 more ... | null) => void | (() => Void...'.
+    Type 'RefObject<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null>' is not assignable to type 'RefObject<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>) | null>'.
+      Type 'SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null' is not assignable to type '{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>) | null'.
+        Type 'SVGSVGElement' is not assignable to type '{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>) | null'.
+          Type 'SVGSVGElement' is not assignable to type 'Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<SVGSVGElement>'.
+            Type 'SVGSVGElement' is not assignable to type 'Omit<SVGProps<SVGSVGElement>, "ref">'.
+              Types of property 'children' are incompatible.
+                Type 'HTMLCollection' is not assignable to type 'ReactNode'.
+                  Type 'HTMLCollection' is not assignable to type 'Iterable<ReactNode>'.
+                    The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+                      Type 'IteratorResult<Element, undefined>' is not assignable to type 'IteratorResult<ReactNode, any>'.
+                        Type 'IteratorYieldResult<Element>' is not assignable to type 'IteratorResult<ReactNode, any>'.
+                          Type 'IteratorYieldResult<Element>' is not assignable to type 'IteratorYieldResult<ReactNode>'.
+                            Type 'Element' is not assignable to type 'ReactNode'.
+                              Type 'Element' is missing the following properties from type 'ReactPortal': type, props, key
+components/ui/icon/index.web.tsx(135,7): error TS2322: Type 'ForwardedRef<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; }>' is not assignable to type 'Ref<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>)> | ((((instance: SVGSVGElement | null) => void | (() => VoidOrUndefinedOnly)) | RefObject<...>) & (((instance: { ...; } | ... 1 more ... | null) => void | (() => Void...'.
+  Type 'RefObject<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null>' is not assignable to type 'Ref<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>)> | ((((instance: SVGSVGElement | null) => void | (() => VoidOrUndefinedOnly)) | RefObject<...>) & (((instance: { ...; } | ... 1 more ... | null) => void | (() => Void...'.
+    Type 'RefObject<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null>' is not assignable to type 'RefObject<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>) | null>'.
+      Type 'SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null' is not assignable to type '{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>) | null'.
+        Type 'SVGSVGElement' is not assignable to type '{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<...>) | null'.
+          Type 'SVGSVGElement' is not assignable to type 'Omit<SVGProps<SVGSVGElement>, "ref"> & IPrimitiveIcon & RefAttributes<SVGSVGElement>'.
+            Type 'SVGSVGElement' is not assignable to type 'Omit<SVGProps<SVGSVGElement>, "ref">'.
+              Types of property 'children' are incompatible.
+                Type 'HTMLCollection' is not assignable to type 'ReactNode'.
+                  Type 'HTMLCollection' is not assignable to type 'Iterable<ReactNode>'.
+                    The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+                      Type 'IteratorResult<Element, undefined>' is not assignable to type 'IteratorResult<ReactNode, any>'.
+                        Type 'IteratorYieldResult<Element>' is not assignable to type 'IteratorResult<ReactNode, any>'.
+                          Type 'IteratorYieldResult<Element>' is not assignable to type 'IteratorYieldResult<ReactNode>'.
+                            Type 'Element' is not assignable to type 'ReactNode'.
+                              Type 'Element' is missing the following properties from type 'ReactPortal': type, props, key
+components/ui/icon/index.web.tsx(157,9): error TS2322: Type 'ForwardedRef<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; }>' is not assignable to type 'Ref<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & RefAttributes<...>)> | ((((instance: SVGSVGElement | null) => void | (() => VoidOrUndefinedOnly)) | RefObject<...>) & (((instance: { ...; } | ... 1 more ... | null) => void | (() => VoidOrUndefinedOnly))...'.
+  Type 'RefObject<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null>' is not assignable to type 'Ref<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & RefAttributes<...>)> | ((((instance: SVGSVGElement | null) => void | (() => VoidOrUndefinedOnly)) | RefObject<...>) & (((instance: { ...; } | ... 1 more ... | null) => void | (() => VoidOrUndefinedOnly))...'.
+    Type 'RefObject<SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null>' is not assignable to type 'RefObject<{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & RefAttributes<...>) | null>'.
+      Type 'SVGSVGElement | { fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | null' is not assignable to type '{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & RefAttributes<SVGSVGElement>) | null'.
+        Type 'SVGSVGElement' is not assignable to type '{ fill?: ColorValue | undefined; stroke?: ColorValue | undefined; } | (Omit<SVGProps<SVGSVGElement>, "ref"> & RefAttributes<SVGSVGElement>) | null'.
+          Type 'SVGSVGElement' is not assignable to type 'Omit<SVGProps<SVGSVGElement>, "ref"> & RefAttributes<SVGSVGElement>'.
+            Type 'SVGSVGElement' is not assignable to type 'Omit<SVGProps<SVGSVGElement>, "ref">'.
+              Types of property 'children' are incompatible.
+                Type 'HTMLCollection' is not assignable to type 'ReactNode'.
+                  Type 'HTMLCollection' is not assignable to type 'Iterable<ReactNode>'.
+                    The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+                      Type 'IteratorResult<Element, undefined>' is not assignable to type 'IteratorResult<ReactNode, any>'.
+                        Type 'IteratorYieldResult<Element>' is not assignable to type 'IteratorResult<ReactNode, any>'.
+                          Type 'IteratorYieldResult<Element>' is not assignable to type 'IteratorYieldResult<ReactNode>'.
+                            Type 'Element' is not assignable to type 'ReactNode'.
+                              Type 'Element' is missing the following properties from type 'ReactPortal': type, props, key
+components/ui/image/index.tsx(3,29): error TS2307: Cannot find module '@gluestack-ui/image' or its corresponding type declarations.
+components/ui/input/index.tsx(151,5): error TS2322: Type '"style"' is not assignable to type 'boolean | keyof IPrimitiveIcon | keyof RefAttributes<IPrimitiveIcon & RefAttributes<Svg>>'.
+components/ui/link/index.tsx(2,28): error TS2307: Cannot find module '@gluestack-ui/link' or its corresponding type declarations.
+components/ui/menu/index.tsx(3,28): error TS2307: Cannot find module '@gluestack-ui/menu' or its corresponding type declarations.
+components/ui/modal/index.tsx(3,29): error TS2307: Cannot find module '@gluestack-ui/modal' or its corresponding type declarations.
+components/ui/popover/index.tsx(9,31): error TS2307: Cannot find module '@gluestack-ui/popover' or its corresponding type declarations.
+components/ui/popover/index.tsx(22,45): error TS2700: Rest types may only be created from object types.
+components/ui/popover/index.tsx(34,59): error TS2345: Argument of type 'ForwardRefExoticComponent<never>' is not assignable to parameter of type 'ComponentType<any>'.
+  Type 'ForwardRefExoticComponent<never>' is not assignable to type 'FunctionComponent<any>'.
+    Types of parameters 'props' and 'props' are incompatible.
+      Type 'any' is not assignable to type 'never'.
+components/ui/popover/index.tsx(45,12): error TS2345: Argument of type 'ForwardRefExoticComponent<never>' is not assignable to parameter of type 'ReactComponent<any>'.
+  Type 'ForwardRefExoticComponent<never>' is not assignable to type 'ForwardRefExoticComponent<any>'.
+    Type 'any' is not assignable to type 'never'.
+components/ui/progress/index.tsx(3,32): error TS2307: Cannot find module '@gluestack-ui/progress' or its corresponding type declarations.
+components/ui/radio/index.tsx(3,29): error TS2307: Cannot find module '@gluestack-ui/radio' or its corresponding type declarations.
+components/ui/radio/index.tsx(156,5): error TS2322: Type '"style"' is not assignable to type 'boolean | keyof RefAttributes<Svg> | keyof IPrimitiveIcon'.
+components/ui/select/index.tsx(10,30): error TS2307: Cannot find module '@gluestack-ui/select' or its corresponding type declarations.
+components/ui/select/select-actionsheet.tsx(1,20): error TS2307: Cannot find module '@expo/html-elements' or its corresponding type declarations.
+components/ui/select/select-actionsheet.tsx(2,35): error TS2307: Cannot find module '@gluestack-ui/actionsheet' or its corresponding type declarations.
+components/ui/skeleton/index.tsx(20,20): error TS2344: Type 'AnimatedComponent<typeof View>' does not satisfy the constraint 'keyof IntrinsicElements | ForwardRefExoticComponent<any> | (new (props: any, context: any) => Component<any, {}, any>) | ((props: any) => ReactNode)'.
+  Property '$$typeof' is missing in type 'AnimatedComponent<typeof View>' but required in type 'ForwardRefExoticComponent<any>'.
+components/ui/slider/index.tsx(2,30): error TS2307: Cannot find module '@gluestack-ui/slider' or its corresponding type declarations.
+components/ui/switch/index.tsx(4,30): error TS2307: Cannot find module '@gluestack-ui/switch' or its corresponding type declarations.
+components/ui/table/index.tsx(9,8): error TS2307: Cannot find module '@expo/html-elements' or its corresponding type declarations.
+components/ui/textarea/index.tsx(3,32): error TS2307: Cannot find module '@gluestack-ui/textarea' or its corresponding type declarations.
+components/ui/tooltip/index.tsx(3,31): error TS2307: Cannot find module '@gluestack-ui/tooltip' or its corresponding type declarations.
+components/video-player/NitroVlcVideoView.tsx(62,7): error TS2322: Type 'import("/Users/jd/projects/peartube/packages/app/node_modules/react-native/Libraries/StyleSheet/StyleSheet").StyleProp<import("/Users/jd/projects/peartube/packages/app/node_modules/react-native/Libraries/StyleSheet/StyleSheetTypes").ViewStyle>' is not assignable to type 'import("/Users/jd/projects/peartube/packages/react-native-nitro-vlc/node_modules/react-native/Libraries/StyleSheet/StyleSheet").StyleProp<import("/Users/jd/projects/peartube/packages/react-native-nitro-vlc/node_modules/react-native/Libraries/StyleSheet/StyleSheetTypes").ViewStyle>'.
+  Type 'RegisteredStyle<ViewStyle>' is not assignable to type 'StyleProp<ViewStyle>'.
+    Type 'Number & { __registeredStyleBrand: ViewStyle; }' is missing the following properties from type 'RecursiveArray<Falsy | ViewStyle>': length, pop, push, concat, and 35 more.
+components/video-player/NitroVlcVideoView.tsx(72,7): error TS2322: Type '(event: VideoInfo) => void' is not assignable to type 'NitroViewWrappedCallback<((event: VideoInfo) => void) | undefined>'.
+components/video-player/NitroVlcVideoView.tsx(73,7): error TS2322: Type '() => void' is not assignable to type 'NitroViewWrappedCallback<((event: OnPlayingEventProps) => void) | undefined>'.
+components/video-player/NitroVlcVideoView.tsx(74,7): error TS2322: Type '((event: any) => void) | undefined' is not assignable to type 'NitroViewWrappedCallback<((event: OnProgressEventProps) => void) | undefined> | undefined'.
+  Type '(event: any) => void' is not assignable to type 'NitroViewWrappedCallback<((event: OnProgressEventProps) => void) | undefined>'.
+components/video-player/NitroVlcVideoView.tsx(75,7): error TS2322: Type '() => void' is not assignable to type 'NitroViewWrappedCallback<((event: SimpleCallbackEventProps) => void) | undefined>'.
+components/video-player/NitroVlcVideoView.tsx(76,7): error TS2322: Type '() => void' is not assignable to type 'NitroViewWrappedCallback<((event: SimpleCallbackEventProps) => void) | undefined>'.
+components/video-player/NitroVlcVideoView.tsx(77,7): error TS2322: Type '(() => void) | undefined' is not assignable to type 'NitroViewWrappedCallback<((event: SimpleCallbackEventProps) => void) | undefined> | undefined'.
+  Type '() => void' is not assignable to type 'NitroViewWrappedCallback<((event: SimpleCallbackEventProps) => void) | undefined>'.
+components/video-player/NitroVlcVideoView.tsx(78,7): error TS2322: Type '((event: any) => void) | undefined' is not assignable to type 'NitroViewWrappedCallback<((event: SimpleCallbackEventProps) => void) | undefined> | undefined'.
+  Type '(event: any) => void' is not assignable to type 'NitroViewWrappedCallback<((event: SimpleCallbackEventProps) => void) | undefined>'.
+components/VideoPlayerOverlay.tsx(232,73): error TS2339: Property 'key' does not exist on type '{ name: string; }'.
+components/VideoPlayerOverlay.tsx(244,74): error TS2339: Property 'key' does not exist on type '{ name: string; }'.
+components/VideoPlayerOverlay.tsx(610,13): error TS2353: Object literal may only specify known properties, and 'publicBeeKey' does not exist in type '{ channelKey: string; videoId: string; }'.
+components/VideoPlayerOverlay.tsx(636,35): error TS2339: Property 'mimeType' does not exist on type 'VideoData'.
+components/VideoPlayerOverlay.tsx(683,13): error TS2353: Object literal may only specify known properties, and 'publicBeeKey' does not exist in type '{ channelKey: string; videoId: string; }'.
+components/VideoPlayerOverlay.tsx(695,37): error TS2339: Property 'mimeType' does not exist on type 'VideoData'.
+components/VideoPlayerOverlay.tsx(950,77): error TS2339: Property 'key' does not exist on type '{ name: string; }'.
+components/VideoPlayerOverlay.tsx(1847,7): error TS2367: This comparison appears to be unintentional because the types 'true | null' and 'false' have no overlap.
+components/VideoPlayerOverlay.tsx(1887,73): error TS2339: Property 'key' does not exist on type '{ name: string; }'.
+components/VideoPlayerOverlay.tsx(2398,28): error TS2304: Cannot find name 'reactions'.
+components/VideoPlayerOverlay.tsx(2409,31): error TS2304: Cannot find name 'reactions'.
+lib/cast/index.ts(5,3): error TS2614: Module '"./useCast"' has no exported member 'TranscodeStatus'. Did you mean to use 'import TranscodeStatus from "./useCast"' instead?
+lib/cast/useCast.shared.ts(406,45): error TS7006: Parameter 'd' implicitly has an 'any' type.
+lib/DownloadsContext.tsx(359,27): error TS2345: Argument of type 'Uint8Array<ArrayBufferLike>[]' is not assignable to parameter of type 'BlobPart[]'.
+  Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'BlobPart'.
+    Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'.
+      Types of property 'buffer' are incompatible.
+        Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'.
+          Type 'SharedArrayBuffer' is missing the following properties from type 'ArrayBuffer': resizable, resize, detached, transfer, transferToFixedLength
+lib/store/appStore.tsx(141,15): error TS2484: Export declaration conflicts with exported declaration of 'AppStoreState'.
+packages/app/pear/workers/core/index.ts(11,18): error TS2307: Cannot find module 'pear-pipe' or its corresponding type declarations.
+packages/app/pear/workers/core/index.ts(103,7): error TS18047: 'proc.stdout' is possibly 'null'.
+packages/app/pear/workers/core/index.ts(103,30): error TS2345: Argument of type '(chunk: Buffer) => number' is not assignable to parameter of type 'EventHandler<[data: unknown], number>'.
+  Types of parameters 'chunk' and 'data' are incompatible.
+    Type 'unknown' is not assignable to type 'Buffer<ArrayBufferLike>'.
+packages/app/pear/workers/core/index.ts(104,7): error TS18047: 'proc.stderr' is possibly 'null'.
+packages/app/pear/workers/core/index.ts(133,5): error TS18047: 'proc.stdout' is possibly 'null'.
+packages/app/pear/workers/core/index.ts(133,28): error TS2345: Argument of type '(chunk: Buffer) => void' is not assignable to parameter of type 'EventHandler<[data: unknown], void>'.
+  Types of parameters 'chunk' and 'data' are incompatible.
+    Type 'unknown' is not assignable to type 'Buffer<ArrayBufferLike>'.
+packages/app/pear/workers/core/index.ts(134,5): error TS18047: 'proc.stderr' is possibly 'null'.
+packages/app/pear/workers/core/index.ts(134,28): error TS2345: Argument of type '(chunk: Buffer) => void' is not assignable to parameter of type 'EventHandler<[data: unknown], void>'.
+  Types of parameters 'chunk' and 'data' are incompatible.
+    Type 'unknown' is not assignable to type 'Buffer<ArrayBufferLike>'.
+packages/app/pear/workers/core/index.ts(152,22): error TS2345: Argument of type '(err: Error) => void' is not assignable to parameter of type 'EventHandler<unknown[], void>'.
+  Types of parameters 'err' and 'args' are incompatible.
+    Type 'unknown' is not assignable to type 'Error'.
+packages/app/pear/workers/core/index.ts(168,5): error TS18047: 'proc.stdout' is possibly 'null'.
+packages/app/pear/workers/core/index.ts(168,28): error TS2345: Argument of type '(chunk: Buffer) => void' is not assignable to parameter of type 'EventHandler<[data: unknown], void>'.
+  Types of parameters 'chunk' and 'data' are incompatible.
+    Type 'unknown' is not assignable to type 'Buffer<ArrayBufferLike>'.
+packages/app/pear/workers/core/index.ts(169,5): error TS18047: 'proc.stderr' is possibly 'null'.
+packages/app/pear/workers/core/index.ts(169,28): error TS2345: Argument of type '(chunk: Buffer) => void' is not assignable to parameter of type 'EventHandler<[data: unknown], void>'.
+  Types of parameters 'chunk' and 'data' are incompatible.
+    Type 'unknown' is not assignable to type 'Buffer<ArrayBufferLike>'.
+packages/app/pear/workers/core/index.ts(191,22): error TS2345: Argument of type '(err: Error) => void' is not assignable to parameter of type 'EventHandler<unknown[], void>'.
+  Types of parameters 'err' and 'args' are incompatible.
+    Type 'unknown' is not assignable to type 'Error'.
+packages/app/pear/workers/core/index.ts(237,40): error TS2339: Property 'createIdentity' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(250,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(252,65): error TS2339: Property 'getIdentities' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(257,31): error TS2339: Property 'getIdentities' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(268,25): error TS2339: Property 'setActiveIdentity' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(273,40): error TS2339: Property 'recoverIdentity' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(286,29): error TS2339: Property 'getChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(291,26): error TS2339: Property 'getChannelMeta' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(299,28): error TS2339: Property 'listVideos' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(306,33): error TS2339: Property 'getVideoThumbnail' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(328,28): error TS2339: Property 'getVideoUrl' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(335,41): error TS2339: Property 'getActiveChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(338,38): error TS2339: Property 'uploadFromPath' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(356,29): error TS2339: Property 'setThumbnailFromBuffer' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(373,13): error TS2339: Property 'prefetchVideo' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(378,21): error TS2339: Property 'getVideoStats' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(384,13): error TS2339: Property 'subscribeChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(389,13): error TS2339: Property 'unsubscribeChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(394,26): error TS2339: Property 'getSubscriptions' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(399,13): error TS2339: Property 'subscribeChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(405,22): error TS2339: Property 'getPublicFeed' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(418,7): error TS2339: Property 'refreshFeed' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(423,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(425,9): error TS2339: Property 'submitToFeed' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(431,7): error TS2339: Property 'hideChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(437,28): error TS2339: Property 'getSeedingStatus' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(447,13): error TS2339: Property 'setSeedingConfig' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(452,13): error TS2339: Property 'pinChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(457,13): error TS2339: Property 'unpinChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(462,22): error TS2339: Property 'getPinnedChannels' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(468,28): error TS2339: Property 'getVideoThumbnail' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(473,27): error TS2339: Property 'getVideoData' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(478,41): error TS2339: Property 'getActiveChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(483,38): error TS2339: Property 'setThumbnailFromBuffer' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(488,41): error TS2339: Property 'getActiveChannel' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(493,38): error TS2339: Property 'setThumbnailFromBuffer' does not exist on type 'Object'.
+packages/app/pear/workers/core/index.ts(501,34): error TS2339: Property 'getIdentities' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(11,18): error TS7016: Could not find a declaration file for module 'bare-path'. '/Users/jd/projects/peartube/packages/app/pear-src/node_modules/bare-path/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/bare-path` if it exists or add a new declaration (.d.ts) file containing `declare module 'bare-path';`
+pear-src/workers/core/index.ts(13,18): error TS2307: Cannot find module 'pear-pipe' or its corresponding type declarations.
+pear-src/workers/core/index.ts(1223,42): error TS2339: Property 'createIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1241,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1243,65): error TS2339: Property 'getIdentities' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1248,31): error TS2339: Property 'getIdentities' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1259,25): error TS2339: Property 'setActiveIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1264,40): error TS2339: Property 'recoverIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1277,29): error TS2339: Property 'getChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1282,26): error TS2339: Property 'getChannelMeta' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1287,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1289,15): error TS2339: Property 'updateChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1297,28): error TS2339: Property 'listVideos' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1308,34): error TS2339: Property 'getVideoThumbnail' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1341,28): error TS2339: Property 'getVideoUrl' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1348,27): error TS2339: Property 'getVideoData' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1353,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1356,41): error TS2339: Property 'getActiveChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1415,38): error TS2339: Property 'uploadFromPath' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1496,30): error TS2339: Property 'getVideoUrl' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1502,28): error TS2339: Property 'getVideoData' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1525,41): error TS2339: Property 'getActiveChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1539,15): error TS2339: Property 'prefetchVideo' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1548,21): error TS2339: Property 'getVideoStats' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1554,13): error TS2339: Property 'subscribeChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1559,13): error TS2339: Property 'unsubscribeChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1564,26): error TS2339: Property 'getSubscriptions' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1569,13): error TS2339: Property 'subscribeChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1575,22): error TS2339: Property 'getPublicFeed' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1589,7): error TS2339: Property 'refreshFeed' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1594,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1596,15): error TS2339: Property 'submitToFeed' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1602,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1604,15): error TS2339: Property 'unpublishFromFeed' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1610,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1612,16): error TS2339: Property 'isChannelPublished' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1618,7): error TS2339: Property 'hideChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1629,61): error TS2339: Property 'addComment' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1639,30): error TS2339: Property 'addComment' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1651,30): error TS2339: Property 'listComments' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1671,30): error TS2339: Property 'hideComment' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1682,30): error TS2339: Property 'removeComment' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1697,30): error TS2339: Property 'addReaction' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1708,30): error TS2339: Property 'removeReaction' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1719,30): error TS2339: Property 'getReactions' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1742,28): error TS2339: Property 'getSeedingStatus' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1752,13): error TS2339: Property 'setSeedingConfig' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1758,14): error TS2339: Property 'getTranscodeSettings' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1762,14): error TS2339: Property 'setTranscodeSettings' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1766,13): error TS2339: Property 'pinChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1771,13): error TS2339: Property 'unpinChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1776,22): error TS2339: Property 'getPinnedChannels' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1782,14): error TS2339: Property 'getStorageStats' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1786,20): error TS2339: Property 'setStorageLimit' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1790,20): error TS2339: Property 'clearCache' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1799,29): error TS2339: Property 'getVideoData' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1831,27): error TS2339: Property 'getVideoData' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1836,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1839,41): error TS2339: Property 'getActiveChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1861,34): error TS2339: Property 'getActiveIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1863,41): error TS2339: Property 'getActiveChannel' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1892,34): error TS2339: Property 'getIdentities' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1905,25): error TS2339: Property 'createDeviceInvite' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1911,25): error TS2339: Property 'pairDevice' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1914,38): error TS2339: Property 'getIdentities' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1916,29): error TS2339: Property 'addPairedChannelIdentity' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1926,25): error TS2339: Property 'listDevices' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(1933,34): error TS2339: Property 'globalSearchVideos' does not exist on type 'Object'.
+pear-src/workers/core/index.ts(2259,30): error TS7016: Could not find a declaration file for module 'bare-dgram'. '/Users/jd/projects/peartube/packages/app/pear-src/node_modules/bare-dgram/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/bare-dgram` if it exists or add a new declaration (.d.ts) file containing `declare module 'bare-dgram';`
+pear-src/workers/core/index.ts(2289,30): error TS7016: Could not find a declaration file for module 'udx-native'. '/Users/jd/projects/peartube/packages/app/pear-src/node_modules/udx-native/lib/udx.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/udx-native` if it exists or add a new declaration (.d.ts) file containing `declare module 'udx-native';`
+pear-src/workers/core/index.ts(2543,33): error TS2339: Property 'fileSize' does not exist on type '{ videoCodec: null; audioCodec: null; audioChannels: number; videoProfile: null; videoLevel: null; container: null; duration: number; needsTranscode: boolean; needsVideoTranscode: boolean; needsAudioTranscode: boolean; needsRemux: boolean; reason: string; }'.
+pear-src/workers/core/index.ts(2543,67): error TS2339: Property 'fileSize' does not exist on type '{ videoCodec: null; audioCodec: null; audioChannels: number; videoProfile: null; videoLevel: null; container: null; duration: number; needsTranscode: boolean; needsVideoTranscode: boolean; needsAudioTranscode: boolean; needsRemux: boolean; reason: string; }'.
+pear-src/workers/core/index.ts(2544,34): error TS2339: Property 'moovAtEnd' does not exist on type '{ videoCodec: null; audioCodec: null; audioChannels: number; videoProfile: null; videoLevel: null; container: null; duration: number; needsTranscode: boolean; needsVideoTranscode: boolean; needsAudioTranscode: boolean; needsRemux: boolean; reason: string; }'.
+pear-src/workers/core/index.ts(2558,36): error TS2339: Property 'checkVideoSync' does not exist on type 'Object'.
+tamagui.config.ts(1,45): error TS2307: Cannot find module '@tamagui/core' or its corresponding type declarations.
+tamagui.config.ts(2,41): error TS2307: Cannot find module '@tamagui/config/v3' or its corresponding type declarations.
+tamagui.config.ts(67,16): error TS2664: Invalid module name in augmentation, module '@tamagui/core' cannot be found.
+../core/src/components/Button.tsx(1,19): error TS7016: Could not find a declaration file for module 'react'. '/Users/jd/projects/peartube/node_modules/react/index.js' implicitly has an 'any' type.
+  If the 'react' package actually exposes this module, consider sending a pull request to amend 'https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react'
+../core/src/components/Button.tsx(6,47): error TS7006: Parameter 'props' implicitly has an 'any' type.
+../core/src/components/Button.tsx(14,17): error TS7031: Binding element 'pressed' implicitly has an 'any' type.
+../core/src/components/Button.tsx(22,31): error TS2339: Property 'borderWidth' does not exist on type '{ paddingVertical: 4; paddingHorizontal: 8; fontSize: number; backgroundColor: "#9147ff"; color: "#efeff1"; borderRadius: 8; opacity: number; cursor: string; } | { paddingVertical: 8; paddingHorizontal: 12; ... 5 more ...; cursor: string; } | ... 9 more ... | { ...; }'.
+  Property 'borderWidth' does not exist on type '{ paddingVertical: 4; paddingHorizontal: 8; fontSize: number; backgroundColor: "#9147ff"; color: "#efeff1"; borderRadius: 8; opacity: number; cursor: string; }'.
+../core/src/components/Button.tsx(23,31): error TS2339: Property 'borderColor' does not exist on type '{ paddingVertical: 4; paddingHorizontal: 8; fontSize: number; backgroundColor: "#9147ff"; color: "#efeff1"; borderRadius: 8; opacity: number; cursor: string; } | { paddingVertical: 8; paddingHorizontal: 12; ... 5 more ...; cursor: string; } | ... 9 more ... | { ...; }'.
+  Property 'borderColor' does not exist on type '{ paddingVertical: 4; paddingHorizontal: 8; fontSize: number; backgroundColor: "#9147ff"; color: "#efeff1"; borderRadius: 8; opacity: number; cursor: string; }'.
+../core/src/components/Button.tsx(28,9): error TS2607: JSX element class does not support attributes because it does not have a 'props' property.
+../core/src/components/Button.tsx(28,10): error TS2786: 'ActivityIndicator' cannot be used as a JSX component.
+  Its type 'typeof ActivityIndicator' is not a valid JSX element type.
+    Type 'typeof ActivityIndicator' is not assignable to type 'new (props: any, deprecatedLegacyContext?: any) => Component<any, any, any>'.
+      Type 'NativeMethods & ActivityIndicatorComponent' is missing the following properties from type 'Component<any, any, any>': context, setState, forceUpdate, render, and 3 more.
+../core/src/components/Button.tsx(30,9): error TS2607: JSX element class does not support attributes because it does not have a 'props' property.
+../core/src/components/Button.tsx(30,10): error TS2786: 'Text' cannot be used as a JSX component.
+  Its type 'typeof Text' is not a valid JSX element type.
+    Type 'typeof Text' is not assignable to type 'new (props: any, deprecatedLegacyContext?: any) => Component<any, any, any>'.
+      Type 'NativeMethods & TextComponent' is missing the following properties from type 'Component<any, any, any>': context, setState, forceUpdate, render, and 3 more.
+../core/src/components/Card.tsx(1,19): error TS7016: Could not find a declaration file for module 'react'. '/Users/jd/projects/peartube/node_modules/react/index.js' implicitly has an 'any' type.
+  If the 'react' package actually exposes this module, consider sending a pull request to amend 'https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react'
+../core/src/components/Card.tsx(5,45): error TS7031: Binding element 'children' implicitly has an 'any' type.
+../core/src/components/Card.tsx(9,5): error TS2607: JSX element class does not support attributes because it does not have a 'props' property.
+../core/src/components/Card.tsx(9,6): error TS2786: 'View' cannot be used as a JSX component.
+  Its type 'typeof View' is not a valid JSX element type.
+    Type 'typeof View' is not assignable to type 'new (props: any, deprecatedLegacyContext?: any) => Component<any, any, any>'.
+      Type 'NativeMethods & ViewComponent' is missing the following properties from type 'Component<any, any, any>': context, setState, forceUpdate, render, and 3 more.
+../core/src/components/Input.tsx(1,19): error TS7016: Could not find a declaration file for module 'react'. '/Users/jd/projects/peartube/node_modules/react/index.js' implicitly has an 'any' type.
+  If the 'react' package actually exposes this module, consider sending a pull request to amend 'https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react'
+../core/src/components/Input.tsx(6,45): error TS7006: Parameter 'props' implicitly has an 'any' type.
+../core/src/components/Input.tsx(11,5): error TS2607: JSX element class does not support attributes because it does not have a 'props' property.
+../core/src/components/Input.tsx(11,6): error TS2786: 'TextInput' cannot be used as a JSX component.
+  Its type 'typeof TextInput' is not a valid JSX element type.
+    Type 'typeof TextInput' is not assignable to type 'new (props: any, deprecatedLegacyContext?: any) => Component<any, any, any>'.
+      Type 'TextInput' is missing the following properties from type 'Component<any, any, any>': context, setState, forceUpdate, render, and 3 more.
+../core/src/components/styles.ts(1,32): error TS7016: Could not find a declaration file for module 'react'. '/Users/jd/projects/peartube/node_modules/react/index.js' implicitly has an 'any' type.
+  If the 'react' package actually exposes this module, consider sending a pull request to amend 'https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react'
+../core/src/components/Text.tsx(1,19): error TS7016: Could not find a declaration file for module 'react'. '/Users/jd/projects/peartube/node_modules/react/index.js' implicitly has an 'any' type.
+  If the 'react' package actually exposes this module, consider sending a pull request to amend 'https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react'
+../core/src/components/Text.tsx(5,43): error TS7006: Parameter 'props' implicitly has an 'any' type.
+../core/src/components/Text.tsx(10,5): error TS2607: JSX element class does not support attributes because it does not have a 'props' property.
+../core/src/components/Text.tsx(10,6): error TS2786: 'RNText' cannot be used as a JSX component.
+  Its type 'typeof Text' is not a valid JSX element type.
+    Type 'typeof Text' is not assignable to type 'new (props: any, deprecatedLegacyContext?: any) => Component<any, any, any>'.
+      Type 'NativeMethods & TextComponent' is missing the following properties from type 'Component<any, any, any>': context, setState, forceUpdate, render, and 3 more.
+../core/src/components/Text.tsx(16,30): error TS2339: Property 'fontWeight' does not exist on type '{ color: "#efeff1"; fontSize: number; } | { color: "#efeff1"; fontSize: number; fontWeight: "bold"; } | { color: "#adadb8"; fontSize: number; } | { color: "#7a7a85"; fontSize: number; }'.
+  Property 'fontWeight' does not exist on type '{ color: "#efeff1"; fontSize: number; }'.
+../core/src/hooks/useP2PVideo.ts(10,58): error TS7016: Could not find a declaration file for module 'react'. '/Users/jd/projects/peartube/node_modules/react/index.js' implicitly has an 'any' type.
+  If the 'react' package actually exposes this module, consider sending a pull request to amend 'https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/react'
+../core/src/hooks/useP2PVideo.ts(85,14): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+../core/src/hooks/useP2PVideo.ts(106,16): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+../core/src/hooks/useP2PVideo.ts(130,16): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+../core/src/hooks/useP2PVideo.ts(146,16): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+../core/src/hooks/useP2PVideo.ts(171,22): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+../platform/src/rpc.native.ts(249,24): error TS18047: 'worklet' is possibly 'null'.
+../platform/src/rpc.native.ts(252,43): error TS18047: 'worklet' is possibly 'null'.
+../platform/src/rpc.native.ts(261,13): error TS1345: An expression of type 'void' cannot be tested for truthiness.
+../platform/src/rpc.native.ts(261,13): error TS1345: An expression of type 'void' cannot be tested for truthiness.
+../platform/src/rpc.native.ts(389,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(390,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(391,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(392,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(393,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(394,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(395,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(396,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(397,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(398,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(399,3): error TS18047: 'hrpc' is possibly 'null'.
+../platform/src/rpc.native.ts(402,3): error TS18047: 'worklet' is possibly 'null'.

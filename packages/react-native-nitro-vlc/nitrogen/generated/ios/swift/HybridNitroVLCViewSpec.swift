@@ -13,7 +13,7 @@ public protocol HybridNitroVLCViewSpec_protocol: HybridObject, HybridView {
   var source: VLCPlayerSource { get set }
   var subtitleUri: String? { get set }
   var paused: Bool? { get set }
-  var repeat: Bool? { get set }
+  var loop: Bool? { get set }
   var rate: Double? { get set }
   var seek: Double? { get set }
   var volume: Double? { get set }

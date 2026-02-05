@@ -16,12 +16,12 @@ import com.facebook.proguard.annotations.DoNotStrip
 @DoNotStrip
 @Keep
 enum class PlayerAspectRatio(@DoNotStrip @Keep val value: Int) {
-  _16_9(0),
-  _1_1(1),
-  _4_3(2),
-  _3_2(3),
-  _21_9(4),
-  _9_16(5);
+  RATIO16X9(0),
+  RATIO1X1(1),
+  RATIO4X3(2),
+  RATIO3X2(3),
+  RATIO21X9(4),
+  RATIO9X16(5);
 
   companion object
 }

@@ -3,7 +3,7 @@ import { HybridView, HybridViewMethods, HybridViewProps } from 'react-native-nit
 /**
  * Video aspect ratio type.
  */
-export type PlayerAspectRatio = '16:9' | '1:1' | '4:3' | '3:2' | '21:9' | '9:16'
+export type PlayerAspectRatio = 'ratio16x9' | 'ratio1x1' | 'ratio4x3' | 'ratio3x2' | 'ratio21x9' | 'ratio9x16'
 
 /**
  * Video resize mode.
@@ -162,7 +162,7 @@ export interface NitroVLCProps extends HybridViewProps {
    *
    * @default false
    */
-  repeat?: boolean
+  loop?: boolean
 
   /**
    * Set the playback rate of the player.

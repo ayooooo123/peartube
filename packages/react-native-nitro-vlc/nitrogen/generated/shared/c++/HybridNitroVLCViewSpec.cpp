@@ -20,8 +20,8 @@ namespace margelo::nitro::nitrovlc {
       prototype.registerHybridSetter("subtitleUri", &HybridNitroVLCViewSpec::setSubtitleUri);
       prototype.registerHybridGetter("paused", &HybridNitroVLCViewSpec::getPaused);
       prototype.registerHybridSetter("paused", &HybridNitroVLCViewSpec::setPaused);
-      prototype.registerHybridGetter("repeat", &HybridNitroVLCViewSpec::getRepeat);
-      prototype.registerHybridSetter("repeat", &HybridNitroVLCViewSpec::setRepeat);
+      prototype.registerHybridGetter("loop", &HybridNitroVLCViewSpec::getLoop);
+      prototype.registerHybridSetter("loop", &HybridNitroVLCViewSpec::setLoop);
       prototype.registerHybridGetter("rate", &HybridNitroVLCViewSpec::getRate);
       prototype.registerHybridSetter("rate", &HybridNitroVLCViewSpec::setRate);
       prototype.registerHybridGetter("seek", &HybridNitroVLCViewSpec::getSeek);

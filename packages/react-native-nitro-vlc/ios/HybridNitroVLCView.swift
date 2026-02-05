@@ -5,6 +5,38 @@ import NitroModules
 import MobileVLCKit
 import UIKit
 
+private class VLCDelegateHelper: NSObject, VLCMediaPlayerDelegate, VLCCustomDialogRendererProtocol {
+  weak var owner: HybridNitroVLCView?
+  
+  func mediaPlayerStateChanged(_ aNotification: Notification) {
+    owner?.handleStateChanged()
+  }
+  
+  func mediaPlayerTimeChanged(_ aNotification: Notification) {
+    owner?.handleTimeChanged()
+  }
+  
+  func showError(withTitle error: String, message: String) {
+    owner?.handleError()
+  }
+  
+  func showLogin(withTitle title: String, message: String, defaultUsername: String?, askingForStorage: Bool, withReference reference: NSValue) {
+    owner?.handleLoginDialog(reference: reference)
+  }
+  
+  func showQuestion(withTitle title: String, message: String, type questionType: VLCDialogQuestionType, cancel cancelString: String?, action1String: String?, action2String: String?, withReference reference: NSValue) {
+    owner?.handleQuestionDialog(title: title, message: message, reference: reference)
+  }
+  
+  func showProgress(withTitle title: String, message: String, isIndeterminate: Bool, position: Float, cancel cancelString: String?, withReference reference: NSValue) {
+    owner?.handleProgressDialog(reference: reference)
+  }
+  
+  func updateProgress(withReference reference: NSValue, message: String?, position: Float) {}
+  
+  func cancelDialog(withReference reference: NSValue) {}
+}
+
 final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   private struct VideoInfoSnapshot: Equatable {
     let duration: Double
@@ -22,9 +54,10 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   let view: UIView
   private var player: VLCMediaPlayer?
   private var dialogProvider: VLCDialogProvider?
+  private var delegateHelper: VLCDelegateHelper?
   private var lastVideoInfoSnapshot: VideoInfoSnapshot?
   private var aspectRatioCString: UnsafeMutablePointer<Int8>?
-  private var isPaused: Bool = false
+  fileprivate var isPaused: Bool = false
 
   var source: VLCPlayerSource {
     didSet {
@@ -44,7 +77,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     }
   }
 
-  var `repeat`: Bool?
+  var loop: Bool?
 
   var rate: Double? {
     didSet {
@@ -124,6 +157,10 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     self.source = VLCPlayerSource(uri: "", initType: nil, initOptions: nil)
     self.autoplay = true
     super.init()
+    
+    delegateHelper = VLCDelegateHelper()
+    delegateHelper?.owner = self
+    
     configureSource()
   }
 
@@ -170,12 +207,14 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     player?.drawable = nil
     player?.stop()
     player = nil
+    delegateHelper?.owner = nil
   }
 
   private func configureSource() {
     guard !source.uri.isEmpty else { return }
 
     cleanup()
+    delegateHelper?.owner = self
 
     if let initType = source.initType, initType != 1, let options = source.initOptions {
       player = VLCMediaPlayer(options: options)
@@ -183,12 +222,12 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
       player = VLCMediaPlayer()
     }
 
-    player?.delegate = self
+    player?.delegate = delegateHelper
     player?.drawable = view
 
     if let library = player?.libraryInstance {
       dialogProvider = VLCDialogProvider(library: library, customUI: true)
-      dialogProvider?.customRenderer = self
+      dialogProvider?.customRenderer = delegateHelper
     }
 
     loadMedia(uri: source.uri)
@@ -281,7 +320,8 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
       return
     }
 
-    guard let ratio = videoAspectRatio?.stringValue else { return }
+    guard let aspectRatio = videoAspectRatio else { return }
+    let ratio = vlcAspectRatioString(for: aspectRatio)
     if let aspectRatioCString {
       free(aspectRatioCString)
       self.aspectRatioCString = nil
@@ -289,6 +329,18 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
 
     aspectRatioCString = strdup(ratio)
     player.videoAspectRatio = aspectRatioCString
+  }
+
+  private func vlcAspectRatioString(for ratio: PlayerAspectRatio) -> String {
+    switch ratio {
+    case .ratio16x9: return "16:9"
+    case .ratio1x1: return "1:1"
+    case .ratio4x3: return "4:3"
+    case .ratio3x2: return "3:2"
+    case .ratio21x9: return "21:9"
+    case .ratio9x16: return "9:16"
+    @unknown default: return "16:9"
+    }
   }
 
   private func applyResizeMode() {
@@ -307,6 +359,85 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     @unknown default:
       view.contentMode = .scaleAspectFit
     }
+  }
+
+  fileprivate func handleStateChanged() {
+    guard let player else { return }
+
+    switch player.state {
+    case .opening, .buffering:
+      onBuffering?(SimpleCallbackEventProps(target: 0))
+    case .playing:
+      let duration = Double(player.media?.length.intValue ?? 0)
+      onPlaying?(OnPlayingEventProps(duration: duration, target: 0, seekable: player.isSeekable))
+    case .paused:
+      isPaused = true
+      onPaused?(SimpleCallbackEventProps(target: 0))
+    case .stopped:
+      onStopped?(SimpleCallbackEventProps(target: 0))
+    case .ended:
+      onEnded?(SimpleCallbackEventProps(target: 0))
+      if loop == true {
+        player.position = 0
+        player.play()
+      }
+    case .error:
+      onError?(SimpleCallbackEventProps(target: 0))
+    case .esAdded:
+      break
+    @unknown default:
+      break
+    }
+
+    updateVideoInfoIfNeeded()
+  }
+
+  fileprivate func handleTimeChanged() {
+    guard let player else { return }
+    guard player.isPlaying, !isPaused else { return }
+
+    let duration = Double(player.media?.length.intValue ?? 0)
+    let currentTime = Double(player.time.intValue)
+    let remainingTime = Double(player.remainingTime?.intValue ?? 0)
+    let position = duration > 0 ? currentTime / duration : 0
+
+    onProgress?(OnProgressEventProps(
+      duration: duration,
+      target: 0,
+      currentTime: currentTime,
+      position: position,
+      remainingTime: remainingTime
+    ))
+
+    updateVideoInfoIfNeeded()
+  }
+
+  fileprivate func handleError() {
+    onError?(SimpleCallbackEventProps(target: 0))
+  }
+
+  fileprivate func handleLoginDialog(reference: NSValue) {
+    dialogProvider?.postAction(3, forDialogReference: reference)
+  }
+
+  fileprivate func handleQuestionDialog(title: String, message: String, reference: NSValue) {
+    let fullText = "\(title) \(message)"
+    let lowercased = fullText.lowercased()
+    let isCertificateDialog = lowercased.contains("certificate") || lowercased.contains("ssl") || lowercased.contains("tls") || lowercased.contains("cert") || lowercased.contains("security")
+
+    if isCertificateDialog {
+      if acceptInvalidCertificates == true {
+        dialogProvider?.postAction(1, forDialogReference: reference)
+      } else {
+        dialogProvider?.postAction(3, forDialogReference: reference)
+      }
+    } else {
+      dialogProvider?.postAction(3, forDialogReference: reference)
+    }
+  }
+
+  fileprivate func handleProgressDialog(reference: NSValue) {
+    dialogProvider?.dismissDialog(withReference: reference)
   }
 
   private func updateVideoInfoIfNeeded() {
@@ -357,92 +488,5 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
 
     return snapshots
   }
-}
-
-extension HybridNitroVLCView: VLCMediaPlayerDelegate {
-  func mediaPlayerStateChanged(_ aNotification: Notification) {
-    guard let player else { return }
-
-    switch player.state {
-    case .opening, .buffering:
-      onBuffering?(SimpleCallbackEventProps(target: 0))
-    case .playing:
-      let duration = Double(player.media?.length.intValue ?? 0)
-      onPlaying?(OnPlayingEventProps(duration: duration, target: 0, seekable: player.isSeekable))
-    case .paused:
-      isPaused = true
-      onPaused?(SimpleCallbackEventProps(target: 0))
-    case .stopped:
-      onStopped?(SimpleCallbackEventProps(target: 0))
-    case .ended:
-      onEnded?(SimpleCallbackEventProps(target: 0))
-      if `repeat` == true {
-        player.position = 0
-        player.play()
-      }
-    case .error:
-      onError?(SimpleCallbackEventProps(target: 0))
-    case .esAdded:
-      break
-    @unknown default:
-      break
-    }
-
-    updateVideoInfoIfNeeded()
-  }
-
-  func mediaPlayerTimeChanged(_ aNotification: Notification) {
-    guard let player else { return }
-    guard player.isPlaying, !isPaused else { return }
-
-    let duration = Double(player.media?.length.intValue ?? 0)
-    let currentTime = Double(player.time.intValue)
-    let remainingTime = Double(player.remainingTime?.intValue ?? 0)
-    let position = duration > 0 ? currentTime / duration : 0
-
-    onProgress?(OnProgressEventProps(
-      duration: duration,
-      target: 0,
-      currentTime: currentTime,
-      position: position,
-      remainingTime: remainingTime
-    ))
-
-    updateVideoInfoIfNeeded()
-  }
-}
-
-extension HybridNitroVLCView: VLCCustomDialogRendererProtocol {
-  func showError(withTitle error: String, message: String) {
-    onError?(SimpleCallbackEventProps(target: 0))
-  }
-
-  func showLogin(withTitle title: String, message: String, defaultUsername: String?, askingForStorage: Bool, withReference reference: NSValue) {
-    dialogProvider?.postAction(3, forDialogReference: reference)
-  }
-
-  func showQuestion(withTitle title: String, message: String, type questionType: VLCDialogQuestionType, cancelString: String?, action1String: String?, action2String: String?, withReference reference: NSValue) {
-    let fullText = "\(title) \(message)"
-    let lowercased = fullText.lowercased()
-    let isCertificateDialog = lowercased.contains("certificate") || lowercased.contains("ssl") || lowercased.contains("tls") || lowercased.contains("cert") || lowercased.contains("security")
-
-    if isCertificateDialog {
-      if acceptInvalidCertificates == true {
-        dialogProvider?.postAction(1, forDialogReference: reference)
-      } else {
-        dialogProvider?.postAction(3, forDialogReference: reference)
-      }
-    } else {
-      dialogProvider?.postAction(3, forDialogReference: reference)
-    }
-  }
-
-  func showProgress(withTitle title: String, message: String, isIndeterminate: Bool, position: Float, cancelString: String?, withReference reference: NSValue) {
-    dialogProvider?.dismissDialog(withReference: reference)
-  }
-
-  func updateProgress(withReference reference: NSValue, message: String?, position: Float) {}
-
-  func cancelDialog(withReference reference: NSValue) {}
 }
 #endif

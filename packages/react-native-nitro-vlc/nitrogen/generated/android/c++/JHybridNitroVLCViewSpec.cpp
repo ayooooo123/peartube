@@ -117,14 +117,14 @@ namespace margelo::nitro::nitrovlc {
     static const auto method = javaClassStatic()->getMethod<void(jni::alias_ref<jni::JBoolean> /* paused */)>("setPaused");
     method(_javaPart, paused.has_value() ? jni::JBoolean::valueOf(paused.value()) : nullptr);
   }
-  std::optional<bool> JHybridNitroVLCViewSpec::getRepeat() {
-    static const auto method = javaClassStatic()->getMethod<jni::local_ref<jni::JBoolean>()>("getRepeat");
+  std::optional<bool> JHybridNitroVLCViewSpec::getLoop() {
+    static const auto method = javaClassStatic()->getMethod<jni::local_ref<jni::JBoolean>()>("getLoop");
     auto __result = method(_javaPart);
     return __result != nullptr ? std::make_optional(static_cast<bool>(__result->value())) : std::nullopt;
   }
-  void JHybridNitroVLCViewSpec::setRepeat(std::optional<bool> repeat) {
-    static const auto method = javaClassStatic()->getMethod<void(jni::alias_ref<jni::JBoolean> /* repeat */)>("setRepeat");
-    method(_javaPart, repeat.has_value() ? jni::JBoolean::valueOf(repeat.value()) : nullptr);
+  void JHybridNitroVLCViewSpec::setLoop(std::optional<bool> loop) {
+    static const auto method = javaClassStatic()->getMethod<void(jni::alias_ref<jni::JBoolean> /* loop */)>("setLoop");
+    method(_javaPart, loop.has_value() ? jni::JBoolean::valueOf(loop.value()) : nullptr);
   }
   std::optional<double> JHybridNitroVLCViewSpec::getRate() {
     static const auto method = javaClassStatic()->getMethod<jni::local_ref<jni::JDouble>()>("getRate");

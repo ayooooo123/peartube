@@ -64,7 +64,7 @@ abstract class HybridNitroVLCViewSpec: HybridView() {
   @get:Keep
   @set:DoNotStrip
   @set:Keep
-  abstract var repeat: Boolean?
+  abstract var loop: Boolean?
   
   @get:DoNotStrip
   @get:Keep

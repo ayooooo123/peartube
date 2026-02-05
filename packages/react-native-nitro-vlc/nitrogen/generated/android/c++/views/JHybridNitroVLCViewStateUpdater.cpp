@@ -49,9 +49,9 @@ void JHybridNitroVLCViewStateUpdater::updateViewProps(jni::alias_ref<jni::JClass
     view->setPaused(props->paused.value);
     props->paused.isDirty = false;
   }
-  if (props->repeat.isDirty) {
-    view->setRepeat(props->repeat.value);
-    props->repeat.isDirty = false;
+  if (props->loop.isDirty) {
+    view->setLoop(props->loop.value);
+    props->loop.isDirty = false;
   }
   if (props->rate.isDirty) {
     view->setRate(props->rate.value);

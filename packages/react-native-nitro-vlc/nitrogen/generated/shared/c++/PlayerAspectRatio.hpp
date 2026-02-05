@@ -29,12 +29,12 @@ namespace margelo::nitro::nitrovlc {
    * An enum which can be represented as a JavaScript union (PlayerAspectRatio).
    */
   enum class PlayerAspectRatio {
-    _16_9      SWIFT_NAME(169) = 0,
-    _1_1      SWIFT_NAME(11) = 1,
-    _4_3      SWIFT_NAME(43) = 2,
-    _3_2      SWIFT_NAME(32) = 3,
-    _21_9      SWIFT_NAME(219) = 4,
-    _9_16      SWIFT_NAME(916) = 5,
+    RATIO16X9      SWIFT_NAME(ratio16x9) = 0,
+    RATIO1X1      SWIFT_NAME(ratio1x1) = 1,
+    RATIO4X3      SWIFT_NAME(ratio4x3) = 2,
+    RATIO3X2      SWIFT_NAME(ratio3x2) = 3,
+    RATIO21X9      SWIFT_NAME(ratio21x9) = 4,
+    RATIO9X16      SWIFT_NAME(ratio9x16) = 5,
   } CLOSED_ENUM;
 
 } // namespace margelo::nitro::nitrovlc
@@ -47,24 +47,24 @@ namespace margelo::nitro {
     static inline margelo::nitro::nitrovlc::PlayerAspectRatio fromJSI(jsi::Runtime& runtime, const jsi::Value& arg) {
       std::string unionValue = JSIConverter<std::string>::fromJSI(runtime, arg);
       switch (hashString(unionValue.c_str(), unionValue.size())) {
-        case hashString("16:9"): return margelo::nitro::nitrovlc::PlayerAspectRatio::_16_9;
-        case hashString("1:1"): return margelo::nitro::nitrovlc::PlayerAspectRatio::_1_1;
-        case hashString("4:3"): return margelo::nitro::nitrovlc::PlayerAspectRatio::_4_3;
-        case hashString("3:2"): return margelo::nitro::nitrovlc::PlayerAspectRatio::_3_2;
-        case hashString("21:9"): return margelo::nitro::nitrovlc::PlayerAspectRatio::_21_9;
-        case hashString("9:16"): return margelo::nitro::nitrovlc::PlayerAspectRatio::_9_16;
+        case hashString("ratio16x9"): return margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO16X9;
+        case hashString("ratio1x1"): return margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO1X1;
+        case hashString("ratio4x3"): return margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO4X3;
+        case hashString("ratio3x2"): return margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO3X2;
+        case hashString("ratio21x9"): return margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO21X9;
+        case hashString("ratio9x16"): return margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO9X16;
         default: [[unlikely]]
           throw std::invalid_argument("Cannot convert \"" + unionValue + "\" to enum PlayerAspectRatio - invalid value!");
       }
     }
     static inline jsi::Value toJSI(jsi::Runtime& runtime, margelo::nitro::nitrovlc::PlayerAspectRatio arg) {
       switch (arg) {
-        case margelo::nitro::nitrovlc::PlayerAspectRatio::_16_9: return JSIConverter<std::string>::toJSI(runtime, "16:9");
-        case margelo::nitro::nitrovlc::PlayerAspectRatio::_1_1: return JSIConverter<std::string>::toJSI(runtime, "1:1");
-        case margelo::nitro::nitrovlc::PlayerAspectRatio::_4_3: return JSIConverter<std::string>::toJSI(runtime, "4:3");
-        case margelo::nitro::nitrovlc::PlayerAspectRatio::_3_2: return JSIConverter<std::string>::toJSI(runtime, "3:2");
-        case margelo::nitro::nitrovlc::PlayerAspectRatio::_21_9: return JSIConverter<std::string>::toJSI(runtime, "21:9");
-        case margelo::nitro::nitrovlc::PlayerAspectRatio::_9_16: return JSIConverter<std::string>::toJSI(runtime, "9:16");
+        case margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO16X9: return JSIConverter<std::string>::toJSI(runtime, "ratio16x9");
+        case margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO1X1: return JSIConverter<std::string>::toJSI(runtime, "ratio1x1");
+        case margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO4X3: return JSIConverter<std::string>::toJSI(runtime, "ratio4x3");
+        case margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO3X2: return JSIConverter<std::string>::toJSI(runtime, "ratio3x2");
+        case margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO21X9: return JSIConverter<std::string>::toJSI(runtime, "ratio21x9");
+        case margelo::nitro::nitrovlc::PlayerAspectRatio::RATIO9X16: return JSIConverter<std::string>::toJSI(runtime, "ratio9x16");
         default: [[unlikely]]
           throw std::invalid_argument("Cannot convert PlayerAspectRatio to JS - invalid value: "
                                     + std::to_string(static_cast<int>(arg)) + "!");
@@ -76,12 +76,12 @@ namespace margelo::nitro {
       }
       std::string unionValue = JSIConverter<std::string>::fromJSI(runtime, value);
       switch (hashString(unionValue.c_str(), unionValue.size())) {
-        case hashString("16:9"):
-        case hashString("1:1"):
-        case hashString("4:3"):
-        case hashString("3:2"):
-        case hashString("21:9"):
-        case hashString("9:16"):
+        case hashString("ratio16x9"):
+        case hashString("ratio1x1"):
+        case hashString("ratio4x3"):
+        case hashString("ratio3x2"):
+        case hashString("ratio21x9"):
+        case hashString("ratio9x16"):
           return true;
         default:
           return false;

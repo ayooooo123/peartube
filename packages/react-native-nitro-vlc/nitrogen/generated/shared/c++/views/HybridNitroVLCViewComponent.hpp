@@ -52,7 +52,7 @@ namespace margelo::nitro::nitrovlc::views {
     CachedProp<VLCPlayerSource> source;
     CachedProp<std::optional<std::string>> subtitleUri;
     CachedProp<std::optional<bool>> paused;
-    CachedProp<std::optional<bool>> repeat;
+    CachedProp<std::optional<bool>> loop;
     CachedProp<std::optional<double>> rate;
     CachedProp<std::optional<double>> seek;
     CachedProp<std::optional<double>> volume;

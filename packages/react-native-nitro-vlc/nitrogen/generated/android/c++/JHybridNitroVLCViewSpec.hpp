@@ -57,8 +57,8 @@ namespace margelo::nitro::nitrovlc {
     void setSubtitleUri(const std::optional<std::string>& subtitleUri) override;
     std::optional<bool> getPaused() override;
     void setPaused(std::optional<bool> paused) override;
-    std::optional<bool> getRepeat() override;
-    void setRepeat(std::optional<bool> repeat) override;
+    std::optional<bool> getLoop() override;
+    void setLoop(std::optional<bool> loop) override;
     std::optional<double> getRate() override;
     void setRate(std::optional<double> rate) override;
     std::optional<double> getSeek() override;

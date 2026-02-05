@@ -2,8 +2,8 @@
   "name": "react-native-nitro-vlc",
   "version": "0.1.0",
   "description": "High-performance VLC player for React Native using Nitro Modules",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
   "scripts": {
     "build": "tsc",
     "test": "jest",
@@ -20,5 +20,10 @@
   "peerDependencies": {
     "react": "*",
     "react-native": ">=0.75.0"
+  },
+  "codegenConfig": {
+    "name": "NitroVLCSpec",
+    "type": "modules",
+    "jsSrcsDir": "src"
   }
 }

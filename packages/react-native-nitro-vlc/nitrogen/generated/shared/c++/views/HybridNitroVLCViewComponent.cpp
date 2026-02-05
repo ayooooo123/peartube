@@ -56,14 +56,14 @@ namespace margelo::nitro::nitrovlc::views {
         throw std::runtime_error(std::string("NitroVLCView.paused: ") + exc.what());
       }
     }()),
-    repeat([&]() -> CachedProp<std::optional<bool>> {
+    loop([&]() -> CachedProp<std::optional<bool>> {
       try {
-        const react::RawValue* rawValue = rawProps.at("repeat", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.repeat;
+        const react::RawValue* rawValue = rawProps.at("loop", nullptr, nullptr);
+        if (rawValue == nullptr) return sourceProps.loop;
         const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<bool>>::fromRawValue(*runtime, value, sourceProps.repeat);
+        return CachedProp<std::optional<bool>>::fromRawValue(*runtime, value, sourceProps.loop);
       } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.repeat: ") + exc.what());
+        throw std::runtime_error(std::string("NitroVLCView.loop: ") + exc.what());
       }
     }()),
     rate([&]() -> CachedProp<std::optional<double>> {
@@ -282,7 +282,7 @@ namespace margelo::nitro::nitrovlc::views {
       case hashString("source"): return true;
       case hashString("subtitleUri"): return true;
       case hashString("paused"): return true;
-      case hashString("repeat"): return true;
+      case hashString("loop"): return true;
       case hashString("rate"): return true;
       case hashString("seek"): return true;
       case hashString("volume"): return true;

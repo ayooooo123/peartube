@@ -254,6 +254,7 @@ export function VideoPlayerOverlay() {
   const progressBarWidth = useRef(0)
   const videoWrapperRef = useRef<View>(null)
   const [pipSupported, setPipSupported] = useState<boolean | null>(null)
+  const [videoWrapperHeight, setVideoWrapperHeight] = useState<number | null>(null)
 
   // State for showing custom controls overlay
   const [showControls, setShowControls] = useState(false)
@@ -1370,14 +1371,23 @@ export function VideoPlayerOverlay() {
   // Controls overlay positioning - always fill the container
   const controlsOverlayStyle = useAnimatedStyle(() => {
     'worklet'
+    if (isLandscapeFullscreenShared.value || isInPipModeShared.value || animProgress.value < 0.95) {
+      return {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+      }
+    }
     return {
       position: 'absolute',
       top: 0,
       left: 0,
-      right: 0,
-      bottom: 0,
+      width: screenWidthShared.value,
+      height: videoWrapperHeight ?? videoHeightShared.value,
     }
-  }, [])
+  }, [videoWrapperHeight])
 
   // Progress bar style - positions at bottom, adjusts for landscape
   const progressBarStyle = useAnimatedStyle(() => {
@@ -2388,6 +2398,12 @@ export function VideoPlayerOverlay() {
           <Animated.View
             ref={videoWrapperRef}
             style={[styles.videoWrapper, videoStyle]}
+            onLayout={(event) => {
+              const height = event.nativeEvent.layout.height
+              if (height > 0 && height !== videoWrapperHeight) {
+                setVideoWrapperHeight(height)
+              }
+            }}
           >
             {/* Background - fills the parent container */}
             <Pressable

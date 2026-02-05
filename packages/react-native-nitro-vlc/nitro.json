@@ -1,0 +1,13 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": ["nitrovlc"],
+  "ios": {
+    "iosModuleName": "NitroVLC"
+  },
+  "android": {
+    "androidNamespace": ["com", "nitrovlc"],
+    "androidCxxLibName": "NitroVLC"
+  },
+  "autolinking": {},
+  "ignorePaths": ["**/node_modules"]
+}

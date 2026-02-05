@@ -4,6 +4,7 @@
   "private": true,
   "description": "PearTube monorepo - P2P video streaming for desktop and mobile",
   "scripts": {
+    "postinstall": "patch-package",
     "start": "npm start --prefix packages/app",
     "ios": "npm run ios --prefix packages/app",
     "android": "npm run android --prefix packages/app",
@@ -36,6 +37,7 @@
     "eslint-plugin-react": "^7.37.0",
     "eslint-plugin-react-hooks": "^4.6.2",
     "hypercore-blob-server": "^1.12.0",
+    "patch-package": "^8.0.1",
     "typescript": "^5.9.0"
   },
   "overrides": {

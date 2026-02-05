@@ -15,6 +15,7 @@ Pod::Spec.new do |s|
   s.source       = { :git => "https://github.com/example/react-native-nitro-vlc.git", :tag => "#{s.version}" }
 
   s.source_files = "ios/**/*.{h,m,mm,swift}"
+  s.exclude_files = "ios/**/*Tests*/**/*"
 
   s.dependency "MobileVLCKit", "~> 3.7.0"
 

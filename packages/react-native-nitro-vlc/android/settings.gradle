@@ -1,0 +1,3 @@
+rootProject.name = 'react-native-nitro-vlc'
+include ':react-native-nitro-vlc'
+project(':react-native-nitro-vlc').projectDir = file('.')

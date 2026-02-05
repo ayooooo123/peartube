@@ -5,4 +5,17 @@
 
 export const name = 'NitroVLC';
 
-// Placeholder for VLC player implementation
+export type {
+  NitroVLCMethods,
+  NitroVLCProps,
+  NitroVLCView,
+  OnPlayingEventProps,
+  OnProgressEventProps,
+  PlayerAspectRatio,
+  PlayerResizeMode,
+  SimpleCallbackEventProps,
+  Track,
+  VideoInfo,
+  VLCPlayerSource,
+  VideoSize,
+} from './NitroVLC.nitro'

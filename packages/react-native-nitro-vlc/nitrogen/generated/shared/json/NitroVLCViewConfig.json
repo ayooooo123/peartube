@@ -1,0 +1,33 @@
+{
+  "uiViewClassName": "NitroVLCView",
+  "supportsRawText": false,
+  "bubblingEventTypes": {},
+  "directEventTypes": {},
+  "validAttributes": {
+    "source": true,
+    "subtitleUri": true,
+    "paused": true,
+    "repeat": true,
+    "rate": true,
+    "seek": true,
+    "volume": true,
+    "muted": true,
+    "audioTrack": true,
+    "textTrack": true,
+    "playInBackground": true,
+    "videoAspectRatio": true,
+    "autoAspectRatio": true,
+    "resizeMode": true,
+    "autoplay": true,
+    "acceptInvalidCertificates": true,
+    "onPlaying": true,
+    "onProgress": true,
+    "onPaused": true,
+    "onStopped": true,
+    "onBuffering": true,
+    "onEnded": true,
+    "onError": true,
+    "onLoad": true,
+    "hybridRef": true
+  }
+}

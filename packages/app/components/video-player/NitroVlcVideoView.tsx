@@ -1,7 +1,13 @@
 import React, { RefObject, useCallback } from 'react'
 import { StyleProp, ViewStyle } from 'react-native'
 import { NitroVLCView } from 'react-native-nitro-vlc'
-import type { NitroVLCProps, VideoInfo } from 'react-native-nitro-vlc'
+import type {
+  NitroVLCProps,
+  VideoInfo,
+  OnPlayingEventProps,
+  OnProgressEventProps,
+  SimpleCallbackEventProps,
+} from 'react-native-nitro-vlc'
 
 type Props = {
   style?: StyleProp<ViewStyle>
@@ -15,13 +21,13 @@ type Props = {
   resizeMode?: NitroVLCProps['resizeMode']
   autoAspectRatio?: boolean
   playInBackground?: boolean
-  onLoad?: (event: any) => void
-  onProgress?: (event: any) => void
-  onPlaying?: () => void
-  onPaused?: () => void
+  onLoad?: (event: VideoInfo) => void
+  onProgress?: (event: OnProgressEventProps) => void
+  onPlaying?: (event?: OnPlayingEventProps) => void
+  onPaused?: (event?: SimpleCallbackEventProps) => void
   onBuffering?: (event: { isBuffering: boolean }) => void
-  onEnded?: () => void
-  onError?: (event: any) => void
+  onEnded?: (event?: SimpleCallbackEventProps) => void
+  onError?: (event: SimpleCallbackEventProps) => void
   onVideoStateChange?: (event: { type?: string; mVideoWidth?: number; mVideoHeight?: number }) => void
 }
 
@@ -59,7 +65,7 @@ export const NitroVlcVideoView: React.FC<Props> = (props) => {
   return (
     <NitroVLCView
       ref={props.playerRef}
-      style={props.style}
+      style={props.style as any}
       source={props.source}
       paused={props.paused}
       rate={props.rate}
@@ -69,13 +75,13 @@ export const NitroVlcVideoView: React.FC<Props> = (props) => {
       resizeMode={props.resizeMode}
       autoAspectRatio={props.autoAspectRatio}
       playInBackground={props.playInBackground}
-      onLoad={handleLoad}
-      onPlaying={handlePlaying}
-      onProgress={props.onProgress}
-      onPaused={handlePaused}
-      onBuffering={handleBuffering}
-      onEnded={props.onEnded}
-      onError={props.onError}
+      onLoad={handleLoad as any}
+      onPlaying={handlePlaying as any}
+      onProgress={props.onProgress as any}
+      onPaused={handlePaused as any}
+      onBuffering={handleBuffering as any}
+      onEnded={props.onEnded as any}
+      onError={props.onError as any}
     />
   )
 }

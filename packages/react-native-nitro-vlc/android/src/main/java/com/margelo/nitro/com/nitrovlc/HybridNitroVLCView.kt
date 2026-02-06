@@ -4,15 +4,18 @@ import android.content.Context
 import android.net.Uri
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import com.margelo.nitro.views.RecyclableView
 import org.videolan.libvlc.Dialog
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
 import org.videolan.libvlc.interfaces.IVLCVout
+import org.videolan.libvlc.interfaces.IMedia
 
 class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(),
   SurfaceHolder.Callback,
-  IVLCVout.OnNewVideoLayoutListener {
+  IVLCVout.OnNewVideoLayoutListener,
+  RecyclableView {
 
   private var libVLC: LibVLC? = null
   private var mediaPlayer: MediaPlayer? = null
@@ -22,6 +25,9 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   private var currentInitOptions: List<String>? = null
   private var videoWidth: Int = 0
   private var videoHeight: Int = 0
+  private val playerLock = Any()
+  private var isDisposed = false
+  private var viewsAttached = false
 
   override val view: SurfaceView
     get() = surfaceView
@@ -29,6 +35,7 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   override var source: VLCPlayerSource = VLCPlayerSource("", null, null)
     set(value) {
       field = value
+      if (isDisposed) return
       if (value.uri.isNotBlank()) {
         loadMedia(value)
       }
@@ -37,15 +44,17 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   override var subtitleUri: String? = null
     set(value) {
       field = value
-      val player = mediaPlayer ?: return
+      if (isDisposed) return
+      val media = mediaPlayer?.media ?: return
       value?.let {
-        player.addSlave(Media.Slave.Type.Subtitle, it, true)
+        media.addSlave(IMedia.Slave(IMedia.Slave.Type.Subtitle, 0, it))
       }
     }
 
   override var paused: Boolean? = null
     set(value) {
       field = value
+      if (isDisposed) return
       val player = mediaPlayer ?: return
       if (value == true) {
         player.pause()
@@ -59,6 +68,7 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   override var rate: Double? = null
     set(value) {
       field = value
+      if (isDisposed) return
       val player = mediaPlayer ?: return
       value?.let { player.rate = it.toFloat() }
     }
@@ -66,6 +76,7 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   override var seek: Double? = null
     set(value) {
       field = value
+      if (isDisposed) return
       val player = mediaPlayer ?: return
       value?.let {
         if (it in 0.0..1.0) {
@@ -77,18 +88,21 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   override var volume: Double? = null
     set(value) {
       field = value
+      if (isDisposed) return
       applyVolume()
     }
 
   override var muted: Boolean? = null
     set(value) {
       field = value
+      if (isDisposed) return
       applyVolume()
     }
 
   override var audioTrack: Double? = null
     set(value) {
       field = value
+      if (isDisposed) return
       val player = mediaPlayer ?: return
       value?.let { player.setAudioTrack(it.toInt()) }
     }
@@ -96,6 +110,7 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   override var textTrack: Double? = null
     set(value) {
       field = value
+      if (isDisposed) return
       val player = mediaPlayer ?: return
       value?.let { player.setSpuTrack(it.toInt()) }
     }
@@ -105,18 +120,21 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   override var videoAspectRatio: PlayerAspectRatio? = null
     set(value) {
       field = value
+      if (isDisposed) return
       applyAspectRatio()
     }
 
   override var autoAspectRatio: Boolean? = null
     set(value) {
       field = value
+      if (isDisposed) return
       applyAspectRatio()
     }
 
   override var resizeMode: PlayerResizeMode? = null
     set(value) {
       field = value
+      if (isDisposed) return
       applyAspectRatio()
     }
 
@@ -146,35 +164,68 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   }
 
   override fun play() {
+    if (isDisposed) return
     mediaPlayer?.play()
   }
 
   override fun pause() {
+    if (isDisposed) return
     mediaPlayer?.pause()
   }
 
   override fun stop() {
+    if (isDisposed) return
     mediaPlayer?.stop()
   }
 
   override fun seek(position: Double) {
+    if (isDisposed) return
     mediaPlayer?.position = position.toFloat()
   }
 
   override fun setVolume(volume: Double) {
+    if (isDisposed) return
     this.volume = volume
   }
 
   override fun surfaceCreated(holder: SurfaceHolder) {
+    if (isDisposed) return
     attachSurface(holder)
   }
 
   override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+    if (isDisposed) return
     applySurfaceSize(width, height)
   }
 
   override fun surfaceDestroyed(holder: SurfaceHolder) {
-    mediaPlayer?.vlcVout?.detachViews()
+    synchronized(playerLock) {
+      if (viewsAttached) {
+        mediaPlayer?.vlcVout?.detachViews()
+        viewsAttached = false
+      }
+    }
+  }
+
+  override fun dispose() {
+    synchronized(playerLock) {
+      if (isDisposed) return
+      isDisposed = true
+      clearCallbacks()
+      releasePlayerLocked()
+    }
+    super.dispose()
+  }
+
+  override fun prepareForRecycle() {
+    synchronized(playerLock) {
+      if (isDisposed) return
+      clearCallbacks()
+      releasePlayerLocked()
+      lastVideoInfoHash = null
+      videoWidth = 0
+      videoHeight = 0
+    }
   }
 
   override fun onNewVideoLayout(
@@ -186,6 +237,7 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
     sarNum: Int,
     sarDen: Int
   ) {
+    if (isDisposed) return
     if (width <= 0 || height <= 0) return
     videoWidth = width
     videoHeight = height
@@ -198,6 +250,7 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   }
 
   private fun ensurePlayer(options: List<String>) {
+    if (isDisposed) return
     if (libVLC != null && currentInitOptions == options) return
     releasePlayer()
     libVLC = LibVLC(context, options)
@@ -208,11 +261,14 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
     Dialog.setCallbacks(libVLC, object : Dialog.Callbacks {
       override fun onDisplay(dialog: Dialog.QuestionDialog) {
         val accept = acceptInvalidCertificates == true
-        dialog.postAction(if (accept) 1 else 2)
+        // Action 1 = accept, Action 3 = dismiss (matches iOS behavior)
+        dialog.postAction(if (accept) 1 else 3)
       }
 
       override fun onDisplay(dialog: Dialog.ErrorMessage) = Unit
-      override fun onDisplay(dialog: Dialog.LoginDialog) = Unit
+      override fun onDisplay(dialog: Dialog.LoginDialog) {
+        dialog.dismiss() // Dismiss login dialogs
+      }
       override fun onDisplay(dialog: Dialog.ProgressDialog) = Unit
       override fun onCanceled(dialog: Dialog) = Unit
       override fun onProgressUpdate(dialog: Dialog.ProgressDialog) = Unit
@@ -223,16 +279,22 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   }
 
   private fun attachSurface(holder: SurfaceHolder) {
-    val player = mediaPlayer ?: return
-    if (holder.surface == null || !holder.surface.isValid) return
-    val vout = player.vlcVout
-    vout.setVideoSurface(holder.surface, holder)
-    if (!vout.areViewsAttached()) {
-      vout.attachViews(this)
+    try {
+      val player = mediaPlayer ?: return
+      if (holder.surface == null || !holder.surface.isValid) return
+      val vout = player.vlcVout
+      vout.setVideoSurface(holder.surface, holder)
+      if (!vout.areViewsAttached()) {
+        vout.attachViews(this)
+        viewsAttached = true
+      }
+    } catch (_: Exception) {
+      return
     }
   }
 
   private fun applySurfaceSize(width: Int, height: Int) {
+    if (isDisposed) return
     val player = mediaPlayer ?: return
     player.vlcVout.setWindowSize(width, height)
     applyAspectRatio()
@@ -244,26 +306,52 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   }
 
   private fun applyAspectRatio() {
+    if (isDisposed) return
     val player = mediaPlayer ?: return
-    val auto = autoAspectRatio == true
-    val aspect = if (auto) {
-      val width = surfaceView.width
-      val height = surfaceView.height
-      if (width > 0 && height > 0) "$width:$height" else null
+
+    // Determine the explicit aspect ratio (null = let VLC use video's natural ratio)
+    val aspect = if (autoAspectRatio == true || videoAspectRatio == null) {
+      null
     } else {
       videoAspectRatio?.let { aspectRatioString(it) }
     }
-    val mode = resizeMode
-    when (mode) {
+
+    when (resizeMode) {
       PlayerResizeMode.FILL -> {
-        player.setScale(0f)
-        player.setAspectRatio(null)
+        // Stretch to fill: set aspect ratio to container dimensions
+        val w = surfaceView.width
+        val h = surfaceView.height
+        if (w > 0 && h > 0) {
+          player.setScale(0f)
+          player.setAspectRatio("$w:$h")
+        }
       }
-      PlayerResizeMode.COVER,
+      PlayerResizeMode.COVER -> {
+        // Fill container preserving aspect ratio (may crop)
+        player.setAspectRatio(aspect)
+        if (videoWidth > 0 && videoHeight > 0) {
+          val w = surfaceView.width.toFloat()
+          val h = surfaceView.height.toFloat()
+          if (w > 0f && h > 0f) {
+            val scaleW = w / videoWidth.toFloat()
+            val scaleH = h / videoHeight.toFloat()
+            player.setScale(maxOf(scaleW, scaleH))
+          } else {
+            player.setScale(0f)
+          }
+        } else {
+          player.setScale(0f)
+        }
+      }
+      PlayerResizeMode.NONE -> {
+        // Native size, no scaling
+        player.setAspectRatio(aspect)
+        player.setScale(1f)
+      }
       PlayerResizeMode.CONTAIN,
-      PlayerResizeMode.NONE,
       PlayerResizeMode.SCALE_DOWN,
       null -> {
+        // Fit inside container preserving aspect ratio (VLC default)
         player.setScale(0f)
         player.setAspectRatio(aspect)
       }
@@ -282,6 +370,7 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   }
 
   private fun applyVolume() {
+    if (isDisposed) return
     val player = mediaPlayer ?: return
     val isMuted = muted == true
     val volumeValue = volume?.let { (it * 100).toInt() } ?: lastKnownVolume
@@ -292,14 +381,28 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   }
 
   private fun loadMedia(value: VLCPlayerSource) {
+    if (isDisposed) return
+    val vlc = libVLC ?: run {
+      onError?.invoke(SimpleCallbackEventProps(0.0))
+      return
+    }
     val options = value.initOptions?.toList() ?: defaultOptions()
     ensurePlayer(options)
     val player = mediaPlayer ?: return
-    val media = Media(libVLC, Uri.parse(value.uri))
-    player.media = media
-    media.release()
-
-    subtitleUri?.let { player.addSlave(Media.Slave.Type.Subtitle, it, true) }
+    try {
+      val media = Media(vlc, Uri.parse(value.uri))
+      subtitleUri?.let {
+        try {
+          media.addSlave(IMedia.Slave(IMedia.Slave.Type.Subtitle, 0, it))
+        } catch (_: Exception) {
+          return@let
+        }
+      }
+      player.media = media
+    } catch (_: Exception) {
+      onError?.invoke(SimpleCallbackEventProps(0.0))
+      return
+    }
     audioTrack?.let { player.setAudioTrack(it.toInt()) }
     textTrack?.let { player.setSpuTrack(it.toInt()) }
     applyAspectRatio()
@@ -311,59 +414,116 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   }
 
   private fun handlePlayerEvent(event: MediaPlayer.Event) {
-    val player = mediaPlayer ?: return
-    when (event.type) {
-      MediaPlayer.Event.Playing -> {
-        val duration = player.length.toDouble()
-        onPlaying?.invoke(OnPlayingEventProps(duration, 0.0, player.isSeekable))
-        emitLoadIfNeeded()
-      }
-      MediaPlayer.Event.Paused -> {
-        onPaused?.invoke(SimpleCallbackEventProps(0.0))
-      }
-      MediaPlayer.Event.Stopped -> {
-        onStopped?.invoke(SimpleCallbackEventProps(0.0))
-      }
-      MediaPlayer.Event.Buffering -> {
-        onBuffering?.invoke(SimpleCallbackEventProps(0.0))
-      }
-      MediaPlayer.Event.EndReached -> {
-        onEnded?.invoke(SimpleCallbackEventProps(0.0))
-      }
-      MediaPlayer.Event.EncounteredError -> {
-        onError?.invoke(SimpleCallbackEventProps(0.0))
-      }
-      MediaPlayer.Event.TimeChanged -> {
-        val duration = player.length.toDouble()
-        val currentTime = player.time.toDouble()
-        val position = if (duration > 0.0) currentTime / duration else 0.0
-        val remainingTime = duration - currentTime
-        onProgress?.invoke(
-          OnProgressEventProps(
+    data class PlayerEventPayload(
+      val onPlayingEvent: OnPlayingEventProps?,
+      val onPausedEvent: SimpleCallbackEventProps?,
+      val onStoppedEvent: SimpleCallbackEventProps?,
+      val onBufferingEvent: SimpleCallbackEventProps?,
+      val onEndedEvent: SimpleCallbackEventProps?,
+      val onErrorEvent: SimpleCallbackEventProps?,
+      val onProgressEvent: OnProgressEventProps?,
+      val shouldEmitLoad: Boolean
+    )
+
+    val payload = synchronized(playerLock) {
+      if (isDisposed) return
+      val player = mediaPlayer ?: return
+      var onPlayingEvent: OnPlayingEventProps? = null
+      var onPausedEvent: SimpleCallbackEventProps? = null
+      var onStoppedEvent: SimpleCallbackEventProps? = null
+      var onBufferingEvent: SimpleCallbackEventProps? = null
+      var onEndedEvent: SimpleCallbackEventProps? = null
+      var onErrorEvent: SimpleCallbackEventProps? = null
+      var onProgressEvent: OnProgressEventProps? = null
+      var shouldEmitLoad = false
+
+      when (event.type) {
+        MediaPlayer.Event.Playing -> {
+          val duration = player.length.toDouble()
+          onPlayingEvent = OnPlayingEventProps(duration, 0.0, player.isSeekable)
+          shouldEmitLoad = true
+        }
+        MediaPlayer.Event.Paused -> {
+          onPausedEvent = SimpleCallbackEventProps(0.0)
+        }
+        MediaPlayer.Event.Stopped -> {
+          onStoppedEvent = SimpleCallbackEventProps(0.0)
+        }
+        MediaPlayer.Event.Buffering -> {
+          onBufferingEvent = SimpleCallbackEventProps(0.0)
+        }
+        MediaPlayer.Event.EndReached -> {
+          onEndedEvent = SimpleCallbackEventProps(0.0)
+          if (loop == true) {
+            player.position = 0f
+            player.play()
+          }
+        }
+        MediaPlayer.Event.EncounteredError -> {
+          onErrorEvent = SimpleCallbackEventProps(0.0)
+        }
+        MediaPlayer.Event.TimeChanged -> {
+          val duration = player.length.toDouble()
+          val currentTime = player.time.toDouble()
+          val position = if (duration > 0.0) currentTime / duration else 0.0
+          val remainingTime = duration - currentTime
+          onProgressEvent = OnProgressEventProps(
             duration = duration,
             target = 0.0,
             currentTime = currentTime,
             position = position,
             remainingTime = remainingTime
           )
-        )
+        }
+        else -> Unit
       }
-      else -> Unit
+
+      PlayerEventPayload(
+        onPlayingEvent = onPlayingEvent,
+        onPausedEvent = onPausedEvent,
+        onStoppedEvent = onStoppedEvent,
+        onBufferingEvent = onBufferingEvent,
+        onEndedEvent = onEndedEvent,
+        onErrorEvent = onErrorEvent,
+        onProgressEvent = onProgressEvent,
+        shouldEmitLoad = shouldEmitLoad
+      )
+    }
+
+    payload.onPlayingEvent?.let { onPlaying?.invoke(it) }
+    payload.onPausedEvent?.let { onPaused?.invoke(it) }
+    payload.onStoppedEvent?.let { onStopped?.invoke(it) }
+    payload.onBufferingEvent?.let { onBuffering?.invoke(it) }
+    payload.onEndedEvent?.let { onEnded?.invoke(it) }
+    payload.onErrorEvent?.let { onError?.invoke(it) }
+    payload.onProgressEvent?.let { onProgress?.invoke(it) }
+    if (payload.shouldEmitLoad) {
+      emitLoadIfNeeded()
     }
   }
 
   private fun emitLoadIfNeeded() {
-    val player = mediaPlayer ?: return
-    val info = buildVideoInfo(player) ?: return
-    val hash = "${info.duration}-${info.videoSize.width}-${info.videoSize.height}-${info.audioTracks.size}-${info.textTracks.size}"
-    if (hash != lastVideoInfoHash) {
-      lastVideoInfoHash = hash
-      onLoad?.invoke(info)
+    var info: VideoInfo? = null
+    var shouldEmit = false
+    synchronized(playerLock) {
+      if (isDisposed) return
+      val player = mediaPlayer ?: return
+      val nextInfo = buildVideoInfo(player)
+      val hash = "${nextInfo.duration}-${nextInfo.videoSize.width}-${nextInfo.videoSize.height}-${nextInfo.audioTracks.size}-${nextInfo.textTracks.size}"
+      if (hash != lastVideoInfoHash) {
+        lastVideoInfoHash = hash
+        info = nextInfo
+        shouldEmit = true
+      }
+    }
+
+    if (shouldEmit) {
+      info?.let { onLoad?.invoke(it) }
     }
   }
 
-  private fun buildVideoInfo(player: MediaPlayer): VideoInfo? {
-    val videoTrack = player.currentVideoTrack ?: return null
+  private fun buildVideoInfo(player: MediaPlayer): VideoInfo {
+    val videoTrack = player.currentVideoTrack
     val audioTracks = player.audioTracks?.map {
       Track(it.id.toDouble(), it.name ?: "")
     }?.toTypedArray() ?: emptyArray()
@@ -373,17 +533,42 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
     return VideoInfo(
       duration = player.length.toDouble(),
       target = 0.0,
-      videoSize = VideoSize(videoTrack.width.toDouble(), videoTrack.height.toDouble()),
+      videoSize = VideoSize(
+        videoTrack?.width?.toDouble() ?: 0.0,
+        videoTrack?.height?.toDouble() ?: 0.0
+      ),
       audioTracks = audioTracks,
       textTracks = textTracks
     )
   }
 
   private fun releasePlayer() {
-    mediaPlayer?.vlcVout?.detachViews()
+    if (isDisposed) return
+    synchronized(playerLock) {
+      releasePlayerLocked()
+    }
+  }
+
+  private fun releasePlayerLocked() {
+    if (viewsAttached) {
+      mediaPlayer?.vlcVout?.detachViews()
+      viewsAttached = false
+    }
     mediaPlayer?.release()
     mediaPlayer = null
     libVLC?.release()
     libVLC = null
+    currentInitOptions = null
+  }
+
+  private fun clearCallbacks() {
+    onPlaying = null
+    onProgress = null
+    onPaused = null
+    onStopped = null
+    onBuffering = null
+    onEnded = null
+    onError = null
+    onLoad = null
   }
 }

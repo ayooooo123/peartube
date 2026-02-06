@@ -27,7 +27,12 @@ namespace margelo::nitro::nitrovlc {
       prototype.registerHybridGetter("seek", &HybridNitroVLCViewSpec::getSeek);
       prototype.registerHybridSetter("seek", &HybridNitroVLCViewSpec::setSeek);
       prototype.registerHybridGetter("volume", &HybridNitroVLCViewSpec::getVolume);
-      prototype.registerHybridSetter("volume", &HybridNitroVLCViewSpec::setVolume);
+      prototype.registerHybridSetter(
+        "volume",
+        static_cast<void (HybridNitroVLCViewSpec::*)(std::optional<double>)>(
+          &HybridNitroVLCViewSpec::setVolume
+        )
+      );
       prototype.registerHybridGetter("muted", &HybridNitroVLCViewSpec::getMuted);
       prototype.registerHybridSetter("muted", &HybridNitroVLCViewSpec::setMuted);
       prototype.registerHybridGetter("audioTrack", &HybridNitroVLCViewSpec::getAudioTrack);
@@ -66,7 +71,12 @@ namespace margelo::nitro::nitrovlc {
       prototype.registerHybridMethod("pause", &HybridNitroVLCViewSpec::pause);
       prototype.registerHybridMethod("stop", &HybridNitroVLCViewSpec::stop);
       prototype.registerHybridMethod("seek", &HybridNitroVLCViewSpec::seek);
-      prototype.registerHybridMethod("setVolume", &HybridNitroVLCViewSpec::setVolume);
+      prototype.registerHybridMethod(
+        "setVolume",
+        static_cast<void (HybridNitroVLCViewSpec::*)(double)>(
+          &HybridNitroVLCViewSpec::setVolume
+        )
+      );
     });
   }
 

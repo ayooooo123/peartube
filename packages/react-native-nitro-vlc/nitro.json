@@ -5,7 +5,7 @@
     "iosModuleName": "NitroVLC"
   },
   "android": {
-    "androidNamespace": ["com", "nitrovlc"],
+    "androidNamespace": ["com", "margelo", "nitro", "com", "nitrovlc"],
     "androidCxxLibName": "NitroVLC"
   },
   "autolinking": {

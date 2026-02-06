@@ -1,6 +1,6 @@
-import React, { RefObject, useCallback } from 'react'
+import React, { RefObject, useCallback, useMemo, useRef } from 'react'
 import { StyleProp, ViewStyle } from 'react-native'
-import { NitroVLCView } from 'react-native-nitro-vlc'
+import { NitroVLCView, callback } from 'react-native-nitro-vlc'
 import type {
   NitroVLCProps,
   VideoInfo,
@@ -31,57 +31,123 @@ type Props = {
   onVideoStateChange?: (event: { type?: string; mVideoWidth?: number; mVideoHeight?: number }) => void
 }
 
-export const NitroVlcVideoView: React.FC<Props> = (props) => {
-  const handleLoad = useCallback(
-    (event: VideoInfo) => {
-      props.onLoad?.(event)
-      const width = event?.videoSize?.width
-      const height = event?.videoSize?.height
-      if (width && height) {
-        props.onVideoStateChange?.({
-          type: 'onNewVideoLayout',
-          mVideoWidth: width,
-          mVideoHeight: height,
-        })
-      }
-    },
-    [props]
-  )
+export const NitroVlcVideoView: React.FC<Props> = ({
+  style,
+  playerRef,
+  source,
+  paused,
+  rate,
+  volume,
+  muted,
+  seek,
+  resizeMode,
+  autoAspectRatio,
+  playInBackground,
+  onLoad,
+  onProgress,
+  onPlaying,
+  onPaused,
+  onBuffering,
+  onEnded,
+  onError,
+  onVideoStateChange,
+}) => {
+  // Store all callbacks in refs so the wrapper functions have stable identity.
+  // This is critical: Nitro Views store JSI callback references in Fabric
+  // Props/State via BorrowingReference<jsi::Value>. When callback identity
+  // changes, old CachedProp is destroyed (potentially on a bg thread).
+  // By using refs, the wrapped callback objects passed to native never change,
+  // so CachedProp reuses the cached value (no BorrowingReference churn).
+  const onLoadRef = useRef(onLoad)
+  const onProgressRef = useRef(onProgress)
+  const onPlayingRef = useRef(onPlaying)
+  const onPausedRef = useRef(onPaused)
+  const onBufferingRef = useRef(onBuffering)
+  const onEndedRef = useRef(onEnded)
+  const onErrorRef = useRef(onError)
+  const onVideoStateChangeRef = useRef(onVideoStateChange)
+
+  // Keep refs current
+  onLoadRef.current = onLoad
+  onProgressRef.current = onProgress
+  onPlayingRef.current = onPlaying
+  onPausedRef.current = onPaused
+  onBufferingRef.current = onBuffering
+  onEndedRef.current = onEnded
+  onErrorRef.current = onError
+  onVideoStateChangeRef.current = onVideoStateChange
+
+  // Stable handlers — empty dep arrays because they read from refs
+  const handleLoad = useCallback((event: VideoInfo) => {
+    onLoadRef.current?.(event)
+    const width = event?.videoSize?.width
+    const height = event?.videoSize?.height
+    if (width && height) {
+      onVideoStateChangeRef.current?.({
+        type: 'onNewVideoLayout',
+        mVideoWidth: width,
+        mVideoHeight: height,
+      })
+    }
+  }, [])
 
   const handlePlaying = useCallback(() => {
-    props.onBuffering?.({ isBuffering: false })
-    props.onPlaying?.()
-  }, [props])
+    onBufferingRef.current?.({ isBuffering: false })
+    onPlayingRef.current?.()
+  }, [])
 
   const handlePaused = useCallback(() => {
-    props.onBuffering?.({ isBuffering: false })
-    props.onPaused?.()
-  }, [props])
+    onBufferingRef.current?.({ isBuffering: false })
+    onPausedRef.current?.()
+  }, [])
 
   const handleBuffering = useCallback(() => {
-    props.onBuffering?.({ isBuffering: true })
-  }, [props])
+    onBufferingRef.current?.({ isBuffering: true })
+  }, [])
+
+  const handleProgress = useCallback((event: OnProgressEventProps) => {
+    onProgressRef.current?.(event)
+  }, [])
+
+  const handleEnded = useCallback(() => {
+    onEndedRef.current?.()
+  }, [])
+
+  const handleError = useCallback((event: SimpleCallbackEventProps) => {
+    onErrorRef.current?.(event)
+  }, [])
+
+  // Nitro Views require callbacks wrapped as { f: func } objects because
+  // React Native converts bare functions to `true` when passing to native.
+  // These are stable because the handlers above never change identity.
+  const wrappedOnLoad = useMemo(() => callback(handleLoad), [handleLoad])
+  const wrappedOnPlaying = useMemo(() => callback(handlePlaying), [handlePlaying])
+  const wrappedOnProgress = useMemo(() => callback(handleProgress), [handleProgress])
+  const wrappedOnPaused = useMemo(() => callback(handlePaused), [handlePaused])
+  const wrappedOnBuffering = useMemo(() => callback(handleBuffering), [handleBuffering])
+  const wrappedOnEnded = useMemo(() => callback(handleEnded), [handleEnded])
+  const wrappedOnError = useMemo(() => callback(handleError), [handleError])
 
   return (
     <NitroVLCView
-      ref={props.playerRef}
-      style={props.style as any}
-      source={props.source}
-      paused={props.paused}
-      rate={props.rate}
-      volume={props.volume}
-      muted={props.muted}
-      seek={props.seek}
-      resizeMode={props.resizeMode}
-      autoAspectRatio={props.autoAspectRatio}
-      playInBackground={props.playInBackground}
-      onLoad={handleLoad as any}
-      onPlaying={handlePlaying as any}
-      onProgress={props.onProgress as any}
-      onPaused={handlePaused as any}
-      onBuffering={handleBuffering as any}
-      onEnded={props.onEnded as any}
-      onError={props.onError as any}
+      ref={playerRef}
+      style={style as any}
+      source={source}
+      paused={paused}
+      rate={rate}
+      volume={volume}
+      muted={muted}
+      seek={seek}
+      resizeMode={resizeMode}
+      autoAspectRatio={autoAspectRatio}
+      playInBackground={playInBackground}
+      onLoad={wrappedOnLoad}
+      onPlaying={wrappedOnPlaying}
+      onProgress={wrappedOnProgress}
+      onPaused={wrappedOnPaused}
+      onBuffering={wrappedOnBuffering}
+      onEnded={wrappedOnEnded}
+      onError={wrappedOnError}
     />
   )
 }

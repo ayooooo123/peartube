@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
   s.authors      = { "NitroVLC Team" => "team@example.com" }
 
   s.platforms    = { :ios => "15.1" }
-  s.source       = { :git => "https://github.com/example/react-native-nitro-vlc.git", :tag => "#{s.version}" }
+  s.source       = { :path => "." }
 
   s.source_files = "ios/**/*.{h,m,mm,swift}"
   s.exclude_files = "ios/**/*Tests*/**/*"

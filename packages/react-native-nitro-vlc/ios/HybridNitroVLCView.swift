@@ -120,12 +120,14 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   var videoAspectRatio: PlayerAspectRatio? {
     didSet {
       applyAspectRatio()
+      applyResizeMode()
     }
   }
 
   var autoAspectRatio: Bool? {
     didSet {
       applyAspectRatio()
+      applyResizeMode()
     }
   }
 
@@ -344,20 +346,48 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   }
 
   private func applyResizeMode() {
+    guard let player else { return }
     guard let resizeMode else { return }
+
     switch resizeMode {
     case .fill:
-      view.contentMode = .scaleToFill
-    case .contain:
-      view.contentMode = .scaleAspectFit
+      // Stretch to fill: set aspect ratio to match container dimensions
+      let w = view.bounds.width
+      let h = view.bounds.height
+      if w > 0, h > 0 {
+        if let aspectRatioCString {
+          free(aspectRatioCString)
+          self.aspectRatioCString = nil
+        }
+        let fillRatio = "\(Int(w)):\(Int(h))"
+        aspectRatioCString = strdup(fillRatio)
+        player.videoAspectRatio = aspectRatioCString
+        player.scaleFactor = 0
+      }
     case .cover:
-      view.contentMode = .scaleAspectFill
+      // Fill container while preserving aspect ratio (may crop)
+      player.videoAspectRatio = nil
+      let videoSize = player.videoSize
+      let w = view.bounds.width
+      let h = view.bounds.height
+      if videoSize.width > 0, videoSize.height > 0, w > 0, h > 0 {
+        let scaleW = w / videoSize.width
+        let scaleH = h / videoSize.height
+        player.scaleFactor = Float(max(scaleW, scaleH))
+      } else {
+        player.scaleFactor = 0
+      }
+    case .contain, .scaleDown:
+      // Fit inside container preserving aspect ratio (VLC default)
+      player.videoAspectRatio = nil
+      player.scaleFactor = 0
     case .none:
-      view.contentMode = .center
-    case .scaleDown:
-      view.contentMode = .scaleAspectFit
+      // Native size, no scaling
+      player.videoAspectRatio = nil
+      player.scaleFactor = 1.0
     @unknown default:
-      view.contentMode = .scaleAspectFit
+      player.videoAspectRatio = nil
+      player.scaleFactor = 0
     }
   }
 
@@ -368,6 +398,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     case .opening, .buffering:
       onBuffering?(SimpleCallbackEventProps(target: 0))
     case .playing:
+      isPaused = false
       let duration = Double(player.media?.length.intValue ?? 0)
       onPlaying?(OnPlayingEventProps(duration: duration, target: 0, seekable: player.isSeekable))
     case .paused:

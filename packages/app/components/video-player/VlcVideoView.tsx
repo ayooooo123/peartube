@@ -7,7 +7,8 @@ if (Platform.OS !== 'web') {
   VLCPlayer = require('react-native-vlc-media-player').VLCPlayer
 }
 
-const USE_NITRO_VLC = process.env.USE_NITRO_VLC === 'true'
+// FORCE ENABLED: Nitro VLC is always active
+const USE_NITRO_VLC = true
 
 type VlcVideoViewProps = {
   style?: StyleProp<ViewStyle>

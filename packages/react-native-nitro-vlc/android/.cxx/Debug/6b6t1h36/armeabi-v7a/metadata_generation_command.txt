@@ -1,0 +1,21 @@
+                        -H/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android
+-DCMAKE_SYSTEM_NAME=Android
+-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+-DCMAKE_SYSTEM_VERSION=29
+-DANDROID_PLATFORM=android-29
+-DANDROID_ABI=armeabi-v7a
+-DCMAKE_ANDROID_ARCH_ABI=armeabi-v7a
+-DANDROID_NDK=/Users/jd/Library/Android/sdk/ndk/27.0.12077973
+-DCMAKE_ANDROID_NDK=/Users/jd/Library/Android/sdk/ndk/27.0.12077973
+-DCMAKE_TOOLCHAIN_FILE=/Users/jd/Library/Android/sdk/ndk/27.0.12077973/build/cmake/android.toolchain.cmake
+-DCMAKE_MAKE_PROGRAM=/Users/jd/Library/Android/sdk/cmake/3.22.1/bin/ninja
+-DCMAKE_CXX_FLAGS=-std=c++20
+-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/build/intermediates/cxx/Debug/6b6t1h36/obj/armeabi-v7a
+-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/build/intermediates/cxx/Debug/6b6t1h36/obj/armeabi-v7a
+-DCMAKE_BUILD_TYPE=Debug
+-DCMAKE_FIND_ROOT_PATH=/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/6b6t1h36/prefab/armeabi-v7a/prefab
+-B/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/6b6t1h36/armeabi-v7a
+-GNinja
+-DANDROID_STL=c++_shared
+                        Build command args: []
+                        Version: 2

@@ -1,0 +1,70 @@
+diff --git a/node_modules/react-native-nitro-modules/cpp/utils/BorrowingReference.hpp b/node_modules/react-native-nitro-modules/cpp/utils/BorrowingReference.hpp
+index 2100469..b8c233c 100644
+--- a/node_modules/react-native-nitro-modules/cpp/utils/BorrowingReference.hpp
++++ b/node_modules/react-native-nitro-modules/cpp/utils/BorrowingReference.hpp
+@@ -94,10 +94,13 @@ public:
+     }
+ 
+     // decrement strong ref count on destroy
+-    bool shouldDestroy = _state->decrementStrongRefCount();
+-    if (shouldDestroy) {
+-      forceDestroyValue();
+-    }
++    _state->strongRefCount.fetch_sub(1);
++    // Do NOT call forceDestroyValue() from the destructor.
++    // On Android Fabric, ShadowNodes (and their Props/State) can be destroyed
++    // on background threads (e.g. pool-3-thread-1). Calling `delete jsi::Value*`
++    // from a non-JS thread triggers Hermes PointerValue::invalidate() which is
++    // NOT thread-safe and causes SIGSEGV. Instead, defer all JSI value cleanup
++    // to JSICache::~JSICache() which runs on the JS thread during runtime teardown.
+     maybeDestroyState();
+   }
+ 
+@@ -116,7 +119,7 @@ public:
+    */
+   [[nodiscard]]
+   inline bool hasValue() const {
+-    return _value != nullptr && !_state->isDeleted;
++    return _value != nullptr && !_state->isDeleted.load(std::memory_order_acquire);
+   }
+ 
+   /**
+@@ -132,8 +135,6 @@ public:
+    * This can even be called if there are still multiple strong references to the value.
+    */
+   void destroy() {
+-    std::unique_lock lock(_state->mutex);
+-
+     forceDestroyValue();
+   }
+ 
+@@ -201,13 +202,14 @@ private:
+   }
+ 
+   void forceDestroyValue() {
+-    if (_state->isDeleted) [[unlikely]] {
++    std::unique_lock lock(_state->mutex);
++    if (_state->isDeleted.load(std::memory_order_acquire)) [[unlikely]] {
+       // it has already been destroyed.
+       return;
+     }
+     delete _value;
+     _value = nullptr;
+-    _state->isDeleted = true;
++    _state->isDeleted.store(true, std::memory_order_release);
+   }
+ 
+ public:
+diff --git a/node_modules/react-native-nitro-modules/cpp/utils/ReferenceState.hpp b/node_modules/react-native-nitro-modules/cpp/utils/ReferenceState.hpp
+index ae946e5..7bc6316 100644
+--- a/node_modules/react-native-nitro-modules/cpp/utils/ReferenceState.hpp
++++ b/node_modules/react-native-nitro-modules/cpp/utils/ReferenceState.hpp
+@@ -23,7 +23,7 @@ namespace margelo::nitro {
+ struct ReferenceState {
+   std::atomic_size_t strongRefCount;
+   std::atomic_size_t weakRefCount;
+-  bool isDeleted;
++  std::atomic<bool> isDeleted;
+   std::mutex mutex;
+ 
+   /**

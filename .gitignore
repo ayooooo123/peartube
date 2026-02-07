@@ -66,6 +66,9 @@ packages/desktop/video/
 # Build caches
 **/.cache/
 
+# Android native build artifacts (externalNativeBuild / CMake)
+**/android/.cxx/
+
 # OpenProse workflows
 *.prose
 

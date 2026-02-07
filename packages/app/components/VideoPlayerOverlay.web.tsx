@@ -26,5 +26,5 @@ export function VideoPlayerOverlay() {
   if (!RealVideoPlayerOverlay) {
     return null
   }
-  return RealVideoPlayerOverlay()
+  return <RealVideoPlayerOverlay />
 }

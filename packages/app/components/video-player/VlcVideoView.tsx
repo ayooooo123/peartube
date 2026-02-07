@@ -1,5 +1,5 @@
-import { memo, RefObject, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { LayoutRectangle, Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native'
+import { memo, RefObject, ReactNode } from 'react'
+import { Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native'
 import { NitroVlcVideoView } from './NitroVlcVideoView'
 
 let VLCPlayer: any = null
@@ -34,28 +34,6 @@ type VlcVideoViewProps = {
   children?: ReactNode
 }
 
-type Size = { width: number; height: number }
-
-const calculateVideoDimensions = (parentLayout?: Size, aspectRatio?: number | null): Size => {
-  const ratio = aspectRatio && aspectRatio > 0 ? aspectRatio : 16 / 9
-  const parent = parentLayout || { width: 16, height: 9 }
-
-  const widthFromHeight = parent.height * ratio
-  const heightFromWidth = parent.width / ratio
-
-  if (heightFromWidth > parent.height) {
-    return {
-      width: Math.round(widthFromHeight),
-      height: Math.round(parent.height),
-    }
-  }
-
-  return {
-    width: Math.round(parent.width),
-    height: Math.round(heightFromWidth),
-  }
-}
-
 export const VlcVideoView = memo(function VlcVideoView({
   style,
   playerRef,
@@ -79,72 +57,6 @@ export const VlcVideoView = memo(function VlcVideoView({
   onVideoStateChange,
   children,
 }: VlcVideoViewProps) {
-  const [layout, setLayout] = useState<LayoutRectangle | null>(null)
-  const isAndroidPip = Boolean(isInPipMode && Platform.OS === 'android')
-  const nitroPlayerRef = useRef<any>(null)
-  const nitroPlayerAdapter = useMemo(
-    () => ({
-      play: () => nitroPlayerRef.current?.play?.(),
-      pause: () => nitroPlayerRef.current?.pause?.(),
-      stop: () => nitroPlayerRef.current?.stop?.(),
-      seek: (position: number) => nitroPlayerRef.current?.seek?.(position),
-      resume: (shouldPlay: boolean) => {
-        if (shouldPlay) {
-          nitroPlayerRef.current?.play?.()
-        } else {
-          nitroPlayerRef.current?.pause?.()
-        }
-      },
-    }),
-    []
-  )
-
-  const handleLayout = useCallback((event: { nativeEvent: { layout: LayoutRectangle } }) => {
-    const nextLayout = event.nativeEvent.layout
-    if (nextLayout.width < 2 || nextLayout.height < 2) return
-    setLayout((prev) => {
-      if (prev && prev.width === nextLayout.width && prev.height === nextLayout.height) {
-        return prev
-      }
-      return nextLayout
-    })
-  }, [])
-
-  const playerSize = useMemo(() => {
-    if (isAndroidPip) {
-      return null
-    }
-
-    if (layout?.width && layout?.height) {
-      return calculateVideoDimensions({ width: layout.width, height: layout.height }, videoAspectRatio)
-    }
-
-    return null
-  }, [isAndroidPip, layout, videoAspectRatio])
-
-  const playerStyle = useMemo(
-    () => (isAndroidPip
-      ? StyleSheet.absoluteFill
-      : (playerSize
-        ? {
-            width: playerSize.width,
-            height: playerSize.height,
-          }
-        : StyleSheet.absoluteFill)),
-    [isAndroidPip, playerSize]
-  )
-
-  useEffect(() => {
-    if (!USE_NITRO_VLC) return
-    if (!playerRef) return
-    playerRef.current = nitroPlayerAdapter
-    return () => {
-      if (playerRef.current === nitroPlayerAdapter) {
-        playerRef.current = null
-      }
-    }
-  }, [playerRef, nitroPlayerAdapter])
-
   if (Platform.OS === 'web') {
     return null
   }
@@ -154,11 +66,11 @@ export const VlcVideoView = memo(function VlcVideoView({
   }
 
   return (
-    <View style={[styles.container, isAndroidPip && styles.pipContainer, style]} onLayout={handleLayout}>
+    <View style={[styles.container, style]}>
       {USE_NITRO_VLC ? (
         <NitroVlcVideoView
           key={`${playbackSession}:${currentVideoKey || ''}:${videoUrl}`}
-          playerRef={nitroPlayerRef}
+          playerRef={playerRef}
           source={{
             uri: videoUrl,
             initType: 2,
@@ -171,7 +83,7 @@ export const VlcVideoView = memo(function VlcVideoView({
               '--avcodec-threads=0',
             ],
           }}
-          style={playerStyle}
+          style={StyleSheet.absoluteFill}
           paused={!isPlaying}
           playInBackground={true}
           rate={playbackRate}
@@ -203,7 +115,7 @@ export const VlcVideoView = memo(function VlcVideoView({
               '--avcodec-threads=0',
             ],
           }}
-          style={playerStyle}
+          style={StyleSheet.absoluteFill}
           paused={!isPlaying}
           playInBackground={true}
           rate={playbackRate}
@@ -218,11 +130,6 @@ export const VlcVideoView = memo(function VlcVideoView({
           onEnd={onEnded}
           onError={onError}
           onVideoStateChange={onVideoStateChange}
-          pipContainerSize={
-            isAndroidPip && layout?.width && layout?.height
-              ? { width: layout.width, height: layout.height }
-              : null
-          }
         />
       )}
       {children}
@@ -236,10 +143,5 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: '#000',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-  },
-  pipContainer: {
-    alignItems: 'stretch',
   },
 })

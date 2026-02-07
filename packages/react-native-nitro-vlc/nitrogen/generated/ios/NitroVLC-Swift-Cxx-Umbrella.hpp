@@ -8,8 +8,8 @@
 #pragma once
 
 // Forward declarations of C++ defined types
-// Forward declaration of `HybridNitroVLCPOCSpec` to properly resolve imports.
-namespace margelo::nitro::nitrovlc { class HybridNitroVLCPOCSpec; }
+// Forward declaration of `HybridNitroVLCModuleSpec` to properly resolve imports.
+namespace margelo::nitro::nitrovlc { class HybridNitroVLCModuleSpec; }
 // Forward declaration of `HybridNitroVLCViewSpec` to properly resolve imports.
 namespace margelo::nitro::nitrovlc { class HybridNitroVLCViewSpec; }
 // Forward declaration of `OnPlayingEventProps` to properly resolve imports.
@@ -32,7 +32,7 @@ namespace margelo::nitro::nitrovlc { struct VideoInfo; }
 namespace margelo::nitro::nitrovlc { struct VideoSize; }
 
 // Include C++ defined types
-#include "HybridNitroVLCPOCSpec.hpp"
+#include "HybridNitroVLCModuleSpec.hpp"
 #include "HybridNitroVLCViewSpec.hpp"
 #include "OnPlayingEventProps.hpp"
 #include "OnProgressEventProps.hpp"
@@ -61,8 +61,8 @@ namespace margelo::nitro::nitrovlc { struct VideoSize; }
 #include <NitroModules/DateToChronoDate.hpp>
 
 // Forward declarations of Swift defined types
-// Forward declaration of `HybridNitroVLCPOCSpec_cxx` to properly resolve imports.
-namespace NitroVLC { class HybridNitroVLCPOCSpec_cxx; }
+// Forward declaration of `HybridNitroVLCModuleSpec_cxx` to properly resolve imports.
+namespace NitroVLC { class HybridNitroVLCModuleSpec_cxx; }
 // Forward declaration of `HybridNitroVLCViewSpec_cxx` to properly resolve imports.
 namespace NitroVLC { class HybridNitroVLCViewSpec_cxx; }
 

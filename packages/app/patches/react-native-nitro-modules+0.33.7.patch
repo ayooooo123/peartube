@@ -1,26 +1,51 @@
 diff --git a/node_modules/react-native-nitro-modules/cpp/utils/BorrowingReference.hpp b/node_modules/react-native-nitro-modules/cpp/utils/BorrowingReference.hpp
-index 2100469..b8c233c 100644
+index 2100469..27c5397 100644
 --- a/node_modules/react-native-nitro-modules/cpp/utils/BorrowingReference.hpp
 +++ b/node_modules/react-native-nitro-modules/cpp/utils/BorrowingReference.hpp
-@@ -94,10 +94,13 @@ public:
+@@ -56,8 +56,12 @@ public:
+       bool shouldDestroy = _state->decrementStrongRefCount();
+       if (shouldDestroy) {
+         forceDestroyValue();
++        // We were the last strong reference. Check weak refs before freeing state.
++        if (_state->weakRefCount.load() == 0) {
++          delete _state;
++          _state = nullptr;
++        }
+       }
+-      maybeDestroyState();
      }
  
-     // decrement strong ref count on destroy
+     _value = ref._value;
+@@ -93,12 +97,23 @@ public:
+       return;
+     }
+ 
+-    // decrement strong ref count on destroy
 -    bool shouldDestroy = _state->decrementStrongRefCount();
 -    if (shouldDestroy) {
 -      forceDestroyValue();
--    }
-+    _state->strongRefCount.fetch_sub(1);
++    // decrement strong ref count on destroy.
++    // Use the return value (previous count) to determine if WE are the thread
++    // that brought it to zero. Only that thread may consider deleting _state.
++    // This prevents a race where two threads both call fetch_sub, then both
++    // read strongRefCount == 0 in maybeDestroyState and both delete _state.
++    size_t prevStrong = _state->strongRefCount.fetch_sub(1);
 +    // Do NOT call forceDestroyValue() from the destructor.
 +    // On Android Fabric, ShadowNodes (and their Props/State) can be destroyed
 +    // on background threads (e.g. pool-3-thread-1). Calling `delete jsi::Value*`
 +    // from a non-JS thread triggers Hermes PointerValue::invalidate() which is
 +    // NOT thread-safe and causes SIGSEGV. Instead, defer all JSI value cleanup
 +    // to JSICache::~JSICache() which runs on the JS thread during runtime teardown.
-     maybeDestroyState();
++    if (prevStrong == 1 && _state->weakRefCount.load() == 0) {
++      // We were the last strong reference and no weak refs exist. Free the state.
++      delete _state;
+     }
+-    maybeDestroyState();
++    _state = nullptr;
    }
  
-@@ -116,7 +119,7 @@ public:
+ public:
+@@ -116,7 +131,7 @@ public:
     */
    [[nodiscard]]
    inline bool hasValue() const {
@@ -29,7 +54,7 @@ index 2100469..b8c233c 100644
    }
  
    /**
-@@ -132,8 +135,6 @@ public:
+@@ -132,8 +147,6 @@ public:
     * This can even be called if there are still multiple strong references to the value.
     */
    void destroy() {
@@ -38,7 +63,7 @@ index 2100469..b8c233c 100644
      forceDestroyValue();
    }
  
-@@ -201,13 +202,14 @@ private:
+@@ -201,13 +214,14 @@ private:
    }
  
    void forceDestroyValue() {
@@ -68,3 +93,73 @@ index ae946e5..7bc6316 100644
    std::mutex mutex;
  
    /**
+diff --git a/node_modules/react-native-nitro-modules/cpp/utils/WeakReference.hpp b/node_modules/react-native-nitro-modules/cpp/utils/WeakReference.hpp
+index 67e67d4..d248d6b 100644
+--- a/node_modules/react-native-nitro-modules/cpp/utils/WeakReference.hpp
++++ b/node_modules/react-native-nitro-modules/cpp/utils/WeakReference.hpp
+@@ -49,9 +49,12 @@ public:
+       return *this;
+ 
+     if (_state != nullptr) {
+-      // destroy previous pointer
+-      _state->weakRefCount--;
+-      maybeDestroy();
++      // destroy previous pointer — use fetch_sub return value to avoid
++      // race where two threads both see count==0 and both delete _state.
++      size_t prevWeak = _state->weakRefCount.fetch_sub(1);
++      if (prevWeak == 1 && _state->strongRefCount.load() == 0) {
++        delete _state;
++      }
+     }
+ 
+     _value = ref._value;
+@@ -66,8 +69,16 @@ public:
+ 
+   ~WeakReference() {
+     if (_state != nullptr) {
+-      _state->weakRefCount--;
+-      maybeDestroy();
++      size_t prevWeak = _state->weakRefCount.fetch_sub(1);
++      if (prevWeak == 1 && _state->strongRefCount.load() == 0) {
++        if (!_state->isDeleted) [[unlikely]] {
++          std::string typeName = TypeInfo::getFriendlyTypename<T>(true);
++          throw std::runtime_error("WeakReference<" + typeName + "> encountered a stale `_value` - BorrowingReference<" + typeName +
++                                   "> should've already deleted this!");
++        }
++        delete _state;
++      }
++      _state = nullptr;
+     }
+   }
+ 
+diff --git a/node_modules/react-native-nitro-modules/cpp/views/CachedProp.hpp b/node_modules/react-native-nitro-modules/cpp/views/CachedProp.hpp
+index 744324d..cbe8ada 100644
+--- a/node_modules/react-native-nitro-modules/cpp/views/CachedProp.hpp
++++ b/node_modules/react-native-nitro-modules/cpp/views/CachedProp.hpp
+@@ -41,18 +41,15 @@ public:
+   }
+ 
+ public:
+-  static CachedProp<T> fromRawValue(jsi::Runtime& runtime, const jsi::Value& value, const CachedProp<T>& oldProp) {
+-    if (oldProp.equals(runtime, value)) {
+-      // jsi::Value hasn't changed - no need to convert it again!
+-      return oldProp;
+-    }
++  static CachedProp<T> fromRawValue(jsi::Runtime& runtime, const jsi::Value& value, const CachedProp<T>& /* oldProp */) {
++    // Always re-parse the value. We intentionally skip jsi::Value caching
++    // (BorrowingReference) because on Android Fabric, ShadowNode Props/State
++    // can be destroyed on non-JS threads. The BorrowingReference destructor
++    // accesses ReferenceState which may already be freed, causing SIGSEGV.
++    // The performance cost is minimal: props are only parsed during mount updates,
++    // and for views with few Fabric props (e.g. just viewId) it's negligible.
+     T converted = JSIConverter<T>::fromJSI(runtime, value);
+-    BorrowingReference<jsi::Value> cached;
+-    {
+-      JSICacheReference cache = JSICache::getOrCreateCache(runtime);
+-      cached = cache.makeShared(jsi::Value(runtime, value));
+-    }
+-    return CachedProp<T>(std::move(converted), std::move(cached));
++    return CachedProp<T>(std::move(converted), BorrowingReference<jsi::Value>());
+   }
+ };
+ 

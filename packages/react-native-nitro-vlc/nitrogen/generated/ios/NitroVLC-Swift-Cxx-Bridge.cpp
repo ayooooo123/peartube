@@ -8,7 +8,7 @@
 #include "NitroVLC-Swift-Cxx-Bridge.hpp"
 
 // Include C++ implementation defined types
-#include "HybridNitroVLCPOCSpecSwift.hpp"
+#include "HybridNitroVLCModuleSpecSwift.hpp"
 #include "HybridNitroVLCViewSpecSwift.hpp"
 #include "NitroVLC-Swift-Cxx-Umbrella.hpp"
 #include <NitroModules/NitroDefines.hpp>
@@ -63,19 +63,19 @@ namespace margelo::nitro::nitrovlc::bridge::swift {
     return swiftPart.toUnsafe();
   }
   
-  // pragma MARK: std::shared_ptr<HybridNitroVLCPOCSpec>
-  std::shared_ptr<HybridNitroVLCPOCSpec> create_std__shared_ptr_HybridNitroVLCPOCSpec_(void* NON_NULL swiftUnsafePointer) noexcept {
-    NitroVLC::HybridNitroVLCPOCSpec_cxx swiftPart = NitroVLC::HybridNitroVLCPOCSpec_cxx::fromUnsafe(swiftUnsafePointer);
-    return std::make_shared<margelo::nitro::nitrovlc::HybridNitroVLCPOCSpecSwift>(swiftPart);
+  // pragma MARK: std::shared_ptr<HybridNitroVLCModuleSpec>
+  std::shared_ptr<HybridNitroVLCModuleSpec> create_std__shared_ptr_HybridNitroVLCModuleSpec_(void* NON_NULL swiftUnsafePointer) noexcept {
+    NitroVLC::HybridNitroVLCModuleSpec_cxx swiftPart = NitroVLC::HybridNitroVLCModuleSpec_cxx::fromUnsafe(swiftUnsafePointer);
+    return std::make_shared<margelo::nitro::nitrovlc::HybridNitroVLCModuleSpecSwift>(swiftPart);
   }
-  void* NON_NULL get_std__shared_ptr_HybridNitroVLCPOCSpec_(std__shared_ptr_HybridNitroVLCPOCSpec_ cppType) {
-    std::shared_ptr<margelo::nitro::nitrovlc::HybridNitroVLCPOCSpecSwift> swiftWrapper = std::dynamic_pointer_cast<margelo::nitro::nitrovlc::HybridNitroVLCPOCSpecSwift>(cppType);
+  void* NON_NULL get_std__shared_ptr_HybridNitroVLCModuleSpec_(std__shared_ptr_HybridNitroVLCModuleSpec_ cppType) {
+    std::shared_ptr<margelo::nitro::nitrovlc::HybridNitroVLCModuleSpecSwift> swiftWrapper = std::dynamic_pointer_cast<margelo::nitro::nitrovlc::HybridNitroVLCModuleSpecSwift>(cppType);
     #ifdef NITRO_DEBUG
     if (swiftWrapper == nullptr) [[unlikely]] {
-      throw std::runtime_error("Class \"HybridNitroVLCPOCSpec\" is not implemented in Swift!");
+      throw std::runtime_error("Class \"HybridNitroVLCModuleSpec\" is not implemented in Swift!");
     }
     #endif
-    NitroVLC::HybridNitroVLCPOCSpec_cxx& swiftPart = swiftWrapper->getSwiftPart();
+    NitroVLC::HybridNitroVLCModuleSpec_cxx& swiftPart = swiftWrapper->getSwiftPart();
     return swiftPart.toUnsafe();
   }
 

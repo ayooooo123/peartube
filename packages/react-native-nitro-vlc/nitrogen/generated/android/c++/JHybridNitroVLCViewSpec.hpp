@@ -51,54 +51,8 @@ namespace margelo::nitro::nitrovlc {
 
   public:
     // Properties
-    VLCPlayerSource getSource() override;
-    void setSource(const VLCPlayerSource& source) override;
-    std::optional<std::string> getSubtitleUri() override;
-    void setSubtitleUri(const std::optional<std::string>& subtitleUri) override;
-    std::optional<bool> getPaused() override;
-    void setPaused(std::optional<bool> paused) override;
-    std::optional<bool> getLoop() override;
-    void setLoop(std::optional<bool> loop) override;
-    std::optional<double> getRate() override;
-    void setRate(std::optional<double> rate) override;
-    std::optional<double> getSeek() override;
-    void setSeek(std::optional<double> seek) override;
-    std::optional<double> getVolume() override;
-    void setVolume(std::optional<double> volume) override;
-    std::optional<bool> getMuted() override;
-    void setMuted(std::optional<bool> muted) override;
-    std::optional<double> getAudioTrack() override;
-    void setAudioTrack(std::optional<double> audioTrack) override;
-    std::optional<double> getTextTrack() override;
-    void setTextTrack(std::optional<double> textTrack) override;
-    std::optional<bool> getPlayInBackground() override;
-    void setPlayInBackground(std::optional<bool> playInBackground) override;
-    std::optional<PlayerAspectRatio> getVideoAspectRatio() override;
-    void setVideoAspectRatio(std::optional<PlayerAspectRatio> videoAspectRatio) override;
-    std::optional<bool> getAutoAspectRatio() override;
-    void setAutoAspectRatio(std::optional<bool> autoAspectRatio) override;
-    std::optional<PlayerResizeMode> getResizeMode() override;
-    void setResizeMode(std::optional<PlayerResizeMode> resizeMode) override;
-    std::optional<bool> getAutoplay() override;
-    void setAutoplay(std::optional<bool> autoplay) override;
-    std::optional<bool> getAcceptInvalidCertificates() override;
-    void setAcceptInvalidCertificates(std::optional<bool> acceptInvalidCertificates) override;
-    std::optional<std::function<void(const OnPlayingEventProps& /* event */)>> getOnPlaying() override;
-    void setOnPlaying(const std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>& onPlaying) override;
-    std::optional<std::function<void(const OnProgressEventProps& /* event */)>> getOnProgress() override;
-    void setOnProgress(const std::optional<std::function<void(const OnProgressEventProps& /* event */)>>& onProgress) override;
-    std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnPaused() override;
-    void setOnPaused(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onPaused) override;
-    std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnStopped() override;
-    void setOnStopped(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onStopped) override;
-    std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnBuffering() override;
-    void setOnBuffering(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onBuffering) override;
-    std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnEnded() override;
-    void setOnEnded(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onEnded) override;
-    std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnError() override;
-    void setOnError(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onError) override;
-    std::optional<std::function<void(const VideoInfo& /* event */)>> getOnLoad() override;
-    void setOnLoad(const std::optional<std::function<void(const VideoInfo& /* event */)>>& onLoad) override;
+    std::string getViewId() override;
+    void setViewId(const std::string& viewId) override;
 
   public:
     // Methods
@@ -106,7 +60,29 @@ namespace margelo::nitro::nitrovlc {
     void pause() override;
     void stop() override;
     void seek(double position) override;
+    void setSource(const VLCPlayerSource& source) override;
+    void setPaused(bool paused) override;
+    void setLoop(bool loop) override;
+    void setRate(double rate) override;
     void setVolume(double volume) override;
+    void setMuted(bool muted) override;
+    void setAudioTrack(double audioTrack) override;
+    void setTextTrack(double textTrack) override;
+    void setSubtitleUri(const std::string& subtitleUri) override;
+    void setPlayInBackground(bool playInBackground) override;
+    void setVideoAspectRatio(PlayerAspectRatio videoAspectRatio) override;
+    void setAutoAspectRatio(bool autoAspectRatio) override;
+    void setResizeMode(PlayerResizeMode resizeMode) override;
+    void setAutoplay(bool autoplay) override;
+    void setAcceptInvalidCertificates(bool acceptInvalidCertificates) override;
+    void setOnPlaying(const std::function<void(const OnPlayingEventProps& /* event */)>& callback) override;
+    void setOnProgress(const std::function<void(const OnProgressEventProps& /* event */)>& callback) override;
+    void setOnPaused(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override;
+    void setOnStopped(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override;
+    void setOnBuffering(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override;
+    void setOnEnded(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override;
+    void setOnError(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override;
+    void setOnLoad(const std::function<void(const VideoInfo& /* event */)>& callback) override;
 
   private:
     friend HybridBase;

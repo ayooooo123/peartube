@@ -451,7 +451,7 @@ export default function RootLayout() {
           <AppContext.Provider value={contextValue}>
             <DownloadsProvider>
               <VideoPlayerProvider>
-                <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', width: '100%' }}>
                   <Stack
                     screenOptions={{
                       headerShown: false,

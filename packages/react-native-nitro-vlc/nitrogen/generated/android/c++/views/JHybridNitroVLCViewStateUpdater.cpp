@@ -16,133 +16,37 @@ using namespace facebook;
 using ConcreteStateData = react::ConcreteState<HybridNitroVLCViewState>;
 
 void JHybridNitroVLCViewStateUpdater::updateViewProps(jni::alias_ref<jni::JClass> /* class */,
-                                           jni::alias_ref<JHybridNitroVLCViewSpec::javaobject> javaView,
-                                           jni::alias_ref<JStateWrapper::javaobject> stateWrapperInterface) {
+	                                           jni::alias_ref<JHybridNitroVLCViewSpec::javaobject> javaView,
+	                                           jni::alias_ref<JStateWrapper::javaobject> stateWrapperInterface) {
+  // This JNI method runs as part of Fabric mounting/state updates.
+  // It must never throw C++ exceptions across JNI boundaries, and it must
+  // not mutate React Props (they're treated as immutable and may be shared).
+  if (javaView == nullptr) [[unlikely]] return;
   JHybridNitroVLCViewSpec* view = javaView->cthis();
+  if (view == nullptr) [[unlikely]] return;
 
-  // Get concrete StateWrapperImpl from passed StateWrapper interface object
-  jobject rawStateWrapper = stateWrapperInterface.get();
-  if (!stateWrapperInterface->isInstanceOf(react::StateWrapperImpl::javaClassStatic())) [[unlikely]] {
-      throw std::runtime_error("StateWrapper is not a StateWrapperImpl");
-  }
-  auto stateWrapper = jni::alias_ref<react::StateWrapperImpl::javaobject>{
-            static_cast<react::StateWrapperImpl::javaobject>(rawStateWrapper)};
-  std::shared_ptr<const react::State> state = stateWrapper->cthis()->getState();
-  auto concreteState = std::static_pointer_cast<const ConcreteStateData>(state);
-  const HybridNitroVLCViewState& data = concreteState->getData();
-  const std::shared_ptr<HybridNitroVLCViewProps>& props = data.getProps();
-  if (props == nullptr) [[unlikely]] {
-    // Props aren't set yet!
-    throw std::runtime_error("HybridNitroVLCViewState's data doesn't contain any props!");
-  }
-
-  // Update all props if they are dirty
-  if (props->source.isDirty) {
-    view->setSource(props->source.value);
-    props->source.isDirty = false;
-  }
-  if (props->subtitleUri.isDirty) {
-    view->setSubtitleUri(props->subtitleUri.value);
-    props->subtitleUri.isDirty = false;
-  }
-  if (props->paused.isDirty) {
-    view->setPaused(props->paused.value);
-    props->paused.isDirty = false;
-  }
-  if (props->loop.isDirty) {
-    view->setLoop(props->loop.value);
-    props->loop.isDirty = false;
-  }
-  if (props->rate.isDirty) {
-    view->setRate(props->rate.value);
-    props->rate.isDirty = false;
-  }
-  if (props->seek.isDirty) {
-    view->setSeek(props->seek.value);
-    props->seek.isDirty = false;
-  }
-  if (props->volume.isDirty) {
-    view->setVolume(props->volume.value);
-    props->volume.isDirty = false;
-  }
-  if (props->muted.isDirty) {
-    view->setMuted(props->muted.value);
-    props->muted.isDirty = false;
-  }
-  if (props->audioTrack.isDirty) {
-    view->setAudioTrack(props->audioTrack.value);
-    props->audioTrack.isDirty = false;
-  }
-  if (props->textTrack.isDirty) {
-    view->setTextTrack(props->textTrack.value);
-    props->textTrack.isDirty = false;
-  }
-  if (props->playInBackground.isDirty) {
-    view->setPlayInBackground(props->playInBackground.value);
-    props->playInBackground.isDirty = false;
-  }
-  if (props->videoAspectRatio.isDirty) {
-    view->setVideoAspectRatio(props->videoAspectRatio.value);
-    props->videoAspectRatio.isDirty = false;
-  }
-  if (props->autoAspectRatio.isDirty) {
-    view->setAutoAspectRatio(props->autoAspectRatio.value);
-    props->autoAspectRatio.isDirty = false;
-  }
-  if (props->resizeMode.isDirty) {
-    view->setResizeMode(props->resizeMode.value);
-    props->resizeMode.isDirty = false;
-  }
-  if (props->autoplay.isDirty) {
-    view->setAutoplay(props->autoplay.value);
-    props->autoplay.isDirty = false;
-  }
-  if (props->acceptInvalidCertificates.isDirty) {
-    view->setAcceptInvalidCertificates(props->acceptInvalidCertificates.value);
-    props->acceptInvalidCertificates.isDirty = false;
-  }
-  if (props->onPlaying.isDirty) {
-    view->setOnPlaying(props->onPlaying.value);
-    props->onPlaying.isDirty = false;
-  }
-  if (props->onProgress.isDirty) {
-    view->setOnProgress(props->onProgress.value);
-    props->onProgress.isDirty = false;
-  }
-  if (props->onPaused.isDirty) {
-    view->setOnPaused(props->onPaused.value);
-    props->onPaused.isDirty = false;
-  }
-  if (props->onStopped.isDirty) {
-    view->setOnStopped(props->onStopped.value);
-    props->onStopped.isDirty = false;
-  }
-  if (props->onBuffering.isDirty) {
-    view->setOnBuffering(props->onBuffering.value);
-    props->onBuffering.isDirty = false;
-  }
-  if (props->onEnded.isDirty) {
-    view->setOnEnded(props->onEnded.value);
-    props->onEnded.isDirty = false;
-  }
-  if (props->onError.isDirty) {
-    view->setOnError(props->onError.value);
-    props->onError.isDirty = false;
-  }
-  if (props->onLoad.isDirty) {
-    view->setOnLoad(props->onLoad.value);
-    props->onLoad.isDirty = false;
-  }
-
-  // Update hybridRef if it changed
-  if (props->hybridRef.isDirty) {
-    // hybridRef changed - call it with new this
-    const auto& maybeFunc = props->hybridRef.value;
-    if (maybeFunc.has_value()) {
-      std::shared_ptr<JHybridNitroVLCViewSpec> shared = javaView->cthis()->shared_cast<JHybridNitroVLCViewSpec>();
-      maybeFunc.value()(shared);
+  try {
+    // Get concrete StateWrapperImpl from passed StateWrapper interface object
+    jobject rawStateWrapper = stateWrapperInterface.get();
+    if (rawStateWrapper == nullptr) [[unlikely]] return;
+    if (!stateWrapperInterface->isInstanceOf(react::StateWrapperImpl::javaClassStatic())) [[unlikely]] {
+      return;
     }
-    props->hybridRef.isDirty = false;
+    auto stateWrapper = jni::alias_ref<react::StateWrapperImpl::javaobject>{
+      static_cast<react::StateWrapperImpl::javaobject>(rawStateWrapper)};
+    std::shared_ptr<const react::State> state = stateWrapper->cthis()->getState();
+    auto concreteState = std::dynamic_pointer_cast<const ConcreteStateData>(state);
+    if (concreteState == nullptr) [[unlikely]] return;
+    const HybridNitroVLCViewState& data = concreteState->getData();
+    const std::shared_ptr<const HybridNitroVLCViewProps>& props = data.getProps();
+    if (props == nullptr) [[unlikely]] return;
+
+    // Only `viewId` is used in this app. All other configuration and callbacks
+    // are set imperatively via HybridObject methods.
+    view->setViewId(props->viewId.value);
+  } catch (...) {
+    // Swallow all exceptions to avoid aborting the process from JNI.
+    return;
   }
 }
 

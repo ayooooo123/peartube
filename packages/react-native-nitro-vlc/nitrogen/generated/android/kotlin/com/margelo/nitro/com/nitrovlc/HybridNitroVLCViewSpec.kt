@@ -46,209 +46,7 @@ abstract class HybridNitroVLCViewSpec: HybridView() {
   @get:Keep
   @set:DoNotStrip
   @set:Keep
-  abstract var source: VLCPlayerSource
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var subtitleUri: String?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var paused: Boolean?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var loop: Boolean?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var rate: Double?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var seek: Double?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var volume: Double?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var muted: Boolean?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var audioTrack: Double?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var textTrack: Double?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var playInBackground: Boolean?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var videoAspectRatio: PlayerAspectRatio?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var autoAspectRatio: Boolean?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var resizeMode: PlayerResizeMode?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var autoplay: Boolean?
-  
-  @get:DoNotStrip
-  @get:Keep
-  @set:DoNotStrip
-  @set:Keep
-  abstract var acceptInvalidCertificates: Boolean?
-  
-  abstract var onPlaying: ((event: OnPlayingEventProps) -> Unit)?
-  
-  private var onPlaying_cxx: Func_void_OnPlayingEventProps?
-    @Keep
-    @DoNotStrip
-    get() {
-      return onPlaying?.let { Func_void_OnPlayingEventProps_java(it) }
-    }
-    @Keep
-    @DoNotStrip
-    set(value) {
-      onPlaying = value?.let { it }
-    }
-  
-  abstract var onProgress: ((event: OnProgressEventProps) -> Unit)?
-  
-  private var onProgress_cxx: Func_void_OnProgressEventProps?
-    @Keep
-    @DoNotStrip
-    get() {
-      return onProgress?.let { Func_void_OnProgressEventProps_java(it) }
-    }
-    @Keep
-    @DoNotStrip
-    set(value) {
-      onProgress = value?.let { it }
-    }
-  
-  abstract var onPaused: ((event: SimpleCallbackEventProps) -> Unit)?
-  
-  private var onPaused_cxx: Func_void_SimpleCallbackEventProps?
-    @Keep
-    @DoNotStrip
-    get() {
-      return onPaused?.let { Func_void_SimpleCallbackEventProps_java(it) }
-    }
-    @Keep
-    @DoNotStrip
-    set(value) {
-      onPaused = value?.let { it }
-    }
-  
-  abstract var onStopped: ((event: SimpleCallbackEventProps) -> Unit)?
-  
-  private var onStopped_cxx: Func_void_SimpleCallbackEventProps?
-    @Keep
-    @DoNotStrip
-    get() {
-      return onStopped?.let { Func_void_SimpleCallbackEventProps_java(it) }
-    }
-    @Keep
-    @DoNotStrip
-    set(value) {
-      onStopped = value?.let { it }
-    }
-  
-  abstract var onBuffering: ((event: SimpleCallbackEventProps) -> Unit)?
-  
-  private var onBuffering_cxx: Func_void_SimpleCallbackEventProps?
-    @Keep
-    @DoNotStrip
-    get() {
-      return onBuffering?.let { Func_void_SimpleCallbackEventProps_java(it) }
-    }
-    @Keep
-    @DoNotStrip
-    set(value) {
-      onBuffering = value?.let { it }
-    }
-  
-  abstract var onEnded: ((event: SimpleCallbackEventProps) -> Unit)?
-  
-  private var onEnded_cxx: Func_void_SimpleCallbackEventProps?
-    @Keep
-    @DoNotStrip
-    get() {
-      return onEnded?.let { Func_void_SimpleCallbackEventProps_java(it) }
-    }
-    @Keep
-    @DoNotStrip
-    set(value) {
-      onEnded = value?.let { it }
-    }
-  
-  abstract var onError: ((event: SimpleCallbackEventProps) -> Unit)?
-  
-  private var onError_cxx: Func_void_SimpleCallbackEventProps?
-    @Keep
-    @DoNotStrip
-    get() {
-      return onError?.let { Func_void_SimpleCallbackEventProps_java(it) }
-    }
-    @Keep
-    @DoNotStrip
-    set(value) {
-      onError = value?.let { it }
-    }
-  
-  abstract var onLoad: ((event: VideoInfo) -> Unit)?
-  
-  private var onLoad_cxx: Func_void_VideoInfo?
-    @Keep
-    @DoNotStrip
-    get() {
-      return onLoad?.let { Func_void_VideoInfo_java(it) }
-    }
-    @Keep
-    @DoNotStrip
-    set(value) {
-      onLoad = value?.let { it }
-    }
+  abstract var viewId: String
 
   // Methods
   @DoNotStrip
@@ -269,7 +67,135 @@ abstract class HybridNitroVLCViewSpec: HybridView() {
   
   @DoNotStrip
   @Keep
+  abstract fun setSource(source: VLCPlayerSource): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setPaused(paused: Boolean): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setLoop(loop: Boolean): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setRate(rate: Double): Unit
+  
+  @DoNotStrip
+  @Keep
   abstract fun setVolume(volume: Double): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setMuted(muted: Boolean): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setAudioTrack(audioTrack: Double): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setTextTrack(textTrack: Double): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setSubtitleUri(subtitleUri: String): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setPlayInBackground(playInBackground: Boolean): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setVideoAspectRatio(videoAspectRatio: PlayerAspectRatio): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setAutoAspectRatio(autoAspectRatio: Boolean): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setResizeMode(resizeMode: PlayerResizeMode): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setAutoplay(autoplay: Boolean): Unit
+  
+  @DoNotStrip
+  @Keep
+  abstract fun setAcceptInvalidCertificates(acceptInvalidCertificates: Boolean): Unit
+  
+  abstract fun setOnPlaying(callback: (event: OnPlayingEventProps) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setOnPlaying_cxx(callback: Func_void_OnPlayingEventProps): Unit {
+    val __result = setOnPlaying(callback)
+    return __result
+  }
+  
+  abstract fun setOnProgress(callback: (event: OnProgressEventProps) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setOnProgress_cxx(callback: Func_void_OnProgressEventProps): Unit {
+    val __result = setOnProgress(callback)
+    return __result
+  }
+  
+  abstract fun setOnPaused(callback: (event: SimpleCallbackEventProps) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setOnPaused_cxx(callback: Func_void_SimpleCallbackEventProps): Unit {
+    val __result = setOnPaused(callback)
+    return __result
+  }
+  
+  abstract fun setOnStopped(callback: (event: SimpleCallbackEventProps) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setOnStopped_cxx(callback: Func_void_SimpleCallbackEventProps): Unit {
+    val __result = setOnStopped(callback)
+    return __result
+  }
+  
+  abstract fun setOnBuffering(callback: (event: SimpleCallbackEventProps) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setOnBuffering_cxx(callback: Func_void_SimpleCallbackEventProps): Unit {
+    val __result = setOnBuffering(callback)
+    return __result
+  }
+  
+  abstract fun setOnEnded(callback: (event: SimpleCallbackEventProps) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setOnEnded_cxx(callback: Func_void_SimpleCallbackEventProps): Unit {
+    val __result = setOnEnded(callback)
+    return __result
+  }
+  
+  abstract fun setOnError(callback: (event: SimpleCallbackEventProps) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setOnError_cxx(callback: Func_void_SimpleCallbackEventProps): Unit {
+    val __result = setOnError(callback)
+    return __result
+  }
+  
+  abstract fun setOnLoad(callback: (event: VideoInfo) -> Unit): Unit
+  
+  @DoNotStrip
+  @Keep
+  private fun setOnLoad_cxx(callback: Func_void_VideoInfo): Unit {
+    val __result = setOnLoad(callback)
+    return __result
+  }
 
   private external fun initHybrid(): HybridData
 

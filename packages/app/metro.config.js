@@ -29,7 +29,6 @@ config.resolver.extraNodeModules = {
   '@peartube/spec/messages': path.resolve(specRoot, 'spec/hrpc/messages.js'),
   '@peartube/spec/schema': path.resolve(specRoot, 'spec/schema/index.js'),
   // Force all packages to use the app's copies (prevents duplicate module instances)
-  'react-native': path.resolve(projectRoot, 'node_modules/react-native'),
   'react-native-nitro-modules': path.resolve(projectRoot, 'node_modules/react-native-nitro-modules'),
   'react': path.resolve(projectRoot, 'node_modules/react'),
 }

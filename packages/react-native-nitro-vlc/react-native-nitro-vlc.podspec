@@ -15,7 +15,13 @@ Pod::Spec.new do |s|
   s.source       = { :path => "." }
 
   s.source_files = "ios/**/*.{h,m,mm,swift}"
-  s.exclude_files = "ios/**/*Tests*/**/*"
+  s.exclude_files = [
+    "ios/**/*Tests*/**/*",
+    # Exclude Nitrogen-generated Fabric view component — we use a plain
+    # RCTViewManager (NitroVLCViewManager.m) instead, which avoids the
+    # CachedProp/BorrowingReference/ConcreteState crash vectors.
+    "nitrogen/generated/**/views/**",
+  ]
 
   s.dependency "MobileVLCKit", "~> 3.7.0"
 

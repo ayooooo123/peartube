@@ -1,3 +1,0 @@
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/3b2y3j1q/arm64-v8a/CMakeFiles/NitroVLC.dir
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/3b2y3j1q/arm64-v8a/CMakeFiles/edit_cache.dir
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/3b2y3j1q/arm64-v8a/CMakeFiles/rebuild_cache.dir

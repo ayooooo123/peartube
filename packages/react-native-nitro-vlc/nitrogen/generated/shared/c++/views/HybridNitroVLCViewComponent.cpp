@@ -26,244 +26,14 @@ namespace margelo::nitro::nitrovlc::views {
                                                    const HybridNitroVLCViewProps& sourceProps,
                                                    const react::RawProps& rawProps):
     react::ViewProps(context, sourceProps, rawProps, filterObjectKeys),
-    source([&]() -> CachedProp<VLCPlayerSource> {
+    viewId([&]() -> CachedProp<std::string> {
       try {
-        const react::RawValue* rawValue = rawProps.at("source", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.source;
+        const react::RawValue* rawValue = rawProps.at("viewId", nullptr, nullptr);
+        if (rawValue == nullptr) return sourceProps.viewId;
         const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<VLCPlayerSource>::fromRawValue(*runtime, value, sourceProps.source);
+        return CachedProp<std::string>::fromRawValue(*runtime, value, sourceProps.viewId);
       } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.source: ") + exc.what());
-      }
-    }()),
-    subtitleUri([&]() -> CachedProp<std::optional<std::string>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("subtitleUri", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.subtitleUri;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::string>>::fromRawValue(*runtime, value, sourceProps.subtitleUri);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.subtitleUri: ") + exc.what());
-      }
-    }()),
-    paused([&]() -> CachedProp<std::optional<bool>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("paused", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.paused;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<bool>>::fromRawValue(*runtime, value, sourceProps.paused);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.paused: ") + exc.what());
-      }
-    }()),
-    loop([&]() -> CachedProp<std::optional<bool>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("loop", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.loop;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<bool>>::fromRawValue(*runtime, value, sourceProps.loop);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.loop: ") + exc.what());
-      }
-    }()),
-    rate([&]() -> CachedProp<std::optional<double>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("rate", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.rate;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<double>>::fromRawValue(*runtime, value, sourceProps.rate);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.rate: ") + exc.what());
-      }
-    }()),
-    seek([&]() -> CachedProp<std::optional<double>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("seek", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.seek;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<double>>::fromRawValue(*runtime, value, sourceProps.seek);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.seek: ") + exc.what());
-      }
-    }()),
-    volume([&]() -> CachedProp<std::optional<double>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("volume", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.volume;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<double>>::fromRawValue(*runtime, value, sourceProps.volume);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.volume: ") + exc.what());
-      }
-    }()),
-    muted([&]() -> CachedProp<std::optional<bool>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("muted", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.muted;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<bool>>::fromRawValue(*runtime, value, sourceProps.muted);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.muted: ") + exc.what());
-      }
-    }()),
-    audioTrack([&]() -> CachedProp<std::optional<double>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("audioTrack", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.audioTrack;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<double>>::fromRawValue(*runtime, value, sourceProps.audioTrack);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.audioTrack: ") + exc.what());
-      }
-    }()),
-    textTrack([&]() -> CachedProp<std::optional<double>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("textTrack", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.textTrack;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<double>>::fromRawValue(*runtime, value, sourceProps.textTrack);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.textTrack: ") + exc.what());
-      }
-    }()),
-    playInBackground([&]() -> CachedProp<std::optional<bool>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("playInBackground", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.playInBackground;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<bool>>::fromRawValue(*runtime, value, sourceProps.playInBackground);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.playInBackground: ") + exc.what());
-      }
-    }()),
-    videoAspectRatio([&]() -> CachedProp<std::optional<PlayerAspectRatio>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("videoAspectRatio", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.videoAspectRatio;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<PlayerAspectRatio>>::fromRawValue(*runtime, value, sourceProps.videoAspectRatio);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.videoAspectRatio: ") + exc.what());
-      }
-    }()),
-    autoAspectRatio([&]() -> CachedProp<std::optional<bool>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("autoAspectRatio", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.autoAspectRatio;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<bool>>::fromRawValue(*runtime, value, sourceProps.autoAspectRatio);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.autoAspectRatio: ") + exc.what());
-      }
-    }()),
-    resizeMode([&]() -> CachedProp<std::optional<PlayerResizeMode>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("resizeMode", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.resizeMode;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<PlayerResizeMode>>::fromRawValue(*runtime, value, sourceProps.resizeMode);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.resizeMode: ") + exc.what());
-      }
-    }()),
-    autoplay([&]() -> CachedProp<std::optional<bool>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("autoplay", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.autoplay;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<bool>>::fromRawValue(*runtime, value, sourceProps.autoplay);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.autoplay: ") + exc.what());
-      }
-    }()),
-    acceptInvalidCertificates([&]() -> CachedProp<std::optional<bool>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("acceptInvalidCertificates", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.acceptInvalidCertificates;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<bool>>::fromRawValue(*runtime, value, sourceProps.acceptInvalidCertificates);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.acceptInvalidCertificates: ") + exc.what());
-      }
-    }()),
-    onPlaying([&]() -> CachedProp<std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("onPlaying", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.onPlaying;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.onPlaying);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.onPlaying: ") + exc.what());
-      }
-    }()),
-    onProgress([&]() -> CachedProp<std::optional<std::function<void(const OnProgressEventProps& /* event */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("onProgress", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.onProgress;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const OnProgressEventProps& /* event */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.onProgress);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.onProgress: ") + exc.what());
-      }
-    }()),
-    onPaused([&]() -> CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("onPaused", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.onPaused;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.onPaused);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.onPaused: ") + exc.what());
-      }
-    }()),
-    onStopped([&]() -> CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("onStopped", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.onStopped;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.onStopped);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.onStopped: ") + exc.what());
-      }
-    }()),
-    onBuffering([&]() -> CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("onBuffering", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.onBuffering;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.onBuffering);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.onBuffering: ") + exc.what());
-      }
-    }()),
-    onEnded([&]() -> CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("onEnded", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.onEnded;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.onEnded);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.onEnded: ") + exc.what());
-      }
-    }()),
-    onError([&]() -> CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("onError", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.onError;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.onError);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.onError: ") + exc.what());
-      }
-    }()),
-    onLoad([&]() -> CachedProp<std::optional<std::function<void(const VideoInfo& /* event */)>>> {
-      try {
-        const react::RawValue* rawValue = rawProps.at("onLoad", nullptr, nullptr);
-        if (rawValue == nullptr) return sourceProps.onLoad;
-        const auto& [runtime, value] = (std::pair<jsi::Runtime*, jsi::Value>)*rawValue;
-        return CachedProp<std::optional<std::function<void(const VideoInfo& /* event */)>>>::fromRawValue(*runtime, value.asObject(*runtime).getProperty(*runtime, PropNameIDCache::get(*runtime, "f")), sourceProps.onLoad);
-      } catch (const std::exception& exc) {
-        throw std::runtime_error(std::string("NitroVLCView.onLoad: ") + exc.what());
+        throw std::runtime_error(std::string("NitroVLCView.viewId: ") + exc.what());
       }
     }()),
     hybridRef([&]() -> CachedProp<std::optional<std::function<void(const std::shared_ptr<HybridNitroVLCViewSpec>& /* ref */)>>> {
@@ -279,30 +49,7 @@ namespace margelo::nitro::nitrovlc::views {
 
   bool HybridNitroVLCViewProps::filterObjectKeys(const std::string& propName) {
     switch (hashString(propName)) {
-      case hashString("source"): return true;
-      case hashString("subtitleUri"): return true;
-      case hashString("paused"): return true;
-      case hashString("loop"): return true;
-      case hashString("rate"): return true;
-      case hashString("seek"): return true;
-      case hashString("volume"): return true;
-      case hashString("muted"): return true;
-      case hashString("audioTrack"): return true;
-      case hashString("textTrack"): return true;
-      case hashString("playInBackground"): return true;
-      case hashString("videoAspectRatio"): return true;
-      case hashString("autoAspectRatio"): return true;
-      case hashString("resizeMode"): return true;
-      case hashString("autoplay"): return true;
-      case hashString("acceptInvalidCertificates"): return true;
-      case hashString("onPlaying"): return true;
-      case hashString("onProgress"): return true;
-      case hashString("onPaused"): return true;
-      case hashString("onStopped"): return true;
-      case hashString("onBuffering"): return true;
-      case hashString("onEnded"): return true;
-      case hashString("onError"): return true;
-      case hashString("onLoad"): return true;
+      case hashString("viewId"): return true;
       case hashString("hybridRef"): return true;
       default: return false;
     }
@@ -326,8 +73,7 @@ namespace margelo::nitro::nitrovlc::views {
     // This is called immediately after `ShadowNode` is created, cloned or in progress.
     // On Android, we need to wrap props in our state, which gets routed through Java and later unwrapped in JNI/C++.
     auto& concreteShadowNode = static_cast<HybridNitroVLCViewShadowNode&>(shadowNode);
-    const std::shared_ptr<const HybridNitroVLCViewProps>& constProps = concreteShadowNode.getConcreteSharedProps();
-    const std::shared_ptr<HybridNitroVLCViewProps>& props = std::const_pointer_cast<HybridNitroVLCViewProps>(constProps);
+    const std::shared_ptr<const HybridNitroVLCViewProps>& props = concreteShadowNode.getConcreteSharedProps();
     HybridNitroVLCViewState state{props};
     concreteShadowNode.setStateData(std::move(state));
   }

@@ -28,9 +28,8 @@ namespace margelo::nitro::nitrovlc { struct SimpleCallbackEventProps; }
 // Forward declaration of `VideoInfo` to properly resolve imports.
 namespace margelo::nitro::nitrovlc { struct VideoInfo; }
 
-#include "VLCPlayerSource.hpp"
 #include <string>
-#include <optional>
+#include "VLCPlayerSource.hpp"
 #include "PlayerAspectRatio.hpp"
 #include "PlayerResizeMode.hpp"
 #include "OnPlayingEventProps.hpp"
@@ -66,54 +65,8 @@ namespace margelo::nitro::nitrovlc {
 
     public:
       // Properties
-      virtual VLCPlayerSource getSource() = 0;
-      virtual void setSource(const VLCPlayerSource& source) = 0;
-      virtual std::optional<std::string> getSubtitleUri() = 0;
-      virtual void setSubtitleUri(const std::optional<std::string>& subtitleUri) = 0;
-      virtual std::optional<bool> getPaused() = 0;
-      virtual void setPaused(std::optional<bool> paused) = 0;
-      virtual std::optional<bool> getLoop() = 0;
-      virtual void setLoop(std::optional<bool> loop) = 0;
-      virtual std::optional<double> getRate() = 0;
-      virtual void setRate(std::optional<double> rate) = 0;
-      virtual std::optional<double> getSeek() = 0;
-      virtual void setSeek(std::optional<double> seek) = 0;
-      virtual std::optional<double> getVolume() = 0;
-      virtual void setVolume(std::optional<double> volume) = 0;
-      virtual std::optional<bool> getMuted() = 0;
-      virtual void setMuted(std::optional<bool> muted) = 0;
-      virtual std::optional<double> getAudioTrack() = 0;
-      virtual void setAudioTrack(std::optional<double> audioTrack) = 0;
-      virtual std::optional<double> getTextTrack() = 0;
-      virtual void setTextTrack(std::optional<double> textTrack) = 0;
-      virtual std::optional<bool> getPlayInBackground() = 0;
-      virtual void setPlayInBackground(std::optional<bool> playInBackground) = 0;
-      virtual std::optional<PlayerAspectRatio> getVideoAspectRatio() = 0;
-      virtual void setVideoAspectRatio(std::optional<PlayerAspectRatio> videoAspectRatio) = 0;
-      virtual std::optional<bool> getAutoAspectRatio() = 0;
-      virtual void setAutoAspectRatio(std::optional<bool> autoAspectRatio) = 0;
-      virtual std::optional<PlayerResizeMode> getResizeMode() = 0;
-      virtual void setResizeMode(std::optional<PlayerResizeMode> resizeMode) = 0;
-      virtual std::optional<bool> getAutoplay() = 0;
-      virtual void setAutoplay(std::optional<bool> autoplay) = 0;
-      virtual std::optional<bool> getAcceptInvalidCertificates() = 0;
-      virtual void setAcceptInvalidCertificates(std::optional<bool> acceptInvalidCertificates) = 0;
-      virtual std::optional<std::function<void(const OnPlayingEventProps& /* event */)>> getOnPlaying() = 0;
-      virtual void setOnPlaying(const std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>& onPlaying) = 0;
-      virtual std::optional<std::function<void(const OnProgressEventProps& /* event */)>> getOnProgress() = 0;
-      virtual void setOnProgress(const std::optional<std::function<void(const OnProgressEventProps& /* event */)>>& onProgress) = 0;
-      virtual std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnPaused() = 0;
-      virtual void setOnPaused(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onPaused) = 0;
-      virtual std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnStopped() = 0;
-      virtual void setOnStopped(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onStopped) = 0;
-      virtual std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnBuffering() = 0;
-      virtual void setOnBuffering(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onBuffering) = 0;
-      virtual std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnEnded() = 0;
-      virtual void setOnEnded(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onEnded) = 0;
-      virtual std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnError() = 0;
-      virtual void setOnError(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onError) = 0;
-      virtual std::optional<std::function<void(const VideoInfo& /* event */)>> getOnLoad() = 0;
-      virtual void setOnLoad(const std::optional<std::function<void(const VideoInfo& /* event */)>>& onLoad) = 0;
+      virtual std::string getViewId() = 0;
+      virtual void setViewId(const std::string& viewId) = 0;
 
     public:
       // Methods
@@ -121,7 +74,29 @@ namespace margelo::nitro::nitrovlc {
       virtual void pause() = 0;
       virtual void stop() = 0;
       virtual void seek(double position) = 0;
+      virtual void setSource(const VLCPlayerSource& source) = 0;
+      virtual void setPaused(bool paused) = 0;
+      virtual void setLoop(bool loop) = 0;
+      virtual void setRate(double rate) = 0;
       virtual void setVolume(double volume) = 0;
+      virtual void setMuted(bool muted) = 0;
+      virtual void setAudioTrack(double audioTrack) = 0;
+      virtual void setTextTrack(double textTrack) = 0;
+      virtual void setSubtitleUri(const std::string& subtitleUri) = 0;
+      virtual void setPlayInBackground(bool playInBackground) = 0;
+      virtual void setVideoAspectRatio(PlayerAspectRatio videoAspectRatio) = 0;
+      virtual void setAutoAspectRatio(bool autoAspectRatio) = 0;
+      virtual void setResizeMode(PlayerResizeMode resizeMode) = 0;
+      virtual void setAutoplay(bool autoplay) = 0;
+      virtual void setAcceptInvalidCertificates(bool acceptInvalidCertificates) = 0;
+      virtual void setOnPlaying(const std::function<void(const OnPlayingEventProps& /* event */)>& callback) = 0;
+      virtual void setOnProgress(const std::function<void(const OnProgressEventProps& /* event */)>& callback) = 0;
+      virtual void setOnPaused(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) = 0;
+      virtual void setOnStopped(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) = 0;
+      virtual void setOnBuffering(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) = 0;
+      virtual void setOnEnded(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) = 0;
+      virtual void setOnError(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) = 0;
+      virtual void setOnLoad(const std::function<void(const VideoInfo& /* event */)>& callback) = 0;
 
     protected:
       // Hybrid Setup

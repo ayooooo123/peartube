@@ -24,15 +24,15 @@ public final class NitroVLCAutolinking {
     return HybridNitroVLCView.self is any RecyclableView.Type
   }
   
-  public static func createNitroVLCPOC() -> bridge.std__shared_ptr_HybridNitroVLCPOCSpec_ {
-    let hybridObject = HybridNitroVLCPOC()
-    return { () -> bridge.std__shared_ptr_HybridNitroVLCPOCSpec_ in
+  public static func createNitroVLCModule() -> bridge.std__shared_ptr_HybridNitroVLCModuleSpec_ {
+    let hybridObject = HybridNitroVLCModule()
+    return { () -> bridge.std__shared_ptr_HybridNitroVLCModuleSpec_ in
       let __cxxWrapped = hybridObject.getCxxWrapper()
       return __cxxWrapped.getCxxPart()
     }()
   }
   
-  public static func isNitroVLCPOCRecyclable() -> Bool {
-    return HybridNitroVLCPOC.self is any RecyclableView.Type
+  public static func isNitroVLCModuleRecyclable() -> Bool {
+    return HybridNitroVLCModule.self is any RecyclableView.Type
   }
 }

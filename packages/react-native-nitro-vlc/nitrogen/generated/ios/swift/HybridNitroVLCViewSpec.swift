@@ -10,37 +10,36 @@ import NitroModules
 /// See ``HybridNitroVLCViewSpec``
 public protocol HybridNitroVLCViewSpec_protocol: HybridObject, HybridView {
   // Properties
-  var source: VLCPlayerSource { get set }
-  var subtitleUri: String? { get set }
-  var paused: Bool? { get set }
-  var loop: Bool? { get set }
-  var rate: Double? { get set }
-  var seek: Double? { get set }
-  var volume: Double? { get set }
-  var muted: Bool? { get set }
-  var audioTrack: Double? { get set }
-  var textTrack: Double? { get set }
-  var playInBackground: Bool? { get set }
-  var videoAspectRatio: PlayerAspectRatio? { get set }
-  var autoAspectRatio: Bool? { get set }
-  var resizeMode: PlayerResizeMode? { get set }
-  var autoplay: Bool? { get set }
-  var acceptInvalidCertificates: Bool? { get set }
-  var onPlaying: ((_ event: OnPlayingEventProps) -> Void)? { get set }
-  var onProgress: ((_ event: OnProgressEventProps) -> Void)? { get set }
-  var onPaused: ((_ event: SimpleCallbackEventProps) -> Void)? { get set }
-  var onStopped: ((_ event: SimpleCallbackEventProps) -> Void)? { get set }
-  var onBuffering: ((_ event: SimpleCallbackEventProps) -> Void)? { get set }
-  var onEnded: ((_ event: SimpleCallbackEventProps) -> Void)? { get set }
-  var onError: ((_ event: SimpleCallbackEventProps) -> Void)? { get set }
-  var onLoad: ((_ event: VideoInfo) -> Void)? { get set }
+  var viewId: String { get set }
 
   // Methods
   func play() throws -> Void
   func pause() throws -> Void
   func stop() throws -> Void
   func seek(position: Double) throws -> Void
+  func setSource(source: VLCPlayerSource) throws -> Void
+  func setPaused(paused: Bool) throws -> Void
+  func setLoop(loop: Bool) throws -> Void
+  func setRate(rate: Double) throws -> Void
   func setVolume(volume: Double) throws -> Void
+  func setMuted(muted: Bool) throws -> Void
+  func setAudioTrack(audioTrack: Double) throws -> Void
+  func setTextTrack(textTrack: Double) throws -> Void
+  func setSubtitleUri(subtitleUri: String) throws -> Void
+  func setPlayInBackground(playInBackground: Bool) throws -> Void
+  func setVideoAspectRatio(videoAspectRatio: PlayerAspectRatio) throws -> Void
+  func setAutoAspectRatio(autoAspectRatio: Bool) throws -> Void
+  func setResizeMode(resizeMode: PlayerResizeMode) throws -> Void
+  func setAutoplay(autoplay: Bool) throws -> Void
+  func setAcceptInvalidCertificates(acceptInvalidCertificates: Bool) throws -> Void
+  func setOnPlaying(callback: @escaping (_ event: OnPlayingEventProps) -> Void) throws -> Void
+  func setOnProgress(callback: @escaping (_ event: OnProgressEventProps) -> Void) throws -> Void
+  func setOnPaused(callback: @escaping (_ event: SimpleCallbackEventProps) -> Void) throws -> Void
+  func setOnStopped(callback: @escaping (_ event: SimpleCallbackEventProps) -> Void) throws -> Void
+  func setOnBuffering(callback: @escaping (_ event: SimpleCallbackEventProps) -> Void) throws -> Void
+  func setOnEnded(callback: @escaping (_ event: SimpleCallbackEventProps) -> Void) throws -> Void
+  func setOnError(callback: @escaping (_ event: SimpleCallbackEventProps) -> Void) throws -> Void
+  func setOnLoad(callback: @escaping (_ event: VideoInfo) -> Void) throws -> Void
 }
 
 public extension HybridNitroVLCViewSpec_protocol {

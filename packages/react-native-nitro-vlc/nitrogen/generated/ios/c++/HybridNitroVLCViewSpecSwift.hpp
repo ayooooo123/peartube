@@ -31,8 +31,8 @@ namespace margelo::nitro::nitrovlc { struct VideoSize; }
 // Forward declaration of `Track` to properly resolve imports.
 namespace margelo::nitro::nitrovlc { struct Track; }
 
-#include "VLCPlayerSource.hpp"
 #include <string>
+#include "VLCPlayerSource.hpp"
 #include <optional>
 #include <vector>
 #include "PlayerAspectRatio.hpp"
@@ -91,172 +91,12 @@ namespace margelo::nitro::nitrovlc {
 
   public:
     // Properties
-    inline VLCPlayerSource getSource() noexcept override {
-      return _swiftPart.getSource();
-    }
-    inline void setSource(const VLCPlayerSource& source) noexcept override {
-      _swiftPart.setSource(std::forward<decltype(source)>(source));
-    }
-    inline std::optional<std::string> getSubtitleUri() noexcept override {
-      auto __result = _swiftPart.getSubtitleUri();
+    inline std::string getViewId() noexcept override {
+      auto __result = _swiftPart.getViewId();
       return __result;
     }
-    inline void setSubtitleUri(const std::optional<std::string>& subtitleUri) noexcept override {
-      _swiftPart.setSubtitleUri(subtitleUri);
-    }
-    inline std::optional<bool> getPaused() noexcept override {
-      auto __result = _swiftPart.getPaused();
-      return __result;
-    }
-    inline void setPaused(std::optional<bool> paused) noexcept override {
-      _swiftPart.setPaused(paused);
-    }
-    inline std::optional<bool> getLoop() noexcept override {
-      auto __result = _swiftPart.getLoop();
-      return __result;
-    }
-    inline void setLoop(std::optional<bool> loop) noexcept override {
-      _swiftPart.setLoop(loop);
-    }
-    inline std::optional<double> getRate() noexcept override {
-      auto __result = _swiftPart.getRate();
-      return __result;
-    }
-    inline void setRate(std::optional<double> rate) noexcept override {
-      _swiftPart.setRate(rate);
-    }
-    inline std::optional<double> getSeek() noexcept override {
-      auto __result = _swiftPart.getSeek();
-      return __result;
-    }
-    inline void setSeek(std::optional<double> seek) noexcept override {
-      _swiftPart.setSeek(seek);
-    }
-    inline std::optional<double> getVolume() noexcept override {
-      auto __result = _swiftPart.getVolume();
-      return __result;
-    }
-    inline void setVolume(std::optional<double> volume) noexcept override {
-      _swiftPart.setVolume(volume);
-    }
-    inline std::optional<bool> getMuted() noexcept override {
-      auto __result = _swiftPart.getMuted();
-      return __result;
-    }
-    inline void setMuted(std::optional<bool> muted) noexcept override {
-      _swiftPart.setMuted(muted);
-    }
-    inline std::optional<double> getAudioTrack() noexcept override {
-      auto __result = _swiftPart.getAudioTrack();
-      return __result;
-    }
-    inline void setAudioTrack(std::optional<double> audioTrack) noexcept override {
-      _swiftPart.setAudioTrack(audioTrack);
-    }
-    inline std::optional<double> getTextTrack() noexcept override {
-      auto __result = _swiftPart.getTextTrack();
-      return __result;
-    }
-    inline void setTextTrack(std::optional<double> textTrack) noexcept override {
-      _swiftPart.setTextTrack(textTrack);
-    }
-    inline std::optional<bool> getPlayInBackground() noexcept override {
-      auto __result = _swiftPart.getPlayInBackground();
-      return __result;
-    }
-    inline void setPlayInBackground(std::optional<bool> playInBackground) noexcept override {
-      _swiftPart.setPlayInBackground(playInBackground);
-    }
-    inline std::optional<PlayerAspectRatio> getVideoAspectRatio() noexcept override {
-      auto __result = _swiftPart.getVideoAspectRatio();
-      return __result;
-    }
-    inline void setVideoAspectRatio(std::optional<PlayerAspectRatio> videoAspectRatio) noexcept override {
-      _swiftPart.setVideoAspectRatio(videoAspectRatio);
-    }
-    inline std::optional<bool> getAutoAspectRatio() noexcept override {
-      auto __result = _swiftPart.getAutoAspectRatio();
-      return __result;
-    }
-    inline void setAutoAspectRatio(std::optional<bool> autoAspectRatio) noexcept override {
-      _swiftPart.setAutoAspectRatio(autoAspectRatio);
-    }
-    inline std::optional<PlayerResizeMode> getResizeMode() noexcept override {
-      auto __result = _swiftPart.getResizeMode();
-      return __result;
-    }
-    inline void setResizeMode(std::optional<PlayerResizeMode> resizeMode) noexcept override {
-      _swiftPart.setResizeMode(resizeMode);
-    }
-    inline std::optional<bool> getAutoplay() noexcept override {
-      auto __result = _swiftPart.getAutoplay();
-      return __result;
-    }
-    inline void setAutoplay(std::optional<bool> autoplay) noexcept override {
-      _swiftPart.setAutoplay(autoplay);
-    }
-    inline std::optional<bool> getAcceptInvalidCertificates() noexcept override {
-      auto __result = _swiftPart.getAcceptInvalidCertificates();
-      return __result;
-    }
-    inline void setAcceptInvalidCertificates(std::optional<bool> acceptInvalidCertificates) noexcept override {
-      _swiftPart.setAcceptInvalidCertificates(acceptInvalidCertificates);
-    }
-    inline std::optional<std::function<void(const OnPlayingEventProps& /* event */)>> getOnPlaying() noexcept override {
-      auto __result = _swiftPart.getOnPlaying();
-      return __result;
-    }
-    inline void setOnPlaying(const std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>& onPlaying) noexcept override {
-      _swiftPart.setOnPlaying(onPlaying);
-    }
-    inline std::optional<std::function<void(const OnProgressEventProps& /* event */)>> getOnProgress() noexcept override {
-      auto __result = _swiftPart.getOnProgress();
-      return __result;
-    }
-    inline void setOnProgress(const std::optional<std::function<void(const OnProgressEventProps& /* event */)>>& onProgress) noexcept override {
-      _swiftPart.setOnProgress(onProgress);
-    }
-    inline std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnPaused() noexcept override {
-      auto __result = _swiftPart.getOnPaused();
-      return __result;
-    }
-    inline void setOnPaused(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onPaused) noexcept override {
-      _swiftPart.setOnPaused(onPaused);
-    }
-    inline std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnStopped() noexcept override {
-      auto __result = _swiftPart.getOnStopped();
-      return __result;
-    }
-    inline void setOnStopped(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onStopped) noexcept override {
-      _swiftPart.setOnStopped(onStopped);
-    }
-    inline std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnBuffering() noexcept override {
-      auto __result = _swiftPart.getOnBuffering();
-      return __result;
-    }
-    inline void setOnBuffering(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onBuffering) noexcept override {
-      _swiftPart.setOnBuffering(onBuffering);
-    }
-    inline std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnEnded() noexcept override {
-      auto __result = _swiftPart.getOnEnded();
-      return __result;
-    }
-    inline void setOnEnded(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onEnded) noexcept override {
-      _swiftPart.setOnEnded(onEnded);
-    }
-    inline std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> getOnError() noexcept override {
-      auto __result = _swiftPart.getOnError();
-      return __result;
-    }
-    inline void setOnError(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& onError) noexcept override {
-      _swiftPart.setOnError(onError);
-    }
-    inline std::optional<std::function<void(const VideoInfo& /* event */)>> getOnLoad() noexcept override {
-      auto __result = _swiftPart.getOnLoad();
-      return __result;
-    }
-    inline void setOnLoad(const std::optional<std::function<void(const VideoInfo& /* event */)>>& onLoad) noexcept override {
-      _swiftPart.setOnLoad(onLoad);
+    inline void setViewId(const std::string& viewId) noexcept override {
+      _swiftPart.setViewId(viewId);
     }
 
   public:
@@ -285,8 +125,140 @@ namespace margelo::nitro::nitrovlc {
         std::rethrow_exception(__result.error());
       }
     }
+    inline void setSource(const VLCPlayerSource& source) override {
+      auto __result = _swiftPart.setSource(std::forward<decltype(source)>(source));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setPaused(bool paused) override {
+      auto __result = _swiftPart.setPaused(std::forward<decltype(paused)>(paused));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setLoop(bool loop) override {
+      auto __result = _swiftPart.setLoop(std::forward<decltype(loop)>(loop));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setRate(double rate) override {
+      auto __result = _swiftPart.setRate(std::forward<decltype(rate)>(rate));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
     inline void setVolume(double volume) override {
       auto __result = _swiftPart.setVolume(std::forward<decltype(volume)>(volume));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setMuted(bool muted) override {
+      auto __result = _swiftPart.setMuted(std::forward<decltype(muted)>(muted));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setAudioTrack(double audioTrack) override {
+      auto __result = _swiftPart.setAudioTrack(std::forward<decltype(audioTrack)>(audioTrack));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setTextTrack(double textTrack) override {
+      auto __result = _swiftPart.setTextTrack(std::forward<decltype(textTrack)>(textTrack));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setSubtitleUri(const std::string& subtitleUri) override {
+      auto __result = _swiftPart.setSubtitleUri(subtitleUri);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setPlayInBackground(bool playInBackground) override {
+      auto __result = _swiftPart.setPlayInBackground(std::forward<decltype(playInBackground)>(playInBackground));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setVideoAspectRatio(PlayerAspectRatio videoAspectRatio) override {
+      auto __result = _swiftPart.setVideoAspectRatio(static_cast<int>(videoAspectRatio));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setAutoAspectRatio(bool autoAspectRatio) override {
+      auto __result = _swiftPart.setAutoAspectRatio(std::forward<decltype(autoAspectRatio)>(autoAspectRatio));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setResizeMode(PlayerResizeMode resizeMode) override {
+      auto __result = _swiftPart.setResizeMode(static_cast<int>(resizeMode));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setAutoplay(bool autoplay) override {
+      auto __result = _swiftPart.setAutoplay(std::forward<decltype(autoplay)>(autoplay));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setAcceptInvalidCertificates(bool acceptInvalidCertificates) override {
+      auto __result = _swiftPart.setAcceptInvalidCertificates(std::forward<decltype(acceptInvalidCertificates)>(acceptInvalidCertificates));
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setOnPlaying(const std::function<void(const OnPlayingEventProps& /* event */)>& callback) override {
+      auto __result = _swiftPart.setOnPlaying(callback);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setOnProgress(const std::function<void(const OnProgressEventProps& /* event */)>& callback) override {
+      auto __result = _swiftPart.setOnProgress(callback);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setOnPaused(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override {
+      auto __result = _swiftPart.setOnPaused(callback);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setOnStopped(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override {
+      auto __result = _swiftPart.setOnStopped(callback);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setOnBuffering(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override {
+      auto __result = _swiftPart.setOnBuffering(callback);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setOnEnded(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override {
+      auto __result = _swiftPart.setOnEnded(callback);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setOnError(const std::function<void(const SimpleCallbackEventProps& /* event */)>& callback) override {
+      auto __result = _swiftPart.setOnError(callback);
+      if (__result.hasError()) [[unlikely]] {
+        std::rethrow_exception(__result.error());
+      }
+    }
+    inline void setOnLoad(const std::function<void(const VideoInfo& /* event */)>& callback) override {
+      auto __result = _swiftPart.setOnLoad(callback);
       if (__result.hasError()) [[unlikely]] {
         std::rethrow_exception(__result.error());
       }

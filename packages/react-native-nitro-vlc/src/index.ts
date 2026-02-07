@@ -1,9 +1,19 @@
-import { getHostComponent, callback } from 'react-native-nitro-modules'
-import type { NitroVLCMethods, NitroVLCProps } from './NitroVLC.nitro'
+import { getHostComponent, NitroModules } from 'react-native-nitro-modules'
+import type { NitroVLCModule as NitroVLCModuleType } from './NitroVLCModule.nitro'
 
 export const name = 'NitroVLC'
 
-export const NitroVLCView = getHostComponent<NitroVLCProps, NitroVLCMethods>(
+/**
+ * Plain React Native native component backed by SimpleViewManager/RCTViewManager.
+ * Only accepts `viewId` (and `style`) as props — all other configuration is done
+ * imperatively via NitroVLCModule.getView(viewId) to avoid Fabric CachedProp crashes.
+ *
+ * Uses getHostComponent (which calls NativeComponentRegistry.get internally) to
+ * register the view config. The actual native view is a plain ViewManager, NOT
+ * a Nitro HybridView — getHostComponent is only used for JS-side view config
+ * registration since it properly handles RN 0.81 bridgeless mode.
+ */
+export const NitroVLCView: any = getHostComponent<any, any>(
   'NitroVLCView',
   () => ({
     uiViewClassName: 'NitroVLCView',
@@ -11,40 +21,15 @@ export const NitroVLCView = getHostComponent<NitroVLCProps, NitroVLCMethods>(
     bubblingEventTypes: {},
     directEventTypes: {},
     validAttributes: {
-      source: true,
-      subtitleUri: true,
-      paused: true,
-      loop: true,
-      rate: true,
-      seek: true,
-      volume: true,
-      muted: true,
-      audioTrack: true,
-      textTrack: true,
-      playInBackground: true,
-      videoAspectRatio: true,
-      autoAspectRatio: true,
-      resizeMode: true,
-      autoplay: true,
-      acceptInvalidCertificates: true,
-      onPlaying: true,
-      onProgress: true,
-      onPaused: true,
-      onStopped: true,
-      onBuffering: true,
-      onEnded: true,
-      onError: true,
-      onLoad: true,
+      viewId: true,
     },
-  })
+  }),
 )
 
-export { callback }
+export const NitroVLCModule = NitroModules.createHybridObject<NitroVLCModuleType>('NitroVLCModule')
 
 export type {
   NitroVLCMethods,
-  NitroVLCProps,
-  NitroVLCView as NitroVLCViewSpec,
   OnPlayingEventProps,
   OnProgressEventProps,
   PlayerAspectRatio,
@@ -55,3 +40,5 @@ export type {
   VLCPlayerSource,
   VideoSize,
 } from './NitroVLC.nitro'
+
+export type { NitroVLCModule as NitroVLCModuleType } from './NitroVLCModule.nitro'

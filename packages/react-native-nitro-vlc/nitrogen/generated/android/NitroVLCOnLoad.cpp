@@ -20,7 +20,7 @@
 #include "JFunc_void_OnProgressEventProps.hpp"
 #include "JFunc_void_SimpleCallbackEventProps.hpp"
 #include "JFunc_void_VideoInfo.hpp"
-#include "views/JHybridNitroVLCViewStateUpdater.hpp"
+#include "JHybridNitroVLCModuleSpec.hpp"
 #include <NitroModules/DefaultConstructableObject.hpp>
 
 namespace margelo::nitro::nitrovlc {
@@ -37,13 +37,15 @@ int initialize(JavaVM* vm) {
     margelo::nitro::nitrovlc::JFunc_void_OnProgressEventProps_cxx::registerNatives();
     margelo::nitro::nitrovlc::JFunc_void_SimpleCallbackEventProps_cxx::registerNatives();
     margelo::nitro::nitrovlc::JFunc_void_VideoInfo_cxx::registerNatives();
-    margelo::nitro::nitrovlc::views::JHybridNitroVLCViewStateUpdater::registerNatives();
+    margelo::nitro::nitrovlc::JHybridNitroVLCModuleSpec::registerNatives();
 
     // Register Nitro Hybrid Objects
+    // Note: NitroVLCView is NOT registered here — instances are created by
+    // the plain NitroVLCViewManager and looked up via NitroVLCModule.getView(viewId).
     HybridObjectRegistry::registerHybridObjectConstructor(
-      "NitroVLCView",
+      "NitroVLCModule",
       []() -> std::shared_ptr<HybridObject> {
-        static DefaultConstructableObject<JHybridNitroVLCViewSpec::javaobject> object("com/margelo/nitro/com/nitrovlc/HybridNitroVLCView");
+        static DefaultConstructableObject<JHybridNitroVLCModuleSpec::javaobject> object("com/margelo/nitro/com/nitrovlc/HybridNitroVLCModule");
         auto instance = object.create();
         return instance->cthis()->shared();
       }

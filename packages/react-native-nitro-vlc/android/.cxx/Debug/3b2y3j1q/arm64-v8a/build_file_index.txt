@@ -1,6 +1,0 @@
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/3b2y3j1q/prefab/arm64-v8a/prefab/lib/aarch64-linux-android/cmake/ReactAndroid/ReactAndroidConfig.cmake
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/3b2y3j1q/prefab/arm64-v8a/prefab/lib/aarch64-linux-android/cmake/ReactAndroid/ReactAndroidConfigVersion.cmake
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/3b2y3j1q/prefab/arm64-v8a/prefab/lib/aarch64-linux-android/cmake/fbjni/fbjniConfig.cmake
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/3b2y3j1q/prefab/arm64-v8a/prefab/lib/aarch64-linux-android/cmake/fbjni/fbjniConfigVersion.cmake
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/.cxx/Debug/3b2y3j1q/prefab/arm64-v8a/prefab/lib/aarch64-linux-android/cmake/react-native-nitro-modules/react-native-nitro-modulesConfig.cmake
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/CMakeLists.txt

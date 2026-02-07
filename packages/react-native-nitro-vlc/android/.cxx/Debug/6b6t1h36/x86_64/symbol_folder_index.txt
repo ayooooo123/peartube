@@ -1,1 +1,0 @@
-/Users/jd/projects/peartube/packages/react-native-nitro-vlc/android/build/intermediates/cxx/Debug/6b6t1h36/obj/x86_64

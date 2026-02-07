@@ -1,8 +1,9 @@
 {
-  "active_plan": "/Users/jd/projects/peartube/.sisyphus/plans/nitro-vlc-player.md",
-  "started_at": "2026-02-05T21:05:59.671Z",
+  "active_plan": "/Users/jd/projects/peartube/.sisyphus/plans/fix-desktop-build.md",
+  "started_at": "2026-02-07T20:01:56.365Z",
   "session_ids": [
-    "ses_3d07ce726ffeWCa7P5CQSO1kqf"
+    "ses_3c684a2deffesunryzy3O1sA99"
   ],
-  "plan_name": "nitro-vlc-player"
+  "plan_name": "fix-desktop-build",
+  "agent": "atlas"
 }

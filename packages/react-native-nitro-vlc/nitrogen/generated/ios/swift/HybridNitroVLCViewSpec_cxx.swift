@@ -121,581 +121,14 @@ open class HybridNitroVLCViewSpec_cxx {
   }
 
   // Properties
-  public final var source: VLCPlayerSource {
+  public final var viewId: std.string {
     @inline(__always)
     get {
-      return self.__implementation.source
+      return std.string(self.__implementation.viewId)
     }
     @inline(__always)
     set {
-      self.__implementation.source = newValue
-    }
-  }
-  
-  public final var subtitleUri: bridge.std__optional_std__string_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_std__string_ in
-        if let __unwrappedValue = self.__implementation.subtitleUri {
-          return bridge.create_std__optional_std__string_(std.string(__unwrappedValue))
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.subtitleUri = { () -> String? in
-        if bridge.has_value_std__optional_std__string_(newValue) {
-          let __unwrapped = bridge.get_std__optional_std__string_(newValue)
-          return String(__unwrapped)
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var paused: bridge.std__optional_bool_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_bool_ in
-        if let __unwrappedValue = self.__implementation.paused {
-          return bridge.create_std__optional_bool_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.paused = { () -> Bool? in
-        if bridge.has_value_std__optional_bool_(newValue) {
-          let __unwrapped = bridge.get_std__optional_bool_(newValue)
-          return __unwrapped
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var loop: bridge.std__optional_bool_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_bool_ in
-        if let __unwrappedValue = self.__implementation.loop {
-          return bridge.create_std__optional_bool_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.loop = { () -> Bool? in
-        if bridge.has_value_std__optional_bool_(newValue) {
-          let __unwrapped = bridge.get_std__optional_bool_(newValue)
-          return __unwrapped
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var rate: bridge.std__optional_double_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_double_ in
-        if let __unwrappedValue = self.__implementation.rate {
-          return bridge.create_std__optional_double_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.rate = newValue.value
-    }
-  }
-  
-  public final var seek: bridge.std__optional_double_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_double_ in
-        if let __unwrappedValue = self.__implementation.seek {
-          return bridge.create_std__optional_double_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.seek = newValue.value
-    }
-  }
-  
-  public final var volume: bridge.std__optional_double_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_double_ in
-        if let __unwrappedValue = self.__implementation.volume {
-          return bridge.create_std__optional_double_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.volume = newValue.value
-    }
-  }
-  
-  public final var muted: bridge.std__optional_bool_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_bool_ in
-        if let __unwrappedValue = self.__implementation.muted {
-          return bridge.create_std__optional_bool_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.muted = { () -> Bool? in
-        if bridge.has_value_std__optional_bool_(newValue) {
-          let __unwrapped = bridge.get_std__optional_bool_(newValue)
-          return __unwrapped
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var audioTrack: bridge.std__optional_double_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_double_ in
-        if let __unwrappedValue = self.__implementation.audioTrack {
-          return bridge.create_std__optional_double_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.audioTrack = newValue.value
-    }
-  }
-  
-  public final var textTrack: bridge.std__optional_double_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_double_ in
-        if let __unwrappedValue = self.__implementation.textTrack {
-          return bridge.create_std__optional_double_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.textTrack = newValue.value
-    }
-  }
-  
-  public final var playInBackground: bridge.std__optional_bool_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_bool_ in
-        if let __unwrappedValue = self.__implementation.playInBackground {
-          return bridge.create_std__optional_bool_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.playInBackground = { () -> Bool? in
-        if bridge.has_value_std__optional_bool_(newValue) {
-          let __unwrapped = bridge.get_std__optional_bool_(newValue)
-          return __unwrapped
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var videoAspectRatio: bridge.std__optional_PlayerAspectRatio_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_PlayerAspectRatio_ in
-        if let __unwrappedValue = self.__implementation.videoAspectRatio {
-          return bridge.create_std__optional_PlayerAspectRatio_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.videoAspectRatio = newValue.value
-    }
-  }
-  
-  public final var autoAspectRatio: bridge.std__optional_bool_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_bool_ in
-        if let __unwrappedValue = self.__implementation.autoAspectRatio {
-          return bridge.create_std__optional_bool_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.autoAspectRatio = { () -> Bool? in
-        if bridge.has_value_std__optional_bool_(newValue) {
-          let __unwrapped = bridge.get_std__optional_bool_(newValue)
-          return __unwrapped
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var resizeMode: bridge.std__optional_PlayerResizeMode_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_PlayerResizeMode_ in
-        if let __unwrappedValue = self.__implementation.resizeMode {
-          return bridge.create_std__optional_PlayerResizeMode_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.resizeMode = newValue.value
-    }
-  }
-  
-  public final var autoplay: bridge.std__optional_bool_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_bool_ in
-        if let __unwrappedValue = self.__implementation.autoplay {
-          return bridge.create_std__optional_bool_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.autoplay = { () -> Bool? in
-        if bridge.has_value_std__optional_bool_(newValue) {
-          let __unwrapped = bridge.get_std__optional_bool_(newValue)
-          return __unwrapped
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var acceptInvalidCertificates: bridge.std__optional_bool_ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_bool_ in
-        if let __unwrappedValue = self.__implementation.acceptInvalidCertificates {
-          return bridge.create_std__optional_bool_(__unwrappedValue)
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.acceptInvalidCertificates = { () -> Bool? in
-        if bridge.has_value_std__optional_bool_(newValue) {
-          let __unwrapped = bridge.get_std__optional_bool_(newValue)
-          return __unwrapped
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var onPlaying: bridge.std__optional_std__function_void_const_OnPlayingEventProps_____event______ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_std__function_void_const_OnPlayingEventProps_____event______ in
-        if let __unwrappedValue = self.__implementation.onPlaying {
-          return bridge.create_std__optional_std__function_void_const_OnPlayingEventProps_____event______({ () -> bridge.Func_void_OnPlayingEventProps in
-            let __closureWrapper = Func_void_OnPlayingEventProps(__unwrappedValue)
-            return bridge.create_Func_void_OnPlayingEventProps(__closureWrapper.toUnsafe())
-          }())
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.onPlaying = { () -> ((_ event: OnPlayingEventProps) -> Void)? in
-        if bridge.has_value_std__optional_std__function_void_const_OnPlayingEventProps_____event______(newValue) {
-          let __unwrapped = bridge.get_std__optional_std__function_void_const_OnPlayingEventProps_____event______(newValue)
-          return { () -> (OnPlayingEventProps) -> Void in
-            let __wrappedFunction = bridge.wrap_Func_void_OnPlayingEventProps(__unwrapped)
-            return { (__event: OnPlayingEventProps) -> Void in
-              __wrappedFunction.call(__event)
-            }
-          }()
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var onProgress: bridge.std__optional_std__function_void_const_OnProgressEventProps_____event______ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_std__function_void_const_OnProgressEventProps_____event______ in
-        if let __unwrappedValue = self.__implementation.onProgress {
-          return bridge.create_std__optional_std__function_void_const_OnProgressEventProps_____event______({ () -> bridge.Func_void_OnProgressEventProps in
-            let __closureWrapper = Func_void_OnProgressEventProps(__unwrappedValue)
-            return bridge.create_Func_void_OnProgressEventProps(__closureWrapper.toUnsafe())
-          }())
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.onProgress = { () -> ((_ event: OnProgressEventProps) -> Void)? in
-        if bridge.has_value_std__optional_std__function_void_const_OnProgressEventProps_____event______(newValue) {
-          let __unwrapped = bridge.get_std__optional_std__function_void_const_OnProgressEventProps_____event______(newValue)
-          return { () -> (OnProgressEventProps) -> Void in
-            let __wrappedFunction = bridge.wrap_Func_void_OnProgressEventProps(__unwrapped)
-            return { (__event: OnProgressEventProps) -> Void in
-              __wrappedFunction.call(__event)
-            }
-          }()
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var onPaused: bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ in
-        if let __unwrappedValue = self.__implementation.onPaused {
-          return bridge.create_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______({ () -> bridge.Func_void_SimpleCallbackEventProps in
-            let __closureWrapper = Func_void_SimpleCallbackEventProps(__unwrappedValue)
-            return bridge.create_Func_void_SimpleCallbackEventProps(__closureWrapper.toUnsafe())
-          }())
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.onPaused = { () -> ((_ event: SimpleCallbackEventProps) -> Void)? in
-        if bridge.has_value_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue) {
-          let __unwrapped = bridge.get_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue)
-          return { () -> (SimpleCallbackEventProps) -> Void in
-            let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(__unwrapped)
-            return { (__event: SimpleCallbackEventProps) -> Void in
-              __wrappedFunction.call(__event)
-            }
-          }()
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var onStopped: bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ in
-        if let __unwrappedValue = self.__implementation.onStopped {
-          return bridge.create_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______({ () -> bridge.Func_void_SimpleCallbackEventProps in
-            let __closureWrapper = Func_void_SimpleCallbackEventProps(__unwrappedValue)
-            return bridge.create_Func_void_SimpleCallbackEventProps(__closureWrapper.toUnsafe())
-          }())
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.onStopped = { () -> ((_ event: SimpleCallbackEventProps) -> Void)? in
-        if bridge.has_value_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue) {
-          let __unwrapped = bridge.get_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue)
-          return { () -> (SimpleCallbackEventProps) -> Void in
-            let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(__unwrapped)
-            return { (__event: SimpleCallbackEventProps) -> Void in
-              __wrappedFunction.call(__event)
-            }
-          }()
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var onBuffering: bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ in
-        if let __unwrappedValue = self.__implementation.onBuffering {
-          return bridge.create_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______({ () -> bridge.Func_void_SimpleCallbackEventProps in
-            let __closureWrapper = Func_void_SimpleCallbackEventProps(__unwrappedValue)
-            return bridge.create_Func_void_SimpleCallbackEventProps(__closureWrapper.toUnsafe())
-          }())
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.onBuffering = { () -> ((_ event: SimpleCallbackEventProps) -> Void)? in
-        if bridge.has_value_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue) {
-          let __unwrapped = bridge.get_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue)
-          return { () -> (SimpleCallbackEventProps) -> Void in
-            let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(__unwrapped)
-            return { (__event: SimpleCallbackEventProps) -> Void in
-              __wrappedFunction.call(__event)
-            }
-          }()
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var onEnded: bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ in
-        if let __unwrappedValue = self.__implementation.onEnded {
-          return bridge.create_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______({ () -> bridge.Func_void_SimpleCallbackEventProps in
-            let __closureWrapper = Func_void_SimpleCallbackEventProps(__unwrappedValue)
-            return bridge.create_Func_void_SimpleCallbackEventProps(__closureWrapper.toUnsafe())
-          }())
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.onEnded = { () -> ((_ event: SimpleCallbackEventProps) -> Void)? in
-        if bridge.has_value_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue) {
-          let __unwrapped = bridge.get_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue)
-          return { () -> (SimpleCallbackEventProps) -> Void in
-            let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(__unwrapped)
-            return { (__event: SimpleCallbackEventProps) -> Void in
-              __wrappedFunction.call(__event)
-            }
-          }()
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var onError: bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ in
-        if let __unwrappedValue = self.__implementation.onError {
-          return bridge.create_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______({ () -> bridge.Func_void_SimpleCallbackEventProps in
-            let __closureWrapper = Func_void_SimpleCallbackEventProps(__unwrappedValue)
-            return bridge.create_Func_void_SimpleCallbackEventProps(__closureWrapper.toUnsafe())
-          }())
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.onError = { () -> ((_ event: SimpleCallbackEventProps) -> Void)? in
-        if bridge.has_value_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue) {
-          let __unwrapped = bridge.get_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(newValue)
-          return { () -> (SimpleCallbackEventProps) -> Void in
-            let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(__unwrapped)
-            return { (__event: SimpleCallbackEventProps) -> Void in
-              __wrappedFunction.call(__event)
-            }
-          }()
-        } else {
-          return nil
-        }
-      }()
-    }
-  }
-  
-  public final var onLoad: bridge.std__optional_std__function_void_const_VideoInfo_____event______ {
-    @inline(__always)
-    get {
-      return { () -> bridge.std__optional_std__function_void_const_VideoInfo_____event______ in
-        if let __unwrappedValue = self.__implementation.onLoad {
-          return bridge.create_std__optional_std__function_void_const_VideoInfo_____event______({ () -> bridge.Func_void_VideoInfo in
-            let __closureWrapper = Func_void_VideoInfo(__unwrappedValue)
-            return bridge.create_Func_void_VideoInfo(__closureWrapper.toUnsafe())
-          }())
-        } else {
-          return .init()
-        }
-      }()
-    }
-    @inline(__always)
-    set {
-      self.__implementation.onLoad = { () -> ((_ event: VideoInfo) -> Void)? in
-        if bridge.has_value_std__optional_std__function_void_const_VideoInfo_____event______(newValue) {
-          let __unwrapped = bridge.get_std__optional_std__function_void_const_VideoInfo_____event______(newValue)
-          return { () -> (VideoInfo) -> Void in
-            let __wrappedFunction = bridge.wrap_Func_void_VideoInfo(__unwrapped)
-            return { (__event: VideoInfo) -> Void in
-              __wrappedFunction.call(__event)
-            }
-          }()
-        } else {
-          return nil
-        }
-      }()
+      self.__implementation.viewId = String(newValue)
     }
   }
 
@@ -745,9 +178,291 @@ open class HybridNitroVLCViewSpec_cxx {
   }
   
   @inline(__always)
+  public final func setSource(source: VLCPlayerSource) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setSource(source: source)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setPaused(paused: Bool) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setPaused(paused: paused)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setLoop(loop: Bool) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setLoop(loop: loop)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setRate(rate: Double) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setRate(rate: rate)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
   public final func setVolume(volume: Double) -> bridge.Result_void_ {
     do {
       try self.__implementation.setVolume(volume: volume)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setMuted(muted: Bool) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setMuted(muted: muted)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setAudioTrack(audioTrack: Double) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setAudioTrack(audioTrack: audioTrack)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setTextTrack(textTrack: Double) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setTextTrack(textTrack: textTrack)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setSubtitleUri(subtitleUri: std.string) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setSubtitleUri(subtitleUri: String(subtitleUri))
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setPlayInBackground(playInBackground: Bool) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setPlayInBackground(playInBackground: playInBackground)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setVideoAspectRatio(videoAspectRatio: Int32) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setVideoAspectRatio(videoAspectRatio: margelo.nitro.nitrovlc.PlayerAspectRatio(rawValue: videoAspectRatio)!)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setAutoAspectRatio(autoAspectRatio: Bool) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setAutoAspectRatio(autoAspectRatio: autoAspectRatio)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setResizeMode(resizeMode: Int32) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setResizeMode(resizeMode: margelo.nitro.nitrovlc.PlayerResizeMode(rawValue: resizeMode)!)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setAutoplay(autoplay: Bool) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setAutoplay(autoplay: autoplay)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setAcceptInvalidCertificates(acceptInvalidCertificates: Bool) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setAcceptInvalidCertificates(acceptInvalidCertificates: acceptInvalidCertificates)
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setOnPlaying(callback: bridge.Func_void_OnPlayingEventProps) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setOnPlaying(callback: { () -> (OnPlayingEventProps) -> Void in
+        let __wrappedFunction = bridge.wrap_Func_void_OnPlayingEventProps(callback)
+        return { (__event: OnPlayingEventProps) -> Void in
+          __wrappedFunction.call(__event)
+        }
+      }())
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setOnProgress(callback: bridge.Func_void_OnProgressEventProps) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setOnProgress(callback: { () -> (OnProgressEventProps) -> Void in
+        let __wrappedFunction = bridge.wrap_Func_void_OnProgressEventProps(callback)
+        return { (__event: OnProgressEventProps) -> Void in
+          __wrappedFunction.call(__event)
+        }
+      }())
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setOnPaused(callback: bridge.Func_void_SimpleCallbackEventProps) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setOnPaused(callback: { () -> (SimpleCallbackEventProps) -> Void in
+        let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(callback)
+        return { (__event: SimpleCallbackEventProps) -> Void in
+          __wrappedFunction.call(__event)
+        }
+      }())
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setOnStopped(callback: bridge.Func_void_SimpleCallbackEventProps) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setOnStopped(callback: { () -> (SimpleCallbackEventProps) -> Void in
+        let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(callback)
+        return { (__event: SimpleCallbackEventProps) -> Void in
+          __wrappedFunction.call(__event)
+        }
+      }())
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setOnBuffering(callback: bridge.Func_void_SimpleCallbackEventProps) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setOnBuffering(callback: { () -> (SimpleCallbackEventProps) -> Void in
+        let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(callback)
+        return { (__event: SimpleCallbackEventProps) -> Void in
+          __wrappedFunction.call(__event)
+        }
+      }())
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setOnEnded(callback: bridge.Func_void_SimpleCallbackEventProps) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setOnEnded(callback: { () -> (SimpleCallbackEventProps) -> Void in
+        let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(callback)
+        return { (__event: SimpleCallbackEventProps) -> Void in
+          __wrappedFunction.call(__event)
+        }
+      }())
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setOnError(callback: bridge.Func_void_SimpleCallbackEventProps) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setOnError(callback: { () -> (SimpleCallbackEventProps) -> Void in
+        let __wrappedFunction = bridge.wrap_Func_void_SimpleCallbackEventProps(callback)
+        return { (__event: SimpleCallbackEventProps) -> Void in
+          __wrappedFunction.call(__event)
+        }
+      }())
+      return bridge.create_Result_void_()
+    } catch (let __error) {
+      let __exceptionPtr = __error.toCpp()
+      return bridge.create_Result_void_(__exceptionPtr)
+    }
+  }
+  
+  @inline(__always)
+  public final func setOnLoad(callback: bridge.Func_void_VideoInfo) -> bridge.Result_void_ {
+    do {
+      try self.__implementation.setOnLoad(callback: { () -> (VideoInfo) -> Void in
+        let __wrappedFunction = bridge.wrap_Func_void_VideoInfo(callback)
+        return { (__event: VideoInfo) -> Void in
+          __wrappedFunction.call(__event)
+        }
+      }())
       return bridge.create_Result_void_()
     } catch (let __error) {
       let __exceptionPtr = __error.toCpp()

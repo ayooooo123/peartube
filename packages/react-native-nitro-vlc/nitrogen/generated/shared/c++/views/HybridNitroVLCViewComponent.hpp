@@ -16,18 +16,16 @@
 #include <react/renderer/components/view/ConcreteViewShadowNode.h>
 #include <react/renderer/components/view/ViewProps.h>
 
-#include "VLCPlayerSource.hpp"
+#ifdef ANDROID
+#include <folly/dynamic.h>
+#include <react/renderer/mapbuffer/MapBufferBuilder.h>
+#endif
+
 #include <string>
-#include <optional>
-#include "PlayerAspectRatio.hpp"
-#include "PlayerResizeMode.hpp"
-#include "OnPlayingEventProps.hpp"
-#include <functional>
-#include "OnProgressEventProps.hpp"
-#include "SimpleCallbackEventProps.hpp"
-#include "VideoInfo.hpp"
 #include <memory>
 #include "HybridNitroVLCViewSpec.hpp"
+#include <functional>
+#include <optional>
 
 namespace margelo::nitro::nitrovlc::views {
 
@@ -49,30 +47,7 @@ namespace margelo::nitro::nitrovlc::views {
                             const react::RawProps& rawProps);
 
   public:
-    CachedProp<VLCPlayerSource> source;
-    CachedProp<std::optional<std::string>> subtitleUri;
-    CachedProp<std::optional<bool>> paused;
-    CachedProp<std::optional<bool>> loop;
-    CachedProp<std::optional<double>> rate;
-    CachedProp<std::optional<double>> seek;
-    CachedProp<std::optional<double>> volume;
-    CachedProp<std::optional<bool>> muted;
-    CachedProp<std::optional<double>> audioTrack;
-    CachedProp<std::optional<double>> textTrack;
-    CachedProp<std::optional<bool>> playInBackground;
-    CachedProp<std::optional<PlayerAspectRatio>> videoAspectRatio;
-    CachedProp<std::optional<bool>> autoAspectRatio;
-    CachedProp<std::optional<PlayerResizeMode>> resizeMode;
-    CachedProp<std::optional<bool>> autoplay;
-    CachedProp<std::optional<bool>> acceptInvalidCertificates;
-    CachedProp<std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>> onPlaying;
-    CachedProp<std::optional<std::function<void(const OnProgressEventProps& /* event */)>>> onProgress;
-    CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> onPaused;
-    CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> onStopped;
-    CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> onBuffering;
-    CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> onEnded;
-    CachedProp<std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>> onError;
-    CachedProp<std::optional<std::function<void(const VideoInfo& /* event */)>>> onLoad;
+    CachedProp<std::string> viewId;
     CachedProp<std::optional<std::function<void(const std::shared_ptr<HybridNitroVLCViewSpec>& /* ref */)>>> hybridRef;
 
   private:
@@ -85,28 +60,33 @@ namespace margelo::nitro::nitrovlc::views {
   class HybridNitroVLCViewState final {
   public:
     HybridNitroVLCViewState() = default;
-    explicit HybridNitroVLCViewState(const std::shared_ptr<HybridNitroVLCViewProps>& props):
-      _props(props) {}
+    explicit HybridNitroVLCViewState(std::shared_ptr<const HybridNitroVLCViewProps> props):
+      _props(std::move(props)) {}
 
   public:
     [[nodiscard]]
-    const std::shared_ptr<HybridNitroVLCViewProps>& getProps() const {
+    const std::shared_ptr<const HybridNitroVLCViewProps>& getProps() const {
       return _props;
     }
 
   public:
 #ifdef ANDROID
-  HybridNitroVLCViewState(const HybridNitroVLCViewState& /* previousState */, folly::dynamic /* data */) {}
+  // React Native can serialize/clone state via folly::dynamic/MapBuffer.
+  // This HybridView does not store any serializable state, but RN still
+  // expects these methods to exist on Android. Keep the props pointer from
+  // the previous state so the JNI updater can continue to access props.
+  HybridNitroVLCViewState(const HybridNitroVLCViewState& previousState, folly::dynamic /* data */):
+    _props(previousState._props) {}
   folly::dynamic getDynamic() const {
-    throw std::runtime_error("HybridNitroVLCViewState does not support folly!");
+    return folly::dynamic::object();
   }
   react::MapBuffer getMapBuffer() const {
-    throw std::runtime_error("HybridNitroVLCViewState does not support MapBuffer!");
+    return react::MapBufferBuilder::EMPTY();
   };
 #endif
 
   private:
-    std::shared_ptr<HybridNitroVLCViewProps> _props;
+    std::shared_ptr<const HybridNitroVLCViewProps> _props;
   };
 
   /**

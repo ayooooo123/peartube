@@ -11,7 +11,7 @@
 #import <type_traits>
 
 #include "HybridNitroVLCViewSpecSwift.hpp"
-#include "HybridNitroVLCPOCSpecSwift.hpp"
+#include "HybridNitroVLCModuleSpecSwift.hpp"
 
 @interface NitroVLCAutolinking : NSObject
 @end
@@ -30,9 +30,9 @@
     }
   );
   HybridObjectRegistry::registerHybridObjectConstructor(
-    "NitroVLCPOC",
+    "NitroVLCModule",
     []() -> std::shared_ptr<HybridObject> {
-      std::shared_ptr<HybridNitroVLCPOCSpec> hybridObject = NitroVLC::NitroVLCAutolinking::createNitroVLCPOC();
+      std::shared_ptr<HybridNitroVLCModuleSpec> hybridObject = NitroVLC::NitroVLCAutolinking::createNitroVLCModule();
       return hybridObject;
     }
   );

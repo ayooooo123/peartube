@@ -7,37 +7,62 @@ import UIKit
 
 private class VLCDelegateHelper: NSObject, VLCMediaPlayerDelegate, VLCCustomDialogRendererProtocol {
   weak var owner: HybridNitroVLCView?
-  
+
   func mediaPlayerStateChanged(_ aNotification: Notification) {
     owner?.handleStateChanged()
   }
-  
+
   func mediaPlayerTimeChanged(_ aNotification: Notification) {
     owner?.handleTimeChanged()
   }
-  
+
   func showError(withTitle error: String, message: String) {
     owner?.handleError()
   }
-  
+
   func showLogin(withTitle title: String, message: String, defaultUsername: String?, askingForStorage: Bool, withReference reference: NSValue) {
     owner?.handleLoginDialog(reference: reference)
   }
-  
+
   func showQuestion(withTitle title: String, message: String, type questionType: VLCDialogQuestionType, cancel cancelString: String?, action1String: String?, action2String: String?, withReference reference: NSValue) {
     owner?.handleQuestionDialog(title: title, message: message, reference: reference)
   }
-  
+
   func showProgress(withTitle title: String, message: String, isIndeterminate: Bool, position: Float, cancel cancelString: String?, withReference reference: NSValue) {
     owner?.handleProgressDialog(reference: reference)
   }
-  
+
   func updateProgress(withReference reference: NSValue, message: String?, position: Float) {}
-  
+
   func cancelDialog(withReference reference: NSValue) {}
 }
 
 final class HybridNitroVLCView: HybridNitroVLCViewSpec {
+  // MARK: - Static View Registry
+  private static let registryLock = NSLock()
+  private static let registry = NSMapTable<NSString, HybridNitroVLCView>(
+    keyOptions: .copyIn,
+    valueOptions: .weakMemory
+  )
+
+  static func lookup(viewId: String) -> HybridNitroVLCView? {
+    registryLock.lock()
+    defer { registryLock.unlock() }
+    return registry.object(forKey: viewId as NSString)
+  }
+
+  private static func register(viewId: String, view: HybridNitroVLCView) {
+    registryLock.lock()
+    registry.setObject(view, forKey: viewId as NSString)
+    registryLock.unlock()
+  }
+
+  private static func unregister(viewId: String) {
+    registryLock.lock()
+    registry.removeObject(forKey: viewId as NSString)
+    registryLock.unlock()
+  }
+
   private struct VideoInfoSnapshot: Equatable {
     let duration: Double
     let width: Double
@@ -59,96 +84,44 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   private var aspectRatioCString: UnsafeMutablePointer<Int8>?
   fileprivate var isPaused: Bool = false
 
-  var source: VLCPlayerSource {
+  // Backing fields for imperative setters (no longer Fabric props)
+  private var _source: VLCPlayerSource = VLCPlayerSource(uri: "", initType: nil, initOptions: nil)
+  private var _subtitleUri: String?
+  private var _paused: Bool?
+  private var _loop: Bool?
+  private var _rate: Double?
+  private var _volume: Double?
+  private var _muted: Bool?
+  private var _audioTrack: Double?
+  private var _textTrack: Double?
+  private var _playInBackground: Bool?
+  private var _videoAspectRatio: PlayerAspectRatio?
+  private var _autoAspectRatio: Bool?
+  private var _resizeMode: PlayerResizeMode?
+  private var _autoplay: Bool? = true
+  private var _acceptInvalidCertificates: Bool?
+
+  // Callbacks — set imperatively via setOn*() methods, NOT via Fabric props
+  private var onPlayingCb: ((OnPlayingEventProps) -> Void)?
+  private var onProgressCb: ((OnProgressEventProps) -> Void)?
+  private var onPausedCb: ((SimpleCallbackEventProps) -> Void)?
+  private var onStoppedCb: ((SimpleCallbackEventProps) -> Void)?
+  private var onBufferingCb: ((SimpleCallbackEventProps) -> Void)?
+  private var onEndedCb: ((SimpleCallbackEventProps) -> Void)?
+  private var onErrorCb: ((SimpleCallbackEventProps) -> Void)?
+  private var onLoadCb: ((VideoInfo) -> Void)?
+
+  // viewId is the ONLY Fabric prop — stays as spec property
+  var viewId: String = "" {
     didSet {
-      configureSource()
+      if !oldValue.isEmpty {
+        Self.unregister(viewId: oldValue)
+      }
+      if !viewId.isEmpty {
+        Self.register(viewId: viewId, view: self)
+      }
     }
   }
-
-  var subtitleUri: String? {
-    didSet {
-      applySubtitle()
-    }
-  }
-
-  var paused: Bool? {
-    didSet {
-      applyPaused()
-    }
-  }
-
-  var loop: Bool?
-
-  var rate: Double? {
-    didSet {
-      applyRate()
-    }
-  }
-
-  var seek: Double? {
-    didSet {
-      applySeek()
-    }
-  }
-
-  var volume: Double? {
-    didSet {
-      applyVolume()
-    }
-  }
-
-  var muted: Bool? {
-    didSet {
-      applyMuted()
-    }
-  }
-
-  var audioTrack: Double? {
-    didSet {
-      applyAudioTrack()
-    }
-  }
-
-  var textTrack: Double? {
-    didSet {
-      applyTextTrack()
-    }
-  }
-
-  var playInBackground: Bool?
-
-  var videoAspectRatio: PlayerAspectRatio? {
-    didSet {
-      applyAspectRatio()
-      applyResizeMode()
-    }
-  }
-
-  var autoAspectRatio: Bool? {
-    didSet {
-      applyAspectRatio()
-      applyResizeMode()
-    }
-  }
-
-  var resizeMode: PlayerResizeMode? {
-    didSet {
-      applyResizeMode()
-    }
-  }
-
-  var autoplay: Bool?
-
-  var acceptInvalidCertificates: Bool?
-
-  var onPlaying: ((OnPlayingEventProps) -> Void)?
-  var onProgress: ((OnProgressEventProps) -> Void)?
-  var onPaused: ((SimpleCallbackEventProps) -> Void)?
-  var onStopped: ((SimpleCallbackEventProps) -> Void)?
-  var onBuffering: ((SimpleCallbackEventProps) -> Void)?
-  var onEnded: ((SimpleCallbackEventProps) -> Void)?
-  var onError: ((SimpleCallbackEventProps) -> Void)?
-  var onLoad: ((VideoInfo) -> Void)?
 
   var memorySize: Int {
     return 0
@@ -156,45 +129,187 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
 
   override init() {
     self.view = NitroVLCView(frame: .zero)
-    self.source = VLCPlayerSource(uri: "", initType: nil, initOptions: nil)
-    self.autoplay = true
     super.init()
-    
+
     delegateHelper = VLCDelegateHelper()
     delegateHelper?.owner = self
-    
-    configureSource()
   }
 
   deinit {
+    if !viewId.isEmpty {
+      Self.unregister(viewId: viewId)
+    }
     cleanup()
   }
 
-  func play() throws {
-    player?.play()
+  // MARK: - Imperative Property Setters
+
+  func setSource(source: VLCPlayerSource) throws {
+    _source = source
+    runOnMainThread { [weak self] in
+      self?.configureSource()
+    }
   }
 
-  func pause() throws {
-    player?.pause()
+  func setPaused(paused: Bool) throws {
+    _paused = paused
+    runOnMainThread { [weak self] in
+      self?.applyPaused()
+    }
   }
 
-  func stop() throws {
-    player?.stop()
+  func setLoop(loop: Bool) throws {
+    _loop = loop
   }
 
-  func seek(position: Double) throws {
-    setSeek(position)
+  func setRate(rate: Double) throws {
+    _rate = rate
+    runOnMainThread { [weak self] in
+      self?.applyRate()
+    }
   }
 
   func setVolume(volume: Double) throws {
-    setPlayerVolume(volume)
+    _volume = volume
+    runOnMainThread { [weak self] in
+      self?.applyVolume()
+    }
   }
+
+  func setMuted(muted: Bool) throws {
+    _muted = muted
+    runOnMainThread { [weak self] in
+      self?.applyMuted()
+    }
+  }
+
+  func setAudioTrack(audioTrack: Double) throws {
+    _audioTrack = audioTrack
+    runOnMainThread { [weak self] in
+      self?.applyAudioTrack()
+    }
+  }
+
+  func setTextTrack(textTrack: Double) throws {
+    _textTrack = textTrack
+    runOnMainThread { [weak self] in
+      self?.applyTextTrack()
+    }
+  }
+
+  func setSubtitleUri(subtitleUri: String) throws {
+    _subtitleUri = subtitleUri
+    runOnMainThread { [weak self] in
+      self?.applySubtitle()
+    }
+  }
+
+  func setPlayInBackground(playInBackground: Bool) throws {
+    _playInBackground = playInBackground
+  }
+
+  func setVideoAspectRatio(videoAspectRatio: PlayerAspectRatio) throws {
+    _videoAspectRatio = videoAspectRatio
+    runOnMainThread { [weak self] in
+      self?.applyAspectRatio()
+      self?.applyResizeMode()
+    }
+  }
+
+  func setAutoAspectRatio(autoAspectRatio: Bool) throws {
+    _autoAspectRatio = autoAspectRatio
+    runOnMainThread { [weak self] in
+      self?.applyAspectRatio()
+      self?.applyResizeMode()
+    }
+  }
+
+  func setResizeMode(resizeMode: PlayerResizeMode) throws {
+    _resizeMode = resizeMode
+    runOnMainThread { [weak self] in
+      self?.applyResizeMode()
+    }
+  }
+
+  func setAutoplay(autoplay: Bool) throws {
+    _autoplay = autoplay
+  }
+
+  func setAcceptInvalidCertificates(acceptInvalidCertificates: Bool) throws {
+    _acceptInvalidCertificates = acceptInvalidCertificates
+  }
+
+  // MARK: - Playback Methods
+
+  func play() throws {
+    runOnMainThread { [weak self] in
+      self?.player?.play()
+    }
+  }
+
+  func pause() throws {
+    runOnMainThread { [weak self] in
+      self?.player?.pause()
+    }
+  }
+
+  func stop() throws {
+    runOnMainThread { [weak self] in
+      self?.player?.stop()
+    }
+  }
+
+  func seek(position: Double) throws {
+    runOnMainThread { [weak self] in
+      self?.setSeek(position)
+    }
+  }
+
+  // MARK: - Imperative Listener Setters
+
+  func setOnPlaying(callback: @escaping (OnPlayingEventProps) -> Void) throws {
+    onPlayingCb = callback
+  }
+
+  func setOnProgress(callback: @escaping (OnProgressEventProps) -> Void) throws {
+    onProgressCb = callback
+  }
+
+  func setOnPaused(callback: @escaping (SimpleCallbackEventProps) -> Void) throws {
+    onPausedCb = callback
+  }
+
+  func setOnStopped(callback: @escaping (SimpleCallbackEventProps) -> Void) throws {
+    onStoppedCb = callback
+  }
+
+  func setOnBuffering(callback: @escaping (SimpleCallbackEventProps) -> Void) throws {
+    onBufferingCb = callback
+  }
+
+  func setOnEnded(callback: @escaping (SimpleCallbackEventProps) -> Void) throws {
+    onEndedCb = callback
+  }
+
+  func setOnError(callback: @escaping (SimpleCallbackEventProps) -> Void) throws {
+    onErrorCb = callback
+  }
+
+  func setOnLoad(callback: @escaping (VideoInfo) -> Void) throws {
+    onLoadCb = callback
+  }
+
+  // MARK: - Lifecycle
 
   func beforeUpdate() {}
 
   func afterUpdate() {}
 
   func dispose() {
+    if !viewId.isEmpty {
+      Self.unregister(viewId: viewId)
+    }
+    clearCallbacks()
     cleanup()
   }
 
@@ -212,13 +327,34 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     delegateHelper?.owner = nil
   }
 
+  private func clearCallbacks() {
+    onPlayingCb = nil
+    onProgressCb = nil
+    onPausedCb = nil
+    onStoppedCb = nil
+    onBufferingCb = nil
+    onEndedCb = nil
+    onErrorCb = nil
+    onLoadCb = nil
+  }
+
+  private func runOnMainThread(_ block: @escaping () -> Void) {
+    if Thread.isMainThread {
+      block()
+    } else {
+      DispatchQueue.main.async(execute: block)
+    }
+  }
+
+  // MARK: - Source Configuration
+
   private func configureSource() {
-    guard !source.uri.isEmpty else { return }
+    guard !_source.uri.isEmpty else { return }
 
     cleanup()
     delegateHelper?.owner = self
 
-    if let initType = source.initType, initType != 1, let options = source.initOptions {
+    if let initType = _source.initType, initType != 1, let options = _source.initOptions {
       player = VLCMediaPlayer(options: options)
     } else {
       player = VLCMediaPlayer()
@@ -232,7 +368,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
       dialogProvider?.customRenderer = delegateHelper
     }
 
-    loadMedia(uri: source.uri)
+    loadMedia(uri: _source.uri)
     applySubtitle()
     applyRate()
     applyVolume()
@@ -243,7 +379,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     applyResizeMode()
     applyPaused()
 
-    if autoplay != false, paused != true {
+    if _autoplay != false, _paused != true {
       player?.play()
     }
   }
@@ -254,12 +390,12 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   }
 
   private func applySubtitle() {
-    guard let subtitleUri, !subtitleUri.isEmpty, let url = URL(string: subtitleUri) else { return }
+    guard let subtitleUri = _subtitleUri, !subtitleUri.isEmpty, let url = URL(string: subtitleUri) else { return }
     _ = player?.addPlaybackSlave(url, type: .subtitle, enforce: true)
   }
 
   private func applyPaused() {
-    guard let paused else { return }
+    guard let paused = _paused else { return }
     isPaused = paused
     if paused {
       player?.pause()
@@ -269,13 +405,8 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   }
 
   private func applyRate() {
-    guard let rate else { return }
+    guard let rate = _rate else { return }
     player?.rate = Float(rate)
-  }
-
-  private func applySeek() {
-    guard let seek else { return }
-    setSeek(seek)
   }
 
   private func setSeek(_ position: Double) {
@@ -285,7 +416,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   }
 
   private func applyVolume() {
-    guard let volume else { return }
+    guard let volume = _volume else { return }
     setPlayerVolume(volume)
   }
 
@@ -296,24 +427,24 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   }
 
   private func applyMuted() {
-    guard let muted else { return }
+    guard let muted = _muted else { return }
     player?.audio?.isMuted = muted
   }
 
   private func applyAudioTrack() {
-    guard let audioTrack else { return }
+    guard let audioTrack = _audioTrack else { return }
     player?.currentAudioTrackIndex = Int32(audioTrack)
   }
 
   private func applyTextTrack() {
-    guard let textTrack else { return }
+    guard let textTrack = _textTrack else { return }
     player?.currentVideoSubTitleIndex = Int32(textTrack)
   }
 
   private func applyAspectRatio() {
     guard let player else { return }
 
-    if autoAspectRatio == true || videoAspectRatio == nil {
+    if _autoAspectRatio == true || _videoAspectRatio == nil {
       if let aspectRatioCString {
         free(aspectRatioCString)
         self.aspectRatioCString = nil
@@ -322,7 +453,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
       return
     }
 
-    guard let aspectRatio = videoAspectRatio else { return }
+    guard let aspectRatio = _videoAspectRatio else { return }
     let ratio = vlcAspectRatioString(for: aspectRatio)
     if let aspectRatioCString {
       free(aspectRatioCString)
@@ -347,11 +478,10 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
 
   private func applyResizeMode() {
     guard let player else { return }
-    guard let resizeMode else { return }
+    guard let resizeMode = _resizeMode else { return }
 
     switch resizeMode {
     case .fill:
-      // Stretch to fill: set aspect ratio to match container dimensions
       let w = view.bounds.width
       let h = view.bounds.height
       if w > 0, h > 0 {
@@ -365,7 +495,6 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
         player.scaleFactor = 0
       }
     case .cover:
-      // Fill container while preserving aspect ratio (may crop)
       player.videoAspectRatio = nil
       let videoSize = player.videoSize
       let w = view.bounds.width
@@ -378,11 +507,9 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
         player.scaleFactor = 0
       }
     case .contain, .scaleDown:
-      // Fit inside container preserving aspect ratio (VLC default)
       player.videoAspectRatio = nil
       player.scaleFactor = 0
     case .none:
-      // Native size, no scaling
       player.videoAspectRatio = nil
       player.scaleFactor = 1.0
     @unknown default:
@@ -391,29 +518,31 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     }
   }
 
+  // MARK: - Event Handlers
+
   fileprivate func handleStateChanged() {
     guard let player else { return }
 
     switch player.state {
     case .opening, .buffering:
-      onBuffering?(SimpleCallbackEventProps(target: 0))
+      onBufferingCb?(SimpleCallbackEventProps(target: 0))
     case .playing:
       isPaused = false
       let duration = Double(player.media?.length.intValue ?? 0)
-      onPlaying?(OnPlayingEventProps(duration: duration, target: 0, seekable: player.isSeekable))
+      onPlayingCb?(OnPlayingEventProps(duration: duration, target: 0, seekable: player.isSeekable))
     case .paused:
       isPaused = true
-      onPaused?(SimpleCallbackEventProps(target: 0))
+      onPausedCb?(SimpleCallbackEventProps(target: 0))
     case .stopped:
-      onStopped?(SimpleCallbackEventProps(target: 0))
+      onStoppedCb?(SimpleCallbackEventProps(target: 0))
     case .ended:
-      onEnded?(SimpleCallbackEventProps(target: 0))
-      if loop == true {
+      onEndedCb?(SimpleCallbackEventProps(target: 0))
+      if _loop == true {
         player.position = 0
         player.play()
       }
     case .error:
-      onError?(SimpleCallbackEventProps(target: 0))
+      onErrorCb?(SimpleCallbackEventProps(target: 0))
     case .esAdded:
       break
     @unknown default:
@@ -432,7 +561,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     let remainingTime = Double(player.remainingTime?.intValue ?? 0)
     let position = duration > 0 ? currentTime / duration : 0
 
-    onProgress?(OnProgressEventProps(
+    onProgressCb?(OnProgressEventProps(
       duration: duration,
       target: 0,
       currentTime: currentTime,
@@ -444,7 +573,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   }
 
   fileprivate func handleError() {
-    onError?(SimpleCallbackEventProps(target: 0))
+    onErrorCb?(SimpleCallbackEventProps(target: 0))
   }
 
   fileprivate func handleLoginDialog(reference: NSValue) {
@@ -457,7 +586,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     let isCertificateDialog = lowercased.contains("certificate") || lowercased.contains("ssl") || lowercased.contains("tls") || lowercased.contains("cert") || lowercased.contains("security")
 
     if isCertificateDialog {
-      if acceptInvalidCertificates == true {
+      if _acceptInvalidCertificates == true {
         dialogProvider?.postAction(1, forDialogReference: reference)
       } else {
         dialogProvider?.postAction(3, forDialogReference: reference)
@@ -501,7 +630,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
       audioTracks: audioTracks.map { Track(id: $0.id, name: $0.name) },
       textTracks: textTracks.map { Track(id: $0.id, name: $0.name) }
     )
-    onLoad?(info)
+    onLoadCb?(info)
   }
 
   private func buildTrackSnapshots(names: [Any], ids: [Any]) -> [TrackSnapshot] {

@@ -136,6 +136,8 @@ object PipBridge {
         // We set this in updateActivityPipParams(), so no manual entry needed
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             android.util.Log.d("PipBridge", "onUserLeaveHint: Android 12+, auto-enter handled by system")
+            // Set flag EARLY — window resizes before onPictureInPictureModeChanged fires
+            notifyNitroVlcViews(true)
             return
         }
 
@@ -145,6 +147,8 @@ object PipBridge {
         }
 
         // Manual PiP entry for Android 8-11 (API 26-30)
+        // Set flag EARLY — window resizes before onPictureInPictureModeChanged fires
+        notifyNitroVlcViews(true)
         try {
             val aspectRatio = getPipAspectRatio()
 
@@ -175,29 +179,77 @@ object PipBridge {
     fun notifyPipModeChanged(activity: Activity, isInPip: Boolean, newConfig: Configuration? = null) {
         android.util.Log.d("PipBridge", "notifyPipModeChanged: isInPip=$isInPip")
 
-        // Notify VLC player directly via reflection (bypasses React prop batching for immediate resize)
-        // We use reflection because expo-media-session module doesn't have a direct dependency on VLC module
-        val density = activity.resources.displayMetrics.density
-        val widthDp = newConfig?.screenWidthDp ?: 0
-        val heightDp = newConfig?.screenHeightDp ?: 0
-        notifyVlcPlayerBridge(isInPip, widthDp, heightDp, density)
+        // onPictureInPictureModeChanged + onConfigurationChanged can both fire during
+        // seamless PiP entry/resize. Avoid re-toggling VLC PiP guards when the PiP
+        // state itself didn't change; it can destabilize surface sizing.
+        val didStateChange = isInPip != lastIsInPip
+        if (didStateChange) {
+            // Block/unblock VLC surface reconfiguration FIRST (before any layout changes)
+            notifyNitroVlcViews(isInPip)
 
-        // Also apply transform directly to all SurfaceViews with a small delay
-        // This ensures the transform is applied after Android finishes PiP transition
-        val handler = android.os.Handler(android.os.Looper.getMainLooper())
-        handler.postDelayed({
-            applySurfaceViewTransforms(activity, isInPip, newConfig)
-        }, 50) // Small delay to let Android settle
+            // Notify VLC player directly via reflection (bypasses React prop batching for immediate resize)
+            // We use reflection because expo-media-session module doesn't have a direct dependency on VLC module
+            val density = activity.resources.displayMetrics.density
+            val widthDp = newConfig?.screenWidthDp ?: 0
+            val heightDp = newConfig?.screenHeightDp ?: 0
+            notifyVlcPlayerBridge(isInPip, widthDp, heightDp, density)
 
-        lastIsInPip = isInPip
+            // Also apply transform directly to all SurfaceViews with a small delay
+            // This ensures the transform is applied after Android finishes PiP transition
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            handler.postDelayed({
+                applySurfaceViewTransforms(activity, isInPip, newConfig)
+            }, 50) // Small delay to let Android settle
 
-        // Still send event to JS for state management
+            lastIsInPip = isInPip
+        }
+
+        // Apply PiP window sizing info to NitroVLC while in PiP. onConfigurationChanged
+        // delivers updated Configuration sizes when the user resizes the PiP window.
+        if (isInPip && newConfig != null) {
+            val density = activity.resources.displayMetrics.density
+            val pipWidthPx = (newConfig.screenWidthDp * density).roundToInt()
+            val pipHeightPx = (newConfig.screenHeightDp * density).roundToInt()
+            notifyNitroVlcPipWindowSize(pipWidthPx, pipHeightPx)
+        }
+
+        // Still send event to JS for state management and PiP window resize updates.
         moduleInstance?.sendPipEvent(activity, isInPip, newConfig)
     }
 
     fun notifyPipDismissed() {
         android.util.Log.d("PipBridge", "notifyPipDismissed: pausing playback")
         moduleInstance?.handlePipPause()
+    }
+
+    /**
+     * Notify all NitroVLC views to block/unblock VLC surface reconfiguration.
+     * Uses reflection because expo-media-session has no compile-time dependency
+     * on react-native-nitro-vlc.
+     */
+    private fun notifyNitroVlcViews(isInPip: Boolean) {
+        try {
+            val viewClass = Class.forName("com.margelo.nitro.com.nitrovlc.HybridNitroVLCView")
+            val method = viewClass.getMethod("setAllPipMode", Boolean::class.javaPrimitiveType)
+            method.invoke(null, isInPip)
+        } catch (_: Exception) {
+            // NitroVLC not available — ignore
+        }
+    }
+
+    private fun notifyNitroVlcPipWindowSize(widthPx: Int, heightPx: Int) {
+        if (widthPx <= 0 || heightPx <= 0) return
+        try {
+            val viewClass = Class.forName("com.margelo.nitro.com.nitrovlc.HybridNitroVLCView")
+            val method = viewClass.getMethod(
+                "setAllPipWindowSize",
+                Int::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType
+            )
+            method.invoke(null, widthPx, heightPx)
+        } catch (_: Exception) {
+            // NitroVLC not available — ignore
+        }
     }
 
     fun setSurfaceViewInset(topInsetPx: Float) {
@@ -270,8 +322,23 @@ object PipBridge {
     }
 
     /**
-     * Find all SurfaceViews in the view hierarchy.
+     * Find all video rendering views (SurfaceView + TextureView) in the hierarchy.
+     * Used for sourceRectHint — needs to find the Nitro VLC TextureView too.
      */
+    private fun findVideoViews(view: android.view.View): List<android.view.View> {
+        val result = mutableListOf<android.view.View>()
+        if (view is android.view.SurfaceView || view is android.view.TextureView) {
+            result.add(view)
+        }
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                result.addAll(findVideoViews(view.getChildAt(i)))
+            }
+        }
+        return result
+    }
+
+    /** Legacy: find SurfaceViews only (for setZOrderMediaOverlay / translationY). */
     private fun findSurfaceViews(view: android.view.View): List<android.view.SurfaceView> {
         val result = mutableListOf<android.view.SurfaceView>()
         if (view is android.view.SurfaceView) {
@@ -298,14 +365,14 @@ object PipBridge {
 
     private fun getVideoSourceRect(activity: Activity): android.graphics.Rect? {
         val decorView = activity.window?.decorView ?: return null
-        val surfaceViews = findSurfaceViews(decorView)
-        if (surfaceViews.isEmpty()) return null
+        val videoViews = findVideoViews(decorView)
+        if (videoViews.isEmpty()) return null
 
         var bestRect: android.graphics.Rect? = null
         var bestArea = 0
-        for (sv in surfaceViews) {
+        for (v in videoViews) {
             val rect = android.graphics.Rect()
-            if (sv.getGlobalVisibleRect(rect) && rect.width() > 0 && rect.height() > 0) {
+            if (v.getGlobalVisibleRect(rect) && rect.width() > 0 && rect.height() > 0) {
                 val area = rect.width() * rect.height()
                 if (area > bestArea) {
                     bestArea = area
@@ -455,6 +522,11 @@ class MediaSessionModule : Module() {
 
         // Kept for backwards compatibility but does nothing now
         AsyncFunction("setPictureInPictureSourceRect") { _: Map<String, Double>, promise: Promise ->
+            // Re-set PiP params with fresh sourceRectHint from actual video view position.
+            // This keeps Android 12+ auto-PiP transition animation accurate as video layout changes.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                updateActivityPipParams(isAutoPipEnabled)
+            }
             promise.resolve(null)
         }
 
@@ -851,6 +923,11 @@ class MediaSessionModule : Module() {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
 
+            val sourceRect = getVideoSourceRect(activity)
+            if (sourceRect != null) {
+                builder.setSourceRectHint(sourceRect)
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setSeamlessResizeEnabled(false)
             }
@@ -886,6 +963,14 @@ class MediaSessionModule : Module() {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
 
+            // sourceRectHint tells the system which area to zoom into for the PiP
+            // transition animation. Without this, the entire Activity is scaled down,
+            // showing the fullscreen layout (with cutout offset etc.) squished into PiP.
+            val sourceRect = getVideoSourceRect(activity)
+            if (sourceRect != null) {
+                builder.setSourceRectHint(sourceRect)
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setSeamlessResizeEnabled(false)
                 // This is the key - auto-enter PiP when going to background
@@ -895,7 +980,7 @@ class MediaSessionModule : Module() {
             builder.setActions(buildPipActions(activity))
 
             activity.setPictureInPictureParams(builder.build())
-            android.util.Log.d("MediaSession", "updateActivityPipParams: enabled=$enabled, aspectRatio=$aspectRatio")
+            android.util.Log.d("MediaSession", "updateActivityPipParams: enabled=$enabled, aspectRatio=$aspectRatio sourceRect=$sourceRect")
         } catch (e: Exception) {
             android.util.Log.e("MediaSession", "updateActivityPipParams: failed", e)
         }
@@ -912,14 +997,14 @@ class MediaSessionModule : Module() {
 
     private fun getVideoSourceRect(activity: Activity): android.graphics.Rect? {
         val decorView = activity.window?.decorView ?: return null
-        val surfaceViews = findSurfaceViews(decorView)
-        if (surfaceViews.isEmpty()) return null
+        val videoViews = findVideoViews(decorView)
+        if (videoViews.isEmpty()) return null
 
         var bestRect: android.graphics.Rect? = null
         var bestArea = 0
-        for (sv in surfaceViews) {
+        for (v in videoViews) {
             val rect = android.graphics.Rect()
-            if (sv.getGlobalVisibleRect(rect) && rect.width() > 0 && rect.height() > 0) {
+            if (v.getGlobalVisibleRect(rect) && rect.width() > 0 && rect.height() > 0) {
                 val area = rect.width() * rect.height()
                 if (area > bestArea) {
                     bestArea = area
@@ -930,14 +1015,15 @@ class MediaSessionModule : Module() {
         return bestRect
     }
 
-    private fun findSurfaceViews(view: android.view.View): List<android.view.SurfaceView> {
-        val result = mutableListOf<android.view.SurfaceView>()
-        if (view is android.view.SurfaceView) {
+    // Find both SurfaceView (legacy VLC) and TextureView (Nitro VLC)
+    private fun findVideoViews(view: android.view.View): List<android.view.View> {
+        val result = mutableListOf<android.view.View>()
+        if (view is android.view.SurfaceView || view is android.view.TextureView) {
             result.add(view)
         }
         if (view is android.view.ViewGroup) {
             for (i in 0 until view.childCount) {
-                result.addAll(findSurfaceViews(view.getChildAt(i)))
+                result.addAll(findVideoViews(view.getChildAt(i)))
             }
         }
         return result

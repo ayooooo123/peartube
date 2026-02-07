@@ -139,185 +139,52 @@ export interface SimpleCallbackEventProps {
   target: number
 }
 
+/**
+ * Props passed through Fabric (minimal — only viewId).
+ * All other configuration is done imperatively via methods to avoid
+ * SIGSEGV/SIGABRT from CachedProp BorrowingReference destruction on bg threads.
+ */
 export interface NitroVLCProps extends HybridViewProps {
   /**
-   * Object that contains the uri of a video or song to play.
+   * Unique view identifier for the registry lookup pattern.
+   * Used by NitroVLCModule.getView() to retrieve the native view reference.
    */
-  source: VLCPlayerSource
-
-  /**
-   * Local subtitle file path.
-   */
-  subtitleUri?: string
-
-  /**
-   * Set to `true` or `false` to pause or play the media.
-   *
-   * @default false
-   */
-  paused?: boolean
-
-  /**
-   * Set to `true` or `false` to loop the media.
-   *
-   * @default false
-   */
-  loop?: boolean
-
-  /**
-   * Set the playback rate of the player.
-   *
-   * @default 1
-   */
-  rate?: number
-
-  /**
-   * Set position to seek between 0 and 1.
-   */
-  seek?: number
-
-  /**
-   * Set the volume of the player.
-   */
-  volume?: number
-
-  /**
-   * Set to `true` or `false` to mute the player.
-   *
-   * @default false
-   */
-  muted?: boolean
-
-  /**
-   * Set audioTrack id (number) (see onLoad callback VideoInfo.audioTracks).
-   */
-  audioTrack?: number
-
-  /**
-   * Set textTrack(subtitle) id (number) (see onLoad callback VideoInfo.textTracks).
-   */
-  textTrack?: number
-
-  /**
-   * Set to `true` or `false` to allow playing in the background.
-   *
-   * @default false
-   */
-  playInBackground?: boolean
-
-  /**
-   * Video aspect ratio.
-   */
-  videoAspectRatio?: PlayerAspectRatio
-
-  /**
-   * Set to `true` or `false` to enable auto aspect ratio.
-   *
-   * @default false
-   */
-  autoAspectRatio?: boolean
-
-  /**
-   * Set the behavior for the video size (fill, contain, cover, none, scale-down).
-   */
-  resizeMode?: PlayerResizeMode
-
-  /**
-   * Enables autoplay.
-   *
-   * @default true
-   */
-  autoplay?: boolean
-
-  /**
-   * Set to `true` to automatically accept invalid SSL/TLS certificates.
-   *
-   * @default false
-   */
-  acceptInvalidCertificates?: boolean
-
-  /**
-   * Called when media starts playing.
-   *
-   * @param event - Event properties.
-   */
-  onPlaying?: (event: OnPlayingEventProps) => void
-
-  /**
-   * Callback containing position as a fraction, and duration, currentTime and remainingTime in seconds.
-   *
-   * @param event - Event properties.
-   */
-  onProgress?: (event: OnProgressEventProps) => void
-
-  /**
-   * Called when media is paused.
-   *
-   * @param event - Event properties.
-   */
-  onPaused?: (event: SimpleCallbackEventProps) => void
-
-  /**
-   * Called when media is stopped.
-   *
-   * @param event - Event properties.
-   */
-  onStopped?: (event: SimpleCallbackEventProps) => void
-
-  /**
-   * Called when media is buffering.
-   *
-   * @param event - Event properties.
-   */
-  onBuffering?: (event: SimpleCallbackEventProps) => void
-
-  /**
-   * Called when media playing ends.
-   *
-   * @param event - Event properties.
-   */
-  onEnded?: (event: SimpleCallbackEventProps) => void
-
-  /**
-   * Called when an error occurs whilst attempting to play media.
-   *
-   * @param event - Event properties.
-   */
-  onError?: (event: SimpleCallbackEventProps) => void
-
-  /**
-   * Called when video info is loaded, Callback containing `VideoInfo`.
-   *
-   * @param event - Event properties.
-   */
-  onLoad?: (event: VideoInfo) => void
+  viewId: string
 }
 
 export interface NitroVLCMethods extends HybridViewMethods {
-  /**
-   * Start or resume playback.
-   */
+  // Playback control
   play(): void
-
-  /**
-   * Pause playback.
-   */
   pause(): void
-
-  /**
-   * Stop playback and reset position.
-   */
   stop(): void
-
-  /**
-   * Seek to position (0-1 normalized).
-   */
   seek(position: number): void
 
-  /**
-   * Set volume (0-1).
-   */
+  // Imperative property setters (moved off Fabric props)
+  setSource(source: VLCPlayerSource): void
+  setPaused(paused: boolean): void
+  setLoop(loop: boolean): void
+  setRate(rate: number): void
   setVolume(volume: number): void
+  setMuted(muted: boolean): void
+  setAudioTrack(audioTrack: number): void
+  setTextTrack(textTrack: number): void
+  setSubtitleUri(subtitleUri: string): void
+  setPlayInBackground(playInBackground: boolean): void
+  setVideoAspectRatio(videoAspectRatio: PlayerAspectRatio): void
+  setAutoAspectRatio(autoAspectRatio: boolean): void
+  setResizeMode(resizeMode: PlayerResizeMode): void
+  setAutoplay(autoplay: boolean): void
+  setAcceptInvalidCertificates(acceptInvalidCertificates: boolean): void
+
+  // Imperative callback setters
+  setOnPlaying(callback: (event: OnPlayingEventProps) => void): void
+  setOnProgress(callback: (event: OnProgressEventProps) => void): void
+  setOnPaused(callback: (event: SimpleCallbackEventProps) => void): void
+  setOnStopped(callback: (event: SimpleCallbackEventProps) => void): void
+  setOnBuffering(callback: (event: SimpleCallbackEventProps) => void): void
+  setOnEnded(callback: (event: SimpleCallbackEventProps) => void): void
+  setOnError(callback: (event: SimpleCallbackEventProps) => void): void
+  setOnLoad(callback: (event: VideoInfo) => void): void
 }
 
 export type NitroVLCView = HybridView<NitroVLCProps, NitroVLCMethods>

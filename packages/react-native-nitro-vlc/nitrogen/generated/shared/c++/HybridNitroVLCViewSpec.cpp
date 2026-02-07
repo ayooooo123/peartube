@@ -14,69 +14,35 @@ namespace margelo::nitro::nitrovlc {
     HybridObject::loadHybridMethods();
     // load custom methods/properties
     registerHybrids(this, [](Prototype& prototype) {
-      prototype.registerHybridGetter("source", &HybridNitroVLCViewSpec::getSource);
-      prototype.registerHybridSetter("source", &HybridNitroVLCViewSpec::setSource);
-      prototype.registerHybridGetter("subtitleUri", &HybridNitroVLCViewSpec::getSubtitleUri);
-      prototype.registerHybridSetter("subtitleUri", &HybridNitroVLCViewSpec::setSubtitleUri);
-      prototype.registerHybridGetter("paused", &HybridNitroVLCViewSpec::getPaused);
-      prototype.registerHybridSetter("paused", &HybridNitroVLCViewSpec::setPaused);
-      prototype.registerHybridGetter("loop", &HybridNitroVLCViewSpec::getLoop);
-      prototype.registerHybridSetter("loop", &HybridNitroVLCViewSpec::setLoop);
-      prototype.registerHybridGetter("rate", &HybridNitroVLCViewSpec::getRate);
-      prototype.registerHybridSetter("rate", &HybridNitroVLCViewSpec::setRate);
-      prototype.registerHybridGetter("seek", &HybridNitroVLCViewSpec::getSeek);
-      prototype.registerHybridSetter("seek", &HybridNitroVLCViewSpec::setSeek);
-      prototype.registerHybridGetter("volume", &HybridNitroVLCViewSpec::getVolume);
-      prototype.registerHybridSetter(
-        "volume",
-        static_cast<void (HybridNitroVLCViewSpec::*)(std::optional<double>)>(
-          &HybridNitroVLCViewSpec::setVolume
-        )
-      );
-      prototype.registerHybridGetter("muted", &HybridNitroVLCViewSpec::getMuted);
-      prototype.registerHybridSetter("muted", &HybridNitroVLCViewSpec::setMuted);
-      prototype.registerHybridGetter("audioTrack", &HybridNitroVLCViewSpec::getAudioTrack);
-      prototype.registerHybridSetter("audioTrack", &HybridNitroVLCViewSpec::setAudioTrack);
-      prototype.registerHybridGetter("textTrack", &HybridNitroVLCViewSpec::getTextTrack);
-      prototype.registerHybridSetter("textTrack", &HybridNitroVLCViewSpec::setTextTrack);
-      prototype.registerHybridGetter("playInBackground", &HybridNitroVLCViewSpec::getPlayInBackground);
-      prototype.registerHybridSetter("playInBackground", &HybridNitroVLCViewSpec::setPlayInBackground);
-      prototype.registerHybridGetter("videoAspectRatio", &HybridNitroVLCViewSpec::getVideoAspectRatio);
-      prototype.registerHybridSetter("videoAspectRatio", &HybridNitroVLCViewSpec::setVideoAspectRatio);
-      prototype.registerHybridGetter("autoAspectRatio", &HybridNitroVLCViewSpec::getAutoAspectRatio);
-      prototype.registerHybridSetter("autoAspectRatio", &HybridNitroVLCViewSpec::setAutoAspectRatio);
-      prototype.registerHybridGetter("resizeMode", &HybridNitroVLCViewSpec::getResizeMode);
-      prototype.registerHybridSetter("resizeMode", &HybridNitroVLCViewSpec::setResizeMode);
-      prototype.registerHybridGetter("autoplay", &HybridNitroVLCViewSpec::getAutoplay);
-      prototype.registerHybridSetter("autoplay", &HybridNitroVLCViewSpec::setAutoplay);
-      prototype.registerHybridGetter("acceptInvalidCertificates", &HybridNitroVLCViewSpec::getAcceptInvalidCertificates);
-      prototype.registerHybridSetter("acceptInvalidCertificates", &HybridNitroVLCViewSpec::setAcceptInvalidCertificates);
-      prototype.registerHybridGetter("onPlaying", &HybridNitroVLCViewSpec::getOnPlaying);
-      prototype.registerHybridSetter("onPlaying", &HybridNitroVLCViewSpec::setOnPlaying);
-      prototype.registerHybridGetter("onProgress", &HybridNitroVLCViewSpec::getOnProgress);
-      prototype.registerHybridSetter("onProgress", &HybridNitroVLCViewSpec::setOnProgress);
-      prototype.registerHybridGetter("onPaused", &HybridNitroVLCViewSpec::getOnPaused);
-      prototype.registerHybridSetter("onPaused", &HybridNitroVLCViewSpec::setOnPaused);
-      prototype.registerHybridGetter("onStopped", &HybridNitroVLCViewSpec::getOnStopped);
-      prototype.registerHybridSetter("onStopped", &HybridNitroVLCViewSpec::setOnStopped);
-      prototype.registerHybridGetter("onBuffering", &HybridNitroVLCViewSpec::getOnBuffering);
-      prototype.registerHybridSetter("onBuffering", &HybridNitroVLCViewSpec::setOnBuffering);
-      prototype.registerHybridGetter("onEnded", &HybridNitroVLCViewSpec::getOnEnded);
-      prototype.registerHybridSetter("onEnded", &HybridNitroVLCViewSpec::setOnEnded);
-      prototype.registerHybridGetter("onError", &HybridNitroVLCViewSpec::getOnError);
-      prototype.registerHybridSetter("onError", &HybridNitroVLCViewSpec::setOnError);
-      prototype.registerHybridGetter("onLoad", &HybridNitroVLCViewSpec::getOnLoad);
-      prototype.registerHybridSetter("onLoad", &HybridNitroVLCViewSpec::setOnLoad);
+      prototype.registerHybridGetter("viewId", &HybridNitroVLCViewSpec::getViewId);
+      prototype.registerHybridSetter("viewId", &HybridNitroVLCViewSpec::setViewId);
       prototype.registerHybridMethod("play", &HybridNitroVLCViewSpec::play);
       prototype.registerHybridMethod("pause", &HybridNitroVLCViewSpec::pause);
       prototype.registerHybridMethod("stop", &HybridNitroVLCViewSpec::stop);
       prototype.registerHybridMethod("seek", &HybridNitroVLCViewSpec::seek);
-      prototype.registerHybridMethod(
-        "setVolume",
-        static_cast<void (HybridNitroVLCViewSpec::*)(double)>(
-          &HybridNitroVLCViewSpec::setVolume
-        )
-      );
+      prototype.registerHybridMethod("setSource", &HybridNitroVLCViewSpec::setSource);
+      prototype.registerHybridMethod("setPaused", &HybridNitroVLCViewSpec::setPaused);
+      prototype.registerHybridMethod("setLoop", &HybridNitroVLCViewSpec::setLoop);
+      prototype.registerHybridMethod("setRate", &HybridNitroVLCViewSpec::setRate);
+      prototype.registerHybridMethod("setVolume", &HybridNitroVLCViewSpec::setVolume);
+      prototype.registerHybridMethod("setMuted", &HybridNitroVLCViewSpec::setMuted);
+      prototype.registerHybridMethod("setAudioTrack", &HybridNitroVLCViewSpec::setAudioTrack);
+      prototype.registerHybridMethod("setTextTrack", &HybridNitroVLCViewSpec::setTextTrack);
+      prototype.registerHybridMethod("setSubtitleUri", &HybridNitroVLCViewSpec::setSubtitleUri);
+      prototype.registerHybridMethod("setPlayInBackground", &HybridNitroVLCViewSpec::setPlayInBackground);
+      prototype.registerHybridMethod("setVideoAspectRatio", &HybridNitroVLCViewSpec::setVideoAspectRatio);
+      prototype.registerHybridMethod("setAutoAspectRatio", &HybridNitroVLCViewSpec::setAutoAspectRatio);
+      prototype.registerHybridMethod("setResizeMode", &HybridNitroVLCViewSpec::setResizeMode);
+      prototype.registerHybridMethod("setAutoplay", &HybridNitroVLCViewSpec::setAutoplay);
+      prototype.registerHybridMethod("setAcceptInvalidCertificates", &HybridNitroVLCViewSpec::setAcceptInvalidCertificates);
+      prototype.registerHybridMethod("setOnPlaying", &HybridNitroVLCViewSpec::setOnPlaying);
+      prototype.registerHybridMethod("setOnProgress", &HybridNitroVLCViewSpec::setOnProgress);
+      prototype.registerHybridMethod("setOnPaused", &HybridNitroVLCViewSpec::setOnPaused);
+      prototype.registerHybridMethod("setOnStopped", &HybridNitroVLCViewSpec::setOnStopped);
+      prototype.registerHybridMethod("setOnBuffering", &HybridNitroVLCViewSpec::setOnBuffering);
+      prototype.registerHybridMethod("setOnEnded", &HybridNitroVLCViewSpec::setOnEnded);
+      prototype.registerHybridMethod("setOnError", &HybridNitroVLCViewSpec::setOnError);
+      prototype.registerHybridMethod("setOnLoad", &HybridNitroVLCViewSpec::setOnLoad);
     });
   }
 

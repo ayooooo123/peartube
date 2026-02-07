@@ -8,18 +8,14 @@
 #pragma once
 
 // Forward declarations of C++ defined types
-// Forward declaration of `HybridNitroVLCPOCSpec` to properly resolve imports.
-namespace margelo::nitro::nitrovlc { class HybridNitroVLCPOCSpec; }
+// Forward declaration of `HybridNitroVLCModuleSpec` to properly resolve imports.
+namespace margelo::nitro::nitrovlc { class HybridNitroVLCModuleSpec; }
 // Forward declaration of `HybridNitroVLCViewSpec` to properly resolve imports.
 namespace margelo::nitro::nitrovlc { class HybridNitroVLCViewSpec; }
 // Forward declaration of `OnPlayingEventProps` to properly resolve imports.
 namespace margelo::nitro::nitrovlc { struct OnPlayingEventProps; }
 // Forward declaration of `OnProgressEventProps` to properly resolve imports.
 namespace margelo::nitro::nitrovlc { struct OnProgressEventProps; }
-// Forward declaration of `PlayerAspectRatio` to properly resolve imports.
-namespace margelo::nitro::nitrovlc { enum class PlayerAspectRatio; }
-// Forward declaration of `PlayerResizeMode` to properly resolve imports.
-namespace margelo::nitro::nitrovlc { enum class PlayerResizeMode; }
 // Forward declaration of `SimpleCallbackEventProps` to properly resolve imports.
 namespace margelo::nitro::nitrovlc { struct SimpleCallbackEventProps; }
 // Forward declaration of `Track` to properly resolve imports.
@@ -30,18 +26,16 @@ namespace margelo::nitro::nitrovlc { struct VideoInfo; }
 namespace margelo::nitro::nitrovlc { struct VideoSize; }
 
 // Forward declarations of Swift defined types
-// Forward declaration of `HybridNitroVLCPOCSpec_cxx` to properly resolve imports.
-namespace NitroVLC { class HybridNitroVLCPOCSpec_cxx; }
+// Forward declaration of `HybridNitroVLCModuleSpec_cxx` to properly resolve imports.
+namespace NitroVLC { class HybridNitroVLCModuleSpec_cxx; }
 // Forward declaration of `HybridNitroVLCViewSpec_cxx` to properly resolve imports.
 namespace NitroVLC { class HybridNitroVLCViewSpec_cxx; }
 
 // Include C++ defined types
-#include "HybridNitroVLCPOCSpec.hpp"
+#include "HybridNitroVLCModuleSpec.hpp"
 #include "HybridNitroVLCViewSpec.hpp"
 #include "OnPlayingEventProps.hpp"
 #include "OnProgressEventProps.hpp"
-#include "PlayerAspectRatio.hpp"
-#include "PlayerResizeMode.hpp"
 #include "SimpleCallbackEventProps.hpp"
 #include "Track.hpp"
 #include "VideoInfo.hpp"
@@ -101,66 +95,6 @@ namespace margelo::nitro::nitrovlc::bridge::swift {
     return *optional;
   }
   
-  // pragma MARK: std::optional<std::string>
-  /**
-   * Specialized version of `std::optional<std::string>`.
-   */
-  using std__optional_std__string_ = std::optional<std::string>;
-  inline std::optional<std::string> create_std__optional_std__string_(const std::string& value) noexcept {
-    return std::optional<std::string>(value);
-  }
-  inline bool has_value_std__optional_std__string_(const std::optional<std::string>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline std::string get_std__optional_std__string_(const std::optional<std::string>& optional) noexcept {
-    return *optional;
-  }
-  
-  // pragma MARK: std::optional<bool>
-  /**
-   * Specialized version of `std::optional<bool>`.
-   */
-  using std__optional_bool_ = std::optional<bool>;
-  inline std::optional<bool> create_std__optional_bool_(const bool& value) noexcept {
-    return std::optional<bool>(value);
-  }
-  inline bool has_value_std__optional_bool_(const std::optional<bool>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline bool get_std__optional_bool_(const std::optional<bool>& optional) noexcept {
-    return *optional;
-  }
-  
-  // pragma MARK: std::optional<PlayerAspectRatio>
-  /**
-   * Specialized version of `std::optional<PlayerAspectRatio>`.
-   */
-  using std__optional_PlayerAspectRatio_ = std::optional<PlayerAspectRatio>;
-  inline std::optional<PlayerAspectRatio> create_std__optional_PlayerAspectRatio_(const PlayerAspectRatio& value) noexcept {
-    return std::optional<PlayerAspectRatio>(value);
-  }
-  inline bool has_value_std__optional_PlayerAspectRatio_(const std::optional<PlayerAspectRatio>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline PlayerAspectRatio get_std__optional_PlayerAspectRatio_(const std::optional<PlayerAspectRatio>& optional) noexcept {
-    return *optional;
-  }
-  
-  // pragma MARK: std::optional<PlayerResizeMode>
-  /**
-   * Specialized version of `std::optional<PlayerResizeMode>`.
-   */
-  using std__optional_PlayerResizeMode_ = std::optional<PlayerResizeMode>;
-  inline std::optional<PlayerResizeMode> create_std__optional_PlayerResizeMode_(const PlayerResizeMode& value) noexcept {
-    return std::optional<PlayerResizeMode>(value);
-  }
-  inline bool has_value_std__optional_PlayerResizeMode_(const std::optional<PlayerResizeMode>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline PlayerResizeMode get_std__optional_PlayerResizeMode_(const std::optional<PlayerResizeMode>& optional) noexcept {
-    return *optional;
-  }
-  
   // pragma MARK: std::function<void(const OnPlayingEventProps& /* event */)>
   /**
    * Specialized version of `std::function<void(const OnPlayingEventProps&)>`.
@@ -181,21 +115,6 @@ namespace margelo::nitro::nitrovlc::bridge::swift {
   Func_void_OnPlayingEventProps create_Func_void_OnPlayingEventProps(void* NON_NULL swiftClosureWrapper) noexcept;
   inline Func_void_OnPlayingEventProps_Wrapper wrap_Func_void_OnPlayingEventProps(Func_void_OnPlayingEventProps value) noexcept {
     return Func_void_OnPlayingEventProps_Wrapper(std::move(value));
-  }
-  
-  // pragma MARK: std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>
-  /**
-   * Specialized version of `std::optional<std::function<void(const OnPlayingEventProps& / * event * /)>>`.
-   */
-  using std__optional_std__function_void_const_OnPlayingEventProps_____event______ = std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>;
-  inline std::optional<std::function<void(const OnPlayingEventProps& /* event */)>> create_std__optional_std__function_void_const_OnPlayingEventProps_____event______(const std::function<void(const OnPlayingEventProps& /* event */)>& value) noexcept {
-    return std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>(value);
-  }
-  inline bool has_value_std__optional_std__function_void_const_OnPlayingEventProps_____event______(const std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline std::function<void(const OnPlayingEventProps& /* event */)> get_std__optional_std__function_void_const_OnPlayingEventProps_____event______(const std::optional<std::function<void(const OnPlayingEventProps& /* event */)>>& optional) noexcept {
-    return *optional;
   }
   
   // pragma MARK: std::function<void(const OnProgressEventProps& /* event */)>
@@ -220,21 +139,6 @@ namespace margelo::nitro::nitrovlc::bridge::swift {
     return Func_void_OnProgressEventProps_Wrapper(std::move(value));
   }
   
-  // pragma MARK: std::optional<std::function<void(const OnProgressEventProps& /* event */)>>
-  /**
-   * Specialized version of `std::optional<std::function<void(const OnProgressEventProps& / * event * /)>>`.
-   */
-  using std__optional_std__function_void_const_OnProgressEventProps_____event______ = std::optional<std::function<void(const OnProgressEventProps& /* event */)>>;
-  inline std::optional<std::function<void(const OnProgressEventProps& /* event */)>> create_std__optional_std__function_void_const_OnProgressEventProps_____event______(const std::function<void(const OnProgressEventProps& /* event */)>& value) noexcept {
-    return std::optional<std::function<void(const OnProgressEventProps& /* event */)>>(value);
-  }
-  inline bool has_value_std__optional_std__function_void_const_OnProgressEventProps_____event______(const std::optional<std::function<void(const OnProgressEventProps& /* event */)>>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline std::function<void(const OnProgressEventProps& /* event */)> get_std__optional_std__function_void_const_OnProgressEventProps_____event______(const std::optional<std::function<void(const OnProgressEventProps& /* event */)>>& optional) noexcept {
-    return *optional;
-  }
-  
   // pragma MARK: std::function<void(const SimpleCallbackEventProps& /* event */)>
   /**
    * Specialized version of `std::function<void(const SimpleCallbackEventProps&)>`.
@@ -255,21 +159,6 @@ namespace margelo::nitro::nitrovlc::bridge::swift {
   Func_void_SimpleCallbackEventProps create_Func_void_SimpleCallbackEventProps(void* NON_NULL swiftClosureWrapper) noexcept;
   inline Func_void_SimpleCallbackEventProps_Wrapper wrap_Func_void_SimpleCallbackEventProps(Func_void_SimpleCallbackEventProps value) noexcept {
     return Func_void_SimpleCallbackEventProps_Wrapper(std::move(value));
-  }
-  
-  // pragma MARK: std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>
-  /**
-   * Specialized version of `std::optional<std::function<void(const SimpleCallbackEventProps& / * event * /)>>`.
-   */
-  using std__optional_std__function_void_const_SimpleCallbackEventProps_____event______ = std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>;
-  inline std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>> create_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(const std::function<void(const SimpleCallbackEventProps& /* event */)>& value) noexcept {
-    return std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>(value);
-  }
-  inline bool has_value_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline std::function<void(const SimpleCallbackEventProps& /* event */)> get_std__optional_std__function_void_const_SimpleCallbackEventProps_____event______(const std::optional<std::function<void(const SimpleCallbackEventProps& /* event */)>>& optional) noexcept {
-    return *optional;
   }
   
   // pragma MARK: std::vector<Track>
@@ -305,21 +194,6 @@ namespace margelo::nitro::nitrovlc::bridge::swift {
     return Func_void_VideoInfo_Wrapper(std::move(value));
   }
   
-  // pragma MARK: std::optional<std::function<void(const VideoInfo& /* event */)>>
-  /**
-   * Specialized version of `std::optional<std::function<void(const VideoInfo& / * event * /)>>`.
-   */
-  using std__optional_std__function_void_const_VideoInfo_____event______ = std::optional<std::function<void(const VideoInfo& /* event */)>>;
-  inline std::optional<std::function<void(const VideoInfo& /* event */)>> create_std__optional_std__function_void_const_VideoInfo_____event______(const std::function<void(const VideoInfo& /* event */)>& value) noexcept {
-    return std::optional<std::function<void(const VideoInfo& /* event */)>>(value);
-  }
-  inline bool has_value_std__optional_std__function_void_const_VideoInfo_____event______(const std::optional<std::function<void(const VideoInfo& /* event */)>>& optional) noexcept {
-    return optional.has_value();
-  }
-  inline std::function<void(const VideoInfo& /* event */)> get_std__optional_std__function_void_const_VideoInfo_____event______(const std::optional<std::function<void(const VideoInfo& /* event */)>>& optional) noexcept {
-    return *optional;
-  }
-  
   // pragma MARK: std::shared_ptr<HybridNitroVLCViewSpec>
   /**
    * Specialized version of `std::shared_ptr<HybridNitroVLCViewSpec>`.
@@ -341,17 +215,32 @@ namespace margelo::nitro::nitrovlc::bridge::swift {
     return Result<void>::withError(error);
   }
   
-  // pragma MARK: std::shared_ptr<HybridNitroVLCPOCSpec>
+  // pragma MARK: std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>
   /**
-   * Specialized version of `std::shared_ptr<HybridNitroVLCPOCSpec>`.
+   * Specialized version of `std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>`.
    */
-  using std__shared_ptr_HybridNitroVLCPOCSpec_ = std::shared_ptr<HybridNitroVLCPOCSpec>;
-  std::shared_ptr<HybridNitroVLCPOCSpec> create_std__shared_ptr_HybridNitroVLCPOCSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
-  void* NON_NULL get_std__shared_ptr_HybridNitroVLCPOCSpec_(std__shared_ptr_HybridNitroVLCPOCSpec_ cppType);
+  using std__optional_std__shared_ptr_HybridNitroVLCViewSpec__ = std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>;
+  inline std::optional<std::shared_ptr<HybridNitroVLCViewSpec>> create_std__optional_std__shared_ptr_HybridNitroVLCViewSpec__(const std::shared_ptr<HybridNitroVLCViewSpec>& value) noexcept {
+    return std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>(value);
+  }
+  inline bool has_value_std__optional_std__shared_ptr_HybridNitroVLCViewSpec__(const std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>& optional) noexcept {
+    return optional.has_value();
+  }
+  inline std::shared_ptr<HybridNitroVLCViewSpec> get_std__optional_std__shared_ptr_HybridNitroVLCViewSpec__(const std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>& optional) noexcept {
+    return *optional;
+  }
   
-  // pragma MARK: std::weak_ptr<HybridNitroVLCPOCSpec>
-  using std__weak_ptr_HybridNitroVLCPOCSpec_ = std::weak_ptr<HybridNitroVLCPOCSpec>;
-  inline std__weak_ptr_HybridNitroVLCPOCSpec_ weakify_std__shared_ptr_HybridNitroVLCPOCSpec_(const std::shared_ptr<HybridNitroVLCPOCSpec>& strong) noexcept { return strong; }
+  // pragma MARK: std::shared_ptr<HybridNitroVLCModuleSpec>
+  /**
+   * Specialized version of `std::shared_ptr<HybridNitroVLCModuleSpec>`.
+   */
+  using std__shared_ptr_HybridNitroVLCModuleSpec_ = std::shared_ptr<HybridNitroVLCModuleSpec>;
+  std::shared_ptr<HybridNitroVLCModuleSpec> create_std__shared_ptr_HybridNitroVLCModuleSpec_(void* NON_NULL swiftUnsafePointer) noexcept;
+  void* NON_NULL get_std__shared_ptr_HybridNitroVLCModuleSpec_(std__shared_ptr_HybridNitroVLCModuleSpec_ cppType);
+  
+  // pragma MARK: std::weak_ptr<HybridNitroVLCModuleSpec>
+  using std__weak_ptr_HybridNitroVLCModuleSpec_ = std::weak_ptr<HybridNitroVLCModuleSpec>;
+  inline std__weak_ptr_HybridNitroVLCModuleSpec_ weakify_std__shared_ptr_HybridNitroVLCModuleSpec_(const std::shared_ptr<HybridNitroVLCModuleSpec>& strong) noexcept { return strong; }
   
   // pragma MARK: Result<std::string>
   using Result_std__string_ = Result<std::string>;
@@ -360,6 +249,15 @@ namespace margelo::nitro::nitrovlc::bridge::swift {
   }
   inline Result_std__string_ create_Result_std__string_(const std::exception_ptr& error) noexcept {
     return Result<std::string>::withError(error);
+  }
+  
+  // pragma MARK: Result<std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>>
+  using Result_std__optional_std__shared_ptr_HybridNitroVLCViewSpec___ = Result<std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>>;
+  inline Result_std__optional_std__shared_ptr_HybridNitroVLCViewSpec___ create_Result_std__optional_std__shared_ptr_HybridNitroVLCViewSpec___(const std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>& value) noexcept {
+    return Result<std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>>::withValue(value);
+  }
+  inline Result_std__optional_std__shared_ptr_HybridNitroVLCViewSpec___ create_Result_std__optional_std__shared_ptr_HybridNitroVLCViewSpec___(const std::exception_ptr& error) noexcept {
+    return Result<std::optional<std::shared_ptr<HybridNitroVLCViewSpec>>>::withError(error);
   }
 
 } // namespace margelo::nitro::nitrovlc::bridge::swift

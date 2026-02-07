@@ -22,11 +22,16 @@ export { useApp } from '@/lib/AppContext'
 // Configure Reanimated logger to disable strict mode warnings
 // We intentionally update shared values during render for PiP exit transitions
 // to ensure animated worklets see current values immediately
-import { configureReanimatedLogger, ReanimatedLogLevel } from 'react-native-reanimated'
-configureReanimatedLogger({
-  level: ReanimatedLogLevel.warn,
-  strict: false,
-})
+// Guarded for SSR: only load on native or Pear runtime (not during static rendering)
+if (Platform.OS !== 'web' || (typeof window !== 'undefined' && (window as any).Pear)) {
+  try {
+    const { configureReanimatedLogger, ReanimatedLogLevel } = require('react-native-reanimated')
+    configureReanimatedLogger({
+      level: ReanimatedLogLevel.warn,
+      strict: false,
+    })
+  } catch {}
+}
 
 // Re-export colors for backward compatibility
 export { colors }

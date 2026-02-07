@@ -8,7 +8,6 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from 'react'
 import { ActivityIndicator } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { usePathname } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { useDownloads } from '../../lib/DownloadsContext'
@@ -1877,7 +1876,7 @@ const watchStyles: Record<string, React.CSSProperties> = {
 
 export default function HomeScreen() {
   const { ready, identity, videos, loading, loadVideos, rpc } = useApp()
-  const pathname = usePathname()
+
 
   // Hash-based routing state (for Pear desktop)
   const [currentRoute, setCurrentRoute] = useState<Route>({ type: 'home' })
@@ -1939,7 +1938,18 @@ export default function HomeScreen() {
     }
   }, [rpc, feedEntries])
 
-  // Hash routing effect - listen for hash changes
+  // Refs so the hashchange listener always sees current video arrays without
+  // needing to re-register (which would re-process the hash on every update).
+  const videosRef = useRef(videos)
+  const channelVideosRef = useRef(channelVideos)
+  const feedVideosRef = useRef(feedVideos)
+  const loadVideoInfoRef = useRef(loadVideoInfo)
+  videosRef.current = videos
+  channelVideosRef.current = channelVideos
+  feedVideosRef.current = feedVideos
+  loadVideoInfoRef.current = loadVideoInfo
+
+  // Hash routing effect — register once, read current state via refs
   useEffect(() => {
     if (!isPear) return
 
@@ -1948,39 +1958,27 @@ export default function HomeScreen() {
       setCurrentRoute(route)
 
       if (route.type === 'watch') {
-        // Try to find the video in local state first (include feedVideos!)
-        const allVideos = [...videos, ...channelVideos, ...feedVideos]
+        const allVideos = [...videosRef.current, ...channelVideosRef.current, ...feedVideosRef.current]
         const foundVideo = allVideos.find(
           v => v.id === route.videoId && (v.channelKey === route.channelKey || !v.channelKey)
         )
         if (foundVideo) {
           setWatchVideo({ ...foundVideo, channelKey: route.channelKey })
         } else {
-          // Need to load video info from backend
-          loadVideoInfo(route.channelKey, route.videoId)
+          loadVideoInfoRef.current(route.channelKey, route.videoId)
         }
       } else {
         setWatchVideo(null)
       }
     }
 
-    // Check initial hash
     handleHashChange()
 
-    // Listen for hash changes
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
-  }, [videos, channelVideos, feedVideos, loadVideoInfo])
+  }, [])
 
   // If a path navigation happens to "/", but hash is still on watch, reset hash/state to home
-  useEffect(() => {
-    if (!isPear) return
-    if (pathname === '/' && window.location.hash.startsWith('#/watch')) {
-      window.location.hash = ''
-      setCurrentRoute({ type: 'home' })
-      setWatchVideo(null)
-    }
-  }, [pathname])
 
   // Convert videos to VideoData format - defined early to avoid reference issues
   const myVideosWithMeta: VideoData[] = useMemo(() => videos.map(v => {
@@ -2174,13 +2172,9 @@ export default function HomeScreen() {
   const playVideo = useCallback((video: VideoData) => {
     const channelKey = video.channelKey || identity?.driveKey || (video as any).driveKey || ''
 
-    // Desktop (Pear): use hash routing which triggers the hashchange handler
     if (isPear) {
       setViewingChannel(null)
-      setChannelVideos([])
-      // Set watchVideo immediately for smooth transition
       setWatchVideo({ ...video, channelKey })
-      // Navigate via hash - this triggers the hashchange event listener
       window.location.hash = `/watch/${channelKey}/${video.id}`
       return
     }

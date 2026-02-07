@@ -202,6 +202,19 @@ object PipBridge {
             }, 50) // Small delay to let Android settle
 
             lastIsInPip = isInPip
+
+            // If the user dismisses PiP by dragging it to the system "X",
+            // we want playback to pause. This exit path leaves the app in the
+            // background (no window focus). If the user taps the PiP to return
+            // to the app, focus is restored and we should NOT force-pause.
+            if (!isInPip) {
+                val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                handler.post {
+                    if (!activity.hasWindowFocus()) {
+                        notifyPipDismissed()
+                    }
+                }
+            }
         }
 
         // Apply PiP window sizing info to NitroVLC while in PiP. onConfigurationChanged
@@ -1223,6 +1236,16 @@ class MediaSessionModule : Module() {
             android.util.Log.d("MediaSession", "notifyVlcPlaybackPaused: VlcPlayerBridge not available")
         } catch (e: Exception) {
             android.util.Log.e("MediaSession", "notifyVlcPlaybackPaused: failed", e)
+        }
+
+        // NitroVLC: pause/resume natively so notification/media-manager controls work
+        // even if the JS thread is backgrounded.
+        try {
+            val viewClass = Class.forName("com.margelo.nitro.com.nitrovlc.HybridNitroVLCView")
+            val method = viewClass.getMethod("setAllPlaybackPaused", Boolean::class.javaPrimitiveType)
+            method.invoke(null, paused)
+        } catch (_: Exception) {
+            // NitroVLC not available — ignore
         }
     }
 

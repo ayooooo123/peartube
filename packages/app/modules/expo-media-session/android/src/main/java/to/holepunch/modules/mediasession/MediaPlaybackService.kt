@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.support.v4.media.session.MediaControllerCompat
+import android.support.v4.media.MediaMetadataCompat
 import androidx.core.app.NotificationCompat
 import androidx.media.session.MediaButtonReceiver
 
@@ -144,6 +145,18 @@ class MediaPlaybackService : Service() {
         val title = controller?.metadata?.getString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_TITLE)
         val artist = controller?.metadata?.getString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_ARTIST)
         val isPlaying = controller?.playbackState?.state == PlaybackStateCompat.STATE_PLAYING
+        val art = controller?.metadata?.getBitmap(MediaMetadataCompat.METADATA_KEY_ART)
+            ?: controller?.metadata?.getBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART)
+
+        fun actionIntent(action: String, requestCode: Int): PendingIntent {
+            val intent = Intent(this, MediaPlaybackService::class.java).apply { this.action = action }
+            return PendingIntent.getService(
+                this,
+                requestCode,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
@@ -153,6 +166,7 @@ class MediaPlaybackService : Service() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setOnlyAlertOnce(true)
         
         contentIntent?.let { builder.setContentIntent(it) }
         
@@ -167,20 +181,17 @@ class MediaPlaybackService : Service() {
                 NotificationCompat.Action(
                     android.R.drawable.ic_media_rew,
                     "Rewind",
-                    MediaButtonReceiver.buildMediaButtonPendingIntent(
-                        this,
-                        PlaybackStateCompat.ACTION_REWIND
-                    )
+                    actionIntent(MediaSessionModule.ACTION_PIP_REWIND, 101)
                 )
             )
             
             builder.addAction(
                 NotificationCompat.Action(
-                    android.R.drawable.ic_media_pause,
-                    "Play/Pause",
-                    MediaButtonReceiver.buildMediaButtonPendingIntent(
-                        this,
-                        PlaybackStateCompat.ACTION_PLAY_PAUSE
+                    if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                    if (isPlaying) "Pause" else "Play",
+                    actionIntent(
+                        if (isPlaying) MediaSessionModule.ACTION_PIP_PAUSE else MediaSessionModule.ACTION_PIP_PLAY,
+                        102
                     )
                 )
             )
@@ -189,12 +200,13 @@ class MediaPlaybackService : Service() {
                 NotificationCompat.Action(
                     android.R.drawable.ic_media_ff,
                     "Fast Forward",
-                    MediaButtonReceiver.buildMediaButtonPendingIntent(
-                        this,
-                        PlaybackStateCompat.ACTION_FAST_FORWARD
-                    )
+                    actionIntent(MediaSessionModule.ACTION_PIP_FORWARD, 103)
                 )
             )
+        }
+
+        if (art != null) {
+            builder.setLargeIcon(art)
         }
         
         return builder.build()

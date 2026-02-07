@@ -80,6 +80,15 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
         view.applyPipMatrix(widthPx, heightPx)
       }
     }
+
+    /** Called from MediaSessionModule via reflection to pause/resume playback natively. */
+    @JvmStatic
+    fun setAllPlaybackPaused(paused: Boolean) {
+      for (entry in registry.values) {
+        val view = entry.get() ?: continue
+        view.setPlaybackPaused(paused)
+      }
+    }
   }
 
   private var libVLC: LibVLC? = null
@@ -229,6 +238,27 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
       logSurface("applyPipMatrix window=${windowWidthPx}x${windowHeightPx} view=${vw}x${vh} scale=${s} translate=${dx},${dy}")
     } catch (_: Exception) {
       // ignore
+    }
+  }
+
+  private fun setPlaybackPaused(paused: Boolean) {
+    if (isDisposed) return
+    if (Looper.myLooper() != Looper.getMainLooper()) {
+      runOnUiThread { setPlaybackPaused(paused) }
+      return
+    }
+    synchronized(playerLock) {
+      val player = mediaPlayer ?: return
+      try {
+        if (paused) {
+          player.pause()
+        } else {
+          player.play()
+        }
+        logSurface("setPlaybackPaused paused=$paused")
+      } catch (_: Exception) {
+        // ignore
+      }
     }
   }
 

@@ -8,6 +8,8 @@ import android.view.Surface
 import android.util.Log
 import android.view.TextureView
 import android.view.View
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.facebook.react.bridge.ReactContext
 import com.margelo.nitro.views.RecyclableView
 import org.videolan.libvlc.Dialog
@@ -38,6 +40,12 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
       for (entry in registry.values) {
         val view = entry.get() ?: continue
         view.pipModeActive = active
+        view.updateLastNonZeroInsetTopPx()
+        if (active && view.lastNonZeroInsetTopPx > 0) {
+          view.textureView.translationY = -view.lastNonZeroInsetTopPx.toFloat()
+        } else if (!active) {
+          view.textureView.translationY = 0f
+        }
         // Cancel any pending deferred VLC reconfiguration. If it fires during PiP
         // (or right after exit) it can call updateVideoSurfaces() with stale/intermediate
         // dimensions and destabilize the SurfaceTexture.
@@ -130,6 +138,8 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   private var lastPipViewWidthPx: Int = 0
   private var lastPipViewHeightPx: Int = 0
 
+  private var lastNonZeroInsetTopPx: Int = 0
+
   // PiP mode flag — set from JS or native PiP callbacks. Prevents ALL VLC
   // reconfiguration (setWindowSize, updateVideoSurfaces) while active.
   // This is more reliable than checking isInPictureInPictureMode on the Activity
@@ -144,7 +154,20 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
     lastPipViewHeightPx = 0
     try {
       textureView.setTransform(null)
+      textureView.translationY = 0f
       textureView.invalidate()
+    } catch (_: Exception) {
+      // ignore
+    }
+  }
+
+  private fun updateLastNonZeroInsetTopPx() {
+    try {
+      val insets = ViewCompat.getRootWindowInsets(textureView) ?: return
+      val cutoutTop = insets.displayCutout?.safeInsetTop ?: 0
+      val statusTop = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+      val top = kotlin.math.max(cutoutTop, statusTop)
+      if (top > 0) lastNonZeroInsetTopPx = top
     } catch (_: Exception) {
       // ignore
     }
@@ -160,6 +183,13 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
     if (!isEffectivelyInPip()) {
       clearPipMatrix()
       return
+    }
+
+    updateLastNonZeroInsetTopPx()
+    if (lastNonZeroInsetTopPx > 0) {
+      // Remove the fullscreen cutout offset from the PiP-visible region.
+      // This is a visual translation only (no LayoutParams change).
+      textureView.translationY = -lastNonZeroInsetTopPx.toFloat()
     }
 
     val vw = textureView.width

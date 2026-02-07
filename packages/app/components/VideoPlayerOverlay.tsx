@@ -988,8 +988,11 @@ export function VideoPlayerOverlay() {
       if (!prevIsInPipMode && isInPipMode) {
         pipExitBlockEarlyDetectRef.current = false
       } else if (prevIsInPipMode && !isInPipMode) {
-        // Exit tail: if the window is still shrunk, block early detection until it recovers.
-        pipExitBlockEarlyDetectRef.current = isWindowShrunkForPip
+        // Exiting PiP: block early detection unconditionally. Android can report
+        // stale PiP-sized window metrics for a few frames after exit; if we let the
+        // shrink heuristic re-activate PiP layout in fullscreen, we lose the cutout
+        // gap and can see transient artifacts.
+        pipExitBlockEarlyDetectRef.current = true
       } else if (pipExitBlockEarlyDetectRef.current && !isWindowShrunkForPip) {
         pipExitBlockEarlyDetectRef.current = false
       }
@@ -1497,22 +1500,13 @@ export function VideoPlayerOverlay() {
   // so Yoga never re-layouts, and the Android TextureView keeps rendering.
   //
   // IMPORTANT: React Native style arrays DON'T deep-merge `transform` — the LAST
-  // style with a `transform` key wins entirely. Since this is applied AFTER
-  // containerStyle (style={[..., containerStyle, containerDragStyle]}), any
-  // transform returned here replaces containerStyle's transform. During Android PiP,
-  // containerStyle sets translateY to compensate for the camera cutout offset.
-  // If this style returns ANY transform, it must include that cutout shift too.
+  // style with a `transform` key wins entirely. Keep this style focused on drag
+  // offsets only; PiP cutout compensation is handled natively in NitroVLC.
   const containerDragStyle = useAnimatedStyle(() => {
     'worklet'
     const isMini = animProgress.value < 0.5
     const totalTranslateX = dragOffsetX.value + (isMini ? swipeDismissX.value : 0)
-    // Android PiP: include the cutout shift in totalTranslateY to prevent
-    // overriding containerStyle's PiP translateY. React Native style arrays
-    // DON'T deep-merge transforms — last style with transform key wins.
-    // If this style emits ANY transform, it must include the cutout shift.
-    const pipCutoutShift = (isPipLayoutActiveShared.value && Platform.OS === 'android'
-      && !isLandscapeFullscreenShared.value) ? frozenInsetTopShared.value : 0
-    const totalTranslateY = dragOffsetY.value - pipCutoutShift
+    const totalTranslateY = dragOffsetY.value
     if (totalTranslateX === 0 && totalTranslateY === 0) return {}
     const transforms: any[] = []
     if (totalTranslateX !== 0) transforms.push({ translateX: totalTranslateX })
@@ -1567,8 +1561,11 @@ export function VideoPlayerOverlay() {
     // Use frozenInsetTopShared: during Android PiP transition, insets go to 0
     // BEFORE isInPipMode is true. frozenInsetTopShared holds the pre-PiP value,
     // preventing a 50dp layout jump that triggers VLC's "50/50 shifted" artifact.
+    const effectiveInsetTop = Platform.OS === 'android' && !isLandscapeFullscreenShared.value
+      ? Math.max(frozenInsetTopShared.value, insetTopShared.value)
+      : 0
     const cutoutInset = Platform.OS === 'android' && !isInPipModeShared.value && !isLandscapeFullscreenShared.value
-      ? frozenInsetTopShared.value * cutoutFactor
+      ? effectiveInsetTop * cutoutFactor
       : 0
     // Normal video height - same activity shrinks for PiP (single-player architecture)
     const height = interpolate(
@@ -1708,10 +1705,13 @@ export function VideoPlayerOverlay() {
     // Smooth blend (matching videoStyle's cutoutFactor) avoids discrete jumps.
     const cutoutFactor = interpolate(animProgress.value, [0.8, 1], [0, 1], Extrapolation.CLAMP)
     // Use frozenInsetTopShared: same PiP transition race guard as videoStyle.
+    const effectiveInsetTop = Platform.OS === 'android' && !isLandscapeFullscreenShared.value
+      ? Math.max(frozenInsetTopShared.value, insetTopShared.value)
+      : 0
     const cutoutOffset = Platform.OS === 'android'
       && !isInPipModeShared.value
       && !isLandscapeFullscreenShared.value
-        ? frozenInsetTopShared.value * cutoutFactor
+        ? effectiveInsetTop * cutoutFactor
         : 0
     return {
       position: 'absolute',

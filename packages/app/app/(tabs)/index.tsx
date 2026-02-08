@@ -7,7 +7,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
-import { VideoCard, VideoData } from '../../components/video'
+import { VideoCard } from '../../components/video'
+import type { VideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
@@ -38,6 +39,13 @@ function formatTimeAgo(timestamp: number): string {
   if (hours < 24) return `${hours}h ago`
   const days = Math.floor(hours / 24)
   return `${days}d ago`
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ])
 }
 
 // Detect Pear desktop vs mobile
@@ -122,50 +130,19 @@ export default function HomeScreen() {
     }
   }, [fetchThumbnail])
 
-  // Fetch thumbnails when own videos change
-  useEffect(() => {
-    if (videos.length > 0 && identity?.driveKey) {
-      const vidsWithKey = videos.map(v => ({ ...v, channelKey: identity.driveKey }))
-      fetchThumbnailsForVideos(vidsWithKey as VideoData[])
-    }
-  }, [videos, identity?.driveKey])
+  // Effects that depend on loadPublicFeed/refreshFeed are declared below those callbacks.
 
-  // Load public feed on mount
-  useEffect(() => {
-    if (ready) {
-      loadPublicFeed()
-    }
-    // Periodic refresh to keep discovery updated
-    const interval = setInterval(() => {
-      if (ready) {
-        refreshFeed()
+  const loadChannelMeta = useCallback(async (driveKey: string, publicBeeKey?: string) => {
+    if (!rpc) return
+    try {
+      const result = await rpc.getChannelMeta({ channelKey: driveKey, publicBeeKey: publicBeeKey || undefined })
+      if (result) {
+        setChannelMeta(prev => ({ ...prev, [driveKey]: result }))
       }
-    }, 30000)
-
-    // Subscribe to feed update events emitted by backend
-    const unsub = platformEvents?.onFeedUpdate?.(() => {
-      loadPublicFeed()
-    })
-
-    return () => {
-      clearInterval(interval)
-      if (typeof unsub === 'function') unsub()
+    } catch (err) {
+      console.error('[Home] Failed to load channel meta:', err)
     }
-  }, [ready, platformEvents, loadPublicFeed, refreshFeed])
-
-  // Refresh discovery when app returns to foreground (mobile)
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active' && appState.current !== 'active' && ready) {
-        refreshFeed()
-        if (feedVideos.length > 0) {
-          fetchThumbnailsForVideos(feedVideos)
-        }
-      }
-      appState.current = state
-    })
-    return () => sub.remove()
-  }, [ready, refreshFeed, feedVideos, fetchThumbnailsForVideos])
+  }, [rpc])
 
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {
@@ -207,7 +184,7 @@ export default function HomeScreen() {
     } finally {
       setFeedLoading(false)
     }
-  }, [rpc, channelMeta])
+  }, [rpc, channelMeta, loadChannelMeta])
 
   const runSearch = useCallback(async () => {
     if (!rpc || !identity?.driveKey) return
@@ -241,18 +218,6 @@ export default function HomeScreen() {
     }
   }, [rpc, identity?.driveKey, searchQuery])
 
-  const loadChannelMeta = useCallback(async (driveKey: string, publicBeeKey?: string) => {
-    if (!rpc) return
-    try {
-      const result = await rpc.getChannelMeta({ channelKey: driveKey, publicBeeKey: publicBeeKey || undefined })
-      if (result) {
-        setChannelMeta(prev => ({ ...prev, [driveKey]: result }))
-      }
-    } catch (err) {
-      console.error('[Home] Failed to load channel meta:', err)
-    }
-  }, [rpc])
-
   const refreshFeed = useCallback(async () => {
     if (!rpc) return
     try {
@@ -262,6 +227,51 @@ export default function HomeScreen() {
       console.error('[Home] Failed to refresh feed:', err)
     }
   }, [rpc, loadPublicFeed])
+
+  // Fetch thumbnails when own videos change
+  useEffect(() => {
+    if (videos.length > 0 && identity?.driveKey) {
+      const vidsWithKey = videos.map(v => ({ ...v, channelKey: identity.driveKey }))
+      fetchThumbnailsForVideos(vidsWithKey as VideoData[])
+    }
+  }, [videos, identity?.driveKey, fetchThumbnailsForVideos])
+
+  // Load public feed on mount
+  useEffect(() => {
+    if (ready) {
+      loadPublicFeed()
+    }
+    // Periodic refresh to keep discovery updated
+    const interval = setInterval(() => {
+      if (ready) {
+        refreshFeed()
+      }
+    }, 30000)
+
+    // Subscribe to feed update events emitted by backend
+    const unsub = platformEvents?.onFeedUpdate?.(() => {
+      loadPublicFeed()
+    })
+
+    return () => {
+      clearInterval(interval)
+      if (typeof unsub === 'function') unsub()
+    }
+  }, [ready, platformEvents, loadPublicFeed, refreshFeed])
+
+  // Refresh discovery when app returns to foreground (mobile)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && appState.current !== 'active' && ready) {
+        refreshFeed()
+        if (feedVideos.length > 0) {
+          fetchThumbnailsForVideos(feedVideos)
+        }
+      }
+      appState.current = state
+    })
+    return () => sub.remove()
+  }, [ready, refreshFeed, feedVideos, fetchThumbnailsForVideos])
 
   const hideChannel = useCallback(async (driveKey: string) => {
     if (!rpc) return
@@ -280,13 +290,6 @@ export default function HomeScreen() {
     if (!rpc || feedEntries.length === 0) return
 
     setLoadingFeedVideos(true)
-
-    // Helper: wrap a promise with a timeout so one hung channel doesn't block the whole feed
-    const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
-      Promise.race([
-        promise,
-        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))
-      ])
 
     // Fetch videos from channels IN PARALLEL with per-channel timeout.
     // Note: For newly discovered channels, `listVideos` may return [] until replication catches up.
@@ -349,7 +352,7 @@ export default function HomeScreen() {
     if (feedEntries.length > 0) {
       loadFeedVideos()
     }
-  }, [feedEntries])
+  }, [feedEntries, loadFeedVideos])
 
   // View a channel's videos
   const viewChannel = useCallback(async (driveKey: string) => {
@@ -378,17 +381,19 @@ export default function HomeScreen() {
           await new Promise((resolve) => setTimeout(resolve, delayMs))
         }
       }
-      if (Array.isArray(videoList)) {
-        const videosWithChannel = videoList.map((v: any) => ({
-          ...v,
-          channelKey: driveKey,
-          publicBeeKey: publicBeeKey || undefined,  // Include for video playback
-          channel: channelMeta[driveKey] ? { name: channelMeta[driveKey].name } : undefined
-        }))
-        setChannelVideos(videosWithChannel)
-        // Fetch thumbnails for channel videos
-        fetchThumbnailsForVideos(videosWithChannel)
-      }
+        if (Array.isArray(videoList)) {
+          const videosWithChannel = videoList.map((v: any) => ({
+            ...v,
+            channelKey: driveKey,
+            publicBeeKey: publicBeeKey || undefined,  // Include for video playback
+            channel: channelMeta[driveKey]
+              ? { name: channelMeta[driveKey].name || 'Channel' }
+              : undefined
+          }))
+          setChannelVideos(videosWithChannel)
+          // Fetch thumbnails for channel videos
+          fetchThumbnailsForVideos(videosWithChannel)
+        }
     } catch (err) {
       console.error('[Home] Failed to load channel videos:', err)
     } finally {
@@ -491,7 +496,7 @@ export default function HomeScreen() {
     // Keep pull-to-refresh focused on Discover/public feed.
     await refreshFeed()
     setRefreshing(false)
-  }, [identity, loadVideos, refreshFeed])
+  }, [refreshFeed])
 
   const refreshMyVideos = useCallback(async () => {
     if (!identity?.driveKey) return
@@ -510,7 +515,7 @@ export default function HomeScreen() {
     return {
       ...v,
       channelKey: identity?.driveKey || '',
-      channel: identity ? { name: identity.name } : undefined,
+      channel: identity ? { name: identity.name || 'You' } : undefined,
       thumbnailUrl
     }
   })
@@ -574,7 +579,12 @@ export default function HomeScreen() {
             <Text className="text-title text-pear-text">PearTube</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <CastHeaderButton size={18} />
-              <Pressable onPress={() => router.push('/search')} className="p-2">
+              <Pressable
+                onPress={() => router.push('/search')}
+                className="p-2"
+                accessibilityRole="button"
+                accessibilityLabel="Search"
+              >
                 <Feather name="search" color={colors.text} size={18} />
               </Pressable>
               {identity && (
@@ -813,7 +823,6 @@ export default function HomeScreen() {
                 <Feather name="refresh-cw" color={refreshingMyVideos ? colors.textMuted : colors.primary} size={18} />
               </Pressable>
             </View>
-            {console.log('[Home] Rendering Your Videos section, count:', myVideosWithMeta.length, 'viewingChannel:', viewingChannel)}
             {myVideosWithMeta.length === 0 ? (
               <View className="py-12 items-center bg-pear-bg-elevated rounded-xl" style={{ marginHorizontal: isDesktop ? 0 : 20 }}>
                 <Text className="text-display mb-4">📺</Text>

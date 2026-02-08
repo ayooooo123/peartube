@@ -35,7 +35,7 @@ const TABS: TabItem[] = [
   { name: 'subscriptions', icon: 'users', label: 'Subs' },
   { name: 'studio', icon: 'plus-circle', label: 'Studio', emphasized: true },
   { name: 'downloads', icon: 'download', label: 'Downloads' },
-  { name: 'search', icon: 'search', label: 'Search' },
+  { name: 'settings', icon: 'settings', label: 'Settings' },
 ]
 
 const PILL_HEIGHT = 56
@@ -62,7 +62,7 @@ export function PillTabBar({ state, descriptors, navigation }: PillTabBarProps) 
   useEffect(() => {
     const shouldHide = playerMode === 'fullscreen' && !isInPipMode
     barVisible.value = withTiming(shouldHide ? 0 : 1, { duration: 200 })
-  }, [playerMode, isInPipMode])
+  }, [playerMode, isInPipMode, barVisible])
 
   useEffect(() => {
     const showSub = Keyboard.addListener(
@@ -81,7 +81,7 @@ export function PillTabBar({ state, descriptors, navigation }: PillTabBarProps) 
       showSub.remove()
       hideSub.remove()
     }
-  }, [])
+  }, [keyboardVisible])
 
   useEffect(() => {
     const totalHeight = PILL_HEIGHT + bottomPosition + PILL_BOTTOM_OFFSET
@@ -169,12 +169,12 @@ function TabButton({ tab, isActive, onPress }: TabButtonProps) {
   const handlePressIn = useCallback(() => {
     scale.value = withSpring(0.9, { damping: 15, stiffness: 400 })
     opacity.value = withTiming(0.7, { duration: 100 })
-  }, [])
+  }, [opacity, scale])
 
   const handlePressOut = useCallback(() => {
     scale.value = withSpring(1, { damping: 15, stiffness: 400 })
     opacity.value = withTiming(1, { duration: 100 })
-  }, [])
+  }, [opacity, scale])
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],

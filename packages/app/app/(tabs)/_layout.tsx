@@ -40,10 +40,7 @@ export default function TabLayout() {
         <Tabs.Screen name="studio" />
         <Tabs.Screen name="downloads" />
         <Tabs.Screen name="search" />
-        <Tabs.Screen 
-          name="settings" 
-          options={{ href: null }}
-        />
+        <Tabs.Screen name="settings" />
       </Tabs>
     </View>
   )

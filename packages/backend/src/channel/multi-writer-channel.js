@@ -341,6 +341,15 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.publicBee?.writable) return
     if (!BeeDiffStream) return
 
+    // hyperbee-diff-stream expects snapshots to be opened.
+    try {
+      await beforeSnapshot?.ready?.()
+      await afterSnapshot?.ready?.()
+    } catch (err) {
+      console.log('[Channel] _syncPublicBeeFromViewDiff snapshot ready error (non-fatal):', err?.message)
+      return
+    }
+
     // 1) Sync channel metadata (only `meta` key, and only public fields)
     try {
       const metaDiff = new BeeDiffStream(afterSnapshot, beforeSnapshot, {
@@ -401,12 +410,16 @@ export class MultiWriterChannel extends ReadyResource {
   async _open() {
     const bootstrapKey = this.opts.key ? fromHex(this.opts.key) : null
     const encryptionKey = this.opts.encryptionKey ? fromHex(this.opts.encryptionKey) : null
+    const keyPair = this.opts.keyPair || null
 
     console.log('[Channel] _open: bootstrapKey:', bootstrapKey ? toHex(bootstrapKey).slice(0, 16) : 'new')
 
     console.log('[Channel] _open: creating Autobase instance...')
     this.base = new Autobase(this.store, bootstrapKey, {
       valueEncoding: 'json',
+      // Providing a keyPair is important on some runtimes (notably Bare/mobile) where
+      // Autobase's "new" path can otherwise hang waiting for a writable local core.
+      keyPair,
       // Encryption is optional. If you want private channels, pass an encryptionKey (and/or set encrypt: true).
       // Keeping this off by default preserves current PearTube behavior where channels are publicly readable.
       encrypt: Boolean(this.opts.encrypt),
@@ -477,6 +490,26 @@ export class MultiWriterChannel extends ReadyResource {
     const updateStart = Date.now()
     await this._safeUpdate()
     console.log('[Channel] _open: base.update() took', Date.now() - updateStart, 'ms')
+
+    // Ensure the local writer exists in the deterministic view as early as possible.
+    // This prevents spurious "unauthorized writer" warnings for the very first ops on a new channel.
+    if (this.writable && this.localWriterKeyHex) {
+      try {
+        const existingWriter = await this.view.get(prefixedKey('writers', this.localWriterKeyHex)).catch(() => null)
+        if (!existingWriter?.value) {
+          await this.appendOp({
+            type: 'upsert-writer',
+            schemaVersion: CURRENT_SCHEMA_VERSION,
+            keyHex: this.localWriterKeyHex,
+            role: 'owner',
+            deviceName: '',
+            addedAt: Date.now(),
+          })
+        }
+      } catch (err) {
+        console.log('[Channel] _open: ensure local writer failed (non-fatal):', err?.message)
+      }
+    }
 
     // Debug Autobase internals
     const inputs = this.base.inputs || []
@@ -714,8 +747,8 @@ export class MultiWriterChannel extends ReadyResource {
     const writerKeyHex = op.updatedBy || op.uploadedBy || op.authorKeyHex || op.moderatorKeyHex || null
     if (writerKeyHex) {
       const writer = await view.get(prefixedKey('writers', writerKeyHex)).catch(() => null)
-      if (!writer?.value && op.type !== 'add-writer') {
-        // Allow add-writer ops even if writer doesn't exist yet (for initial setup)
+      if (!writer?.value && op.type !== 'add-writer' && op.type !== 'upsert-writer') {
+        // Allow writer bootstrap ops even if writer doesn't exist yet (for initial setup)
         console.warn('[Channel] Op from unauthorized writer:', writerKeyHex?.slice(0, 16), 'type:', op.type)
         // Note: Autobase will reject ops from non-writers, so this is mostly for logging
       }
@@ -1144,6 +1177,18 @@ export class MultiWriterChannel extends ReadyResource {
     // Check if writer is already registered
     const existing = await this.view.get(prefixedKey('writers', this.localWriterKeyHex)).catch(() => null)
     if (existing?.value) {
+      // Backfill blobDriveKey/deviceName if this writer record was created before blobs were ready.
+      const needsBlobDriveKey = !existing.value.blobDriveKey && this.blobsKeyHex
+      const needsDeviceName = deviceName && existing.value.deviceName !== deviceName
+      if (needsBlobDriveKey || needsDeviceName) {
+        await this.appendOp({
+          type: 'upsert-writer',
+          schemaVersion: CURRENT_SCHEMA_VERSION,
+          keyHex: this.localWriterKeyHex,
+          deviceName,
+          blobDriveKey: this.blobsKeyHex
+        })
+      }
       return this.blobsKeyHex // Return shared blobs key for compatibility
     }
 
@@ -1840,6 +1885,19 @@ export class MultiWriterChannel extends ReadyResource {
     const writerKeyHex =
       op?.updatedBy || op?.uploadedBy || op?.authorKeyHex || op?.moderatorKeyHex || this.localWriterKeyHex || null
     if (writerKeyHex) this._checkLocalRateLimit(writerKeyHex)
+
+    // Ensure every user-authored op has an author field so verifyOpAuthor can validate it.
+    // Some ops (writer management, invites, etc.) didn't previously include an author key and
+    // would be rejected during apply ("Operation has no author key").
+    const hasAuthorKey = Boolean(
+      op?.authorKeyHex || op?.updatedBy || op?.uploadedBy || op?.moderatorKeyHex || op?.writerKeyHex
+    )
+    if (!hasAuthorKey && op?.type && !['init', 'system', 'ack'].includes(op.type)) {
+      if (this.localWriterKeyHex) {
+        op = { ...op, writerKeyHex: this.localWriterKeyHex }
+      }
+    }
+
     const result = await this.base.append(op)
 
     // Announce new content to peers via wakeup protocol

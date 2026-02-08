@@ -81,3 +81,6 @@ packages/desktop/video/
 # OpenProse workflows
 *.prose
 logfile
+
+# Agent state
+.sisyphus/

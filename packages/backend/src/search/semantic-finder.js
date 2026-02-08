@@ -339,6 +339,9 @@ export class SemanticFinder {
    */
   removeVideo(videoId) {
     this.index.remove(videoId)
+    this._indexedVideoIds.delete(videoId)
+    this._dirty = true
+    this._scheduleSave()
   }
 
   /**

@@ -152,6 +152,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const remotePlayWhileBackgroundedRef = useRef(false)
   const pipExitShouldResumeRef = useRef(false)
   const pendingSeekSecondsRef = useRef<number | null>(null)
+  const seekConfirmRef = useRef<{ targetSeconds: number; startedAt: number } | null>(null)
+  const seekClearTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // Background playback tracking refs
   const wasPlayingWhenBackgroundedRef = useRef(false)
@@ -701,7 +703,17 @@ useEffect(() => {
     setSeekPosition(seekValue)
     currentTimeRef.current = clampedTime
     setCurrentTime(clampedTime)
-    setTimeout(() => setSeekPosition(undefined), 100)
+
+    // Keep the seek prop set until playback progress confirms the seek landed.
+    // This avoids flaky/late seeks on some VLC builds and prevents UI from snapping back.
+    seekConfirmRef.current = { targetSeconds: clampedTime, startedAt: Date.now() }
+    if (seekClearTimeoutRef.current) clearTimeout(seekClearTimeoutRef.current)
+    seekClearTimeoutRef.current = setTimeout(() => {
+      // Failsafe: clear even if we never got a confirming progress event.
+      seekConfirmRef.current = null
+      setSeekPosition(undefined)
+      seekClearTimeoutRef.current = null
+    }, 1200)
   }, [])
 
   const seekBy = useCallback((delta: number) => {
@@ -721,7 +733,14 @@ useEffect(() => {
     setSeekPosition(seekValue)
     currentTimeRef.current = newTime
     setCurrentTime(newTime)
-    setTimeout(() => setSeekPosition(undefined), 100)
+
+    seekConfirmRef.current = { targetSeconds: newTime, startedAt: Date.now() }
+    if (seekClearTimeoutRef.current) clearTimeout(seekClearTimeoutRef.current)
+    seekClearTimeoutRef.current = setTimeout(() => {
+      seekConfirmRef.current = null
+      setSeekPosition(undefined)
+      seekClearTimeoutRef.current = null
+    }, 1200)
   }, [])
 
   // Set playback speed
@@ -750,6 +769,21 @@ useEffect(() => {
     }
     
     const now = Date.now()
+
+    // Confirm any pending seek once progress is close to the target.
+    const pending = seekConfirmRef.current
+    if (pending) {
+      const closeEnough = Math.abs(timeS - pending.targetSeconds) < 0.75
+      const tooOld = now - pending.startedAt > 1500
+      if (closeEnough || tooOld) {
+        seekConfirmRef.current = null
+        if (seekClearTimeoutRef.current) {
+          clearTimeout(seekClearTimeoutRef.current)
+          seekClearTimeoutRef.current = null
+        }
+        setSeekPosition(undefined)
+      }
+    }
     const shouldUpdateUI = now - lastUIUpdateRef.current >= UI_UPDATE_INTERVAL
     if (shouldUpdateUI) {
       lastUIUpdateRef.current = now

@@ -8,8 +8,8 @@
  * - Upload button
  * - User avatar
  */
-import React, { useState, useCallback } from 'react'
-import { useRouter } from 'expo-router'
+import React, { useState, useCallback, useEffect } from 'react'
+import { useRouter, useLocalSearchParams, usePathname } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
 import { useCast } from '@/lib/cast'
@@ -57,10 +57,18 @@ function UserIcon() {
 
 export function DesktopHeader() {
   const router = useRouter()
+  const pathname = usePathname()
+  const params = useLocalSearchParams<{ q?: string }>()
   const { toggleSidebar } = useSidebar()
   const cast = useCast()
   const [searchQuery, setSearchQuery] = useState('')
   const [isSearchFocused, setIsSearchFocused] = useState(false)
+
+  useEffect(() => {
+    if (pathname === '/search' && typeof params.q === 'string') {
+      setSearchQuery(params.q)
+    }
+  }, [pathname, params.q])
   const [showCastPicker, setShowCastPicker] = useState(false)
   const [isConnectingCast, setIsConnectingCast] = useState(false)
 

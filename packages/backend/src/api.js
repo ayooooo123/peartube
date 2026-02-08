@@ -586,6 +586,11 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           return { success: false, error: 'Failed to load channel' };
         }
         await channel.deleteVideo(videoId)
+
+        if (ctx.semanticFinder) {
+          try { ctx.semanticFinder.removeVideo(videoId) } catch {}
+        }
+
         return { success: true };
       } catch (err) {
         console.error('[API] DELETE_VIDEO error:', err.message);
@@ -1750,7 +1755,28 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       const results = await finder.globalSearch(query, topK)
       console.log('[API] globalSearchVideos: found', results.length, 'results in global index')
 
-      return results
+      // Validate results exist and lazily prune stale entries
+      const validated = []
+      const staleIds = []
+      for (const r of results) {
+        const meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {})
+        const channelKey = meta.channelKey || meta.driveKey
+        if (!channelKey) { validated.push(r); continue }
+        try {
+          const video = await this.getVideoData(channelKey, r.id, meta.publicBeeKey)
+          if (video) { validated.push(r); continue }
+        } catch {}
+        staleIds.push(r.id)
+      }
+
+      if (staleIds.length > 0) {
+        console.log('[API] globalSearchVideos: pruning', staleIds.length, 'stale entries')
+        for (const id of staleIds) {
+          try { finder.removeVideo(id) } catch {}
+        }
+      }
+
+      return validated
     },
 
     /**

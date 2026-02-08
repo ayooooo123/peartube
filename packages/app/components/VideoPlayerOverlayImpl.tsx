@@ -70,6 +70,7 @@ import {
   ChannelInfo,
   ActionButton,
   TimeDisplay,
+  Scrubber,
   SeekFeedback,
   LoadingOverlay,
   DesktopMiniPlayer,
@@ -300,8 +301,8 @@ export function VideoPlayerOverlay() {
   // State for drag seeking
   const [isSeeking, setIsSeeking] = useState(false)
   const [seekPosition, setSeekPosition] = useState(0)
-  const progressBarRef = useRef<View>(null)
-  const progressBarWidth = useRef(0)
+  const [scrubPendingTime, setScrubPendingTime] = useState<number | null>(null)
+  const scrubPendingSinceRef = useRef(0)
   const videoWrapperRef = useRef<View>(null)
   const [pipSupported, setPipSupported] = useState<boolean | null>(null)
   const wasInPipModeRef = useRef(false)
@@ -364,6 +365,22 @@ export function VideoPlayerOverlay() {
       setSeekPosition(effectiveCurrentTime)
     }
   }, [effectiveCurrentTime, isSeeking])
+
+  // Clear scrub pending lock once playback catches up (or after a timeout).
+  // This prevents the scrubber UI from snapping back to stale progress right after commit.
+  useEffect(() => {
+    if (scrubPendingTime === null) return
+    if (effectiveDuration <= 0) {
+      setScrubPendingTime(null)
+      return
+    }
+
+    const ageMs = Date.now() - scrubPendingSinceRef.current
+    const closeEnough = Math.abs(effectiveCurrentTime - scrubPendingTime) < 0.75
+    if (closeEnough || ageMs > 1500) {
+      setScrubPendingTime(null)
+    }
+  }, [scrubPendingTime, effectiveCurrentTime, effectiveDuration])
 
 
 
@@ -2095,6 +2112,18 @@ export function VideoPlayerOverlay() {
     setTimeout(() => setSeekFeedback(null), 500)
   }, [isCasting, effectiveCurrentTime, effectiveDuration, cast, seekBy])
 
+  const handleScrubCommit = useCallback((timeSeconds: number) => {
+    if (effectiveDuration <= 0) return
+    const clamped = Math.max(0, Math.min(timeSeconds, effectiveDuration))
+    setScrubPendingTime(clamped)
+    scrubPendingSinceRef.current = Date.now()
+    if (isCasting) {
+      cast.seek(clamped)
+    } else {
+      seekTo(clamped)
+    }
+  }, [effectiveDuration, isCasting, cast, seekTo])
+
 
   // Available playback speeds
   const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
@@ -2933,60 +2962,24 @@ export function VideoPlayerOverlay() {
         </Animated.View>
       )}
 
-      {!isInPipMode && (
-        <Animated.View
-          style={progressBarStyle}
-          ref={progressBarRef}
-          onLayout={(e) => {
-            progressBarWidth.current = e.nativeEvent.layout.width
-          }}
-          onTouchStart={(e) => {
-            const locationX = e.nativeEvent.locationX
-            const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
-            setIsSeeking(true)
-            setSeekPosition(progress * effectiveDuration)
-          }}
-          onTouchMove={(e) => {
-            if (isSeeking) {
-              const locationX = e.nativeEvent.locationX
-              const progress = Math.max(0, Math.min(1, locationX / progressBarWidth.current))
-              setSeekPosition(progress * effectiveDuration)
-            }
-          }}
-          onTouchEnd={() => {
-            if (isSeeking) {
-              if (isCasting) {
-                cast.seek(seekPosition)
-              } else {
-                seekTo(seekPosition)
-              }
-              setIsSeeking(false)
-            }
-          }}
-        >
-          {isSeeking && (
-            <View style={[
-              styles.seekTimePreview,
-              { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
-            ]}>
-              <Text style={styles.seekTimeText}>{formatDuration(seekPosition)}</Text>
-            </View>
-          )}
-          <View style={[styles.thinProgressBg, isSeeking && styles.thinProgressBgActive]}>
-            <View
-              style={[
-                styles.thinProgressFill,
-                isSeeking && styles.thinProgressFillActive,
-                { width: `${(isSeeking ? seekPosition / (effectiveDuration || 1) : effectiveProgress) * 100}%` }
-              ]}
-            />
+      {!isInPipMode && Platform.OS !== 'web' && (
+        <Scrubber
+          containerStyle={progressBarStyle}
+          duration={effectiveDuration}
+          currentTime={effectiveCurrentTime}
+          progress={effectiveProgress}
+          pendingSeekTime={scrubPendingTime}
+          disabled={effectiveDuration <= 0}
+          externalGesture={panGesture}
+          onSeekCommit={handleScrubCommit}
+        />
+      )}
+
+      {!isInPipMode && Platform.OS === 'web' && (
+        <Animated.View style={progressBarStyle} pointerEvents="none">
+          <View style={styles.thinProgressBg}>
+            <View style={[styles.thinProgressFill, { width: `${effectiveProgress * 100}%` }]} />
           </View>
-          {isSeeking && (
-            <View style={[
-              styles.scrubberHandle,
-              { left: `${(seekPosition / (effectiveDuration || 1)) * 100}%` }
-            ]} />
-          )}
         </Animated.View>
       )}
 

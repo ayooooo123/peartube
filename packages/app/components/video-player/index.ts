@@ -16,6 +16,7 @@ export { P2PStatsBar } from './P2PStatsBar'
 export { ChannelInfo } from './ChannelInfo'
 export { ActionButton } from './ActionButton'
 export { TimeDisplay } from './TimeDisplay'
+export { Scrubber } from './Scrubber'
 
 // Context-connected components
 export { SeekBar } from './SeekBar'

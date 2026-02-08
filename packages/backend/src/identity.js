@@ -41,11 +41,22 @@ export function generateMnemonic(wordCount = 12) {
  * @param {string} [passphrase=''] - Optional BIP39 passphrase for additional security
  * @returns {{publicKey: Buffer, secretKey: Buffer}} Keypair
  */
-export function keypairFromMnemonic(mnemonic, passphrase = '') {
-  // BIP39 derivation using PBKDF2
-  // mnemonicToSeed returns a 64-byte seed, we use first 32 bytes for ed25519
-  const seed = bip39.mnemonicToSeed(mnemonic, passphrase);
-  return crypto.keyPair(seed.slice(0, 32));
+export async function keypairFromMnemonic(mnemonic, passphrase = '') {
+  // BIP39 derivation using PBKDF2.
+  // On some runtimes `mnemonicToSeed` is async (returns a Promise), so always await.
+  // The result is 64 bytes; we use first 32 bytes for ed25519.
+  const seed = await bip39.mnemonicToSeed(mnemonic, passphrase)
+
+  /** @type {Uint8Array | Buffer} */
+  let seedBytes = seed
+  if (seedBytes instanceof ArrayBuffer) seedBytes = new Uint8Array(seedBytes)
+  // Handle typed-array views (including Buffer)
+  if (ArrayBuffer.isView(seedBytes) && !(seedBytes instanceof Uint8Array)) {
+    seedBytes = new Uint8Array(seedBytes.buffer, seedBytes.byteOffset, seedBytes.byteLength)
+  }
+
+  const seedBuf = b4a.from(seedBytes)
+  return crypto.keyPair(seedBuf.subarray(0, 32))
 }
 
 /**
@@ -148,7 +159,7 @@ export function createIdentityManager({ ctx }) {
 
       if (generateMnem) {
         mnemonic = generateMnemonic();
-        keypair = keypairFromMnemonic(mnemonic);
+        keypair = await keypairFromMnemonic(mnemonic);
       } else {
         keypair = crypto.keyPair();
       }
@@ -253,7 +264,7 @@ export function createIdentityManager({ ctx }) {
     async recoverIdentity(mnemonic, name) {
       log.info(' Recovering from mnemonic');
 
-      const keypair = keypairFromMnemonic(mnemonic);
+      const keypair = await keypairFromMnemonic(mnemonic);
       const publicKey = b4a.toString(keypair.publicKey, 'hex');
 
       // Check if already exists

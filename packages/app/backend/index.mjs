@@ -716,8 +716,9 @@ function ensureRpc() {
           try {
             return await originalOnRequest(req)
           } catch (err) {
-            console.error('[Backend] HRPC request failed:', req?.command, err?.message || err)
-            return
+            reportBackendError(`HRPC request failed (${req?.command})`, err)
+            // Let HRPC propagate the error back to the caller.
+            throw err
           }
         }
         rawRpc._peartubeCompat = true
@@ -900,7 +901,21 @@ await restoreFeedCache()
 // Identity handlers
 rpc.onCreateIdentity(async (req) => {
   console.log('[HRPC] createIdentity:', req.name)
+  try {
+    rpc?.eventLog?.({
+      level: 'info',
+      message: `[createIdentity] start name=${String(req?.name || '').slice(0, 64)}`,
+      timestamp: Date.now()
+    })
+  } catch {}
   const result = await identityManager.createIdentity(req.name || 'New Channel', true)
+  try {
+    rpc?.eventLog?.({
+      level: 'info',
+      message: `[createIdentity] done pub=${String(result?.publicKey || '').slice(0, 16)} drive=${String(result?.driveKey || '').slice(0, 16)}`,
+      timestamp: Date.now()
+    })
+  } catch {}
   return {
     identity: {
       publicKey: result.publicKey,

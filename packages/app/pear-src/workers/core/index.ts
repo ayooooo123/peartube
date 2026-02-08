@@ -701,7 +701,6 @@ const placeholderStatsCallback = (driveKey: string, videoPath: string, stats: an
 
 const backend = await createBackendContext({
   storagePath: storage,
-  blobServerBindHost: '0.0.0.0',
   onFeedUpdate: () => {
     // Feed updates will be wired after HRPC init
   },
@@ -1815,7 +1814,9 @@ rpc.onGetVideoThumbnail(async (req: any) => {
 
       const url = ctx.blobServer.getLink(blobsCore.key, {
         blob,
-        type: 'image/jpeg'
+        type: 'image/jpeg',
+        host: ctx.blobServerHost || '127.0.0.1',
+        port: ctx.blobServer?.port || ctx.blobServerPort
       });
       return { url, exists: true };
     }

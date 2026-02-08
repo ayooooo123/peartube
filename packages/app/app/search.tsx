@@ -1,7 +1,7 @@
 /**
  * Search Results Page - Global semantic search across all channels
  */
-import { useCallback, useState, useEffect } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 import { View, Text, ActivityIndicator, ScrollView, useWindowDimensions, Platform, Pressable, TextInput } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter, useLocalSearchParams } from 'expo-router'
@@ -56,6 +56,9 @@ export default function SearchScreen() {
   const [results, setResults] = useState<VideoData[]>([])
   const [error, setError] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
+  const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
+  const thumbnailCacheRef = useRef(thumbnailCache)
+  thumbnailCacheRef.current = thumbnailCache
 
   // On Pear desktop, clear any active watch hash so background playback stops.
   useEffect(() => {
@@ -147,6 +150,20 @@ export default function SearchScreen() {
 
         console.log('[Search] Final videos array:', videos.length, videos)
         setResults(videos)
+
+        // Fetch thumbnails for search results
+        for (const v of videos) {
+          const ck = v.channelKey || v.driveKey
+          if (!ck || !v.id) continue
+          const cacheKey = `${ck}:${v.id}`
+          if (thumbnailCacheRef.current[cacheKey]) continue
+          rpc.getVideoThumbnail({ channelKey: ck, videoId: v.id }).then((res: any) => {
+            const url = res?.dataUrl || res?.url
+            if (res?.exists && url) {
+              setThumbnailCache(prev => ({ ...prev, [cacheKey]: url }))
+            }
+          }).catch(() => {})
+        }
       } catch (e: any) {
         console.error('[Search] Error:', e)
         setError(e?.message || 'Search failed')
@@ -386,7 +403,11 @@ export default function SearchScreen() {
               flexWrap: 'wrap',
               marginHorizontal: -8,
             } : {}}>
-              {results.map((video, index) => (
+              {results.map((video, index) => {
+                const ck = video.channelKey || video.driveKey
+                const thumbUrl = (ck ? thumbnailCache[`${ck}:${video.id}`] : null) || video.thumbnailUrl || video.thumbnail || undefined
+                const videoWithThumb = thumbUrl ? { ...video, thumbnailUrl: thumbUrl } : video
+                return (
                 <View
                   key={`${video.driveKey || video.channelKey}-${video.id}-${index}`}
                   style={isDesktop ? {
@@ -398,7 +419,7 @@ export default function SearchScreen() {
                   }}
                 >
                   <VideoCard
-                    video={video}
+                    video={videoWithThumb}
                     onPress={() => handleVideoPress(video)}
                     showChannelInfo={true}
                   />
@@ -414,7 +435,7 @@ export default function SearchScreen() {
                     </Text>
                   )}
                 </View>
-              ))}
+              )})}
             </View>
           </>
         )}

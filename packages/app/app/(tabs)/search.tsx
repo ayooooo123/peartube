@@ -1,6 +1,7 @@
 import { useCallback, useState, useEffect, useRef } from 'react'
 import { View, Text, ActivityIndicator, ScrollView, useWindowDimensions, Platform, Pressable, TextInput } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useLocalSearchParams } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { VideoCard, type VideoData } from '../../components/video'
@@ -12,10 +13,25 @@ import { useTabBarMetrics } from '@/lib/tabBarHeight'
 
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
 
+function computeTextRelevance(query: string, title: string): number {
+  const normalize = (s: string) => s.toLowerCase().replace(/[._\-\[\]\(\)]/g, ' ').replace(/\s+/g, ' ').trim()
+  const q = normalize(query)
+  const t = normalize(title)
+
+  if (t === q) return 3
+  if (t.includes(q)) return 2
+
+  const qWords = q.split(' ').filter(w => w.length > 1)
+  if (qWords.length === 0) return 0
+  const matchCount = qWords.filter(w => t.includes(w)).length
+  return matchCount / qWords.length
+}
+
 export default function SearchTab() {
   const insets = useSafeAreaInsets()
   const tabBarMetrics = useTabBarMetrics()
   const inputRef = useRef<TextInput>(null)
+  const params = useLocalSearchParams<{ q?: string }>()
   
   const [queryInput, setQueryInput] = useState('')
   const [query, setQuery] = useState('')
@@ -24,6 +40,14 @@ export default function SearchTab() {
   const { loadAndPlayVideo, closeVideo } = useVideoPlayerContext()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
+
+  useEffect(() => {
+    if (typeof params.q === 'string' && params.q.trim()) {
+      setQueryInput(params.q)
+      setQuery(params.q)
+      setSearched(true)
+    }
+  }, [params.q])
 
   const getGridColumns = () => {
     if (!isDesktop) return 1
@@ -95,6 +119,13 @@ export default function SearchTab() {
             return null
           }
         }).filter(Boolean) as VideoData[]
+
+        videos.sort((a, b) => {
+          const relA = computeTextRelevance(query, a.title || '')
+          const relB = computeTextRelevance(query, b.title || '')
+          if (relA !== relB) return relB - relA
+          return (b.score ?? 0) - (a.score ?? 0)
+        })
 
         setResults(videos)
       } catch (e: any) {
@@ -182,62 +213,64 @@ export default function SearchTab() {
         }}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 8,
-          marginBottom: 24
-        }}>
+        {!isDesktop && (
           <View style={{
-            flex: 1,
             flexDirection: 'row',
             alignItems: 'center',
-            borderWidth: 1,
-            borderColor: colors.border,
-            backgroundColor: colors.bgSecondary,
-            borderRadius: 12,
-            paddingHorizontal: 12,
-            paddingVertical: Platform.OS === 'web' ? 8 : 12,
+            gap: 8,
+            marginBottom: 24
           }}>
-            <Feather name="search" size={18} color={colors.textMuted} />
-            <TextInput
-              ref={inputRef}
-              value={queryInput}
-              onChangeText={setQueryInput}
-              placeholder="Search videos..."
-              placeholderTextColor={colors.textMuted}
-              style={{ 
-                flex: 1, 
-                color: colors.text, 
-                marginLeft: 10,
-                fontSize: 16,
-              }}
-              autoCapitalize="none"
-              returnKeyType="search"
-              onSubmitEditing={submitSearch}
-            />
-            {queryInput.length > 0 && (
-              <Pressable onPress={clearSearch} hitSlop={8}>
-                <Feather name="x" size={18} color={colors.textMuted} />
-              </Pressable>
-            )}
-          </View>
-          <Pressable
-            onPress={submitSearch}
-            disabled={!queryInput.trim() || searching}
-            style={{
-              paddingHorizontal: 16,
-              paddingVertical: 12,
+            <View style={{
+              flex: 1,
+              flexDirection: 'row',
+              alignItems: 'center',
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.bgSecondary,
               borderRadius: 12,
-              backgroundColor: colors.primary,
-              opacity: (!queryInput.trim() || searching) ? 0.5 : 1,
-            }}
-          >
-            <Text style={{ color: '#fff', fontWeight: '600', fontSize: 15 }}>
-              {searching ? '…' : 'Search'}
-            </Text>
-          </Pressable>
-        </View>
+              paddingHorizontal: 12,
+              paddingVertical: Platform.OS === 'web' ? 8 : 12,
+            }}>
+              <Feather name="search" size={18} color={colors.textMuted} />
+              <TextInput
+                ref={inputRef}
+                value={queryInput}
+                onChangeText={setQueryInput}
+                placeholder="Search videos..."
+                placeholderTextColor={colors.textMuted}
+                style={{ 
+                  flex: 1, 
+                  color: colors.text, 
+                  marginLeft: 10,
+                  fontSize: 16,
+                }}
+                autoCapitalize="none"
+                returnKeyType="search"
+                onSubmitEditing={submitSearch}
+              />
+              {queryInput.length > 0 && (
+                <Pressable onPress={clearSearch} hitSlop={8}>
+                  <Feather name="x" size={18} color={colors.textMuted} />
+                </Pressable>
+              )}
+            </View>
+            <Pressable
+              onPress={submitSearch}
+              disabled={!queryInput.trim() || searching}
+              style={{
+                paddingHorizontal: 16,
+                paddingVertical: 12,
+                borderRadius: 12,
+                backgroundColor: colors.primary,
+                opacity: (!queryInput.trim() || searching) ? 0.5 : 1,
+              }}
+            >
+              <Text style={{ color: '#fff', fontWeight: '600', fontSize: 15 }}>
+                {searching ? '…' : 'Search'}
+              </Text>
+            </Pressable>
+          </View>
+        )}
 
         {!searched && !searching && (
           <View style={{ alignItems: 'center', paddingVertical: 64 }}>

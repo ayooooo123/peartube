@@ -62,6 +62,9 @@ export default function SearchTab() {
   const [results, setResults] = useState<VideoData[]>([])
   const [error, setError] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
+  const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
+  const thumbnailCacheRef = useRef(thumbnailCache)
+  thumbnailCacheRef.current = thumbnailCache
 
   const submitSearch = useCallback(() => {
     const nextQuery = queryInput.trim()
@@ -128,6 +131,19 @@ export default function SearchTab() {
         })
 
         setResults(videos)
+
+        for (const v of videos) {
+          const ck = v.channelKey || v.driveKey
+          if (!ck || !v.id) continue
+          const cacheKey = `${ck}:${v.id}`
+          if (thumbnailCacheRef.current[cacheKey]) continue
+          rpc.getVideoThumbnail({ channelKey: ck, videoId: v.id }).then((res: any) => {
+            const url = res?.dataUrl || res?.url
+            if (res?.exists && url) {
+              setThumbnailCache(prev => ({ ...prev, [cacheKey]: url }))
+            }
+          }).catch(() => {})
+        }
       } catch (e: any) {
         setError(e?.message || 'Search failed')
         setResults([])
@@ -345,7 +361,11 @@ export default function SearchTab() {
               flexWrap: 'wrap',
               marginHorizontal: -8,
             } : {}}>
-              {results.map((video, index) => (
+              {results.map((video, index) => {
+                const ck = video.channelKey || video.driveKey
+                const thumbUrl = (ck ? thumbnailCache[`${ck}:${video.id}`] : null) || video.thumbnailUrl || video.thumbnail || undefined
+                const videoWithThumb = thumbUrl ? { ...video, thumbnailUrl: thumbUrl } : video
+                return (
                 <View
                   key={`${video.driveKey || video.channelKey}-${video.id}-${index}`}
                   style={isDesktop ? {
@@ -357,12 +377,12 @@ export default function SearchTab() {
                   }}
                 >
                   <VideoCard
-                    video={video}
+                    video={videoWithThumb}
                     onPress={() => handleVideoPress(video)}
                     showChannelInfo={true}
                   />
                 </View>
-              ))}
+              )})}
             </View>
           </>
         )}

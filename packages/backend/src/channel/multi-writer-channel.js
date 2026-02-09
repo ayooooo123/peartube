@@ -410,16 +410,14 @@ export class MultiWriterChannel extends ReadyResource {
   async _open() {
     const bootstrapKey = this.opts.key ? fromHex(this.opts.key) : null
     const encryptionKey = this.opts.encryptionKey ? fromHex(this.opts.encryptionKey) : null
-    const keyPair = this.opts.keyPair || null
+    const keyPair = this.opts.keyPair
 
     console.log('[Channel] _open: bootstrapKey:', bootstrapKey ? toHex(bootstrapKey).slice(0, 16) : 'new')
 
     console.log('[Channel] _open: creating Autobase instance...')
-    this.base = new Autobase(this.store, bootstrapKey, {
+    /** @type {any} */
+    const autobaseOpts = {
       valueEncoding: 'json',
-      // Providing a keyPair is important on some runtimes (notably Bare/mobile) where
-      // Autobase's "new" path can otherwise hang waiting for a writable local core.
-      keyPair,
       // Encryption is optional. If you want private channels, pass an encryptionKey (and/or set encrypt: true).
       // Keeping this off by default preserves current PearTube behavior where channels are publicly readable.
       encrypt: Boolean(this.opts.encrypt),
@@ -444,7 +442,17 @@ export class MultiWriterChannel extends ReadyResource {
         }
         console.log('[Channel] apply callback: done')
       }
-    })
+    }
+
+    // Only pass keyPair if the caller explicitly provided one.
+    // Passing `keyPair: null` can force some Autobase implementations into read-only behavior.
+    if (keyPair) {
+      // Providing a keyPair is important on some runtimes (notably Bare/mobile) where
+      // Autobase's "new" path can otherwise hang waiting for a writable local core.
+      autobaseOpts.keyPair = keyPair
+    }
+
+    this.base = new Autobase(this.store, bootstrapKey, autobaseOpts)
     console.log('[Channel] _open: Autobase instance created')
 
     console.log('[Channel] _open: waiting for base.ready()...')
@@ -734,6 +742,18 @@ export class MultiWriterChannel extends ReadyResource {
       return // Skip invalid ops to maintain forward compatibility
     }
 
+    // Backward compatibility: legacy ops may not include an explicit author key field.
+    // We can deterministically infer the author from the Autobase node writer core.
+    // This keeps old channels readable while still allowing verifyOpAuthor to validate
+    // "claimed" author against node.from.key.
+    const hasAuthorField = Boolean(
+      op.authorKeyHex || op.updatedBy || op.uploadedBy || op.moderatorKeyHex || op.writerKeyHex
+    )
+    if (!hasAuthorField && op.type && !['init', 'system', 'ack'].includes(op.type)) {
+      const inferred = node?.from?.key ? b4a.toString(node.from.key, 'hex') : null
+      if (inferred) op = { ...op, writerKeyHex: inferred }
+    }
+
     // SECURITY: Verify the operation author matches the node's writer key
     // This prevents users from forging ops with fake author keys
     const authorResult = verifyOpAuthor(op, node)
@@ -744,7 +764,7 @@ export class MultiWriterChannel extends ReadyResource {
 
     // ACL Enforcement: Verify op is from an authorized writer
     // Autobase already enforces this at the core level, but we can add additional checks
-    const writerKeyHex = op.updatedBy || op.uploadedBy || op.authorKeyHex || op.moderatorKeyHex || null
+    const writerKeyHex = op.updatedBy || op.uploadedBy || op.authorKeyHex || op.moderatorKeyHex || op.writerKeyHex || null
     if (writerKeyHex) {
       const writer = await view.get(prefixedKey('writers', writerKeyHex)).catch(() => null)
       if (!writer?.value && op.type !== 'add-writer' && op.type !== 'upsert-writer') {
@@ -779,8 +799,21 @@ export class MultiWriterChannel extends ReadyResource {
       op.logicalClock = node?.index || 0
     }
 
+    const authorKeyHex = node?.from?.key ? b4a.toString(node.from.key, 'hex') : null
+    const authorWriter = authorKeyHex
+      ? await view.get(prefixedKey('writers', authorKeyHex)).catch(() => null)
+      : null
+    const authorRole = authorWriter?.value?.role || null
+    const authorIsOwner = authorRole === 'owner'
+    const authorIsModerator = authorRole === 'moderator'
+    const authorIsPrivileged = authorIsOwner || authorIsModerator
+
     switch (op.type) {
       case 'update-channel': {
+        // Channel metadata is privileged; any device can read, but only owner/mods should mutate.
+        // This channel is meant to sync a single user's state across their devices.
+        if (!authorIsPrivileged) return
+
         const key = prefixedKey('channel-meta', op.key || 'meta')
         const existing = await view.get(key).catch(() => null)
         const prev = existing?.value || {}
@@ -900,13 +933,26 @@ export class MultiWriterChannel extends ReadyResource {
 
       case 'add-writer': {
         const keyHex = op.keyHex
+        // Writer membership changes are privileged. Allow bootstrap where the first writer
+        // adds themselves as owner.
+        const isBootstrapSelfOwner = Boolean(
+          authorKeyHex &&
+          keyHex === authorKeyHex &&
+          (op.role === 'owner' || op.role === undefined || op.role === null) &&
+          !authorWriter?.value
+        )
+
+        if (!authorIsOwner && !isBootstrapSelfOwner) return
+
         if (typeof keyHex === 'string' && host?.internal) {
           // Membership change must go through Autobase system (deterministic, replicated).
-          await host.addWriter(fromHex(keyHex), { indexer: true })
+          const role = isBootstrapSelfOwner ? 'owner' : (op.role || 'device')
+          const indexer = role === 'owner' || role === 'moderator'
+          await host.addWriter(fromHex(keyHex), { indexer })
         }
         await view.put(prefixedKey('writers', keyHex), {
           keyHex,
-          role: op.role || 'device',
+          role: isBootstrapSelfOwner ? 'owner' : (op.role || 'device'),
           deviceName: op.deviceName || '',
           addedAt: op.addedAt || 0,
           blobDriveKey: op.blobDriveKey || null
@@ -916,8 +962,16 @@ export class MultiWriterChannel extends ReadyResource {
 
       case 'upsert-writer': {
         const keyHex = op.keyHex
+        // Allow a device to update its own record (deviceName/blobDriveKey), but do not allow
+        // role escalation without an owner.
+        const isSelf = Boolean(authorKeyHex && keyHex === authorKeyHex)
+        if (!isSelf && !authorIsOwner) return
+
         const existing = await view.get(prefixedKey('writers', keyHex)).catch(() => null)
         const prev = existing?.value || null
+
+        if (op.role && op.role !== (prev?.role || 'device') && !authorIsOwner) return
+
         await view.put(prefixedKey('writers', keyHex), {
           keyHex,
           role: op.role || prev?.role || 'device',
@@ -930,6 +984,7 @@ export class MultiWriterChannel extends ReadyResource {
 
       case 'remove-writer': {
         const keyHex = op.keyHex
+        if (!authorIsOwner) return
         if (typeof keyHex === 'string' && host?.internal) {
           await host.removeWriter(fromHex(keyHex))
         }
@@ -938,6 +993,7 @@ export class MultiWriterChannel extends ReadyResource {
       }
 
       case 'add-invite': {
+        if (!authorIsPrivileged) return
         const idHex = op.idHex
         await view.put(prefixedKey('invites', idHex), {
           idHex,
@@ -952,6 +1008,7 @@ export class MultiWriterChannel extends ReadyResource {
       }
 
       case 'delete-invite': {
+        if (!authorIsPrivileged) return
         const idHex = op.idHex
         await view.del(prefixedKey('invites', idHex))
         const cur = await view.get('invites/current').catch(() => null)

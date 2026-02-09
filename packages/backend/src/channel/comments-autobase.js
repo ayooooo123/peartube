@@ -358,9 +358,9 @@ export class CommentsAutobase extends ReadyResource {
       this._viewerKeyPairPromise = this.store.createKeyPair(`peartube-comments-viewer:${this.channelKeyHex}`)
     }
 
-    this.base = new Autobase(this.store, bootstrapKey, {
+    /** @type {any} */
+    const autobaseOpts = {
       valueEncoding: 'json',
-      keyPair: useViewerPath ? this._viewerKeyPairPromise : null,
       // Enable optimistic mode for open participation
       // Non-writers can append optimistically, and indexers acknowledge them
       optimistic: true,
@@ -399,7 +399,16 @@ export class CommentsAutobase extends ReadyResource {
           await this._applyOp(op, view, host, node)
         }
       }
-    })
+    }
+
+    // IMPORTANT: Do not pass `keyPair: null`.
+    // Autobase treats `keyPair` as a real option, and `null` can force read-only behavior
+    // on some runtimes (notably Bare/mobile), which then breaks signing/checkpoint flows.
+    if (useViewerPath) {
+      autobaseOpts.keyPair = this._viewerKeyPairPromise
+    }
+
+    this.base = new Autobase(this.store, bootstrapKey, autobaseOpts)
 
     console.log('[CommentsAutobase] Autobase created, calling ready()...')
 
@@ -856,6 +865,15 @@ export class CommentsAutobase extends ReadyResource {
   async _applyOp(op, view, host, node) {
     if (!op || typeof op !== 'object') return
 
+    const authorKeyHex = node?.from?.key ? b4a.toString(node.from.key, 'hex') : null
+    const getDeterministicTimestamp = () => {
+      if (typeof op.timestamp === 'number' && Number.isFinite(op.timestamp)) return op.timestamp
+      // Fallback must be deterministic for all peers applying the same op stream.
+      // `node.index` is used elsewhere in this codebase as a Lamport-style clock.
+      if (typeof op.logicalClock === 'number' && Number.isFinite(op.logicalClock)) return op.logicalClock
+      return typeof node?.index === 'number' ? node.index : 0
+    }
+
     // SECURITY: Verify the operation author matches the node's writer key
     // This prevents users from forging ops with fake authorKeyHex values
     const authorResult = verifyOpAuthor(op, node)
@@ -872,8 +890,8 @@ export class CommentsAutobase extends ReadyResource {
           videoId: op.videoId,
           commentId: op.commentId,
           text: op.text,
-          authorKeyHex: op.authorKeyHex,
-          timestamp: op.timestamp || Date.now(),
+          authorKeyHex: authorKeyHex || op.authorKeyHex,
+          timestamp: getDeterministicTimestamp(),
           parentId: op.parentId || null,
           hidden: false
         })
@@ -881,20 +899,24 @@ export class CommentsAutobase extends ReadyResource {
       }
 
       case 'hide-comment': {
+        // Moderation is privileged: only the published admin key may hide/remove comments.
+        if (!this._adminKeyHex || !authorKeyHex || authorKeyHex !== this._adminKeyHex) return
+
         const key = prefixedKey('comments', `${op.videoId}/${op.commentId}`)
         const existing = await view.get(key).catch(() => null)
         if (existing?.value) {
           await view.put(key, {
             ...existing.value,
             hidden: true,
-            hiddenBy: op.moderatorKeyHex,
-            hiddenAt: op.timestamp || Date.now()
+            hiddenBy: authorKeyHex,
+            hiddenAt: getDeterministicTimestamp()
           })
         }
         return
       }
 
       case 'remove-comment': {
+        if (!this._adminKeyHex || !authorKeyHex || authorKeyHex !== this._adminKeyHex) return
         const key = prefixedKey('comments', `${op.videoId}/${op.commentId}`)
         await view.del(key)
         return
@@ -902,18 +924,20 @@ export class CommentsAutobase extends ReadyResource {
 
       case 'add-reaction': {
         // Key: reactions/{videoId}/{authorKeyHex}
-        const key = prefixedKey('reactions', `${op.videoId}/${op.authorKeyHex}`)
+        const reactionAuthorKeyHex = authorKeyHex || op.authorKeyHex
+        const key = prefixedKey('reactions', `${op.videoId}/${reactionAuthorKeyHex}`)
         await view.put(key, {
           videoId: op.videoId,
-          authorKeyHex: op.authorKeyHex,
+          authorKeyHex: reactionAuthorKeyHex,
           reactionType: op.reactionType, // 'like' or 'dislike'
-          timestamp: op.timestamp || Date.now()
+          timestamp: getDeterministicTimestamp()
         })
         return
       }
 
       case 'remove-reaction': {
-        const key = prefixedKey('reactions', `${op.videoId}/${op.authorKeyHex}`)
+        const reactionAuthorKeyHex = authorKeyHex || op.authorKeyHex
+        const key = prefixedKey('reactions', `${op.videoId}/${reactionAuthorKeyHex}`)
         await view.del(key)
         return
       }

@@ -76,26 +76,45 @@ export default function RootLayout() {
     }
   }, [])
 
-  useEffect(() => {
-    if (isNative) {
-      if (Platform.OS === 'android' && Platform.Version >= 33) {
-        PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS).catch(() => {})
-      }
-      initNativeBackend()
+  const loadInitialData = useCallback(async () => {
+    if (!platformRPC) return
 
-      const subscription = AppState.addEventListener('change', handleAppStateChange)
-      return () => {
-        subscription.remove()
-        // Don't terminate worklet if playback is active (e.g., during PiP)
-        if (platformRPC && !playbackActiveEmitter.isActive) {
-          platformRPC.terminatePlatformRPC()
+    try {
+      setLoading(true)
+
+      // Load identities
+      const result = await platformRPC.rpc.getIdentities()
+      const identities = result?.identities || []
+      console.log('[App] Got', identities.length, 'identities')
+
+      if (identities.length > 0) {
+        const active = identities.find((id: any) => id.isActive) || identities[0]
+        setIdentity(active)
+
+        // Load videos for active identity with timeout
+        // Use longer timeout (30s) for initial load as channel may need to sync
+        // Backend smart sync takes up to 25s (15s peer discovery + 10s data sync)
+        if (active?.driveKey) {
+          try {
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Initial listVideos timeout')), 30000)
+            )
+            const listPromise = platformRPC.rpc.listVideos({ channelKey: active.driveKey })
+            const videosResult = await Promise.race([listPromise, timeoutPromise]) as any
+            console.log('[App] Initial load got', videosResult?.videos?.length, 'videos')
+            if (videosResult?.videos?.length > 0) {
+              setVideos(videosResult.videos)
+            }
+            // Don't clear videos on empty result - keep any cached data
+          } catch (err: any) {
+            console.error('[App] Initial video load failed:', err?.message)
+            // Continue without videos - they'll load on next interaction
+          }
         }
       }
-    } else if (isPear) {
-      initPearBackend()
-    } else {
-      // Regular web: mark as ready without backend
-      setReady(true)
+    } catch (err) {
+      console.error('[App] Failed to load initial data:', err)
+    } finally {
       setLoading(false)
     }
   }, [])
@@ -178,32 +197,7 @@ export default function RootLayout() {
     }
   }, [])
 
-  function handleAppStateChange(nextState: AppStateStatus) {
-    if (!platformRPC) return
-
-    if (nextState === 'background') {
-      if (playbackActiveEmitter.isActive) {
-        console.log('[App] Skipping network suspend - playback is active')
-        return
-      }
-      console.log('[App] Suspending network for background')
-      platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
-        console.log('[App] suspendNetwork error:', err?.message)
-      })
-    } else if (nextState === 'active') {
-      console.log('[App] Resuming network from foreground')
-      platformRPC.rpc?.resumeNetwork?.().catch((err: any) => {
-        console.log('[App] resumeNetwork error:', err?.message)
-      })
-
-      if (!platformRPC.isInitialized()) {
-        console.log('[App] Backend not initialized, reinitializing...')
-        initNativeBackend()
-      }
-    }
-  }
-
-  async function initNativeBackend() {
+  const initNativeBackend = useCallback(async () => {
     console.log('[App] Initializing native backend via platform RPC...')
     setBackendError(null)
 
@@ -264,9 +258,9 @@ export default function RootLayout() {
       console.error('[App] Failed to initialize platform RPC:', err)
       setBackendError(err instanceof Error ? err.message : 'Failed to initialize backend')
     }
-  }
+  }, [loadInitialData])
 
-  async function initPearBackend() {
+  const initPearBackend = useCallback(async () => {
     console.log('[App] Initializing Pear desktop backend via platform RPC...')
 
     try {
@@ -322,7 +316,56 @@ export default function RootLayout() {
 
     setReady(true)
     setLoading(false)
-  }
+  }, [loadInitialData])
+
+  const handleAppStateChange = useCallback((nextState: AppStateStatus) => {
+    if (!platformRPC) return
+
+    if (nextState === 'background') {
+      if (playbackActiveEmitter.isActive) {
+        console.log('[App] Skipping network suspend - playback is active')
+        return
+      }
+      console.log('[App] Suspending network for background')
+      platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
+        console.log('[App] suspendNetwork error:', err?.message)
+      })
+    } else if (nextState === 'active') {
+      console.log('[App] Resuming network from foreground')
+      platformRPC.rpc?.resumeNetwork?.().catch((err: any) => {
+        console.log('[App] resumeNetwork error:', err?.message)
+      })
+
+      if (!platformRPC.isInitialized()) {
+        console.log('[App] Backend not initialized, reinitializing...')
+        initNativeBackend()
+      }
+    }
+  }, [initNativeBackend])
+
+  useEffect(() => {
+    if (isNative) {
+      if (Platform.OS === 'android' && Platform.Version >= 33) {
+        PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS).catch(() => {})
+      }
+      initNativeBackend()
+
+      const subscription = AppState.addEventListener('change', handleAppStateChange)
+      return () => {
+        subscription.remove()
+        // Don't terminate worklet if playback is active (e.g., during PiP)
+        if (platformRPC && !playbackActiveEmitter.isActive) {
+          platformRPC.terminatePlatformRPC()
+        }
+      }
+    } else if (isPear) {
+      initPearBackend()
+    } else {
+      // Regular web: mark as ready without backend
+      setReady(true)
+      setLoading(false)
+    }
+  }, [handleAppStateChange, initNativeBackend, initPearBackend])
 
   // Update cache when state changes
   useEffect(() => {
@@ -330,69 +373,6 @@ export default function RootLayout() {
       cachedAppState = { identity, videos, blobServerPort }
     }
   }, [ready, identity, videos, blobServerPort])
-
-  async function loadInitialData() {
-    if (!platformRPC) return
-
-    try {
-      setLoading(true)
-
-      // Load identities
-      const result = await platformRPC.rpc.getIdentities()
-      const identities = result?.identities || []
-      console.log('[App] Got', identities.length, 'identities')
-
-      if (identities.length > 0) {
-        const active = identities.find((id: any) => id.isActive) || identities[0]
-        setIdentity(active)
-
-        // Load videos for active identity with timeout
-        // Use longer timeout (30s) for initial load as channel may need to sync
-        // Backend smart sync takes up to 25s (15s peer discovery + 10s data sync)
-        if (active?.driveKey) {
-          try {
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Initial listVideos timeout')), 30000)
-            )
-            const listPromise = platformRPC.rpc.listVideos({ channelKey: active.driveKey })
-            const videosResult = await Promise.race([listPromise, timeoutPromise]) as any
-            console.log('[App] Initial load got', videosResult?.videos?.length, 'videos')
-            if (videosResult?.videos?.length > 0) {
-              setVideos(videosResult.videos)
-            }
-            // Don't clear videos on empty result - keep any cached data
-          } catch (err: any) {
-            console.error('[App] Initial video load failed:', err?.message)
-            // Continue without videos - they'll load on next interaction
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[App] Failed to load initial data:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const loadIdentityFromBackend = useCallback(async () => {
-    if (!platformRPC) return
-    try {
-      setLoading(true)
-      const result = await platformRPC.rpc.getIdentity()
-      const id = result?.identity
-      // Only update identity if we got a valid one (don't clear existing identity on error)
-      if (id?.driveKey) {
-        setIdentity(id)
-        await loadVideosFromBackend(id.driveKey)
-      } else {
-        console.warn('[App] getIdentity returned no identity, keeping current state')
-      }
-    } catch (err) {
-      console.error('[App] Failed to load identity:', err)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
 
   const loadVideosFromBackend = useCallback(async (driveKey: string, retryCount = 0) => {
     if (!platformRPC) return
@@ -452,13 +432,33 @@ export default function RootLayout() {
     }
   }, [])
 
+  const loadIdentityFromBackend = useCallback(async () => {
+    if (!platformRPC) return
+    try {
+      setLoading(true)
+      const result = await platformRPC.rpc.getIdentity()
+      const id = result?.identity
+      // Only update identity if we got a valid one (don't clear existing identity on error)
+      if (id?.driveKey) {
+        setIdentity(id)
+        await loadVideosFromBackend(id.driveKey)
+      } else {
+        console.warn('[App] getIdentity returned no identity, keeping current state')
+      }
+    } catch (err) {
+      console.error('[App] Failed to load identity:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [loadVideosFromBackend])
+
   const createIdentityHandler = useCallback(async (name: string): Promise<Identity> => {
     if (!platformRPC) throw new Error('RPC not ready')
     setLoading(true)
     try {
       const result = await platformRPC.rpc.createIdentity(name)
       const id = result?.identity
-      setIdentity(id)
+      if (id) setIdentity(id)
       return id
     } finally {
       setLoading(false)
@@ -540,7 +540,7 @@ export default function RootLayout() {
     setLoading(true)
     setBackendError(null)
     initNativeBackend()
-  }, [])
+  }, [initNativeBackend])
 
   const contextValue: AppContextType = {
     ready,

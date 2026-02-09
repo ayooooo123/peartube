@@ -155,6 +155,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const lastClosedTimeRef = useRef<number | null>(null)
   const remotePlayWhileBackgroundedRef = useRef(false)
   const pipExitShouldResumeRef = useRef(false)
+  const pipExitExpectedPlayingRef = useRef(false)
+  const pipExitResumeUntilRef = useRef(0)
+  const pipExitReassertLoggedAtRef = useRef(0)
   const pendingSeekSecondsRef = useRef<number | null>(null)
   const seekConfirmRef = useRef<{ targetSeconds: number; startedAt: number } | null>(null)
   const seekClearTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -187,6 +190,29 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   useEffect(() => { playbackRateRef.current = playbackRate }, [playbackRate])
   useEffect(() => { playerModeRef.current = playerMode }, [playerMode])
   useEffect(() => { pipWindowSizeRef.current = pipWindowSize }, [pipWindowSize])
+
+  const reassertNativePlayAfterPipExit = useCallback((reason: string) => {
+    if (Platform.OS !== 'android') return
+    if (isInPipModeRef.current) return
+    if (!pipExitExpectedPlayingRef.current) return
+    const now = Date.now()
+    if (now > pipExitResumeUntilRef.current) return
+
+    // Some Android builds briefly pause the underlying player during the PiP->fullscreen
+    // transition (surface re-attach / audio focus). If JS ignores the pause event to
+    // keep UI stable, we still need to *reassert* play on the native player.
+    try {
+      playerRef.current?.play?.()
+    } catch (e) {
+      if (__DEV__) console.warn('[VideoPlayerContext] Failed to reassert play after PiP exit:', reason, e)
+    }
+
+    // Avoid log spam while still surfacing what happened.
+    if (__DEV__ && now - pipExitReassertLoggedAtRef.current > 1000) {
+      pipExitReassertLoggedAtRef.current = now
+      console.log('[VideoPlayerContext] Reasserting play after PiP exit:', reason)
+    }
+  }, [])
 
   const mediaSessionActiveRef = useRef(false)
   const setMediaSessionActive = useCallback((active: boolean) => {
@@ -282,30 +308,34 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   useEffect(() => {
     if (Platform.OS === 'web') return
 
-      const handleAppStateChange = async (nextState: AppStateStatus) => {
-      const goingToBackground = nextState === 'background' || nextState === 'inactive'
-      const comingToForeground = nextState === 'active'
+       const handleAppStateChange = async (nextState: AppStateStatus) => {
+       const goingToBackground = nextState === 'background' || nextState === 'inactive'
+       const comingToForeground = nextState === 'active'
 
       if (goingToBackground && !isBackgroundedRef.current) {
         isBackgroundedRef.current = true
         wasPlayingWhenBackgroundedRef.current = isPlayingRef.current
         console.log('[VideoPlayerContext] Going to background, wasPlaying:', isPlayingRef.current)
-      } else if (comingToForeground && isBackgroundedRef.current) {
-        isBackgroundedRef.current = false
-        console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current)
+       } else if (comingToForeground && isBackgroundedRef.current) {
+         isBackgroundedRef.current = false
+         const wasInPip = isInPipModeRef.current
+         console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current, 'wasInPiP:', wasInPip)
 
-        console.log('[VideoPlayerContext] Clearing PiP state on foreground')
-        isInPipModeRef.current = false
-        setIsInPipMode(false)
-        setPipWindowSize(null)
-        if (pipTransitionTimeoutRef.current) {
-          clearTimeout(pipTransitionTimeoutRef.current)
-          pipTransitionTimeoutRef.current = null
-        }
-        if (pipTransitionTimeoutRef.current) {
-          clearTimeout(pipTransitionTimeoutRef.current)
-          pipTransitionTimeoutRef.current = null
-        }
+         // IMPORTANT: Don't clear PiP state on foreground if we were in PiP.
+         // When returning from PiP, Android can deliver the AppState "active" event
+         // before the native PiP exit callback reaches JS. Clearing the ref here
+         // makes the PiP exit handler think we were never in PiP, so it won't
+         // restore playback state (leading to unintended pauses).
+         if (!wasInPip) {
+           console.log('[VideoPlayerContext] Clearing PiP state on foreground')
+           isInPipModeRef.current = false
+           setIsInPipMode(false)
+           setPipWindowSize(null)
+           if (pipTransitionTimeoutRef.current) {
+             clearTimeout(pipTransitionTimeoutRef.current)
+             pipTransitionTimeoutRef.current = null
+           }
+         }
 
         if (!currentVideoRef.current) {
           restoreLastClosedVideo('foreground')
@@ -321,17 +351,19 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           }
         }
 
-        if (wasPlayingWhenBackgroundedRef.current && durationRef.current > 0) {
-          const seekValue = currentTimeRef.current / durationRef.current
-          setSeekPosition(seekValue)
-          setTimeout(() => setSeekPosition(undefined), 100)
-        }
-      }
-    }
+         // Foreground seek "nudge" is useful after backgrounding, but it can cause
+         // audible/visible stutter when returning from PiP (single-player continues).
+         if (!wasInPip && wasPlayingWhenBackgroundedRef.current && durationRef.current > 0) {
+           const seekValue = currentTimeRef.current / durationRef.current
+           setSeekPosition(seekValue)
+           setTimeout(() => setSeekPosition(undefined), 100)
+         }
+       }
+     }
 
-  const subscription = AppState.addEventListener('change', handleAppStateChange)
-  return () => subscription.remove()
- }, [forceReloadPlayback, restoreLastClosedVideo])
+    const subscription = AppState.addEventListener('change', handleAppStateChange)
+    return () => subscription.remove()
+  }, [forceReloadPlayback, restoreLastClosedVideo])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
@@ -376,7 +408,15 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           break
         case 'pause':
           console.log('[VideoPlayerContext] Setting isPlaying = false')
-          if (pipExitShouldResumeRef.current) {
+          if (
+            Platform.OS === 'android' &&
+            !isInPipModeRef.current &&
+            pipExitExpectedPlayingRef.current &&
+            Date.now() <= pipExitResumeUntilRef.current
+          ) {
+            // Android PiP exit can emit a spurious pause from MediaSession/AudioFocus.
+            // Keep UI stable and immediately re-assert play to avoid an audible gap.
+            reassertNativePlayAfterPipExit('remote-pause-during-pip-exit')
             return
           }
           setIsPlaying(false)
@@ -420,7 +460,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     })
 
     return () => subscription.remove()
-  }, [restoreLastClosedVideo])
+  }, [restoreLastClosedVideo, reassertNativePlayAfterPipExit])
 
   // Audio interruption listener (iOS only) - Android relies on remote commands from AudioFocus
   useEffect(() => {
@@ -465,6 +505,18 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       const wasInPip = isInPipModeRef.current
 
       console.log('[VideoPlayerContext] PiP event raw:', event.isInPictureInPicture, 'wasInPip:', wasInPip, 'width:', event.width, 'height:', event.height)
+
+      // IMPORTANT: Mark PiP exit transition immediately.
+      // Some devices emit a MediaSession "pause" (and/or VLC onPaused) right as the
+      // PiP window is closed, BEFORE our debounced/timeout PiP handler runs. If we let
+      // that pause flip `isPlaying=false`, the native player will pause briefly and
+      // you hear a gap. Precomputing expectedPlaying here lets us ignore those pauses.
+      if (!event.isInPictureInPicture && wasInPip) {
+        const expectedPlaying = Boolean(event.isPlaying ?? wasPlayingWhenPipEnteredRef.current ?? isPlayingRef.current)
+        pipExitExpectedPlayingRef.current = expectedPlaying
+        pipExitShouldResumeRef.current = expectedPlaying
+        pipExitResumeUntilRef.current = expectedPlaying ? (Date.now() + 2000) : 0
+      }
 
       // Only debounce if BOTH boolean AND dimensions are identical
       // This ensures dimension changes are always processed, even if boolean is the same
@@ -522,6 +574,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           const shouldResume = event.isPlaying ?? wasPlayingWhenPipEnteredRef.current
           console.log('[VideoPlayerContext] PiP closed, restoring playback:', shouldResume)
           pipExitShouldResumeRef.current = shouldResume
+          pipExitExpectedPlayingRef.current = Boolean(shouldResume)
+          pipExitResumeUntilRef.current = shouldResume ? Math.max(pipExitResumeUntilRef.current, Date.now() + 2000) : 0
           wasPlayingWhenPipEnteredRef.current = false
           // Restore the playerMode that was active before PiP entry
           const modeToRestore = playerModeBeforePipRef.current
@@ -530,6 +584,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           // Single-player architecture: same player continues, position is already synced
           setPlayerMode(modeToRestore)
           setIsPlaying(shouldResume)
+
+          if (shouldResume) {
+            // Proactively reassert play during the first few frames after PiP exit.
+            // This is a no-op on healthy devices but prevents short silent gaps on others.
+            reassertNativePlayAfterPipExit('pip-exit-immediate')
+            setTimeout(() => reassertNativePlayAfterPipExit('pip-exit+120ms'), 120)
+            setTimeout(() => reassertNativePlayAfterPipExit('pip-exit+320ms'), 320)
+          }
         }
       })
     })
@@ -537,7 +599,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     return () => {
       subscription.remove()
     }
-  }, [])
+  }, [reassertNativePlayAfterPipExit])
 
   // Subscribe to video stats events from backend
   useEffect(() => {
@@ -751,9 +813,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const lastMediaSessionUpdateRef = useRef(0)
   const onProgress = useCallback((data: { currentTime: number; duration: number }) => {
-    if (Platform.OS === 'android' && pipExitShouldResumeRef.current && !isInPipModeRef.current) {
+    if (Platform.OS === 'android' && pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
       console.log('[VideoPlayerContext] PiP exit resume confirmed via progress')
       pipExitShouldResumeRef.current = false
+      pipExitExpectedPlayingRef.current = false
+      pipExitResumeUntilRef.current = 0
     }
     const timeS = data.currentTime / 1000
     const durationS = data.duration > 0 ? data.duration / 1000 : 0
@@ -822,9 +886,17 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [tryApplyPendingSeek])
 
   const onPaused = useCallback(() => {
-    if (Platform.OS === 'android' && pipExitShouldResumeRef.current && !isInPipModeRef.current) {
-      console.log('[VideoPlayerContext] Ignoring pause after PiP exit')
-      return
+    if (Platform.OS === 'android' && pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
+      // A pause right after PiP exit is often transient. Reassert play for a short window.
+      reassertNativePlayAfterPipExit('vlc-paused-during-pip-exit')
+
+      // If we keep seeing pauses beyond the grace window, accept the pause
+      // so the UI can reflect the real state.
+      if (Date.now() <= pipExitResumeUntilRef.current) {
+        return
+      }
+      pipExitShouldResumeRef.current = false
+      pipExitExpectedPlayingRef.current = false
     }
     console.log('[VideoPlayerContext] VLC paused')
     setIsPlaying(false)
@@ -836,7 +908,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         rate: playbackRateRef.current,
       }).catch(() => {})
     }
-  }, [])
+  }, [reassertNativePlayAfterPipExit])
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
     console.log('[VideoPlayerContext] VLC buffering:', data?.isBuffering)

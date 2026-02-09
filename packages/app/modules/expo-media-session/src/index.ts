@@ -291,6 +291,8 @@ export interface PictureInPictureEvent {
   isPreparing?: boolean
   width?: number
   height?: number
+  // Android only: current playback state as known by MediaSession
+  isPlaying?: boolean
 }
 
 /**

@@ -362,14 +362,16 @@ export class PublicFeedManager {
       return;
     }
 
-    // Send both formats for backward compatibility:
-    // - keys: array of driveKey strings (legacy)
-    // - entries: array of {driveKey, publicBeeKey} objects (new)
-    const keys = Array.from(this.entries.keys());
-    const entries = Array.from(this.entries.values()).map(e => ({
+    const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
+
+    // Pre-alpha: the public feed is PublicBee-only. We only advertise entries
+    // that include a valid publicBeeKey so viewers can fetch instantly without Autobase.
+    const values = Array.from(this.entries.values()).filter(e => isValidKey(e.publicBeeKey))
+    const keys = values.map(e => e.driveKey)
+    const entries = values.map(e => ({
       driveKey: e.driveKey,
-      publicBeeKey: e.publicBeeKey || null
-    }));
+      publicBeeKey: e.publicBeeKey
+    }))
     const msg = { type: 'HAVE_FEED', keys, entries };
 
     console.log('[PublicFeed] Sending HAVE_FEED with', keys.length, 'entries');
@@ -392,12 +394,13 @@ export class PublicFeedManager {
     // Handle HAVE_FEED - peer is sharing their known channels
     if (msg.type === 'HAVE_FEED') {
       let added = 0;
+      const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
 
       // Prefer new entries format (with publicBeeKey)
       if (msg.entries && Array.isArray(msg.entries)) {
         console.log('[PublicFeed] HAVE_FEED received with', msg.entries.length, 'entries (new format)');
         for (const entry of msg.entries) {
-          if (entry.driveKey && this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey)) {
+          if (entry.driveKey && isValidKey(entry.publicBeeKey) && this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey)) {
             added++;
           }
         }
@@ -421,6 +424,8 @@ export class PublicFeedManager {
     // Handle SUBMIT_CHANNEL - peer is broadcasting a new channel
     else if (msg.type === 'SUBMIT_CHANNEL' && msg.key) {
       console.log('[PublicFeed] SUBMIT_CHANNEL received:', msg.key?.slice(0, 16), 'publicBee:', msg.publicBeeKey?.slice(0, 16) || 'none');
+      const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
+      if (!isValidKey(msg.publicBeeKey)) return
       if (this.addEntry(msg.key, 'peer', msg.publicBeeKey)) {
         this.onFeedUpdate?.();
         this._schedulePersistDiscovered()
@@ -459,11 +464,18 @@ export class PublicFeedManager {
    * @returns {boolean}
    */
   addEntry(driveKey, source, publicBeeKey = null) {
+    const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
+
+    // Pre-alpha: peer entries must include a PublicBee key.
+    if (source === 'peer' && !isValidKey(publicBeeKey)) {
+      return false
+    }
+
     // Skip if already exists or hidden
     if (this.entries.has(driveKey) || this.hiddenKeys.has(driveKey)) {
       // Update publicBeeKey if we didn't have it before
       const existing = this.entries.get(driveKey)
-      if (existing && !existing.publicBeeKey && publicBeeKey) {
+      if (existing && !existing.publicBeeKey && isValidKey(publicBeeKey)) {
         existing.publicBeeKey = publicBeeKey
         this._schedulePersistDiscovered()
       }
@@ -478,7 +490,7 @@ export class PublicFeedManager {
 
     this.entries.set(driveKey, {
       driveKey,
-      publicBeeKey: publicBeeKey || null, // Key for viewers to use (auto-replicating Hyperbee)
+      publicBeeKey: isValidKey(publicBeeKey) ? publicBeeKey : null, // Key for viewers to use (auto-replicating Hyperbee)
       addedAt: Date.now(),
       source
     });

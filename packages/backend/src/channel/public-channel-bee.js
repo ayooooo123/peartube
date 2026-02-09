@@ -86,9 +86,12 @@ export class PublicChannelBee extends ReadyResource {
    * Best-effort wait for replication to deliver blocks for this bee.
    * On mobile (few peers, slower links), immediate reads often return empty unless we wait a bit.
    *
-   * @param {number} [timeoutMs=5000]
+   * Keep this bounded and short: callers (UI) often retry, so we prefer returning
+   * quickly over blocking for multi-second syncs.
+   *
+   * @param {number} [timeoutMs=1500]
    */
-  async waitForSync(timeoutMs = 5000) {
+  async waitForSync(timeoutMs = 1500) {
     // Only makes sense if we have a core and we're not the writer (writers already have the data locally).
     if (!this.core) return
     if (this.writable) return
@@ -106,7 +109,7 @@ export class PublicChannelBee extends ReadyResource {
   // ============================================
 
   async getMetadata() {
-    await this.waitForSync(4000)
+    await this.waitForSync(1500)
     const node = await this.bee.get('meta')
     return node?.value || null
   }
@@ -132,7 +135,7 @@ export class PublicChannelBee extends ReadyResource {
 
   async listVideos() {
     // Give replication a chance before scanning.
-    await this.waitForSync(4000)
+    await this.waitForSync(1500)
 
     const videos = []
     const stream = this.bee.createReadStream({

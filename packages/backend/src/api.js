@@ -113,6 +113,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
   // The app UI (home tab) re-mounts on navigation and calls getChannelMeta/listVideos each time.
   // Cache recent results in the backend worker so back-navigation is instant.
   const LIST_VIDEOS_CACHE_TTL_MS = 15_000
+  const LIST_VIDEOS_EMPTY_CACHE_TTL_MS = 1_000
   const CHANNEL_META_CACHE_TTL_MS = 30_000
   /** @type {Map<string, Promise<any>>} */
   const prefetchInFlight = new Map()
@@ -186,13 +187,32 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @param {string} driveKey
      * @returns {Promise<ChannelMetadata>}
      */
-    async getChannelMeta(driveKey) {
+    async getChannelMeta(driveKey, publicBeeKey = null) {
       console.log('[API] GET_CHANNEL_META:', driveKey?.slice(0, 16));
       try {
         const cached = channelMetaCache.get(driveKey)
         if (cached && (Date.now() - cached.ts) < CHANNEL_META_CACHE_TTL_MS) {
           return cloneObject(cached.value)
         }
+        // Fast/public-feed path: if publicBeeKey is provided, don't load Autobase.
+        // Viewers should be able to list metadata/videos via the auto-replicating PublicBee.
+        if (publicBeeKey) {
+          const publicBee = await loadPublicBee(ctx, publicBeeKey)
+          const meta = await publicBee.getMetadata().catch(() => null)
+          const videos = await publicBee.listVideos().catch(() => [])
+          const result = {
+            driveKey,
+            name: meta?.name || 'Channel',
+            description: meta?.description || '',
+            avatar: meta?.avatar || null,
+            createdAt: meta?.createdAt || Date.now(),
+            publicKey: meta?.createdBy || null,
+            videoCount: videos?.length || 0
+          }
+          channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
+          return cloneObject(result)
+        }
+
         const channel = await loadChannel(ctx, driveKey)
         await markAsMultiWriterChannel(driveKey)
         const meta = await channel.getMetadata().catch(() => null)
@@ -234,8 +254,13 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       console.log('[API] LIST_VIDEOS for:', driveKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16));
       try {
         const cached = listVideosCache.get(driveKey)
-        if (cached && (Date.now() - cached.ts) < LIST_VIDEOS_CACHE_TTL_MS) {
+        if (cached) {
+          const ttl = Array.isArray(cached.value) && cached.value.length === 0
+            ? LIST_VIDEOS_EMPTY_CACHE_TTL_MS
+            : LIST_VIDEOS_CACHE_TTL_MS
+          if ((Date.now() - cached.ts) < ttl) {
           return cloneArrayOfObjects(cached.value)
+          }
         }
 
         const extractVideoId = (video) => {
@@ -749,7 +774,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       if (!publicFeed) {
         return { entries: [], stats: { totalEntries: 0, hiddenCount: 0, peerCount: 0 } };
       }
-      const feed = publicFeed.getFeed();
+      // Pre-alpha: only return entries with a PublicBee key so UIs never fall back to Autobase.
+      const feed = publicFeed.getFeed().filter(e => typeof e.publicBeeKey === 'string' && e.publicBeeKey.length > 0);
       const stats = publicFeed.getStats();
       console.log(`[API] Returning ${feed.length} feed entries (${stats.peerCount} peers)`);
       return { entries: feed, stats };

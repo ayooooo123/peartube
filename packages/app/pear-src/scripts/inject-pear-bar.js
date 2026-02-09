@@ -22,15 +22,21 @@ const PEAR_CSP = `<meta http-equiv="Content-Security-Policy" content="default-sr
 // Worker client script - ES module that has access to Pear's import resolution
 const WORKER_CLIENT_SCRIPT = `<script type="module" src="./worker-client.js"></script>`
 
+// React Native (Metro web) NativeModules shim.
+// Prevents "__fbBatchedBridgeConfig is not set" by providing a minimal `nativeModuleProxy`.
+const RN_NATIVE_MODULE_PROXY_SHIM = `<script id="peartube-native-module-proxy">(function(){try{var scale=window.devicePixelRatio||1;var dims={width:window.innerWidth||0,height:window.innerHeight||0,scale:scale,fontScale:scale};window.nativeModuleProxy=window.nativeModuleProxy||{SourceCode:{getConstants:function(){return{scriptURL:String(location&&location.href||'')}}},DeviceInfo:{getConstants:function(){return{Dimensions:{window:dims,screen:dims}}}},UIManager:{getConstants:function(){return{ViewManagerNames:[],LazyViewManagersEnabled:false,genericBubblingEventTypes:{},genericDirectEventTypes:{}}},getViewManagerConfig:function(){return null},getConstantsForViewManager:function(){return null},getDefaultEventTypes:function(){return{}}}};window.__PEARTUBE_NATIVE_MODULE_PROXY__=true;}catch(e){}})();</script>`
+
 function processHtmlFile(filePath) {
   let html = readFileSync(filePath, 'utf-8')
 
   // Remove any existing pear-bar injection to allow re-processing
   html = html.replace(/<div id="pear-bar"[^>]*>[\s\S]*?<\/div>\n?/g, '')
+  html = html.replace(/<div id="pear-bar-right"[^>]*>[\s\S]*?<\/div>\n?/g, '')
   html = html.replace(/<style id="pear-bar-css">[\s\S]*?<\/style>\n?/g, '')
   html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>\n?/g, '')
   html = html.replace(/<script src="src\/pear-bridge\.js"><\/script>\n?/g, '')
   html = html.replace(/<script[^>]*src="(?:\.\/)?worker-client\.js"[^>]*><\/script>\n?/g, '')
+  html = html.replace(/<script id="peartube-native-module-proxy">[\s\S]*?<\/script>\n?/g, '')
 
   // Convert module scripts to regular scripts for Pear compatibility
   // Pear's DependencyStream cannot analyze ES module scripts properly
@@ -51,7 +57,7 @@ function processHtmlFile(filePath) {
   html = html.replace('</head>', `${PEAR_BAR_CSS}\n</head>`)
 
   // Inject pear bar after <body>
-  html = html.replace('<body>', `<body>\n${PEAR_BAR_HTML}`)
+  html = html.replace('<body>', `<body>\n${PEAR_BAR_HTML}\n${RN_NATIVE_MODULE_PROXY_SHIM}`)
 
   // Inject worker client script before </body> (after other scripts load, unbundled for Pear require access)
   html = html.replace('</body>', `${WORKER_CLIENT_SCRIPT}\n</body>`)

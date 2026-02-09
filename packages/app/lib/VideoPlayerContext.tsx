@@ -127,6 +127,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const [pipWindowSize, setPipWindowSize] = useState<{ width: number; height: number } | null>(null)
   const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null)
 
+  // Keep PiP window size in a ref so PiP listeners can read latest value
+  // without having to re-subscribe to native events.
+  const pipWindowSizeRef = useRef<{ width: number; height: number } | null>(null)
+
   // Playback position state
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -182,6 +186,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [isPlaying, currentVideo, isInPipMode])
   useEffect(() => { playbackRateRef.current = playbackRate }, [playbackRate])
   useEffect(() => { playerModeRef.current = playerMode }, [playerMode])
+  useEffect(() => { pipWindowSizeRef.current = pipWindowSize }, [pipWindowSize])
 
   const mediaSessionActiveRef = useRef(false)
   const setMediaSessionActive = useCallback((active: boolean) => {
@@ -259,7 +264,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       duration,
       artworkUrl: currentVideo.thumbnailUrl ?? undefined,
     }).catch(() => {})
-  }, [currentVideo?.id, currentVideo?.title, currentVideo?.thumbnailUrl, currentVideo?.channel?.name, duration])
+  }, [currentVideo, duration])
 
   // Ensure playback state reflects play/pause changes even if VLC events lag
   useEffect(() => {
@@ -326,7 +331,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const subscription = AppState.addEventListener('change', handleAppStateChange)
   return () => subscription.remove()
-}, [])
+ }, [forceReloadPlayback, restoreLastClosedVideo])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
@@ -335,7 +340,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [playerMode, isInPipMode])
 
 // MediaSession remote command listener (mobile only)
-useEffect(() => {
+ useEffect(() => {
     if (Platform.OS === 'web') return
 
     const subscription = MediaSession.addRemoteCommandListener((event) => {
@@ -415,7 +420,7 @@ useEffect(() => {
     })
 
     return () => subscription.remove()
-  }, [])
+  }, [restoreLastClosedVideo])
 
   // Audio interruption listener (iOS only) - Android relies on remote commands from AudioFocus
   useEffect(() => {
@@ -464,7 +469,7 @@ useEffect(() => {
       // Only debounce if BOTH boolean AND dimensions are identical
       // This ensures dimension changes are always processed, even if boolean is the same
       const sameState = event.isInPictureInPicture === wasInPip
-      const sameDimensions = event.width === pipWindowSize?.width && event.height === pipWindowSize?.height
+      const sameDimensions = event.width === pipWindowSizeRef.current?.width && event.height === pipWindowSizeRef.current?.height
       const tooSoon = now - lastPipEventTimeRef.current < 100
 
       if (sameState && sameDimensions && tooSoon) {
@@ -576,15 +581,8 @@ useEffect(() => {
       if (sameVideo) {
         console.log('[VideoPlayerContext] Received stats event:', stats.progress + '%')
         setVideoStats(stats)
-        // Drop the "connecting" overlay once stats show real activity.
-        setIsLoading((prev) => {
-          if (!prev) return prev
-          if (!stats) return prev
-          if (stats.isComplete) return false
-          if (typeof stats.progress === 'number' && stats.progress > 0) return false
-          if (stats.status && stats.status !== 'connecting' && stats.status !== 'resolving') return false
-          return prev
-        })
+        // Keep the loading overlay up until the player actually starts.
+        // (We still display live P2P stats while waiting.)
       }
     })
     return () => { unsubscribe() }
@@ -607,9 +605,10 @@ useEffect(() => {
     setIsPlaying(true)
     setPlayerMode('fullscreen')
     setVideoStats(null)
-    // Don't show loading overlay - let video start immediately
-    // Loading state will be set by onBuffering if VLC needs to buffer
-    setIsLoading(false)
+    // Show loading overlay until playback actually starts.
+    // Some player builds don't reliably emit initial buffering events, which can
+    // otherwise lead to a confusing black screen while data is loading.
+    setIsLoading(true)
     setCurrentTime(0)
     setDuration(0)
     setVideoAspectRatio(null)
@@ -937,9 +936,9 @@ useEffect(() => {
     // High-frequency dependencies (progress - NOTE: this still causes re-renders at 4Hz)
     currentTime, duration, progress,
     // Callbacks (stable references via useCallback)
-    setIsInPipMode, setPipWindowSize, loadAndPlayVideo, pauseVideo, resumeVideo,
+    loadAndPlayVideo, pauseVideo, resumeVideo,
     closeVideo, minimizePlayer, maximizePlayer, seekTo, seekBy, setPlaybackRate,
-    setVideoStats, setIsLoading, onProgress, onPlaying, onPaused, onBuffering,
+    onProgress, onPlaying, onPaused, onBuffering,
     onEnded, onError, onVideoStateChange,
   ])
 

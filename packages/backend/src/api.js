@@ -879,6 +879,35 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         return Math.max(1, Math.min(totalBlocks, headBlocks))
       }
 
+      // Some containers (notably MP4 without faststart, MKV cues, etc.) may require reads
+      // from the end or middle of the file during demuxer init. If the blob server supports
+      // Range requests (or the player seeks), having these blocks available dramatically
+      // reduces startup time.
+      const getTailBlockCount = (totalBlocks, totalBytes) => {
+        if (!totalBlocks || totalBlocks <= 0) return 0
+        if (!totalBytes || totalBytes <= 0) {
+          return Math.min(totalBlocks, 16)
+        }
+        const bytesPerBlock = totalBytes / totalBlocks
+        const minTailBytes = 2 * 1024 * 1024
+        const maxTailBytes = 16 * 1024 * 1024
+        const adaptiveBytes = Math.round(totalBytes * 0.01)
+        const tailTargetBytes = Math.min(maxTailBytes, Math.max(minTailBytes, adaptiveBytes))
+        const tailBlocks = Math.ceil(tailTargetBytes / bytesPerBlock)
+        return Math.max(1, Math.min(totalBlocks, tailBlocks))
+      }
+
+      const getMidBlockCount = (totalBlocks, totalBytes) => {
+        if (!totalBlocks || totalBlocks <= 0) return 0
+        if (!totalBytes || totalBytes <= 0) {
+          return Math.min(totalBlocks, 8)
+        }
+        const bytesPerBlock = totalBytes / totalBlocks
+        const targetBytes = 2 * 1024 * 1024
+        const midBlocks = Math.ceil(targetBytes / bytesPerBlock)
+        return Math.max(1, Math.min(totalBlocks, midBlocks))
+      }
+
       console.log('[API] ===== STARTING PREFETCH =====');
       console.log('[API] Channel:', driveKey?.slice(0, 16));
       console.log('[API] Path:', videoPath);
@@ -977,6 +1006,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
 
           const bytesPerBlock = totalBlocks > 0 ? totalBytes / totalBlocks : 0
           const headBlocks = getHeadBlockCount(totalBlocks, totalBytes)
+          const tailBlocks = getTailBlockCount(totalBlocks, totalBytes)
+          const midBlocks = getMidBlockCount(totalBlocks, totalBytes)
           let downloadedBlocks = 0
           let downloadedBytesTotal = initialAvailable * bytesPerBlock
           let downloadSpeed = 0
@@ -1100,27 +1131,65 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               })
             }
 
-            if (headBlocks > 0 && headBlocks < totalBlocks) {
-              const headEnd = startBlock + headBlocks
-              console.log('[API] Prefetch head range (blobs):', headBlocks, 'blocks')
-              const headRange = core.download({ start: startBlock, end: headEnd })
-              let headTimeout = null
-              headTimeout = setTimeout(() => {
-                console.log('[API] Head prefetch slow, starting full download in parallel')
+            const startInitPrefetch = () => {
+              // Head prefetch: prioritize container headers and early samples.
+              if (headBlocks > 0 && headBlocks < totalBlocks) {
+                const headEnd = Math.min(endBlock, startBlock + headBlocks)
+                console.log('[API] Prefetch head range (blobs):', (headEnd - startBlock), 'blocks')
+                const headRange = core.download({ start: startBlock, end: headEnd })
+                let headTimeout = null
+                headTimeout = setTimeout(() => {
+                  console.log('[API] Head prefetch slow, starting full download in parallel')
+                  startFullDownload()
+                }, 1500)
+                headRange.done().then(() => {
+                  console.log('[API] Head prefetch complete (blobs)')
+                  if (headTimeout) clearTimeout(headTimeout)
+                  startFullDownload()
+                }).catch(err => {
+                  console.log('[API] Head prefetch error (blobs):', err?.message)
+                  if (headTimeout) clearTimeout(headTimeout)
+                  startFullDownload()
+                })
+              } else {
                 startFullDownload()
-              }, 1500)
-              headRange.done().then(() => {
-                console.log('[API] Head prefetch complete (blobs)')
-                if (headTimeout) clearTimeout(headTimeout)
-                startFullDownload()
-              }).catch(err => {
-                console.log('[API] Head prefetch error (blobs):', err?.message)
-                if (headTimeout) clearTimeout(headTimeout)
-                startFullDownload()
-              })
-            } else {
-              startFullDownload()
+              }
+
+              // Tail prefetch: helps players that seek for indices (MP4 moov-at-end, MKV cues).
+              if (tailBlocks > 0 && tailBlocks < totalBlocks) {
+                const tailStart = Math.max(startBlock, endBlock - tailBlocks)
+                // Avoid duplicating the head range on tiny files.
+                if (tailStart > startBlock + Math.max(1, headBlocks)) {
+                  console.log('[API] Prefetch tail range (blobs):', (endBlock - tailStart), 'blocks')
+                  core.download({ start: tailStart, end: endBlock }).done().then(() => {
+                    console.log('[API] Tail prefetch complete (blobs)')
+                  }).catch(err => {
+                    console.log('[API] Tail prefetch error (blobs):', err?.message)
+                  })
+                }
+              }
+
+              // Mid prefetch: some files place indexes/headers in the middle; keep it small.
+              if (midBlocks > 0 && midBlocks < totalBlocks && totalBlocks > (headBlocks + tailBlocks + midBlocks + 4)) {
+                const midCenter = startBlock + Math.floor(totalBlocks / 2)
+                const midStart = Math.max(startBlock, Math.min(endBlock - 1, midCenter - Math.floor(midBlocks / 2)))
+                const midEnd = Math.min(endBlock, midStart + midBlocks)
+                const headEnd = Math.min(endBlock, startBlock + headBlocks)
+                const tailStart = Math.max(startBlock, endBlock - tailBlocks)
+                const overlapsHead = midStart < headEnd && midEnd > startBlock
+                const overlapsTail = midStart < endBlock && midEnd > tailStart
+                if (!overlapsHead && !overlapsTail && midEnd > midStart) {
+                  console.log('[API] Prefetch mid range (blobs):', (midEnd - midStart), 'blocks')
+                  core.download({ start: midStart, end: midEnd }).done().then(() => {
+                    console.log('[API] Mid prefetch complete (blobs)')
+                  }).catch(err => {
+                    console.log('[API] Mid prefetch error (blobs):', err?.message)
+                  })
+                }
+              }
             }
+
+            startInitPrefetch()
           } else if (videoStats) {
             // Keep stats fresh for cached videos so upload speeds can update.
             videoStats.emitStats(driveKey, videoPath, true) // force=true for cached videos

@@ -245,15 +245,17 @@ export async function initPlatformRPC(config: {
   }
 
   // Create worklet and HRPC client before starting to avoid missing early events.
-  worklet = new WorkletClass();
-  hrpc = new HRPCClass(worklet.IPC);
+  const localWorklet = new WorkletClass();
+  const localHrpc = new HRPCClass(localWorklet.IPC);
+  worklet = localWorklet;
+  hrpc = localHrpc;
   console.log('[Platform RPC] HRPC client initialized');
 
-  console.log('[Platform RPC] IPC type:', worklet.IPC?.constructor?.name);
+  console.log('[Platform RPC] IPC type:', localWorklet.IPC?.constructor?.name);
 
   const { decode: decodeHrpcMessage } = require('@peartube/spec/messages');
 
-  const safeDispatch = <T extends unknown>(label: string, callbacks: Array<(data: T) => void>, data: T) => {
+  const safeDispatch = <T extends unknown>(label: string, callbacks: Array<(data: T) => unknown>, data: T) => {
     callbacks.forEach((cb) => {
       if (typeof cb !== 'function') return;
       try {
@@ -386,20 +388,20 @@ export async function initPlatformRPC(config: {
   }
 
   // Wire event handlers before starting the worklet.
-  hrpc.onEventReady(handleReady);
-  hrpc.onEventError(handleError);
-  hrpc.onEventVideoStats(handleVideoStats);
-  hrpc.onEventUploadProgress(handleUploadProgress);
-  hrpc.onEventDownloadProgress(handleDownloadProgress);
-  hrpc.onEventFeedUpdate(handleFeedUpdate);
-  hrpc.onEventLog(handleLog);
-  hrpc.onEventCastDeviceFound(handleCastDeviceFound);
-  hrpc.onEventCastDeviceLost(handleCastDeviceLost);
-  hrpc.onEventCastPlaybackState(handleCastPlaybackState);
-  hrpc.onEventCastTimeUpdate(handleCastTimeUpdate);
+  localHrpc.onEventReady(handleReady);
+  localHrpc.onEventError(handleError);
+  localHrpc.onEventVideoStats(handleVideoStats);
+  localHrpc.onEventUploadProgress(handleUploadProgress);
+  localHrpc.onEventDownloadProgress(handleDownloadProgress);
+  localHrpc.onEventFeedUpdate(handleFeedUpdate);
+  localHrpc.onEventLog(handleLog);
+  localHrpc.onEventCastDeviceFound(handleCastDeviceFound);
+  localHrpc.onEventCastDeviceLost(handleCastDeviceLost);
+  localHrpc.onEventCastPlaybackState(handleCastPlaybackState);
+  localHrpc.onEventCastTimeUpdate(handleCastTimeUpdate);
 
   // Start worklet after handlers are registered.
-  worklet.start('/backend.bundle', config.backendSource, [storagePath, downloaderWorkerPath]);
+  localWorklet.start('/backend.bundle', config.backendSource, [storagePath, downloaderWorkerPath]);
   console.log('[Platform RPC] Worklet started');
 }
 
@@ -555,7 +557,7 @@ function handleTranscodeMessage(
   console.log('[Platform RPC] Transcode message:', msg.type);
 
   switch (msg.type) {
-    case 'ready':
+    case 'ready': {
       // Send start command to worklet
       console.log('[Platform RPC] Transcode worklet ready, sending start command');
       const startMsg = JSON.stringify({
@@ -566,6 +568,7 @@ function handleTranscodeMessage(
       }) + '\n';
       transcodeWorklet?.IPC.write(Buffer.from(startMsg));
       break;
+    }
 
     case 'progress':
       if (_transcodeCallbacks.onProgress) {

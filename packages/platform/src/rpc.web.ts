@@ -117,34 +117,50 @@ function setupEventListeners() {
 
     if (channelKey && videoId && stats) {
       console.log('[Platform RPC] Dispatching to', eventCallbacks.videoStats.length, 'listeners');
-      eventCallbacks.videoStats.forEach(cb => cb({ channelKey, videoId, stats }));
+      eventCallbacks.videoStats.forEach((cb) => {
+        cb({ channelKey, videoId, stats });
+      });
     } else {
-      eventCallbacks.videoStats.forEach(cb => cb(data));
+      eventCallbacks.videoStats.forEach((cb) => {
+        cb(data);
+      });
     }
   }) as EventListener);
 
   window.addEventListener('pearUploadProgress', ((e: CustomEvent) => {
-    eventCallbacks.uploadProgress.forEach(cb => cb(e.detail));
+    eventCallbacks.uploadProgress.forEach((cb) => {
+      cb(e.detail);
+    });
   }) as EventListener);
 
   window.addEventListener('pearFeedUpdate', ((e: CustomEvent) => {
-    eventCallbacks.feedUpdate.forEach(cb => cb(e.detail));
+    eventCallbacks.feedUpdate.forEach((cb) => {
+      cb(e.detail);
+    });
   }) as EventListener);
 
   window.addEventListener('pearCastDeviceFound', ((e: CustomEvent) => {
-    eventCallbacks.castDeviceFound.forEach(cb => cb(e.detail));
+    eventCallbacks.castDeviceFound.forEach((cb) => {
+      cb(e.detail);
+    });
   }) as EventListener);
 
   window.addEventListener('pearCastDeviceLost', ((e: CustomEvent) => {
-    eventCallbacks.castDeviceLost.forEach(cb => cb(e.detail));
+    eventCallbacks.castDeviceLost.forEach((cb) => {
+      cb(e.detail);
+    });
   }) as EventListener);
 
   window.addEventListener('pearCastPlaybackState', ((e: CustomEvent) => {
-    eventCallbacks.castPlaybackState.forEach(cb => cb(e.detail));
+    eventCallbacks.castPlaybackState.forEach((cb) => {
+      cb(e.detail);
+    });
   }) as EventListener);
 
   window.addEventListener('pearCastTimeUpdate', ((e: CustomEvent) => {
-    eventCallbacks.castTimeUpdate.forEach(cb => cb(e.detail));
+    eventCallbacks.castTimeUpdate.forEach((cb) => {
+      cb(e.detail);
+    });
   }) as EventListener);
 }
 
@@ -184,7 +200,9 @@ export async function initPlatformRPC(): Promise<void> {
     console.log('[Platform RPC] Initialized, blobServerPort:', _blobServerPort);
 
     // Fire ready callbacks
-    eventCallbacks.ready.forEach(cb => cb({ blobServerPort: _blobServerPort! }));
+    eventCallbacks.ready.forEach((cb) => {
+      cb({ blobServerPort: _blobServerPort! });
+    });
   } catch (err) {
     console.error('[Platform RPC] Failed to initialize:', err);
     throw err;
@@ -238,7 +256,9 @@ function normalizeParam<T extends string>(
   key: T
 ): { [K in T]: string } {
   if (typeof arg === 'string') {
-    return { [key]: arg } as { [K in T]: string };
+    const out = Object.create(null) as { [K in T]: string };
+    out[key] = arg;
+    return out;
   }
   return arg as { [K in T]: string };
 }

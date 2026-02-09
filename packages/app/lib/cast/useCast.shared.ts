@@ -152,7 +152,9 @@ const sharedConnection = {
 
 function notifyConnectedDevice(device: CastDevice | null) {
   sharedConnection.connectedDevice = device
-  sharedConnection.listeners.forEach((listener) => listener(device))
+  sharedConnection.listeners.forEach((listener) => {
+    listener(device)
+  })
 }
 
 function subscribeConnectedDevice(listener: ConnectedDeviceListener) {
@@ -186,6 +188,12 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
   })
 
   const mountedRef = useRef(true)
+
+  // Serialize Chromecast/FCast commands that are known to be crash-prone when fired rapidly
+  // (e.g. switching videos quickly while already casting).
+  const playSequenceRef = useRef(Promise.resolve())
+  const playRequestIdRef = useRef(0)
+  const lastPlayAtRef = useRef(0)
 
   useEffect(() => {
     connectedDeviceRef.current = connectedDevice
@@ -398,12 +406,12 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       const result = await rpc.castConnect({ deviceId })
 
       if (result?.success) {
-        let device = result?.device || devices.find(d => d.id === deviceId) || null
+        let device = result?.device || devices.find((d: CastDevice) => d.id === deviceId) || null
         if (!device) {
           const refreshed = await rpc.castGetDevices({})
           if (refreshed?.devices) {
             setDevices(refreshed.devices)
-            device = refreshed.devices.find(d => d.id === deviceId) || null
+            device = refreshed.devices.find((d: CastDevice) => d.id === deviceId) || null
           }
         }
         if (!device) {
@@ -457,6 +465,9 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     if (!rpc) return false
     const device = connectedDeviceRef.current || connectedDevice
 
+    // Last-request-wins: if the app switches videos rapidly, only execute the newest play.
+    const requestId = ++playRequestIdRef.current
+
     // For Chromecast with unsupported formats, the worker will auto-transcode
     // Log a warning but don't block - let the worker handle it
     if (device?.protocol === 'chromecast') {
@@ -473,30 +484,69 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       }
     }
 
-    try {
-      const result = await rpc.castPlay({
-        url: options.url,
-        contentType: options.contentType,
-        title: options.title || '',
-        thumbnail: options.thumbnail || '',
-        time: Math.floor(options.time || 0),
-        volume: normalizeVolumeToCast(playbackState.volume),
-        duration: options.duration || 0,
-      })
+    // Mark as buffering immediately so the UI communicates "working".
+    setPlaybackState(prev => ({ ...prev, state: 'buffering' }))
 
-      if (result?.success) {
-        setPlaybackState(prev => ({ ...prev, state: 'playing' }))
-        return true
+    const run = async (): Promise<boolean> => {
+      // If a newer play request arrived while we were queued, drop this one.
+      if (requestId !== playRequestIdRef.current) return false
+
+      // Rate-limit LOAD calls. Native layers can crash if we spam LOAD back-to-back.
+      const minIntervalMs = 1200
+      const sinceLast = Date.now() - lastPlayAtRef.current
+      if (sinceLast < minIntervalMs) {
+        await new Promise<void>((resolve) => setTimeout(resolve, minIntervalMs - sinceLast))
+        if (requestId !== playRequestIdRef.current) return false
       }
 
-      console.error('[useCast] play failed:', result?.error)
-      showCastError(`Chromecast failed to start playback.${result?.error ? ` ${result.error}` : ''}`)
-      return false
-    } catch (err) {
-      console.error('[useCast] play failed:', err)
-      showCastError('Chromecast failed to start playback.')
-      return false
+      // Best-effort stop before loading a new item. Not required by the protocol,
+      // but reduces edge-case churn when rapidly switching videos.
+      try {
+        await rpc.castStop({})
+      } catch {}
+
+      // Small delay to let the receiver settle between STOP and LOAD.
+      await new Promise<void>((resolve) => setTimeout(resolve, 120))
+      if (requestId !== playRequestIdRef.current) return false
+
+      try {
+        lastPlayAtRef.current = Date.now()
+        const result = await rpc.castPlay({
+          url: options.url,
+          contentType: options.contentType,
+          title: options.title || '',
+          thumbnail: options.thumbnail || '',
+          time: Math.floor(options.time || 0),
+          volume: normalizeVolumeToCast(playbackState.volume),
+          duration: options.duration || 0,
+        })
+
+        if (requestId !== playRequestIdRef.current) return false
+
+        if (result?.success) {
+          setPlaybackState(prev => ({ ...prev, state: 'playing' }))
+          return true
+        }
+
+        console.error('[useCast] play failed:', result?.error)
+        setPlaybackState(prev => ({ ...prev, state: 'idle' }))
+        showCastError(`Chromecast failed to start playback.${result?.error ? ` ${result.error}` : ''}`)
+        return false
+      } catch (err) {
+        console.error('[useCast] play failed:', err)
+        setPlaybackState(prev => ({ ...prev, state: 'idle' }))
+        showCastError('Chromecast failed to start playback.')
+        return false
+      }
     }
+
+    // Chain onto the previous play call (serialize).
+    const chained = playSequenceRef.current.then(run, run)
+    playSequenceRef.current = chained.then(
+      () => undefined,
+      () => undefined
+    )
+    return chained
   }, [rpc, connectedDevice, playbackState.volume])
 
   // Pause

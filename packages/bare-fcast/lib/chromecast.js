@@ -240,8 +240,27 @@ export class ChromecastDevice extends EventEmitter {
     this._loadInProgress = false
     this._lastLoadTime = 0
     this._loadDebounceMs = 1000 // Minimum 1 second between LOAD calls
+    // If play() is called repeatedly during debounce, keep only the latest request.
+    this._pendingLoadOptions = null
+    this._pendingLoadTimer = null
     this._recentWrites = []
     this._recentWriteLimit = 128
+  }
+
+  _schedulePendingLoad(delayMs) {
+    if (this._pendingLoadTimer) {
+      try { clearTimeout(this._pendingLoadTimer) } catch (e) {}
+      this._pendingLoadTimer = null
+    }
+
+    const ms = Math.max(0, Math.floor(delayMs || 0))
+    this._pendingLoadTimer = setTimeout(() => {
+      this._pendingLoadTimer = null
+      const next = this._pendingLoadOptions
+      this._pendingLoadOptions = null
+      if (!next) return
+      this.play(next).catch(() => {})
+    }, ms)
   }
 
   /**
@@ -383,11 +402,15 @@ export class ChromecastDevice extends EventEmitter {
     // Debounce: prevent rapid consecutive LOAD calls that cause native crashes
     const now = Date.now()
     if (this._loadInProgress) {
-      console.warn('[Chromecast] LOAD already in progress, ignoring duplicate play()')
+      console.warn('[Chromecast] LOAD already in progress, queueing latest play()')
+      this._pendingLoadOptions = options
+      this._schedulePendingLoad(250)
       return
     }
     if (now - this._lastLoadTime < this._loadDebounceMs) {
-      console.warn('[Chromecast] play() called too soon after previous LOAD, ignoring')
+      console.warn('[Chromecast] play() called too soon after previous LOAD, queueing latest')
+      this._pendingLoadOptions = options
+      this._schedulePendingLoad(this._loadDebounceMs - (now - this._lastLoadTime) + 50)
       return
     }
     this._loadInProgress = true
@@ -458,6 +481,9 @@ export class ChromecastDevice extends EventEmitter {
       // Clear load-in-progress after a short delay to allow the LOAD to complete
       setTimeout(() => {
         this._loadInProgress = false
+        if (this._pendingLoadOptions && !this._pendingLoadTimer) {
+          this._schedulePendingLoad(150)
+        }
       }, 500)
     }
   }

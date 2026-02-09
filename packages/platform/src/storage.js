@@ -40,7 +40,9 @@ export function getStoragePath(options = {}) {
   // Bare runtime (mobile backend) - should receive path from argv
   if (isBare()) {
     try {
-      return globalThis.Bare?.argv?.[0] || `./storage`;
+      const arg0 = globalThis.Bare?.argv?.[0];
+      if (typeof arg0 === 'string' && arg0.length > 0) return arg0;
+      return `./storage`;
     } catch (e) {
       return `./storage`;
     }

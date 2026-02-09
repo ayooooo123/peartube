@@ -1,15 +1,17 @@
 /**
  * Studio Tab - Upload and manage videos
  */
-import { useState, useCallback } from 'react'
-import { View, Text, FlatList, Alert, Pressable, TextInput, ActivityIndicator, Platform, Image } from 'react-native'
+import { useRef, useState, useCallback } from 'react'
+import { View, Text, FlatList, Alert, Pressable, TextInput, ActivityIndicator, Platform, Image, AppState } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather, Ionicons } from '@expo/vector-icons'
+import * as DocumentPicker from 'expo-document-picker'
 import * as ImagePicker from 'expo-image-picker'
 import * as VideoThumbnails from 'expo-video-thumbnails'
 import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
+import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 
 // Helper to read file as base64 without expo-file-system
 async function readFileAsBase64(uri: string): Promise<string> {
@@ -55,6 +57,7 @@ export default function StudioScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos } = useApp()
+  const { pauseVideo } = useVideoPlayerContext()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadSpeed, setUploadSpeed] = useState(0)  // bytes/sec
@@ -70,11 +73,15 @@ export default function StudioScreen() {
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null) // Preview URI (data URL or file URI)
   const [thumbnailFilePath, setThumbnailFilePath] = useState<string | null>(null) // Pear: actual thumbnail file path
   const [videoDuration, setVideoDuration] = useState<number | null>(null)
+  const [thumbnailGenerating, setThumbnailGenerating] = useState(false)
+  const [pickingVideo, setPickingVideo] = useState(false)
+  const pickingVideoRef = useRef(false)
 
   // Generate thumbnail from video at 10%
   const generateThumbnail = useCallback(async (videoUri: string, durationMs?: number) => {
     if (isPear) return // Desktop handles thumbnails server-side
     try {
+      setThumbnailGenerating(true)
       const timeMs = durationMs ? Math.floor(durationMs * 0.1) : 1000
       console.log('[Studio] Generating thumbnail at', timeMs, 'ms')
       const { uri } = await VideoThumbnails.getThumbnailAsync(videoUri, {
@@ -87,6 +94,8 @@ export default function StudioScreen() {
     } catch (err) {
       console.log('[Studio] Thumbnail generation failed:', err)
       return null
+    } finally {
+      setThumbnailGenerating(false)
     }
   }, [])
 
@@ -115,7 +124,7 @@ export default function StudioScreen() {
           // Store file path for upload and dataUrl for preview
           setThumbnailFilePath(result.filePath)
           console.log('[Studio] setThumbnailFilePath called with:', result.filePath)
-          if (result.dataUrl) {
+          if ('dataUrl' in result && typeof result.dataUrl === 'string') {
             setThumbnailUri(result.dataUrl)
             console.log('[Studio] setThumbnailUri called with dataUrl (length:', result.dataUrl.length, ')')
           }
@@ -148,6 +157,13 @@ export default function StudioScreen() {
   }, [pickImageFile])
 
   const pickVideo = async () => {
+    if (pickingVideoRef.current) return
+    if (AppState.currentState !== 'active') return
+
+    pickingVideoRef.current = true
+    setPickingVideo(true)
+    pauseVideo()
+
     if (isPear) {
       // Pear desktop: use native file picker via osascript
       try {
@@ -181,32 +197,69 @@ export default function StudioScreen() {
       return
     }
 
-    // Native: use expo-image-picker
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please grant permission to access your videos')
-      return
-    }
+    try {
+      // Android: prefer DocumentPicker to avoid Photo Picker URI permission issues.
+      if (Platform.OS === 'android') {
+        const docResult = await DocumentPicker.getDocumentAsync({
+          type: 'video/*',
+          copyToCacheDirectory: true,
+          multiple: false,
+        })
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-      allowsEditing: false,
-      quality: 1,
-    })
+        if (docResult.canceled) return
+        const asset = docResult.assets?.[0]
+        if (!asset?.uri) return
 
-    if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0]
-      setSelectedVideo(asset.uri)
-      const filename = asset.uri.split('/').pop() || 'Untitled'
-      setTitle(filename.replace(/\.[^/.]+$/, ''))
+        setSelectedVideo(asset.uri)
+        const filename = asset.name || asset.uri.split('/').pop() || 'Untitled'
+        setTitle(filename.replace(/\.[^/.]+$/, ''))
 
-      // Store duration if available
-      if (asset.duration) {
-        setVideoDuration(asset.duration)
+        if (typeof asset.size === 'number') setFileSize(asset.size)
+        if (typeof asset.mimeType === 'string') setMimeType(asset.mimeType)
+
+        void generateThumbnail(asset.uri).catch((err) => {
+          console.log('[Studio] Background thumbnail generation failed:', err)
+        })
+
+        return
       }
 
-      // Generate thumbnail at 10% into video
-      await generateThumbnail(asset.uri, asset.duration)
+      // iOS: use expo-image-picker
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please grant permission to access your videos')
+        return
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['videos'],
+        allowsEditing: false,
+        videoExportPreset: ImagePicker.VideoExportPreset.Passthrough,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
+      })
+
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0]
+        setSelectedVideo(asset.uri)
+        const filename = asset.uri.split('/').pop() || 'Untitled'
+        setTitle(filename.replace(/\.[^/.]+$/, ''))
+
+        // Store duration if available
+        if (asset.duration) {
+          setVideoDuration(asset.duration)
+        }
+
+        // Generate thumbnail at 10% into video, but don't block UI.
+        void generateThumbnail(asset.uri, asset.duration ?? undefined).catch((err) => {
+          console.log('[Studio] Background thumbnail generation failed:', err)
+        })
+      }
+    } catch (err: any) {
+      console.error('[Studio] pickVideo error:', err)
+      Alert.alert('Error', err?.message || 'Failed to open video picker')
+    } finally {
+      pickingVideoRef.current = false
+      setPickingVideo(false)
     }
   }
 
@@ -233,6 +286,14 @@ export default function StudioScreen() {
       Alert.alert('No identity', 'Please create an identity in Settings first')
       return
     }
+
+    if (!identity.driveKey) {
+      console.error('[Studio] Identity missing driveKey')
+      Alert.alert('Identity error', 'Your identity is missing a channel key. Please recreate it in Settings.')
+      return
+    }
+
+    const driveKey = identity.driveKey
 
     setUploading(true)
     setUploadProgress(0)
@@ -269,7 +330,7 @@ export default function StudioScreen() {
         }
 
         // Reload videos after upload
-        await loadVideos(identity.driveKey)
+        await loadVideos(driveKey)
       } else if (rpc) {
         // Native: use HRPC upload
         // Skip FFmpeg thumbnail generation if user selected/generated a thumbnail
@@ -305,7 +366,7 @@ export default function StudioScreen() {
           console.log('[Studio] No thumbnail to upload, thumbnailUri:', thumbnailUri, 'videoId:', videoId)
         }
 
-        await loadVideos(identity.driveKey)
+        await loadVideos(driveKey)
       }
 
       setSelectedVideo(null)
@@ -330,6 +391,153 @@ export default function StudioScreen() {
   }
 
   const myVideos = videos.filter((v) => v.channelKey === identity?.driveKey)
+
+  const ListHeaderComponent = () => {
+    return (
+      <View>
+        {/* Upload Section */}
+        <View className="py-5 border-b border-pear-border">
+          {selectedVideo ? (
+            <View className="gap-4">
+              {/* Thumbnail preview */}
+              <View className="rounded-xl overflow-hidden bg-pear-bg-card">
+                <View style={{ aspectRatio: 16 / 9 }}>
+                  {thumbnailUri ? (
+                    <Image
+                      source={{ uri: thumbnailUri }}
+                      style={{ width: '100%', height: '100%' }}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View className="flex-1 items-center justify-center bg-pear-bg-elevated">
+                      <Feather name="film" color={colors.textMuted} size={48} />
+                      <Text className="text-caption text-pear-text-muted mt-2">
+                        {isPear
+                          ? 'Click below to add thumbnail'
+                          : (thumbnailGenerating ? 'Generating thumbnail...' : 'Thumbnail not available')}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {/* Change thumbnail button */}
+                <Pressable
+                  onPress={pickThumbnail}
+                  className="flex-row items-center justify-center gap-2 py-3 bg-pear-bg-elevated active:opacity-80"
+                >
+                  <Feather name="image" color={colors.textMuted} size={16} />
+                  <Text className="text-caption text-pear-text-muted">
+                    {thumbnailUri ? 'Change Thumbnail' : 'Add Thumbnail'}
+                  </Text>
+                </Pressable>
+              </View>
+
+              {/* Selected video indicator */}
+              <View className="flex-row items-center bg-pear-bg-card rounded-lg p-4">
+                <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
+                  <Feather name="film" color={colors.primary} size={20} />
+                </View>
+                <Text className="flex-1 text-label text-pear-text ml-3" numberOfLines={1}>
+                  Video selected
+                </Text>
+                <Pressable
+                  onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); setThumbnailFilePath(null); setVideoDuration(null); }}
+                  className="w-8 h-8 items-center justify-center"
+                >
+                  <Feather name="trash-2" color={colors.error} size={18} />
+                </Pressable>
+              </View>
+
+              {/* Title input */}
+              <TextInput
+                placeholder="Video title"
+                value={title}
+                onChangeText={setTitle}
+                placeholderTextColor={colors.textMuted}
+                className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+              />
+
+              {/* Category picker */}
+              <View className="gap-2">
+                <Text className="text-caption text-pear-text-muted">Category</Text>
+                <View className="flex-row flex-wrap gap-2">
+                  {categoryOptions.map((cat) => (
+                    <Pressable
+                      key={cat}
+                      onPress={() => setSelectedCategory(cat)}
+                      style={{
+                        paddingHorizontal: 16,
+                        paddingVertical: 8,
+                        borderRadius: 8,
+                        backgroundColor: selectedCategory === cat ? colors.primary : colors.bgCard,
+                      }}
+                    >
+                      <Text style={{
+                        fontSize: 14,
+                        fontWeight: '500',
+                        color: selectedCategory === cat ? '#fff' : colors.text,
+                      }}>
+                        {cat}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+
+              {/* Upload button or progress bar */}
+              {uploading ? (
+                <View className="gap-2">
+                  {/* Progress bar */}
+                  <View className="h-3 bg-pear-bg-input rounded-full overflow-hidden">
+                    <View
+                      className="h-full bg-pear-primary rounded-full"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </View>
+                  <View className="flex-row items-center justify-center gap-2">
+                    <ActivityIndicator color={colors.primary} size="small" />
+                    <Text className="text-pear-text-muted text-caption">
+                      {isTranscoding ? (
+                        `Transcoding audio... ${uploadProgress}%`
+                      ) : (
+                        <>
+                          Uploading... {uploadProgress}%
+                          {uploadSpeed > 0 && ` · ${formatSpeed(uploadSpeed)}`}
+                          {uploadEta > 0 && ` · ${formatEta(uploadEta)} left`}
+                        </>
+                      )}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <Pressable
+                  onPress={handleUpload}
+                  disabled={!title.trim()}
+                  className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${!title.trim() ? 'opacity-50' : ''}`}
+                >
+                  <Feather name="upload" color="white" size={18} />
+                  <Text className="text-white text-label">Upload Video</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            <Pressable
+              onPress={pickVideo}
+              disabled={pickingVideo}
+              className="flex-row items-center justify-center gap-3 bg-pear-bg-card border-2 border-dashed border-pear-border rounded-xl py-8 active:opacity-80"
+            >
+              <Feather name="upload" color={colors.textMuted} size={24} />
+              <Text className="text-body text-pear-text-muted">{pickingVideo ? 'Opening picker...' : 'Select a video to upload'}</Text>
+            </Pressable>
+          )}
+        </View>
+
+        {/* Videos List title */}
+        <View className="py-4">
+          <Text className="text-headline text-pear-text">Your Videos ({myVideos.length})</Text>
+        </View>
+      </View>
+    )
+  }
 
   const handleDeleteVideo = async (videoId: string, videoTitle: string) => {
     const confirmDelete = () => {
@@ -406,185 +614,46 @@ export default function StudioScreen() {
         </View>
       </View>
 
-      {/* Upload Section */}
-      <View className="px-5 py-5 border-b border-pear-border">
-        {selectedVideo ? (
-          <View className="gap-4">
-            {/* Thumbnail preview */}
-            <View className="rounded-xl overflow-hidden bg-pear-bg-card">
-              <View style={{ aspectRatio: 16 / 9 }}>
-                {thumbnailUri ? (
-                  <Image
-                    source={{ uri: thumbnailUri }}
-                    style={{ width: '100%', height: '100%' }}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <View className="flex-1 items-center justify-center bg-pear-bg-elevated">
-                    <Feather name="film" color={colors.textMuted} size={48} />
-                    <Text className="text-caption text-pear-text-muted mt-2">
-                      {isPear ? 'Click below to add thumbnail' : 'Generating thumbnail...'}
-                    </Text>
-                  </View>
-                )}
-              </View>
-              {/* Change thumbnail button */}
-              <Pressable
-                onPress={pickThumbnail}
-                className="flex-row items-center justify-center gap-2 py-3 bg-pear-bg-elevated active:opacity-80"
-              >
-                <Feather name="image" color={colors.textMuted} size={16} />
-                <Text className="text-caption text-pear-text-muted">
-                  {thumbnailUri ? 'Change Thumbnail' : 'Add Thumbnail'}
-                </Text>
-              </Pressable>
+      <FlatList
+        data={myVideos}
+        keyExtractor={(item) => item.id}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={ListHeaderComponent}
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingBottom: insets.bottom + 16,
+        }}
+        ListEmptyComponent={
+          <View className="flex-1 justify-center items-center py-16">
+            <View className="w-16 h-16 rounded-full bg-pear-bg-card items-center justify-center mb-4">
+              <Feather name="film" color={colors.textMuted} size={28} />
             </View>
-
-            {/* Selected video indicator */}
-            <View className="flex-row items-center bg-pear-bg-card rounded-lg p-4">
-              <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
-                <Feather name="film" color={colors.primary} size={20} />
-              </View>
-              <Text className="flex-1 text-label text-pear-text ml-3" numberOfLines={1}>
-                Video selected
-              </Text>
-              <Pressable
-                onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); }}
-                className="w-8 h-8 items-center justify-center"
-              >
-                <Feather name="trash-2" color={colors.error} size={18} />
-              </Pressable>
-            </View>
-
-            {/* Title input */}
-            <TextInput
-              placeholder="Video title"
-              value={title}
-              onChangeText={setTitle}
-              placeholderTextColor={colors.textMuted}
-              className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-            />
-
-            {/* Category picker */}
-            <View className="gap-2">
-              <Text className="text-caption text-pear-text-muted">Category</Text>
-              <View className="flex-row flex-wrap gap-2">
-                {categoryOptions.map((cat) => (
-                  <Pressable
-                    key={cat}
-                    onPress={() => setSelectedCategory(cat)}
-                    style={{
-                      paddingHorizontal: 16,
-                      paddingVertical: 8,
-                      borderRadius: 8,
-                      backgroundColor: selectedCategory === cat ? colors.primary : colors.bgCard,
-                    }}
-                  >
-                    <Text style={{
-                      fontSize: 14,
-                      fontWeight: '500',
-                      color: selectedCategory === cat ? '#fff' : colors.text,
-                    }}>
-                      {cat}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-
-            {/* Upload button or progress bar */}
-            {uploading ? (
-              <View className="gap-2">
-                {/* Progress bar */}
-                <View className="h-3 bg-pear-bg-input rounded-full overflow-hidden">
-                  <View
-                    className="h-full bg-pear-primary rounded-full"
-                    style={{ width: `${uploadProgress}%` }}
-                  />
-                </View>
-                <View className="flex-row items-center justify-center gap-2">
-                  <ActivityIndicator color={colors.primary} size="small" />
-                  <Text className="text-pear-text-muted text-caption">
-                    {isTranscoding ? (
-                      `Transcoding audio... ${uploadProgress}%`
-                    ) : (
-                      <>
-                        Uploading... {uploadProgress}%
-                        {uploadSpeed > 0 && ` · ${formatSpeed(uploadSpeed)}`}
-                        {uploadEta > 0 && ` · ${formatEta(uploadEta)} left`}
-                      </>
-                    )}
-                  </Text>
-                </View>
-              </View>
-            ) : (
-              <Pressable
-                onPress={handleUpload}
-                disabled={!title.trim()}
-                className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${!title.trim() ? 'opacity-50' : ''}`}
-              >
-                <Feather name="upload" color="white" size={18} />
-                <Text className="text-white text-label">Upload Video</Text>
-              </Pressable>
-            )}
+            <Text className="text-body text-pear-text-muted text-center">
+              No videos uploaded yet
+            </Text>
           </View>
-        ) : (
-          <Pressable
-            onPress={pickVideo}
-            className="flex-row items-center justify-center gap-3 bg-pear-bg-card border-2 border-dashed border-pear-border rounded-xl py-8 active:opacity-80"
-          >
-            <Feather name="upload" color={colors.textMuted} size={24} />
-            <Text className="text-body text-pear-text-muted">Select a video to upload</Text>
-          </Pressable>
-        )}
-      </View>
-
-      {/* Videos List */}
-      <View className="flex-1">
-        <View className="px-5 py-4">
-          <Text className="text-headline text-pear-text">Your Videos ({myVideos.length})</Text>
-        </View>
-
-        <FlatList
-          data={myVideos}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{
-            paddingHorizontal: 20,
-            paddingBottom: insets.bottom + 16,
-            flexGrow: 1,
-          }}
-          ListEmptyComponent={
-            <View className="flex-1 justify-center items-center py-16">
-              <View className="w-16 h-16 rounded-full bg-pear-bg-card items-center justify-center mb-4">
-                <Feather name="film" color={colors.textMuted} size={28} />
-              </View>
-              <Text className="text-body text-pear-text-muted text-center">
-                No videos uploaded yet
+        }
+        ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+        renderItem={({ item }) => (
+          <View className="flex-row bg-pear-bg-elevated rounded-xl overflow-hidden" style={{ minHeight: 72 }}>
+            <View className="w-28 bg-pear-bg-card justify-center items-center">
+              <Ionicons name="play" color={colors.text} size={16} />
+            </View>
+            <View className="flex-1 p-4 justify-center">
+              <Text className="text-label text-pear-text" numberOfLines={1}>{item.title}</Text>
+              <Text className="text-caption text-pear-text-muted mt-1">
+                {formatSize(item.size)} · {formatDate(item.uploadedAt)}
               </Text>
             </View>
-          }
-          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
-          renderItem={({ item }) => (
-            <View className="flex-row bg-pear-bg-elevated rounded-xl overflow-hidden" style={{ minHeight: 72 }}>
-              <View className="w-28 bg-pear-bg-card justify-center items-center">
-                <Ionicons name="play" color={colors.text} size={16} />
-              </View>
-              <View className="flex-1 p-4 justify-center">
-                <Text className="text-label text-pear-text" numberOfLines={1}>{item.title}</Text>
-                <Text className="text-caption text-pear-text-muted mt-1">
-                  {formatSize(item.size)} · {formatDate(item.uploadedAt)}
-                </Text>
-              </View>
-              <Pressable
-                onPress={() => handleDeleteVideo(item.id, item.title)}
-                className="w-12 justify-center items-center active:opacity-60"
-              >
-                <Feather name="trash-2" color={colors.error} size={18} />
-              </Pressable>
-            </View>
-          )}
-        />
-      </View>
+            <Pressable
+              onPress={() => handleDeleteVideo(item.id, item.title)}
+              className="w-12 justify-center items-center active:opacity-60"
+            >
+              <Feather name="trash-2" color={colors.error} size={18} />
+            </Pressable>
+          </View>
+        )}
+      />
     </View>
   )
 }

@@ -981,6 +981,7 @@ rpc.onUpdateChannel(async (req) => {
 // Video handlers
 rpc.onListVideos(async (req) => {
   const channelKey = req?.channelKey || ''
+  const publicBeeKey = req?.publicBeeKey || null
   console.log('[HRPC] listVideos:', channelKey?.slice(0, 16))
 
   // Always respond quickly; never let listVideos hang the client.
@@ -988,7 +989,7 @@ rpc.onListVideos(async (req) => {
 
   let rawVideos = []
   try {
-    rawVideos = await api.listVideos(channelKey)
+    rawVideos = await api.listVideos(channelKey, publicBeeKey)
   } catch (e) {
     console.log('[HRPC] listVideos failed:', e?.message)
     return { videos: [] }
@@ -1027,13 +1028,16 @@ rpc.onListVideos(async (req) => {
 
 rpc.onGetVideoUrl(async (req) => {
   console.log('[HRPC] getVideoUrl:', req.channelKey?.slice(0, 16), req.videoId)
-  const result = await api.getVideoUrl(req.channelKey, req.videoId)
+  // Forward publicBeeKey so viewers can resolve metadata fast.
+  // Without it, getVideoUrl can fail for public-feed / multi-writer channels
+  // where the channel metadata isn't fully replicated yet.
+  const result = await api.getVideoUrl(req.channelKey, req.videoId, req.publicBeeKey)
   return { url: result.url }
 })
 
 rpc.onGetVideoData(async (req) => {
   console.log('[HRPC] getVideoData:', req.channelKey?.slice(0, 16), req.videoId)
-  const video = await api.getVideoData(req.channelKey, req.videoId)
+  const video = await api.getVideoData(req.channelKey, req.videoId, req.publicBeeKey)
   return { video: video || { id: req.videoId, title: 'Unknown' } }
 })
 
@@ -1255,6 +1259,7 @@ rpc.onGetPublicFeed(async () => {
   return {
     entries: result.entries.map(e => ({
       channelKey: e.driveKey || e.channelKey,
+      publicBeeKey: e.publicBeeKey || null,
       channelName: e.name,
       videoCount: e.videoCount || 0,
       peerCount: e.peerCount || 0,
@@ -1304,7 +1309,7 @@ rpc.onHideChannel(async (req) => {
 
 rpc.onGetChannelMeta(async (req) => {
   console.log('[HRPC] getChannelMeta:', req.channelKey?.slice(0, 16))
-  const meta = await api.getChannelMeta(req.channelKey)
+  const meta = await api.getChannelMeta(req.channelKey, req.publicBeeKey || null)
   return {
     name: meta.name,
     description: meta.description,

@@ -4,7 +4,7 @@
  * Supports swipe-down to minimize to mini player
  * Uses SHARED player from VideoPlayerContext for continuous playback
  */
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet, Alert } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { useIsFocused } from '@react-navigation/native'
@@ -19,7 +19,7 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { MpvPlayer } from '@/components/MpvPlayer'
 import { useCast } from '@/lib/cast'
-import { DevicePickerModal } from '@/components/cast'
+import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 
 // HRPC methods used: getVideoUrl, prefetchVideo, getVideoStats, getChannelMeta
 
@@ -318,6 +318,9 @@ export default function VideoPlayerScreen() {
   // Casting
   const cast = useCast()
   const [showCastPicker, setShowCastPicker] = useState(false)
+  const [showCastRemote, setShowCastRemote] = useState(false)
+  const [connectingCastDeviceId, setConnectingCastDeviceId] = useState<string | null>(null)
+  const [recentCastDeviceId, setRecentCastDeviceId] = useState<string | null>(null)
 
   // Fetch video metadata if not provided (YouTube-style: load from ID)
   useEffect(() => {
@@ -360,28 +363,62 @@ export default function VideoPlayerScreen() {
     return unsubscribe
   }, [navigation, minimizePlayer])
 
-  // Load video when videoData is available (either from params or fetched)
-  useEffect(() => {
-    if (!videoData || loadingMeta) return
-
-    if (!fromMiniPlayer && !videoLoaded) {
-      loadVideo()
-      setVideoLoaded(true)
-    } else if (fromMiniPlayer && (Platform.OS !== 'web' || isPear)) {
-      // Coming from mini player - start polling for stats
-      startStatsPolling()
+  const loadChannelInfo = useCallback(async () => {
+    if (!videoData?.channelKey || !rpc) return
+    try {
+      const result = await rpc.getChannelMeta({ channelKey: videoData.channelKey })
+      setChannelMeta(result)
+    } catch (err) {
+      console.error('[VideoPlayer] Failed to load channel info:', err)
     }
-    loadChannelInfo()
+  }, [rpc, videoData?.channelKey])
 
-    return () => {
-      if (statsPollingRef.current) {
-        clearInterval(statsPollingRef.current)
-        statsPollingRef.current = null
+  const startPrefetch = useCallback(async (videoRefOverride?: string) => {
+    if (!videoData || !rpc) return
+    try {
+      const videoRef = videoRefOverride ||
+        ((videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
+          ? videoData.path
+          : videoData.id)
+      await rpc.prefetchVideo({
+        channelKey: videoData.channelKey,
+        videoId: videoRef,
+        publicBeeKey: (videoData as any)?.publicBeeKey || undefined
+      })
+    } catch (err) {
+      console.error('[VideoPlayer] Prefetch failed:', err)
+    }
+  }, [rpc, videoData])
+
+  const startStatsPolling = useCallback(() => {
+    if (!videoData || !rpc) return
+    if (statsPollingRef.current) clearInterval(statsPollingRef.current)
+    const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
+      ? videoData.path
+      : videoData.id
+    console.log('[VideoPlayer] Starting stats polling for', videoRef)
+
+    const pollStats = async () => {
+      try {
+        const result = await rpc.getVideoStats({
+          channelKey: videoData.channelKey,
+          videoId: videoRef
+        })
+        const stats = result?.stats
+        console.log('[VideoPlayer] Got stats:', stats ? `${stats.progress}%` : 'null')
+        if (stats) {
+          setLocalStats(stats as VideoStats)
+        }
+      } catch (err) {
+        console.error('[VideoPlayer] Stats polling error:', err)
       }
     }
-  }, [videoData, loadingMeta, fromMiniPlayer, isPear, videoLoaded])
 
-  const loadVideo = async () => {
+    pollStats()
+    statsPollingRef.current = setInterval(pollStats, 1000)
+  }, [rpc, videoData])
+
+  const loadVideo = useCallback(async () => {
     if (!videoData || !rpc) return
     setIsLoading(true)
 
@@ -419,62 +456,28 @@ export default function VideoPlayerScreen() {
       console.error('[VideoPlayer] Failed to load video:', err)
       setIsLoading(false)
     }
-  }
+  }, [isPear, loadAndPlayVideo, rpc, setIsLoading, startPrefetch, startStatsPolling, videoData])
 
-  const loadChannelInfo = async () => {
-    if (!videoData?.channelKey || !rpc) return
-    try {
-      const result = await rpc.getChannelMeta({ channelKey: videoData.channelKey })
-      setChannelMeta(result)
-    } catch (err) {
-      console.error('[VideoPlayer] Failed to load channel info:', err)
+  // Load video when videoData is available (either from params or fetched)
+  useEffect(() => {
+    if (!videoData || loadingMeta) return
+
+    if (!fromMiniPlayer && !videoLoaded) {
+      loadVideo()
+      setVideoLoaded(true)
+    } else if (fromMiniPlayer && (Platform.OS !== 'web' || isPear)) {
+      // Coming from mini player - start polling for stats
+      startStatsPolling()
     }
-  }
+    loadChannelInfo()
 
-  const startPrefetch = async (videoRefOverride?: string) => {
-    if (!videoData || !rpc) return
-    try {
-      const videoRef = videoRefOverride ||
-        ((videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
-          ? videoData.path
-          : videoData.id)
-      await rpc.prefetchVideo({
-        channelKey: videoData.channelKey,
-        videoId: videoRef,
-        publicBeeKey: (videoData as any)?.publicBeeKey || undefined
-      })
-    } catch (err) {
-      console.error('[VideoPlayer] Prefetch failed:', err)
-    }
-  }
-
-  const startStatsPolling = () => {
-    if (!videoData || !rpc) return
-    if (statsPollingRef.current) clearInterval(statsPollingRef.current)
-    const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
-      ? videoData.path
-      : videoData.id
-    console.log('[VideoPlayer] Starting stats polling for', videoRef)
-
-    const pollStats = async () => {
-      try {
-        const result = await rpc.getVideoStats({
-          channelKey: videoData.channelKey,
-          videoId: videoRef
-        })
-        const stats = result?.stats
-        console.log('[VideoPlayer] Got stats:', stats ? `${stats.progress}%` : 'null')
-        if (stats) {
-          setLocalStats(stats as VideoStats)
-        }
-      } catch (err) {
-        console.error('[VideoPlayer] Stats polling error:', err)
+    return () => {
+      if (statsPollingRef.current) {
+        clearInterval(statsPollingRef.current)
+        statsPollingRef.current = null
       }
     }
-
-    pollStats()
-    statsPollingRef.current = setInterval(pollStats, 1000)
-  }
+  }, [videoData, loadingMeta, fromMiniPlayer, isPear, videoLoaded, loadVideo, startStatsPolling, loadChannelInfo])
 
   // Back/minimize button - beforeRemove listener handles minimizePlayer()
   const goBack = () => {
@@ -512,6 +515,10 @@ export default function VideoPlayerScreen() {
 
         {/* Cast button */}
         <Pressable style={styles.castButton} onPress={() => {
+          if (cast.isConnected) {
+            setShowCastRemote(true)
+            return
+          }
           cast.startDiscovery()
           setShowCastPicker(true)
         }}>
@@ -595,6 +602,26 @@ export default function VideoPlayerScreen() {
         {/* Video Title & Meta */}
         <View style={styles.videoInfo}>
           <Text style={styles.videoTitle}>{videoData?.title || 'Untitled'}</Text>
+          {cast.isConnected && (
+            <View style={styles.castBanner}>
+              <Feather name="cast" color={colors.primary} size={14} />
+              <Text style={styles.castBannerText} numberOfLines={1}>
+                Casting to {cast.connectedDevice?.name || 'Cast device'}
+              </Text>
+              <Pressable onPress={() => setShowCastRemote(true)} style={styles.castBannerAction}>
+                <Text style={styles.castBannerActionText}>Remote</Text>
+              </Pressable>
+              <Pressable
+                onPress={async () => {
+                  await cast.disconnect()
+                  setShowCastRemote(false)
+                }}
+                style={styles.castBannerAction}
+              >
+                <Text style={styles.castBannerActionText}>Disconnect</Text>
+              </Pressable>
+            </View>
+          )}
           <Text style={styles.videoMeta}>
             {formatTimeAgo(videoData?.uploadedAt || Date.now())} · {formatSize(videoData?.size || 0)}
           </Text>
@@ -628,54 +655,74 @@ export default function VideoPlayerScreen() {
         visible={showCastPicker}
         devices={cast.devices}
         connectedDevice={cast.connectedDevice}
+        connectingDeviceId={connectingCastDeviceId}
+        recentDeviceId={recentCastDeviceId}
         isDiscovering={cast.isDiscovering}
         onClose={() => {
           cast.stopDiscovery()
           setShowCastPicker(false)
+          setConnectingCastDeviceId(null)
         }}
         onDeviceSelect={async (deviceId: string) => {
-          const success = await cast.connect(deviceId)
-          if (!success) {
-            showCastAlert('Failed to connect to Chromecast device.')
-            return
-          }
-
-          let urlToCast = videoUrl
-          if (!urlToCast && videoData && rpc?.getVideoUrl) {
-            try {
-              const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
-                ? videoData.path
-                : videoData.id
-              const result = await rpc.getVideoUrl({
-                channelKey: videoData.channelKey,
-                videoId: videoRef,
-                publicBeeKey: videoData.publicBeeKey || undefined,
-              })
-              urlToCast = result?.url || null
-            } catch (err: any) {
-              showCastAlert(err?.message || 'Failed to resolve video URL for casting.')
+          setConnectingCastDeviceId(deviceId)
+          try {
+            const success = await cast.connect(deviceId)
+            if (!success) {
+              showCastAlert('Failed to connect to Chromecast device.')
               return
             }
-          }
+            setRecentCastDeviceId(deviceId)
 
-          if (!urlToCast) {
-            showCastAlert('Video URL is not ready yet. Try again once playback starts.')
-            return
-          }
+            let urlToCast = videoUrl
+            if (!urlToCast && videoData && rpc?.getVideoUrl) {
+              try {
+                const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
+                  ? videoData.path
+                  : videoData.id
+                const result = await rpc.getVideoUrl({
+                  channelKey: videoData.channelKey,
+                  videoId: videoRef,
+                })
+                urlToCast = result?.url || null
+              } catch (err: any) {
+                showCastAlert(err?.message || 'Failed to resolve video URL for casting.')
+                return
+              }
+            }
 
-          await cast.play({
-            url: urlToCast,
-            contentType: videoData?.mimeType || 'video/mp4',
-            title: videoData?.title,
-          })
-          setShowCastPicker(false)
+            if (!urlToCast) {
+              showCastAlert('Video URL is not ready yet. Try again once playback starts.')
+              return
+            }
+
+            await cast.play({
+              url: urlToCast,
+              contentType: videoData?.mimeType || 'video/mp4',
+              title: videoData?.title,
+            })
+            setShowCastPicker(false)
+            setShowCastRemote(true)
+          } finally {
+            setConnectingCastDeviceId(null)
+          }
         }}
         onDisconnect={async () => {
           await cast.disconnect()
           setShowCastPicker(false)
+          setShowCastRemote(false)
         }}
         onAddManualDevice={cast.addManualDevice}
         onRefresh={cast.startDiscovery}
+      />
+      <CastRemoteModal
+        visible={showCastRemote}
+        onClose={() => setShowCastRemote(false)}
+        onSwitchDevice={() => {
+          setShowCastRemote(false)
+          cast.startDiscovery()
+          setShowCastPicker(true)
+        }}
+        videoTitle={videoData?.title || null}
       />
     </View>
   )
@@ -776,6 +823,37 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 13,
     marginTop: 6,
+  },
+  castBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: colors.bgSecondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  castBannerText: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  castBannerAction: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: colors.bg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  castBannerActionText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
   },
   actions: {
     flexDirection: 'row',

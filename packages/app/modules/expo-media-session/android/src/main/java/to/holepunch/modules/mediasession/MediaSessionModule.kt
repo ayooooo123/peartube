@@ -209,11 +209,23 @@ object PipBridge {
             // to the app, focus is restored and we should NOT force-pause.
             if (!isInPip) {
                 val handler = android.os.Handler(android.os.Looper.getMainLooper())
-                handler.post {
-                    if (!activity.hasWindowFocus()) {
+                // NOTE: When returning from PiP by tapping the window, Android can
+                // report no window focus for a short period even though focus will
+                // be restored moments later. If we pause immediately, we cause the
+                // "return from PiP" path to incorrectly stop playback.
+                //
+                // Approach: retry the focus check a few times; only treat this as
+                // dismissal if focus never comes back.
+                fun maybePauseAfterDismissal(attempt: Int) {
+                    if (activity.isDestroyed || activity.isFinishing) return
+                    if (activity.hasWindowFocus()) return
+                    if (attempt >= 3) {
                         notifyPipDismissed()
+                        return
                     }
+                    handler.postDelayed({ maybePauseAfterDismissal(attempt + 1) }, 250)
                 }
+                handler.postDelayed({ maybePauseAfterDismissal(0) }, 250)
             }
         }
 
@@ -1164,7 +1176,9 @@ class MediaSessionModule : Module() {
         sendEvent("onPictureInPictureChanged", mapOf(
             "isInPictureInPicture" to isInPip,
             "width" to width,
-            "height" to height
+            "height" to height,
+            // Helps JS restore correct play state on PiP exit.
+            "isPlaying" to currentIsPlaying
         ))
     }
 

@@ -2,12 +2,14 @@ const path = require('path')
 
 module.exports = function (api) {
   api.cache(true)
+  const isPearWebExport = process.env.PEARTUBE_WEB_EXPORT === '1'
   return {
     presets: [
       ['babel-preset-expo', { jsxImportSource: 'nativewind' }],
       'nativewind/babel',
     ],
     plugins: [
+      isPearWebExport && 'react-native-web',
       [
         'module-resolver',
         {
@@ -22,6 +24,6 @@ module.exports = function (api) {
         },
       ],
       'react-native-reanimated/plugin',
-    ],
+    ].filter(Boolean),
   }
 }

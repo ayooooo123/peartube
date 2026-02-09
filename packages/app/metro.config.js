@@ -3,12 +3,54 @@ const { getDefaultConfig } = require('expo/metro-config')
 const { withNativeWind } = require('nativewind/metro')
 const path = require('path')
 
+let metroResolve = null
+try {
+  ;({ resolve: metroResolve } = require('metro-resolver'))
+} catch {
+  // Optional dependency; if missing, web builds may resolve to native react-native.
+  metroResolve = null
+}
+
 // Monorepo root
 const projectRoot = __dirname
 const monorepoRoot = path.resolve(projectRoot, '../..')
 
 /** @type {import('expo/metro-config').MetroConfig} */
 const config = getDefaultConfig(projectRoot)
+
+// For Pear desktop web exports we must avoid bundling React Native's native runtime.
+// Metro's default pre-modules include `react-native/Libraries/Core/InitializeCore`, which
+// expects a native bridge to inject `__fbBatchedBridgeConfig`.
+const originalGetModulesRunBeforeMainModule = config.serializer?.getModulesRunBeforeMainModule
+if (typeof originalGetModulesRunBeforeMainModule === 'function') {
+  config.serializer.getModulesRunBeforeMainModule = () => {
+    const pre = originalGetModulesRunBeforeMainModule()
+    if (process.env.PEARTUBE_WEB_EXPORT === '1') {
+      const shim = require.resolve('./web/native-module-proxy')
+      const filtered = pre.filter(m => !m.includes(`${path.sep}Libraries${path.sep}Core${path.sep}InitializeCore`))
+      return [shim, ...filtered]
+    }
+    return pre
+  }
+}
+
+const originalGetPolyfills = config.serializer?.getPolyfills
+if (typeof originalGetPolyfills === 'function') {
+  config.serializer.getPolyfills = options => {
+    const polyfills = originalGetPolyfills(options)
+    if (process.env.PEARTUBE_WEB_EXPORT === '1' && options?.platform === 'web') {
+      const shim = require.resolve('./web/native-module-proxy')
+      return [shim, ...polyfills]
+    }
+    return polyfills
+  }
+}
+
+// Ensure platform extensions work for web builds.
+// @expo/metro-config defaults to native-only platforms.
+config.resolver.platforms = Array.from(
+  new Set([...(config.resolver.platforms ?? []), 'ios', 'android', 'native', 'web'])
+)
 
 // Watch all monorepo folders for changes
 config.watchFolders = [monorepoRoot]
@@ -31,6 +73,23 @@ config.resolver.extraNodeModules = {
   // Force all packages to use the app's copies (prevents duplicate module instances)
   'react-native-nitro-modules': path.resolve(projectRoot, 'node_modules/react-native-nitro-modules'),
   'react': path.resolve(projectRoot, 'node_modules/react'),
+}
+
+// Ensure web export never bundles native React Native.
+if (process.env.PEARTUBE_WEB_EXPORT === '1') {
+  config.resolver.extraNodeModules['react-native'] = require.resolve('react-native-web')
+}
+
+// Force web bundles to resolve react-native to react-native-web.
+// Without this, Metro can bundle native react-native internals which crash at runtime
+// with: __fbBatchedBridgeConfig is not set.
+if (metroResolve) {
+  config.resolver.resolveRequest = (context, moduleName, platform) => {
+    if (platform === 'web' && moduleName === 'react-native') {
+      return metroResolve(context, 'react-native-web', platform)
+    }
+    return metroResolve(context, moduleName, platform)
+  }
 }
 
 // Force Metro to ignore paths that would cause duplicate module instances

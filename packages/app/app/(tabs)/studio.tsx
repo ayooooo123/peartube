@@ -57,7 +57,7 @@ export default function StudioScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos } = useApp()
-  const { pauseVideo } = useVideoPlayerContext()
+  const { pauseVideo, closeVideo } = useVideoPlayerContext()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadSpeed, setUploadSpeed] = useState(0)  // bytes/sec
@@ -163,6 +163,11 @@ export default function StudioScreen() {
     pickingVideoRef.current = true
     setPickingVideo(true)
     pauseVideo()
+    if (Platform.OS === 'android') {
+      // On Android, returning from picker can leave the TextureView/Surface in a bad state
+      // and present as a full-screen black overlay. Closing the global player avoids this.
+      closeVideo()
+    }
 
     if (isPear) {
       // Pear desktop: use native file picker via osascript
@@ -217,9 +222,10 @@ export default function StudioScreen() {
         if (typeof asset.size === 'number') setFileSize(asset.size)
         if (typeof asset.mimeType === 'string') setMimeType(asset.mimeType)
 
-        void generateThumbnail(asset.uri).catch((err) => {
-          console.log('[Studio] Background thumbnail generation failed:', err)
-        })
+        // Thumbnail generation on Android can be flaky for some picker sources.
+        // Let the backend generate a thumbnail during upload, or the user can pick a custom thumbnail.
+        setThumbnailUri(null)
+        setThumbnailGenerating(false)
 
         return
       }

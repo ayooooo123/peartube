@@ -26,6 +26,8 @@ interface DevicePickerModalProps {
   onClose: () => void
   devices: CastDevice[]
   connectedDevice: CastDevice | null
+  connectingDeviceId?: string | null
+  recentDeviceId?: string | null
   isDiscovering: boolean
   onDeviceSelect: (deviceId: string) => void
   onDisconnect: () => void
@@ -38,18 +40,32 @@ export function DevicePickerModal({
   onClose,
   devices,
   connectedDevice,
+  connectingDeviceId = null,
+  recentDeviceId = null,
   isDiscovering,
   onDeviceSelect,
   onDisconnect,
   onAddManualDevice,
   onRefresh,
 }: DevicePickerModalProps) {
-  const [showManualInput, setShowManualInput] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [manualName, setManualName] = useState('')
   const [manualHost, setManualHost] = useState('')
   const [manualPort, setManualPort] = useState('')
   const [manualProtocol, setManualProtocol] = useState<'fcast' | 'chromecast'>('fcast')
   const [isAdding, setIsAdding] = useState(false)
+
+  const sortedDevices = (() => {
+    const list = Array.isArray(devices) ? [...devices] : []
+    const connectedId = connectedDevice?.id
+    list.sort((a, b) => {
+      const aPinned = (a.id && (a.id === connectedId || a.id === recentDeviceId)) ? 1 : 0
+      const bPinned = (b.id && (b.id === connectedId || b.id === recentDeviceId)) ? 1 : 0
+      if (aPinned !== bPinned) return bPinned - aPinned
+      return (a.name || '').localeCompare(b.name || '')
+    })
+    return list
+  })()
 
   const handleAddManual = async () => {
     if (!manualHost.trim()) return
@@ -64,16 +80,16 @@ export function DevicePickerModal({
         manualProtocol
       )
 
-      if (device) {
-        setManualName('')
-        setManualHost('')
-        setManualPort('')
-        setShowManualInput(false)
-      }
-    } finally {
-      setIsAdding(false)
-    }
-  }
+       if (device) {
+         setManualName('')
+         setManualHost('')
+         setManualPort('')
+         setShowAdvanced(false)
+       }
+     } finally {
+       setIsAdding(false)
+     }
+   }
 
   const handleDevicePress = (device: CastDevice) => {
     if (connectedDevice?.id === device.id) {
@@ -94,7 +110,7 @@ export function DevicePickerModal({
         <View style={styles.modal}>
           {/* Header */}
           <View style={styles.header}>
-            <Text style={styles.title}>Cast to Device</Text>
+            <Text style={styles.title}>Cast</Text>
             <Pressable style={styles.closeButton} onPress={onClose}>
               <Feather name="x" size={24} color={colors.text} />
             </Pressable>
@@ -102,25 +118,29 @@ export function DevicePickerModal({
 
           {/* Device List */}
           <ScrollView style={styles.deviceList}>
-            {devices.length === 0 ? (
+            {sortedDevices.length === 0 ? (
               <View style={styles.emptyState}>
                 {isDiscovering ? (
                   <>
                     <ActivityIndicator size="large" color={colors.primary} />
-                    <Text style={styles.emptyText}>Searching for devices...</Text>
+                    <Text style={styles.emptyText}>Looking for devices…</Text>
                   </>
                 ) : (
                   <>
                     <Feather name="cast" size={48} color={colors.textMuted} />
                     <Text style={styles.emptyText}>No devices found</Text>
                     <Text style={styles.emptySubtext}>
-                      Make sure your FCast receiver is running and connected to the same network
+                      Make sure your phone and cast device are on the same Wi-Fi.
                     </Text>
+                    <Pressable style={styles.emptyRefresh} onPress={onRefresh}>
+                      <Feather name="refresh-cw" size={16} color={colors.primary} />
+                      <Text style={styles.emptyRefreshText}>Refresh</Text>
+                    </Pressable>
                   </>
                 )}
               </View>
             ) : (
-              devices.map((device) => (
+              sortedDevices.map((device) => (
                 <Pressable
                   key={device.id}
                   style={[
@@ -128,6 +148,7 @@ export function DevicePickerModal({
                     connectedDevice?.id === device.id && styles.deviceItemConnected,
                   ]}
                   onPress={() => handleDevicePress(device)}
+                  disabled={Boolean(connectingDeviceId) && connectingDeviceId !== device.id}
                 >
                   <View style={styles.deviceIcon}>
                     <Feather
@@ -144,14 +165,18 @@ export function DevicePickerModal({
                       {device.name}
                     </Text>
                     <Text style={styles.deviceMeta}>
-                      {device.host}:{device.port} · {device.protocol.toUpperCase()}
+                      {connectedDevice?.id === device.id
+                        ? 'Connected'
+                        : (connectingDeviceId === device.id ? 'Connecting…' : 'Tap to connect')}
                     </Text>
                   </View>
-                  {connectedDevice?.id === device.id && (
+                  {connectingDeviceId === device.id ? (
+                    <ActivityIndicator size={16} color={colors.primary} />
+                  ) : connectedDevice?.id === device.id ? (
                     <View style={styles.connectedBadge}>
                       <Text style={styles.connectedText}>Connected</Text>
                     </View>
-                  )}
+                  ) : null}
                 </Pressable>
               ))
             )}
@@ -170,17 +195,20 @@ export function DevicePickerModal({
 
             <Pressable
               style={styles.actionButton}
-              onPress={() => setShowManualInput(!showManualInput)}
+              onPress={() => setShowAdvanced(!showAdvanced)}
             >
-              <Feather name="plus" size={16} color={colors.primary} />
-              <Text style={styles.actionText}>Add Manually</Text>
+              <Feather name={showAdvanced ? 'chevron-down' : 'chevron-up'} size={16} color={colors.primary} />
+              <Text style={styles.actionText}>Advanced</Text>
             </Pressable>
           </View>
 
           {/* Manual Input */}
-          {showManualInput && (
+          {showAdvanced && (
             <View style={styles.manualInput}>
               <Text style={styles.manualTitle}>Add Device Manually</Text>
+              <Text style={styles.manualHint}>
+                Use this only if discovery fails. Enter an IP address on your local network.
+              </Text>
 
               <TextInput
                 style={styles.input}
@@ -224,7 +252,7 @@ export function DevicePickerModal({
                       manualProtocol === 'fcast' && styles.protocolTextActive,
                     ]}
                   >
-                    FCast
+                    FCast (custom)
                   </Text>
                 </Pressable>
                 <Pressable
@@ -313,6 +341,22 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     opacity: 0.7,
   },
+  emptyRefresh: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: colors.bg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  emptyRefreshText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.primary,
+  },
   deviceItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -390,6 +434,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.text,
     marginBottom: 4,
+  },
+  manualHint: {
+    fontSize: 13,
+    color: colors.textMuted,
+    opacity: 0.8,
+    marginBottom: 8,
   },
   input: {
     backgroundColor: colors.bg,

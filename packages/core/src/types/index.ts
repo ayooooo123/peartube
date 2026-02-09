@@ -39,12 +39,26 @@ export interface Video {
 }
 
 /**
- * Frontend video representation with UI concerns
- * Extends Video with channel info for display
+ * Frontend video representation with UI concerns.
+ *
+ * NOTE: This type is used across mobile + desktop UI.
+ * Keep it permissive enough to cover fields that may be present depending on
+ * where the data originated (feed, search, player, RPC, etc).
  */
-export interface VideoData extends Omit<Video, 'mimeType'> {
-  channel?: { name: string };
+export interface VideoData extends Video {
+  channel?: {
+    name: string;
+    key?: string;
+    avatarUrl?: string;
+  };
   thumbnailUrl?: string | null;
+
+  // Optional fields that can be attached by various backends/paths.
+  // Used for casting URL resolution, comments/reactions discovery, etc.
+  driveKey?: string;
+  publicBeeKey?: string | null;
+  blobId?: string | null;
+  blobsCoreKey?: string | null;
 }
 
 export interface UploadVideoResult {

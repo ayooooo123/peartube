@@ -1,6 +1,7 @@
 package to.holepunch.modules.mediasession
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Application
 import android.app.PendingIntent
 import android.app.PictureInPictureParams
@@ -19,6 +20,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -47,6 +49,10 @@ object PipBridge {
     @Volatile private var lastIsInPip: Boolean = false
     @Volatile private var surfaceViewInsetPx: Float = 0f
 
+    // PiP enter/exit can briefly drop focus and trigger lifecycle/audio-focus churn.
+    // Track a short transition window so we can avoid treating that as a user dismissal.
+    @Volatile private var pipTransitionUntilUptimeMs: Long = 0
+
     @Volatile private var pipAspectRatioWidth: Int = 16
     @Volatile private var pipAspectRatioHeight: Int = 9
 
@@ -57,6 +63,28 @@ object PipBridge {
     fun unregister(module: MediaSessionModule) {
         if (moduleInstance === module) {
             moduleInstance = null
+        }
+    }
+
+    private fun markPipTransition() {
+        pipTransitionUntilUptimeMs = SystemClock.uptimeMillis() + 2200
+        notifyNitroVlcTransitionUntil(pipTransitionUntilUptimeMs)
+    }
+
+    fun isInPipTransition(): Boolean {
+        return SystemClock.uptimeMillis() <= pipTransitionUntilUptimeMs
+    }
+
+    private fun notifyNitroVlcTransitionUntil(untilUptimeMs: Long) {
+        try {
+            val viewClass = Class.forName("com.margelo.nitro.com.nitrovlc.HybridNitroVLCView")
+            val method = viewClass.getMethod(
+                "setAllPipTransitionUntilUptimeMs",
+                Long::class.javaPrimitiveType
+            )
+            method.invoke(null, untilUptimeMs)
+        } catch (_: Exception) {
+            // NitroVLC not available — ignore
         }
     }
 
@@ -137,6 +165,7 @@ object PipBridge {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             android.util.Log.d("PipBridge", "onUserLeaveHint: Android 12+, auto-enter handled by system")
             // Set flag EARLY — window resizes before onPictureInPictureModeChanged fires
+            markPipTransition()
             notifyNitroVlcViews(true)
             return
         }
@@ -148,6 +177,7 @@ object PipBridge {
 
         // Manual PiP entry for Android 8-11 (API 26-30)
         // Set flag EARLY — window resizes before onPictureInPictureModeChanged fires
+        markPipTransition()
         notifyNitroVlcViews(true)
         try {
             val aspectRatio = getPipAspectRatio()
@@ -184,6 +214,7 @@ object PipBridge {
         // state itself didn't change; it can destabilize surface sizing.
         val didStateChange = isInPip != lastIsInPip
         if (didStateChange) {
+            markPipTransition()
             // Block/unblock VLC surface reconfiguration FIRST (before any layout changes)
             notifyNitroVlcViews(isInPip)
 
@@ -216,16 +247,29 @@ object PipBridge {
                 //
                 // Approach: retry the focus check a few times; only treat this as
                 // dismissal if focus never comes back.
+                fun isAppProcessVisible(): Boolean {
+                    val info = ActivityManager.RunningAppProcessInfo()
+                    ActivityManager.getMyMemoryState(info)
+                    return info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+                        info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+                }
+
                 fun maybePauseAfterDismissal(attempt: Int) {
                     if (activity.isDestroyed || activity.isFinishing) return
-                    if (activity.hasWindowFocus()) return
-                    if (attempt >= 3) {
+
+                    // During PiP exit transitions, window focus can be false even while the app
+                    // is coming back to foreground. Use process visibility instead of window focus
+                    // to avoid false-positive "dismissed" detection (which would pause + stutter).
+                    if (isAppProcessVisible()) return
+
+                    if (attempt >= 8) {
                         notifyPipDismissed()
                         return
                     }
                     handler.postDelayed({ maybePauseAfterDismissal(attempt + 1) }, 250)
                 }
-                handler.postDelayed({ maybePauseAfterDismissal(0) }, 250)
+
+                handler.postDelayed({ maybePauseAfterDismissal(0) }, 350)
             }
         }
 
@@ -780,6 +824,19 @@ class MediaSessionModule : Module() {
 
         override fun onPause() {
             android.util.Log.d("MediaSession", "onPause callback")
+
+            // Some Android 14+ devices briefly deliver MediaSession pause during PiP exit
+            // (focus/window transition). Pausing the native player here introduces an
+            // audible gap. During the PiP transition window, keep audio running.
+            val activity = appContext.currentActivity
+            val suppress = PipBridge.isInPipTransition() && (activity == null || !activity.isInPictureInPictureMode)
+            if (suppress) {
+                android.util.Log.d("MediaSession", "onPause suppressed during PiP transition")
+                // Still notify JS for state reconciliation; JS layer may ignore spurious pause.
+                sendEvent("onRemoteCommand", mapOf("command" to "pause"))
+                return
+            }
+
             updatePipPlayState(false)
             notifyVlcPlaybackPaused(true)
             sendEvent("onRemoteCommand", mapOf("command" to "pause"))
@@ -787,6 +844,15 @@ class MediaSessionModule : Module() {
 
         override fun onStop() {
             android.util.Log.d("MediaSession", "onStop callback")
+
+            val activity = appContext.currentActivity
+            val suppress = PipBridge.isInPipTransition() && (activity == null || !activity.isInPictureInPictureMode)
+            if (suppress) {
+                android.util.Log.d("MediaSession", "onStop suppressed during PiP transition")
+                sendEvent("onRemoteCommand", mapOf("command" to "stop"))
+                return
+            }
+
             updatePipPlayState(false)
             notifyVlcPlaybackPaused(true)
             sendEvent("onRemoteCommand", mapOf("command" to "stop"))
@@ -864,6 +930,24 @@ class MediaSessionModule : Module() {
     }
 
     private fun handleAudioFocusChange(focusChange: Int) {
+        // During PiP enter/exit, some devices briefly report transient focus loss.
+        // Treat that as non-fatal to keep audio seamless.
+        if (PipBridge.isInPipTransition()) {
+            when (focusChange) {
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                    android.util.Log.d("MediaSession", "handleAudioFocusChange: ignoring transient focus loss during PiP transition")
+                    return
+                }
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    // Some builds can emit a short-lived LOSS during PiP exit.
+                    // Avoid pausing the native player unless the loss persists.
+                    android.util.Log.d("MediaSession", "handleAudioFocusChange: ignoring focus LOSS during PiP transition")
+                    return
+                }
+            }
+        }
+
         when (focusChange) {
             AudioManager.AUDIOFOCUS_LOSS -> {
                 sendEvent("onAudioInterruption", mapOf("type" to "began"))
@@ -954,7 +1038,10 @@ class MediaSessionModule : Module() {
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setSeamlessResizeEnabled(false)
+                // Android 12+ supports seamless PiP resizing. For video playback we want
+                // the system to resize the activity/window smoothly to avoid disruptive
+                // surface churn during PiP enter/exit.
+                builder.setSeamlessResizeEnabled(true)
             }
 
             builder.setActions(buildPipActions(activity))
@@ -997,7 +1084,8 @@ class MediaSessionModule : Module() {
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setSeamlessResizeEnabled(false)
+                // See enterPiP(): prefer seamless resize for video playback.
+                builder.setSeamlessResizeEnabled(true)
                 // This is the key - auto-enter PiP when going to background
                 builder.setAutoEnterEnabled(enabled)
             }
@@ -1076,7 +1164,8 @@ class MediaSessionModule : Module() {
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setSeamlessResizeEnabled(false)
+                // See enterPiP(): prefer seamless resize for video playback.
+                builder.setSeamlessResizeEnabled(true)
             }
 
             builder.setActions(buildPipActions(activity))

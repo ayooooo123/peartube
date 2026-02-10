@@ -413,8 +413,13 @@ export const rpc = {
     return ensureRPC().hideChannel(req);
   },
 
-  async getChannelMeta(channelKeyOrReq: string | { channelKey: string }) {
-    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+  async getChannelMeta(
+    channelKeyOrReq: string | { channelKey: string; publicBeeKey?: string | null },
+    publicBeeKey?: string | null
+  ) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, publicBeeKey: publicBeeKey ?? undefined }
+      : channelKeyOrReq;
     return ensureRPC().getChannelMeta(req);
   },
 

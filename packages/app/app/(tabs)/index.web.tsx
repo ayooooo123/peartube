@@ -583,10 +583,10 @@ function WatchPageView({
       return
     }
 
-    rpc.getChannelMeta({ channelKey: channelKey })
+    rpc.getChannelMeta({ channelKey: channelKey, publicBeeKey })
       .then((result: any) => setChannel(result))
       .catch((err: any) => console.error('Failed to load channel:', err))
-  }, [channelKey, channelMeta, rpc])
+  }, [channelKey, channelMeta, rpc, publicBeeKey])
 
   // Start prefetch and poll for video stats
   useEffect(() => {
@@ -629,7 +629,7 @@ function WatchPageView({
       cancelled = true
       if (interval) clearInterval(interval)
     }
-  }, [channelKey, video?.path, video?.id, rpc])
+  }, [channelKey, video?.path, video?.id, rpc, isActiveWatch, publicBeeKey])
 
   // Load comments/reactions (best-effort)
   const loadSocialData = useCallback(async (page = 0, append = false) => {

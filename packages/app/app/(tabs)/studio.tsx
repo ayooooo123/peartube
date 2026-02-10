@@ -2,7 +2,7 @@
  * Studio Tab - Upload and manage videos
  */
 import { useRef, useState, useCallback } from 'react'
-import { View, Text, FlatList, Alert, Pressable, TextInput, ActivityIndicator, Platform, Image, AppState } from 'react-native'
+import { View, Text, FlatList, Alert, Pressable, TextInput, ActivityIndicator, Platform, Image, AppState, InteractionManager } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather, Ionicons } from '@expo/vector-icons'
@@ -12,21 +12,6 @@ import * as VideoThumbnails from 'expo-video-thumbnails'
 import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
-
-// Helper to read file as base64 without expo-file-system
-async function readFileAsBase64(uri: string): Promise<string> {
-  const response = await fetch(uri)
-  const blob = await response.blob()
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onloadend = () => {
-      const base64 = (reader.result as string).split(',')[1] // Remove data:... prefix
-      resolve(base64)
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(blob)
-  })
-}
 
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
@@ -57,7 +42,7 @@ export default function StudioScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos } = useApp()
-  const { pauseVideo, closeVideo } = useVideoPlayerContext()
+  const { pauseVideo, closeVideo, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo } = useVideoPlayerContext()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadSpeed, setUploadSpeed] = useState(0)  // bytes/sec
@@ -71,9 +56,11 @@ export default function StudioScreen() {
   const [fileSize, setFileSize] = useState<number>(0)
   const [mimeType, setMimeType] = useState<string>('video/mp4')
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null) // Preview URI (data URL or file URI)
-  const [thumbnailFilePath, setThumbnailFilePath] = useState<string | null>(null) // Pear: actual thumbnail file path
+  const [thumbnailFilePath, setThumbnailFilePath] = useState<string | null>(null) // File path/URI for uploading thumbnail
   const [videoDuration, setVideoDuration] = useState<number | null>(null)
   const [thumbnailGenerating, setThumbnailGenerating] = useState(false)
+  const [thumbnailError, setThumbnailError] = useState<string | null>(null)
+  const thumbnailGenIdRef = useRef(0)
   const [pickingVideo, setPickingVideo] = useState(false)
   const pickingVideoRef = useRef(false)
 
@@ -81,18 +68,38 @@ export default function StudioScreen() {
   const generateThumbnail = useCallback(async (videoUri: string, durationMs?: number) => {
     if (isPear) return // Desktop handles thumbnails server-side
     try {
+      const genId = ++thumbnailGenIdRef.current
       setThumbnailGenerating(true)
-      const timeMs = durationMs ? Math.floor(durationMs * 0.1) : 1000
-      console.log('[Studio] Generating thumbnail at', timeMs, 'ms')
-      const { uri } = await VideoThumbnails.getThumbnailAsync(videoUri, {
-        time: timeMs,
-        quality: 0.8,
-      })
-      console.log('[Studio] Thumbnail generated:', uri)
-      setThumbnailUri(uri)
-      return uri
+      setThumbnailError(null)
+      const primaryTime = durationMs ? Math.floor(durationMs * 0.1) : 1000
+      const times = Array.from(new Set([primaryTime, 1000, 2000].filter((t) => t >= 0)))
+
+      for (const timeMs of times) {
+        try {
+          console.log('[Studio] Generating thumbnail at', timeMs, 'ms')
+          const { uri } = await VideoThumbnails.getThumbnailAsync(videoUri, {
+            time: timeMs,
+            quality: 0.7,
+          })
+          console.log('[Studio] Thumbnail generated:', uri)
+          // Ignore stale generations (user picked another video)
+          if (thumbnailGenIdRef.current !== genId) return null
+          setThumbnailUri(uri)
+          setThumbnailFilePath(uri)
+          return uri
+        } catch (err) {
+          console.log('[Studio] Thumbnail attempt failed at', timeMs, 'ms:', err)
+        }
+      }
+
+      if (thumbnailGenIdRef.current === genId) {
+        setThumbnailError('Could not generate thumbnail. Please pick an image.')
+      }
+
+      return null
     } catch (err) {
       console.log('[Studio] Thumbnail generation failed:', err)
+      setThumbnailError('Could not generate thumbnail. Please pick an image.')
       return null
     } finally {
       setThumbnailGenerating(false)
@@ -153,6 +160,8 @@ export default function StudioScreen() {
     if (!result.canceled && result.assets[0]) {
       console.log('[Studio] Custom thumbnail selected:', result.assets[0].uri)
       setThumbnailUri(result.assets[0].uri)
+      setThumbnailFilePath(result.assets[0].uri)
+      setThumbnailError(null)
     }
   }, [pickImageFile])
 
@@ -162,12 +171,14 @@ export default function StudioScreen() {
 
     pickingVideoRef.current = true
     setPickingVideo(true)
+    // Opening a system picker backgrounds the app. Our VideoPlayerContext tries to
+    // auto-restore the last closed video on foreground, which can cause surprise playback
+    // and a black overlay. Suppress that once for picker flows.
+    suppressForegroundRestoreOnce()
+    suppressForegroundRestoreFor(8000)
     pauseVideo()
-    if (Platform.OS === 'android') {
-      // On Android, returning from picker can leave the TextureView/Surface in a bad state
-      // and present as a full-screen black overlay. Closing the global player avoids this.
-      closeVideo()
-    }
+    closeVideo()
+    clearLastClosedVideo()
 
     if (isPear) {
       // Pear desktop: use native file picker via osascript
@@ -222,10 +233,16 @@ export default function StudioScreen() {
         if (typeof asset.size === 'number') setFileSize(asset.size)
         if (typeof asset.mimeType === 'string') setMimeType(asset.mimeType)
 
-        // Thumbnail generation on Android can be flaky for some picker sources.
-        // Let the backend generate a thumbnail during upload, or the user can pick a custom thumbnail.
+        // Kick off thumbnail generation (non-blocking). This should work reliably
+        // because we copy the video to app cache (file:// URI).
         setThumbnailUri(null)
-        setThumbnailGenerating(false)
+        setThumbnailFilePath(null)
+        setThumbnailError(null)
+        InteractionManager.runAfterInteractions(() => {
+          void generateThumbnail(asset.uri).catch((err) => {
+            console.log('[Studio] Background thumbnail generation failed:', err)
+          })
+        })
 
         return
       }
@@ -256,8 +273,13 @@ export default function StudioScreen() {
         }
 
         // Generate thumbnail at 10% into video, but don't block UI.
-        void generateThumbnail(asset.uri, asset.duration ?? undefined).catch((err) => {
-          console.log('[Studio] Background thumbnail generation failed:', err)
+        setThumbnailUri(null)
+        setThumbnailFilePath(null)
+        setThumbnailError(null)
+        InteractionManager.runAfterInteractions(() => {
+          void generateThumbnail(asset.uri, asset.duration ?? undefined).catch((err) => {
+            console.log('[Studio] Background thumbnail generation failed:', err)
+          })
         })
       }
     } catch (err: any) {
@@ -338,41 +360,49 @@ export default function StudioScreen() {
         // Reload videos after upload
         await loadVideos(driveKey)
       } else if (rpc) {
-        // Native: use HRPC upload
-        // Skip FFmpeg thumbnail generation if user selected/generated a thumbnail
-        const skipThumbnail = !!thumbnailUri
-        const result = await rpc.uploadVideo({
-          filePath: selectedVideo,
-          title: title.trim(),
-          description: '',
-          category: selectedCategory,
-          skipThumbnailGeneration: skipThumbnail,
-        })
-        videoId = result?.video?.id
+        // Native: use AppContext uploadVideo so we get streaming progress events.
+        // Prefer the RN-generated thumbnail when available.
+        // Keep bare-media thumbnail generation available as a fallback on iOS only.
+        // (Android bare-media thumbnail generation has been crash-prone.)
+        const skipThumbnail = Platform.OS === 'android'
+          ? true
+          : (thumbnailGenerating || !!thumbnailFilePath)
+
+        const video = await uploadVideo(
+          selectedVideo,
+          title.trim(),
+          '',
+          mimeType,
+          selectedCategory,
+          (progress, speed, eta, transcoding) => {
+            setUploadProgress(progress)
+            if (speed !== undefined) setUploadSpeed(speed)
+            if (eta !== undefined) setUploadEta(eta)
+            setIsTranscoding(!!transcoding)
+          },
+          skipThumbnail
+        )
+
+        videoId = video?.id
         console.log('[Studio] Upload complete, videoId:', videoId, 'skippedThumbnail:', skipThumbnail)
 
-        // If we have a thumbnail, upload it
-        if (thumbnailUri && videoId) {
-          console.log('[Studio] Uploading thumbnail from URI:', thumbnailUri)
+        // If we have a thumbnail file/URI, upload it (no base64)
+        if (thumbnailFilePath && videoId) {
+          console.log('[Studio] Uploading thumbnail from file:', thumbnailFilePath)
           try {
-            const thumbBase64 = await readFileAsBase64(thumbnailUri)
-            console.log('[Studio] Thumbnail base64 length:', thumbBase64.length)
-
-            const uploadResult = await rpc.setVideoThumbnail({
+            await rpc.setVideoThumbnailFromFile({
               videoId,
-              imageData: thumbBase64,
-              mimeType: 'image/jpeg',
+              filePath: thumbnailFilePath,
             })
-            console.log('[Studio] Thumbnail upload result:', JSON.stringify(uploadResult))
+            console.log('[Studio] Thumbnail uploaded from file')
           } catch (thumbErr: any) {
             console.error('[Studio] Failed to upload thumbnail:', thumbErr?.message || thumbErr)
             // Don't fail the whole upload if thumbnail fails
           }
         } else {
-          console.log('[Studio] No thumbnail to upload, thumbnailUri:', thumbnailUri, 'videoId:', videoId)
+          console.log('[Studio] No thumbnail to upload, thumbnailFilePath:', thumbnailFilePath, 'videoId:', videoId)
         }
 
-        await loadVideos(driveKey)
       }
 
       setSelectedVideo(null)
@@ -383,6 +413,7 @@ export default function StudioScreen() {
       setThumbnailFilePath(null)
       setVideoDuration(null)
       setSelectedCategory('Other')
+      setThumbnailError(null)
       Alert.alert('Success', 'Video uploaded successfully!')
     } catch (err: any) {
       console.error('[Studio] Upload failed:', err)
@@ -409,18 +440,38 @@ export default function StudioScreen() {
               <View className="rounded-xl overflow-hidden bg-pear-bg-card">
                 <View style={{ aspectRatio: 16 / 9 }}>
                   {thumbnailUri ? (
-                    <Image
-                      source={{ uri: thumbnailUri }}
-                      style={{ width: '100%', height: '100%' }}
-                      resizeMode="cover"
-                    />
+                    <View style={{ width: '100%', height: '100%' }}>
+                      <Image
+                        source={{ uri: thumbnailUri }}
+                        style={{ width: '100%', height: '100%' }}
+                        resizeMode="cover"
+                      />
+                      {thumbnailGenerating ? (
+                        <View
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            backgroundColor: 'rgba(0,0,0,0.25)',
+                          }}
+                        >
+                          <ActivityIndicator color={colors.text} />
+                        </View>
+                      ) : null}
+                    </View>
                   ) : (
                     <View className="flex-1 items-center justify-center bg-pear-bg-elevated">
                       <Feather name="film" color={colors.textMuted} size={48} />
                       <Text className="text-caption text-pear-text-muted mt-2">
                         {isPear
                           ? 'Click below to add thumbnail'
-                          : (thumbnailGenerating ? 'Generating thumbnail...' : 'Thumbnail not available')}
+                          : (thumbnailGenerating
+                            ? 'Generating thumbnail...'
+                            : (thumbnailError ? thumbnailError : 'Thumbnail not available'))}
                       </Text>
                     </View>
                   )}
@@ -446,12 +497,20 @@ export default function StudioScreen() {
                   Video selected
                 </Text>
                 <Pressable
-                  onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); setThumbnailFilePath(null); setVideoDuration(null); }}
+                  onPress={() => { setSelectedVideo(null); setFilePath(null); setFileSize(0); setThumbnailUri(null); setThumbnailFilePath(null); setVideoDuration(null); setThumbnailError(null); }}
                   className="w-8 h-8 items-center justify-center"
                 >
                   <Feather name="trash-2" color={colors.error} size={18} />
                 </Pressable>
               </View>
+
+              {!isPear && thumbnailError ? (
+                <View className="bg-pear-bg-elevated border border-pear-border rounded-lg p-4">
+                  <Text className="text-caption text-pear-text-muted">
+                    Thumbnail generation failed. Tap "Add Thumbnail" to pick an image.
+                  </Text>
+                </View>
+              ) : null}
 
               {/* Title input */}
               <TextInput
@@ -517,11 +576,20 @@ export default function StudioScreen() {
               ) : (
                 <Pressable
                   onPress={handleUpload}
-                  disabled={!title.trim()}
-                  className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${!title.trim() ? 'opacity-50' : ''}`}
+                  disabled={
+                    !title.trim() ||
+                    (!isPear && (thumbnailGenerating || !thumbnailFilePath))
+                  }
+                  className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(!title.trim() || (!isPear && (thumbnailGenerating || !thumbnailFilePath))) ? 'opacity-50' : ''}`}
                 >
                   <Feather name="upload" color="white" size={18} />
-                  <Text className="text-white text-label">Upload Video</Text>
+                  <Text className="text-white text-label">
+                    {!isPear && thumbnailGenerating
+                      ? 'Generating Thumbnail...'
+                      : (!isPear && !thumbnailFilePath)
+                        ? 'Thumbnail Required'
+                        : 'Upload Video'}
+                  </Text>
                 </Pressable>
               )}
             </View>

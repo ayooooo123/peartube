@@ -133,7 +133,13 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     return { ...obj }
   }
 
+  function invalidateChannelCaches(driveKey) {
+    try { listVideosCache.delete(driveKey) } catch {}
+    try { channelMetaCache.delete(driveKey) } catch {}
+  }
+
   return {
+    invalidateChannelCaches,
     // ============================================
     // Channel Operations
     // ============================================

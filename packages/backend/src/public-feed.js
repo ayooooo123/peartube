@@ -173,15 +173,23 @@ export class PublicFeedManager {
     const discovery = this.swarm.join(this.feedTopic, { server: true, client: true });
     this._feedDiscovery = discovery;
 
-    // Don't block forever on flushed() - it can hang on mobile
+    // IMPORTANT: do not await discovery.flushed() here.
+    // Hyperswarm treats flushed() as a heavyweight "fully announced" barrier; on mobile/Bare
+    // it can be slow or hang, and there's no need to block backend readiness on it.
+    // We'll log completion best-effort in the background instead.
     try {
-      await Promise.race([
-        discovery.flushed(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('flushed timeout')), 10000))
-      ]);
-      console.log('[PublicFeed] Feed topic join flushed');
+      const flushed = discovery.flushed?.();
+      if (flushed && typeof flushed.then === 'function') {
+        flushed
+          .then(() => {
+            console.log('[PublicFeed] Feed topic join flushed');
+          })
+          .catch((err) => {
+            console.log('[PublicFeed] Feed topic join flush failed (non-fatal):', err?.message);
+          });
+      }
     } catch (err) {
-      console.log('[PublicFeed] Feed topic join flush timeout (non-fatal):', err?.message);
+      console.log('[PublicFeed] Feed topic join flush setup failed (non-fatal):', err?.message);
     }
 
     console.log('[PublicFeed] Swarm connections after join:', this.swarm.connections?.size || 0);

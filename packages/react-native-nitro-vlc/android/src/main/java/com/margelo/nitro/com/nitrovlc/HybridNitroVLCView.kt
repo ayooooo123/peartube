@@ -33,6 +33,17 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   companion object {
     val registry = ConcurrentHashMap<String, WeakReference<HybridNitroVLCView>>()
 
+    // Set from PipBridge via reflection. We use uptimeMillis so this isn't affected by
+    // wall-clock changes. While this window is active, we avoid any expensive VLC
+    // surface reconfiguration that could glitch audio on PiP exit.
+    @Volatile private var pipTransitionUntilUptimeMs: Long = 0
+
+    /** Called from PipBridge via reflection to mark the PiP enter/exit transition window. */
+    @JvmStatic
+    fun setAllPipTransitionUntilUptimeMs(untilUptimeMs: Long) {
+      pipTransitionUntilUptimeMs = maxOf(pipTransitionUntilUptimeMs, untilUptimeMs)
+    }
+
     /** Called from MediaSessionModule via reflection when PiP mode changes. */
     @JvmStatic
     fun setAllPipMode(active: Boolean) {
@@ -155,6 +166,11 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
   // because the Activity flag may not be set yet during the PiP transition race.
   @Volatile
   var pipModeActive = false
+
+  private fun isInPipTransition(): Boolean {
+    val until = pipTransitionUntilUptimeMs
+    return until > 0 && SystemClock.uptimeMillis() <= until
+  }
 
   private fun clearPipMatrix() {
     lastPipWindowWidthPx = 0
@@ -281,25 +297,23 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
     val runnable = Runnable {
       if (isDisposed) return@Runnable
       if (isEffectivelyInPip()) return@Runnable
-
-      val player = mediaPlayer ?: return@Runnable
-      val st = textureView.surfaceTexture ?: return@Runnable
       val w = textureView.width
       val h = textureView.height
       if (w <= 0 || h <= 0) return@Runnable
 
-      try { st.setDefaultBufferSize(w, h) } catch (_: Exception) {}
-      try { player.vlcVout.setWindowSize(w, h) } catch (_: Exception) {}
+      // IMPORTANT: Avoid forcing updateVideoSurfaces() immediately on PiP exit.
+      // On some devices, a forced surface sync during the exit animation causes
+      // a tiny audible stutter. Route through applySurfaceSize() so we dedupe and
+      // only do a full reconfigure when it is truly needed.
+      applySurfaceSize(w, h, reason = "postPipExitSurfaceSync")
       try { applyAspectRatio() } catch (_: Exception) {}
-      try { player.updateVideoSurfaces() } catch (_: Exception) {}
-      lastAppliedSurfaceWidth = w
-      lastAppliedSurfaceHeight = h
-      logSurface("postPipExitSurfaceSync updateVideoSurfaces size=${w}x${h}")
+      logSurface("postPipExitSurfaceSync appliedSurfaceSize size=${w}x${h}")
     }
 
     postPipExitSurfaceSync = runnable
-    // Post (no delay): improves resume latency after PiP exit.
-    mainHandler.post(runnable)
+    // Delay slightly so we don't fight the PiP->fullscreen transition animation.
+    // This reduces the chance of syncing against intermediate TextureView sizes.
+    mainHandler.postDelayed(runnable, 180)
   }
 
   // Throttle extremely chatty logs during Reanimated-driven resizes.
@@ -785,16 +799,22 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
         }
         viewsAttached = false
       }
-      // Release old Surface before creating a new one from the SurfaceTexture.
-      currentSurface?.release()
-      currentSurface = Surface(st)
+      // Avoid unnecessary Surface churn when the SurfaceTexture hasn't changed.
+      // Releasing/recreating the Surface can cause brief glitches on some devices.
+      val canReuseSurface = currentSurface != null && attachedSurfaceTextureId == stId
+      if (!canReuseSurface) {
+        currentSurface?.release()
+        currentSurface = Surface(st)
+      }
       // Use setVideoSurface instead of setVideoView. setVideoView calls
       // textureView.setSurfaceTextureListener(...) internally, which REPLACES
       // our listener. Without our listener, onSurfaceTextureDestroyed can't
       // return false to keep the texture alive during PiP drag animations.
       // setVideoSurface just provides the Surface for rendering without
       // touching the SurfaceTextureListener.
-      vout.setVideoSurface(currentSurface!!, null)
+      if (!canReuseSurface || needsReattach || !vout.areViewsAttached()) {
+        vout.setVideoSurface(currentSurface!!, null)
+      }
       if (!vout.areViewsAttached()) {
         vout.attachViews(this)
       }
@@ -815,10 +835,18 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
           st.setDefaultBufferSize(w, h)
           vout.setWindowSize(w, h)
           applyAspectRatio()
-          player.updateVideoSurfaces()
-          lastAppliedSurfaceWidth = w
-          lastAppliedSurfaceHeight = h
-          logSurface("attachSurface updateVideoSurfaces ok reason=$reason size=${w}x${h}")
+          if (isInPipTransition()) {
+            // Avoid forcing an EGL/surface sync during PiP enter/exit. We want audio to
+            // remain uninterrupted; video can settle once the transition is complete.
+            lastAppliedSurfaceWidth = w
+            lastAppliedSurfaceHeight = h
+            logSurface("attachSurface SKIPPED updateVideoSurfaces (PiP transition) reason=$reason size=${w}x${h}")
+          } else {
+            player.updateVideoSurfaces()
+            lastAppliedSurfaceWidth = w
+            lastAppliedSurfaceHeight = h
+            logSurface("attachSurface updateVideoSurfaces ok reason=$reason size=${w}x${h}")
+          }
         } catch (e: Exception) {
           logSurface("attachSurface updateVideoSurfaces threw: ${e.message} reason=$reason")
         }
@@ -858,6 +886,7 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
     val effectiveW = if (tvW > 0) tvW else width
     val effectiveH = if (tvH > 0) tvH else height
     val inPip = isEffectivelyInPip()
+    val inTransition = isInPipTransition()
     val prevArea = lastAppliedSurfaceWidth.toLong() * lastAppliedSurfaceHeight.toLong()
     val newArea = effectiveW.toLong() * effectiveH.toLong()
     val isPipLikeShrink = prevArea > 0 && newArea > 0 && newArea < prevArea / 4
@@ -891,7 +920,20 @@ class HybridNitroVLCView(private val context: Context) : HybridNitroVLCViewSpec(
       return
     }
 
-    if (isLargeChange) {
+    val treatLargeChangeAsLightweight = isLargeChange && (reason == "postPipExitSurfaceSync" || inTransition)
+    if (treatLargeChangeAsLightweight) {
+      // PiP exit is a special case: forcing an EGL/surface reinit (via updateVideoSurfaces)
+      // right as the system animates back can produce a tiny audible stutter on some
+      // Android 14+ devices. Prefer a lightweight update and let TextureView scale.
+      logSurface("applySurfaceSize PiP-exit lightweight reason=$reason prev=${prevW}x${prevH} -> ${effectiveW}x${effectiveH}")
+      val now = SystemClock.uptimeMillis()
+      if (now - lastSurfaceSizeLogAtMs > 750) {
+        lastSurfaceSizeLogAtMs = now
+      }
+      try { st.setDefaultBufferSize(effectiveW, effectiveH) } catch (_: Exception) {}
+      try { player.vlcVout.setWindowSize(effectiveW, effectiveH) } catch (_: Exception) {}
+      // Intentionally no updateVideoSurfaces() here.
+    } else if (isLargeChange) {
       // Large change: recreate Surface so VLC's EGL context reinitializes
       // at the new resolution. Then reconfigure VLC.
       logSurface("applySurfaceSize LARGE change reason=$reason prev=${prevW}x${prevH} -> ${effectiveW}x${effectiveH}")

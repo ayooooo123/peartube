@@ -35,7 +35,7 @@ declare const HRPC: new (stream: any) => {
   submitToFeed(req: {}): Promise<any>;
   unpublishFromFeed(req: {}): Promise<any>;
   isChannelPublished(req: {}): Promise<any>;
-  getChannelMeta(req: { channelKey: string }): Promise<any>;
+  getChannelMeta(req: { channelKey: string; publicBeeKey?: string | null }): Promise<any>;
   createDeviceInvite(req: { channelKey: string }): Promise<any>;
   pairDevice(req: { inviteCode: string; deviceName?: string }): Promise<any>;
   listDevices(req: { channelKey: string }): Promise<any>;
@@ -777,8 +777,13 @@ export const rpc = {
     return ensureRPC().isChannelPublished({});
   },
 
-  async getChannelMeta(channelKeyOrReq: string | { channelKey: string }) {
-    const req = typeof channelKeyOrReq === 'string' ? { channelKey: channelKeyOrReq } : channelKeyOrReq;
+  async getChannelMeta(
+    channelKeyOrReq: string | { channelKey: string; publicBeeKey?: string | null },
+    publicBeeKey?: string | null
+  ) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, publicBeeKey: publicBeeKey ?? undefined }
+      : channelKeyOrReq;
     return ensureRPC().getChannelMeta(req);
   },
 

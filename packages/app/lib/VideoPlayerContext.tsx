@@ -84,6 +84,9 @@ interface VideoPlayerContextType {
   pauseVideo: () => void
   resumeVideo: () => void
   closeVideo: () => void
+  suppressForegroundRestoreOnce: () => void
+  suppressForegroundRestoreFor: (ms: number) => void
+  clearLastClosedVideo: () => void
   minimizePlayer: () => void
   maximizePlayer: () => void
   seekTo: (time: number) => void
@@ -153,6 +156,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const lastClosedVideoRef = useRef<VideoData | null>(null)
   const lastClosedUrlRef = useRef<string | null>(null)
   const lastClosedTimeRef = useRef<number | null>(null)
+  const suppressForegroundRestoreRef = useRef(false)
+  const suppressForegroundRestoreUntilRef = useRef<number>(0)
   const remotePlayWhileBackgroundedRef = useRef(false)
   const pipExitShouldResumeRef = useRef(false)
   const pipExitExpectedPlayingRef = useRef(false)
@@ -337,11 +342,20 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
            }
          }
 
-        if (!currentVideoRef.current) {
-          restoreLastClosedVideo('foreground')
-        } else if (playerModeRef.current === 'hidden' && currentVideoRef.current) {
-          console.log('[VideoPlayerContext] Foreground while hidden, restoring fullscreen')
-          setPlayerMode('fullscreen')
+        const now = Date.now()
+        const suppressOnce = suppressForegroundRestoreRef.current
+        if (suppressOnce) {
+          suppressForegroundRestoreRef.current = false
+        }
+        const suppressWindow = suppressForegroundRestoreUntilRef.current > now
+
+        if (!suppressOnce && !suppressWindow) {
+          if (!currentVideoRef.current) {
+            restoreLastClosedVideo('foreground')
+          } else if (playerModeRef.current === 'hidden' && currentVideoRef.current) {
+            console.log('[VideoPlayerContext] Foreground while hidden, restoring fullscreen')
+            setPlayerMode('fullscreen')
+          }
         }
 
         if (remotePlayWhileBackgroundedRef.current) {
@@ -736,6 +750,24 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     mediaSessionActiveRef.current = false
   }, [setMediaSessionActive])
 
+  const suppressForegroundRestoreOnce = useCallback(() => {
+    suppressForegroundRestoreRef.current = true
+  }, [])
+
+  const suppressForegroundRestoreFor = useCallback((ms: number) => {
+    const now = Date.now()
+    const until = now + Math.max(0, ms)
+    if (until > suppressForegroundRestoreUntilRef.current) {
+      suppressForegroundRestoreUntilRef.current = until
+    }
+  }, [])
+
+  const clearLastClosedVideo = useCallback(() => {
+    lastClosedVideoRef.current = null
+    lastClosedUrlRef.current = null
+    lastClosedTimeRef.current = null
+  }, [])
+
   const minimizePlayer = useCallback(() => {
     console.log('[VideoPlayerContext] Minimizing to in-app mini player')
     setPlayerMode('mini')
@@ -985,6 +1017,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     pauseVideo,
     resumeVideo,
     closeVideo,
+    suppressForegroundRestoreOnce,
+    suppressForegroundRestoreFor,
+    clearLastClosedVideo,
     minimizePlayer,
     maximizePlayer,
     seekTo,
@@ -1009,7 +1044,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     currentTime, duration, progress,
     // Callbacks (stable references via useCallback)
     loadAndPlayVideo, pauseVideo, resumeVideo,
-    closeVideo, minimizePlayer, maximizePlayer, seekTo, seekBy, setPlaybackRate,
+    closeVideo, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo, minimizePlayer, maximizePlayer, seekTo, seekBy, setPlaybackRate,
     onProgress, onPlaying, onPaused, onBuffering,
     onEnded, onError, onVideoStateChange,
   ])

@@ -949,6 +949,13 @@ export function VideoPlayerOverlay() {
   const miniPipStartX = useSharedValue(0)
   const miniPipStartY = useSharedValue(0)
 
+  // Safe bounds captured at gesture start (prevents mid-gesture jumps when Android
+  // window metrics/insets change due to keyboard, system UI, or PiP heuristics).
+  const dragSafeLeft = useSharedValue(0)
+  const dragSafeRight = useSharedValue(0)
+  const dragSafeTop = useSharedValue(0)
+  const dragSafeBottom = useSharedValue(0)
+
   // Stable mode (0=mini, 1=fullscreen) based on animProgress reaching endpoints.
   // This prevents the pan gesture from misclassifying the mode while the mini/full
   // transition is still animating (which can make a mini drag behave like a fullscreen
@@ -1056,15 +1063,27 @@ export function VideoPlayerOverlay() {
   }, [miniPlayerBottom])
 
   useEffect(() => {
-    if (playerMode === 'mini') {
-      // Bottom-right corner, above tab bar
-      const safeRight = screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN
-      const safeBottom = screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottom
-      // Use spring for bouncy entrance animation
-      miniPipX.value = withSpring(safeRight, SPRING_CONFIG_BOUNCY)
-      miniPipY.value = withSpring(safeBottom, SPRING_CONFIG_BOUNCY)
-    }
-  }, [screenWidth, screenHeight, playerMode, miniPlayerBottom])
+    // Avoid re-anchoring the mini player on every dimension/inset change.
+    // That can fire mid-drag and cause the mini player to "shoot" off-screen.
+    if (playerMode !== 'mini') return
+
+    const safeTop = stableInsetTopRef.current + MINI_PIP_MARGIN
+    const safeBottom = screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottom
+    const safeLeft = MINI_PIP_MARGIN
+    const safeRight = screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN
+
+    runOnUI(() => {
+      'worklet'
+      // Only clamp when we're stably in mini and no gesture is active.
+      if (isGestureActive.value) return
+      if (stableModeShared.value !== 0) return
+
+      const clampedX = Math.max(safeLeft, Math.min(safeRight, miniPipX.value))
+      const clampedY = Math.max(safeTop, Math.min(safeBottom, miniPipY.value))
+      if (clampedX !== miniPipX.value) miniPipX.value = clampedX
+      if (clampedY !== miniPipY.value) miniPipY.value = clampedY
+    })()
+  }, [playerMode, screenWidth, screenHeight, miniPlayerBottom, insets.top, insets.bottom])
 
   // When exiting landscape fullscreen, keep rendering the fullscreen container until window dimensions AND insets settle.
   // The tricky part: StatusBar visibility + safe area insets can lag behind the orientation lock by a few frames.
@@ -1255,6 +1274,21 @@ export function VideoPlayerOverlay() {
       }
 
       if (startedInFullscreen === 0) {
+        // Capture safe bounds once for the whole gesture.
+        // If these change while dragging, the clamp target can jump and make the
+        // mini player appear to "shoot".
+        const safeTop = insetTopShared.value + MINI_PIP_MARGIN
+        const safeBottom = screenHeightShared.value - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottomShared.value
+        const safeLeft = MINI_PIP_MARGIN
+        const safeRight = screenWidthShared.value - MINI_PIP_WIDTH - MINI_PIP_MARGIN
+
+        // Defensive: if bounds are invalid (can happen during transient dimension
+        // glitches), fall back to a sane rect.
+        dragSafeLeft.value = safeLeft
+        dragSafeTop.value = safeTop
+        dragSafeRight.value = safeRight > safeLeft ? safeRight : safeLeft
+        dragSafeBottom.value = safeBottom > safeTop ? safeBottom : safeTop
+
         const visualLeft = interpolate(
           animProgress.value,
           [0, 1],
@@ -1277,6 +1311,8 @@ export function VideoPlayerOverlay() {
       // fight with the drag. Self-assignment cancels animations in Reanimated.
       cancelAnimation(miniPipX)
       cancelAnimation(miniPipY)
+      cancelAnimation(swipeDismissX)
+      cancelAnimation(swipeDismissOpacity)
       miniPipStartX.value = miniPipX.value
       miniPipStartY.value = miniPipY.value
       // Reset drag offset (transform-based movement during drag)
@@ -1303,10 +1339,10 @@ export function VideoPlayerOverlay() {
       if (gestureStartedInFullscreen.value === 0) {
         // Mini player mode - use transform-based drag offset to avoid Yoga relayout.
         // On Android, Yoga relayout on every frame disrupts TextureView rendering.
-        const safeTop = insetTopShared.value + MINI_PIP_MARGIN
-        const safeBottom = screenHeightShared.value - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottomShared.value
-        const safeLeft = MINI_PIP_MARGIN
-        const safeRight = screenWidthShared.value - MINI_PIP_WIDTH - MINI_PIP_MARGIN
+        const safeTop = dragSafeTop.value
+        const safeBottom = dragSafeBottom.value
+        const safeLeft = dragSafeLeft.value
+        const safeRight = dragSafeRight.value
 
         const newX = miniPipStartX.value + event.translationX
         const newY = miniPipStartY.value + event.translationY
@@ -1315,20 +1351,20 @@ export function VideoPlayerOverlay() {
         // dragOffset is applied via transform (GPU-only, no Yoga), not left/top.
         const clampedX = Math.max(safeLeft, Math.min(safeRight, newX))
         const clampedY = Math.max(safeTop, Math.min(safeBottom, newY))
-        dragOffsetX.value = clampedX - miniPipX.value
-        dragOffsetY.value = clampedY - miniPipY.value
+        // IMPORTANT: compute offsets relative to the gesture start snapshot.
+        // miniPipX/Y can change due to unrelated effects (dimension/inset settles),
+        // which would otherwise cause jumps or off-screen launches mid-drag.
+        dragOffsetX.value = clampedX - miniPipStartX.value
+        dragOffsetY.value = clampedY - miniPipStartY.value
 
         // Dismiss should be intentional: don't arm it just because we're near an edge.
         // Keep drag stable; decide dismissal on release.
         swipeDismissX.value = 0
         isSwipeDismissing.value = false
-        const absDx = Math.abs(event.translationX)
-        if (absDx > 24) {
-          const progress = Math.min(absDx / (SWIPE_DISMISS_THRESHOLD * 1.25), 1)
-          swipeDismissOpacity.value = 1 - (progress * 0.2)
-        } else {
-          swipeDismissOpacity.value = 1
-        }
+        // Android performance: avoid changing opacity every frame (forces the
+        // container animated style to re-evaluate during drag). Only animate
+        // opacity during the actual dismiss.
+        swipeDismissOpacity.value = 1
       } else {
         // Fullscreen mode - drag to minimize
         const totalDistance = screenHeightShared.value - miniPlayerBottomShared.value - insetTopShared.value - MINI_PIP_HEIGHT
@@ -1361,10 +1397,10 @@ export function VideoPlayerOverlay() {
 
       // Handle mini player gestures (swipe dismiss or corner snap)
       if (gestureStartedInFullscreen.value === 0) {
-        const safeTop = insetTopShared.value + MINI_PIP_MARGIN
-        const safeBottom = screenHeightShared.value - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottomShared.value
-        const safeLeft = MINI_PIP_MARGIN
-        const safeRight = screenWidthShared.value - MINI_PIP_WIDTH - MINI_PIP_MARGIN
+        const safeTop = dragSafeTop.value
+        const safeBottom = dragSafeBottom.value
+        const safeLeft = dragSafeLeft.value
+        const safeRight = dragSafeRight.value
 
         // Commit drag offset to base position (no visual jump — visual stays the same
         // because left + dragOffset == newLeft + 0)
@@ -1381,24 +1417,33 @@ export function VideoPlayerOverlay() {
         const absDx = Math.abs(event.translationX)
         const absDy = Math.abs(event.translationY)
         const isMostlyHorizontal = absDx > (absDy * 1.25)
-        const longPull = absDx >= (SWIPE_DISMISS_THRESHOLD * 1.25)
-        const fastFling = absVelocityX >= (SWIPE_VELOCITY_THRESHOLD * 1.6) && absVelocityX > absVelocityY
-        const shouldDismiss = isMostlyHorizontal && (longPull || fastFling)
+        // Android: stronger thresholds to reduce accidental dismissal.
+        const distanceMult = Platform.OS === 'android' ? 1.75 : 1.25
+        const velocityMult = Platform.OS === 'android' ? 2.2 : 1.6
+        const longPull = absDx >= (SWIPE_DISMISS_THRESHOLD * distanceMult)
+        const fastFling = absVelocityX >= (SWIPE_VELOCITY_THRESHOLD * velocityMult) && absVelocityX > absVelocityY
+        // Android: disable swipe-to-dismiss via drag for now.
+        // RNGH velocity reporting + window metric churn can make this feel flaky,
+        // and we already have an explicit close button.
+        const shouldDismiss = Platform.OS !== 'android' && isMostlyHorizontal && (longPull || fastFling)
 
         if (shouldDismiss) {
           const direction = absDx > 6
             ? (event.translationX > 0 ? 1 : -1)
             : (event.velocityX > 0 ? 1 : -1)
           swipeDismissOpacity.value = withTiming(0, { duration: 200 })
-          miniPipX.value = withTiming(
-            direction > 0 ? screenWidthShared.value : -MINI_PIP_WIDTH,
-            { duration: 200 },
-            (finished) => {
-              'worklet'
-              if (finished) runOnJS(closeVideo)()
-            }
-          )
+          // Animate dismissal via transform only; never move miniPipX offscreen.
+          const offscreenX = direction > 0
+            ? (screenWidthShared.value + MINI_PIP_WIDTH)
+            : -(screenWidthShared.value + MINI_PIP_WIDTH)
+          swipeDismissX.value = withTiming(offscreenX, { duration: 220 }, (finished) => {
+            'worklet'
+            if (finished) runOnJS(closeVideo)()
+          })
         } else {
+          // Ensure any prior dismissal transform is cleared.
+          swipeDismissX.value = 0
+          swipeDismissOpacity.value = 1
           // Snap to one of the 4 corners.
           // Animate via transform (dragOffset) to avoid layout thrash and keep video
           // rendering stable (especially on Android TextureView).
@@ -1613,7 +1658,8 @@ export function VideoPlayerOverlay() {
   // offsets only; PiP cutout compensation is handled natively in NitroVLC.
   const containerDragStyle = useAnimatedStyle(() => {
     'worklet'
-    const totalTranslateX = dragOffsetX.value
+    const isMini = animProgress.value < 0.5
+    const totalTranslateX = dragOffsetX.value + (isMini ? swipeDismissX.value : 0)
     const totalTranslateY = dragOffsetY.value
     if (totalTranslateX === 0 && totalTranslateY === 0) return {}
     const transforms: any[] = []

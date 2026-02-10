@@ -66,6 +66,13 @@ export default function RootLayout() {
   const [backendError, setBackendError] = useState<string | null>(null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
 
+  const startupLog = useCallback((...args: unknown[]) => {
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      // eslint-disable-next-line no-console
+      console.log(...args)
+    }
+  }, [])
+
   // Lock to portrait on app startup (mobile only)
   // Fullscreen video player will temporarily override this to landscape
   useEffect(() => {
@@ -80,12 +87,14 @@ export default function RootLayout() {
     if (!platformRPC) return
 
     try {
+      const t0 = Date.now()
       setLoading(true)
 
       // Load identities
       const result = await platformRPC.rpc.getIdentities()
       const identities = result?.identities || []
       console.log('[App] Got', identities.length, 'identities')
+      startupLog('[Startup] getIdentities ms=', Date.now() - t0)
 
       if (identities.length > 0) {
         const active = identities.find((id: any) => id.isActive) || identities[0]
@@ -96,12 +105,14 @@ export default function RootLayout() {
         // Backend smart sync takes up to 25s (15s peer discovery + 10s data sync)
         if (active?.driveKey) {
           try {
+            const tList = Date.now()
             const timeoutPromise = new Promise((_, reject) =>
               setTimeout(() => reject(new Error('Initial listVideos timeout')), 30000)
             )
             const listPromise = platformRPC.rpc.listVideos({ channelKey: active.driveKey })
             const videosResult = await Promise.race([listPromise, timeoutPromise]) as any
             console.log('[App] Initial load got', videosResult?.videos?.length, 'videos')
+            startupLog('[Startup] listVideos ms=', Date.now() - tList)
             if (videosResult?.videos?.length > 0) {
               setVideos(videosResult.videos)
             }
@@ -117,7 +128,7 @@ export default function RootLayout() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [startupLog])
 
   // Subscribe to video load events to trigger prefetch
   useEffect(() => {
@@ -198,6 +209,7 @@ export default function RootLayout() {
   }, [])
 
   const initNativeBackend = useCallback(async () => {
+    const t0 = Date.now()
     console.log('[App] Initializing native backend via platform RPC...')
     setBackendError(null)
 
@@ -207,6 +219,7 @@ export default function RootLayout() {
     // Subscribe to events before initialization
     platformRPC.events.onReady(async (data: any) => {
       console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
+      startupLog('[Startup] backend ready ms=', Date.now() - t0)
       setBlobServerPort(data?.blobServerPort || null)
       setReady(true)
       setBackendError(null)
@@ -254,11 +267,12 @@ export default function RootLayout() {
       console.log('[App] Backend bundle length:', backendSource?.length || 0)
       console.log('[App] Downloader worker bundle length:', downloaderWorkerSource?.length || 0)
       await platformRPC.initPlatformRPC({ backendSource, downloaderWorkerSource })
+      startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
     } catch (err) {
       console.error('[App] Failed to initialize platform RPC:', err)
       setBackendError(err instanceof Error ? err.message : 'Failed to initialize backend')
     }
-  }, [loadInitialData])
+  }, [loadInitialData, startupLog])
 
   const initPearBackend = useCallback(async () => {
     console.log('[App] Initializing Pear desktop backend via platform RPC...')
@@ -478,9 +492,18 @@ export default function RootLayout() {
 
     console.log('[App] Uploading video:', filePath, 'category:', category, 'skipThumbnailGeneration:', skipThumbnailGeneration)
 
-    // Listen for progress events during upload (Pear desktop)
+    // Listen for progress events during upload
     let progressHandler: ((e: Event) => void) | null = null
-    if (onProgress && isPear && typeof window !== 'undefined') {
+    let unsubscribeNativeProgress: (() => void) | null = null
+
+    if (onProgress && isNative) {
+      unsubscribeNativeProgress = platformRPC.events.onUploadProgress((detail: any) => {
+        if (detail?.progress !== undefined) {
+          const isTranscoding = detail.videoId === 'transcoding'
+          onProgress(detail.progress, detail.speed || undefined, detail.eta || undefined, isTranscoding)
+        }
+      })
+    } else if (onProgress && isPear && typeof window !== 'undefined') {
       progressHandler = (e: Event) => {
         const detail = (e as CustomEvent).detail
         if (detail?.progress !== undefined) {
@@ -516,6 +539,9 @@ export default function RootLayout() {
       // Clean up event listener
       if (progressHandler && typeof window !== 'undefined') {
         window.removeEventListener('pearUploadProgress', progressHandler)
+      }
+      if (unsubscribeNativeProgress) {
+        unsubscribeNativeProgress()
       }
     }
   }, [identity, loadVideosFromBackend])

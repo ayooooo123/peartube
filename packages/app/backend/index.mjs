@@ -1088,9 +1088,19 @@ rpc.onUploadVideo(async (req) => {
       category: req.category || ''
     },
     fs,  // Pass bare-fs for file reading
-    (progress, bytesWritten, totalBytes) => {
-      // Emit progress event
-      rpc.eventUploadProgress({ progress })
+    (progress, bytesWritten, totalBytes, stats) => {
+      // Emit progress event (spec requires `videoId`)
+      // Note: Use a stable sentinel id for the active upload.
+      const speed = stats?.speed ? Math.max(0, Math.round(stats.speed)) : 0
+      const eta = stats?.eta ? Math.max(0, Math.round(stats.eta)) : 0
+      rpc.eventUploadProgress({
+        videoId: 'upload',
+        progress,
+        bytesUploaded: bytesWritten,
+        totalBytes,
+        speed,
+        eta,
+      })
     }
   )
 
@@ -1099,7 +1109,13 @@ rpc.onUploadVideo(async (req) => {
   // Note: uploadManager.uploadFromPath already calls channel.addVideo internally
   if (!result?.success) {
     console.error('[HRPC] Upload failed:', result?.error)
+    throw new Error(result?.error || 'Upload failed')
   }
+
+  // Invalidate list caches so the UI sees the new video immediately.
+  try {
+    api.invalidateChannelCaches?.(active.driveKey)
+  } catch {}
 
   // Generate thumbnail using bare-media (unified with desktop)
   if (result?.success && result?.videoId && !req.skipThumbnailGeneration) {
@@ -1483,6 +1499,9 @@ rpc.onSetVideoThumbnail(async (req) => {
     req.mimeType
   )
 
+  try {
+    api.invalidateChannelCaches?.(active.driveKey)
+  } catch {}
   return { success: result.success, error: result.error }
 })
 
@@ -1515,9 +1534,44 @@ rpc.onPickImageFile(async () => {
   return { filePath: null, cancelled: true }
 })
 
-rpc.onSetVideoThumbnailFromFile(async () => {
-  console.log('[HRPC] setVideoThumbnailFromFile - not supported on mobile')
-  return { success: false }
+rpc.onSetVideoThumbnailFromFile(async (req) => {
+  console.log('[HRPC] setVideoThumbnailFromFile:', req.videoId)
+  const active = identityManager.getActiveIdentity()
+  if (!active?.driveKey) return { success: false, error: 'No active identity' }
+
+  const channel = await identityManager.getActiveChannel?.()
+  if (!channel) return { success: false, error: 'No active channel' }
+  if (!channel.blobs) return { success: false, error: 'Channel blobs not initialized' }
+
+  let filePath = req.filePath
+  if (!filePath) return { success: false, error: 'No file path provided' }
+
+  // Handle file:// prefix (RN typically uses this)
+  if (filePath.startsWith('file://')) {
+    filePath = filePath.slice(7)
+  }
+
+  try {
+    const buf = fs.readFileSync(filePath)
+    const ext = path.extname(filePath).toLowerCase()
+    const mimeType = ext === '.webp'
+      ? 'image/webp'
+      : (ext === '.png' ? 'image/png' : 'image/jpeg')
+
+    const result = await uploadManager.setThumbnailFromBuffer(
+      channel,
+      req.videoId,
+      buf,
+      mimeType
+    )
+    try {
+      api.invalidateChannelCaches?.(active.driveKey)
+    } catch {}
+    return { success: result.success, error: result.error }
+  } catch (err) {
+    console.error('[HRPC] setVideoThumbnailFromFile failed:', err?.message || err)
+    return { success: false, error: err?.message || String(err) }
+  }
 })
 
 // Cast handlers (FCast/Chromecast)

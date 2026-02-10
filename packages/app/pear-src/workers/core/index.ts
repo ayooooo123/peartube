@@ -693,18 +693,21 @@ console.log('[Worker] Pear.config:', JSON.stringify({
   dev: Pear.config.dev
 }, null, 2));
 
-// Create a placeholder callback that we'll replace after HRPC init
-const placeholderStatsCallback = (driveKey: string, videoPath: string, stats: any) => {
-  console.log('[Worker] PLACEHOLDER stats callback called - this should not happen!');
+// Buffer stats emitted before HRPC is initialized.
+// This avoids dropping early stats if prefetch starts before the UI connects.
+const pendingVideoStats = new Map<string, { driveKey: string; videoPath: string; stats: any }>();
+const bufferStatsCallback = (driveKey: string, videoPath: string, stats: any) => {
+  const key = `${driveKey}:${videoPath}`;
+  pendingVideoStats.set(key, { driveKey, videoPath, stats });
 };
-(placeholderStatsCallback as any)._statsMarker = 'placeholder';
+(bufferStatsCallback as any)._statsMarker = 'buffer';
 
 const backend = await createBackendContext({
   storagePath: storage,
   onFeedUpdate: () => {
     // Feed updates will be wired after HRPC init
   },
-  onStatsUpdate: placeholderStatsCallback
+  onStatsUpdate: bufferStatsCallback
 });
 
 const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
@@ -1183,23 +1186,24 @@ console.log('[Worker] HRPC initialized');
 // Wire up video stats events
 console.log('[Worker] Setting up videoStats callback');
 const workerStatsCallback = (driveKey: string, videoPath: string, stats: any) => {
-  console.log('[Worker] videoStats callback fired, progress:', stats.progress);
+  const progress = typeof stats?.progress === 'number' ? stats.progress : 0;
+  console.log('[Worker] videoStats callback fired, progress:', progress);
   try {
     rpc.eventVideoStats({
       stats: {
         videoId: videoPath,
         channelKey: driveKey,
-        status: stats.status || 'unknown',
-        progress: stats.progress || 0,
-        totalBlocks: stats.totalBlocks || 0,
-        downloadedBlocks: stats.downloadedBlocks || 0,
-        totalBytes: stats.totalBytes || 0,
-        downloadedBytes: stats.downloadedBytes || 0,
-        peerCount: stats.peerCount || 0,
-        speedMBps: stats.speedMBps || '0',
-        uploadSpeedMBps: stats.uploadSpeedMBps || '0',
-        elapsed: stats.elapsed || 0,
-        isComplete: Boolean(stats.isComplete),
+        status: stats?.status || 'unknown',
+        progress,
+        totalBlocks: stats?.totalBlocks || 0,
+        downloadedBlocks: stats?.downloadedBlocks || 0,
+        totalBytes: stats?.totalBytes || 0,
+        downloadedBytes: stats?.downloadedBytes || 0,
+        peerCount: stats?.peerCount || 0,
+        speedMBps: stats?.speedMBps || '0',
+        uploadSpeedMBps: stats?.uploadSpeedMBps || '0',
+        elapsed: stats?.elapsed || 0,
+        isComplete: Boolean(stats?.isComplete),
       }
     });
     console.log('[Worker] rpc.eventVideoStats sent successfully');
@@ -1209,6 +1213,18 @@ const workerStatsCallback = (driveKey: string, videoPath: string, stats: any) =>
 };
 (workerStatsCallback as any)._statsMarker = 'worker-rpc';
 videoStats.setOnStatsUpdate(workerStatsCallback);
+
+// Flush any buffered stats that fired before HRPC was ready.
+if (pendingVideoStats.size > 0) {
+  console.log('[Worker] Flushing buffered video stats:', pendingVideoStats.size);
+  for (const { driveKey, videoPath, stats } of pendingVideoStats.values()) {
+    try {
+      workerStatsCallback(driveKey, videoPath, stats);
+    } catch {}
+  }
+  pendingVideoStats.clear();
+}
+
 console.log('[Worker] videoStats callback registered');
 
 // ============================================
@@ -1278,7 +1294,7 @@ rpc.onGetChannel(async (req: any) => {
 });
 
 rpc.onGetChannelMeta(async (req: any) => {
-  const meta = await api.getChannelMeta(req.channelKey);
+  const meta = await api.getChannelMeta(req.channelKey, req.publicBeeKey || null);
   return { name: meta.name, description: meta.description, videoCount: meta.videoCount || 0 };
 });
 
@@ -1535,12 +1551,17 @@ rpc.onDeleteVideo(async (req: any) => {
 rpc.onPrefetchVideo(async (req: any) => {
   console.log('[Worker] onPrefetchVideo called:', req.channelKey?.slice(0, 16), req.videoId);
   try {
-    await api.prefetchVideo(req.channelKey, req.videoId, req.publicBeeKey);
+    const res = await api.prefetchVideo(req.channelKey, req.videoId, req.publicBeeKey || null);
+    if (res?.success === false) {
+      console.log('[Worker] onPrefetchVideo failed:', res?.error);
+      return { success: false };
+    }
     console.log('[Worker] onPrefetchVideo completed');
+    return { success: true };
   } catch (e: any) {
     console.log('[Worker] onPrefetchVideo error:', e?.message);
+    return { success: false };
   }
-  return { success: true };
 });
 
 rpc.onGetVideoStats(async (req: any) => {

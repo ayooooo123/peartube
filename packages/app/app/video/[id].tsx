@@ -366,12 +366,15 @@ export default function VideoPlayerScreen() {
   const loadChannelInfo = useCallback(async () => {
     if (!videoData?.channelKey || !rpc) return
     try {
-      const result = await rpc.getChannelMeta({ channelKey: videoData.channelKey })
+      const result = await rpc.getChannelMeta({
+        channelKey: videoData.channelKey,
+        publicBeeKey: videoData.publicBeeKey || undefined,
+      })
       setChannelMeta(result)
     } catch (err) {
       console.error('[VideoPlayer] Failed to load channel info:', err)
     }
-  }, [rpc, videoData?.channelKey])
+  }, [rpc, videoData?.channelKey, videoData?.publicBeeKey])
 
   const startPrefetch = useCallback(async (videoRefOverride?: string) => {
     if (!videoData || !rpc) return

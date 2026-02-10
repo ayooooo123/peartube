@@ -538,37 +538,8 @@ export default function HomeScreen() {
     }
   })
 
-  if (!ready || loading) {
-    return (
-      <View className="flex-1 bg-pear-bg justify-center items-center">
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text className="text-pear-text-muted mt-4 text-label">
-          {!ready ? 'Starting P2P network...' : 'Loading...'}
-        </Text>
-        {backendError ? (
-          <>
-            <Text className="text-pear-text mt-3 text-center px-6 text-caption">
-              {backendError}
-            </Text>
-            {retryBackend ? (
-              <Pressable
-                onPress={retryBackend}
-                style={{
-                  marginTop: 12,
-                  paddingHorizontal: 16,
-                  paddingVertical: 8,
-                  borderRadius: 999,
-                  backgroundColor: colors.primary,
-                }}
-              >
-                <Text style={{ color: '#fff', fontWeight: '600' }}>Retry backend</Text>
-              </Pressable>
-            ) : null}
-          </>
-        ) : null}
-      </View>
-    )
-  }
+  const backendConnecting = !ready
+  const backendLoading = Boolean(loading)
 
   return (
     <View className="flex-1 bg-pear-bg">
@@ -659,10 +630,72 @@ export default function HomeScreen() {
                   </View>
                 )}
               </View>
-              <Pressable onPress={refreshFeed} className="p-2 active:opacity-60" disabled={feedLoading}>
-                <Feather name="refresh-cw" color={feedLoading ? colors.textMuted : colors.primary} size={18} />
+              <Pressable
+                onPress={refreshFeed}
+                className="p-2 active:opacity-60"
+                disabled={feedLoading || backendConnecting || !rpc}
+              >
+                <Feather
+                  name="refresh-cw"
+                  color={(feedLoading || backendConnecting || !rpc) ? colors.textMuted : colors.primary}
+                  size={18}
+                />
               </Pressable>
             </View>
+
+            {(backendConnecting || backendLoading || backendError) && (
+              <View
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  backgroundColor: colors.bgSecondary,
+                  borderRadius: 12,
+                  paddingHorizontal: 12,
+                  paddingVertical: 10,
+                  marginBottom: 12,
+                }}
+              >
+                {backendError ? (
+                  <>
+                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
+                      Backend error
+                    </Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                      {backendError}
+                    </Text>
+                    {retryBackend ? (
+                      <Pressable
+                        onPress={retryBackend}
+                        style={{
+                          marginTop: 10,
+                          alignSelf: 'flex-start',
+                          paddingHorizontal: 14,
+                          paddingVertical: 8,
+                          borderRadius: 999,
+                          backgroundColor: colors.primary,
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Retry backend</Text>
+                      </Pressable>
+                    ) : null}
+                  </>
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                        {backendConnecting ? 'Connecting to P2P network…' : 'Loading…'}
+                      </Text>
+                      <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
+                        {backendConnecting
+                          ? 'You can browse the UI while the backend starts.'
+                          : 'Fetching identities and videos in the background.'}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
 
             {/* Search (your channel) */}
             {identity?.driveKey && (

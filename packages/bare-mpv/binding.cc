@@ -12,8 +12,8 @@
 #include <bare.h>
 #include <js.h>
 
-#include <mpv/client.h>
-#include <mpv/render.h>
+#include "vendor/mpv/include/mpv/client.h"
+#include "vendor/mpv/include/mpv/render.h"
 
 // Handle wrapper for mpv_handle
 typedef struct {
@@ -70,7 +70,7 @@ bare_mpv_initialize(js_env_t *env, js_callback_info_t *info) {
 
   // Set some default options for embedded playback
   mpv_set_option_string(handle->mpv, "vo", "libmpv");  // Use libmpv render API
-  mpv_set_option_string(handle->mpv, "hwdec", "auto"); // Use hardware decoding
+  mpv_set_option_string(handle->mpv, "hwdec", "auto-safe"); // Prefer safe hardware decoding
   mpv_set_option_string(handle->mpv, "keep-open", "yes"); // Don't close on EOF
 
   int status = mpv_initialize(handle->mpv);

@@ -115,8 +115,18 @@ function isChromecastSupported(options: { url: string; contentType: string; titl
   return { supported: true, reason: '' }
 }
 
+let _lastCastErrorMsg: string | null = null
+let _lastCastErrorTime = 0
+const CAST_ERROR_COOLDOWN_MS = 5000
+
 function showCastError(message: string) {
   try {
+    const now = Date.now()
+    if (message === _lastCastErrorMsg && now - _lastCastErrorTime < CAST_ERROR_COOLDOWN_MS) {
+      return
+    }
+    _lastCastErrorMsg = message
+    _lastCastErrorTime = now
     console.error('[useCast] Chromecast:', message)
     if (typeof window !== 'undefined' && typeof window.alert === 'function') {
       window.alert(message)
@@ -267,11 +277,13 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
 
     const handlePlaybackState = (data: any) => {
       if (!data?.state) return
-      setPlaybackState(prev => ({ ...prev, state: data.state }))
       if (data.state === 'error') {
         const message = data?.error ? `Chromecast error: ${data.error}` : 'Chromecast error.'
         showCastError(message)
+        setPlaybackState(prev => ({ ...prev, state: 'idle' }))
+        return
       }
+      setPlaybackState(prev => ({ ...prev, state: data.state }))
     }
 
     const handleTimeUpdate = (data: any) => {
@@ -499,15 +511,9 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
         if (requestId !== playRequestIdRef.current) return false
       }
 
-      // Best-effort stop before loading a new item. Not required by the protocol,
-      // but reduces edge-case churn when rapidly switching videos.
-      try {
-        await rpc.castStop({})
-      } catch {}
-
-      // Small delay to let the receiver settle between STOP and LOAD.
-      await new Promise<void>((resolve) => setTimeout(resolve, 120))
-      if (requestId !== playRequestIdRef.current) return false
+      // The worker's castPlay handler already stops current media before LOAD.
+      // Do NOT call rpc.castStop() here — it destroys the active transcode
+      // session via onCastStop, then castPlay starts a new one from scratch.
 
       try {
         lastPlayAtRef.current = Date.now()

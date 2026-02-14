@@ -44,7 +44,6 @@ interface DesktopMiniPlayerProps {
   onMaximize: () => void
   onClose: () => void
 
-  // VLC callbacks
   onPlaying: () => void
   onPaused: () => void
   onEnded: () => void

@@ -1,13 +1,5 @@
-/**
- * VideoPlayerOverlay - YouTube-style animated video player
- * Single view that animates between mini player and fullscreen
- * Uses react-native-reanimated for smooth 60fps animations
- * Uses VLC player for broad codec support
- *
- * See ./video-player/ for modular components
- */
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
-import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput } from 'react-native'
+import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput, AppState } from 'react-native'
 import { rpc } from '@peartube/platform/rpc'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
@@ -26,7 +18,6 @@ import Animated, {
   withTiming,
   interpolate,
   runOnJS,
-  runOnUI,
   Extrapolation,
   cancelAnimation,
 } from 'react-native-reanimated'
@@ -49,8 +40,7 @@ import {
   MINI_PIP_CORNER_RADIUS,
   TAB_BAR_HEIGHT,
   ANIMATION_DURATION,
-  SWIPE_DISMISS_THRESHOLD,
-  SWIPE_VELOCITY_THRESHOLD,
+
   SPRING_CONFIG,
   SPRING_CONFIG_BOUNCY,
   SPRING_CONFIG_TIGHT,
@@ -77,7 +67,7 @@ import {
   LoadingOverlay,
   DesktopMiniPlayer,
   VideoContainer,
-  VlcVideoView,
+  MpvMobileVideoView,
 } from './video-player'
 
 function showCastAlert(message: string) {
@@ -149,7 +139,7 @@ export function VideoPlayerOverlay() {
     duration,
     progress: playbackProgress,
     playbackRate,
-    vlcSeekPosition,
+    seekPosition: playerSeekPosition,
     isInPipMode,
     setIsInPipMode,
     pipWindowSize,
@@ -159,6 +149,7 @@ export function VideoPlayerOverlay() {
     closeVideo,
     minimizePlayer,
     maximizePlayer,
+    maximizedForPipRef,
     seekBy,
     seekTo,
     setPlaybackRate,
@@ -173,7 +164,6 @@ export function VideoPlayerOverlay() {
   } = useVideoPlayerContext()
 
   // Simplified PiP state tracking - trust the native event, don't over-engineer
-  // Complex early detection and long transition buffers were fighting VLC's surface handling
   const wasInPipRef = useRef(false)
   // Android 12+ seamless PiP can shrink the Activity window before the JS PiP event arrives.
   // Freeze PiP layout branches early based on window shrink, but avoid re-activating them
@@ -202,7 +192,6 @@ export function VideoPlayerOverlay() {
   // window BEFORE onPictureInPictureModeChanged fires the JS event. This causes
   // useWindowDimensions to return intermediate/PiP-sized values while isInPipMode
   // is still false. The non-PiP fullscreen branches of animated styles would use
-  // these shrunken dimensions → TextureView parent resizes → "50/50 shifted" VLC
   // artifact. Using screen dimensions (which never change) prevents any layout
   // disruption during PiP transitions.
   // Also handles PiP EXIT where useWindowDimensions briefly returns stale PiP sizes.
@@ -222,7 +211,6 @@ export function VideoPlayerOverlay() {
   const isWindowLandscape = screenWidth > screenHeight
 
   // Always use 16:9 for video height calculation - don't special case PiP
-  // In PiP mode, the container fills the window and VLC handles aspect ratio via resizeMode="contain"
   const videoHeight = Math.round(screenWidth * 9 / 16)
 
   const pipLayoutLastLogAtRef = useRef(0)
@@ -280,7 +268,7 @@ export function VideoPlayerOverlay() {
 
   useEffect(() => {
     if (!currentVideo || playerMode === 'hidden') return
-    const player = Platform.OS === 'web' ? (isPear ? 'mpv' : 'web') : 'vlc'
+    const player = Platform.OS === 'web' ? (isPear ? 'mpv' : 'web') : 'mpv'
     const channelKey = currentVideo.channelKey || currentVideo.channel?.key || ''
     const logKey = `${player}:${channelKey}:${currentVideo.id || videoUrl || ''}`
     if (playerLogKeyRef.current === logKey) return
@@ -307,7 +295,6 @@ export function VideoPlayerOverlay() {
   const scrubPendingSinceRef = useRef(0)
   const videoWrapperRef = useRef<View>(null)
   const [pipSupported, setPipSupported] = useState<boolean | null>(null)
-  const wasInPipModeRef = useRef(false)
 
   // State for showing custom controls overlay
   const [showControls, setShowControls] = useState(false)
@@ -315,7 +302,8 @@ export function VideoPlayerOverlay() {
   // State for true fullscreen (landscape, hidden UI)
   const [isLandscapeFullscreen, setIsLandscapeFullscreen] = useState(false)
   const autoPipEnabledRef = useRef(false)
-  
+  const [iosPipEnabled, setIosPipEnabled] = useState(false)
+
   // Desktop mini player drag state
   const [miniPlayerCorner, setMiniPlayerCorner] = useState<'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'>('bottom-right')
   const [isDraggingMiniPlayer, setIsDraggingMiniPlayer] = useState(false)
@@ -356,7 +344,34 @@ export function VideoPlayerOverlay() {
   const effectiveDuration = isCasting ? castPlayback.duration : duration
   const effectiveIsPlaying = isCasting ? castIsPlaying : isPlaying
   const effectiveProgress = effectiveDuration > 0 ? effectiveCurrentTime / effectiveDuration : 0
-  const showLoadingOverlay = isCasting ? castPlayback.state === 'buffering' : isLoading
+
+  // Debounce cast buffering — brief BUFFERING from HLS segment transitions shouldn't flash the overlay
+  const [castBufferingDebounced, setCastBufferingDebounced] = useState(false)
+  const castBufferingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const isBuffering = castPlayback.state === 'buffering'
+    if (isBuffering) {
+      if (!castBufferingTimerRef.current) {
+        castBufferingTimerRef.current = setTimeout(() => {
+          setCastBufferingDebounced(true)
+        }, 2000)
+      }
+    } else {
+      if (castBufferingTimerRef.current) {
+        clearTimeout(castBufferingTimerRef.current)
+        castBufferingTimerRef.current = null
+      }
+      setCastBufferingDebounced(false)
+    }
+    return () => {
+      if (castBufferingTimerRef.current) {
+        clearTimeout(castBufferingTimerRef.current)
+        castBufferingTimerRef.current = null
+      }
+    }
+  }, [castPlayback.state])
+
+  const showLoadingOverlay = isCasting ? castBufferingDebounced : isLoading
   const loadingLabel = isCasting ? `Casting to ${castDeviceName}...` : 'Connecting to P2P...'
   const castAutoPlayRef = useRef<string | null>(null)
   const castAutoPlayInFlightRef = useRef(false)
@@ -385,8 +400,6 @@ export function VideoPlayerOverlay() {
   }, [scrubPendingTime, effectiveCurrentTime, effectiveDuration])
 
 
-
-  const COMMENTS_PER_PAGE = 25
 
   const currentVideoKey = useMemo(() => {
     if (!currentVideo?.channelKey || !currentVideo?.id) return null
@@ -758,18 +771,16 @@ export function VideoPlayerOverlay() {
 
         if (!urlToCast || cancelled) return
 
-        const success = await cast.play({
+        await cast.play({
           url: urlToCast,
           contentType: currentVideo.mimeType || 'video/mp4',
           title: currentVideo.title,
           time: Math.floor(currentTime || 0),
         })
-
+      } finally {
         if (!cancelled) {
-          // Always set castAutoPlayRef to prevent retry loops on failure
           castAutoPlayRef.current = castKey
         }
-      } finally {
         castAutoPlayInFlightRef.current = false
       }
     }
@@ -780,15 +791,17 @@ export function VideoPlayerOverlay() {
     }
   }, [isCasting, currentVideo?.channelKey, currentVideo?.id, videoUrl, rpc, cast])
 
-  // Check PiP support once on Android
   useEffect(() => {
-    if (Platform.OS !== 'android') return
+    if (Platform.OS === 'web') return
     let cancelled = false
+    console.log('[VideoPlayerOverlay] Checking PiP support...')
     MediaSession.isPictureInPictureSupported?.()
       .then((supported) => {
+        console.log('[VideoPlayerOverlay] PiP supported:', supported)
         if (!cancelled) setPipSupported(supported)
       })
-      .catch(() => {
+      .catch((err) => {
+        console.log('[VideoPlayerOverlay] PiP support check failed:', err)
         if (!cancelled) setPipSupported(false)
       })
     return () => {
@@ -796,21 +809,8 @@ export function VideoPlayerOverlay() {
     }
   }, [])
 
-  // Set simple PiP source rect once - let OS handle the rest
-  // No need to constantly update on layout changes
-  const updatePipSourceRect = useCallback(() => {
-    if (Platform.OS !== 'android') return
-    if (pipSupported === false || isInPipMode) return
-
-    // Simple fixed rect - OS handles animation from current position
-    const screen = Dimensions.get('screen')
-    MediaSession.setPictureInPictureSourceRect({
-      x: 0,
-      y: 0,
-      width: screen.width,
-      height: Math.round(screen.width * 9 / 16),
-    })
-  }, [pipSupported, isInPipMode])
+  // PiP source rect is computed natively from the actual SurfaceView/TextureView
+  // position (see getVideoSourceRect in MediaSessionModule.kt). No JS-side rect needed.
 
   // Native overlay disabled - testing simple padding approach
 
@@ -826,21 +826,28 @@ export function VideoPlayerOverlay() {
   }, [])
 
   useEffect(() => {
-    if (wasInPipModeRef.current && !isInPipMode && playerMode === 'fullscreen') {
+    if (wasInPipRef.current && !isInPipMode && playerMode === 'fullscreen') {
       showControlsTemporarily()
+      // Force layout recalculation after PiP exit — iOS PiP can leave
+      // isPipLayoutActiveShared stale, causing the video to center vertically
+      // instead of pinning to the top in portrait fullscreen.
+      isPipLayoutActiveShared.value = false
+      animProgress.value = 1
     }
-    wasInPipModeRef.current = isInPipMode
   }, [isInPipMode, playerMode, showControlsTemporarily])
 
-  const handleVlcPipStatusChanged = useCallback((event: { isInPictureInPicture: boolean; width: number; height: number }) => {
-    console.log('[VideoPlayerOverlay] VLC PiP status changed:', event.isInPictureInPicture, event.width, event.height)
+  const handlePipStatusChanged = useCallback((event: { isInPictureInPicture: boolean; width: number; height: number }) => {
+    console.log('[VideoPlayerOverlay] PiP status changed:', event.isInPictureInPicture, event.width, event.height)
     setIsInPipMode(event.isInPictureInPicture)
     if (event.isInPictureInPicture && event.width > 0 && event.height > 0) {
       setPipWindowSize({ width: event.width, height: event.height })
     } else if (!event.isInPictureInPicture) {
       setPipWindowSize(null)
+      if (AppState.currentState === 'active') {
+        maximizePlayer()
+      }
     }
-  }, [setIsInPipMode, setPipWindowSize])
+  }, [setIsInPipMode, setPipWindowSize, maximizePlayer])
 
   // Handle video load - set PiP aspect ratio to match actual video dimensions
   const handleVideoLoad = useCallback((info: { duration?: number; videoSize?: { width: number; height: number } }) => {
@@ -944,48 +951,13 @@ export function VideoPlayerOverlay() {
    const frozenInsetTopShared = useSharedValue(insets.top)
    const frozenInsetBottomShared = useSharedValue(insets.bottom)
   
+  // Mini player position: fixed bottom-right corner (no drag/snap)
   const miniPipX = useSharedValue(screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN)
   const miniPipY = useSharedValue(screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - TAB_BAR_HEIGHT - insets.bottom)
-  const miniPipStartX = useSharedValue(0)
-  const miniPipStartY = useSharedValue(0)
-
-  // Safe bounds captured at gesture start (prevents mid-gesture jumps when Android
-  // window metrics/insets change due to keyboard, system UI, or PiP heuristics).
-  const dragSafeLeft = useSharedValue(0)
-  const dragSafeRight = useSharedValue(0)
-  const dragSafeTop = useSharedValue(0)
-  const dragSafeBottom = useSharedValue(0)
-
-  // Stable mode (0=mini, 1=fullscreen) based on animProgress reaching endpoints.
-  // This prevents the pan gesture from misclassifying the mode while the mini/full
-  // transition is still animating (which can make a mini drag behave like a fullscreen
-  // drag and "jump" the player to the top).
-  const stableModeShared = useSharedValue(0)
-
-  useAnimatedReaction(
-    () => animProgress.value,
-    (p) => {
-      'worklet'
-      if (p <= 0.05) stableModeShared.value = 0
-      else if (p >= 0.95) stableModeShared.value = 1
-    },
-    []
-  )
-
-  // Drag offset (transform-based, not layout-based) to avoid Yoga relayout during drag.
-  // On Android, Yoga relayout disrupts TextureView rendering → black frames.
-  const dragOffsetX = useSharedValue(0)
-  const dragOffsetY = useSharedValue(0)
-
-  // Swipe-to-dismiss values
-  const swipeDismissX = useSharedValue(0)
-  const swipeDismissOpacity = useSharedValue(1)
-  const isSwipeDismissing = useSharedValue(false)
 
   // Track whether gesture started in fullscreen (1) or mini (0) mode
   // Using number instead of string to avoid potential worklet string comparison issues
   const gestureStartedInFullscreen = useSharedValue(0)
-  const isDraggingMiniShared = useSharedValue(0)
 
    // CRITICAL: Update shared values SYNCHRONOUSLY during render, NOT in useEffect
    // useEffect runs AFTER the render commit, so worklets would see stale values
@@ -996,7 +968,6 @@ export function VideoPlayerOverlay() {
    // On Android 12+ with setAutoEnterEnabled, the Activity window animates to PiP
    // dimensions BEFORE onPictureInPictureModeChanged fires. Without early detection,
    // the non-PiP fullscreen branches would run with intermediate/PiP-sized dimensions,
-   // causing layout changes that trigger the "50/50 shifted" VLC artifact.
    // The 0.9 threshold catches even the START of the seamless PiP animation.
    // Uses AND (both dimensions must shrink) to avoid false positives in
    // split-screen mode where only one dimension is reduced.
@@ -1063,27 +1034,10 @@ export function VideoPlayerOverlay() {
   }, [miniPlayerBottom])
 
   useEffect(() => {
-    // Avoid re-anchoring the mini player on every dimension/inset change.
-    // That can fire mid-drag and cause the mini player to "shoot" off-screen.
     if (playerMode !== 'mini') return
-
-    const safeTop = stableInsetTopRef.current + MINI_PIP_MARGIN
-    const safeBottom = screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottom
-    const safeLeft = MINI_PIP_MARGIN
-    const safeRight = screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN
-
-    runOnUI(() => {
-      'worklet'
-      // Only clamp when we're stably in mini and no gesture is active.
-      if (isGestureActive.value) return
-      if (stableModeShared.value !== 0) return
-
-      const clampedX = Math.max(safeLeft, Math.min(safeRight, miniPipX.value))
-      const clampedY = Math.max(safeTop, Math.min(safeBottom, miniPipY.value))
-      if (clampedX !== miniPipX.value) miniPipX.value = clampedX
-      if (clampedY !== miniPipY.value) miniPipY.value = clampedY
-    })()
-  }, [playerMode, screenWidth, screenHeight, miniPlayerBottom, insets.top, insets.bottom])
+    miniPipX.value = screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN
+    miniPipY.value = screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottom
+  }, [playerMode, screenWidth, screenHeight, miniPlayerBottom])
 
   // When exiting landscape fullscreen, keep rendering the fullscreen container until window dimensions AND insets settle.
   // The tricky part: StatusBar visibility + safe area insets can lag behind the orientation lock by a few frames.
@@ -1187,37 +1141,25 @@ export function VideoPlayerOverlay() {
     // and can fight gesture worklets).
     if (isInPipMode) return
     if (playerMode === 'fullscreen') {
-      animProgress.value = withTiming(1, { duration: 250 })
+      if (maximizedForPipRef.current) {
+        // Snap instantly — user is going to background, no need to animate
+        animProgress.value = 1
+      } else {
+        animProgress.value = withTiming(1, { duration: 250 })
+      }
     } else if (playerMode === 'mini') {
       animProgress.value = withTiming(0, { duration: 250 })
+      showControlsTemporarily()
     }
   }, [playerMode, isInPipMode])
 
   const maximizeFromMini = useCallback(() => {
-    // Commit any in-flight snap/drag transform into the base position before
-    // transitioning. Otherwise the fullscreen interpolation would start from a
-    // stale miniPipX/Y and appear to freeze/jump.
-    runOnUI(() => {
-      'worklet'
-      cancelAnimation(miniPipX)
-      cancelAnimation(miniPipY)
-      cancelAnimation(dragOffsetX)
-      cancelAnimation(dragOffsetY)
-
-      const committedX = miniPipX.value + dragOffsetX.value
-      const committedY = miniPipY.value + dragOffsetY.value
-      miniPipX.value = committedX
-      miniPipY.value = committedY
-      dragOffsetX.value = 0
-      dragOffsetY.value = 0
-    })()
     maximizePlayer()
   }, [maximizePlayer])
 
-  // Toggle controls on tap (fullscreen) or maximize (mini)
   const handleVideoTap = useCallback(() => {
     if (isInPipMode) return
-    if (playerMode === 'fullscreen' || isLandscapeFullscreen) {
+    if (playerMode === 'fullscreen' || isLandscapeFullscreen || playerMode === 'mini') {
       if (showControls) {
         setShowControls(false)
         if (controlsTimeoutRef.current) {
@@ -1226,300 +1168,72 @@ export function VideoPlayerOverlay() {
       } else {
         showControlsTemporarily()
       }
-    } else if (playerMode === 'mini') {
-      // Tap mini player to maximize (YouTube-style)
-      maximizeFromMini()
     }
-  }, [isInPipMode, playerMode, isLandscapeFullscreen, showControls, showControlsTemporarily, maximizeFromMini])
+  }, [isInPipMode, playerMode, isLandscapeFullscreen, showControls, showControlsTemporarily])
 
   // Memoize gesture to prevent recreation on every render
   // Move enabled check inside worklets instead of using .enabled() with JS variable
   // This keeps the gesture handler stable and prevents mid-gesture interruptions
+  // Pan gesture: only handles fullscreen drag-to-minimize (no mini player dragging)
   const panGesture = useMemo(() => Gesture.Pan()
-    // Don't activate on simple taps; avoids canceling/resnapping on gentle touch.
     .minDistance(12)
     .maxPointers(1)
     .onStart(() => {
       'worklet'
-      // Skip gesture if in landscape fullscreen mode
-      if (isLandscapeFullscreenShared.value) {
-        return
-      }
-      // Skip any gestures while PiP is active (or PiP-like transition is detected).
-      // In PiP, dragging should move the system PiP window, not the in-app player.
-      if (isPipLayoutActiveShared.value) {
-        return
-      }
-      isGestureActive.value = true
+      if (isLandscapeFullscreenShared.value) return
+      if (isPipLayoutActiveShared.value) return
 
-      // If the mini/full transition is still animating, animProgress can be between 0 and 1.
-      // Lock to the logical mode (mini/fullscreen) and convert the current visual position
-      // into the mini base to prevent large jumps on repeated drags.
-      cancelAnimation(animProgress)
-      // Use JS-driven playerMode (mirrored into isFullscreenShared) as the authority.
-      // stableModeShared lags while animProgress animates and can cause "half" states
-      // if a tap to maximize accidentally starts a pan gesture.
       const startedInFullscreen = isFullscreenShared.value ? 1 : 0
-      stableModeShared.value = startedInFullscreen
+      if (startedInFullscreen === 0) return
 
-      // If a snap animation is in-flight (transform-based), commit it so the drag
-      // starts from the visual position.
-      cancelAnimation(dragOffsetX)
-      cancelAnimation(dragOffsetY)
-      if (dragOffsetX.value !== 0 || dragOffsetY.value !== 0) {
-        miniPipX.value = miniPipX.value + dragOffsetX.value
-        miniPipY.value = miniPipY.value + dragOffsetY.value
-        dragOffsetX.value = 0
-        dragOffsetY.value = 0
-      }
-
-      if (startedInFullscreen === 0) {
-        // Capture safe bounds once for the whole gesture.
-        // If these change while dragging, the clamp target can jump and make the
-        // mini player appear to "shoot".
-        const safeTop = insetTopShared.value + MINI_PIP_MARGIN
-        const safeBottom = screenHeightShared.value - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottomShared.value
-        const safeLeft = MINI_PIP_MARGIN
-        const safeRight = screenWidthShared.value - MINI_PIP_WIDTH - MINI_PIP_MARGIN
-
-        // Defensive: if bounds are invalid (can happen during transient dimension
-        // glitches), fall back to a sane rect.
-        dragSafeLeft.value = safeLeft
-        dragSafeTop.value = safeTop
-        dragSafeRight.value = safeRight > safeLeft ? safeRight : safeLeft
-        dragSafeBottom.value = safeBottom > safeTop ? safeBottom : safeTop
-
-        const visualLeft = interpolate(
-          animProgress.value,
-          [0, 1],
-          [miniPipX.value, 0],
-          Extrapolation.CLAMP
-        )
-        const visualTop = interpolate(
-          animProgress.value,
-          [0, 1],
-          [miniPipY.value, 0],
-          Extrapolation.CLAMP
-        )
-        miniPipX.value = visualLeft
-        miniPipY.value = visualTop
-        animProgress.value = 0
-      } else {
-        animProgress.value = 1
-      }
-      // Cancel any ongoing spring/timing animations on position so they don't
-      // fight with the drag. Self-assignment cancels animations in Reanimated.
-      cancelAnimation(miniPipX)
-      cancelAnimation(miniPipY)
-      cancelAnimation(swipeDismissX)
-      cancelAnimation(swipeDismissOpacity)
-      miniPipStartX.value = miniPipX.value
-      miniPipStartY.value = miniPipY.value
-      // Reset drag offset (transform-based movement during drag)
-      dragOffsetX.value = 0
-      dragOffsetY.value = 0
-      // Reset swipe dismiss values
-      swipeDismissX.value = 0
-      swipeDismissOpacity.value = 1
-      isSwipeDismissing.value = false
-      // Track mode at gesture start (1 = fullscreen, 0 = mini)
-      gestureStartedInFullscreen.value = startedInFullscreen
-      isDraggingMiniShared.value = startedInFullscreen === 0 ? 1 : 0
+      isGestureActive.value = true
+      cancelAnimation(animProgress)
+      animProgress.value = 1
+      gestureStartedInFullscreen.value = 1
     })
     .onUpdate((event) => {
       'worklet'
-      // Skip if gesture was started in disabled state
-      if (isLandscapeFullscreenShared.value || !isGestureActive.value) {
-        return
-      }
-      if (isPipLayoutActiveShared.value) {
-        return
-      }
-      // Use gestureStartedInFullscreen for consistent behavior throughout entire gesture
-      if (gestureStartedInFullscreen.value === 0) {
-        // Mini player mode - use transform-based drag offset to avoid Yoga relayout.
-        // On Android, Yoga relayout on every frame disrupts TextureView rendering.
-        const safeTop = dragSafeTop.value
-        const safeBottom = dragSafeBottom.value
-        const safeLeft = dragSafeLeft.value
-        const safeRight = dragSafeRight.value
+      if (!isGestureActive.value) return
+      if (isLandscapeFullscreenShared.value) return
+      if (isPipLayoutActiveShared.value) return
 
-        const newX = miniPipStartX.value + event.translationX
-        const newY = miniPipStartY.value + event.translationY
-
-        // Clamp to safe bounds, then compute offset from base position.
-        // dragOffset is applied via transform (GPU-only, no Yoga), not left/top.
-        const clampedX = Math.max(safeLeft, Math.min(safeRight, newX))
-        const clampedY = Math.max(safeTop, Math.min(safeBottom, newY))
-        // IMPORTANT: compute offsets relative to the gesture start snapshot.
-        // miniPipX/Y can change due to unrelated effects (dimension/inset settles),
-        // which would otherwise cause jumps or off-screen launches mid-drag.
-        dragOffsetX.value = clampedX - miniPipStartX.value
-        dragOffsetY.value = clampedY - miniPipStartY.value
-
-        // Dismiss should be intentional: don't arm it just because we're near an edge.
-        // Keep drag stable; decide dismissal on release.
-        swipeDismissX.value = 0
-        isSwipeDismissing.value = false
-        // Android performance: avoid changing opacity every frame (forces the
-        // container animated style to re-evaluate during drag). Only animate
-        // opacity during the actual dismiss.
-        swipeDismissOpacity.value = 1
-      } else {
-        // Fullscreen mode - drag to minimize
-        const totalDistance = screenHeightShared.value - miniPlayerBottomShared.value - insetTopShared.value - MINI_PIP_HEIGHT
-        const dragProgress = -event.translationY / totalDistance
-        animProgress.value = Math.max(0, Math.min(1, 1 + dragProgress))
-      }
+      const totalDistance = screenHeightShared.value - miniPlayerBottomShared.value - insetTopShared.value - MINI_PIP_HEIGHT
+      const dragProgress = -event.translationY / totalDistance
+      animProgress.value = Math.max(0, Math.min(1, 1 + dragProgress))
     })
     .onEnd((event) => {
       'worklet'
-      // Always reset gesture active state first
       const wasActive = isGestureActive.value
       isGestureActive.value = false
-      isDraggingMiniShared.value = 0
+      if (!wasActive) return
+      if (isPipLayoutActiveShared.value) return
 
-      // Skip if gesture was never activated (landscape mode)
-      if (!wasActive) {
-        return
-      }
+      const velocity = event.velocityY
+      const position = animProgress.value
 
-      // If PiP activates mid-gesture (e.g. home swipe), don't let the gesture
-      // commit any minimize/maximize state changes.
-      if (isPipLayoutActiveShared.value) {
-        dragOffsetX.value = 0
-        dragOffsetY.value = 0
-        swipeDismissX.value = 0
-        swipeDismissOpacity.value = 1
-        isSwipeDismissing.value = false
-        return
-      }
-
-      // Handle mini player gestures (swipe dismiss or corner snap)
-      if (gestureStartedInFullscreen.value === 0) {
-        const safeTop = dragSafeTop.value
-        const safeBottom = dragSafeBottom.value
-        const safeLeft = dragSafeLeft.value
-        const safeRight = dragSafeRight.value
-
-        // Commit drag offset to base position (no visual jump — visual stays the same
-        // because left + dragOffset == newLeft + 0)
-        const committedX = miniPipStartX.value + dragOffsetX.value
-        const committedY = miniPipStartY.value + dragOffsetY.value
-        miniPipX.value = committedX
-        miniPipY.value = committedY
-        dragOffsetX.value = 0
-        dragOffsetY.value = 0
-
-        // Dismiss should be intentional (YouTube-like): require a strong horizontal swipe.
-        const absVelocityX = Math.abs(event.velocityX)
-        const absVelocityY = Math.abs(event.velocityY)
-        const absDx = Math.abs(event.translationX)
-        const absDy = Math.abs(event.translationY)
-        const isMostlyHorizontal = absDx > (absDy * 1.25)
-        // Android: stronger thresholds to reduce accidental dismissal.
-        const distanceMult = Platform.OS === 'android' ? 1.75 : 1.25
-        const velocityMult = Platform.OS === 'android' ? 2.2 : 1.6
-        const longPull = absDx >= (SWIPE_DISMISS_THRESHOLD * distanceMult)
-        const fastFling = absVelocityX >= (SWIPE_VELOCITY_THRESHOLD * velocityMult) && absVelocityX > absVelocityY
-        // Android: disable swipe-to-dismiss via drag for now.
-        // RNGH velocity reporting + window metric churn can make this feel flaky,
-        // and we already have an explicit close button.
-        const shouldDismiss = Platform.OS !== 'android' && isMostlyHorizontal && (longPull || fastFling)
-
-        if (shouldDismiss) {
-          const direction = absDx > 6
-            ? (event.translationX > 0 ? 1 : -1)
-            : (event.velocityX > 0 ? 1 : -1)
-          swipeDismissOpacity.value = withTiming(0, { duration: 200 })
-          // Animate dismissal via transform only; never move miniPipX offscreen.
-          const offscreenX = direction > 0
-            ? (screenWidthShared.value + MINI_PIP_WIDTH)
-            : -(screenWidthShared.value + MINI_PIP_WIDTH)
-          swipeDismissX.value = withTiming(offscreenX, { duration: 220 }, (finished) => {
-            'worklet'
-            if (finished) runOnJS(closeVideo)()
-          })
-        } else {
-          // Ensure any prior dismissal transform is cleared.
-          swipeDismissX.value = 0
-          swipeDismissOpacity.value = 1
-          // Snap to one of the 4 corners.
-          // Animate via transform (dragOffset) to avoid layout thrash and keep video
-          // rendering stable (especially on Android TextureView).
-          const velocityInfluence = 30
-          const centerX = committedX + (MINI_PIP_WIDTH / 2) + (event.velocityX / velocityInfluence)
-          const centerY = committedY + (MINI_PIP_HEIGHT / 2) + (event.velocityY / velocityInfluence)
-          const midX = screenWidthShared.value / 2
-          const midY = (safeTop + safeBottom) / 2
-
-          const targetX = centerX < midX ? safeLeft : safeRight
-          const targetY = centerY < midY ? safeTop : safeBottom
-
-          const deltaX = targetX - committedX
-          const deltaY = targetY - committedY
-
-          dragOffsetX.value = withSpring(deltaX, { ...SPRING_CONFIG_TIGHT, overshootClamping: true }, (finished) => {
-            'worklet'
-            if (!finished) return
-            miniPipX.value = targetX
-            dragOffsetX.value = 0
-          })
-          dragOffsetY.value = withSpring(deltaY, { ...SPRING_CONFIG_TIGHT, overshootClamping: true }, (finished) => {
-            'worklet'
-            if (!finished) return
-            miniPipY.value = targetY
-            dragOffsetY.value = 0
-          })
-          swipeDismissOpacity.value = withTiming(1, { duration: 120 })
-        }
-        // Always reset swipe dismiss state
-        isSwipeDismissing.value = false
-      } else if (gestureStartedInFullscreen.value === 1) {
-        // YouTube-like snap behavior with velocity-based decisions
-        const velocity = event.velocityY
-        const position = animProgress.value
-
-        // Determine snap direction based on position and velocity
-        let shouldMinimize = false
-
-        if (velocity > 300) {
-          // Fast swipe down - minimize
-          shouldMinimize = true
-        } else if (velocity < -300) {
-          // Fast swipe up - maximize
-          shouldMinimize = false
-        } else if (position < 0.75) {
-          // Below commitment threshold (0.75): need to drag 25% down to minimize
-          // In the uncertain zone (0.5-0.75), velocity decides
-          // Tiny velocity (> 20 px/s) in direction determines outcome
-          shouldMinimize = velocity > 20
-        } else {
-          // Above 0.75: stay fullscreen unless velocity says otherwise
-          shouldMinimize = velocity > 100
-        }
-
-        if (shouldMinimize) {
-          animProgress.value = withSpring(0, SPRING_CONFIG_TIGHT)
-          runOnJS(minimizePlayer)()
-        } else {
-          animProgress.value = withSpring(1, SPRING_CONFIG_BOUNCY)
-          runOnJS(maximizePlayer)()
-        }
+      let shouldMinimize = false
+      if (velocity > 300) {
+        shouldMinimize = true
+      } else if (velocity < -300) {
+        shouldMinimize = false
+      } else if (position < 0.75) {
+        shouldMinimize = velocity > 20
       } else {
-        // Fallback: snap to nearest state to prevent stuck states
-        if (animProgress.value < 0.5) {
-          animProgress.value = withSpring(0, SPRING_CONFIG_TIGHT)
-        } else {
-          animProgress.value = withSpring(1, SPRING_CONFIG_BOUNCY)
-        }
+        shouldMinimize = velocity > 100
+      }
+
+      if (shouldMinimize) {
+        animProgress.value = withSpring(0, SPRING_CONFIG_TIGHT)
+        runOnJS(minimizePlayer)()
+      } else {
+        animProgress.value = withSpring(1, SPRING_CONFIG_BOUNCY)
+        runOnJS(maximizePlayer)()
       }
     })
     .onFinalize(() => {
       'worklet'
       isGestureActive.value = false
-      isDraggingMiniShared.value = 0
-    }), [closeVideo, minimizePlayer, maximizePlayer])
+    }), [minimizePlayer, maximizePlayer])
 
   const composedGesture = panGesture
 
@@ -1552,8 +1266,6 @@ export function VideoPlayerOverlay() {
         // realScreenWidth/Height come from Dimensions.get('screen') and never
         // change, unlike screenWidthShared which gets PiP-sized values.
         //
-        // Note: cutout compensation is applied in containerDragStyle (transform)
-        // so we don't fight transform override semantics in RN style arrays.
         return {
           position: 'absolute',
           left: 0,
@@ -1568,13 +1280,16 @@ export function VideoPlayerOverlay() {
           opacity: 1,
         }
       }
-      // iOS: PiP handled at player level, fill window normally
+      // iOS: PiP handled at player level, use explicit dimensions
+      // IMPORTANT: must use width/height (not right/bottom) so Reanimated
+      // applies the same property set as the normal branch — otherwise stale
+      // right/bottom values stick after PiP exit and break layout.
       return {
         position: 'absolute',
         left: 0,
-        right: 0,
         top: 0,
-        bottom: 0,
+        width: screenWidthShared.value,
+        height: screenHeightShared.value + insetBottomShared.value,
         zIndex: 9999,
         borderRadius: 0,
         backgroundColor: '#000',
@@ -1623,8 +1338,6 @@ export function VideoPlayerOverlay() {
     )
 
     const isMini = animProgress.value < 0.5
-    const isMiniDragging = isMini && isDraggingMiniShared.value === 1
-    const swipeOpacity = isMini ? swipeDismissOpacity.value : 1
 
     return {
       position: 'absolute',
@@ -1633,39 +1346,14 @@ export function VideoPlayerOverlay() {
       width,
       height,
       zIndex: 9999,
-      borderRadius: isMiniDragging ? 0 : borderRadius,
-      // TextureView + overflow hidden can black out while moving on Android. Disable clipping while dragging.
-      overflow: isMiniDragging ? 'visible' : 'hidden',
+      borderRadius,
+      overflow: 'hidden',
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: isMini ? 0.4 : 0,
       shadowRadius: 8,
-      // Android: elevation creates a hardware display list that conflicts with
-      // TextureView rendering during rapid position changes (PiP drag → black).
-      // iOS shadows work via Core Animation (no elevation needed).
       elevation: (!isAndroid && isMini) ? 10 : 0,
-      opacity: swipeOpacity,
     }
-  }, [])
-
-  // Drag transform — SEPARATE animated style so containerStyle is NOT re-evaluated
-  // during drag. When dragOffsetX/Y change, only this worklet runs, updating only
-  // the `transform` prop. No layout props (left/top/width/height) are touched,
-  // so Yoga never re-layouts, and the Android TextureView keeps rendering.
-  //
-  // IMPORTANT: React Native style arrays DON'T deep-merge `transform` — the LAST
-  // style with a `transform` key wins entirely. Keep this style focused on drag
-  // offsets only; PiP cutout compensation is handled natively in NitroVLC.
-  const containerDragStyle = useAnimatedStyle(() => {
-    'worklet'
-    const isMini = animProgress.value < 0.5
-    const totalTranslateX = dragOffsetX.value + (isMini ? swipeDismissX.value : 0)
-    const totalTranslateY = dragOffsetY.value
-    if (totalTranslateX === 0 && totalTranslateY === 0) return {}
-    const transforms: any[] = []
-    if (totalTranslateX !== 0) transforms.push({ translateX: totalTranslateX })
-    if (totalTranslateY !== 0) transforms.push({ translateY: totalTranslateY })
-    return { transform: transforms }
   }, [])
 
   const videoStyle = useAnimatedStyle(() => {
@@ -1692,48 +1380,43 @@ export function VideoPlayerOverlay() {
            transform: [],
          }
         }
-      // iOS: fill container naturally
+      // iOS: use explicit dimensions — never flex:1 (Reanimated won't clear it on branch switch)
       return {
-        flex: 1,
-        width: undefined,
-        height: undefined,
+        width: screenWidthShared.value,
+        height: videoHeightShared.value,
+        flex: undefined,
         transform: [],
       }
     }
 
-    const width = interpolate(
-      animProgress.value,
-      [0, 1],
-      [MINI_PIP_WIDTH, screenWidthShared.value],
-      Extrapolation.CLAMP
-    )
-
-    // Smoothly blend the cutout inset instead of a discrete 0.95 threshold.
-    // A binary threshold causes ~50px jumps that make VLC oscillate between
-    // sizes during the spring animation, producing the "50/50 shifted down" look.
     const cutoutFactor = interpolate(animProgress.value, [0.8, 1], [0, 1], Extrapolation.CLAMP)
-    // Use frozenInsetTopShared: during Android PiP transition, insets go to 0
-    // BEFORE isInPipMode is true. frozenInsetTopShared holds the pre-PiP value,
-    // preventing a 50dp layout jump that triggers VLC's "50/50 shifted" artifact.
-    const effectiveInsetTop = Platform.OS === 'android' && !isLandscapeFullscreenShared.value
+    const effectiveInsetTop = Platform.OS !== 'web' && !isLandscapeFullscreenShared.value
       ? Math.max(frozenInsetTopShared.value, insetTopShared.value)
       : 0
-    const cutoutInset = Platform.OS === 'android' && !isInPipModeShared.value && !isLandscapeFullscreenShared.value
+    const cutoutInset = Platform.OS !== 'web' && !isInPipModeShared.value && !isLandscapeFullscreenShared.value
       ? effectiveInsetTop * cutoutFactor
       : 0
-    // Normal video height - same activity shrinks for PiP (single-player architecture)
-    const height = interpolate(
+
+    const fullW = screenWidthShared.value
+    const fullH = videoHeightShared.value + cutoutInset
+
+    const miniScale = fullW > 0
+      ? MINI_PIP_WIDTH / fullW
+      : 1
+
+    const scale = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PIP_HEIGHT, videoHeightShared.value + cutoutInset],
+      [miniScale, 1],
       Extrapolation.CLAMP
     )
 
     return {
-      width,
-      height,
+      width: fullW,
+      height: fullH,
       flex: undefined,
-      transform: [],
+      transformOrigin: 'left top',
+      transform: [{ scale }],
     }
   }, [])
 
@@ -1768,7 +1451,7 @@ export function VideoPlayerOverlay() {
       Extrapolation.CLAMP
     )
 
-    const cutoutInset = Platform.OS === 'android' && !isInPipModeShared.value && !isLandscapeFullscreenShared.value && animProgress.value >= 0.95
+    const cutoutInset = Platform.OS !== 'web' && !isInPipModeShared.value && !isLandscapeFullscreenShared.value && animProgress.value >= 0.95
       ? insetTopShared.value
       : 0
     // Calculate top position - video height for fullscreen, mini pip height for mini
@@ -1842,14 +1525,14 @@ export function VideoPlayerOverlay() {
         bottom: 0,
       }
     }
-    // iOS PiP: fill container, no cutout needed
+    // iOS PiP: explicit width/height (not right/bottom) for Reanimated consistency
     if (isPipLayoutActiveShared.value) {
       return {
         position: 'absolute',
         top: 0,
         left: 0,
-        right: 0,
-        bottom: 0,
+        width: screenWidthShared.value,
+        height: videoHeightShared.value,
       }
     }
     // On Android in fullscreen portrait, push the video below the camera cutout.
@@ -1859,10 +1542,10 @@ export function VideoPlayerOverlay() {
     // Smooth blend (matching videoStyle's cutoutFactor) avoids discrete jumps.
     const cutoutFactor = interpolate(animProgress.value, [0.8, 1], [0, 1], Extrapolation.CLAMP)
     // Use frozenInsetTopShared: same PiP transition race guard as videoStyle.
-    const effectiveInsetTop = Platform.OS === 'android' && !isLandscapeFullscreenShared.value
+    const effectiveInsetTop = Platform.OS !== 'web' && !isLandscapeFullscreenShared.value
       ? Math.max(frozenInsetTopShared.value, insetTopShared.value)
       : 0
-    const cutoutOffset = Platform.OS === 'android'
+    const cutoutOffset = Platform.OS !== 'web'
       && !isInPipModeShared.value
       && !isLandscapeFullscreenShared.value
         ? effectiveInsetTop * cutoutFactor
@@ -1939,7 +1622,7 @@ export function VideoPlayerOverlay() {
 
     const cutoutInset = overlayInVlcViewShared.value
       ? 0
-      : Platform.OS === 'android'
+      : Platform.OS !== 'web'
         && !isInPipModeShared.value
         && !isLandscapeFullscreenShared.value
         && animProgress.value >= 0.95
@@ -2020,7 +1703,7 @@ export function VideoPlayerOverlay() {
 
     const cutoutInset = overlayInVlcViewShared.value
       ? 0
-      : Platform.OS === 'android'
+      : Platform.OS !== 'web'
         && !isInPipModeShared.value
         && !isLandscapeFullscreenShared.value
         && animProgress.value >= 0.95
@@ -2103,7 +1786,7 @@ export function VideoPlayerOverlay() {
 
     const cutoutInset = overlayInVlcViewShared.value
       ? 0
-      : Platform.OS === 'android'
+      : Platform.OS !== 'web'
         && !isInPipModeShared.value
         && !isLandscapeFullscreenShared.value
         && animProgress.value >= 0.95
@@ -2151,7 +1834,7 @@ export function VideoPlayerOverlay() {
 
      const cutoutInset = overlayInVlcViewShared.value
        ? 0
-       : Platform.OS === 'android'
+       : Platform.OS !== 'web'
          && !isInPipModeShared.value
          && !isLandscapeFullscreenShared.value
          && animProgress.value >= 0.95
@@ -2262,9 +1945,6 @@ export function VideoPlayerOverlay() {
   }, [effectiveDuration, isCasting, cast, seekTo])
 
 
-  // Available playback speeds
-  const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
-
   // Cycle through playback speeds
   const cyclePlaybackSpeed = useCallback(() => {
     const currentIndex = PLAYBACK_SPEEDS.indexOf(playbackRate)
@@ -2273,7 +1953,6 @@ export function VideoPlayerOverlay() {
   }, [playbackRate, setPlaybackRate])
 
   // Toggle true fullscreen (landscape mode)
-  // Uses shared values so VLC doesn't remount - position should be preserved
   const toggleLandscapeFullscreen = useCallback(async () => {
     if (Platform.OS === 'web') return
 
@@ -2339,28 +2018,23 @@ export function VideoPlayerOverlay() {
   }, [playerMode, isInPipMode, isLandscapeFullscreen])
 
   useEffect(() => {
-    if (Platform.OS !== 'android') return
-  }, [])
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    if (pipSupported === false) return
-    const shouldEnableAutoPip =
-      pipSupported !== false &&
+    if (Platform.OS === 'web') return
+    if (Platform.OS === 'android' && pipSupported === false) return
+    const shouldAutoPip =
       (playerMode === 'fullscreen' || playerMode === 'mini') &&
       currentVideo !== null &&
       !isCasting
-    const shouldAutoPip = shouldEnableAutoPip
     autoPipEnabledRef.current = shouldAutoPip
-    if (shouldEnableAutoPip) {
-      updatePipSourceRect()
-    }
     if (isInPipMode) return
     console.log('[VideoPlayerOverlay] Auto-PiP effect, playerMode:', playerMode, 'hasVideo:', !!currentVideo, 'enabling:', shouldAutoPip)
-    MediaSession.setAutoPictureInPicture(shouldAutoPip)
-      .then(() => console.log('[VideoPlayerOverlay] Auto-PiP set:', shouldAutoPip))
-      .catch((err) => console.error('[VideoPlayerOverlay] Auto-PiP failed:', err))
-  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, updatePipSourceRect])
+    if (Platform.OS === 'android') {
+      MediaSession.setAutoPictureInPicture(shouldAutoPip)
+        .then(() => console.log('[VideoPlayerOverlay] Auto-PiP set:', shouldAutoPip))
+        .catch((err) => console.error('[VideoPlayerOverlay] Auto-PiP failed:', err))
+    } else if (Platform.OS === 'ios') {
+      setIosPipEnabled(shouldAutoPip)
+    }
+  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode])
 
   // PiP entry is handled natively via onUserLeaveHint in MainActivity
   // Same activity shrinks, same player continues (single-player architecture)
@@ -2418,8 +2092,7 @@ export function VideoPlayerOverlay() {
     })
   }, [currentVideo, playerMode, videoUrl, isPear, isDesktop])
 
-  // Don't render if no video
-  if (!currentVideo || playerMode === 'hidden') {
+  if (!currentVideo) {
     return null
   }
 
@@ -2428,12 +2101,6 @@ export function VideoPlayerOverlay() {
     currentVideo.channel?.name ||
     `Channel ${currentVideo.channelKey?.slice(0, 8) || 'Unknown'}`
   const channelInitial = channelName.charAt(0).toUpperCase()
-
-  // Desktop mini player dimensions
-  const DESKTOP_MINI_WIDTH = 320
-  const DESKTOP_MINI_HEIGHT = 180
-  const DESKTOP_MINI_PADDING = 24
-  const DESKTOP_MINI_CONTROLS_HEIGHT = 48
 
   // Calculate mini player position based on corner
   const getMiniPlayerPosition = () => {
@@ -3128,30 +2795,6 @@ export function VideoPlayerOverlay() {
         </Animated.View>
       )}
 
-      {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && showControls && (
-        <Animated.View style={[styles.miniPipOverlay, miniInfoStyle]} pointerEvents="box-none">
-          <View style={styles.miniPipTopRow} pointerEvents="box-none">
-            <Pressable style={styles.miniPipSmallButton} onPress={closeVideo}>
-              <Feather name="x" size={18} color="#fff" />
-            </Pressable>
-            <Pressable style={styles.miniPipSmallButton} onPress={maximizeFromMini}>
-              <Feather name="maximize-2" size={18} color="#fff" />
-            </Pressable>
-          </View>
-          <View style={styles.miniPipControlsRow}>
-            <Pressable style={styles.miniPipSkipButton} onPress={() => handleDoubleTapSeek('left')}>
-              <Feather name="rotate-ccw" size={18} color="#fff" />
-            </Pressable>
-            <Pressable style={styles.miniPipPlayButton} onPress={handlePlayPause}>
-              <Ionicons name={effectiveIsPlaying ? 'pause' : 'play'} size={28} color="#fff" />
-            </Pressable>
-            <Pressable style={styles.miniPipSkipButton} onPress={() => handleDoubleTapSeek('right')}>
-              <Feather name="rotate-cw" size={18} color="#fff" />
-            </Pressable>
-          </View>
-        </Animated.View>
-      )}
-
       {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
         <Animated.View style={[styles.miniPipProgressBar, miniInfoStyle]} pointerEvents="none">
           <View style={[styles.miniPipProgressFill, { width: `${effectiveProgress * 100}%` }]} />
@@ -3175,12 +2818,10 @@ export function VideoPlayerOverlay() {
       )
     }
 
-    const networkCachingMs = videoStats?.isComplete ? 0 : 300
-
     return (
       <>
         {Platform.OS !== 'web' && videoUrl && (
-          <VlcVideoView
+          <MpvMobileVideoView
             style={StyleSheet.absoluteFill}
             playerRef={playerRef}
             videoUrl={videoUrl}
@@ -3188,12 +2829,13 @@ export function VideoPlayerOverlay() {
             currentVideoKey={`${currentVideo?.channelKey || ''}:${currentVideo?.id || ''}`}
             isPlaying={isPlaying}
             playbackRate={playbackRate}
-            vlcSeekPosition={vlcSeekPosition}
-            networkCachingMs={networkCachingMs}
+            seekPosition={playerSeekPosition}
             isInPipMode={isInPipMode}
             pipWindowSize={pipWindowSize}
+            pipEnabled={iosPipEnabled}
             videoAspectRatio={videoAspectRatio}
             onLoad={handleVideoLoad}
+            onPictureInPictureChanged={handlePipStatusChanged}
             onProgress={onProgress}
             onPlaying={onPlaying}
             onPaused={onPaused}
@@ -3203,7 +2845,7 @@ export function VideoPlayerOverlay() {
             onVideoStateChange={onVideoStateChange}
           >
             {overlayContent}
-          </VlcVideoView>
+          </MpvMobileVideoView>
         )}
         {Platform.OS === 'web' && isPear && videoUrl && (
           <MpvPlayer
@@ -3234,9 +2876,8 @@ export function VideoPlayerOverlay() {
     )
   }
 
-  // Render - all styles are animated, no React state conditionals in JSX to prevent VLC remounting
   const content = (
-    <Animated.View style={[styles.container, containerStyle, containerDragStyle]}>
+    <Animated.View style={[styles.container, containerStyle]}>
           <GestureDetector gesture={composedGesture}>
           <Animated.View
             ref={videoWrapperRef}
@@ -3262,6 +2903,34 @@ export function VideoPlayerOverlay() {
           </Pressable>
         </Animated.View>
         </GestureDetector>
+
+        {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && showControls && (
+          <>
+            <View style={styles.miniPipTopRow} pointerEvents="box-none">
+              <Pressable
+                style={styles.miniPipSmallButton}
+                onPress={() => setTimeout(closeVideo, 0)}
+                testID="mini-player-close"
+              >
+                <Feather name="x" size={18} color="#fff" />
+              </Pressable>
+              <Pressable
+                style={styles.miniPipSmallButton}
+                onPress={() => setTimeout(maximizeFromMini, 0)}
+                testID="mini-player-maximize"
+              >
+                <Feather name="chevron-up" size={18} color="#fff" />
+              </Pressable>
+            </View>
+            <Pressable
+              style={styles.miniPipPlayPauseButton}
+              onPress={handlePlayPause}
+              testID="mini-player-play-pause"
+            >
+              <Feather name={isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
+            </Pressable>
+          </>
+        )}
 
         {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
           <Animated.View
@@ -3488,8 +3157,6 @@ export function VideoPlayerOverlay() {
     </Animated.View>
   )
 
-  // Always use same structure to prevent remounting
-  // GestureDetector wraps only video area - comments scroll freely
   return (
     <>
       {content}

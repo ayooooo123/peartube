@@ -36,7 +36,7 @@ export { DesktopMiniPlayer } from './DesktopMiniPlayer'
 export { LoadingOverlay } from './LoadingOverlay'
 export { SeekFeedback } from './SeekFeedback'
 export { VideoContainer } from './VideoContainer'
-export { VlcVideoView } from './VlcVideoView'
+export { MpvMobileVideoView } from './MpvMobileVideoView'
 
 // Hooks
 export { useCommentsPolling, useVideoGestures, useMiniPlayerPosition, useLandscapeMode } from './hooks'

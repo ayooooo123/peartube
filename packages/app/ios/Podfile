@@ -45,6 +45,9 @@ target 'PearTube' do
   # These are linked by the worklet at runtime via "linked:" specifiers
   pod 'BareAddons', :path => '../BareAddons.podspec'
 
+  # MPVKit with AVFoundation video output for PiP support
+  pod 'MPVKit-GPL', :podspec => 'https://raw.githubusercontent.com/streamyfin/MPVKit/0.40.0-av/MPVKit-GPL.podspec'
+
   if ENV['EXPO_USE_COMMUNITY_AUTOLINKING'] == '1'
     config_command = ['node', '-e', "process.argv=['', '', 'config'];require('@react-native-community/cli').run()"];
   else

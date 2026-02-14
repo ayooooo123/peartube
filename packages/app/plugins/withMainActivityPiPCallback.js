@@ -5,7 +5,7 @@ import to.holepunch.modules.mediasession.PipBridge`;
 
 const PIP_CALLBACK_BLOCK = `
   /**
-   * Called when user presses home button. VLC Android's approach:
+   * Called when user presses home button.
    * Enter PiP with correct aspect ratio already set.
    */
   override fun onUserLeaveHint() {

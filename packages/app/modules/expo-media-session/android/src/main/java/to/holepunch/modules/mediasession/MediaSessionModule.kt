@@ -39,9 +39,6 @@ import java.net.URL
 
 /**
  * Simplified PiP bridge for MainActivity callbacks.
- *
- * VLC Android's approach: Set the correct aspect ratio BEFORE entering PiP,
- * then let Android handle the window sizing. Don't fight VLC's surface handling.
  */
 object PipBridge {
     private var moduleInstance: MediaSessionModule? = null
@@ -68,23 +65,32 @@ object PipBridge {
 
     private fun markPipTransition() {
         pipTransitionUntilUptimeMs = SystemClock.uptimeMillis() + 2200
-        notifyNitroVlcTransitionUntil(pipTransitionUntilUptimeMs)
+        notifyPlayerViewTransitionUntil(pipTransitionUntilUptimeMs)
     }
 
     fun isInPipTransition(): Boolean {
         return SystemClock.uptimeMillis() <= pipTransitionUntilUptimeMs
     }
 
-    private fun notifyNitroVlcTransitionUntil(untilUptimeMs: Long) {
-        try {
-            val viewClass = Class.forName("com.margelo.nitro.com.nitrovlc.HybridNitroVLCView")
-            val method = viewClass.getMethod(
-                "setAllPipTransitionUntilUptimeMs",
-                Long::class.javaPrimitiveType
-            )
-            method.invoke(null, untilUptimeMs)
-        } catch (_: Exception) {
-            // NitroVLC not available — ignore
+    private fun notifyPlayerViewTransitionUntil(untilUptimeMs: Long) {
+        invokePlayerViewStatic(
+            "setAllPipTransitionUntilUptimeMs",
+            arrayOf(Long::class.javaPrimitiveType),
+            arrayOf(untilUptimeMs)
+        )
+    }
+
+    fun invokePlayerViewStatic(methodName: String, paramTypes: Array<Class<*>?>, args: Array<Any?>) {
+        val classes = listOf("to.holepunch.peartube.mpv.MpvView")
+        for (className in classes) {
+            try {
+                val viewClass = Class.forName(className)
+                val method = viewClass.getMethod(methodName, *paramTypes)
+                method.invoke(null, *args)
+                return
+            } catch (_: Exception) {
+                continue
+            }
         }
     }
 
@@ -160,70 +166,214 @@ object PipBridge {
             return
         }
 
-        // On Android 12+, auto-enter is handled by setAutoEnterEnabled(true)
-        // We set this in updateActivityPipParams(), so no manual entry needed
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            android.util.Log.d("PipBridge", "onUserLeaveHint: Android 12+, auto-enter handled by system")
-            // Set flag EARLY — window resizes before onPictureInPictureModeChanged fires
-            markPipTransition()
-            notifyNitroVlcViews(true)
-            return
-        }
-
         if (activity.isInPictureInPictureMode) {
             android.util.Log.d("PipBridge", "onUserLeaveHint: already in PiP, skipping")
             return
         }
 
-        // Manual PiP entry for Android 8-11 (API 26-30)
-        // Set flag EARLY — window resizes before onPictureInPictureModeChanged fires
-        markPipTransition()
-        notifyNitroVlcViews(true)
-        try {
-            val aspectRatio = getPipAspectRatio()
+        expandSurfaceViewsForPip(activity)
 
-            val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(aspectRatio)
+        // Disable auto-enter so Android doesn't capture pre-transform state,
+        // then enter PiP manually on next frame after transforms have rendered.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val disableParams = PictureInPictureParams.Builder()
+                .setAutoEnterEnabled(false)
+                .setAspectRatio(getPipAspectRatio())
+                .build()
+            activity.setPictureInPictureParams(disableParams)
+        }
 
-            val sourceRect = getVideoSourceRect(activity)
-            if (sourceRect != null) {
+        activity.window.decorView.post {
+            if (activity.isDestroyed || activity.isFinishing) return@post
+            android.util.Log.d("PipBridge", "onUserLeaveHint: entering PiP after transforms rendered")
+
+            markPipTransition()
+            notifyPlayerViews(true)
+            try {
+                val builder = PictureInPictureParams.Builder()
+                    .setAspectRatio(getPipAspectRatio())
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    builder.setAutoEnterEnabled(true)
+                }
+
+                val sourceRect = getFullscreenSourceRect(activity)
                 builder.setSourceRectHint(sourceRect)
+
+                val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
+                builder.setActions(actions)
+
+                val result = activity.enterPictureInPictureMode(builder.build())
+                android.util.Log.d("PipBridge", "onUserLeaveHint: enterPictureInPictureMode returned $result")
+            } catch (e: Exception) {
+                android.util.Log.e("PipBridge", "onUserLeaveHint: failed", e)
             }
-
-            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
-            builder.setActions(actions)
-
-            val params = builder.build()
-            val result = activity.enterPictureInPictureMode(params)
-            android.util.Log.d("PipBridge", "onUserLeaveHint: enterPictureInPictureMode returned $result")
-        } catch (e: Exception) {
-            android.util.Log.e("PipBridge", "onUserLeaveHint: failed", e)
         }
     }
 
+    // State saved before PiP so we can restore on exit
+    private val hiddenViews = mutableListOf<android.view.View>()
+    private val unclippedParents = mutableListOf<Pair<android.view.ViewGroup, Pair<Boolean, Boolean>>>()
+    private var savedDecorBackground: android.graphics.drawable.Drawable? = null
+    private var pipViewExpanded = false
+
     /**
-     * Called from MainActivity.onPictureInPictureModeChanged().
-     * Notifies both VLC player (directly, bypassing React) and JS layer.
+     * Prepare the Activity for PiP by hiding all non-video UI and expanding
+     * the SurfaceView to fill the screen. Android PiP captures the entire
+     * Activity window, so we must make it look like only the video is showing.
      */
+    private fun expandSurfaceViewsForPip(activity: Activity) {
+        val rootView = activity.window.decorView as? android.view.ViewGroup ?: return
+        val videoViews = findVideoViews(rootView)
+        if (videoViews.isEmpty()) {
+            android.util.Log.d("PipBridge", "expandSurfaceViewsForPip: no video views found")
+            return
+        }
+
+        val display = activity.windowManager.defaultDisplay
+        val size = android.graphics.Point()
+        display.getRealSize(size)
+        val screenW = size.x.toFloat()
+        val screenH = size.y.toFloat()
+
+        hiddenViews.clear()
+        unclippedParents.clear()
+        savedDecorBackground = rootView.background
+        pipViewExpanded = true
+
+        invokePlayerViewStatic(
+            "setPipExpandedByBridge",
+            arrayOf(Boolean::class.javaPrimitiveType),
+            arrayOf(true)
+        )
+
+        for (vv in videoViews) {
+            val viewW = vv.width.toFloat()
+            val viewH = vv.height.toFloat()
+            if (viewW <= 0 || viewH <= 0) continue
+
+            var parent = vv.parent
+            while (parent is android.view.ViewGroup) {
+                val vg = parent
+                unclippedParents.add(vg to Pair(vg.clipChildren, vg.clipToPadding))
+                vg.clipChildren = false
+                vg.clipToPadding = false
+                parent = vg.parent
+            }
+
+            val loc = IntArray(2)
+            vv.getLocationOnScreen(loc)
+
+            vv.pivotX = 0f
+            vv.pivotY = 0f
+            vv.scaleX = screenW / viewW
+            vv.scaleY = screenH / viewH
+            vv.translationX = -loc[0].toFloat()
+            vv.translationY = -loc[1].toFloat()
+
+            if (vv is android.view.SurfaceView) {
+                vv.setZOrderOnTop(true)
+            }
+
+            android.util.Log.d("PipBridge", "expandSurfaceViewsForPip: ${vv.javaClass.simpleName} ${viewW}x${viewH} at ${loc[0]},${loc[1]} → fullscreen ${screenW}x${screenH}")
+        }
+
+        val ancestorSet = mutableSetOf<android.view.View>()
+        for (vv in videoViews) {
+            var v: android.view.View? = vv
+            while (v != null) {
+                ancestorSet.add(v)
+                v = v.parent as? android.view.View
+            }
+        }
+
+        hideNonVideoViews(rootView, ancestorSet)
+        rootView.setBackgroundColor(android.graphics.Color.BLACK)
+    }
+
+    private fun isVideoView(view: android.view.View): Boolean {
+        return view is android.view.SurfaceView || view is android.view.TextureView
+    }
+
+    private fun hideNonVideoViews(group: android.view.ViewGroup, ancestors: Set<android.view.View>) {
+        for (i in 0 until group.childCount) {
+            val child = group.getChildAt(i)
+            if (isVideoView(child)) continue
+            if (child in ancestors) {
+                if (child is android.view.ViewGroup) {
+                    hideNonVideoViews(child, ancestors)
+                }
+            } else {
+                if (child.visibility == android.view.View.VISIBLE) {
+                    hiddenViews.add(child)
+                    child.visibility = android.view.View.INVISIBLE
+                }
+            }
+        }
+    }
+
+    private fun restoreViewsAfterPip(activity: Activity) {
+        if (!pipViewExpanded) return
+        pipViewExpanded = false
+
+        invokePlayerViewStatic(
+            "setPipExpandedByBridge",
+            arrayOf(Boolean::class.javaPrimitiveType),
+            arrayOf(false)
+        )
+
+        android.util.Log.d("PipBridge", "restoreViewsAfterPip: restoring ${hiddenViews.size} hidden views, ${unclippedParents.size} clip states")
+
+        for (v in hiddenViews) {
+            v.visibility = android.view.View.VISIBLE
+        }
+        hiddenViews.clear()
+
+        for ((vg, clips) in unclippedParents) {
+            vg.clipChildren = clips.first
+            vg.clipToPadding = clips.second
+        }
+        unclippedParents.clear()
+
+        val rootView = activity.window.decorView
+        val videoViews = findVideoViews(rootView)
+        for (vv in videoViews) {
+            if (vv is android.view.SurfaceView) {
+                vv.setZOrderOnTop(false)
+                vv.setZOrderMediaOverlay(false)
+            }
+            vv.pivotX = vv.width / 2f
+            vv.pivotY = vv.height / 2f
+            vv.scaleX = 1f
+            vv.scaleY = 1f
+            vv.translationX = 0f
+            vv.translationY = surfaceViewInsetPx
+        }
+
+        val decorView = activity.window.decorView as? android.view.ViewGroup
+        if (savedDecorBackground != null) {
+            decorView?.background = savedDecorBackground
+        } else {
+            decorView?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        }
+        savedDecorBackground = null
+    }
+
+    fun getFullscreenSourceRect(activity: Activity): android.graphics.Rect {
+        val display = activity.windowManager.defaultDisplay
+        val size = android.graphics.Point()
+        display.getRealSize(size)
+        return android.graphics.Rect(0, 0, size.x, size.y)
+    }
+
     @JvmStatic
     fun notifyPipModeChanged(activity: Activity, isInPip: Boolean, newConfig: Configuration? = null) {
         android.util.Log.d("PipBridge", "notifyPipModeChanged: isInPip=$isInPip")
 
-        // onPictureInPictureModeChanged + onConfigurationChanged can both fire during
-        // seamless PiP entry/resize. Avoid re-toggling VLC PiP guards when the PiP
-        // state itself didn't change; it can destabilize surface sizing.
         val didStateChange = isInPip != lastIsInPip
         if (didStateChange) {
             markPipTransition()
-            // Block/unblock VLC surface reconfiguration FIRST (before any layout changes)
-            notifyNitroVlcViews(isInPip)
-
-            // Notify VLC player directly via reflection (bypasses React prop batching for immediate resize)
-            // We use reflection because expo-media-session module doesn't have a direct dependency on VLC module
-            val density = activity.resources.displayMetrics.density
-            val widthDp = newConfig?.screenWidthDp ?: 0
-            val heightDp = newConfig?.screenHeightDp ?: 0
-            notifyVlcPlayerBridge(isInPip, widthDp, heightDp, density)
+            notifyPlayerViews(isInPip)
 
             // Also apply transform directly to all SurfaceViews with a small delay
             // This ensures the transform is applied after Android finishes PiP transition
@@ -234,11 +384,9 @@ object PipBridge {
 
             lastIsInPip = isInPip
 
-            // If the user dismisses PiP by dragging it to the system "X",
-            // we want playback to pause. This exit path leaves the app in the
-            // background (no window focus). If the user taps the PiP to return
-            // to the app, focus is restored and we should NOT force-pause.
             if (!isInPip) {
+                restoreViewsAfterPip(activity)
+
                 val handler = android.os.Handler(android.os.Looper.getMainLooper())
                 // NOTE: When returning from PiP by tapping the window, Android can
                 // report no window focus for a short period even though focus will
@@ -273,13 +421,11 @@ object PipBridge {
             }
         }
 
-        // Apply PiP window sizing info to NitroVLC while in PiP. onConfigurationChanged
-        // delivers updated Configuration sizes when the user resizes the PiP window.
         if (isInPip && newConfig != null) {
             val density = activity.resources.displayMetrics.density
             val pipWidthPx = (newConfig.screenWidthDp * density).roundToInt()
             val pipHeightPx = (newConfig.screenHeightDp * density).roundToInt()
-            notifyNitroVlcPipWindowSize(pipWidthPx, pipHeightPx)
+            notifyPlayerPipWindowSize(pipWidthPx, pipHeightPx)
         }
 
         // Still send event to JS for state management and PiP window resize updates.
@@ -291,34 +437,21 @@ object PipBridge {
         moduleInstance?.handlePipPause()
     }
 
-    /**
-     * Notify all NitroVLC views to block/unblock VLC surface reconfiguration.
-     * Uses reflection because expo-media-session has no compile-time dependency
-     * on react-native-nitro-vlc.
-     */
-    private fun notifyNitroVlcViews(isInPip: Boolean) {
-        try {
-            val viewClass = Class.forName("com.margelo.nitro.com.nitrovlc.HybridNitroVLCView")
-            val method = viewClass.getMethod("setAllPipMode", Boolean::class.javaPrimitiveType)
-            method.invoke(null, isInPip)
-        } catch (_: Exception) {
-            // NitroVLC not available — ignore
-        }
+    private fun notifyPlayerViews(isInPip: Boolean) {
+        invokePlayerViewStatic(
+            "setAllPipMode",
+            arrayOf(Boolean::class.javaPrimitiveType),
+            arrayOf(isInPip)
+        )
     }
 
-    private fun notifyNitroVlcPipWindowSize(widthPx: Int, heightPx: Int) {
+    private fun notifyPlayerPipWindowSize(widthPx: Int, heightPx: Int) {
         if (widthPx <= 0 || heightPx <= 0) return
-        try {
-            val viewClass = Class.forName("com.margelo.nitro.com.nitrovlc.HybridNitroVLCView")
-            val method = viewClass.getMethod(
-                "setAllPipWindowSize",
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType
-            )
-            method.invoke(null, widthPx, heightPx)
-        } catch (_: Exception) {
-            // NitroVLC not available — ignore
-        }
+        invokePlayerViewStatic(
+            "setAllPipWindowSize",
+            arrayOf(Int::class.javaPrimitiveType, Int::class.javaPrimitiveType),
+            arrayOf(widthPx, heightPx)
+        )
     }
 
     fun setSurfaceViewInset(topInsetPx: Float) {
@@ -392,7 +525,6 @@ object PipBridge {
 
     /**
      * Find all video rendering views (SurfaceView + TextureView) in the hierarchy.
-     * Used for sourceRectHint — needs to find the Nitro VLC TextureView too.
      */
     private fun findVideoViews(view: android.view.View): List<android.view.View> {
         val result = mutableListOf<android.view.View>()
@@ -452,28 +584,6 @@ object PipBridge {
         return bestRect
     }
 
-    /**
-     * Notify VLC player of PiP mode change via reflection.
-     * This bypasses React's prop batching for immediate resize.
-     */
-    private fun notifyVlcPlayerBridge(isInPip: Boolean, widthDp: Int, heightDp: Int, density: Float) {
-        try {
-            val bridgeClass = Class.forName("com.yuanzhou.vlc.vlcplayer.VlcPlayerBridge")
-            val method = bridgeClass.getMethod(
-                "notifyPipModeChanged",
-                Boolean::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                Float::class.javaPrimitiveType
-            )
-            method.invoke(null, isInPip, widthDp, heightDp, density)
-            android.util.Log.d("PipBridge", "notifyVlcPlayerBridge: called successfully")
-        } catch (e: ClassNotFoundException) {
-            android.util.Log.d("PipBridge", "notifyVlcPlayerBridge: VlcPlayerBridge not available")
-        } catch (e: Exception) {
-            android.util.Log.e("PipBridge", "notifyVlcPlayerBridge: failed", e)
-        }
-    }
 }
 
 class MediaSessionModule : Module() {
@@ -818,7 +928,7 @@ class MediaSessionModule : Module() {
         override fun onPlay() {
             android.util.Log.d("MediaSession", "onPlay callback")
             updatePipPlayState(true)
-            notifyVlcPlaybackPaused(false)
+            notifyPlayerPlaybackPaused(false)
             sendEvent("onRemoteCommand", mapOf("command" to "play"))
         }
 
@@ -838,7 +948,7 @@ class MediaSessionModule : Module() {
             }
 
             updatePipPlayState(false)
-            notifyVlcPlaybackPaused(true)
+            notifyPlayerPlaybackPaused(true)
             sendEvent("onRemoteCommand", mapOf("command" to "pause"))
         }
 
@@ -854,7 +964,7 @@ class MediaSessionModule : Module() {
             }
 
             updatePipPlayState(false)
-            notifyVlcPlaybackPaused(true)
+            notifyPlayerPlaybackPaused(true)
             sendEvent("onRemoteCommand", mapOf("command" to "stop"))
         }
 
@@ -1075,13 +1185,10 @@ class MediaSessionModule : Module() {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
 
-            // sourceRectHint tells the system which area to zoom into for the PiP
-            // transition animation. Without this, the entire Activity is scaled down,
-            // showing the fullscreen layout (with cutout offset etc.) squished into PiP.
-            val sourceRect = getVideoSourceRect(activity)
-            if (sourceRect != null) {
-                builder.setSourceRectHint(sourceRect)
-            }
+            // Use fullscreen rect — expandSurfaceViewsForPip already moved the
+            // surface to cover the whole screen before PiP activates.
+            val sourceRect = getVideoSourceRect(activity) ?: PipBridge.getFullscreenSourceRect(activity)
+            builder.setSourceRectHint(sourceRect)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 // See enterPiP(): prefer seamless resize for video playback.
@@ -1128,7 +1235,6 @@ class MediaSessionModule : Module() {
         return bestRect
     }
 
-    // Find both SurfaceView (legacy VLC) and TextureView (Nitro VLC)
     private fun findVideoViews(view: android.view.View): List<android.view.View> {
         val result = mutableListOf<android.view.View>()
         if (view is android.view.SurfaceView || view is android.view.TextureView) {
@@ -1274,14 +1380,14 @@ class MediaSessionModule : Module() {
     internal fun handlePipPlay() {
         android.util.Log.d("MediaSession", "handlePipPlay")
         updatePipPlayState(true)
-        notifyVlcPlaybackPaused(false)
+        notifyPlayerPlaybackPaused(false)
         sendEvent("onRemoteCommand", mapOf("command" to "play"))
     }
 
     internal fun handlePipPause() {
         android.util.Log.d("MediaSession", "handlePipPause")
         updatePipPlayState(false)
-        notifyVlcPlaybackPaused(true)
+        notifyPlayerPlaybackPaused(true)
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }
 
@@ -1326,30 +1432,12 @@ class MediaSessionModule : Module() {
         }
     }
 
-    private fun notifyVlcPlaybackPaused(paused: Boolean) {
-        try {
-            val bridgeClass = Class.forName("com.yuanzhou.vlc.vlcplayer.VlcPlayerBridge")
-            val method = bridgeClass.getMethod(
-                "setPlaybackPaused",
-                Boolean::class.javaPrimitiveType
-            )
-            method.invoke(null, paused)
-            android.util.Log.d("MediaSession", "notifyVlcPlaybackPaused: paused=$paused")
-        } catch (e: ClassNotFoundException) {
-            android.util.Log.d("MediaSession", "notifyVlcPlaybackPaused: VlcPlayerBridge not available")
-        } catch (e: Exception) {
-            android.util.Log.e("MediaSession", "notifyVlcPlaybackPaused: failed", e)
-        }
-
-        // NitroVLC: pause/resume natively so notification/media-manager controls work
-        // even if the JS thread is backgrounded.
-        try {
-            val viewClass = Class.forName("com.margelo.nitro.com.nitrovlc.HybridNitroVLCView")
-            val method = viewClass.getMethod("setAllPlaybackPaused", Boolean::class.javaPrimitiveType)
-            method.invoke(null, paused)
-        } catch (_: Exception) {
-            // NitroVLC not available — ignore
-        }
+    private fun notifyPlayerPlaybackPaused(paused: Boolean) {
+        PipBridge.invokePlayerViewStatic(
+            "setAllPlaybackPaused",
+            arrayOf(Boolean::class.javaPrimitiveType),
+            arrayOf(paused)
+        )
     }
 
     companion object {

@@ -62,7 +62,7 @@ class MainActivity : ReactActivity() {
   }
 
   /**
-   * Called when user presses home button. VLC Android's approach:
+   * Called when user presses home button.
    * Enter PiP with correct aspect ratio already set.
    */
   override fun onUserLeaveHint() {

@@ -12,8 +12,12 @@
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		4958506397AA1E01F0882164 /* libPods-PearTube.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 1E3A982F26F26A64BBD30EEA /* libPods-PearTube.a */; };
 		5FF52A9B3A0951B25A874930 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 0B578897D873CF432CEB650B /* PrivacyInfo.xcprivacy */; };
-		A1B2C3D4E5F60001PIPPLYR /* VLCPiPPlayer.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60002PIPPLYR /* VLCPiPPlayer.m */; };
-		A1B2C3D4E5F60003PIPMGR /* VLCPiPPlayerManager.m in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60004PIPMGR /* VLCPiPPlayerManager.m */; };
+		A9A100000000000000000010 /* MpvPlayerCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000014 /* MpvPlayerCore.swift */; };
+		A9A100000000000000000011 /* MpvPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000015 /* MpvPlayerView.swift */; };
+		A9A100000000000000000012 /* MpvPlayerViewManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000016 /* MpvPlayerViewManager.swift */; };
+		A9A100000000000000000013 /* MpvPlayerManager.m in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000017 /* MpvPlayerManager.m */; };
+		A9A100000000000000000019 /* MpvHttpStreamBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A100000000000000000018 /* MpvHttpStreamBridge.swift */; };
+		A9A10000000000000000001B /* MpvPipController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9A10000000000000000001A /* MpvPipController.swift */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
 /* End PBXBuildFile section */
@@ -25,10 +29,12 @@
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = PearTube/Info.plist; sourceTree = "<group>"; };
 		1E3A982F26F26A64BBD30EEA /* libPods-PearTube.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-PearTube.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4A4BD87A92B24AAC9EFE2CB0 /* Pods-PearTube.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-PearTube.debug.xcconfig"; path = "Target Support Files/Pods-PearTube/Pods-PearTube.debug.xcconfig"; sourceTree = "<group>"; };
-		A1B2C3D4E5F60002PIPPLYR /* VLCPiPPlayer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VLCPiPPlayer.m; path = PearTube/VLCPiPPlayer.m; sourceTree = "<group>"; };
-		A1B2C3D4E5F60004PIPMGR /* VLCPiPPlayerManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = VLCPiPPlayerManager.m; path = PearTube/VLCPiPPlayerManager.m; sourceTree = "<group>"; };
-		A1B2C3D4E5F60005PIPPLYH /* VLCPiPPlayer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = VLCPiPPlayer.h; path = PearTube/VLCPiPPlayer.h; sourceTree = "<group>"; };
-		A1B2C3D4E5F60006PIPMGRH /* VLCPiPPlayerManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = VLCPiPPlayerManager.h; path = PearTube/VLCPiPPlayerManager.h; sourceTree = "<group>"; };
+		A9A100000000000000000014 /* MpvPlayerCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvPlayerCore.swift; path = PearTube/MpvPlayerCore.swift; sourceTree = "<group>"; };
+		A9A100000000000000000015 /* MpvPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvPlayerView.swift; path = PearTube/MpvPlayerView.swift; sourceTree = "<group>"; };
+		A9A100000000000000000016 /* MpvPlayerViewManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvPlayerViewManager.swift; path = PearTube/MpvPlayerViewManager.swift; sourceTree = "<group>"; };
+		A9A100000000000000000017 /* MpvPlayerManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = MpvPlayerManager.m; path = PearTube/MpvPlayerManager.m; sourceTree = "<group>"; };
+		A9A100000000000000000018 /* MpvHttpStreamBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvHttpStreamBridge.swift; path = PearTube/MpvHttpStreamBridge.swift; sourceTree = "<group>"; };
+		A9A10000000000000000001A /* MpvPipController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = MpvPipController.swift; path = PearTube/MpvPipController.swift; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = PearTube/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
@@ -55,10 +61,12 @@
 			children = (
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
 				F11748442D0722820044C1D9 /* PearTube-Bridging-Header.h */,
-				A1B2C3D4E5F60005PIPPLYH /* VLCPiPPlayer.h */,
-				A1B2C3D4E5F60002PIPPLYR /* VLCPiPPlayer.m */,
-				A1B2C3D4E5F60006PIPMGRH /* VLCPiPPlayerManager.h */,
-				A1B2C3D4E5F60004PIPMGR /* VLCPiPPlayerManager.m */,
+				A9A100000000000000000014 /* MpvPlayerCore.swift */,
+				A9A100000000000000000015 /* MpvPlayerView.swift */,
+				A9A100000000000000000016 /* MpvPlayerViewManager.swift */,
+				A9A100000000000000000017 /* MpvPlayerManager.m */,
+				A9A100000000000000000018 /* MpvHttpStreamBridge.swift */,
+				A9A10000000000000000001A /* MpvPipController.swift */,
 				BB2F792B24A3F905000567C9 /* Supporting */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
@@ -264,22 +272,6 @@
 				"${PODS_CONFIGURATION_BUILD_DIR}/ExpoMediaLibrary/ExpoMediaLibrary_privacy.bundle",
 				"${PODS_CONFIGURATION_BUILD_DIR}/ExpoSystemUI/ExpoSystemUI_privacy.bundle",
 				"${PODS_CONFIGURATION_BUILD_DIR}/RNSVG/RNSVGFilters.bundle",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/AntDesign.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/Entypo.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/EvilIcons.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/Feather.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/FontAwesome.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/FontAwesome5_Brands.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/FontAwesome5_Regular.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/FontAwesome5_Solid.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/Fontisto.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/Foundation.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/Ionicons.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/MaterialIcons.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/Octicons.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/SimpleLineIcons.ttf",
-				"${PODS_ROOT}/../../node_modules/react-native-vector-icons/Fonts/Zocial.ttf",
 				"${PODS_CONFIGURATION_BUILD_DIR}/React-Core/React-Core_privacy.bundle",
 				"${PODS_CONFIGURATION_BUILD_DIR}/React-cxxreact/React-cxxreact_privacy.bundle",
 			);
@@ -291,22 +283,6 @@
 				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoMediaLibrary_privacy.bundle",
 				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/ExpoSystemUI_privacy.bundle",
 				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/RNSVGFilters.bundle",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/AntDesign.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Entypo.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/EvilIcons.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Feather.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/FontAwesome.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/FontAwesome5_Brands.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/FontAwesome5_Regular.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/FontAwesome5_Solid.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Fontisto.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Foundation.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Ionicons.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/MaterialCommunityIcons.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/MaterialIcons.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Octicons.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/SimpleLineIcons.ttf",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Zocial.ttf",
 				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/React-Core_privacy.bundle",
 				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/React-cxxreact_privacy.bundle",
 			);
@@ -355,7 +331,6 @@
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-tcp.2.2.0.framework/bare-tcp.2.2.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-tty.5.0.3.framework/bare-tty.5.0.3",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/crc-native.1.1.8.framework/crc-native.1.1.8",
-				"${PODS_XCFRAMEWORKS_BUILD_DIR}/MobileVLCKit/MobileVLCKit.framework/MobileVLCKit",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/React-Core-prebuilt/React.framework/React",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/ReactNativeDependencies/ReactNativeDependencies.framework/ReactNativeDependencies",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/hermes-engine/Pre-built/hermes.framework/hermes",
@@ -384,7 +359,6 @@
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tcp.2.2.2.framework/bare-tcp.2.2.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tiff.1.0.2.framework/bare-tiff.1.0.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tls.2.1.5-patched.1.framework/bare-tls.2.1.5-patched.1",
-				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tls.2.1.5.framework/bare-tls.2.1.5",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-tls.2.1.7.framework/bare-tls.2.1.7",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-type.1.1.0.framework/bare-type.1.1.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/react-native-bare-kit/bare-url.2.3.2.framework/bare-url.2.3.2",
@@ -408,7 +382,6 @@
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tcp.2.2.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tty.5.0.3.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/crc-native.1.1.8.framework",
-				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/MobileVLCKit.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/React.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/ReactNativeDependencies.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/hermes.framework",
@@ -437,7 +410,6 @@
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tcp.2.2.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tiff.1.0.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tls.2.1.5-patched.1.framework",
-				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tls.2.1.5.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tls.2.1.7.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-type.1.1.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-url.2.3.2.framework",
@@ -462,10 +434,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A9A100000000000000000013 /* MpvPlayerManager.m in Sources */,
+				A9A100000000000000000012 /* MpvPlayerViewManager.swift in Sources */,
+				A9A100000000000000000011 /* MpvPlayerView.swift in Sources */,
+				A9A100000000000000000010 /* MpvPlayerCore.swift in Sources */,
+				A9A100000000000000000019 /* MpvHttpStreamBridge.swift in Sources */,
+				A9A10000000000000000001B /* MpvPipController.swift in Sources */,
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
 				118FBCE4D3E1CB8EFA0A9E1D /* ExpoModulesProvider.swift in Sources */,
-				A1B2C3D4E5F60001PIPPLYR /* VLCPiPPlayer.m in Sources */,
-				A1B2C3D4E5F60003PIPMGR /* VLCPiPPlayerManager.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -479,6 +455,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = PearTube/PearTube.entitlements;
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = YW9KBXR4W3;
 				ENABLE_BITCODE = NO;
@@ -516,6 +493,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = PearTube/PearTube.entitlements;
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = YW9KBXR4W3;
 				INFOPLIST_FILE = PearTube/Info.plist;

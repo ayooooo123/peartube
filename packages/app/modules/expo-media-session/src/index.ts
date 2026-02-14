@@ -136,9 +136,8 @@ export async function enterPictureInPicture(): Promise<boolean> {
  * Check if PiP is supported on this device (Android only).
  */
 export async function isPictureInPictureSupported(): Promise<boolean> {
-  if (Platform.OS !== 'android' || !MediaSessionNative.isPictureInPictureSupported) {
-    return false
-  }
+  if (Platform.OS === 'web') return false
+  if (!MediaSessionNative.isPictureInPictureSupported) return false
   return MediaSessionNative.isPictureInPictureSupported()
 }
 
@@ -148,20 +147,12 @@ export async function isPictureInPictureSupported(): Promise<boolean> {
  * while video is playing.
  */
 export async function setAutoPictureInPicture(enabled: boolean): Promise<void> {
-  console.log('[MediaSession JS] setAutoPictureInPicture called:', enabled)
-  if (Platform.OS !== 'android') {
-    console.log('[MediaSession JS] Not Android, skipping')
-    return
-  }
-  if (!(MediaSessionNative as any).setAutoPictureInPicture) {
-    console.log('[MediaSession JS] setAutoPictureInPicture not available on native module')
-    return
-  }
+  if (Platform.OS !== 'android') return
+  if (!(MediaSessionNative as any).setAutoPictureInPicture) return
   try {
     await (MediaSessionNative as any).setAutoPictureInPicture(enabled)
-    console.log('[MediaSession JS] setAutoPictureInPicture succeeded')
   } catch (err) {
-    console.error('[MediaSession JS] setAutoPictureInPicture failed:', err)
+    console.error('[MediaSession] setAutoPictureInPicture failed:', err)
   }
 }
 
@@ -187,7 +178,6 @@ export async function setPictureInPictureAspectRatio(width: number, height: numb
   if (Platform.OS !== 'android' || !(MediaSessionNative as any).setPictureInPictureAspectRatio) {
     return
   }
-  console.log('[MediaSession JS] setPictureInPictureAspectRatio:', width, 'x', height)
   return (MediaSessionNative as any).setPictureInPictureAspectRatio(width, height)
 }
 
@@ -204,20 +194,12 @@ export async function setPictureInPictureAspectRatio(width: number, height: numb
  * @param enabled - Whether the overlay should be visible
  */
 export async function setStatusBarOverlayEnabled(enabled: boolean): Promise<void> {
-  if (Platform.OS !== 'android') {
-    console.log('[MediaSession JS] setStatusBarOverlayEnabled: not Android, skipping')
-    return
-  }
-  if (!(MediaSessionNative as any).setStatusBarOverlayEnabled) {
-    console.log('[MediaSession JS] setStatusBarOverlayEnabled: function not available on native module')
-    return
-  }
-  console.log('[MediaSession JS] setStatusBarOverlayEnabled: calling native with enabled=', enabled)
+  if (Platform.OS !== 'android') return
+  if (!(MediaSessionNative as any).setStatusBarOverlayEnabled) return
   try {
     await (MediaSessionNative as any).setStatusBarOverlayEnabled(enabled)
-    console.log('[MediaSession JS] setStatusBarOverlayEnabled: native call succeeded')
   } catch (err) {
-    console.error('[MediaSession JS] setStatusBarOverlayEnabled: native call failed:', err)
+    console.error('[MediaSession] setStatusBarOverlayEnabled failed:', err)
   }
 }
 
@@ -245,10 +227,7 @@ export function addRemoteCommandListener(
   if (!emitter) {
     return { remove: () => {} }
   }
-  return (emitter as any).addListener('onRemoteCommand', (event: RemoteCommandEvent) => {
-    console.log('[MediaSession JS] Remote command event received:', event)
-    listener(event)
-  })
+  return (emitter as any).addListener('onRemoteCommand', listener)
 }
 
 /**
@@ -307,13 +286,7 @@ export function addPictureInPictureListener(
   if (!emitter) {
     return { remove: () => {} }
   }
-  return (emitter as any).addListener(
-    'onPictureInPictureChanged',
-    (event: PictureInPictureEvent) => {
-    console.log('[MediaSession JS] PiP changed event received:', event)
-    listener(event)
-    }
-  )
+  return (emitter as any).addListener('onPictureInPictureChanged', listener)
 }
 
 export default {

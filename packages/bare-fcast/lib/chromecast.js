@@ -240,6 +240,7 @@ export class ChromecastDevice extends EventEmitter {
     this._loadInProgress = false
     this._lastLoadTime = 0
     this._loadDebounceMs = 1000 // Minimum 1 second between LOAD calls
+    this._lastEmittedError = null
     // If play() is called repeatedly during debounce, keep only the latest request.
     this._pendingLoadOptions = null
     this._pendingLoadTimer = null
@@ -471,6 +472,7 @@ export class ChromecastDevice extends EventEmitter {
       }
 
       console.log('[Chromecast] sending LOAD to transport', this._transportId)
+      this._lastEmittedError = null
       this._sendMediaMessage(payload)
       try {
         this._sendMediaMessage({ type: 'GET_STATUS', requestId: this._nextRequestId() })
@@ -530,7 +532,7 @@ export class ChromecastDevice extends EventEmitter {
       throw new Error('Not connected')
     }
     if (!this._mediaSessionId) {
-      throw new Error('No media session')
+      return
     }
     this._sendMediaMessage({
       type: 'STOP',
@@ -872,6 +874,14 @@ export class ChromecastDevice extends EventEmitter {
 
     // Handle INVALID_REQUEST
     if (payload.type === 'INVALID_REQUEST') {
+      // INVALID_MEDIA_SESSION_ID is benign — it fires when status polling or
+      // stop() runs before/after a media session exists.  Do NOT surface it as
+      // an error; just log and move on.
+      if (payload.reason === 'INVALID_MEDIA_SESSION_ID') {
+        console.log('[Chromecast] INVALID_MEDIA_SESSION_ID (benign, no active media session)')
+        this._mediaSessionId = null
+        return
+      }
       console.error('[Chromecast] INVALID_REQUEST received!')
       try {
         console.error('[Chromecast] INVALID_REQUEST details:', JSON.stringify(payload))
@@ -921,11 +931,6 @@ export class ChromecastDevice extends EventEmitter {
         if (status.playerState === 'IDLE' && status.idleReason) {
           console.warn('[Chromecast] Media idle reason:', status.idleReason)
           if (status.idleReason === 'ERROR') {
-            try {
-              console.warn('[Chromecast] Full MEDIA_STATUS on ERROR:', JSON.stringify(status))
-            } catch (e) {
-              console.warn('[Chromecast] Full MEDIA_STATUS keys:', Object.keys(status))
-            }
             let errType = 'unknown'
             let detailedCode = null
             try {
@@ -937,22 +942,33 @@ export class ChromecastDevice extends EventEmitter {
                 || (status.error && status.error.reason)
                 || null
             } catch (e) {}
-            console.warn('[Chromecast] Media error type:', errType)
-            if (detailedCode) {
-              console.warn('[Chromecast] Media error detailedCode:', detailedCode)
-            }
-            try {
-              if (status.error) {
-                console.warn('[Chromecast] Media error details:', JSON.stringify(status.error))
-              }
-              if (status.extendedStatus) {
-                console.warn('[Chromecast] Media extendedStatus:', JSON.stringify(status.extendedStatus))
-              }
-            } catch (e) {}
             const errMsg = detailedCode
               ? 'Chromecast media error: ' + errType + ' (' + detailedCode + ')'
               : 'Chromecast media error: ' + errType
-            this.emit('error', new Error(errMsg))
+
+            // Only emit once per unique error — status polling re-sends the same
+            // IDLE:ERROR every 5s which causes an alert storm in the UI.
+            if (this._lastEmittedError !== errMsg) {
+              this._lastEmittedError = errMsg
+              try {
+                console.warn('[Chromecast] Full MEDIA_STATUS on ERROR:', JSON.stringify(status))
+              } catch (e) {
+                console.warn('[Chromecast] Full MEDIA_STATUS keys:', Object.keys(status))
+              }
+              console.warn('[Chromecast] Media error type:', errType)
+              if (detailedCode) {
+                console.warn('[Chromecast] Media error detailedCode:', detailedCode)
+              }
+              try {
+                if (status.error) {
+                  console.warn('[Chromecast] Media error details:', JSON.stringify(status.error))
+                }
+                if (status.extendedStatus) {
+                  console.warn('[Chromecast] Media extendedStatus:', JSON.stringify(status.extendedStatus))
+                }
+              } catch (e) {}
+              this.emit('error', new Error(errMsg))
+            }
           }
         }
       }

@@ -270,7 +270,16 @@ export default function RootLayout() {
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
     } catch (err) {
       console.error('[App] Failed to initialize platform RPC:', err)
-      setBackendError(err instanceof Error ? err.message : 'Failed to initialize backend')
+      const message = err instanceof Error ? err.message : 'Failed to initialize backend'
+      const isMissingBundle =
+        message.includes('backend.bundle.js') ||
+        message.includes('downloader-worker.bundle.js')
+
+      if (isMissingBundle) {
+        setBackendError('Backend bundles are missing. Run `npm run bundle:backend` in packages/app, then restart the app.')
+      } else {
+        setBackendError(message)
+      }
     }
   }, [loadInitialData, startupLog])
 

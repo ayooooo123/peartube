@@ -271,7 +271,36 @@ function WatchPageView({
   const effectiveDuration = isCasting ? castPlayback.duration : duration
   const effectiveIsPlaying = isCasting ? castIsPlaying : isPlaying
   const showCastControls = showControls || isCasting
-  const showLoadingOverlay = isCasting ? castPlayback.state === 'buffering' : isLoading
+
+  // Debounce cast buffering state — HLS segment transitions cause brief BUFFERING
+  // reports from Chromecast every few seconds. Only show the loading overlay if
+  // buffering persists for >2s to avoid flashing the "Casting to..." screen.
+  const [castBufferingDebounced, setCastBufferingDebounced] = useState(false)
+  const castBufferingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    const isBuffering = castPlayback.state === 'buffering'
+    if (isBuffering) {
+      if (!castBufferingTimerRef.current) {
+        castBufferingTimerRef.current = setTimeout(() => {
+          setCastBufferingDebounced(true)
+        }, 2000)
+      }
+    } else {
+      if (castBufferingTimerRef.current) {
+        clearTimeout(castBufferingTimerRef.current)
+        castBufferingTimerRef.current = null
+      }
+      setCastBufferingDebounced(false)
+    }
+    return () => {
+      if (castBufferingTimerRef.current) {
+        clearTimeout(castBufferingTimerRef.current)
+        castBufferingTimerRef.current = null
+      }
+    }
+  }, [castPlayback.state])
+
+  const showLoadingOverlay = isCasting ? castBufferingDebounced : isLoading
   const loadingLabel = isCasting ? `Casting to ${castDeviceName}...` : 'Connecting to P2P network...'
   const castAutoPlayRef = useRef<string | null>(null)
   const castAutoPlayInFlightRef = useRef(false)
@@ -556,17 +585,16 @@ function WatchPageView({
 
         if (!urlToCast || cancelled) return
 
-        const success = await cast.play({
+        await cast.play({
           url: urlToCast,
           contentType: video.mimeType || 'video/mp4',
           title: video.title,
           time: Math.floor(currentTime || 0),
         })
-
-        if (success && !cancelled) {
+      } finally {
+        if (!cancelled) {
           castAutoPlayRef.current = videoKey
         }
-      } finally {
         castAutoPlayInFlightRef.current = false
       }
     }

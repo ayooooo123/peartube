@@ -100,6 +100,7 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   private var _resizeMode: PlayerResizeMode?
   private var _autoplay: Bool? = true
   private var _acceptInvalidCertificates: Bool?
+  private var lastLoadedSourceSignature: String?
 
   // Callbacks — set imperatively via setOn*() methods, NOT via Fabric props
   private var onPlayingCb: ((OnPlayingEventProps) -> Void)?
@@ -145,7 +146,13 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
   // MARK: - Imperative Property Setters
 
   func setSource(source: VLCPlayerSource) throws {
+    let nextSignature = Self.sourceSignature(source)
+    if lastLoadedSourceSignature == nextSignature {
+      return
+    }
+
     _source = source
+    lastLoadedSourceSignature = nextSignature
     runOnMainThread { [weak self] in
       self?.configureSource()
     }
@@ -382,6 +389,12 @@ final class HybridNitroVLCView: HybridNitroVLCViewSpec {
     if _autoplay != false, _paused != true {
       player?.play()
     }
+  }
+
+  private static func sourceSignature(_ source: VLCPlayerSource) -> String {
+    let initTypePart = source.initType.map(String.init) ?? "default"
+    let initOptionsPart = source.initOptions?.joined(separator: "\u{001F}") ?? ""
+    return "\(source.uri)::\(initTypePart)::\(initOptionsPart)"
   }
 
   private func loadMedia(uri: String) {

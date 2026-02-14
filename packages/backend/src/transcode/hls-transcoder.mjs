@@ -1635,6 +1635,16 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
       console.log('[HlsTranscoder] Could not set frame rate:', e?.message)
     }
 
+    // Compute per-frame duration in MPEGTS timebase (1/90000) for accurate muxing
+    // Hardware encoders (VideoToolbox) often emit duration=0, causing incorrect PCR
+    // and playback speed issues (e.g., 10x video speed on Chromecast)
+    // Compute in 90kHz directly to avoid rounding errors from ms intermediate:
+    //   duration_90k = 90000 * frame_interval = 90000 * denominator / numerator
+    const frameDuration90k = (inputFrameRate.numerator > 0)
+      ? Math.round(90000 * inputFrameRate.denominator / inputFrameRate.numerator)
+      : Math.round(90000 / 24)  // fallback: 24fps = 3750 ticks
+    console.log('[HlsTranscoder] Frame duration:', frameDuration90k, 'ticks @90kHz (from', inputFrameRate.numerator + '/' + inputFrameRate.denominator + ')')
+
     // CRITICAL: Set libx264 options BEFORE open() to force no B-frames
     // The maxBFrames property alone may not be applied
     if (!h264Selection.isHardware) {
@@ -2645,12 +2655,8 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
 
                   let packetToWrite = outputPacket
                   if (packetDataChanged) {
-                    const duration = outputPacket.duration
                     convertedPacket.unref()
                     convertedPacket.data = packetData
-                    if (Number.isFinite(duration) && duration > 0) {
-                      convertedPacket.duration = duration
-                    }
                     packetToWrite = convertedPacket
                   }
 
@@ -2668,8 +2674,15 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
                   packetToWrite.rescaleTimestamps(videoEncoder.timeBase, mpegtsTimeBase)
                   packetToWrite.timeBase = mpegtsTimeBase
 
+                  // CRITICAL: Explicitly set packet duration from frame rate in 90kHz ticks
+                  // Hardware encoders (VideoToolbox) often emit duration=0, which causes
+                  // the MPEGTS muxer to generate incorrect PCR values. Without correct
+                  // duration, Chromecast plays video at ~10x speed while audio is normal.
+                  // Set AFTER rescale to avoid rounding errors from ms intermediate.
+                  packetToWrite.duration = frameDuration90k
+
                   if (totalEncoderPackets <= 5 || totalEncoderPackets % 500 === 0) {
-                    console.log('[HlsTranscoder] Video packet #' + totalEncoderPackets + ': pts=', packetToWrite.pts, 'dts=', packetToWrite.dts)
+                    console.log('[HlsTranscoder] Video packet #' + totalEncoderPackets + ': pts=', packetToWrite.pts, 'dts=', packetToWrite.dts, 'dur=', packetToWrite.duration)
                   }
 
                   try {

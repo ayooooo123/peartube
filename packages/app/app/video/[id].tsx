@@ -9,15 +9,12 @@ import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWind
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
 import { useIsFocused } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-let VLCPlayer: any = null
-if (Platform.OS !== 'web') {
-  VLCPlayer = require('react-native-vlc-media-player').VLCPlayerSurface
-}
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { MpvPlayer } from '@/components/MpvPlayer'
+import { MpvVideoView } from '@/components/video-player/MpvVideoView'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 
@@ -290,7 +287,6 @@ export default function VideoPlayerScreen() {
     loadAndPlayVideo,
     setIsLoading,
     isInPipMode,
-    // VLC callbacks
     onProgress,
     onPlaying,
     onPaused,
@@ -562,20 +558,21 @@ export default function VideoPlayerScreen() {
               )
             ) : (
               <View style={{ width: screenWidth, height: videoHeight }}>
-                {isFocused && !isInPipMode && VLCPlayer && (
-                  <VLCPlayer
+                {isFocused && !isInPipMode && (
+                  <MpvVideoView
                     key={`${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
-                    ref={playerRef}
-                    source={{ uri: videoUrl }}
+                    playerRef={playerRef as any}
+                    source={{ uri: videoUrl || '' }}
                     style={{ width: screenWidth, height: videoHeight }}
                     resizeMode="contain"
                     paused={!isPlaying}
                     rate={playbackRate}
+                    seek={undefined}
                     onProgress={onProgress}
                     onPlaying={onPlaying}
                     onPaused={onPaused}
                     onBuffering={onBuffering}
-                    onEnd={onEnded}
+                    onEnded={onEnded}
                     onError={onError}
                   />
                 )}

@@ -34,10 +34,8 @@ interface VideoControlContextType {
   // Video dimensions
   videoAspectRatio: number | null
 
-  // VLC seek position (0-1) - passed as prop to VLCPlayer
-  vlcSeekPosition: number | undefined
+  seekPosition: number | undefined
 
-  // VLC player ref
   playerRef: React.MutableRefObject<any>
 
   // Refs for synchronous access
@@ -55,7 +53,6 @@ interface VideoControlContextType {
   setSeekPosition: (pos: number | undefined) => void
   incrementPlaybackSession: () => void
 
-  // VLC callbacks
   onPlaying: () => void
   onPaused: () => void
   onBuffering: (data: { isBuffering: boolean }) => void
@@ -105,10 +102,8 @@ export function VideoControlProvider({
   const [pipWindowSize, setPipWindowSizeState] = useState<{ width: number; height: number } | null>(null)
   const [videoAspectRatio, setVideoAspectRatioState] = useState<number | null>(null)
 
-  // VLC seek position
   const [seekPosition, setSeekPositionState] = useState<number | undefined>(undefined)
 
-  // VLC player ref
   const playerRef = useRef<any>(null)
 
   // Refs for synchronous access
@@ -355,7 +350,6 @@ export function VideoControlProvider({
     return () => subscription.remove()
   }, [pipWindowSize])
 
-  // VLC callbacks
   const onPlaying = useCallback(() => {
     setIsLoadingState(false)
     setIsPlayingState(true)
@@ -400,7 +394,7 @@ export function VideoControlProvider({
   }, [durationRef])
 
   const onError = useCallback((error: any) => {
-    console.error('[VideoControlContext] VLC error:', error, 'URL:', videoUrlRef.current)
+    console.error('[VideoControlContext] Player error:', error, 'URL:', videoUrlRef.current)
     setIsLoadingState(false)
   }, [videoUrlRef])
 
@@ -434,7 +428,7 @@ export function VideoControlProvider({
     setPipWindowSize,
     shouldEnablePip,
     videoAspectRatio,
-    vlcSeekPosition: seekPosition,
+    seekPosition,
     playerRef,
     isPlayingRef,
     playbackRateRef,

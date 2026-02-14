@@ -1,10 +1,3 @@
-/**
- * VideoContainer - Platform-specific video player switching
- *
- * Renders VLCPlayer on iOS/Android and MpvPlayer on Pear Desktop.
- * Also handles the casting placeholder when casting is active.
- */
-
 import { memo, forwardRef, RefObject } from 'react'
 import { View, Text, StyleSheet, Platform } from 'react-native'
 import { Feather } from '@expo/vector-icons'
@@ -12,7 +5,7 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
 import { MpvPlayer, MpvPlayerRef } from '../MpvPlayer'
 import { styles } from './styles'
-import { VlcVideoView } from './VlcVideoView'
+import { MpvMobileVideoView } from './MpvMobileVideoView'
 
 export interface VideoContainerProps {
   // Video state
@@ -26,27 +19,26 @@ export interface VideoContainerProps {
   } | null
   playbackSession: number
 
-  // Player ref (typed as any since it could be VLC or MPV)
   playerRef: RefObject<any>
 
   // Playback control
   isPlaying: boolean
   playbackRate: number
-  vlcSeekPosition?: number
+  seekPosition?: number
 
   // Casting
   isCasting: boolean
   castDeviceName?: string
 
-  // PiP (Android)
   isInPipMode?: boolean
   pipWindowSize?: { width: number; height: number } | null
+  pipEnabled?: boolean
+  onPictureInPictureChanged?: (event: { isInPictureInPicture: boolean; width: number; height: number }) => void
 
   // Dimensions for Android non-PiP mode
   screenWidth?: number
   videoHeight?: number
 
-  // VLC Callbacks (iOS/Android)
   onLoad?: (data: any) => void
   onProgress?: (data: any) => void
   onPlaying?: () => void
@@ -69,11 +61,13 @@ export const VideoContainer = memo(
       playerRef,
       isPlaying,
       playbackRate,
-      vlcSeekPosition,
+      seekPosition,
       isCasting,
       castDeviceName,
       isInPipMode,
       pipWindowSize,
+      pipEnabled,
+      onPictureInPictureChanged,
       screenWidth,
       videoHeight,
       onLoad,
@@ -116,12 +110,9 @@ export const VideoContainer = memo(
       )
     }
 
-    // VLC Player for iOS/Android
     if (Platform.OS !== 'web') {
-      const networkCachingMs = 300
-
       return (
-        <VlcVideoView
+        <MpvMobileVideoView
           style={style}
           playerRef={playerRef}
           videoUrl={videoUrl}
@@ -129,11 +120,12 @@ export const VideoContainer = memo(
           currentVideoKey={`${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
           isPlaying={isPlaying}
           playbackRate={playbackRate}
-          vlcSeekPosition={vlcSeekPosition}
-          networkCachingMs={networkCachingMs}
+          seekPosition={seekPosition}
           isInPipMode={isInPipMode}
           pipWindowSize={pipWindowSize}
+          pipEnabled={pipEnabled}
           onLoad={onLoad}
+          onPictureInPictureChanged={onPictureInPictureChanged}
           onProgress={onProgress}
           onPlaying={onPlaying}
           onPaused={onPaused}

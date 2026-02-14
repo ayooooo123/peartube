@@ -62,7 +62,6 @@ interface VideoPlayerContextType {
   // Unified PiP gating - single source of truth for whether PiP should be enabled
   shouldEnablePip: boolean
 
-  // Video dimensions (from VLC onNewVideoLayout)
   videoAspectRatio: number | null
 
   // Playback position
@@ -73,10 +72,8 @@ interface VideoPlayerContextType {
   // Playback speed
   playbackRate: number
 
-  // VLC seek position (0-1) - passed as prop to VLCPlayer
-  vlcSeekPosition: number | undefined
+  seekPosition: number | undefined
 
-  // VLC player ref - set by VideoPlayerOverlay
   playerRef: React.MutableRefObject<any>
 
   // Actions
@@ -89,13 +86,13 @@ interface VideoPlayerContextType {
   clearLastClosedVideo: () => void
   minimizePlayer: () => void
   maximizePlayer: () => void
+  maximizedForPipRef: React.MutableRefObject<boolean>
   seekTo: (time: number) => void
   seekBy: (delta: number) => void
   setPlaybackRate: (rate: number) => void
   setVideoStats: (stats: VideoStats | null) => void
   setIsLoading: (loading: boolean) => void
 
-  // Called by VLCPlayer callbacks
   onProgress: (data: { currentTime: number; duration: number }) => void
   onPlaying: () => void
   onPaused: () => void
@@ -141,11 +138,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Playback speed state
   const [playbackRate, setPlaybackRateState] = useState(1)
 
-  // VLC seek position (0-1) - used as a prop, not a ref method
-  // Use undefined when not seeking so the prop isn't passed to VLC
   const [seekPosition, setSeekPosition] = useState<number | undefined>(undefined)
 
-  // VLC player ref - will be set by VideoPlayerOverlay
   const playerRef = useRef<any>(null)
 
   // Ref for current video - updated synchronously to avoid race conditions with stats events
@@ -163,6 +157,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const pipExitExpectedPlayingRef = useRef(false)
   const pipExitResumeUntilRef = useRef(0)
   const pipExitReassertLoggedAtRef = useRef(0)
+  const iosIgnorePausedUntilRef = useRef(0)
   const pendingSeekSecondsRef = useRef<number | null>(null)
   const seekConfirmRef = useRef<{ targetSeconds: number; startedAt: number } | null>(null)
   const seekClearTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -174,6 +169,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const wasPlayingWhenPipEnteredRef = useRef(false)
   const playerModeBeforePipRef = useRef<PlayerMode>('fullscreen')
   const playerModeRef = useRef<PlayerMode>(playerMode)  // Sync ref for PiP handler
+  const maximizedForPipRef = useRef(false)  // True when we expanded mini→fullscreen for PiP
   const lastPipEventTimeRef = useRef(0)
   const pipStateUpdateRafRef = useRef<number | null>(null)
   const pipTransitionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -297,7 +293,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }).catch(() => {})
   }, [currentVideo, duration])
 
-  // Ensure playback state reflects play/pause changes even if VLC events lag
   useEffect(() => {
     if (Platform.OS === 'web') return
     if (!mediaSessionActiveRef.current) return
@@ -320,9 +315,20 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       if (goingToBackground && !isBackgroundedRef.current) {
         isBackgroundedRef.current = true
         wasPlayingWhenBackgroundedRef.current = isPlayingRef.current
-        console.log('[VideoPlayerContext] Going to background, wasPlaying:', isPlayingRef.current)
+        console.log('[VideoPlayerContext] Going to background, wasPlaying:', isPlayingRef.current, 'playerMode:', playerModeRef.current)
+
+        // Expand mini player to fullscreen before PiP activates.
+        // PiP needs the native video surface at fullscreen dimensions — on Android
+        // the Activity window IS the PiP content, on iOS the AVSampleBufferDisplayLayer
+        // must be large enough for canStartPictureInPictureAutomaticallyFromInline.
+        if (playerModeRef.current === 'mini' && isPlayingRef.current) {
+          console.log('[VideoPlayerContext] Maximizing from mini for PiP')
+          maximizedForPipRef.current = true
+          setPlayerMode('fullscreen')
+        }
        } else if (comingToForeground && isBackgroundedRef.current) {
          isBackgroundedRef.current = false
+         maximizedForPipRef.current = false
          const wasInPip = isInPipModeRef.current
          console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current, 'wasInPiP:', wasInPip)
 
@@ -415,8 +421,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         case 'play':
           console.log('[VideoPlayerContext] Setting isPlaying = true')
           if (isBackgroundedRef.current) {
-            remotePlayWhileBackgroundedRef.current = true
-            return
+            if (Platform.OS === 'ios' && currentVideoRef.current) {
+              setIsPlaying(true)
+              try { playerRef.current?.play?.() } catch {}
+            } else {
+              remotePlayWhileBackgroundedRef.current = true
+              return
+            }
+            break
           }
           resumeFromRemote()
           break
@@ -428,12 +440,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
             pipExitExpectedPlayingRef.current &&
             Date.now() <= pipExitResumeUntilRef.current
           ) {
-            // Android PiP exit can emit a spurious pause from MediaSession/AudioFocus.
-            // Keep UI stable and immediately re-assert play to avoid an audible gap.
             reassertNativePlayAfterPipExit('remote-pause-during-pip-exit')
             return
           }
           setIsPlaying(false)
+          if (isBackgroundedRef.current && Platform.OS === 'ios') {
+            try { playerRef.current?.pause?.() } catch {}
+          }
           break
         case 'stop':
           console.log('[VideoPlayerContext] Stopping playback')
@@ -443,6 +456,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           console.log('[VideoPlayerContext] Toggling play/pause')
           if (isPlayingRef.current) {
             setIsPlaying(false)
+          } else if (isBackgroundedRef.current && Platform.OS === 'ios' && currentVideoRef.current) {
+            setIsPlaying(true)
+            try { playerRef.current?.play?.() } catch {}
           } else {
             resumeFromRemote()
           }
@@ -521,7 +537,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       console.log('[VideoPlayerContext] PiP event raw:', event.isInPictureInPicture, 'wasInPip:', wasInPip, 'width:', event.width, 'height:', event.height)
 
       // IMPORTANT: Mark PiP exit transition immediately.
-      // Some devices emit a MediaSession "pause" (and/or VLC onPaused) right as the
       // PiP window is closed, BEFORE our debounced/timeout PiP handler runs. If we let
       // that pause flip `isPlaying=false`, the native player will pause briefly and
       // you hear a gap. Precomputing expectedPlaying here lets us ignore those pauses.
@@ -688,6 +703,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setCurrentTime(0)
     setDuration(0)
     setVideoAspectRatio(null)
+    if (Platform.OS === 'ios') {
+      iosIgnorePausedUntilRef.current = Date.now() + 1500
+    }
     // Emit load event so _layout.tsx can trigger prefetch
     _videoLoadEventEmitter.emit(video)
   }, [])
@@ -728,21 +746,21 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const closeVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Closing video')
-    try {
-      playerRef.current?.stop?.()
-      playerRef.current?.pause?.()
-    } catch {}
-    lastClosedVideoRef.current = currentVideoRef.current
-    lastClosedUrlRef.current = videoUrlRef.current
+
+    lastClosedVideoRef.current = null
+    lastClosedUrlRef.current = null
+    lastClosedTimeRef.current = null
     currentVideoRef.current = null
     videoUrlRef.current = null
+
+    setIsPlaying(false)
     setCurrentVideo(null)
     setVideoUrl(null)
-    setIsPlaying(false)
     setPlayerMode('hidden')
     setVideoStats(null)
     setCurrentTime(0)
     setDuration(0)
+
     if (Platform.OS !== 'web') {
       MediaSession.clearNowPlaying().catch(() => {})
       setMediaSessionActive(false)
@@ -779,6 +797,16 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setPlayerMode('fullscreen')
   }, [])
 
+  const startSeekConfirm = useCallback((targetSeconds: number) => {
+    seekConfirmRef.current = { targetSeconds, startedAt: Date.now() }
+    if (seekClearTimeoutRef.current) clearTimeout(seekClearTimeoutRef.current)
+    seekClearTimeoutRef.current = setTimeout(() => {
+      seekConfirmRef.current = null
+      setSeekPosition(undefined)
+      seekClearTimeoutRef.current = null
+    }, 1200)
+  }, [])
+
   const seekTo = useCallback((time: number) => {
     const dur = durationRef.current
     if (dur <= 0) return
@@ -796,18 +824,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setSeekPosition(seekValue)
     currentTimeRef.current = clampedTime
     setCurrentTime(clampedTime)
-
-    // Keep the seek prop set until playback progress confirms the seek landed.
-    // This avoids flaky/late seeks on some VLC builds and prevents UI from snapping back.
-    seekConfirmRef.current = { targetSeconds: clampedTime, startedAt: Date.now() }
-    if (seekClearTimeoutRef.current) clearTimeout(seekClearTimeoutRef.current)
-    seekClearTimeoutRef.current = setTimeout(() => {
-      // Failsafe: clear even if we never got a confirming progress event.
-      seekConfirmRef.current = null
-      setSeekPosition(undefined)
-      seekClearTimeoutRef.current = null
-    }, 1200)
-  }, [])
+    startSeekConfirm(clampedTime)
+  }, [startSeekConfirm])
 
   const seekBy = useCallback((delta: number) => {
     const dur = durationRef.current
@@ -826,21 +844,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setSeekPosition(seekValue)
     currentTimeRef.current = newTime
     setCurrentTime(newTime)
-
-    seekConfirmRef.current = { targetSeconds: newTime, startedAt: Date.now() }
-    if (seekClearTimeoutRef.current) clearTimeout(seekClearTimeoutRef.current)
-    seekClearTimeoutRef.current = setTimeout(() => {
-      seekConfirmRef.current = null
-      setSeekPosition(undefined)
-      seekClearTimeoutRef.current = null
-    }, 1200)
-  }, [])
+    startSeekConfirm(newTime)
+  }, [startSeekConfirm])
 
   // Set playback speed
   const setPlaybackRate = useCallback((rate: number) => {
     console.log('[VideoPlayerContext] Setting playback rate:', rate)
     setPlaybackRateState(rate)
-    // VLC handles this via the rate prop
   }, [])
 
   const lastMediaSessionUpdateRef = useRef(0)
@@ -860,6 +870,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }
     
     if (data.currentTime > 0) {
+      if (Platform.OS === 'ios') {
+        iosIgnorePausedUntilRef.current = 0
+      }
       setIsLoading((prev) => (prev ? false : prev))
     }
     
@@ -903,7 +916,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const onPlaying = useCallback(() => {
-    console.log('[VideoPlayerContext] VLC playing')
+    console.log('[VideoPlayerContext] Player playing')
+    if (Platform.OS === 'ios') {
+      iosIgnorePausedUntilRef.current = 0
+    }
     setIsLoading(false)
     setIsPlaying(true)
     tryApplyPendingSeek()
@@ -918,19 +934,20 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [tryApplyPendingSeek])
 
   const onPaused = useCallback(() => {
-    if (Platform.OS === 'android' && pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
-      // A pause right after PiP exit is often transient. Reassert play for a short window.
-      reassertNativePlayAfterPipExit('vlc-paused-during-pip-exit')
+    if (Platform.OS === 'ios' && Date.now() < iosIgnorePausedUntilRef.current) {
+      console.log('[VideoPlayerContext] Ignoring transient iOS paused event during source swap')
+      return
+    }
+    if (pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
+      reassertNativePlayAfterPipExit('player-paused-during-pip-exit')
 
-      // If we keep seeing pauses beyond the grace window, accept the pause
-      // so the UI can reflect the real state.
       if (Date.now() <= pipExitResumeUntilRef.current) {
         return
       }
       pipExitShouldResumeRef.current = false
       pipExitExpectedPlayingRef.current = false
     }
-    console.log('[VideoPlayerContext] VLC paused')
+    console.log('[VideoPlayerContext] Player paused')
     setIsPlaying(false)
     if (Platform.OS !== 'web') {
       MediaSession.setPlaybackState({
@@ -943,7 +960,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [reassertNativePlayAfterPipExit])
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
-    console.log('[VideoPlayerContext] VLC buffering:', data?.isBuffering)
+    console.log('[VideoPlayerContext] Player buffering:', data?.isBuffering)
     // Only show loading when actually buffering, hide when buffering stops
     if (data?.isBuffering !== undefined) {
       setIsLoading(data.isBuffering)
@@ -951,7 +968,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const onEnded = useCallback(() => {
-    console.log('[VideoPlayerContext] VLC ended')
+    console.log('[VideoPlayerContext] Player ended')
     setIsPlaying(false)
     if (Platform.OS !== 'web') {
       MediaSession.setPlaybackState({
@@ -964,7 +981,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const onError = useCallback((error: any) => {
-    console.error('[VideoPlayerContext] VLC error:', error, 'URL:', videoUrlRef.current)
+    const currentUrl = videoUrlRef.current
+    console.error('[VideoPlayerContext] Player error:', error, 'URL:', currentUrl)
     setIsLoading(false)
   }, [])
 
@@ -974,8 +992,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       console.log('[VideoPlayerContext] Video dimensions:', data.mVideoWidth, 'x', data.mVideoHeight, '- aspect ratio:', aspectRatio.toFixed(3))
       setVideoAspectRatio(aspectRatio)
       if (Platform.OS === 'android') {
-        // VLC Android approach: Set PiP aspect ratio from actual video dimensions
-        // This prevents zoom/stretch - Android will letterbox if needed
         MediaSession.setPictureInPictureAspectRatio(data.mVideoWidth, data.mVideoHeight).catch(() => {})
       }
     }
@@ -1011,7 +1027,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setPipWindowSize,
     shouldEnablePip,
     videoAspectRatio,
-    vlcSeekPosition: seekPosition,
+    seekPosition,
     playerRef,
     loadAndPlayVideo,
     pauseVideo,
@@ -1022,6 +1038,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     clearLastClosedVideo,
     minimizePlayer,
     maximizePlayer,
+    maximizedForPipRef,
     seekTo,
     seekBy,
     setPlaybackRate,

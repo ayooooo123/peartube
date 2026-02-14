@@ -1,5 +1,6 @@
 import ExpoModulesCore
 import AVFoundation
+import AVKit
 import MediaPlayer
 
 public class MediaSessionModule: Module {
@@ -26,6 +27,20 @@ public class MediaSessionModule: Module {
         
         AsyncFunction("clearNowPlaying") { (promise: Promise) in
             self.clearNowPlayingInfo(promise: promise)
+        }
+        
+        AsyncFunction("isPictureInPictureSupported") { (promise: Promise) in
+            if #available(iOS 15.0, *) {
+                // Audio session must be configured for playback before
+                // isPictureInPictureSupported() returns true.
+                let session = AVAudioSession.sharedInstance()
+                if session.category != .playback {
+                    try? session.setCategory(.playback, mode: .default, options: [])
+                }
+                promise.resolve(AVPictureInPictureController.isPictureInPictureSupported())
+            } else {
+                promise.resolve(false)
+            }
         }
         
         OnDestroy {

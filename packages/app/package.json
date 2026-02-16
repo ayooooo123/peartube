@@ -123,7 +123,7 @@
     "bare-build": "^0.2.7",
     "bare-fs": "^4.5.2",
     "bare-media": "^2.1.0",
-    "bare-pack": "^1.5.1",
+    "bare-pack": "^2.0.0",
     "bare-path": "^3.0.0",
     "blind-pairing": "^2.3.1",
     "compact-encoding": "^2.18.0",

@@ -51,7 +51,7 @@ jobs:
           file prebuilds/darwin-arm64/bare-mpv.bare
 
       - name: Upload prebuild artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: prebuild-darwin-arm64
           path: packages/bare-mpv/prebuilds/darwin-arm64/bare-mpv.bare
@@ -133,7 +133,7 @@ jobs:
             "
 
       - name: Upload prebuild artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: prebuild-${{ matrix.prebuild_dir }}
           path: packages/bare-mpv/prebuilds/${{ matrix.prebuild_dir }}/

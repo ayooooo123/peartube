@@ -98,7 +98,7 @@
     "nativewind": "^4.2.1",
     "protomux-wakeup": "^2.9.0",
     "react": "19.1.0",
-    "react-dom": "19.1.0",
+    "react-dom": "19.2.4",
     "react-native": "^0.81.4",
     "react-native-b4a": "^0.0.4",
     "react-native-bare-kit": "^0.12.0",

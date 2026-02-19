@@ -1,4 +1,5 @@
 import type { VideoData } from '@peartube/core'
+import { useReducer } from 'react'
 import type { PlayerMode } from './video-player'
 
 export type PlayerStateMode =
@@ -205,3 +206,315 @@ export type TransitionDecision<
       source: TransitionSource
       devLog: '[player-state-machine] invalid transition'
     }
+
+const DEV_INVALID_TRANSITION = '[player-state-machine] Invalid transition:'
+
+function invalidTransition(state: PlayerState, event: PlayerEvent): PlayerState {
+  if (__DEV__) {
+    console.log(DEV_INVALID_TRANSITION, `${state.mode} + ${event.type}`, `(${event.source})`)
+  }
+  return state
+}
+
+function toFullscreenState(
+  state: PlayerState,
+  video: VideoData,
+  url: string,
+  resetMemory: boolean,
+): PlayerState {
+  return {
+    mode: 'fullscreen',
+    video,
+    url,
+    wasPlayingWhenBackgrounded: resetMemory ? false : state.wasPlayingWhenBackgrounded,
+    wasPlayingWhenPipEntered: resetMemory ? false : state.wasPlayingWhenPipEntered,
+    modeBeforePip: resetMemory ? 'fullscreen' : state.modeBeforePip,
+  }
+}
+
+function toHiddenState(state: PlayerState): PlayerState {
+  return {
+    mode: 'hidden',
+    video: null,
+    url: null,
+    wasPlayingWhenBackgrounded: state.wasPlayingWhenBackgrounded,
+    wasPlayingWhenPipEntered: state.wasPlayingWhenPipEntered,
+    modeBeforePip: state.modeBeforePip,
+  }
+}
+
+function withMode(state: ActivePlayerState, mode: ActivePlayerState['mode']): PlayerState {
+  return {
+    ...state,
+    mode,
+  }
+}
+
+export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerState {
+  switch (state.mode) {
+    case 'hidden': {
+      switch (event.type) {
+        case 'LOAD_VIDEO':
+          return toFullscreenState(state, event.video, event.url, true)
+        case 'RESTORE_FROM_LAST_CLOSED':
+          return toFullscreenState(state, event.video, event.url, false)
+        case 'FORCE_RELOAD_PLAYBACK':
+        case 'MINIMIZE':
+        case 'MAXIMIZE':
+        case 'APP_BACKGROUND':
+        case 'REMOTE_PAUSE':
+        case 'REMOTE_TOGGLE_PLAY_PAUSE':
+        case 'PIP_ENTERED_ANDROID':
+        case 'PIP_EXITED_ANDROID':
+          return invalidTransition(state, event)
+        case 'APP_FOREGROUND':
+          if (event.suppressRestore || !event.wasInPip) {
+            return {
+              ...state,
+              mode: 'hidden',
+            }
+          }
+          return {
+            ...state,
+            mode: 'hidden',
+          }
+        case 'REMOTE_PLAY':
+          if (event.isBackgrounded) {
+            return {
+              ...state,
+              mode: 'hidden',
+            }
+          }
+          return {
+            ...state,
+            mode: 'hidden',
+          }
+        case 'CLOSE_VIDEO':
+          return {
+            ...state,
+            mode: 'hidden',
+          }
+      }
+      break
+    }
+    case 'loading': {
+      switch (event.type) {
+        case 'LOAD_VIDEO':
+        case 'RESTORE_FROM_LAST_CLOSED':
+        case 'APP_BACKGROUND':
+        case 'APP_FOREGROUND':
+        case 'REMOTE_PLAY':
+        case 'REMOTE_PAUSE':
+        case 'REMOTE_TOGGLE_PLAY_PAUSE':
+          return invalidTransition(state, event)
+        case 'FORCE_RELOAD_PLAYBACK':
+          return invalidTransition(state, event)
+        case 'MINIMIZE':
+          return withMode(state, 'mini')
+        case 'MAXIMIZE':
+          return withMode(state, 'fullscreen')
+        case 'PIP_ENTERED_ANDROID':
+          return {
+            ...state,
+            mode: 'pip_entering',
+            wasPlayingWhenPipEntered: Boolean(
+              event.isPlaying ?? state.wasPlayingWhenBackgrounded ?? false,
+            ),
+          }
+        case 'PIP_EXITED_ANDROID':
+          if (!event.wasInPip) {
+            return {
+              ...state,
+              mode: 'loading',
+            }
+          }
+          return {
+            ...state,
+            mode: event.restoreMode,
+          }
+        case 'CLOSE_VIDEO':
+          return toHiddenState(state)
+      }
+      break
+    }
+    case 'fullscreen': {
+      switch (event.type) {
+        case 'LOAD_VIDEO':
+        case 'RESTORE_FROM_LAST_CLOSED':
+          return invalidTransition(state, event)
+        case 'CLOSE_VIDEO':
+          return toHiddenState(state)
+        case 'MINIMIZE':
+          return withMode(state, 'mini')
+        case 'MAXIMIZE':
+          return withMode(state, 'fullscreen')
+        case 'APP_BACKGROUND':
+          return {
+            ...state,
+            mode: 'fullscreen',
+            wasPlayingWhenBackgrounded: event.isPlaying,
+          }
+        case 'APP_FOREGROUND':
+          return withMode(state, 'fullscreen')
+        case 'REMOTE_PLAY':
+        case 'REMOTE_PAUSE':
+        case 'REMOTE_TOGGLE_PLAY_PAUSE':
+          return withMode(state, 'fullscreen')
+        case 'PIP_ENTERED_ANDROID':
+          return {
+            ...state,
+            mode: 'pip_entering',
+            wasPlayingWhenPipEntered: Boolean(
+              event.isPlaying ?? state.wasPlayingWhenBackgrounded,
+            ),
+            modeBeforePip: 'fullscreen',
+          }
+        case 'PIP_EXITED_ANDROID':
+          return {
+            ...state,
+            mode: event.restoreMode,
+          }
+        case 'FORCE_RELOAD_PLAYBACK':
+          return toFullscreenState(state, event.video, event.url, false)
+      }
+      break
+    }
+    case 'mini': {
+      switch (event.type) {
+        case 'LOAD_VIDEO':
+        case 'RESTORE_FROM_LAST_CLOSED':
+        case 'PIP_ENTERED_ANDROID':
+          return invalidTransition(state, event)
+        case 'CLOSE_VIDEO':
+          return toHiddenState(state)
+        case 'MINIMIZE':
+          return withMode(state, 'mini')
+        case 'MAXIMIZE':
+          return withMode(state, 'fullscreen')
+        case 'APP_BACKGROUND':
+          return {
+            ...state,
+            mode: event.isPlaying ? 'fullscreen' : 'mini',
+            wasPlayingWhenBackgrounded: event.isPlaying,
+          }
+        case 'APP_FOREGROUND':
+          return {
+            ...state,
+            mode: event.wasInPip ? 'fullscreen' : 'mini',
+          }
+        case 'REMOTE_PLAY':
+          return {
+            ...state,
+            mode: event.isBackgrounded && event.platform === 'android' ? 'fullscreen' : 'mini',
+          }
+        case 'REMOTE_PAUSE':
+          return withMode(state, 'mini')
+        case 'REMOTE_TOGGLE_PLAY_PAUSE':
+          return {
+            ...state,
+            mode:
+              !event.isPlaying && event.isBackgrounded && event.platform === 'android'
+                ? 'fullscreen'
+                : 'mini',
+          }
+        case 'PIP_EXITED_ANDROID':
+          return invalidTransition(state, event)
+        case 'FORCE_RELOAD_PLAYBACK':
+          return toFullscreenState(state, event.video, event.url, false)
+      }
+      break
+    }
+    case 'pip_entering': {
+      switch (event.type) {
+        case 'LOAD_VIDEO':
+        case 'RESTORE_FROM_LAST_CLOSED':
+        case 'FORCE_RELOAD_PLAYBACK':
+        case 'MINIMIZE':
+        case 'MAXIMIZE':
+        case 'APP_BACKGROUND':
+        case 'APP_FOREGROUND':
+        case 'REMOTE_PLAY':
+        case 'REMOTE_PAUSE':
+        case 'REMOTE_TOGGLE_PLAY_PAUSE':
+          return invalidTransition(state, event)
+        case 'PIP_ENTERED_ANDROID':
+          return {
+            ...state,
+            mode: 'pip_active',
+            wasPlayingWhenPipEntered: Boolean(
+              event.isPlaying ?? state.wasPlayingWhenPipEntered,
+            ),
+          }
+        case 'PIP_EXITED_ANDROID':
+          return withMode(state, 'pip_exiting')
+        case 'CLOSE_VIDEO':
+          return toHiddenState(state)
+      }
+      break
+    }
+    case 'pip_active': {
+      switch (event.type) {
+        case 'LOAD_VIDEO':
+        case 'RESTORE_FROM_LAST_CLOSED':
+        case 'FORCE_RELOAD_PLAYBACK':
+        case 'MINIMIZE':
+        case 'MAXIMIZE':
+        case 'APP_BACKGROUND':
+        case 'APP_FOREGROUND':
+        case 'REMOTE_PLAY':
+        case 'REMOTE_PAUSE':
+        case 'REMOTE_TOGGLE_PLAY_PAUSE':
+        case 'PIP_ENTERED_ANDROID':
+          return invalidTransition(state, event)
+        case 'PIP_EXITED_ANDROID':
+          return withMode(state, 'pip_exiting')
+        case 'CLOSE_VIDEO':
+          return toHiddenState(state)
+      }
+      break
+    }
+    case 'pip_exiting': {
+      switch (event.type) {
+        case 'LOAD_VIDEO':
+        case 'RESTORE_FROM_LAST_CLOSED':
+        case 'FORCE_RELOAD_PLAYBACK':
+        case 'MINIMIZE':
+        case 'MAXIMIZE':
+        case 'APP_BACKGROUND':
+        case 'APP_FOREGROUND':
+        case 'REMOTE_PLAY':
+        case 'REMOTE_TOGGLE_PLAY_PAUSE':
+        case 'PIP_ENTERED_ANDROID':
+          return invalidTransition(state, event)
+        case 'PIP_EXITED_ANDROID':
+          if (!event.wasInPip) {
+            return {
+              ...state,
+              mode: 'loading',
+              wasPlayingWhenPipEntered: false,
+            }
+          }
+          return {
+            ...state,
+            mode: event.restoreMode,
+            wasPlayingWhenPipEntered: false,
+          }
+        case 'REMOTE_PAUSE':
+          if (event.duringAndroidPipExitGuardWindow) {
+            return withMode(state, 'pip_exiting')
+          }
+          return withMode(state, 'pip_exiting')
+        case 'CLOSE_VIDEO':
+          return toHiddenState(state)
+      }
+      break
+    }
+  }
+
+  return invalidTransition(state, event)
+}
+
+export function usePlayerStateMachine(initialState: PlayerState) {
+  const [state, dispatch] = useReducer(playerReducer, initialState)
+  return { state, dispatch }
+}

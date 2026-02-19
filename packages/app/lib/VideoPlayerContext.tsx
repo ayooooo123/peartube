@@ -11,6 +11,8 @@ import { Platform, AppState, AppStateStatus } from 'react-native'
 import type { VideoData, VideoStats } from '@peartube/core'
 import type { PlayerMode } from './video-player'
 import * as MediaSession from '../modules/expo-media-session/src'
+import { usePlayerStateMachine } from './playerStateMachine'
+import type { ModeBeforePip, PlayerState } from './playerStateMachine'
 
 // Re-export types for backwards compatibility
 export type { VideoData, VideoStats } from '@peartube/core'
@@ -102,15 +104,30 @@ interface VideoPlayerProviderProps {
 }
 
 export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
+  const initialState = useMemo<PlayerState>(() => ({
+    mode: 'hidden',
+    video: null,
+    url: null,
+    wasPlayingWhenBackgrounded: false,
+    wasPlayingWhenPipEntered: false,
+    modeBeforePip: 'fullscreen',
+  }), [])
+  const { state, dispatch } = usePlayerStateMachine(initialState)
+
   // Video state
-  const [currentVideo, setCurrentVideo] = useState<VideoData | null>(null)
-  const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  const currentVideo = state.video
+  const videoUrl = state.url
   const [isPlaying, setIsPlaying] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [playerMode, setPlayerMode] = useState<PlayerMode>('hidden')
+  const playerMode: PlayerMode =
+    state.mode === 'mini'
+      ? 'mini'
+      : state.mode === 'hidden'
+        ? 'hidden'
+        : 'fullscreen'
   const [videoStats, setVideoStats] = useState<VideoStats | null>(null)
   const [playbackSession, setPlaybackSession] = useState(0)
-  const [isInPipMode, setIsInPipMode] = useState(false)
+  const isInPipMode = state.mode === 'pip_active'
   const [pipWindowSize, setPipWindowSize] = useState<{ width: number; height: number } | null>(null)
   const [videoAspectRatio, setVideoAspectRatio] = useState<number | null>(null)
 
@@ -150,16 +167,17 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const seekClearTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // Background playback tracking refs
-  const wasPlayingWhenBackgroundedRef = useRef(false)
+  const wasPlayingWhenBackgroundedRef = useRef(state.wasPlayingWhenBackgrounded)
   const isBackgroundedRef = useRef(false)
   const isInPipModeRef = useRef(false)
-  const wasPlayingWhenPipEnteredRef = useRef(false)
-  const playerModeBeforePipRef = useRef<PlayerMode>('fullscreen')
+  const wasPlayingWhenPipEnteredRef = useRef(state.wasPlayingWhenPipEntered)
+  const modeBeforePipRef = useRef<ModeBeforePip>(state.modeBeforePip)
   const playerModeRef = useRef<PlayerMode>(playerMode)  // Sync ref for PiP handler
   const maximizedForPipRef = useRef(false)  // True when we expanded mini→fullscreen for PiP
   const lastPipEventTimeRef = useRef(0)
   const pipTransitionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const pipTransitionInFlightRef = useRef(false)  // True during PiP exit→fullscreen transition window
+  const previousStateModeRef = useRef(state.mode)
   const currentTimeRef = useRef(0)
   const durationRef = useRef(0)
   const isPlayingRef = useRef(false)
@@ -178,6 +196,15 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   useEffect(() => { playbackRateRef.current = playbackRate }, [playbackRate])
   useEffect(() => { playerModeRef.current = playerMode }, [playerMode])
   useEffect(() => { pipWindowSizeRef.current = pipWindowSize }, [pipWindowSize])
+  useEffect(() => {
+    wasPlayingWhenBackgroundedRef.current = state.wasPlayingWhenBackgrounded
+    wasPlayingWhenPipEnteredRef.current = state.wasPlayingWhenPipEntered
+    modeBeforePipRef.current = state.modeBeforePip
+  }, [state.modeBeforePip, state.wasPlayingWhenBackgrounded, state.wasPlayingWhenPipEntered])
+  useEffect(() => {
+    currentVideoRef.current = currentVideo
+    videoUrlRef.current = videoUrl
+  }, [currentVideo, videoUrl])
 
   const reassertNativePlayAfterPipExit = useCallback((reason: string) => {
     if (Platform.OS !== 'android') return
@@ -222,17 +249,21 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     console.log('[VideoPlayerContext] Restoring last closed video:', reason)
     currentVideoRef.current = lastClosedVideoRef.current
     videoUrlRef.current = lastClosedUrlRef.current
-    setCurrentVideo(lastClosedVideoRef.current)
-    setVideoUrl(lastClosedUrlRef.current)
     setPlaybackSession((prev) => prev + 1)
-    setPlayerMode('fullscreen')
+    dispatch({
+      type: 'RESTORE_FROM_LAST_CLOSED',
+      source: 'restoreLastClosedVideo',
+      video: lastClosedVideoRef.current,
+      url: lastClosedUrlRef.current,
+      resumeSeconds: lastClosedTimeRef.current ?? undefined,
+    })
     setIsLoading(true)
     if (lastClosedTimeRef.current !== null) {
       pendingSeekSecondsRef.current = lastClosedTimeRef.current
     }
     setIsPlaying(true)
     return true
-  }, [])
+  }, [dispatch])
 
   const forceReloadPlayback = useCallback((reason: string) => {
     const video = currentVideoRef.current
@@ -240,14 +271,18 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     if (!video || !url) return false
     console.log('[VideoPlayerContext] Forcing playback reload:', reason)
     setPlaybackSession((prev) => prev + 1)
-    setCurrentVideo(video)
-    setVideoUrl(url)
-    setPlayerMode('fullscreen')
+    dispatch({
+      type: 'FORCE_RELOAD_PLAYBACK',
+      source: 'forceReloadPlayback',
+      video,
+      url,
+      resumeSeconds: currentTimeRef.current,
+    })
     setIsLoading(true)
     pendingSeekSecondsRef.current = currentTimeRef.current
     setIsPlaying(true)
     return true
-  }, [])
+  }, [dispatch])
 
   const tryApplyPendingSeek = useCallback(() => {
     const pending = pendingSeekSecondsRef.current
@@ -291,6 +326,73 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }).catch(() => {})
   }, [isPlaying])
 
+  useEffect(() => {
+    const previousMode = previousStateModeRef.current
+    const nextMode = state.mode
+    previousStateModeRef.current = nextMode
+
+    if (previousMode === nextMode) return
+
+    if (nextMode === 'hidden') {
+      if (seekClearTimeoutRef.current) {
+        clearTimeout(seekClearTimeoutRef.current)
+        seekClearTimeoutRef.current = null
+      }
+      if (pipTransitionTimeoutRef.current) {
+        clearTimeout(pipTransitionTimeoutRef.current)
+        pipTransitionTimeoutRef.current = null
+      }
+      seekConfirmRef.current = null
+      pipTransitionInFlightRef.current = false
+      pipExitShouldResumeRef.current = false
+      pipExitExpectedPlayingRef.current = false
+      pipExitResumeUntilRef.current = 0
+      isInPipModeRef.current = false
+      setPipWindowSize(null)
+      setSeekPosition(undefined)
+      setVideoStats(null)
+      setVideoAspectRatio(null)
+      setIsLoading(false)
+      if (Platform.OS !== 'web') {
+        MediaSession.clearNowPlaying().catch(() => {})
+        setMediaSessionActive(false)
+      }
+      mediaSessionActiveRef.current = false
+      return
+    }
+
+    if (nextMode === 'fullscreen') {
+      if (Platform.OS !== 'web' && mediaSessionActiveRef.current) {
+        MediaSession.setPlaybackState({
+          isPlaying: isPlayingRef.current,
+          position: currentTimeRef.current,
+          duration: durationRef.current,
+          rate: playbackRateRef.current,
+        }).catch(() => {})
+      }
+      if (pipExitShouldResumeRef.current) {
+        pipExitShouldResumeRef.current = false
+        setIsPlaying(true)
+        reassertNativePlayAfterPipExit('mode-fullscreen-transition')
+      }
+    }
+
+    if (nextMode === 'pip_active') {
+      const shouldKeepPlaying = state.wasPlayingWhenPipEntered || isPlayingRef.current
+      if (shouldKeepPlaying) {
+        setIsPlaying(true)
+      }
+    }
+
+    if (previousMode === 'pip_active' && nextMode !== 'pip_active') {
+      const shouldResume = pipExitShouldResumeRef.current || state.wasPlayingWhenPipEntered
+      if (shouldResume) {
+        setIsPlaying(true)
+        reassertNativePlayAfterPipExit('pip-active-exit-transition')
+      }
+    }
+  }, [reassertNativePlayAfterPipExit, setMediaSessionActive, state.mode, state.wasPlayingWhenPipEntered])
+
    // AppState listener for background/foreground transitions (mobile only)
    useEffect(() => {
      if (Platform.OS === 'web') return
@@ -301,7 +403,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
       if (goingToBackground && !isBackgroundedRef.current) {
         isBackgroundedRef.current = true
-        wasPlayingWhenBackgroundedRef.current = isPlayingRef.current
+        dispatch({
+          type: 'APP_BACKGROUND',
+          source: 'appStateBackgroundMiniAutoMaximizeForPip',
+          appState: nextState,
+          isPlaying: isPlayingRef.current,
+        })
         console.log('[VideoPlayerContext] Going to background, wasPlaying:', isPlayingRef.current, 'playerMode:', playerModeRef.current)
 
         // Expand mini player to fullscreen before PiP activates.
@@ -311,7 +418,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         if (playerModeRef.current === 'mini' && isPlayingRef.current) {
           console.log('[VideoPlayerContext] Maximizing from mini for PiP')
           maximizedForPipRef.current = true
-          setPlayerMode('fullscreen')
+          dispatch({ type: 'MAXIMIZE', source: 'maximizePlayer' })
         }
        } else if (comingToForeground && isBackgroundedRef.current) {
          isBackgroundedRef.current = false
@@ -324,13 +431,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
          // before the native PiP exit callback reaches JS. Clearing the ref here
          // makes the PiP exit handler think we were never in PiP, so it won't
          // restore playback state (leading to unintended pauses).
-         if (!wasInPip) {
-           console.log('[VideoPlayerContext] Clearing PiP state on foreground')
-           isInPipModeRef.current = false
-           setIsInPipMode(false)
-           setPipWindowSize(null)
-           if (pipTransitionTimeoutRef.current) {
-             clearTimeout(pipTransitionTimeoutRef.current)
+          if (!wasInPip) {
+            console.log('[VideoPlayerContext] Clearing PiP state on foreground')
+            isInPipModeRef.current = false
+            setPipWindowSize(null)
+            if (pipTransitionTimeoutRef.current) {
+              clearTimeout(pipTransitionTimeoutRef.current)
              pipTransitionTimeoutRef.current = null
            }
          }
@@ -341,12 +447,17 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         const suppressWindow = suppressForegroundRestoreUntilRef.current > now
         const shouldSuppressRestore = suppressOnce || suppressWindow || wasInPip
 
+        dispatch({
+          type: 'APP_FOREGROUND',
+          source: 'appStateForegroundHiddenRestore',
+          appState: 'active',
+          wasInPip,
+          suppressRestore: shouldSuppressRestore,
+        })
+
         if (!shouldSuppressRestore) {
           if (!currentVideoRef.current) {
             restoreLastClosedVideo('foreground')
-          } else if (playerModeRef.current === 'hidden' && currentVideoRef.current) {
-            console.log('[VideoPlayerContext] Foreground while hidden, restoring fullscreen')
-            setPlayerMode('fullscreen')
           }
         }
 
@@ -369,7 +480,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
      const subscription = AppState.addEventListener('change', handleAppStateChange)
      return () => subscription.remove()
-   }, [forceReloadPlayback, restoreLastClosedVideo])
+    }, [dispatch, forceReloadPlayback, restoreLastClosedVideo])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
@@ -390,7 +501,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           }
         } else if (playerModeRef.current === 'hidden' && currentVideoRef.current) {
           console.log('[VideoPlayerContext] Remote play while hidden, restoring fullscreen')
-          setPlayerMode('fullscreen')
+          const platform = Platform.OS === 'ios' ? 'ios' : 'android'
+          dispatch({
+            type: 'REMOTE_PLAY',
+            source: 'remoteCommandHiddenRestore',
+            isBackgrounded: isBackgroundedRef.current,
+            platform,
+          })
         }
         if (Platform.OS === 'ios' && durationRef.current > 0) {
           const seekValue = currentTimeRef.current / durationRef.current
@@ -484,7 +601,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
     const subscription = MediaSession.addAudioInterruptionListener((event) => {
       if (event.type === 'began') {
-        wasPlayingWhenBackgroundedRef.current = isPlayingRef.current
+        dispatch({
+          type: 'APP_BACKGROUND',
+          source: 'appStateBackgroundMiniAutoMaximizeForPip',
+          appState: 'inactive',
+          isPlaying: isPlayingRef.current,
+        })
         setIsPlaying(false)
       } else if (event.type === 'ended' && event.shouldResume) {
         if (wasPlayingWhenBackgroundedRef.current) {
@@ -494,7 +616,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     })
 
     return () => subscription.remove()
-  }, [])
+  }, [dispatch])
 
   // Route change listener (headphone unplug) - mobile only
   useEffect(() => {
@@ -547,18 +669,22 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       isInPipModeRef.current = event.isInPictureInPicture
 
       // Update state immediately - RAF doesn't fire in PiP/background mode
-      setIsInPipMode(event.isInPictureInPicture)
+      if (event.isInPictureInPicture) {
+        dispatch({
+          type: 'PIP_ENTERED_ANDROID',
+          source: 'androidPipExitRestorePreviousMode',
+          platform: 'android',
+          dimensions:
+            event.width && event.height
+              ? { width: event.width, height: event.height }
+              : undefined,
+          isPlaying: event.isPlaying,
+        })
+      }
       if (event.isInPictureInPicture && event.width && event.height) {
         setPipWindowSize({ width: event.width, height: event.height })
       } else if (!event.isInPictureInPicture) {
         setPipWindowSize(null)
-      }
-
-      // Capture playerMode SYNCHRONOUSLY before setTimeout - the closure captures stale values
-      // because this useEffect has empty deps []
-      if (event.isInPictureInPicture) {
-        // Save playerMode now, not inside setTimeout where it would be stale
-        playerModeBeforePipRef.current = playerModeRef.current
       }
 
       // Use setTimeout instead of RAF - RAF doesn't fire in PiP/background mode
@@ -573,7 +699,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
         if (event.isInPictureInPicture) {
           const wasPlaying = isPlayingRef.current || wasPlayingWhenBackgroundedRef.current
-          wasPlayingWhenPipEnteredRef.current = wasPlaying
           if (wasPlaying) {
             setTimeout(() => {
               setIsPlaying(true)
@@ -584,12 +709,18 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           pipExitShouldResumeRef.current = shouldResume
           pipExitExpectedPlayingRef.current = Boolean(shouldResume)
           pipExitResumeUntilRef.current = shouldResume ? Math.max(pipExitResumeUntilRef.current, Date.now() + 2000) : 0
-          wasPlayingWhenPipEnteredRef.current = false
-          // Restore the playerMode that was active before PiP entry
-          const modeToRestore = playerModeBeforePipRef.current
-
-          // Single-player architecture: same player continues, position is already synced
-          setPlayerMode(modeToRestore)
+          dispatch({
+            type: 'PIP_EXITED_ANDROID',
+            source: 'androidPipExitRestorePreviousMode',
+            platform: 'android',
+            wasInPip,
+            shouldResume,
+            restoreMode: modeBeforePipRef.current,
+            dimensions:
+              event.width && event.height
+                ? { width: event.width, height: event.height }
+                : undefined,
+          })
           setIsPlaying(shouldResume)
 
           if (shouldResume) {
@@ -607,7 +738,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     return () => {
       subscription.remove()
     }
-  }, [reassertNativePlayAfterPipExit])
+  }, [dispatch, reassertNativePlayAfterPipExit])
 
   // Subscribe to video stats events from backend
   useEffect(() => {
@@ -670,10 +801,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // Update refs synchronously FIRST (before emitting event)
     currentVideoRef.current = video
     videoUrlRef.current = url
-    setCurrentVideo(video)
-    setVideoUrl(url)
+    dispatch({ type: 'LOAD_VIDEO', source: 'loadAndPlayVideo', video, url })
     setIsPlaying(true)
-    setPlayerMode('fullscreen')
     setVideoStats(null)
     // Show loading overlay until playback actually starts.
     // Some player builds don't reliably emit initial buffering events, which can
@@ -687,7 +816,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }
     // Emit load event so _layout.tsx can trigger prefetch
     _videoLoadEventEmitter.emit(video)
-  }, [])
+  }, [dispatch])
 
   // Pause video
   const pauseVideo = useCallback(() => {
@@ -745,19 +874,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     videoUrlRef.current = null
 
     setIsPlaying(false)
-    setCurrentVideo(null)
-    setVideoUrl(null)
-    setPlayerMode('hidden')
+    dispatch({ type: 'CLOSE_VIDEO', source: 'closeVideo' })
     setVideoStats(null)
     setCurrentTime(0)
     setDuration(0)
-
-    if (Platform.OS !== 'web') {
-      MediaSession.clearNowPlaying().catch(() => {})
-      setMediaSessionActive(false)
-    }
-    mediaSessionActiveRef.current = false
-  }, [setMediaSessionActive])
+  }, [dispatch])
 
   const suppressForegroundRestoreOnce = useCallback(() => {
     suppressForegroundRestoreRef.current = true
@@ -779,14 +900,45 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const minimizePlayer = useCallback(() => {
     console.log('[VideoPlayerContext] Minimizing to in-app mini player')
-    setPlayerMode('mini')
-  }, [])
+    dispatch({ type: 'MINIMIZE', source: 'minimizePlayer' })
+  }, [dispatch])
 
   // Maximize from mini player
   const maximizePlayer = useCallback(() => {
     console.log('[VideoPlayerContext] Maximizing player')
-    setPlayerMode('fullscreen')
-  }, [])
+    dispatch({ type: 'MAXIMIZE', source: 'maximizePlayer' })
+  }, [dispatch])
+
+  const setIsInPipMode = useCallback((value: boolean) => {
+    if (Platform.OS !== 'android') {
+      isInPipModeRef.current = value
+      return
+    }
+
+    const wasInPip = isInPipModeRef.current
+    isInPipModeRef.current = value
+
+    if (value) {
+      dispatch({
+        type: 'PIP_ENTERED_ANDROID',
+        source: 'androidPipExitRestorePreviousMode',
+        platform: 'android',
+        dimensions: pipWindowSizeRef.current ?? undefined,
+        isPlaying: isPlayingRef.current,
+      })
+      return
+    }
+
+    dispatch({
+      type: 'PIP_EXITED_ANDROID',
+      source: 'androidPipExitRestorePreviousMode',
+      platform: 'android',
+      wasInPip,
+      shouldResume: isPlayingRef.current,
+      restoreMode: modeBeforePipRef.current,
+      dimensions: pipWindowSizeRef.current ?? undefined,
+    })
+  }, [dispatch])
 
   const startSeekConfirm = useCallback((targetSeconds: number) => {
     seekConfirmRef.current = { targetSeconds, startedAt: Date.now() }
@@ -1053,6 +1205,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // Callbacks (stable references via useCallback)
     loadAndPlayVideo, pauseVideo, resumeVideo,
     closeVideo, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo, minimizePlayer, maximizePlayer, seekTo, seekBy, setPlaybackRate,
+    setIsInPipMode,
     onProgress, onPlaying, onPaused, onBuffering,
     onEnded, onError, onVideoStateChange,
   ])

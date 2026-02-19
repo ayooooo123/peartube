@@ -401,7 +401,8 @@ export function createUploadManager({ ctx }) {
         // Update video metadata with thumbnail info using updateVideo method
         await channel.updateVideo(videoId, {
           thumbnailBlobId: blobResult.id,
-          thumbnailBlobsCoreKey: channel.blobsKeyHex
+          thumbnailBlobsCoreKey: channel.blobsKeyHex,
+          thumbnailMimeType: mimeType
         });
         console.log('[Upload] Updated video metadata with thumbnail');
 

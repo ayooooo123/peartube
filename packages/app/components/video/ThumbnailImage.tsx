@@ -15,6 +15,8 @@ interface ThumbnailImageProps {
   style?: any
 }
 
+const MAX_IMAGE_RETRIES = 2
+
 // Format duration as mm:ss or h:mm:ss
 function formatDuration(seconds: number): string {
   if (!seconds || isNaN(seconds)) return ''
@@ -35,6 +37,7 @@ function ThumbnailImageComponent({
 }: ThumbnailImageProps) {
   const [imageError, setImageError] = useState(false)
   const [imageLoading, setImageLoading] = useState(true)
+  const [retryAttempt, setRetryAttempt] = useState(0)
 
   // Memoize duration text
   const durationText = useMemo(
@@ -50,29 +53,48 @@ function ThumbnailImageComponent({
 
   // Memoize image source to prevent object recreation
   const imageSource = useMemo(
-    () => thumbnailUrl ? { uri: thumbnailUrl } : null,
-    [thumbnailUrl]
+    () => {
+      if (!thumbnailUrl) return null
+      if (retryAttempt === 0) return { uri: thumbnailUrl }
+      const separator = thumbnailUrl.includes('?') ? '&' : '?'
+      return { uri: `${thumbnailUrl}${separator}attempt=${retryAttempt}` }
+    },
+    [thumbnailUrl, retryAttempt]
   )
+
+  const handleRecoverableError = useCallback(() => {
+    if (retryAttempt < MAX_IMAGE_RETRIES) {
+      setRetryAttempt(retryAttempt + 1)
+      setImageError(false)
+      setImageLoading(true)
+      return
+    }
+
+    setImageError(true)
+    setImageLoading(false)
+  }, [retryAttempt])
 
   // Timeout for loading - give up after 8 seconds
   useEffect(() => {
     if (thumbnailUrl && imageLoading && !imageError) {
       const timeout = setTimeout(() => {
-        setImageError(true)
-        setImageLoading(false)
+        handleRecoverableError()
       }, 8000)
       return () => clearTimeout(timeout)
     }
-  }, [thumbnailUrl, imageLoading, imageError])
+  }, [thumbnailUrl, imageLoading, imageError, handleRecoverableError])
 
   // Reset error state when URL changes
   useEffect(() => {
     setImageError(false)
-    setImageLoading(true)
+    setImageLoading(Boolean(thumbnailUrl))
+    setRetryAttempt(0)
   }, [thumbnailUrl])
 
   // Memoize callbacks for Image component
-  const handleError = useCallback(() => setImageError(true), [])
+  const handleError = useCallback(() => {
+    handleRecoverableError()
+  }, [handleRecoverableError])
   const handleLoadStart = useCallback(() => setImageLoading(true), [])
   const handleLoadEnd = useCallback(() => setImageLoading(false), [])
 

@@ -24,7 +24,8 @@ export interface AppContextType {
   pickImageFile: () => Promise<{ filePath: string; name: string; size: number } | { cancelled: true } | null>
   loadIdentity: () => Promise<void>
   createIdentity: (name: string) => Promise<Identity>
-  loadVideos: (driveKey: string) => Promise<void>
+  loadVideos: (driveKey: string, options?: { allowEmptyResult?: boolean }) => Promise<void>
+  removeVideo: (videoId: string) => void
 }
 
 export const AppContext = createContext<AppContextType | null>(null)
@@ -34,7 +35,6 @@ export function useApp() {
   if (!ctx) throw new Error('useApp must be used within AppProvider')
   return ctx
 }
-
 
 
 

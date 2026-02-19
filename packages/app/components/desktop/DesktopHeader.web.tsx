@@ -20,6 +20,7 @@ import { useSidebar, HEADER_HEIGHT } from './constants'
 function MenuIcon() {
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <title>Menu</title>
       <line x1="3" y1="6" x2="21" y2="6" />
       <line x1="3" y1="12" x2="21" y2="12" />
       <line x1="3" y1="18" x2="21" y2="18" />
@@ -30,6 +31,7 @@ function MenuIcon() {
 function SearchIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <title>Search</title>
       <circle cx="11" cy="11" r="8" />
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
     </svg>
@@ -39,6 +41,7 @@ function SearchIcon() {
 function UploadIcon() {
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <title>Upload</title>
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <polyline points="17 8 12 3 7 8" />
       <line x1="12" y1="3" x2="12" y2="15" />
@@ -49,6 +52,7 @@ function UploadIcon() {
 function UserIcon() {
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <title>User</title>
       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
       <circle cx="12" cy="7" r="4" />
     </svg>
@@ -80,6 +84,10 @@ export function DesktopHeader() {
   }, [searchQuery, router])
 
   const handleLogoClick = useCallback(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      window.location.hash = ''
+      return
+    }
     router.push('/')
   }, [router])
 
@@ -99,6 +107,7 @@ export function DesktopHeader() {
         {/* Left section - hamburger + logo */}
         <div style={styles.leftSection}>
           <button
+            type="button"
             style={styles.iconButton}
             onClick={toggleSidebar}
             aria-label="Toggle sidebar"
@@ -107,6 +116,7 @@ export function DesktopHeader() {
           </button>
 
           <button
+            type="button"
             style={styles.logoButton}
             onClick={handleLogoClick}
             aria-label="Go to home"
@@ -144,6 +154,7 @@ export function DesktopHeader() {
         <div style={styles.rightSection}>
           {cast.available && (
             <button
+              type="button"
               style={styles.iconButton}
               onClick={handleCastPress}
               aria-label={cast.isConnected ? 'Casting' : 'Cast to device'}
@@ -157,6 +168,7 @@ export function DesktopHeader() {
           )}
 
           <button
+            type="button"
             style={styles.iconButton}
             onClick={handleUploadClick}
             aria-label="Upload video"
@@ -165,6 +177,7 @@ export function DesktopHeader() {
           </button>
 
           <button
+            type="button"
             style={styles.avatarButton}
             aria-label="User menu"
           >

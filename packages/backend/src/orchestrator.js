@@ -16,6 +16,7 @@ import { SeedingManager } from './seeding.js';
 import { createApi } from './api.js';
 import { createIdentityManager } from './identity.js';
 import { createUploadManager } from './upload.js';
+import { initFileLogger } from './logger.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/hls-transcoder.mjs';
 
 /**
@@ -70,9 +71,19 @@ export async function createBackendContext(config) {
   console.log('[Orchestrator] ===== INITIALIZING BACKEND =====');
   console.log('[Orchestrator] Storage path:', storagePath);
 
-  // Phase 1: Initialize core storage (fast - just creates corestore, blob server, swarm)
   const ctx = await initializeStorage({ storagePath, blobServerHost, blobServerBindHost });
   console.log('[Orchestrator] Storage initialized, blob server port:', ctx.blobServerPort);
+
+  try {
+    const _fs = (await import('bare-fs')).default
+    const _path = (await import('bare-path')).default
+    const logsDir = _path.join(storagePath, 'logs')
+    _fs.mkdirSync(logsDir, { recursive: true })
+    await initFileLogger(_path.join(logsDir, 'peartube.log'))
+    console.log('[Orchestrator] File logger initialized at:', _path.join(logsDir, 'peartube.log'))
+  } catch (err) {
+    console.log('[Orchestrator] File logger setup skipped:', err?.message)
+  }
 
   // Phase 2: Create managers (synchronous, fast)
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb);

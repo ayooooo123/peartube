@@ -105,6 +105,15 @@ function validateAddVideo(op) {
   if (op.thumbnail !== undefined && typeof op.thumbnail !== 'string') {
     return { valid: false, error: 'add-video.thumbnail must be a string' }
   }
+  if (op.thumbnailBlobId !== undefined && typeof op.thumbnailBlobId !== 'string') {
+    return { valid: false, error: 'add-video.thumbnailBlobId must be a string' }
+  }
+  if (op.thumbnailBlobsCoreKey !== undefined && typeof op.thumbnailBlobsCoreKey !== 'string') {
+    return { valid: false, error: 'add-video.thumbnailBlobsCoreKey must be a string' }
+  }
+  if (op.thumbnailMimeType !== undefined && typeof op.thumbnailMimeType !== 'string') {
+    return { valid: false, error: 'add-video.thumbnailMimeType must be a string' }
+  }
   if (op.blobDriveKey !== undefined && typeof op.blobDriveKey !== 'string') {
     return { valid: false, error: 'add-video.blobDriveKey must be a string' }
   }
@@ -141,6 +150,21 @@ function validateUpdateVideo(op) {
   }
   if (op.thumbnail !== undefined && typeof op.thumbnail !== 'string') {
     return { valid: false, error: 'update-video.thumbnail must be a string' }
+  }
+  if (op.thumbnailBlobId !== undefined && typeof op.thumbnailBlobId !== 'string') {
+    return { valid: false, error: 'update-video.thumbnailBlobId must be a string' }
+  }
+  if (op.thumbnailBlobsCoreKey !== undefined && typeof op.thumbnailBlobsCoreKey !== 'string') {
+    return { valid: false, error: 'update-video.thumbnailBlobsCoreKey must be a string' }
+  }
+  if (op.thumbnailMimeType !== undefined && typeof op.thumbnailMimeType !== 'string') {
+    return { valid: false, error: 'update-video.thumbnailMimeType must be a string' }
+  }
+  if (op.blobId !== undefined && typeof op.blobId !== 'string') {
+    return { valid: false, error: 'update-video.blobId must be a string' }
+  }
+  if (op.blobsCoreKey !== undefined && typeof op.blobsCoreKey !== 'string') {
+    return { valid: false, error: 'update-video.blobsCoreKey must be a string' }
   }
   if (op.category !== undefined && typeof op.category !== 'string') {
     return { valid: false, error: 'update-video.category must be a string' }

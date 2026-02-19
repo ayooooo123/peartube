@@ -19,7 +19,13 @@
       "infoPlist": {
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": ["audio"],
+        "NSLocalNetworkUsageDescription": "PearTube uses the local network to discover cast devices and peer-to-peer streams.",
+        "NSBonjourServices": [
+          "_fcast._tcp",
+          "_googlecast._tcp",
+          "_CC1AD845._googlecast._tcp"
+        ]
       }
     },
     "android": {
@@ -27,7 +33,14 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#0e0e10"
       },
-      "package": "com.peartube.app"
+      "package": "com.peartube.app",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.CHANGE_WIFI_MULTICAST_STATE",
+        "android.permission.NEARBY_WIFI_DEVICES"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -41,7 +54,8 @@
         "expo-build-properties",
         {
           "android": {
-            "minSdkVersion": 29
+            "minSdkVersion": 29,
+            "usesCleartextTraffic": true
           }
         }
       ],

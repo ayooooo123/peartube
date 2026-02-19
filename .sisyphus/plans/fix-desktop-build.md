@@ -76,10 +76,10 @@ Make `npm run pear:export` (and full `npm run pear:build`) succeed by ensuring n
 - Working Pear desktop build pipeline
 
 ### Definition of Done
-- [ ] `npm run pear:export` exits with code 0
-- [ ] `npm run pear:build` exits with code 0
-- [ ] `pear/index.html` exists and contains `<script` tags
-- [ ] No regression in iOS build capability
+- [x] `npm run pear:export` exits with code 0
+- [x] `npm run pear:build` exits with code 0
+- [x] `pear/index.html` exists and contains `<script` tags
+- [x] No regression in iOS build capability
 
 ### Must Have
 - `expo export --platform web` succeeds without `__fbBatchedBridgeConfig` error
@@ -156,7 +156,7 @@ Task 3: Full Pear build pipeline verification + regression check
 
 ## TODOs
 
-- [ ] 1. Fix `metro.config.js` — Make `react-native` resolution web-aware
+- [x] 1. Fix `metro.config.js` — Make `react-native` resolution web-aware
 
   **What to do**:
   Replace the static `extraNodeModules['react-native']` entry with a `resolveRequest` override that only redirects `react-native` to the local copy for **non-web** platforms, letting Expo's built-in aliasing work for web/SSR.
@@ -268,7 +268,7 @@ Task 3: Full Pear build pipeline verification + regression check
 
 ---
 
-- [ ] 2. (CONDITIONAL) Guard `configureReanimatedLogger` import in `_layout.tsx`
+- [x] 2. (CONDITIONAL - SKIPPED) Guard `configureReanimatedLogger` import in `_layout.tsx`
 
   **ONLY DO THIS IF Task 1 alone doesn't fix the export.** Test Task 1 first.
 
@@ -376,7 +376,7 @@ Task 3: Full Pear build pipeline verification + regression check
 
 ---
 
-- [ ] 3. Full Pear build pipeline verification + regression check
+- [x] 3. Full Pear build pipeline verification + regression check
 
   **What to do**:
   Run the complete `pear:build` pipeline and verify all output files exist and are valid. Also verify that the metro config still works for native (iOS) platform to catch any regressions.

@@ -10,10 +10,31 @@
  * - Now: bare-media everywhere (runs on Bare runtime)
  */
 
-import { video, image } from 'bare-media'
 import { logger } from './logger.js'
 
 const log = logger('Thumbnail')
+
+let bareMediaRuntime = null
+let bareMediaLoadFailed = false
+
+async function getBareMediaRuntime() {
+  if (bareMediaRuntime) return bareMediaRuntime
+  if (bareMediaLoadFailed) return null
+
+  try {
+    const mod = await import('bare-media')
+    if (typeof mod?.video !== 'function' || typeof mod?.image?.encode !== 'function') {
+      bareMediaLoadFailed = true
+      return null
+    }
+    bareMediaRuntime = { video: mod.video, image: mod.image }
+    return bareMediaRuntime
+  } catch (err) {
+    bareMediaLoadFailed = true
+    log.warn('bare-media unavailable; thumbnail generation disabled', { error: err?.message || String(err) })
+    return null
+  }
+}
 
 /**
  * Default thumbnail configuration
@@ -49,6 +70,9 @@ const THUMBNAIL_CONFIG = {
  */
 export async function generateThumbnail(filePath, options = {}) {
   const config = { ...THUMBNAIL_CONFIG, ...options }
+  const runtime = await getBareMediaRuntime()
+  if (!runtime) return null
+  const { video, image } = runtime
 
   log.debug('Generating thumbnail', {
     filePath,
@@ -125,7 +149,7 @@ export async function generateThumbnail(filePath, options = {}) {
  * @param {string} videoId - Video ID in channel
  * @param {object} channel - MultiWriterChannel instance
  * @param {object} [options] - Thumbnail options
- * @returns {Promise<{thumbnailBlobId: string, thumbnailBlobsCoreKey: string} | null>}
+ * @returns {Promise<{thumbnailBlobId: string, thumbnailBlobsCoreKey: string, thumbnailMimeType: string} | null>}
  */
 export async function generateAndStoreThumbnail(filePath, videoId, channel, options = {}) {
   const result = await generateThumbnail(filePath, options)
@@ -149,7 +173,8 @@ export async function generateAndStoreThumbnail(filePath, videoId, channel, opti
 
     return {
       thumbnailBlobId: blobResult.id,
-      thumbnailBlobsCoreKey: channel.blobsKeyHex
+      thumbnailBlobsCoreKey: channel.blobsKeyHex,
+      thumbnailMimeType: result.mimeType
     }
   } catch (err) {
     log.error('Failed to store thumbnail in Hyperblobs', err)

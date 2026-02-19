@@ -534,8 +534,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       const now = Date.now()
       const wasInPip = isInPipModeRef.current
 
-      console.log('[VideoPlayerContext] PiP event raw:', event.isInPictureInPicture, 'wasInPip:', wasInPip, 'width:', event.width, 'height:', event.height)
-
       // IMPORTANT: Mark PiP exit transition immediately.
       // PiP window is closed, BEFORE our debounced/timeout PiP handler runs. If we let
       // that pause flip `isPlaying=false`, the native player will pause briefly and
@@ -551,10 +549,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       // This ensures dimension changes are always processed, even if boolean is the same
       const sameState = event.isInPictureInPicture === wasInPip
       const sameDimensions = event.width === pipWindowSizeRef.current?.width && event.height === pipWindowSizeRef.current?.height
-      const tooSoon = now - lastPipEventTimeRef.current < 100
+      const tooSoon = now - lastPipEventTimeRef.current < 50
 
       if (sameState && sameDimensions && tooSoon) {
-        console.log('[VideoPlayerContext] PiP event debounced (identical state+dimensions)')
         return
       }
       lastPipEventTimeRef.current = now
@@ -570,14 +567,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         setPipWindowSize(null)
       }
 
-      console.log('[VideoPlayerContext] PiP mode changed:', event.isInPictureInPicture, 'wasPlaying:', wasPlayingWhenBackgroundedRef.current)
-
       // Capture playerMode SYNCHRONOUSLY before setTimeout - the closure captures stale values
       // because this useEffect has empty deps []
       if (event.isInPictureInPicture) {
         // Save playerMode now, not inside setTimeout where it would be stale
         playerModeBeforePipRef.current = playerModeRef.current
-        console.log('[VideoPlayerContext] Entering PiP, saving playerMode:', playerModeRef.current)
       }
 
       // Use setTimeout instead of RAF - RAF doesn't fire in PiP/background mode
@@ -592,23 +586,19 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         if (event.isInPictureInPicture) {
           const wasPlaying = isPlayingRef.current || wasPlayingWhenBackgroundedRef.current
           wasPlayingWhenPipEnteredRef.current = wasPlaying
-          console.log('[VideoPlayerContext] Entering PiP, wasPlaying:', wasPlaying, 'playerMode:', playerModeBeforePipRef.current)
           if (wasPlaying) {
             setTimeout(() => {
-              console.log('[VideoPlayerContext] Resuming playback in PiP')
               setIsPlaying(true)
             }, 150)
           }
         } else if (wasInPip) {
           const shouldResume = event.isPlaying ?? wasPlayingWhenPipEnteredRef.current
-          console.log('[VideoPlayerContext] PiP closed, restoring playback:', shouldResume)
           pipExitShouldResumeRef.current = shouldResume
           pipExitExpectedPlayingRef.current = Boolean(shouldResume)
           pipExitResumeUntilRef.current = shouldResume ? Math.max(pipExitResumeUntilRef.current, Date.now() + 2000) : 0
           wasPlayingWhenPipEnteredRef.current = false
           // Restore the playerMode that was active before PiP entry
           const modeToRestore = playerModeBeforePipRef.current
-          console.log('[VideoPlayerContext] Exiting PiP, restoring playerMode:', modeToRestore)
 
           // Single-player architecture: same player continues, position is already synced
           setPlayerMode(modeToRestore)
@@ -746,6 +736,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const closeVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Closing video')
+
+    suppressForegroundRestoreRef.current = true
+    const suppressUntil = Date.now() + 2000
+    if (suppressUntil > suppressForegroundRestoreUntilRef.current) {
+      suppressForegroundRestoreUntilRef.current = suppressUntil
+    }
 
     lastClosedVideoRef.current = null
     lastClosedUrlRef.current = null

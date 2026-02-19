@@ -2,6 +2,8 @@
  * Platform Storage Module
  *
  * Provides platform-specific storage path utilities.
+ * Uses bare-storage for cross-platform directory resolution when running
+ * in Bare/Pear runtime, with fallbacks for web/React Native contexts.
  */
 
 import { detectPlatform, isBare, isPear } from './detection.js';
@@ -10,8 +12,24 @@ import { detectPlatform, isBare, isPear } from './detection.js';
  * @typedef {import('./types.js').PlatformType} PlatformType
  */
 
+/** @type {any} */
+let _bareStorage = null;
+let _bareStorageLoaded = false;
+
+function getBareStorage() {
+  if (_bareStorageLoaded) return _bareStorage;
+  _bareStorageLoaded = true;
+  try {
+    _bareStorage = require('bare-storage');
+  } catch {}
+  return _bareStorage;
+}
+
 /**
  * Get the default storage directory for the platform
+ *
+ * Uses bare-storage.persistent() for cross-platform path resolution in Bare
+ * runtime. Falls back to manual paths for web/React Native contexts.
  *
  * @param {Object} [options]
  * @param {string} [options.appName='peartube'] - Application name for storage dir
@@ -21,50 +39,55 @@ import { detectPlatform, isBare, isPear } from './detection.js';
 export function getStoragePath(options = {}) {
   const { appName = 'peartube', providedPath } = options;
 
-  // If a path was provided externally (e.g., from mobile app via Bare.argv)
   if (providedPath) {
     return providedPath;
   }
 
-  const platform = detectPlatform();
-
-  // Pear desktop - use Pear.config.storage
+  // Pear desktop - use Pear.config.storage (set via --store flag)
   if (isPear()) {
     try {
-      return globalThis.Pear?.config?.storage || `./storage`;
-    } catch (e) {
-      return `./storage`;
-    }
+      const pearStorage = globalThis.Pear?.config?.storage;
+      if (pearStorage) return pearStorage;
+    } catch {}
   }
 
-  // Bare runtime (mobile backend) - should receive path from argv
+  // Bare/Pear runtime - use bare-storage for cross-platform path resolution
+  if (isBare() || isPear()) {
+    const bs = getBareStorage();
+    if (bs) return `${bs.persistent()}/${appName}`;
+  }
+
+  // Bare runtime without bare-storage - check argv
   if (isBare()) {
     try {
       const arg0 = globalThis.Bare?.argv?.[0];
       if (typeof arg0 === 'string' && arg0.length > 0) return arg0;
-      return `./storage`;
-    } catch (e) {
-      return `./storage`;
-    }
+    } catch {}
   }
 
-  // Platform-specific defaults (these are fallbacks, real paths come from native)
-  switch (platform) {
-    case 'pear-macos':
-      return `~/Library/Application Support/${appName}`;
-    case 'pear-windows':
-      return `%APPDATA%/${appName}`;
-    case 'pear-linux':
-      return `~/.config/${appName}`;
-    case 'ios':
-      // iOS documents directory - must be provided by native
-      return `./Documents/${appName}`;
-    case 'android':
-      // Android files directory - must be provided by native
-      return `./files/${appName}`;
-    default:
-      return `./storage`;
+  return `./storage`;
+}
+
+/**
+ * Get a platform-appropriate ephemeral (cache/temp) directory.
+ *
+ * Uses bare-storage.ephemeral() when available. Data stored here may be
+ * wiped by the OS during storage pressure.
+ *
+ * @param {Object} [options]
+ * @param {string} [options.appName='peartube'] - Application name for cache dir
+ * @returns {string}
+ */
+export function getEphemeralPath(options = {}) {
+  const { appName = 'peartube' } = options;
+
+  const bs = getBareStorage();
+  if (bs) {
+    return `${bs.ephemeral()}/${appName}`;
   }
+
+  // Fallback: use base storage + /cache
+  return `${getStoragePath(options)}/cache`;
 }
 
 /**

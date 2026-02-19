@@ -1157,6 +1157,16 @@ export function VideoPlayerOverlay() {
     maximizePlayer()
   }, [maximizePlayer])
 
+  const closeFromMini = useCallback(() => {
+    setShowControls(false)
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current)
+      controlsTimeoutRef.current = null
+    }
+    cancelAnimation(animProgress)
+    closeVideo()
+  }, [closeVideo, animProgress])
+
   const handleVideoTap = useCallback(() => {
     if (isInPipMode) return
     if (playerMode === 'fullscreen' || isLandscapeFullscreen || playerMode === 'mini') {
@@ -2046,7 +2056,7 @@ export function VideoPlayerOverlay() {
   const currentDownload = currentVideo ? downloads.find(d =>
     d.id === `${currentVideo.channelKey}:${currentVideo.id || currentVideo.path}`
   ) : null
-  const isDownloading = currentDownload?.status === 'downloading' || currentDownload?.status === 'queued' || currentDownload?.status === 'saving'
+  const isDownloading = currentDownload?.status === 'downloading' || currentDownload?.status === 'queued'
   const isDownloaded = currentDownload?.status === 'complete'
 
   // Handle video download - adds to downloads queue
@@ -2909,7 +2919,7 @@ export function VideoPlayerOverlay() {
             <View style={styles.miniPipTopRow} pointerEvents="box-none">
               <Pressable
                 style={styles.miniPipSmallButton}
-                onPress={() => setTimeout(closeVideo, 0)}
+                onPress={closeFromMini}
                 testID="mini-player-close"
               >
                 <Feather name="x" size={18} color="#fff" />

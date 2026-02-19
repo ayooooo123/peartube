@@ -66,7 +66,7 @@ function DownloadItemRow({
   onRemove: () => void
   onRetry: () => void
 }) {
-  const isActive = item.status === 'downloading' || item.status === 'queued' || item.status === 'saving'
+  const isActive = item.status === 'downloading' || item.status === 'queued'
   const isComplete = item.status === 'complete'
   const isError = item.status === 'error'
 
@@ -118,7 +118,6 @@ function DownloadItemRow({
           <StatusIcon status={item.status} />
           <Text style={{ color: colors.textSecondary, fontSize: 12, marginLeft: 6 }}>
             {item.status === 'downloading' && `${item.progress}% · ${item.speed}`}
-            {item.status === 'saving' && 'Saving to gallery...'}
             {item.status === 'queued' && 'Waiting...'}
             {item.status === 'complete' && `${formatBytes(item.totalBytes)} · Saved`}
             {item.status === 'error' && (item.error || 'Failed')}
@@ -264,7 +263,7 @@ export default function DownloadsScreen() {
         ) : (
           <>
             {/* Active downloads */}
-            {downloads.filter(d => d.status === 'downloading' || d.status === 'queued' || d.status === 'saving').length > 0 && (
+        {downloads.filter(d => d.status === 'downloading' || d.status === 'queued').length > 0 && (
               <View style={{ marginBottom: 20 }}>
                 <Text style={{
                   color: colors.textSecondary,
@@ -276,7 +275,7 @@ export default function DownloadsScreen() {
                   Active
                 </Text>
                 {downloads
-                  .filter(d => d.status === 'downloading' || d.status === 'queued' || d.status === 'saving')
+              .filter(d => d.status === 'downloading' || d.status === 'queued')
                   .map(item => (
                     <DownloadItemRow
                       key={item.id}

@@ -250,6 +250,13 @@ export class MultiWriterChannel extends ReadyResource {
     console.log('[Channel] Processed pending connections:', replicated, 'replicated for:', this.keyHex?.slice(0, 16))
   }
 
+  _isCheckpointSignatureMismatch(err) {
+    const msg = err?.message || ''
+    return typeof msg === 'string' &&
+      msg.includes("Cannot destructure property 'length'") &&
+      msg.includes('signatures.user')
+  }
+
   async _safeUpdate(opts = {}) {
     const { syncPublicBee = true, ...updateOpts } = opts || {}
     const channelId = this.keyHex?.slice(0, 16) || 'unknown'
@@ -311,11 +318,25 @@ export class MultiWriterChannel extends ReadyResource {
       }
       return result
     } catch (err) {
+      if (this._isCheckpointSignatureMismatch(err)) {
+        console.log(`[Channel:${channelId}] _safeUpdate: checkpoint signature mismatch (non-fatal):`, err?.message)
+        return null
+      }
+
       console.log(`[Channel:${channelId}] _safeUpdate: error, retrying... ${err?.message}`)
       if (this.base?._applyState?.views) {
         this.base._applyState.views = this.base._applyState.views.map((v) => v || { core: { download: () => {} } })
       }
-      const result = await this.base.update({ wait: true, ...updateOpts })
+      let result
+      try {
+        result = await this.base.update({ wait: true, ...updateOpts })
+      } catch (retryErr) {
+        if (this._isCheckpointSignatureMismatch(retryErr)) {
+          console.log(`[Channel:${channelId}] _safeUpdate: checkpoint signature mismatch on retry (non-fatal):`, retryErr?.message)
+          return null
+        }
+        throw retryErr
+      }
       if (beforeSnapshot && shouldDiffSyncPublicBee) {
         try {
           const afterSnapshot = this.view.snapshot()
@@ -1429,6 +1450,10 @@ export class MultiWriterChannel extends ReadyResource {
   }
 
   async deleteVideo(id) {
+    if (!this.writable) {
+      throw new Error('Channel is not writable')
+    }
+
     // Note: In Hyperblobs, blobs are content-addressed and immutable.
     // We can't delete individual blobs, but removing the video metadata
     // makes the blob unreferenced and it won't be served.
@@ -1889,7 +1914,7 @@ export class MultiWriterChannel extends ReadyResource {
       // Try to pull data from peers - use longer timeout (10s) to allow replication to complete
       try {
         await Promise.race([
-          this.base.update({ wait: true }),
+          this._safeUpdate({ syncPublicBee: false }),
           new Promise((_, reject) => setTimeout(() => reject(new Error('update timeout')), 10000))
         ])
       } catch (err) {

@@ -8,12 +8,11 @@ import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from './desktop/co
 import { useApp } from '@/lib/AppContext'
 
 // MpvPlayer for Pear Desktop
-import { MpvPlayer, MpvPlayerRef } from './MpvPlayer'
+import { MpvPlayer } from './MpvPlayer'
 
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  useAnimatedReaction,
   withSpring,
   withTiming,
   interpolate,
@@ -23,7 +22,7 @@ import Animated, {
 } from 'react-native-reanimated'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import * as ScreenOrientation from 'expo-screen-orientation'
-import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
+import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { useDownloads } from '@/lib/DownloadsContext'
 import { useCurrentDownloadStatus } from '@/hooks/useCurrentDownloadStatus'
 import { useSocial } from '@/lib/SocialContext'
@@ -31,7 +30,7 @@ import { colors } from '@/lib/colors'
 import * as MediaSession from '../modules/expo-media-session/src'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { useCast } from '@/lib/cast'
-import { CastButton, DevicePickerModal } from '@/components/cast'
+import { DevicePickerModal } from '@/components/cast'
 
 // Import modular video-player components
 import {
@@ -41,9 +40,7 @@ import {
   MINI_PIP_MARGIN,
   MINI_PIP_CORNER_RADIUS,
   TAB_BAR_HEIGHT,
-  ANIMATION_DURATION,
 
-  SPRING_CONFIG,
   SPRING_CONFIG_BOUNCY,
   SPRING_CONFIG_TIGHT,
   DESKTOP_MINI_WIDTH,
@@ -62,12 +59,7 @@ import {
   P2PStatsBar,
   ChannelInfo,
   ActionButton,
-  TimeDisplay,
   Scrubber,
-  SeekFeedback,
-  LoadingOverlay,
-  DesktopMiniPlayer,
-  VideoContainer,
   MpvMobileVideoView,
 } from './video-player'
 
@@ -101,21 +93,18 @@ export function VideoPlayerOverlay() {
   const { identity } = useApp()
   const {
     comments,
-    pendingComments,
     commentText,
     setCommentText,
     replyToComment,
     setReplyToComment,
     commentsLoading,
     postingComment,
-    commentsPage,
     hasMoreComments,
     loadingMoreComments,
     refreshingComments,
     deletingCommentId,
     reactionCounts,
     userReaction,
-    loadSocial,
     refreshComments,
     loadMoreComments,
     postComment,
@@ -166,7 +155,6 @@ export function VideoPlayerOverlay() {
     playerRef,
     currentTime,
     duration,
-    progress: playbackProgress,
     playbackRate,
     seekPosition: playerSeekPosition,
     isInPipMode,
@@ -630,10 +618,9 @@ export function VideoPlayerOverlay() {
   }, [])
 
    // Animation progress: 0 = mini, 1 = fullscreen
-   // Initialize based on playerMode to avoid layout flash on first render
-   const animProgress = useSharedValue(playerMode === 'fullscreen' ? 1 : 0)
-   const translateY = useSharedValue(0)
-   const isGestureActive = useSharedValue(false)
+    // Initialize based on playerMode to avoid layout flash on first render
+    const animProgress = useSharedValue(playerMode === 'fullscreen' ? 1 : 0)
+    const isGestureActive = useSharedValue(false)
    const isInPipModeShared = useSharedValue(false)
    // Early PiP layout activation — true when PiP layout (frozen dims + translateY)
    // should be applied. Fires BEFORE isInPipMode by detecting window dimension
@@ -1016,11 +1003,8 @@ export function VideoPlayerOverlay() {
 
   const composedGesture = panGesture
 
-  // Animated styles for the container
-  // On Android, add bottom inset to fullscreen height so it covers the navigation bar
-  const fullscreenHeight = Platform.OS === 'android' ? screenHeight + insets.bottom : screenHeight
-
-  const containerStyle = useAnimatedStyle(() => {
+   // Animated styles for the container
+   const containerStyle = useAnimatedStyle(() => {
     'worklet'
     if (isLandscapeFullscreenShared.value) {
       return {
@@ -1276,19 +1260,7 @@ export function VideoPlayerOverlay() {
      }
    }, [])
 
-  // Mini player controls opacity
-  const miniControlsStyle = useAnimatedStyle(() => {
-    'worklet'
-    const opacity = interpolate(
-      animProgress.value,
-      [0, 0.3],
-      [1, 0],
-      Extrapolation.CLAMP
-    )
-    return { opacity }
-  }, [])
-
-  // Video player positioning - always fill container
+   // Video player positioning - always fill container
   const videoPlayerStyle = useAnimatedStyle(() => {
     'worklet'
     // Android PiP: freeze at EXACTLY the same position as fullscreen.
@@ -2344,7 +2316,7 @@ export function VideoPlayerOverlay() {
                   }}
                 >
                   <span style={{ color: userReaction === 'like' ? '#fff' : colors.text }}>
-                    Like ({reactions.like || 0})
+                    Like ({reactionCounts.like || 0})
                   </span>
                 </button>
                 <button
@@ -2355,7 +2327,7 @@ export function VideoPlayerOverlay() {
                   }}
                 >
                   <span style={{ color: userReaction === 'dislike' ? '#fff' : colors.text }}>
-                    Dislike ({reactions.dislike || 0})
+                    Dislike ({reactionCounts.dislike || 0})
                   </span>
                 </button>
                 <button

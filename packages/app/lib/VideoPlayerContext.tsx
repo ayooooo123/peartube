@@ -1,17 +1,9 @@
 /**
  * VideoPlayerContext - Unified Video Player State Management
  *
- * PERFORMANCE NOTE: This context has been split into 3 separate contexts to reduce re-renders:
- * - VideoProgressContext: High-frequency progress updates (~4Hz)
- * - VideoControlContext: Medium-frequency control state (play/pause, mode)
- * - VideoMetaContext: Low-frequency video metadata
- *
- * For new components, prefer importing the specific context you need from './video-player':
- *   import { useVideoProgressContext } from '@/lib/video-player'  // For SeekBar
- *   import { useVideoControlContext } from '@/lib/video-player'   // For controls
- *   import { useVideoMetaContext } from '@/lib/video-player'      // For video info
- *
- * This file maintains backward compatibility by combining all contexts into one.
+ * Contains all video player state, controls, and media session handling.
+ * Emits events via playbackActiveEmitter, videoStatsEventEmitter, and videoLoadEventEmitter
+ * for cross-component communication.
  */
 
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react'
@@ -23,11 +15,8 @@ import * as MediaSession from '../modules/expo-media-session/src'
 // Re-export types for backwards compatibility
 export type { VideoData, VideoStats } from '@peartube/core'
 
-// Re-export split contexts for gradual migration
+// Re-export emitters for backwards compatibility
 export {
-  useVideoProgressContext,
-  useVideoControlContext,
-  useVideoMetaContext,
   videoStatsEventEmitter,
   videoLoadEventEmitter,
   playbackActiveEmitter,

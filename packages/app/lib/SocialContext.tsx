@@ -44,11 +44,11 @@ export function useSocial() {
 
 export function SocialProvider({ children }: { children: React.ReactNode }) {
   const { identity } = useApp()
-  const player = useVideoPlayerContext() as any
+  const player = useVideoPlayerContext()
   const currentVideo = player.currentVideo
   const playerMode = player.playerMode
-  const isLandscapeFullscreen = Boolean(player.isLandscapeFullscreen)
-  const pendingLandscapeExit = Boolean(player.pendingLandscapeExit)
+  const isLandscapeFullscreen = Boolean((player as any).isLandscapeFullscreen)
+  const pendingLandscapeExit = Boolean((player as any).pendingLandscapeExit)
 
   const commentsLengthRef = useRef(0)
 

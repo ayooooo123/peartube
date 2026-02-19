@@ -159,6 +159,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const maximizedForPipRef = useRef(false)  // True when we expanded mini→fullscreen for PiP
   const lastPipEventTimeRef = useRef(0)
   const pipTransitionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const pipTransitionInFlightRef = useRef(false)  // True during PiP exit→fullscreen transition window
   const currentTimeRef = useRef(0)
   const durationRef = useRef(0)
   const isPlayingRef = useRef(false)
@@ -315,8 +316,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
        } else if (comingToForeground && isBackgroundedRef.current) {
          isBackgroundedRef.current = false
          maximizedForPipRef.current = false
-         const wasInPip = isInPipModeRef.current
-         console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current, 'wasInPiP:', wasInPip)
+          const wasInPip = isInPipModeRef.current || pipTransitionInFlightRef.current
+          console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current, 'wasInPiP:', wasInPip, 'pipInFlight:', pipTransitionInFlightRef.current)
 
          // IMPORTANT: Don't clear PiP state on foreground if we were in PiP.
          // When returning from PiP, Android can deliver the AppState "active" event
@@ -336,12 +337,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
         const now = Date.now()
         const suppressOnce = suppressForegroundRestoreRef.current
-        if (suppressOnce) {
-          suppressForegroundRestoreRef.current = false
-        }
+        suppressForegroundRestoreRef.current = false
         const suppressWindow = suppressForegroundRestoreUntilRef.current > now
+        const shouldSuppressRestore = suppressOnce || suppressWindow || wasInPip
 
-        if (!suppressOnce && !suppressWindow) {
+        if (!shouldSuppressRestore) {
           if (!currentVideoRef.current) {
             restoreLastClosedVideo('foreground')
           } else if (playerModeRef.current === 'hidden' && currentVideoRef.current) {
@@ -529,6 +529,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         pipExitExpectedPlayingRef.current = expectedPlaying
         pipExitShouldResumeRef.current = expectedPlaying
         pipExitResumeUntilRef.current = expectedPlaying ? (Date.now() + 2000) : 0
+        pipTransitionInFlightRef.current = true
       }
 
       // Only debounce if BOTH boolean AND dimensions are identical
@@ -566,6 +567,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       }
       pipTransitionTimeoutRef.current = setTimeout(() => {
         if (event.isInPictureInPicture !== isInPipModeRef.current) {
+          pipTransitionInFlightRef.current = false
           return
         }
 
@@ -598,6 +600,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
             setTimeout(() => reassertNativePlayAfterPipExit('pip-exit+320ms'), 320)
           }
         }
+        pipTransitionInFlightRef.current = false
       })
     })
 
@@ -722,6 +725,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const closeVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Closing video')
+
+    if (seekClearTimeoutRef.current) {
+      clearTimeout(seekClearTimeoutRef.current)
+      seekClearTimeoutRef.current = null
+    }
+    seekConfirmRef.current = null
 
     suppressForegroundRestoreRef.current = true
     const suppressUntil = Date.now() + 2000

@@ -99,40 +99,57 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
   const abortControllers = useRef<Map<string, AbortController>>(new Map())
   const speedTrackers = useRef<Map<string, { lastBytes: number; lastTime: number }>>(new Map())
 
+  // Throttle refs for batching progress updates (max 4 updates/second)
+  const pendingUpdatesRef = useRef<Map<string, { progress: number; bytesDownloaded: number; totalBytes: number }>>(new Map())
+  const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Calculate active downloads count
   const activeCount = downloads.filter(d => d.status === 'downloading' || d.status === 'queued').length
 
-  // Handle progress update from any source
+  // Handle progress update from any source (throttled - batches updates every 250ms)
   const handleProgressUpdate = useCallback((id: string, progress: number, bytesDownloaded: number, totalBytes: number) => {
-    setDownloads(prev => prev.map(d => {
-      if (d.id !== id) return d
+    pendingUpdatesRef.current.set(id, { progress, bytesDownloaded, totalBytes })
 
-      // Calculate speed
-      const tracker = speedTrackers.current.get(id)
-      const now = Date.now()
-      let speed = d.speed
+    if (!flushTimeoutRef.current) {
+      flushTimeoutRef.current = setTimeout(() => {
+        const updates = pendingUpdatesRef.current
+        pendingUpdatesRef.current = new Map()
+        flushTimeoutRef.current = null
 
-      if (tracker) {
-        const timeDelta = (now - tracker.lastTime) / 1000 // seconds
-        if (timeDelta > 0.5) { // Update speed every 500ms
-          const bytesDelta = bytesDownloaded - tracker.lastBytes
-          const bytesPerSec = bytesDelta / timeDelta
-          speed = formatBytes(bytesPerSec) + '/s'
-          speedTrackers.current.set(id, { lastBytes: bytesDownloaded, lastTime: now })
-        }
-      } else {
-        speedTrackers.current.set(id, { lastBytes: bytesDownloaded, lastTime: now })
-      }
+        if (updates.size === 0) return
 
-      return {
-        ...d,
-        progress,
-        bytesDownloaded,
-        totalBytes,
-        speed,
-        status: 'downloading' as DownloadStatus
-      }
-    }))
+        setDownloads(prev => prev.map(d => {
+          const update = updates.get(d.id)
+          if (!update) return d
+
+          // Calculate speed
+          const tracker = speedTrackers.current.get(d.id)
+          const now = Date.now()
+          let speed = d.speed
+
+          if (tracker) {
+            const timeDelta = (now - tracker.lastTime) / 1000 // seconds
+            if (timeDelta > 0.5) { // Update speed every 500ms
+              const bytesDelta = update.bytesDownloaded - tracker.lastBytes
+              const bytesPerSec = bytesDelta / timeDelta
+              speed = formatBytes(bytesPerSec) + '/s'
+              speedTrackers.current.set(d.id, { lastBytes: update.bytesDownloaded, lastTime: now })
+            }
+          } else {
+            speedTrackers.current.set(d.id, { lastBytes: update.bytesDownloaded, lastTime: now })
+          }
+
+          return {
+            ...d,
+            progress: update.progress,
+            bytesDownloaded: update.bytesDownloaded,
+            totalBytes: update.totalBytes,
+            speed,
+            status: 'downloading' as DownloadStatus
+          }
+        }))
+      }, 250)
+    }
   }, [])
 
   // Subscribe to progress events from internal emitter (for web)
@@ -151,6 +168,16 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     })
     return () => { unsubscribe() }
   }, [handleProgressUpdate])
+
+  // Clean up flush timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (flushTimeoutRef.current) {
+        clearTimeout(flushTimeoutRef.current)
+        flushTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   const downloadForWeb = useCallback(async (id: string, url: string, filename: string, signal: AbortSignal) => {
     console.log('[Downloads] Web download:', filename, 'from:', url)
@@ -199,15 +226,23 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     downloadProgressEventEmitter.emit(id, 100, blob.size, blob.size)
   }, [])
 
-  const addDownload = useCallback(async (video: VideoData, rpc: any) => {
-    const id = `${video.channelKey}:${video.id || video.path}`
+   const addDownload = useCallback(async (video: VideoData, rpc: any) => {
+     const id = `${video.channelKey}:${video.id || video.path}`
 
-    // Check if already downloading
-    const existing = downloads.find(d => d.id === id)
-    if (existing && (existing.status === 'downloading' || existing.status === 'queued')) {
-      Alert.alert('Already Downloading', 'This video is already being downloaded.')
-      return
-    }
+     // Check if already downloading (using functional update to avoid dependency)
+     let isAlreadyDownloading = false
+     setDownloads(prev => {
+       const existing = prev.find(d => d.id === id)
+       if (existing && (existing.status === 'downloading' || existing.status === 'queued')) {
+         isAlreadyDownloading = true
+       }
+       return prev
+     })
+
+     if (isAlreadyDownloading) {
+       Alert.alert('Already Downloading', 'This video is already being downloaded.')
+       return
+     }
 
     // Create download item
     const downloadItem: DownloadItem = {
@@ -310,10 +345,10 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
         } : d))
       }
     } finally {
-      abortControllers.current.delete(id)
-      speedTrackers.current.delete(id)
-    }
-  }, [downloads, downloadForWeb])
+       abortControllers.current.delete(id)
+       speedTrackers.current.delete(id)
+     }
+   }, [downloadForWeb])
 
   // Cancel a download
   const cancelDownload = useCallback((id: string) => {
@@ -338,25 +373,30 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     setDownloads(prev => prev.filter(d => d.status !== 'complete' && d.status !== 'cancelled' && d.status !== 'error'))
   }, [])
 
-  // Retry a failed download
-  const retryDownload = useCallback(async (id: string, rpc: any) => {
-    const download = downloads.find(d => d.id === id)
-    if (!download) return
+   // Retry a failed download
+   const retryDownload = useCallback(async (id: string, rpc: any) => {
+     let download: DownloadItem | undefined
+     setDownloads(prev => {
+       download = prev.find(d => d.id === id)
+       return prev
+     })
 
-    // Recreate video data
-    const video: VideoData = {
-      id: download.videoId,
-      channelKey: download.channelKey,
-      title: download.title,
-      thumbnail: download.thumbnail,
-      size: download.totalBytes,
-      path: download.videoId,
-      description: '',
-      uploadedAt: 0
-    }
+     if (!download) return
 
-    await addDownload(video, rpc)
-  }, [downloads, addDownload])
+     // Recreate video data
+     const video: VideoData = {
+       id: download.videoId,
+       channelKey: download.channelKey,
+       title: download.title,
+       thumbnail: download.thumbnail,
+       size: download.totalBytes,
+       path: download.videoId,
+       description: '',
+       uploadedAt: 0
+     }
+
+     await addDownload(video, rpc)
+   }, [addDownload])
 
   const contextValue = useMemo<DownloadsContextType>(() => ({
     downloads,

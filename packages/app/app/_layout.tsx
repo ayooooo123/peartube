@@ -65,6 +65,11 @@ export default function RootLayout() {
   const [blobServerPort, setBlobServerPort] = useState<number | null>(() => cachedAppState?.blobServerPort ?? null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
+const castKeepaliveIntervalRef = useRef<NodeJS.Timeout | null>(null)
+const castSuspendGraceTimerRef = useRef<NodeJS.Timeout | null>(null)
+const castKeepaliveLastErrorLogAtRef = useRef(0)
+const lastKnownCastActiveAtRef = useRef(0)
+const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
 
   const startupLog = useCallback((...args: unknown[]) => {
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -341,41 +346,148 @@ export default function RootLayout() {
     setLoading(false)
   }, [loadInitialData])
 
+  const isCastSessionActive = useCallback(async (): Promise<boolean> => {
+    if (!platformRPC?.rpc?.castIsConnected) return false
+
+    try {
+      const connected = await platformRPC.rpc.castIsConnected({})
+      if (!connected?.connected) {
+        return Date.now() - lastKnownCastActiveAtRef.current < CAST_ACTIVITY_GRACE_MS
+      }
+      lastKnownCastActiveAtRef.current = Date.now()
+
+      if (typeof platformRPC.rpc.castGetState === 'function') {
+        try {
+          const state = await platformRPC.rpc.castGetState({})
+          const castState = String(state?.state || '').toLowerCase()
+          if (castState === 'idle' || castState === 'stopped') {
+            return false
+          }
+          lastKnownCastActiveAtRef.current = Date.now()
+        } catch {
+          return true
+        }
+      }
+
+      return true
+    } catch {
+      return Date.now() - lastKnownCastActiveAtRef.current < CAST_ACTIVITY_GRACE_MS
+    }
+  }, [])
+
+  const stopCastKeepalive = useCallback(() => {
+    if (castKeepaliveIntervalRef.current) {
+      clearInterval(castKeepaliveIntervalRef.current)
+      castKeepaliveIntervalRef.current = null
+    }
+  }, [])
+
+  const startCastKeepalive = useCallback(() => {
+    if (castKeepaliveIntervalRef.current) return
+    if (!platformRPC?.rpc?.castGetState) return
+
+    castKeepaliveIntervalRef.current = setInterval(() => {
+      platformRPC.rpc.castGetState({}).catch(() => {
+        const now = Date.now()
+        if (now - castKeepaliveLastErrorLogAtRef.current > 60000) {
+          castKeepaliveLastErrorLogAtRef.current = now
+          console.log('[App] Cast keepalive state check failed (will retry)')
+        }
+      })
+    }, 15000)
+  }, [])
+
+  const clearCastSuspendGraceTimer = useCallback(() => {
+    if (castSuspendGraceTimerRef.current) {
+      clearTimeout(castSuspendGraceTimerRef.current)
+      castSuspendGraceTimerRef.current = null
+    }
+  }, [])
+
   const handleAppStateChange = useCallback((nextState: AppStateStatus) => {
     if (!platformRPC) return
+    const goingToBackground = nextState === 'background' || (nextState === 'inactive' && Platform.OS !== 'android')
 
-    if (nextState === 'background') {
-      if (playbackActiveEmitter.isActive) {
-        console.log('[App] Skipping network suspend - playback is active')
-        return
+    if (goingToBackground) {
+      clearCastSuspendGraceTimer()
+
+      const maybeSuspendWithGrace = async () => {
+        if (playbackActiveEmitter.isActive) {
+          console.log('[App] Skipping network suspend - local playback is active (state:', nextState + ')')
+          return
+        }
+
+        if (await isCastSessionActive()) {
+          console.log('[App] Skipping network suspend - cast session is active (state:', nextState + ')')
+          startCastKeepalive()
+          return
+        }
+
+        castSuspendGraceTimerRef.current = setTimeout(async () => {
+          castSuspendGraceTimerRef.current = null
+
+          if (playbackActiveEmitter.isActive) {
+            console.log('[App] Grace check: local playback active, skip suspend')
+            return
+          }
+
+          if (await isCastSessionActive()) {
+            console.log('[App] Grace check: cast session active, skip suspend')
+            startCastKeepalive()
+            return
+          }
+
+          stopCastKeepalive()
+          console.log('[App] Suspending network for app state:', nextState)
+          platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
+            console.log('[App] suspendNetwork error:', err?.message)
+          })
+        }, 8000)
       }
-      console.log('[App] Suspending network for background')
-      platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
-        console.log('[App] suspendNetwork error:', err?.message)
-      })
+
+      void maybeSuspendWithGrace()
     } else if (nextState === 'active') {
+      clearCastSuspendGraceTimer()
+      stopCastKeepalive()
       console.log('[App] Resuming network from foreground')
       platformRPC.rpc?.resumeNetwork?.().catch((err: any) => {
         console.log('[App] resumeNetwork error:', err?.message)
       })
+
+      if (typeof platformRPC.rpc?.castStartDiscovery === 'function') {
+        platformRPC.rpc.castStartDiscovery({}).catch((err: any) => {
+          console.log('[App] castStartDiscovery error after foreground:', err?.message)
+        })
+      }
 
       if (!platformRPC.isInitialized()) {
         console.log('[App] Backend not initialized, reinitializing...')
         initNativeBackend()
       }
     }
-  }, [initNativeBackend])
+  }, [
+    clearCastSuspendGraceTimer,
+    initNativeBackend,
+    isCastSessionActive,
+    startCastKeepalive,
+    stopCastKeepalive,
+  ])
 
   useEffect(() => {
     if (isNative) {
       if (Platform.OS === 'android' && Platform.Version >= 33) {
         PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS).catch(() => {})
+        if (PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES) {
+          PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES).catch(() => {})
+        }
       }
       initNativeBackend()
 
       const subscription = AppState.addEventListener('change', handleAppStateChange)
       return () => {
         subscription.remove()
+        clearCastSuspendGraceTimer()
+        stopCastKeepalive()
         // Don't terminate worklet if playback is active (e.g., during PiP)
         if (platformRPC && !playbackActiveEmitter.isActive) {
           platformRPC.terminatePlatformRPC()
@@ -388,7 +500,13 @@ export default function RootLayout() {
       setReady(true)
       setLoading(false)
     }
-  }, [handleAppStateChange, initNativeBackend, initPearBackend])
+  }, [
+    clearCastSuspendGraceTimer,
+    handleAppStateChange,
+    initNativeBackend,
+    initPearBackend,
+    stopCastKeepalive,
+  ])
 
   // Update cache when state changes
   useEffect(() => {
@@ -397,8 +515,13 @@ export default function RootLayout() {
     }
   }, [ready, identity, videos, blobServerPort])
 
-  const loadVideosFromBackend = useCallback(async (driveKey: string, retryCount = 0) => {
+  const loadVideosFromBackend = useCallback(async (
+    driveKey: string,
+    options: { retryCount?: number; allowEmptyResult?: boolean } = {}
+  ) => {
     if (!platformRPC) return
+    const retryCount = options.retryCount ?? 0
+    const allowEmptyResult = options.allowEmptyResult === true
     const maxRetries = 3
     const retryDelay = 5000 // 5 seconds between retries
 
@@ -421,24 +544,28 @@ export default function RootLayout() {
       if (result?.videos?.length > 0) {
         setVideos(result.videos)
       } else if (result?.videos?.length === 0) {
-        console.log('[App] loadVideosFromBackend: got 0 videos, checking if we should clear...')
-        // Only clear if we truly have no videos (not a sync issue)
-        // Keep existing videos if this might be a transient empty result
-        setVideos(prev => {
-          if (prev.length === 0) return []
-          console.log('[App] loadVideosFromBackend: keeping', prev.length, 'existing videos (not clearing)')
-          return prev
-        })
-
-        // Schedule automatic retry in background if no videos found
-        // This helps when DHT discovery is slow after device pairing
-        if (retryCount < maxRetries) {
-          console.log(`[App] No videos found, scheduling retry ${retryCount + 1}/${maxRetries} in ${retryDelay}ms...`)
-          setTimeout(() => {
-            loadVideosFromBackend(driveKey, retryCount + 1)
-          }, retryDelay)
+        if (allowEmptyResult) {
+          setVideos([])
         } else {
-          console.log('[App] Max retries reached, giving up auto-retry')
+          console.log('[App] loadVideosFromBackend: got 0 videos, checking if we should clear...')
+          // Only clear if we truly have no videos (not a sync issue)
+          // Keep existing videos if this might be a transient empty result
+          setVideos(prev => {
+            if (prev.length === 0) return []
+            console.log('[App] loadVideosFromBackend: keeping', prev.length, 'existing videos (not clearing)')
+            return prev
+          })
+
+          // Schedule automatic retry in background if no videos found
+          // This helps when DHT discovery is slow after device pairing
+          if (retryCount < maxRetries) {
+            console.log(`[App] No videos found, scheduling retry ${retryCount + 1}/${maxRetries} in ${retryDelay}ms...`)
+            setTimeout(() => {
+              loadVideosFromBackend(driveKey, { retryCount: retryCount + 1, allowEmptyResult })
+            }, retryDelay)
+          } else {
+            console.log('[App] Max retries reached, giving up auto-retry')
+          }
         }
       }
     } catch (err: any) {
@@ -449,7 +576,7 @@ export default function RootLayout() {
       if (retryCount < maxRetries) {
         console.log(`[App] Load failed, scheduling retry ${retryCount + 1}/${maxRetries} in ${retryDelay}ms...`)
         setTimeout(() => {
-          loadVideosFromBackend(driveKey, retryCount + 1)
+          loadVideosFromBackend(driveKey, { retryCount: retryCount + 1, allowEmptyResult })
         }, retryDelay)
       }
     }
@@ -593,6 +720,7 @@ export default function RootLayout() {
     loadIdentity: loadIdentityFromBackend,
     createIdentity: createIdentityHandler,
     loadVideos: loadVideosFromBackend,
+    removeVideo: (videoId: string) => setVideos(prev => prev.filter(v => v.id !== videoId)),
   }
 
   return (

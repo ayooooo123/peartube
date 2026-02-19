@@ -3,7 +3,7 @@
  * Provides browser-style downloads queue with progress tracking
  * Works across all platforms (iOS, Android, Desktop, Web)
  */
-import { createContext, useContext, useState, useCallback, useEffect, ReactNode, useRef } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, ReactNode, useRef, useMemo } from 'react'
 import { Platform, Alert } from 'react-native'
 import { events } from '@peartube/platform/rpc'
 import type { VideoData } from '@peartube/core'
@@ -358,7 +358,7 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     await addDownload(video, rpc)
   }, [downloads, addDownload])
 
-  const contextValue: DownloadsContextType = {
+  const contextValue = useMemo<DownloadsContextType>(() => ({
     downloads,
     activeCount,
     addDownload,
@@ -366,7 +366,7 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     removeDownload,
     clearCompleted,
     retryDownload
-  }
+  }), [downloads, activeCount, addDownload, cancelDownload, removeDownload, clearCompleted, retryDownload])
 
   return (
     <DownloadsContext.Provider value={contextValue}>

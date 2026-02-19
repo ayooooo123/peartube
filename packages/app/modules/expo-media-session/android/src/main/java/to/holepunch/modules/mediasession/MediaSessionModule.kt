@@ -171,8 +171,6 @@ object PipBridge {
             return
         }
 
-        expandSurfaceViewsForPip(activity)
-
         // Disable auto-enter so Android doesn't capture pre-transform state,
         // then enter PiP manually on next frame after transforms have rendered.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -185,28 +183,33 @@ object PipBridge {
 
         activity.window.decorView.post {
             if (activity.isDestroyed || activity.isFinishing) return@post
-            android.util.Log.d("PipBridge", "onUserLeaveHint: entering PiP after transforms rendered")
+            expandSurfaceViewsForPip(activity)
 
-            markPipTransition()
-            notifyPlayerViews(true)
-            try {
-                val builder = PictureInPictureParams.Builder()
-                    .setAspectRatio(getPipAspectRatio())
+            activity.window.decorView.post {
+                if (activity.isDestroyed || activity.isFinishing) return@post
+                android.util.Log.d("PipBridge", "onUserLeaveHint: entering PiP after transforms rendered")
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    builder.setAutoEnterEnabled(true)
+                markPipTransition()
+                notifyPlayerViews(true)
+                try {
+                    val builder = PictureInPictureParams.Builder()
+                        .setAspectRatio(getPipAspectRatio())
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        builder.setAutoEnterEnabled(true)
+                    }
+
+                    val sourceRect = getVideoSourceRect(activity) ?: getFullscreenSourceRect(activity)
+                    builder.setSourceRectHint(sourceRect)
+
+                    val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
+                    builder.setActions(actions)
+
+                    val result = activity.enterPictureInPictureMode(builder.build())
+                    android.util.Log.d("PipBridge", "onUserLeaveHint: enterPictureInPictureMode returned $result")
+                } catch (e: Exception) {
+                    android.util.Log.e("PipBridge", "onUserLeaveHint: failed", e)
                 }
-
-                val sourceRect = getFullscreenSourceRect(activity)
-                builder.setSourceRectHint(sourceRect)
-
-                val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
-                builder.setActions(actions)
-
-                val result = activity.enterPictureInPictureMode(builder.build())
-                android.util.Log.d("PipBridge", "onUserLeaveHint: enterPictureInPictureMode returned $result")
-            } catch (e: Exception) {
-                android.util.Log.e("PipBridge", "onUserLeaveHint: failed", e)
             }
         }
     }
@@ -652,6 +655,39 @@ class MediaSessionModule : Module() {
                     promise.resolve(null)
                 } catch (e: Exception) {
                     promise.reject("MEDIA_SESSION_ERROR", e.message ?: "Failed to clear now playing", e)
+                }
+            }
+        }
+
+        AsyncFunction("startCastForegroundService") { title: String, subtitle: String, promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    startCastForegroundService(title, subtitle)
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject("MEDIA_SESSION_ERROR", e.message ?: "Failed to start cast foreground service", e)
+                }
+            }
+        }
+
+        AsyncFunction("updateCastForegroundService") { title: String, subtitle: String, promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    updateCastForegroundService(title, subtitle)
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject("MEDIA_SESSION_ERROR", e.message ?: "Failed to update cast foreground service", e)
+                }
+            }
+        }
+
+        AsyncFunction("stopCastForegroundService") { promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    stopCastForegroundService()
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject("MEDIA_SESSION_ERROR", e.message ?: "Failed to stop cast foreground service", e)
                 }
             }
         }
@@ -1116,6 +1152,36 @@ class MediaSessionModule : Module() {
         ContextCompat.startForegroundService(context, intent)
     }
 
+    private fun startCastForegroundService(title: String, subtitle: String) {
+        val context = appContext.reactContext ?: return
+        val intent = Intent(context, MediaPlaybackService::class.java).apply {
+            action = ACTION_CAST_START
+            putExtra(EXTRA_CAST_TITLE, title)
+            putExtra(EXTRA_CAST_SUBTITLE, subtitle)
+            putExtra("mediaSessionToken", mediaSession?.sessionToken)
+        }
+        ContextCompat.startForegroundService(context, intent)
+    }
+
+    private fun updateCastForegroundService(title: String, subtitle: String) {
+        val context = appContext.reactContext ?: return
+        val intent = Intent(context, MediaPlaybackService::class.java).apply {
+            action = ACTION_CAST_UPDATE
+            putExtra(EXTRA_CAST_TITLE, title)
+            putExtra(EXTRA_CAST_SUBTITLE, subtitle)
+            putExtra("mediaSessionToken", mediaSession?.sessionToken)
+        }
+        context.startService(intent)
+    }
+
+    private fun stopCastForegroundService() {
+        val context = appContext.reactContext ?: return
+        val intent = Intent(context, MediaPlaybackService::class.java).apply {
+            action = ACTION_CAST_STOP
+        }
+        context.startService(intent)
+    }
+
     private fun stopForegroundService() {
         val context = appContext.reactContext ?: return
         val intent = Intent(context, MediaPlaybackService::class.java)
@@ -1445,6 +1511,11 @@ class MediaSessionModule : Module() {
         const val ACTION_PIP_PAUSE = "to.holepunch.mediasession.PIP_PAUSE"
         const val ACTION_PIP_REWIND = "to.holepunch.mediasession.PIP_REWIND"
         const val ACTION_PIP_FORWARD = "to.holepunch.mediasession.PIP_FORWARD"
+        const val ACTION_CAST_START = "to.holepunch.mediasession.CAST_START"
+        const val ACTION_CAST_UPDATE = "to.holepunch.mediasession.CAST_UPDATE"
+        const val ACTION_CAST_STOP = "to.holepunch.mediasession.CAST_STOP"
+        const val EXTRA_CAST_TITLE = "castTitle"
+        const val EXTRA_CAST_SUBTITLE = "castSubtitle"
 
         private const val REQUEST_PLAY_PAUSE = 1
         private const val REQUEST_REWIND = 2

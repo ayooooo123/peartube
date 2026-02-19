@@ -65,6 +65,10 @@ interface MediaSessionModuleInterface {
   
   // Android only: check if PiP is supported
   isPictureInPictureSupported?(): Promise<boolean>
+
+  startCastForegroundService?(title: string, subtitle: string): Promise<void>
+  updateCastForegroundService?(title: string, subtitle: string): Promise<void>
+  stopCastForegroundService?(): Promise<void>
 }
 
 // Get native module or provide web fallback
@@ -214,6 +218,21 @@ export async function setSurfaceViewInset(topInsetDp: number): Promise<void> {
   return (MediaSessionNative as any).setSurfaceViewInset(topInsetDp)
 }
 
+export async function startCastForegroundService(title: string, subtitle: string): Promise<void> {
+  if (Platform.OS !== 'android' || !MediaSessionNative.startCastForegroundService) return
+  return MediaSessionNative.startCastForegroundService(title, subtitle)
+}
+
+export async function updateCastForegroundService(title: string, subtitle: string): Promise<void> {
+  if (Platform.OS !== 'android' || !MediaSessionNative.updateCastForegroundService) return
+  return MediaSessionNative.updateCastForegroundService(title, subtitle)
+}
+
+export async function stopCastForegroundService(): Promise<void> {
+  if (Platform.OS !== 'android' || !MediaSessionNative.stopCastForegroundService) return
+  return MediaSessionNative.stopCastForegroundService()
+}
+
 /**
  * Subscribe to remote control commands (play, pause, seek, skip, etc.)
  * from lock screen, notification, headset buttons, etc.
@@ -299,6 +318,9 @@ export default {
   setAutoPictureInPicture,
   setPictureInPictureAspectRatio,
   setStatusBarOverlayEnabled,
+  startCastForegroundService,
+  updateCastForegroundService,
+  stopCastForegroundService,
   addRemoteCommandListener,
   addAudioInterruptionListener,
   addAudioRouteChangeListener,

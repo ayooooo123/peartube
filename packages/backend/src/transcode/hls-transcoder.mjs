@@ -3126,13 +3126,14 @@ async function hlsTranscodeVideo(session, inputIO, segmentManager, totalSize, on
 /**
  * Start HLS transcode session
  * @param {string} sourceUrl - Video URL (from blob server)
- * @param {object} options - { title, onProgress, store, isVideoComplete, blobInfo, blobsCoreKey, forceSoftwareDecode, forceProgressive, forceHypercoreStream }
+ * @param {object} options - { title, onProgress, store, isVideoComplete, blobInfo, blobsCoreKey, forceSoftwareDecode, forceProgressive, forceHypercoreStream, forceFullTranscode }
  *   - store: Corestore instance (for direct Hypercore access)
  *   - isVideoComplete: If true, video is fully synced - enables direct Hypercore read
  *   - blobInfo/blobsCoreKey: For direct Hypercore block access (fastest path)
  *   - forceSoftwareDecode: Disable VideoToolbox decode for this session unless locked by env
  *   - forceProgressive: Skip full temp-file download even if video is fully synced
  *   - forceHypercoreStream: Stream directly from Hypercore via worker (no preload, no temp file)
+ *   - forceFullTranscode: Force full decode/encode path (reliability-first, slower startup)
  */
 export async function startHlsTranscode(sourceUrl, options = {}) {
   const {
@@ -3144,6 +3145,7 @@ export async function startHlsTranscode(sourceUrl, options = {}) {
     forceSoftwareDecode = false,
     forceProgressive = false,
     forceHypercoreStream = false,
+    forceFullTranscode = false,
     // Optional: Direct Hypercore access (bypasses HTTP)
     blobInfo = null,        // { blockOffset, blockLength, byteOffset, byteLength }
     blobsCoreKey = null     // hex string of the blobs Hypercore key
@@ -3478,9 +3480,21 @@ export async function startHlsTranscode(sourceUrl, options = {}) {
       // - neither: Use hlsRemux (pure stream copy)
       const needsVideoTranscode = detection.needsVideoTranscode
       const needsAudioTranscode = detection.needsAudioTranscode
-      const useFullTranscode = needsVideoTranscode || needsAudioTranscode
+      let forceFullPath = forceFullTranscode
+      if (forceFullPath) {
+        if (h264EncoderAvailable === null) {
+          h264EncoderAvailable = isH264EncoderAvailable()
+        }
+        if (!h264EncoderAvailable) {
+          console.warn('[HlsTranscoder] forceFullTranscode requested but H.264 encoder unavailable; falling back to remux/transcode auto decision')
+          forceFullPath = false
+        }
+      }
+
+      const useFullTranscode = forceFullPath || needsVideoTranscode || needsAudioTranscode
       console.log('[HlsTranscoder] Transcode decision: needsVideo=' + needsVideoTranscode + 
         ' needsAudio=' + needsAudioTranscode + 
+        ' forceFull=' + forceFullPath +
         ' -> ' + (useFullTranscode ? 'FULL_TRANSCODE' : 'REMUX'))
 
       if (useFullTranscode) {

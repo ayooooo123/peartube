@@ -241,6 +241,8 @@ export class ChromecastDevice extends EventEmitter {
     this._lastLoadTime = 0
     this._loadDebounceMs = 1000 // Minimum 1 second between LOAD calls
     this._lastEmittedError = null
+    this._loadStartedAt = 0
+    this._intentionalStopAt = 0 // Track stop() calls to suppress stale IDLE:ERROR
     // If play() is called repeatedly during debounce, keep only the latest request.
     this._pendingLoadOptions = null
     this._pendingLoadTimer = null
@@ -477,6 +479,7 @@ export class ChromecastDevice extends EventEmitter {
       try {
         this._sendMediaMessage({ type: 'GET_STATUS', requestId: this._nextRequestId() })
       } catch {}
+      this._loadStartedAt = Date.now()
       this._state.state = 'loading'
       this.emit('playbackStateChanged', 'loading')
     } finally {
@@ -527,13 +530,14 @@ export class ChromecastDevice extends EventEmitter {
   /**
    * Stop playback
    */
-  async stop() {
+   async stop() {
     if (!this._connected) {
       throw new Error('Not connected')
     }
     if (!this._mediaSessionId) {
       return
     }
+    this._intentionalStopAt = Date.now()
     this._sendMediaMessage({
       type: 'STOP',
       requestId: this._nextRequestId(),
@@ -828,6 +832,10 @@ export class ChromecastDevice extends EventEmitter {
           this._sendConnect(mediaApp.transportId)
           this._launchWaiters.splice(0).forEach(function(resolve) { resolve(mediaApp.transportId) })
         } else if (this._transportId && this._state.state === 'loading') {
+          const loadingForMs = this._loadStartedAt > 0 ? (Date.now() - this._loadStartedAt) : 0
+          if (loadingForMs < 8000) {
+            return
+          }
           const otherApps = apps.filter(function(a) { return a.appId !== DEFAULT_MEDIA_RECEIVER_APP_ID })
           if (otherApps.length > 0) {
             console.error('[Chromecast] Media receiver app replaced while loading! New apps:', otherApps.map(function(a) { return a.appId }))
@@ -927,10 +935,23 @@ export class ChromecastDevice extends EventEmitter {
         if (this._state.state !== nextState) {
           this._state.state = nextState
           this.emit('playbackStateChanged', nextState)
+          if (nextState === 'playing' || nextState === 'paused' || nextState === 'buffering') {
+            this._loadStartedAt = 0
+            this._intentionalStopAt = 0
+          }
         }
         if (status.playerState === 'IDLE' && status.idleReason) {
           console.warn('[Chromecast] Media idle reason:', status.idleReason)
           if (status.idleReason === 'ERROR') {
+            // Suppress stale IDLE:ERROR that arrives after intentional stop() (pre-LOAD cleanup)
+            // or while a new LOAD is in flight. These belong to the OLD media session.
+            const sinceStopped = this._intentionalStopAt > 0 ? (Date.now() - this._intentionalStopAt) : Infinity
+            const isLoading = this._loadStartedAt > 0
+            if (sinceStopped < 8000 || isLoading) {
+              console.log('[Chromecast] Suppressing stale IDLE:ERROR (stop ' + Math.round(sinceStopped) + 'ms ago, loading:', isLoading + ')')
+              return
+            }
+
             let errType = 'unknown'
             let detailedCode = null
             try {

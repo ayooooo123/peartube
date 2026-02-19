@@ -10,6 +10,7 @@ import { Stack } from 'expo-router'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData, playbackActiveEmitter } from '@/lib/VideoPlayerContext'
+import { SocialProvider } from '@/lib/SocialContext'
 import { DownloadsProvider } from '@/lib/DownloadsContext'
 import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -453,15 +454,17 @@ export default function RootLayout() {
           <AppContext.Provider value={contextValue}>
             <DownloadsProvider>
               <VideoPlayerProvider>
-                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', width: '100%' }}>
-                  <Stack
-                    screenOptions={{
-                      headerShown: false,
-                      contentStyle: { backgroundColor: colors.bg },
-                    }}
-                  />
-                </div>
-                <VideoPlayerOverlay />
+                <SocialProvider>
+                  <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', width: '100%' }}>
+                    <Stack
+                      screenOptions={{
+                        headerShown: false,
+                        contentStyle: { backgroundColor: colors.bg },
+                      }}
+                    />
+                  </div>
+                  <VideoPlayerOverlay />
+                </SocialProvider>
               </VideoPlayerProvider>
             </DownloadsProvider>
           </AppContext.Provider>

@@ -18,7 +18,7 @@ export const videoStatsEventEmitter = {
   },
   subscribe: (listener: VideoStatsListener) => {
     statsListeners.add(listener)
-    return () => statsListeners.delete(listener)
+    return () => { statsListeners.delete(listener) }
   }
 }
 
@@ -31,7 +31,7 @@ export const videoLoadEventEmitter = {
   },
   subscribe: (listener: VideoLoadListener) => {
     loadListeners.add(listener)
-    return () => loadListeners.delete(listener)
+    return () => { loadListeners.delete(listener) }
   }
 }
 

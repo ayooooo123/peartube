@@ -290,13 +290,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }).catch(() => {})
   }, [isPlaying])
 
-  // AppState listener for background/foreground transitions (mobile only)
-  useEffect(() => {
-    if (Platform.OS === 'web') return
+   // AppState listener for background/foreground transitions (mobile only)
+   useEffect(() => {
+     if (Platform.OS === 'web') return
 
-       const handleAppStateChange = async (nextState: AppStateStatus) => {
-       const goingToBackground = nextState === 'background' || nextState === 'inactive'
-       const comingToForeground = nextState === 'active'
+        const handleAppStateChange = (nextState: AppStateStatus) => {
+        const goingToBackground = nextState === 'background' || nextState === 'inactive'
+        const comingToForeground = nextState === 'active'
 
       if (goingToBackground && !isBackgroundedRef.current) {
         isBackgroundedRef.current = true
@@ -364,12 +364,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
            setSeekPosition(seekValue)
            setTimeout(() => setSeekPosition(undefined), 100)
          }
-       }
-     }
+        }
+      }
 
-    const subscription = AppState.addEventListener('change', handleAppStateChange)
-    return () => subscription.remove()
-  }, [forceReloadPlayback, restoreLastClosedVideo])
+     const subscription = AppState.addEventListener('change', handleAppStateChange)
+     return () => subscription.remove()
+   }, [forceReloadPlayback, restoreLastClosedVideo])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
@@ -608,52 +608,52 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Subscribe to video stats events from backend
   useEffect(() => {
-    const unsubscribe = _videoStatsEventEmitter.subscribe((driveKey, videoPath, stats) => {
-      // Use ref for synchronous access (state may not be updated yet)
-      const video = currentVideoRef.current
-      console.log('[VideoPlayerContext] Stats event received, checking match:', {
-        videoPath,
-        driveKey,
-        currentPath: video?.path,
-        currentKey: video?.channelKey
-      })
-      // Only update if this is for the current video.
-      // Some layers identify a video by id while others may still use legacy path formats.
-      // Normalize both before comparison so mobile/desktop stay consistent.
-      const extractVideoId = (idOrPath?: string | null) => {
-        if (!idOrPath) return null
-        const cleaned = idOrPath.split('?')[0]?.split('#')[0] || idOrPath
-        // Path case: /videos/<id>.<ext> or videos/<id>.<ext>
-        const m = cleaned.match(/(?:^|\/)videos\/([^.\/]+)(?:\.[^\/]+)?$/)
-        if (m?.[1]) return m[1]
-        // Fallback: take basename then strip extension if present (e.g. abc.mp4)
-        const base = cleaned.split('/').pop() || cleaned
-        return base.replace(/\.[^./]+$/, '')
-      }
+     const unsubscribe = _videoStatsEventEmitter.subscribe((driveKey, videoPath, stats) => {
+       // Use ref for synchronous access (state may not be updated yet)
+       const video = currentVideoRef.current
+       console.log('[VideoPlayerContext] Stats event received, checking match:', {
+         videoPath,
+         driveKey,
+         currentPath: video?.path,
+         currentKey: video?.channelKey
+       })
+       // Only update if this is for the current video.
+       // Some layers identify a video by id while others may still use legacy path formats.
+       // Normalize both before comparison so mobile/desktop stay consistent.
+       const extractVideoId = (idOrPath?: string | null) => {
+         if (!idOrPath) return null
+         const cleaned = idOrPath.split('?')[0]?.split('#')[0] || idOrPath
+         // Path case: /videos/<id>.<ext> or videos/<id>.<ext>
+         const m = cleaned.match(/(?:^|\/)videos\/([^.\/]+)(?:\.[^\/]+)?$/)
+         if (m?.[1]) return m[1]
+         // Fallback: take basename then strip extension if present (e.g. abc.mp4)
+         const base = cleaned.split('/').pop() || cleaned
+         return base.replace(/\.[^./]+$/, '')
+       }
 
-      const currentKey = (video as any)?.channelKey || (video as any)?.driveKey || null
-      const currentId = extractVideoId((video as any)?.id) ?? extractVideoId(video?.path)
-      const incomingId = extractVideoId(videoPath)
+       const currentKey = (video as any)?.channelKey || (video as any)?.driveKey || null
+       const currentId = extractVideoId((video as any)?.id) ?? extractVideoId(video?.path)
+       const incomingId = extractVideoId(videoPath)
 
-      const sameVideo =
-        Boolean(video) &&
-        (currentKey ? currentKey === driveKey : true) &&
-        (
-          // Exact path match
-          video?.path === videoPath ||
-          // Id-based match
-          (currentId && incomingId && currentId === incomingId)
-        )
+       const sameVideo =
+         Boolean(video) &&
+         (currentKey ? currentKey === driveKey : true) &&
+         (
+           // Exact path match
+           video?.path === videoPath ||
+           // Id-based match
+           (currentId && incomingId && currentId === incomingId)
+         )
 
-      if (sameVideo) {
-        console.log('[VideoPlayerContext] Received stats event:', stats.progress + '%')
-        setVideoStats(stats)
-        // Keep the loading overlay up until the player actually starts.
-        // (We still display live P2P stats while waiting.)
-      }
-    })
-    return () => { unsubscribe() }
-  }, [])
+       if (sameVideo) {
+         console.log('[VideoPlayerContext] Received stats event:', stats.progress + '%')
+         setVideoStats(stats)
+         // Keep the loading overlay up until the player actually starts.
+         // (We still display live P2P stats while waiting.)
+       }
+     })
+     return () => { unsubscribe() }
+   }, [])
 
   // Load and play a new video (triggers overlay to fullscreen)
   const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {

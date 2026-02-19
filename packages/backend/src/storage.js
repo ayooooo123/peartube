@@ -12,13 +12,16 @@ import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
+import { logger } from './logger.js'
+
+const log = logger('Storage')
 
 // Network stats for debugging connection issues
 let HyperswarmStats = null;
 try {
   HyperswarmStats = (await import('hyperswarm-stats')).default;
-} catch (e) {
-  console.log('[Storage] hyperswarm-stats not available');
+  } catch (e) {
+  log.debug('hyperswarm-stats not available')
 }
 
 // Global network stats instance (set after swarm is created)
@@ -52,7 +55,7 @@ try {
   Wakeup = (await import('protomux-wakeup')).default;
 } catch (e) {
   // blind-peering is optional - will work without it but mobile may have connectivity issues
-  console.log('[Storage] blind-peer/blind-peering not available, mobile connectivity may be limited');
+  log.debug('blind-peer/blind-peering not available, mobile connectivity may be limited')
 }
 
 // Import bare-fs and bare-path for Bare runtime environments (mobile/desktop)
@@ -266,7 +269,7 @@ export async function initializeStorage(config) {
 
   // Log swarm events for debugging mobile connectivity
   swarm.on('update', () => {
-    console.log('[Storage] Swarm update event: connections=', swarm.connections?.size || 0, 'peers=', swarm.peers?.size || 0);
+    log.debug('Swarm update event', { connections: swarm.connections?.size || 0, peers: swarm.peers?.size || 0 })
   });
 
   // Log connection events
@@ -437,16 +440,42 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
   if (!ctx.channels) ctx.channels = new Map()
   if (ctx.channels.has(channelKeyHex)) {
     const cached = ctx.channels.get(channelKeyHex)
-    console.log('[Storage] loadChannel: returning cached channel:', channelKeyHex.slice(0, 16))
+    if (!isChannelUsable(cached)) {
+      console.log('[Storage] loadChannel: evicting stale cached channel:', channelKeyHex.slice(0, 16))
+      ctx.channels.delete(channelKeyHex)
+      try { await cached?.close?.() } catch {}
+    }
+
+    if (ctx.channels.has(channelKeyHex)) {
+      const current = ctx.channels.get(channelKeyHex)
+      if (options.preferWritable && current && !current.writable) {
+        if (typeof options.writerKeyName === 'string' && options.writerKeyName) {
+          console.log('[Storage] loadChannel: cached channel read-only, reloading for writable access:', channelKeyHex.slice(0, 16))
+          try {
+            await Promise.race([
+              current.close(),
+              new Promise((resolve) => setTimeout(resolve, 2000))
+            ])
+          } catch {}
+          ctx.channels.delete(channelKeyHex)
+        } else {
+          console.log('[Storage] loadChannel: cached channel remains read-only (no writer key name):', channelKeyHex.slice(0, 16))
+        }
+      }
+    }
+
+    if (ctx.channels.has(channelKeyHex)) {
+      const current = ctx.channels.get(channelKeyHex)
+      log.debug('loadChannel returning cached channel', { channelKey: channelKeyHex.slice(0, 16) })
 
     // CRITICAL: Ensure replication is set up on any connections that came in after the channel was loaded
     // This handles the case where channel was cached but new peers connected since then
-    if (ctx.swarm && ctx.swarm.connections?.size > 0 && cached.base && cached._replicatedConns) {
+    if (ctx.swarm && ctx.swarm.connections?.size > 0 && current.base && current._replicatedConns) {
       for (const conn of ctx.swarm.connections) {
-        if (!cached._replicatedConns.has(conn)) {
-          cached._replicatedConns.add(conn)
+        if (!current._replicatedConns.has(conn)) {
+          current._replicatedConns.add(conn)
           try {
-            cached.base.replicate(conn)
+            current.base.replicate(conn)
             console.log('[Storage] loadChannel: replicated cached channel on new connection:', channelKeyHex.slice(0, 16))
           } catch (err) {
             console.log('[Storage] loadChannel: replicate error:', err?.message)
@@ -455,13 +484,23 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
       }
     }
 
-    return cached
+      return current
+    }
   }
 
-  // Check if already loading - wait for existing load to complete
   if (loadingChannels.has(channelKeyHex)) {
     console.log('[Storage] loadChannel: already loading, waiting...:', channelKeyHex.slice(0, 16))
-    return loadingChannels.get(channelKeyHex)
+    const pending = loadingChannels.get(channelKeyHex)
+    const timeoutMs = 30000
+    try {
+      return await Promise.race([
+        pending,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('loadChannel wait timeout')), timeoutMs))
+      ])
+    } catch (err) {
+      console.warn('[Storage] loadChannel: wait timed out, retrying fresh:', channelKeyHex.slice(0, 16), err?.message)
+      loadingChannels.delete(channelKeyHex)
+    }
   }
 
   console.log('[Storage] loadChannel: cache miss, loading new:', channelKeyHex.slice(0, 16))
@@ -474,27 +513,53 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
       throw new Error('Corestore is closed');
     }
 
-    console.log('[Storage] Loading channel:', channelKeyHex.slice(0, 16));
-    const ch = new MultiWriterChannel(ctx.store, {
-      key: b4a.from(channelKeyHex, 'hex'),
-      encryptionKey: options.encryptionKeyHex ? b4a.from(options.encryptionKeyHex, 'hex') : null,
-      swarm: ctx.swarm  // CRITICAL: Pass swarm so replication can be set up BEFORE base.update()
-    })
+    const openChannel = async (writerKeyName) => {
+      const writerKeyPair =
+        typeof writerKeyName === 'string' && writerKeyName && typeof ctx.store.createKeyPair === 'function'
+          ? await ctx.store.createKeyPair(writerKeyName)
+          : null
 
-    // Add timeout to prevent hanging on channel ready
-    const readyStart = Date.now()
-    try {
-      await Promise.race([
-        ch.ready(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Channel ready timeout')), 10000))
-      ])
-    } catch (err) {
-      console.error('[Storage] Channel ready failed:', err.message)
-      // Best-effort cleanup so a failed open doesn't leak resources or leave half-open cores around.
-      try { await ch.close() } catch {}
-      throw err
+      console.log('[Storage] Loading channel:', channelKeyHex.slice(0, 16));
+      const ch = new MultiWriterChannel(ctx.store, {
+        key: b4a.from(channelKeyHex, 'hex'),
+        encryptionKey: options.encryptionKeyHex ? b4a.from(options.encryptionKeyHex, 'hex') : null,
+        keyPair: writerKeyPair || undefined,
+        swarm: ctx.swarm
+      })
+
+      const readyTimeoutMs = options.preferWritable ? 25000 : 10000
+      const readyStart = Date.now()
+      try {
+        await Promise.race([
+          ch.ready(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Channel ready timeout')), readyTimeoutMs))
+        ])
+      } catch (err) {
+        try { await ch.close() } catch {}
+        throw err
+      }
+
+      console.log('[Storage] Channel ready in', Date.now() - readyStart, 'ms:', channelKeyHex.slice(0, 16));
+      return ch
     }
-    console.log('[Storage] Channel ready in', Date.now() - readyStart, 'ms:', channelKeyHex.slice(0, 16));
+
+    let ch
+    try {
+      ch = await openChannel(options.writerKeyName)
+    } catch (err) {
+      const canRetryWithoutWriter = Boolean(options.writerKeyName)
+      if (!canRetryWithoutWriter) {
+        console.error('[Storage] Channel ready failed:', err.message)
+        throw err
+      }
+
+      console.log('[Storage] Channel load with writer key failed, retrying without writer key:', err?.message)
+      ch = await openChannel(null)
+    }
+
+    if (options.preferWritable && !ch.writable) {
+      console.log('[Storage] Channel loaded but not writable:', channelKeyHex.slice(0, 16))
+    }
     ctx.channels.set(channelKeyHex, ch)
 
     // Ensure we join the channel topic so this device can FIND peers and replicate Autobase cores.
@@ -502,11 +567,10 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
     if (ctx.swarm) {
       try {
         if (ch.discoveryKey) ctx.swarm.join(ch.discoveryKey)
-        // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
-        // BEFORE any data queries (like listVideos). Autobase requires explicit replication
-        // setup. Without awaiting, the race condition causes listVideos to return empty on
-        // mobile because handlers aren't registered yet.
-        await ch.setupPairing(ctx.swarm)
+        await Promise.race([
+          ch.setupPairing(ctx.swarm),
+          new Promise(resolve => setTimeout(resolve, 15000))
+        ])
       } catch (err) {
         console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
       }
@@ -559,8 +623,36 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
   }
 }
 
-// Cache for public bees (keyed by publicBeeKeyHex)
-const publicBeeCache = new Map()
+function isResourceClosing(resource) {
+  if (!resource || typeof resource !== 'object') return true
+  if (resource.closing || resource.closed) return true
+  return false
+}
+
+function isCoreClosing(core) {
+  if (!core || typeof core !== 'object') return true
+  if (core.closing || core.closed) return true
+  return false
+}
+
+function isChannelUsable(channel) {
+  if (isResourceClosing(channel)) return false
+  if (isResourceClosing(channel.base)) return false
+  if (channel.view && isResourceClosing(channel.view)) return false
+  return true
+}
+
+function isPublicBeeUsable(bee) {
+  if (isResourceClosing(bee)) return false
+  if (isCoreClosing(bee.core)) return false
+  if (bee.bee && isResourceClosing(bee.bee)) return false
+  return true
+}
+
+function getPublicBeeCache(ctx) {
+  if (!ctx._publicBeeCache) ctx._publicBeeCache = new Map()
+  return ctx._publicBeeCache
+}
 
 /**
  * Load a public channel Hyperbee for viewing.
@@ -572,10 +664,23 @@ const publicBeeCache = new Map()
  * @returns {Promise<PublicChannelBee>}
  */
 export async function loadPublicBee(ctx, publicBeeKeyHex) {
+  if (ctx.store.closed) {
+    throw new Error('Corestore is closed')
+  }
+
+  const publicBeeCache = getPublicBeeCache(ctx)
+
   // Check cache first
   if (publicBeeCache.has(publicBeeKeyHex)) {
-    console.log('[Storage] loadPublicBee: returning cached:', publicBeeKeyHex.slice(0, 16))
-    return publicBeeCache.get(publicBeeKeyHex)
+    const cached = publicBeeCache.get(publicBeeKeyHex)
+    if (isPublicBeeUsable(cached)) {
+      log.debug('loadPublicBee returning cached', { publicBeeKey: publicBeeKeyHex.slice(0, 16) })
+      return cached
+    }
+
+    console.log('[Storage] loadPublicBee: evicting stale cached entry:', publicBeeKeyHex.slice(0, 16))
+    publicBeeCache.delete(publicBeeKeyHex)
+    try { await cached?.close?.() } catch {}
   }
 
   console.log('[Storage] loadPublicBee: loading:', publicBeeKeyHex.slice(0, 16))
@@ -620,8 +725,11 @@ export async function createChannel(ctx, options = {}) {
   // Root fix: use an explicit Autobase keyPair for new channels.
   // This makes new-channel creation reliable and fast on mobile/Bare.
   const suffix = b4a.toString(crypto.randomBytes(16), 'hex')
+  const writerKeyName = typeof options.writerKeyName === 'string' && options.writerKeyName
+    ? options.writerKeyName
+    : `peartube-channel-writer:${suffix}`
   const keyPair = typeof ctx.store.createKeyPair === 'function'
-    ? await ctx.store.createKeyPair(`peartube-channel-writer:${suffix}`)
+    ? await ctx.store.createKeyPair(writerKeyName)
     : null
 
   const ch = new MultiWriterChannel(ctx.store, {
@@ -685,7 +793,7 @@ export async function createChannel(ctx, options = {}) {
     }
   }
 
-  return { channel: ch, channelKeyHex, encryptionKeyHex }
+  return { channel: ch, channelKeyHex, encryptionKeyHex, writerKeyName }
 }
 
 /**

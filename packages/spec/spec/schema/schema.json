@@ -578,7 +578,7 @@
       "name": "download-video-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": -1,
+      "flagsPosition": 3,
       "fields": [
         {
           "name": "channelKey",
@@ -595,6 +595,12 @@
         {
           "name": "destPath",
           "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
           "type": "string",
           "version": 1
         }

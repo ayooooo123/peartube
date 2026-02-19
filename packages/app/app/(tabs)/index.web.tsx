@@ -468,7 +468,7 @@ function WatchPageView({
   // Download state
   const downloadId = video ? `${channelKey}:${video.id || video.path}` : null
   const currentDownload = downloadId ? downloads.find(d => d.id === downloadId) : null
-  const isDownloading = currentDownload?.status === 'downloading' || currentDownload?.status === 'queued' || currentDownload?.status === 'saving'
+  const isDownloading = currentDownload?.status === 'downloading' || currentDownload?.status === 'queued'
   const isDownloaded = currentDownload?.status === 'complete'
 
   const handleDownload = useCallback(async () => {
@@ -1275,12 +1275,21 @@ function WatchPageView({
                     onClick={() => onVideoClick(v)}
                   >
                     <div style={watchStyles.relatedThumb}>
-                      <span style={watchStyles.relatedThumbText}>{v.title.charAt(0).toUpperCase()}</span>
+                      {(v.thumbnailUrl || v.thumbnail) ? (
+                        <img
+                          src={(v.thumbnailUrl || v.thumbnail) as string}
+                          alt={v.title}
+                          style={watchStyles.relatedThumbImage}
+                          loading="lazy"
+                        />
+                      ) : (
+                        <span style={watchStyles.relatedThumbText}>{v.title.charAt(0).toUpperCase()}</span>
+                      )}
                     </div>
                     <div style={watchStyles.relatedInfo}>
                       <span style={watchStyles.relatedTitle}>{v.title}</span>
                       <span style={watchStyles.relatedMeta}>
-                        {channelMeta[v.channelKey]?.name || 'Channel'}
+                        {(v.channelKey ? channelMeta[v.channelKey]?.name : undefined) || 'Channel'}
                       </span>
                     </div>
                   </div>
@@ -1861,6 +1870,13 @@ const watchStyles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+    overflow: 'hidden',
+  },
+  relatedThumbImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
   },
   relatedThumbText: {
     fontSize: 24,

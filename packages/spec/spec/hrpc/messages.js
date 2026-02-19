@@ -693,21 +693,31 @@ const encoding27 = {
     c.string.preencode(state, m.channelKey)
     c.string.preencode(state, m.videoId)
     c.string.preencode(state, m.destPath)
+    state.end++ // max flag is 1 so always one byte
+
+    if (m.publicBeeKey) c.string.preencode(state, m.publicBeeKey)
   },
   encode(state, m) {
+    const flags = m.publicBeeKey ? 1 : 0
+
     c.string.encode(state, m.channelKey)
     c.string.encode(state, m.videoId)
     c.string.encode(state, m.destPath)
+    c.uint.encode(state, flags)
+
+    if (m.publicBeeKey) c.string.encode(state, m.publicBeeKey)
   },
   decode(state) {
     const r0 = c.string.decode(state)
     const r1 = c.string.decode(state)
     const r2 = c.string.decode(state)
+    const flags = c.uint.decode(state)
 
     return {
       channelKey: r0,
       videoId: r1,
-      destPath: r2
+      destPath: r2,
+      publicBeeKey: (flags & 1) !== 0 ? c.string.decode(state) : null
     }
   }
 }

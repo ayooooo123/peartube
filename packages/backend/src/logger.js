@@ -13,7 +13,6 @@
  *   log.error('Error occurred', error)
  */
 
-// Log levels in order of severity
 const LOG_LEVELS = {
   DEBUG: 0,
   INFO: 1,
@@ -21,6 +20,8 @@ const LOG_LEVELS = {
   ERROR: 3,
   SILENT: 4
 }
+
+let fileLog = null
 
 // Get configured log level from environment
 function getLogLevel() {
@@ -194,56 +195,81 @@ function format(prefix, level, args) {
  */
 export function logger(moduleName) {
   return {
-    /**
-     * Log debug message (only shown when LOG_LEVEL=DEBUG)
-     * @param {...any} args
-     */
     debug(...args) {
       if (currentLevel <= LOG_LEVELS.DEBUG) {
-        console.debug(format(moduleName, 'DEBUG', args))
+        const msg = format(moduleName, 'DEBUG', args)
+        console.debug(msg)
+        if (fileLog) try { fileLog.info(msg) } catch {}
       }
     },
 
-    /**
-     * Log info message
-     * @param {...any} args
-     */
     info(...args) {
       if (currentLevel <= LOG_LEVELS.INFO) {
-        console.log(format(moduleName, 'INFO', args))
+        const msg = format(moduleName, 'INFO', args)
+        console.log(msg)
+        if (fileLog) try { fileLog.info(msg) } catch {}
       }
     },
 
-    /**
-     * Log warning message
-     * @param {...any} args
-     */
     warn(...args) {
       if (currentLevel <= LOG_LEVELS.WARN) {
-        console.warn(format(moduleName, 'WARN', args))
+        const msg = format(moduleName, 'WARN', args)
+        console.warn(msg)
+        if (fileLog) try { fileLog.info(msg) } catch {}
       }
     },
 
-    /**
-     * Log error message
-     * @param {...any} args
-     */
     error(...args) {
       if (currentLevel <= LOG_LEVELS.ERROR) {
-        console.error(format(moduleName, 'ERROR', args))
+        const msg = format(moduleName, 'ERROR', args)
+        console.error(msg)
+        if (fileLog) try { fileLog.info(msg) } catch {}
       }
     },
 
-    /**
-     * Create a child logger with a sub-prefix
-     * @param {string} subName
-     * @returns {Object}
-     */
     child(subName) {
       return logger(`${moduleName}:${subName}`)
     }
   }
 }
 
-// Export constants for external use
+/**
+ * Initialize file logging with rotation. Call once during backend startup.
+ * @param {string} logFilePath - Absolute path to the log file
+ * @param {Object} [options]
+ * @param {number} [options.maxSize=5242880] - Max file size in bytes (default 5 MB)
+ * @param {number} [options.rotateInterval=5000] - Rotation check interval in ms
+ */
+export async function initFileLogger(logFilePath, options = {}) {
+  let FileLog = null
+  try {
+    FileLog = (await import('bare-file-logger')).default
+  } catch {
+    return
+  }
+  if (!FileLog) return
+
+  const {
+    maxSize = 5 * 1024 * 1024,
+    rotateInterval = 5000
+  } = options
+
+  try {
+    fileLog = new FileLog(logFilePath, {
+      maxSize,
+      rotateInterval,
+      rotate(filePath) {
+        return filePath + '.' + Date.now()
+      }
+    })
+
+    fileLog.on('rotate', (from, to) => {
+      console.log('[Logger] Log rotated:', to)
+    })
+  } catch (err) {
+    console.warn('[Logger] File logger init failed:', err?.message)
+    fileLog = null
+  }
+}
+
 export const LogLevel = LOG_LEVELS

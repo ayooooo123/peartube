@@ -10,6 +10,7 @@ import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
+import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
 
@@ -36,7 +37,7 @@ export default function SearchTab() {
   const [queryInput, setQueryInput] = useState('')
   const [query, setQuery] = useState('')
 
-  const { ready, rpc } = useApp()
+  const { ready, rpc, blobServerPort } = useApp()
   const { loadAndPlayVideo, closeVideo } = useVideoPlayerContext()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
@@ -65,6 +66,7 @@ export default function SearchTab() {
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const thumbnailCacheRef = useRef(thumbnailCache)
   thumbnailCacheRef.current = thumbnailCache
+  const inflightThumbnailFetches = useRef<Set<string>>(new Set())
 
   const submitSearch = useCallback(() => {
     const nextQuery = queryInput.trim()
@@ -137,12 +139,23 @@ export default function SearchTab() {
           if (!ck || !v.id) continue
           const cacheKey = `${ck}:${v.id}`
           if (thumbnailCacheRef.current[cacheKey]) continue
-          rpc.getVideoThumbnail({ channelKey: ck, videoId: v.id }).then((res: any) => {
-            const url = res?.dataUrl || res?.url
-            if (res?.exists && url) {
-              setThumbnailCache(prev => ({ ...prev, [cacheKey]: url }))
-            }
-          }).catch(() => {})
+          if (inflightThumbnailFetches.current.has(cacheKey)) continue
+          inflightThumbnailFetches.current.add(cacheKey)
+
+          void fetchThumbnailUrlWithRetry({
+            rpc,
+            channelKey: ck,
+            videoId: v.id,
+            expectedPort: blobServerPort,
+          }).then((url) => {
+            if (!url) return
+            setThumbnailCache(prev => {
+              if (prev[cacheKey] === url) return prev
+              return { ...prev, [cacheKey]: url }
+            })
+          }).catch(() => {}).finally(() => {
+            inflightThumbnailFetches.current.delete(cacheKey)
+          })
         }
       } catch (e: any) {
         setError(e?.message || 'Search failed')
@@ -153,7 +166,7 @@ export default function SearchTab() {
     }
 
     doSearch()
-  }, [query, ready, rpc])
+  }, [query, ready, rpc, blobServerPort])
 
   const handleVideoPress = useCallback(async (video: VideoData) => {
     const channelKey = video.channelKey || video.driveKey
@@ -178,6 +191,7 @@ export default function SearchTab() {
 
     try {
       const videoRef = video.id
+      const videoAny = video as VideoData & { blobId?: string | null; blobsCoreKey?: string | null }
 
       // Start prefetch early to warm peers before URL resolution
       void rpc.prefetchVideo({
@@ -190,8 +204,8 @@ export default function SearchTab() {
         channelKey,
         videoId: videoRef,
         publicBeeKey: video.publicBeeKey || undefined,
-        blobId: video.blobId || undefined,
-        blobsCoreKey: video.blobsCoreKey || undefined,
+        blobId: videoAny.blobId || undefined,
+        blobsCoreKey: videoAny.blobsCoreKey || undefined,
         mimeType: video.mimeType || undefined,
       })
 

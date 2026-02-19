@@ -673,18 +673,21 @@ console.log('[Worker] Hypercore worker path:', hypercoreWorkerPath);
 // Initialize Backend using Orchestrator
 // ============================================
 
-// Determine storage path - prefer explicit --store, fall back to home directory
+// Determine storage path: --store flag > bare-storage.persistent() > os.homedir()
 let storage: string;
 if (Pear.config.storage) {
   storage = Pear.config.storage;
   console.log('[Worker] Using --store storage path:', storage);
 } else {
-  // Without --store, use a more stable path based on home directory
-  // Pear.config.storage being null means ephemeral storage which can cause issues
-  const homeDir = os.homedir();
-  storage = path.join(homeDir, '.peartube');
-  console.log('[Worker] No --store flag, using fallback storage:', storage);
-  console.log('[Worker] For persistent storage, run with: pear run --store ~/.peartube --dev .');
+  try {
+    const dir = require('bare-storage');
+    storage = path.join(dir.persistent(), 'peartube');
+    console.log('[Worker] Using bare-storage persistent path:', storage);
+  } catch {
+    const homeDir = os.homedir();
+    storage = path.join(homeDir, '.peartube');
+    console.log('[Worker] Falling back to homedir storage:', storage);
+  }
 }
 
 console.log('[Worker] Pear.config:', JSON.stringify({
@@ -1476,7 +1479,8 @@ rpc.onUploadVideo(async (req: any) => {
         // Update video metadata with thumbnail info
         await channel.updateVideo(result.videoId, {
           thumbnailBlobId: thumbResult.thumbnailBlobId,
-          thumbnailBlobsCoreKey: thumbResult.thumbnailBlobsCoreKey
+          thumbnailBlobsCoreKey: thumbResult.thumbnailBlobsCoreKey,
+          thumbnailMimeType: thumbResult.thumbnailMimeType
         });
       }
     } catch (thumbErr: any) {
@@ -1504,7 +1508,8 @@ rpc.onUploadVideo(async (req: any) => {
 
 // Download video - returns URL for web/desktop download
 rpc.onDownloadVideo(async (req: any) => {
-  console.log('[HRPC] downloadVideo:', req.channelKey?.slice(0, 16), req.videoId, 'publicBeeKey:', req.publicBeeKey?.slice(0, 16));
+  const requestKey = req.publicBeeKey ? req.publicBeeKey.slice(0, 16) : 'missing';
+  console.log('[HRPC] downloadVideo request decoded:', req.channelKey?.slice(0, 16), req.videoId, 'publicBeeKey:', requestKey);
 
   try {
     // Use getVideoUrl which handles both local and remote channels
@@ -1514,7 +1519,7 @@ rpc.onDownloadVideo(async (req: any) => {
     }
 
     // Try to get video metadata for size info
-    const meta = await api.getVideoData(req.channelKey, req.videoId);
+    const meta = await api.getVideoData(req.channelKey, req.videoId, req.publicBeeKey);
     let size = 0;
     if (meta?.blobId) {
       const parts = meta.blobId.split(':').map(Number);
@@ -1537,8 +1542,13 @@ rpc.onDownloadVideo(async (req: any) => {
 
 // Delete video
 rpc.onDeleteVideo(async (req: any) => {
+  const active = identityManager.getActiveIdentity?.();
   const channel = await identityManager.getActiveChannel?.();
   if (!channel) return { success: false, error: 'No active channel' };
+  if (!channel.writable) {
+    const key = channel.keyHex || active?.driveKey || 'unknown';
+    return { success: false, error: `Active channel is read-only on this device (channel=${String(key).slice(0, 16)})` };
+  }
   try {
     await channel.deleteVideo(req.videoId);
     return { success: true };

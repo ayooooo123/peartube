@@ -12,6 +12,7 @@ import type { VideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
+import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 
 // Public feed types
 interface FeedEntry {
@@ -54,7 +55,7 @@ const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(wind
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
-  const { ready, identity, videos, loading, loadVideos, rpc, backendError, retryBackend, platformEvents } = useApp()
+  const { ready, identity, videos, loading, loadVideos, rpc, backendError, retryBackend, platformEvents, blobServerPort } = useApp()
   const { loadAndPlayVideo } = useVideoPlayerContext()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
@@ -101,24 +102,40 @@ export default function HomeScreen() {
 
   // Thumbnail cache: key = `${driveKey}:${videoId}` -> url
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
+  const thumbnailCacheRef = useRef(thumbnailCache)
+  thumbnailCacheRef.current = thumbnailCache
+  const inflightThumbnailFetches = useRef<Set<string>>(new Set())
   const appState = useRef<AppStateStatus>(AppState.currentState)
 
   // Fetch thumbnail for a video (non-blocking)
   const fetchThumbnail = useCallback(async (driveKey: string, videoId: string) => {
     if (isPear || !rpc) return // Desktop handles thumbnails differently
     const cacheKey = `${driveKey}:${videoId}`
-    if (thumbnailCache[cacheKey]) return // Already cached
+    if (thumbnailCacheRef.current[cacheKey]) return // Already cached
+    if (inflightThumbnailFetches.current.has(cacheKey)) return
+
+    inflightThumbnailFetches.current.add(cacheKey)
 
     try {
-      const result = await rpc.getVideoThumbnail({ channelKey: driveKey, videoId })
-      const url = result?.dataUrl || result?.url
-      if (result?.exists && url) {
-        setThumbnailCache(prev => ({ ...prev, [cacheKey]: url }))
+      const url = await fetchThumbnailUrlWithRetry({
+        rpc,
+        channelKey: driveKey,
+        videoId,
+        expectedPort: blobServerPort,
+      })
+
+      if (url) {
+        setThumbnailCache(prev => {
+          if (prev[cacheKey] === url) return prev
+          return { ...prev, [cacheKey]: url }
+        })
       }
     } catch {
       // Silently fail - thumbnails are optional
+    } finally {
+      inflightThumbnailFetches.current.delete(cacheKey)
     }
-  }, [rpc, thumbnailCache])
+  }, [rpc, blobServerPort])
 
   // Fetch thumbnails for a list of videos
   const fetchThumbnailsForVideos = useCallback((vids: VideoData[]) => {

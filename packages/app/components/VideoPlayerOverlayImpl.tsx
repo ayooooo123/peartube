@@ -25,6 +25,7 @@ import { Feather, Ionicons } from '@expo/vector-icons'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { useDownloads } from '@/lib/DownloadsContext'
+import { useCurrentDownloadStatus } from '@/hooks/useCurrentDownloadStatus'
 import { colors } from '@/lib/colors'
 import * as MediaSession from '../modules/expo-media-session/src'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
@@ -103,6 +104,7 @@ export function VideoPlayerOverlay() {
   const exitGateStableCountRef = useRef(0)
   const exitGateAttemptsRef = useRef(0)
   const playerLogKeyRef = useRef<string | null>(null)
+  const commentsLengthRef = useRef(0)
 
   // For landscape fullscreen, track screen dimensions as shared values
   // This allows animated styles to use current screen size without React re-renders
@@ -442,6 +444,11 @@ export function VideoPlayerOverlay() {
     return c?.authorKeyHex === identity.driveKey
   }, [identity?.driveKey])
 
+  // Sync comments.length to ref to break polling interval restart cycle
+  useEffect(() => {
+    commentsLengthRef.current = comments.length
+  }, [comments.length])
+
   const loadSocial = useCallback(async (page = 0, append = false, forceRefresh = false) => {
     if (!currentVideo?.channelKey || !currentVideo?.id) return
     if (!rpc?.listComments || !rpc?.getReactions) return
@@ -450,7 +457,7 @@ export function VideoPlayerOverlay() {
     const canonicalVid = currentVideo.id
     const pubBee = (currentVideo as any).publicBeeKey || undefined  // Pass for comments key discovery
 
-    const isInitialLoad = comments.length === 0
+    const isInitialLoad = commentsLengthRef.current === 0
     if (!append && (isInitialLoad || forceRefresh)) {
       setCommentsLoading(true)
     }
@@ -513,7 +520,7 @@ export function VideoPlayerOverlay() {
       setLoadingMoreComments(false)
       setRefreshingComments(false)
     }
-  }, [currentVideo?.channelKey, currentVideo?.id, comments.length, rpc])
+  }, [currentVideo?.channelKey, currentVideo?.id, rpc])
 
   // Reload social when the current video changes
   useEffect(() => {
@@ -2054,14 +2061,13 @@ export function VideoPlayerOverlay() {
   // Same activity shrinks, same player continues (single-player architecture)
 
   // Downloads context for browser-style download manager
-  const { addDownload, downloads } = useDownloads()
-
-  // Check if current video is being downloaded or already downloaded
-  const currentDownload = currentVideo ? downloads.find(d =>
-    d.id === `${currentVideo.channelKey}:${currentVideo.id || currentVideo.path}`
-  ) : null
-  const isDownloading = currentDownload?.status === 'downloading' || currentDownload?.status === 'queued'
-  const isDownloaded = currentDownload?.status === 'complete'
+  const { addDownload } = useDownloads()
+  const currentDownloadStatus = useCurrentDownloadStatus(
+    currentVideo?.id || currentVideo?.path,
+    currentVideo?.channelKey || currentVideo?.channel?.key
+  )
+  const isDownloading = currentDownloadStatus === 'downloading' || currentDownloadStatus === 'queued'
+  const isDownloaded = currentDownloadStatus === 'complete'
 
   // Handle video download - adds to downloads queue
   const handleDownload = useCallback(async () => {

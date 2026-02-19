@@ -18,6 +18,9 @@ import b4a from 'b4a';
 import Protomux from 'protomux';
 import c from 'compact-encoding';
 import { FEED_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
+import { logger } from './logger.js'
+
+const log = logger('PublicFeed')
 
 /**
  * @typedef {import('./types.js').PublicFeedEntry} PublicFeedEntry
@@ -64,7 +67,7 @@ export class PublicFeedManager {
     /** @type {number} */
     this._persistMaxEntries = 500
 
-    console.log('[PublicFeed] Initialized (topic:', b4a.toString(this.feedTopic, 'hex'), ')');
+    log.info('Initialized', { topic: b4a.toString(this.feedTopic, 'hex') })
   }
 
   /**
@@ -326,10 +329,10 @@ export class PublicFeedManager {
       protocol: PROTOCOL_NAME,
       messages: [{
         encoding: c.json,
-        onmessage: (msg) => {
-          console.log('[PublicFeed] Received message type:', msg?.type, 'keys:', msg?.keys?.length || 0);
-          this.handleMessage(msg, conn);
-        }
+      onmessage: (msg) => {
+        log.debug('Received message', { type: msg?.type, keys: msg?.keys?.length || 0 })
+        this.handleMessage(msg, conn);
+      }
       }],
       onopen: () => {
         console.log('[PublicFeed] Feed channel opened! Total feed connections:', this.feedConnections.size + 1);
@@ -397,7 +400,7 @@ export class PublicFeedManager {
    * @param {any} conn
    */
   handleMessage(msg, conn) {
-    console.log('[PublicFeed] handleMessage: type=', msg?.type);
+    log.debug('handleMessage', { type: msg?.type })
 
     // Handle HAVE_FEED - peer is sharing their known channels
     if (msg.type === 'HAVE_FEED') {
@@ -406,7 +409,7 @@ export class PublicFeedManager {
 
       // Prefer new entries format (with publicBeeKey)
       if (msg.entries && Array.isArray(msg.entries)) {
-        console.log('[PublicFeed] HAVE_FEED received with', msg.entries.length, 'entries (new format)');
+      log.debug('HAVE_FEED received (entries)', { count: msg.entries.length })
         for (const entry of msg.entries) {
           if (entry.driveKey && isValidKey(entry.publicBeeKey) && this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey)) {
             added++;
@@ -415,7 +418,7 @@ export class PublicFeedManager {
       }
       // Fallback to legacy keys array
       else if (msg.keys && Array.isArray(msg.keys)) {
-        console.log('[PublicFeed] HAVE_FEED received with', msg.keys.length, 'keys (legacy format)');
+      log.debug('HAVE_FEED received (legacy keys)', { count: msg.keys.length })
         for (const key of msg.keys) {
           if (this.addEntry(key, 'peer')) {
             added++;
@@ -423,7 +426,7 @@ export class PublicFeedManager {
         }
       }
 
-      console.log('[PublicFeed] Added', added, 'new channels from peer (total entries:', this.entries.size, ')');
+    log.debug('Merged feed entries', { added, total: this.entries.size })
       if (added > 0) {
         this.onFeedUpdate?.();
         this._schedulePersistDiscovered()

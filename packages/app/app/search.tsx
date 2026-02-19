@@ -8,9 +8,11 @@ import { useRouter, useLocalSearchParams } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from './_layout'
 import { VideoCard, VideoData } from '../components/video'
+import type { VideoData as CoreVideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
+import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 
 // Detect Pear desktop vs mobile (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
@@ -36,7 +38,7 @@ export default function SearchScreen() {
   const query = typeof params.q === 'string' ? params.q : ''
   const [queryInput, setQueryInput] = useState(query)
 
-  const { ready, rpc, platformEvents } = useApp()
+  const { ready, rpc, platformEvents, blobServerPort } = useApp()
   const { loadAndPlayVideo, closeVideo } = useVideoPlayerContext()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
@@ -59,6 +61,7 @@ export default function SearchScreen() {
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const thumbnailCacheRef = useRef(thumbnailCache)
   thumbnailCacheRef.current = thumbnailCache
+  const inflightThumbnailFetches = useRef<Set<string>>(new Set())
 
   // On Pear desktop, clear any active watch hash so background playback stops.
   useEffect(() => {
@@ -157,12 +160,23 @@ export default function SearchScreen() {
           if (!ck || !v.id) continue
           const cacheKey = `${ck}:${v.id}`
           if (thumbnailCacheRef.current[cacheKey]) continue
-          rpc.getVideoThumbnail({ channelKey: ck, videoId: v.id }).then((res: any) => {
-            const url = res?.dataUrl || res?.url
-            if (res?.exists && url) {
-              setThumbnailCache(prev => ({ ...prev, [cacheKey]: url }))
-            }
-          }).catch(() => {})
+          if (inflightThumbnailFetches.current.has(cacheKey)) continue
+          inflightThumbnailFetches.current.add(cacheKey)
+
+          void fetchThumbnailUrlWithRetry({
+            rpc,
+            channelKey: ck,
+            videoId: v.id,
+            expectedPort: blobServerPort,
+          }).then((url) => {
+            if (!url) return
+            setThumbnailCache(prev => {
+              if (prev[cacheKey] === url) return prev
+              return { ...prev, [cacheKey]: url }
+            })
+          }).catch(() => {}).finally(() => {
+            inflightThumbnailFetches.current.delete(cacheKey)
+          })
         }
       } catch (e: any) {
         console.error('[Search] Error:', e)
@@ -174,7 +188,7 @@ export default function SearchScreen() {
     }
 
     doSearch()
-  }, [query, ready, rpc])
+  }, [query, ready, rpc, blobServerPort])
 
   // Handle video click - match the homepage behavior per platform.
   const handleVideoPress = useCallback(async (video: VideoData) => {
@@ -236,6 +250,7 @@ export default function SearchScreen() {
       const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
         ? video.path
         : video.id
+      const videoAny = video as VideoData & { blobId?: string | null; blobsCoreKey?: string | null }
       console.log('[Search] Using videoRef:', videoRef)
 
       // Start prefetch early to warm peers before URL resolution
@@ -249,16 +264,34 @@ export default function SearchScreen() {
         channelKey,
         videoId: videoRef,
         publicBeeKey: video.publicBeeKey || undefined,
-        blobId: video.blobId || undefined,
-        blobsCoreKey: video.blobsCoreKey || undefined,
+        blobId: videoAny.blobId || undefined,
+        blobsCoreKey: videoAny.blobsCoreKey || undefined,
         mimeType: video.mimeType || undefined,
       })
       console.log('[Search] getVideoUrl result:', result)
 
       if (result?.url) {
         console.log('[Search] Playing video with url:', result.url)
-        // Pass video with channelKey guaranteed to be set
-        loadAndPlayVideo({ ...video, channelKey }, result.url)
+        const coreVideo: CoreVideoData = {
+          id: video.id,
+          title: video.title,
+          channelKey,
+          description: video.description || '',
+          path: video.path || video.id,
+          size: video.size || 0,
+          uploadedAt: video.uploadedAt || video.createdAt || Date.now(),
+          thumbnail: video.thumbnail ?? undefined,
+          duration: video.duration,
+          category: video.category,
+          mimeType: video.mimeType,
+          channel: video.channel ? { name: video.channel.name } : undefined,
+          thumbnailUrl: video.thumbnailUrl,
+          driveKey: video.driveKey,
+          publicBeeKey: video.publicBeeKey,
+          blobId: videoAny.blobId || null,
+          blobsCoreKey: videoAny.blobsCoreKey || null,
+        }
+        loadAndPlayVideo(coreVideo, result.url)
       } else {
         console.error('[Search] No url in result:', result)
       }

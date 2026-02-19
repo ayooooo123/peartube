@@ -189,18 +189,14 @@ export class TempFileReader {
    */
   _downloadInBackground(onProgress) {
     return new Promise((resolve, reject) => {
-      const options = {
-        method: 'GET',
-        hostname: this.parsedUrl.hostname,
-        port: this.parsedUrl.port || 80,
-        path: this.parsedUrl.pathname + this.parsedUrl.search
-      }
-
       let lastLoggedBytes = 0
       let lastProgressAt = Date.now()
       const downloadStart = Date.now()
       let settled = false
       let idleTimer = null
+      let activeReq = null
+      let reconnectAttempts = 0
+      const MAX_RECONNECT_ATTEMPTS = 100
 
       const finalize = (err) => {
         if (settled) return
@@ -211,77 +207,122 @@ export class TempFileReader {
         }
         if (err) {
           this.downloadError = err
+          this._maybeResolveBufferWait()
           reject(err)
           return
         }
         resolve()
       }
 
-      const req = http.request(options, (res) => {
-        if (res.statusCode !== 200) {
-          const err = new Error(`HTTP ${res.statusCode}`)
-          this.downloadError = err
-          res.resume()
-          finalize(err)
-          return
-        }
-
-        res.on('data', (chunk) => {
-          if (this.downloadAborted) return
-          lastProgressAt = Date.now()
-
-          try {
-            // Write chunk to temp file
-            fs.writeSync(this.writeFd, chunk, 0, chunk.length, this.downloadedBytes)
-            this.downloadedBytes += chunk.length
-
-            // Log progress
-            if (this.downloadedBytes - lastLoggedBytes >= LOG_INTERVAL_BYTES) {
-              const pct = Math.round((this.downloadedBytes / this.fileSize) * 100)
-              console.log('[TempFileReader] Download:', Math.round(this.downloadedBytes / 1024 / 1024) + 'MB (' + pct + '%)')
-              lastLoggedBytes = this.downloadedBytes
-
-              if (onProgress) {
-                onProgress(this.downloadedBytes, this.fileSize)
-              }
-            }
-
-            // Resolve buffer waiters as soon as threshold is reached
-            this._maybeResolveBufferWait()
-          } catch (err) {
-            console.error('[TempFileReader] Write error:', err.message)
-            this.downloadError = err
-            this._maybeResolveBufferWait()
-          }
-        })
-
-        res.on('end', () => {
+      const reconnect = (reason) => {
+        if (settled || this.downloadAborted) return
+        if (this.downloadedBytes >= this.fileSize) {
           this.downloadComplete = true
-          console.log('[TempFileReader] Download complete:', Math.round(this.downloadedBytes / 1024 / 1024) + 'MB')
-
-          // Close write fd
           if (this.writeFd !== null) {
             try { fs.closeSync(this.writeFd) } catch {}
             this.writeFd = null
           }
-
           this._maybeResolveBufferWait()
           finalize()
+          return
+        }
+
+        reconnectAttempts += 1
+        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+          finalize(new Error('Download reconnection limit reached: ' + reason))
+          return
+        }
+
+        const offsetMb = Math.round(this.downloadedBytes / 1024 / 1024)
+        console.warn('[TempFileReader] Reconnecting download at', offsetMb + 'MB', 'attempt', reconnectAttempts + '/' + MAX_RECONNECT_ATTEMPTS, 'reason:', reason)
+        setTimeout(() => {
+          if (settled || this.downloadAborted) return
+          startRequest()
+        }, Math.min(3000, reconnectAttempts * 200))
+      }
+
+      const startRequest = () => {
+        if (settled || this.downloadAborted || this.downloadComplete) return
+
+        const offset = this.downloadedBytes
+        const options = {
+          method: 'GET',
+          hostname: this.parsedUrl.hostname,
+          port: this.parsedUrl.port || 80,
+          path: this.parsedUrl.pathname + this.parsedUrl.search,
+          headers: offset > 0 ? { Range: `bytes=${offset}-` } : undefined,
+        }
+
+        const req = http.request(options, (res) => {
+          const expectedStatus = offset > 0 ? 206 : 200
+          if (res.statusCode !== expectedStatus) {
+            const err = new Error(`HTTP ${res.statusCode} (expected ${expectedStatus})`)
+            this.downloadError = err
+            res.resume()
+            finalize(err)
+            return
+          }
+
+          res.on('data', (chunk) => {
+            if (this.downloadAborted) return
+            lastProgressAt = Date.now()
+
+            try {
+              fs.writeSync(this.writeFd, chunk, 0, chunk.length, this.downloadedBytes)
+              this.downloadedBytes += chunk.length
+
+              if (this.downloadedBytes - lastLoggedBytes >= LOG_INTERVAL_BYTES) {
+                const pct = Math.round((this.downloadedBytes / this.fileSize) * 100)
+                console.log('[TempFileReader] Download:', Math.round(this.downloadedBytes / 1024 / 1024) + 'MB (' + pct + '%)')
+                lastLoggedBytes = this.downloadedBytes
+
+                if (onProgress) {
+                  onProgress(this.downloadedBytes, this.fileSize)
+                }
+              }
+
+              this._maybeResolveBufferWait()
+            } catch (err) {
+              console.error('[TempFileReader] Write error:', err.message)
+              finalize(err)
+            }
+          })
+
+          res.on('end', () => {
+            if (settled || this.downloadAborted) return
+            if (this.downloadedBytes >= this.fileSize) {
+              this.downloadComplete = true
+              console.log('[TempFileReader] Download complete:', Math.round(this.downloadedBytes / 1024 / 1024) + 'MB')
+
+              if (this.writeFd !== null) {
+                try { fs.closeSync(this.writeFd) } catch {}
+                this.writeFd = null
+              }
+
+              this._maybeResolveBufferWait()
+              finalize()
+              return
+            }
+
+            reconnect('upstream ended early')
+          })
+
+          res.on('error', (err) => {
+            if (settled || this.downloadAborted) return
+            reconnect(err?.message || 'response error')
+          })
         })
 
-        res.on('error', (err) => {
-          console.error('[TempFileReader] Download error:', err.message)
-          this._maybeResolveBufferWait()
-          finalize(err)
+        activeReq = req
+        this.downloadRequest = req
+
+        req.on('error', (err) => {
+          if (settled || this.downloadAborted) return
+          reconnect(err?.message || 'request error')
         })
-      })
 
-      req.on('error', (err) => {
-        this._maybeResolveBufferWait()
-        finalize(err)
-      })
-
-      this.downloadRequest = req
+        req.end()
+      }
 
       idleTimer = setInterval(() => {
         if (settled || this.downloadAborted || this.downloadComplete) return
@@ -289,14 +330,13 @@ export class TempFileReader {
         if (idleFor >= DOWNLOAD_IDLE_TIMEOUT_MS) {
           const elapsed = Math.round((Date.now() - downloadStart) / 1000)
           const idleSecs = Math.round(idleFor / 1000)
-          const err = new Error(`Download stalled for ${idleSecs}s (elapsed ${elapsed}s)`)
-          console.error('[TempFileReader] Download idle timeout:', err.message)
-          try { req.destroy() } catch {}
-          finalize(err)
+          console.error('[TempFileReader] Download idle timeout:', `idle ${idleSecs}s elapsed ${elapsed}s`)
+          try { activeReq?.destroy() } catch {}
+          reconnect('idle timeout')
         }
       }, 1000)
 
-      req.end()
+      startRequest()
     })
   }
 

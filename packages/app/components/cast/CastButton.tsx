@@ -33,10 +33,6 @@ export function CastButton({
     return null
   }
 
-  if (!available) {
-    return null
-  }
-
   return (
     <Pressable
       style={styles.button}

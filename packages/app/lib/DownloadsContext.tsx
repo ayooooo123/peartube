@@ -8,19 +8,8 @@ import { Platform, Alert } from 'react-native'
 import { events } from '@peartube/platform/rpc'
 import type { VideoData } from '@peartube/core'
 
-// Conditionally import saveToDownloads for mobile platforms
-let saveToDownloads: ((sourcePath: string, filename: string, mimeType: string) => Promise<string>) | null = null
-if (Platform.OS !== 'web') {
-  try {
-    const DownloadsSave = require('expo-downloads-save')
-    saveToDownloads = DownloadsSave.saveToDownloads
-  } catch (e) {
-    console.log('[Downloads] expo-downloads-save not available:', e)
-  }
-}
-
 // Download item status
-export type DownloadStatus = 'queued' | 'downloading' | 'saving' | 'complete' | 'error' | 'cancelled'
+export type DownloadStatus = 'queued' | 'downloading' | 'complete' | 'error' | 'cancelled'
 
 // Download item interface
 export interface DownloadItem {
@@ -46,7 +35,9 @@ const progressListeners = new Set<DownloadProgressListener>()
 
 export const downloadProgressEventEmitter = {
   emit: (id: string, progress: number, bytesDownloaded: number, totalBytes: number) => {
-    progressListeners.forEach(listener => listener(id, progress, bytesDownloaded, totalBytes))
+    progressListeners.forEach(listener => {
+      listener(id, progress, bytesDownloaded, totalBytes)
+    })
   },
   subscribe: (listener: DownloadProgressListener) => {
     progressListeners.add(listener)
@@ -109,7 +100,7 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
   const speedTrackers = useRef<Map<string, { lastBytes: number; lastTime: number }>>(new Map())
 
   // Calculate active downloads count
-  const activeCount = downloads.filter(d => d.status === 'downloading' || d.status === 'queued' || d.status === 'saving').length
+  const activeCount = downloads.filter(d => d.status === 'downloading' || d.status === 'queued').length
 
   // Handle progress update from any source
   const handleProgressUpdate = useCallback((id: string, progress: number, bytesDownloaded: number, totalBytes: number) => {
@@ -161,7 +152,53 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     return () => { unsubscribe() }
   }, [handleProgressUpdate])
 
-  // Add a download to the queue and start it
+  const downloadForWeb = useCallback(async (id: string, url: string, filename: string, signal: AbortSignal) => {
+    console.log('[Downloads] Web download:', filename, 'from:', url)
+
+    const response = await fetch(url, { signal })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+    const contentLength = response.headers.get('content-length')
+    const totalBytes = contentLength ? parseInt(contentLength, 10) : 0
+    console.log('[Downloads] Content-Length:', totalBytes)
+
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Response body not readable')
+    }
+
+    const chunks: ArrayBuffer[] = []
+    let bytesReceived = 0
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+
+      const copy = new ArrayBuffer(value.byteLength)
+      new Uint8Array(copy).set(value)
+      chunks.push(copy)
+      bytesReceived += value.length
+
+      const progress = totalBytes > 0 ? Math.round((bytesReceived / totalBytes) * 100) : 0
+      downloadProgressEventEmitter.emit(id, progress, bytesReceived, totalBytes)
+    }
+
+    const blob = new Blob(chunks)
+    const blobUrl = URL.createObjectURL(blob)
+    console.log('[Downloads] Download complete, size:', blob.size)
+
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(blobUrl)
+
+    downloadProgressEventEmitter.emit(id, 100, blob.size, blob.size)
+  }, [])
+
   const addDownload = useCallback(async (video: VideoData, rpc: any) => {
     const id = `${video.channelKey}:${video.id || video.path}`
 
@@ -225,8 +262,6 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
 
         await downloadForWeb(id, blobUrl, filename, abortController.signal)
       } else {
-        // Mobile: Backend downloads directly to file using bare-fs
-        // Progress events are emitted by the backend and captured by our progress listener
         const result = await rpc.downloadVideo({
           channelKey: video.channelKey,
           videoId: video.id || video.path,
@@ -240,59 +275,16 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
 
         console.log('[Downloads] Backend saved to:', result.filePath)
 
-        // Now copy from app storage to public Downloads folder
-        if (saveToDownloads && result.filePath) {
-          setDownloads(prev => prev.map(d => d.id === id ? {
-            ...d,
-            status: 'saving' as DownloadStatus,
-            progress: 100
-          } : d))
+        setDownloads(prev => prev.map(d => d.id === id ? {
+          ...d,
+          filePath: result.filePath,
+          totalBytes: result.size || video.size || 0
+        } : d))
 
-          const mimeType = (video as any).mimeType || 'video/mp4'
-          const ext = getExtension(mimeType)
-          const filename = `${sanitizeFilename(video.title)}_${video.id || 'video'}.${ext}`
-
-          try {
-            const finalPath = await saveToDownloads(result.filePath, filename, mimeType)
-            console.log('[Downloads] Saved to Downloads:', finalPath)
-
-            setDownloads(prev => prev.map(d => d.id === id ? {
-              ...d,
-              filePath: finalPath,
-              totalBytes: result.size || video.size || 0
-            } : d))
-
-            Alert.alert(
-              'Download Complete',
-              `"${video.title}" saved to Downloads folder.`
-            )
-          } catch (saveError: any) {
-            console.error('[Downloads] Failed to save to Downloads:', saveError)
-            // Fall back to showing app storage path
-            setDownloads(prev => prev.map(d => d.id === id ? {
-              ...d,
-              filePath: result.filePath,
-              totalBytes: result.size || video.size || 0
-            } : d))
-
-            Alert.alert(
-              'Download Complete',
-              `"${video.title}" downloaded. Saved to app storage.`
-            )
-          }
-        } else {
-          // No saveToDownloads available, just use app storage path
-          setDownloads(prev => prev.map(d => d.id === id ? {
-            ...d,
-            filePath: result.filePath,
-            totalBytes: result.size || video.size || 0
-          } : d))
-
-          Alert.alert(
-            'Download Complete',
-            `"${video.title}" downloaded.`
-          )
-        }
+        Alert.alert(
+          'Download Complete',
+          `"${video.title}" saved to Downloads folder.`
+        )
       }
 
       // Mark as complete
@@ -321,73 +313,7 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
       abortControllers.current.delete(id)
       speedTrackers.current.delete(id)
     }
-  }, [downloads])
-
-  // Download for web platform
-  const downloadForWeb = async (id: string, url: string, filename: string, signal: AbortSignal) => {
-    console.log('[Downloads] Web download:', filename, 'from:', url)
-
-    const response = await fetch(url, { signal })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-
-    const contentLength = response.headers.get('content-length')
-    const totalBytes = contentLength ? parseInt(contentLength, 10) : 0
-    console.log('[Downloads] Content-Length:', totalBytes)
-
-    // Stream the response to track progress
-    const reader = response.body?.getReader()
-    if (!reader) {
-      throw new Error('Response body not readable')
-    }
-
-    const chunks: Uint8Array[] = []
-    let bytesReceived = 0
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      chunks.push(value)
-      bytesReceived += value.length
-
-      // Emit progress
-      const progress = totalBytes > 0 ? Math.round((bytesReceived / totalBytes) * 100) : 0
-      downloadProgressEventEmitter.emit(id, progress, bytesReceived, totalBytes)
-    }
-
-    // Combine chunks into blob
-    const blob = new Blob(chunks)
-    const blobUrl = URL.createObjectURL(blob)
-    console.log('[Downloads] Download complete, size:', blob.size)
-
-    // Create and click download link
-    const a = document.createElement('a')
-    a.href = blobUrl
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(blobUrl)
-
-    // Final progress update
-    downloadProgressEventEmitter.emit(id, 100, blob.size, blob.size)
-  }
-
-  // Download for mobile (iOS/Android) - handled by backend using bare-fs
-  // The backend streams the file to disk with progress events
-  // This function is not used on mobile - download happens in addDownload via RPC
-  const downloadForMobile = async (
-    id: string,
-    url: string,
-    filename: string,
-    totalBytes: number,
-    signal: AbortSignal
-  ) => {
-    // On mobile, the backend handles the download using bare-fs
-    // Progress is emitted via RPC events which we listen to in the progress subscriber
-    // This function should not be called on mobile - see addDownload
-    console.log('[Downloads] Mobile download handled by backend:', filename)
-  }
+  }, [downloads, downloadForWeb])
 
   // Cancel a download
   const cancelDownload = useCallback((id: string) => {

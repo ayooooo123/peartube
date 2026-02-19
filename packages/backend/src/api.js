@@ -636,30 +636,94 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @returns {Promise<{url?: string, exists: boolean}>}
      */
     async getVideoThumbnail(driveKey, videoId) {
-      console.log('[API] GET_VIDEO_THUMBNAIL:', driveKey?.slice(0, 16), videoId);
       try {
-        // Get video metadata to find thumbnail blob info
-        const meta = await this.getVideoData(driveKey, videoId);
+        const normalizeVideoId = (value) => {
+          if (!value || typeof value !== 'string') return value
+          if (value.startsWith('/videos/')) {
+            const match = value.match(/\/videos\/([^.\/]+)/)
+            if (match?.[1]) return match[1]
+          }
+          return value
+        }
+
+        const targetVideoId = normalizeVideoId(videoId)
+
+        const getThumbnailMetaFromCachedList = () => {
+          const cached = listVideosCache.get(driveKey)
+          const items = Array.isArray(cached?.value) ? cached.value : []
+          if (!items.length) return null
+
+          const match = items.find((v) => {
+            if (!v || typeof v !== 'object') return false
+            const cachedId = normalizeVideoId(v.id || v.videoId || v.path)
+            return cachedId === targetVideoId
+          })
+
+          if (!match || typeof match !== 'object') return null
+
+          if (match.thumbnailBlobId && match.thumbnailBlobsCoreKey) {
+            return {
+              thumbnailBlobId: match.thumbnailBlobId,
+              thumbnailBlobsCoreKey: match.thumbnailBlobsCoreKey,
+              thumbnailMimeType: match.thumbnailMimeType,
+              thumbnail: match.thumbnail,
+            }
+          }
+
+          if (typeof match.thumbnail === 'string' && match.thumbnail.length > 0) {
+            return { thumbnail: match.thumbnail }
+          }
+
+          return null
+        }
+
+        let resolvedPublicBeeKey = null;
+        try {
+          const feedManager = publicFeed && typeof publicFeed === 'object' ? publicFeed : null;
+          const feed = feedManager && typeof feedManager.getFeed === 'function'
+            ? feedManager.getFeed()
+            : [];
+          const entry = Array.isArray(feed)
+            ? feed.find((e) => {
+                const key = e && typeof e === 'object'
+                  ? (e.channelKey || e.driveKey || null)
+                  : null;
+                return key === driveKey;
+              })
+            : null;
+          resolvedPublicBeeKey = entry && typeof entry === 'object' ? (entry.publicBeeKey || null) : null;
+        } catch {}
+
+        let meta = null;
+        const cachedMeta = getThumbnailMetaFromCachedList()
+        if (cachedMeta) {
+          meta = cachedMeta
+        }
+
+        if (resolvedPublicBeeKey) {
+          meta = meta || await this.getVideoData(driveKey, targetVideoId, resolvedPublicBeeKey);
+        }
+        if (!meta) {
+          meta = await this.getVideoData(driveKey, targetVideoId);
+        }
         if (!meta) {
           return { exists: false };
         }
 
+        if (!meta.thumbnailBlobId && !meta.thumbnailBlobsCoreKey && typeof meta.thumbnail === 'string' && meta.thumbnail.length > 0) {
+          return { url: meta.thumbnail, exists: true };
+        }
+
         // New Hyperblobs-based thumbnail
         if (meta.thumbnailBlobId && meta.thumbnailBlobsCoreKey) {
-          console.log('[API] GET_VIDEO_THUMBNAIL: thumbnailBlobsCoreKey length:', meta.thumbnailBlobsCoreKey?.length);
-          console.log('[API] GET_VIDEO_THUMBNAIL: thumbnailBlobsCoreKey value:', meta.thumbnailBlobsCoreKey);
           const keyBuffer = b4a.from(meta.thumbnailBlobsCoreKey, 'hex');
-          console.log('[API] GET_VIDEO_THUMBNAIL: keyBuffer length:', keyBuffer.length, 'bytes, isBuffer:', b4a.isBuffer(keyBuffer));
-          console.log('[API] GET_VIDEO_THUMBNAIL: calling store.get...');
           
           let blobsCore;
           try {
             blobsCore = ctx.store.get(keyBuffer);
-            console.log('[API] GET_VIDEO_THUMBNAIL: store.get returned, calling ready...');
             await blobsCore.ready();
-            console.log('[API] GET_VIDEO_THUMBNAIL: ready done, blobsCore.key length:', blobsCore.key?.length, 'bytes');
           } catch (storeErr) {
-            console.error('[API] GET_VIDEO_THUMBNAIL: store.get or ready FAILED:', storeErr.message, storeErr.stack);
+            console.error('[API] GET_VIDEO_THUMBNAIL: store.get/ready failed:', storeErr.message);
             throw storeErr;
           }
 
@@ -667,6 +731,13 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           if (ctx.swarm && blobsCore.discoveryKey) {
             try { ctx.swarm.join(blobsCore.discoveryKey) } catch {}
           }
+
+          try {
+            await Promise.race([
+              blobsCore.update({ wait: true }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 1500))
+            ]);
+          } catch {}
 
           // Parse blobId string to blob object
           const parts = meta.thumbnailBlobId.split(':').map(Number);
@@ -677,15 +748,16 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             byteLength: parts[3]
           };
 
-          console.log('[API] GET_VIDEO_THUMBNAIL: blobsCore.key hex:', blobsCore.key ? b4a.toString(blobsCore.key, 'hex') : 'NULL');
-          console.log('[API] GET_VIDEO_THUMBNAIL: ctx.blobServer exists:', !!ctx.blobServer);
+          const thumbnailMimeType = typeof meta.thumbnailMimeType === 'string' && meta.thumbnailMimeType.length > 0
+            ? meta.thumbnailMimeType
+            : 'image/webp';
+
           const url = ctx.blobServer.getLink(blobsCore.key, {
             blob,
-          type: 'image/jpeg',
+          type: thumbnailMimeType,
           host: ctx.blobServerHost || '127.0.0.1',
           port: ctx.blobServer?.port || ctx.blobServerPort
           });
-          console.log('[API] Thumbnail URL (Hyperblobs):', url);
           return { url, exists: true };
         }
 

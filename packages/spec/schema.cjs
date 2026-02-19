@@ -255,7 +255,8 @@ ns.register({
   fields: [
     { name: 'channelKey', type: 'string', required: true },
     { name: 'videoId', type: 'string', required: true },
-    { name: 'destPath', type: 'string', required: true }
+    { name: 'destPath', type: 'string', required: true },
+    { name: 'publicBeeKey', type: 'string', required: false }
   ]
 })
 

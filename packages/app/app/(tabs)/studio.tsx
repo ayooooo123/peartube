@@ -41,7 +41,7 @@ function formatEta(seconds: number): string {
 export default function StudioScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
-  const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos } = useApp()
+  const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos, removeVideo } = useApp()
   const { pauseVideo, closeVideo, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo } = useVideoPlayerContext()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -63,6 +63,21 @@ export default function StudioScreen() {
   const thumbnailGenIdRef = useRef(0)
   const [pickingVideo, setPickingVideo] = useState(false)
   const pickingVideoRef = useRef(false)
+
+  const uploadThumbnailForVideo = useCallback(async (videoId: string, thumbPath: string) => {
+    if (!rpc || !videoId || !thumbPath) return false
+
+    const result = await rpc.setVideoThumbnailFromFile({
+      videoId,
+      filePath: thumbPath,
+    })
+
+    if (!result?.success) {
+      throw new Error(result?.error || 'setVideoThumbnailFromFile failed')
+    }
+
+    return true
+  }, [rpc])
 
   // Generate thumbnail from video at 10%
   const generateThumbnail = useCallback(async (videoUri: string, durationMs?: number) => {
@@ -346,11 +361,8 @@ export default function StudioScreen() {
         if (thumbnailFilePath && videoId && rpc) {
           console.log('[Studio] Uploading thumbnail from file:', thumbnailFilePath)
           try {
-            await rpc.setVideoThumbnailFromFile({
-              videoId,
-              filePath: thumbnailFilePath,
-            })
-            console.log('[Studio] Thumbnail uploaded from file')
+            const uploaded = await uploadThumbnailForVideo(videoId, thumbnailFilePath)
+            console.log('[Studio] Thumbnail upload result:', uploaded)
           } catch (thumbErr) {
             console.error('[Studio] Failed to upload thumbnail:', thumbErr)
             // Don't fail the whole upload if thumbnail fails
@@ -390,11 +402,8 @@ export default function StudioScreen() {
         if (thumbnailFilePath && videoId) {
           console.log('[Studio] Uploading thumbnail from file:', thumbnailFilePath)
           try {
-            await rpc.setVideoThumbnailFromFile({
-              videoId,
-              filePath: thumbnailFilePath,
-            })
-            console.log('[Studio] Thumbnail uploaded from file')
+            const uploaded = await uploadThumbnailForVideo(videoId, thumbnailFilePath)
+            console.log('[Studio] Thumbnail upload result:', uploaded)
           } catch (thumbErr: any) {
             console.error('[Studio] Failed to upload thumbnail:', thumbErr?.message || thumbErr)
             // Don't fail the whole upload if thumbnail fails
@@ -429,9 +438,8 @@ export default function StudioScreen() {
 
   const myVideos = videos.filter((v) => v.channelKey === identity?.driveKey)
 
-  const ListHeaderComponent = () => {
-    return (
-      <View>
+  const listHeaderComponent = (
+    <View>
         {/* Upload Section */}
         <View className="py-5 border-b border-pear-border">
           {selectedVideo ? (
@@ -609,9 +617,8 @@ export default function StudioScreen() {
         <View className="py-4">
           <Text className="text-headline text-pear-text">Your Videos ({myVideos.length})</Text>
         </View>
-      </View>
-    )
-  }
+    </View>
+  )
 
   const handleDeleteVideo = async (videoId: string, videoTitle: string) => {
     const confirmDelete = () => {
@@ -634,20 +641,20 @@ export default function StudioScreen() {
     const confirmed = await confirmDelete()
     if (!confirmed) return
 
+    const removedVideo = videos.find(v => v.id === videoId)
+    removeVideo(videoId)
+
     try {
       const result = await rpc?.deleteVideo({ videoId })
       if (result?.success) {
-        // Reload videos after deletion
         if (identity?.driveKey) {
-          await loadVideos(identity.driveKey)
-        }
-        if (Platform.OS === 'web') {
-          window.alert('Video deleted successfully')
-        } else {
-          Alert.alert('Deleted', 'Video deleted successfully')
+          loadVideos(identity.driveKey, { allowEmptyResult: true }).catch(() => {})
         }
       } else {
         const errorMsg = result?.error || 'Failed to delete video'
+        if (identity?.driveKey) {
+          loadVideos(identity.driveKey).catch(() => {})
+        }
         if (Platform.OS === 'web') {
           window.alert(`Error: ${errorMsg}`)
         } else {
@@ -656,6 +663,9 @@ export default function StudioScreen() {
       }
     } catch (err: any) {
       console.error('[Studio] Delete failed:', err)
+      if (identity?.driveKey) {
+        loadVideos(identity.driveKey).catch(() => {})
+      }
       const errorMsg = err.message || 'Failed to delete video'
       if (Platform.OS === 'web') {
         window.alert(`Error: ${errorMsg}`)
@@ -692,7 +702,7 @@ export default function StudioScreen() {
         data={myVideos}
         keyExtractor={(item) => item.id}
         keyboardShouldPersistTaps="handled"
-        ListHeaderComponent={ListHeaderComponent}
+        ListHeaderComponent={listHeaderComponent}
         contentContainerStyle={{
           paddingHorizontal: 20,
           paddingBottom: insets.bottom + 16,

@@ -117,6 +117,7 @@ export function createIdentityManager({ ctx }) {
             // Backward compat: keep driveKey as the canonical channel key for app compatibility.
             channelKey,
             channelEncryptionKey: i.channelEncryptionKey || null,
+            channelWriterKeyName: i.channelWriterKeyName || null,
             driveKey: channelKey,
             isActive: i.publicKey === activeIdentity,
             createdAt: typeof i.createdAt === 'number' && i.createdAt >= 0
@@ -168,7 +169,11 @@ export function createIdentityManager({ ctx }) {
       log.info(' Generated keypair:', publicKey.slice(0, 16));
 
       // Create the channel's multi-writer metadata log (Autobase)
-      const { channel, channelKeyHex, encryptionKeyHex } = await createChannel(ctx, { encrypt: false })
+      const writerKeyName = `peartube-channel-writer:${publicKey}`
+      const { channel, channelKeyHex, encryptionKeyHex } = await createChannel(ctx, {
+        encrypt: false,
+        writerKeyName
+      })
       await channel.updateMetadata({ name, description: '', avatar: null })
       await channel.ensureLocalBlobDrive({ deviceName: name })
 
@@ -182,6 +187,7 @@ export function createIdentityManager({ ctx }) {
         driveKey: channelKeyHex,
         channelKey: channelKeyHex,
         channelEncryptionKey: encryptionKeyHex,
+        channelWriterKeyName: writerKeyName,
         name,
         createdAt: Date.now(),
         // secretKey removed for security - derive from mnemonic when needed
@@ -238,6 +244,7 @@ export function createIdentityManager({ ctx }) {
         driveKey: channelKeyHex, // app compat: driveKey used as channel key throughout the UI
         channelKey: channelKeyHex,
         channelEncryptionKey: null,
+        channelWriterKeyName: null,
         name,
         createdAt: Date.now(),
         // secretKey removed for security
@@ -279,7 +286,11 @@ export function createIdentityManager({ ctx }) {
       }
 
       // Recovery currently creates a fresh channel.
-      const { channelKeyHex, encryptionKeyHex, channel } = await createChannel(ctx, { encrypt: false })
+      const writerKeyName = `peartube-channel-writer:${publicKey}`
+      const { channelKeyHex, encryptionKeyHex, channel } = await createChannel(ctx, {
+        encrypt: false,
+        writerKeyName
+      })
       await channel.updateMetadata({ name: name || `Recovered ${Date.now()}`, description: '', avatar: null })
       await channel.ensureLocalBlobDrive({ deviceName: name || '' })
 
@@ -290,6 +301,7 @@ export function createIdentityManager({ ctx }) {
         driveKey: channelKeyHex,
         channelKey: channelKeyHex,
         channelEncryptionKey: encryptionKeyHex,
+        channelWriterKeyName: writerKeyName,
         name: name || `Recovered ${Date.now()}`,
         createdAt: Date.now(),
         // secretKey removed for security - derive from mnemonic when needed
@@ -374,7 +386,10 @@ export function createIdentityManager({ ctx }) {
       for (const identity of identities) {
         if (identity.channelKey) {
           try {
-            await loadChannel(ctx, identity.channelKey, { encryptionKeyHex: identity.channelEncryptionKey || null })
+            await loadChannel(ctx, identity.channelKey, {
+              encryptionKeyHex: identity.channelEncryptionKey || null,
+              writerKeyName: identity.channelWriterKeyName || null
+            })
           } catch (err) {
             log.error(' Failed to load channel:', identity.channelKey?.slice(0, 16), err.message)
           }
@@ -392,7 +407,33 @@ export function createIdentityManager({ ctx }) {
       const full = identities.find(i => i.publicKey === active.publicKey)
       const channelKey = full?.channelKey || active.driveKey
       if (!channelKey) return null
-      return await loadChannel(ctx, channelKey, { encryptionKeyHex: full?.channelEncryptionKey || null })
+
+      try {
+        return await loadChannel(ctx, channelKey, {
+          encryptionKeyHex: full?.channelEncryptionKey || null,
+          writerKeyName: full?.channelWriterKeyName || null,
+          preferWritable: true
+        })
+      } catch (err) {
+        if (!full?.channelWriterKeyName) throw err
+
+        log.error(' Active channel load with writer key failed, retrying without writer key:', err?.message)
+
+        const fallback = await loadChannel(ctx, channelKey, {
+          encryptionKeyHex: full?.channelEncryptionKey || null,
+          writerKeyName: null,
+          preferWritable: true
+        })
+
+        identities = identities.map(i =>
+          i.publicKey === full.publicKey
+            ? { ...i, channelWriterKeyName: null }
+            : i
+        )
+        await this.saveIdentities()
+
+        return fallback
+      }
     }
   };
 }

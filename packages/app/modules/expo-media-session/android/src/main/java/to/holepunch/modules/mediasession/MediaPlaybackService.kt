@@ -6,9 +6,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.os.PowerManager
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.support.v4.media.session.MediaControllerCompat
@@ -22,16 +24,23 @@ class MediaPlaybackService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "peartube_media_playback_v2"
         private const val CHANNEL_NAME = "Media Playback"
+        private const val LOCK_TAG = "PearTube:CastKeepalive"
     }
     
     private var mediaSessionToken: MediaSessionCompat.Token? = null
     private var isForeground = false
+    private var isCastMode = false
+    private var castTitle: String? = null
+    private var castSubtitle: String? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
     
     override fun onBind(intent: Intent?): IBinder? = null
     
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        initLocks()
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -52,40 +61,125 @@ class MediaPlaybackService : Service() {
                 updateNotification()
                 return START_NOT_STICKY
             }
+            MediaSessionModule.ACTION_CAST_START -> {
+                isCastMode = true
+                castTitle = intent.getStringExtra(MediaSessionModule.EXTRA_CAST_TITLE)
+                castSubtitle = intent.getStringExtra(MediaSessionModule.EXTRA_CAST_SUBTITLE)
+                ensureForeground()
+                acquireLocks()
+                updateNotification()
+                return START_REDELIVER_INTENT
+            }
+            MediaSessionModule.ACTION_CAST_UPDATE -> {
+                if (!isCastMode) {
+                    isCastMode = true
+                }
+                castTitle = intent.getStringExtra(MediaSessionModule.EXTRA_CAST_TITLE) ?: castTitle
+                castSubtitle = intent.getStringExtra(MediaSessionModule.EXTRA_CAST_SUBTITLE) ?: castSubtitle
+                ensureForeground()
+                acquireLocks()
+                updateNotification()
+                return START_REDELIVER_INTENT
+            }
+            MediaSessionModule.ACTION_CAST_STOP -> {
+                isCastMode = false
+                castTitle = null
+                castSubtitle = null
+                releaseLocks()
+                if (mediaSessionToken == null) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    isForeground = false
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                updateNotification()
+                return START_NOT_STICKY
+            }
             MediaSessionModule.ACTION_PIP_PLAY -> {
                 android.util.Log.d("MediaPlaybackService", "PiP play action received")
                 ensureForeground()
                 PipServiceBridge.onPlay()
-                return START_NOT_STICKY
+                return if (isCastMode) START_REDELIVER_INTENT else START_NOT_STICKY
             }
             MediaSessionModule.ACTION_PIP_PAUSE -> {
                 android.util.Log.d("MediaPlaybackService", "PiP pause action received")
                 ensureForeground()
                 PipServiceBridge.onPause()
-                return START_NOT_STICKY
+                return if (isCastMode) START_REDELIVER_INTENT else START_NOT_STICKY
             }
             MediaSessionModule.ACTION_PIP_REWIND -> {
                 android.util.Log.d("MediaPlaybackService", "PiP rewind action received")
                 ensureForeground()
                 PipServiceBridge.onRewind()
-                return START_NOT_STICKY
+                return if (isCastMode) START_REDELIVER_INTENT else START_NOT_STICKY
             }
             MediaSessionModule.ACTION_PIP_FORWARD -> {
                 android.util.Log.d("MediaPlaybackService", "PiP forward action received")
                 ensureForeground()
                 PipServiceBridge.onForward()
-                return START_NOT_STICKY
+                return if (isCastMode) START_REDELIVER_INTENT else START_NOT_STICKY
             }
         }
 
         ensureForeground()
-        return START_NOT_STICKY
+        return if (isCastMode) START_REDELIVER_INTENT else START_NOT_STICKY
     }
     
     override fun onDestroy() {
         super.onDestroy()
+        releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
         isForeground = false
+    }
+
+    private fun initLocks() {
+        try {
+            val powerManager = getSystemService(POWER_SERVICE) as? PowerManager
+            wakeLock = powerManager?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, LOCK_TAG)?.apply {
+                setReferenceCounted(false)
+            }
+
+            val wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager
+            wifiLock = wifiManager?.createWifiLock(WifiManager.WIFI_MODE_FULL, LOCK_TAG)?.apply {
+                setReferenceCounted(false)
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MediaPlaybackService", "Failed to initialize power locks: ${e.message}")
+        }
+    }
+
+    private fun acquireLocks() {
+        try {
+            if (wakeLock?.isHeld != true) {
+                wakeLock?.acquire()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MediaPlaybackService", "Failed to acquire wake lock: ${e.message}")
+        }
+
+        try {
+            if (wifiLock?.isHeld != true) {
+                wifiLock?.acquire()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MediaPlaybackService", "Failed to acquire Wi-Fi lock: ${e.message}")
+        }
+    }
+
+    private fun releaseLocks() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (_: Exception) {
+        }
+
+        try {
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+            }
+        } catch (_: Exception) {
+        }
     }
 
     private fun ensureForeground() {
@@ -133,6 +227,21 @@ class MediaPlaybackService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
         }
+
+        if (isCastMode) {
+            val castBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentTitle(castTitle ?: "Casting to Chromecast")
+                .setContentText(castSubtitle ?: "Keeping cast alive")
+                .setOngoing(true)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+                .setOnlyAlertOnce(true)
+
+            contentIntent?.let { castBuilder.setContentIntent(it) }
+            return castBuilder.build()
+        }
         
         val controller = mediaSessionToken?.let { token ->
             try {
@@ -160,8 +269,12 @@ class MediaPlaybackService : Service() {
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(title ?: "PearTube")
-            .setContentText(artist ?: if (isPlaying) "Playing video" else "Paused")
+            .setContentTitle(
+                if (isCastMode) (castTitle ?: "Casting to Chromecast") else (title ?: "PearTube")
+            )
+            .setContentText(
+                if (isCastMode) (castSubtitle ?: "Keeping cast alive") else (artist ?: if (isPlaying) "Playing video" else "Paused")
+            )
             .setOngoing(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

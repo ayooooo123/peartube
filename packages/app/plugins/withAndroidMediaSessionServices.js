@@ -37,6 +37,8 @@ function withAndroidMediaSessionServices(config) {
     const manifest = config.modResults.manifest;
 
     ensurePermission(manifest, 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK');
+    ensurePermission(manifest, 'android.permission.FOREGROUND_SERVICE');
+    ensurePermission(manifest, 'android.permission.WAKE_LOCK');
     ensurePermission(manifest, 'android.permission.POST_NOTIFICATIONS');
 
     const application = manifest.application?.[0];

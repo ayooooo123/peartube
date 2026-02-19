@@ -6,8 +6,9 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { Alert } from 'react-native'
+import { Alert, Platform } from 'react-native'
 import { useApp } from '@/lib/AppContext'
+import * as MediaSession from '../../modules/expo-media-session/src'
 
 export interface CastDevice {
   id: string
@@ -198,6 +199,32 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
   })
 
   const mountedRef = useRef(true)
+  const castKeepaliveActiveRef = useRef(false)
+
+  const startCastKeepalive = useCallback(async (title: string, deviceName: string) => {
+    if (Platform.OS !== 'android') return
+    try {
+      if (castKeepaliveActiveRef.current) {
+        await MediaSession.updateCastForegroundService(title || 'PearTube', `Casting to ${deviceName}`)
+      } else {
+        await MediaSession.startCastForegroundService(title || 'PearTube', `Casting to ${deviceName}`)
+        castKeepaliveActiveRef.current = true
+      }
+    } catch (err) {
+      console.warn('[useCast] Failed to start cast keepalive service:', err)
+    }
+  }, [])
+
+  const stopCastKeepalive = useCallback(async () => {
+    if (Platform.OS !== 'android' || !castKeepaliveActiveRef.current) return
+    try {
+      await MediaSession.stopCastForegroundService()
+    } catch (err) {
+      console.warn('[useCast] Failed to stop cast keepalive service:', err)
+    } finally {
+      castKeepaliveActiveRef.current = false
+    }
+  }, [])
 
   // Serialize Chromecast/FCast commands that are known to be crash-prone when fired rapidly
   // (e.g. switching videos quickly while already casting).
@@ -271,7 +298,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       if (!deviceId) return
       setDevices(prev => prev.filter(d => d.id !== deviceId))
       if (connectedDeviceRef.current?.id === deviceId) {
-        notifyConnectedDevice(null)
+        console.log('[useCast] Ignoring device-lost for active cast target')
       }
     }
 
@@ -453,6 +480,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
 
     try {
       await rpc.castDisconnect({})
+      await stopCastKeepalive()
       notifyConnectedDevice(null)
       setPlaybackState({
         state: 'idle',
@@ -463,7 +491,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     } catch (err) {
       console.error('[useCast] disconnect failed:', err)
     }
-  }, [rpc])
+  }, [rpc, stopCastKeepalive])
 
   // Play video
   const play = useCallback(async (options: {
@@ -530,16 +558,22 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
         if (requestId !== playRequestIdRef.current) return false
 
         if (result?.success) {
+          if (device?.protocol === 'chromecast') {
+            const deviceName = device.name || 'Chromecast'
+            await startCastKeepalive(options.title || 'PearTube', deviceName)
+          }
           setPlaybackState(prev => ({ ...prev, state: 'playing' }))
           return true
         }
 
         console.error('[useCast] play failed:', result?.error)
+        await stopCastKeepalive()
         setPlaybackState(prev => ({ ...prev, state: 'idle' }))
         showCastError(`Chromecast failed to start playback.${result?.error ? ` ${result.error}` : ''}`)
         return false
       } catch (err) {
         console.error('[useCast] play failed:', err)
+        await stopCastKeepalive()
         setPlaybackState(prev => ({ ...prev, state: 'idle' }))
         showCastError('Chromecast failed to start playback.')
         return false
@@ -553,7 +587,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       () => undefined
     )
     return chained
-  }, [rpc, connectedDevice, playbackState.volume])
+  }, [rpc, connectedDevice, playbackState.volume, startCastKeepalive, stopCastKeepalive])
 
   // Pause
   const pause = useCallback(async () => {
@@ -585,6 +619,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
 
     try {
       await rpc.castStop({})
+      await stopCastKeepalive()
       setPlaybackState({
         state: 'stopped',
         currentTime: 0,
@@ -594,7 +629,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     } catch (err) {
       console.error('[useCast] stop failed:', err)
     }
-  }, [rpc, playbackState.volume])
+  }, [rpc, playbackState.volume, stopCastKeepalive])
 
   // Seek
   const seek = useCallback(async (time: number) => {
@@ -644,6 +679,12 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     const interval = setInterval(pollState, 1000)
     return () => clearInterval(interval)
   }, [rpc, connectedDevice])
+
+  useEffect(() => {
+    return () => {
+      stopCastKeepalive().catch(() => {})
+    }
+  }, [stopCastKeepalive])
 
   const isConnected = connectedDevice !== null
 

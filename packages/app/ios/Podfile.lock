@@ -1437,7 +1437,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - "react-native-bare-kit (0.12.0+a28a7d)":
+  - "react-native-bare-kit (0.12.0+7eb2fc)":
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2499,7 +2499,7 @@ SPEC CHECKSUMS:
   React-Mapbuffer: 9050ee10c19f4f7fca8963d0211b2854d624973e
   React-microtasksnativemodule: f775db9e991c6f3b8ccbc02bfcde22770f96e23b
   react-native-b4a: 3f26169d6e2907c6db9b0a805806584a17e91c38
-  react-native-bare-kit: 7db7684ad976fac37dac03601c891572355ba6ca
+  react-native-bare-kit: 8b797a3a723fbe667c65439f8bf5291af3523da0
   react-native-safe-area-context: 37e680fc4cace3c0030ee46e8987d24f5d3bdab2
   React-NativeModulesApple: 8969913947d5b576de4ed371a939455a8daf28aa
   React-oscompat: ce47230ed20185e91de62d8c6d139ae61763d09c
@@ -2539,6 +2539,6 @@ SPEC CHECKSUMS:
   RNWorklets: 54d8dffb7f645873a58484658ddfd4bd1a9a0bc1
   Yoga: 5934998fbeaef7845dbf698f698518695ab4cd1a
 
-PODFILE CHECKSUM: ce05c2517a311d2e65598a88dc1e645fe9e64c2d
+PODFILE CHECKSUM: aa8ef3d8318a2397eca3d77f27f8652bddb14ecf
 
 COCOAPODS: 1.16.2

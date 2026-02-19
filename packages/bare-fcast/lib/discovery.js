@@ -258,7 +258,15 @@ export class DeviceDiscoverer extends EventEmitter {
     return new Promise((resolve, reject) => {
       try {
         console.log('[Discovery] Creating UDP socket...')
-        this._socket = dgram.createSocket()
+        try {
+          this._socket = dgram.createSocket({ type: 'udp4', reuseAddress: true })
+        } catch {
+          try {
+            this._socket = dgram.createSocket('udp4')
+          } catch {
+            this._socket = dgram.createSocket()
+          }
+        }
         console.log('[Discovery] Socket created')
 
         this._socket.on('error', (err) => {
@@ -321,13 +329,16 @@ export class DeviceDiscoverer extends EventEmitter {
     if (!this._socket) return
 
     try {
-      // Query for FCast devices
-      const fcastQuery = buildQuery(ServiceType.FCAST)
-      await this._socket.send(fcastQuery, 0, fcastQuery.length, MDNS_PORT, MDNS_ADDRESS)
+      const queries = [
+        buildQuery(ServiceType.FCAST, true),
+        buildQuery(ServiceType.FCAST, false),
+        buildQuery(ServiceType.CHROMECAST, true),
+        buildQuery(ServiceType.CHROMECAST, false),
+      ]
 
-      // Query for Chromecast devices
-      const castQuery = buildQuery(ServiceType.CHROMECAST)
-      await this._socket.send(castQuery, 0, castQuery.length, MDNS_PORT, MDNS_ADDRESS)
+      for (const query of queries) {
+        await this._socket.send(query, 0, query.length, MDNS_PORT, MDNS_ADDRESS)
+      }
 
       console.log('[Discovery] Sent mDNS queries to', MDNS_ADDRESS + ':' + MDNS_PORT)
     } catch (err) {

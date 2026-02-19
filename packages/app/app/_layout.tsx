@@ -13,6 +13,7 @@ import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, Vid
 import { DownloadsProvider } from '@/lib/DownloadsContext'
 import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { SocialProvider } from '@/lib/SocialContext'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { colors } from '@/lib/colors'
@@ -732,15 +733,17 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
             <AppContext.Provider value={contextValue}>
               <DownloadsProvider>
                 <VideoPlayerProvider>
-                  <View style={{ flex: 1 }}>
-                    <Stack
-                      screenOptions={{
-                        headerShown: false,
-                        contentStyle: { backgroundColor: colors.bg },
-                      }}
-                    />
-                  </View>
-                  <VideoPlayerOverlay />
+                  <SocialProvider>
+                    <View style={{ flex: 1 }}>
+                      <Stack
+                        screenOptions={{
+                          headerShown: false,
+                          contentStyle: { backgroundColor: colors.bg },
+                        }}
+                      />
+                    </View>
+                    <VideoPlayerOverlay />
+                  </SocialProvider>
                 </VideoPlayerProvider>
               </DownloadsProvider>
             </AppContext.Provider>

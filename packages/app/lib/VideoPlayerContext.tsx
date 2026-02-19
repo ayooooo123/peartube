@@ -17,6 +17,7 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react'
 import { Platform, AppState, AppStateStatus } from 'react-native'
 import type { VideoData, VideoStats } from '@peartube/core'
+import type { PlayerMode } from './video-player'
 import * as MediaSession from '../modules/expo-media-session/src'
 
 // Re-export types for backwards compatibility
@@ -39,9 +40,6 @@ import {
   videoLoadEventEmitter as _videoLoadEventEmitter,
   playbackActiveEmitter as _playbackActiveEmitter,
 } from './video-player'
-
-// Player mode (re-exported from video-player but defined here for legacy code)
-type PlayerMode = 'hidden' | 'mini' | 'fullscreen'
 
 interface VideoPlayerContextType {
   // Current video
@@ -171,7 +169,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const playerModeRef = useRef<PlayerMode>(playerMode)  // Sync ref for PiP handler
   const maximizedForPipRef = useRef(false)  // True when we expanded mini→fullscreen for PiP
   const lastPipEventTimeRef = useRef(0)
-  const pipStateUpdateRafRef = useRef<number | null>(null)
   const pipTransitionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const currentTimeRef = useRef(0)
   const durationRef = useRef(0)

@@ -86,11 +86,13 @@ export function VideoPlayerOverlay() {
 
   // Debug log on mount
   useEffect(() => {
-    console.log('[VideoPlayerOverlay] Mounted. isPear:', isPear, 'isDesktop:', isDesktop, 'Platform.OS:', Platform.OS)
-    if (typeof window !== 'undefined') {
-      console.log('[VideoPlayerOverlay] window.Pear:', !!(window as any).Pear)
-      console.log('[VideoPlayerOverlay] PearWorkerClient:', !!(window as any).PearWorkerClient)
-      console.log('[VideoPlayerOverlay] userAgent:', navigator?.userAgent?.substring(0, 100))
+    if (__DEV__) {
+      console.log('[VideoPlayerOverlay] Mounted. isPear:', isPear, 'isDesktop:', isDesktop, 'Platform.OS:', Platform.OS)
+      if (typeof window !== 'undefined') {
+        console.log('[VideoPlayerOverlay] window.Pear:', !!(window as any).Pear)
+        console.log('[VideoPlayerOverlay] PearWorkerClient:', !!(window as any).PearWorkerClient)
+        console.log('[VideoPlayerOverlay] userAgent:', navigator?.userAgent?.substring(0, 100))
+      }
     }
   }, [isPear, isDesktop])
 
@@ -1150,6 +1152,8 @@ export function VideoPlayerOverlay() {
     } else if (playerMode === 'mini') {
       animProgress.value = withTiming(0, { duration: 250 })
       showControlsTemporarily()
+    } else if (playerMode === 'hidden') {
+      animProgress.value = withTiming(0, { duration: 150 })
     }
   }, [playerMode, isInPipMode])
 
@@ -2092,14 +2096,16 @@ export function VideoPlayerOverlay() {
 
   // Debug: log player state
   useEffect(() => {
-    console.log('[VideoPlayerOverlay] State:', {
-      hasCurrentVideo: !!currentVideo,
-      videoId: currentVideo?.id,
-      playerMode,
-      videoUrl: videoUrl?.substring(0, 50),
-      isPear,
-      isDesktop,
-    })
+    if (__DEV__) {
+      console.log('[VideoPlayerOverlay] State:', {
+        hasCurrentVideo: !!currentVideo,
+        videoId: currentVideo?.id,
+        playerMode,
+        videoUrl: videoUrl?.substring(0, 50),
+        isPear,
+        isDesktop,
+      })
+    }
   }, [currentVideo, playerMode, videoUrl, isPear, isDesktop])
 
   if (!currentVideo) {

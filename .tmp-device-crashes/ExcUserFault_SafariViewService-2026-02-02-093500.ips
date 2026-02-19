@@ -1,0 +1,82 @@
+{"is_simulated":1,"app_name":"SafariViewService","timestamp":"2026-02-02 09:35:00.00 -0500","app_version":"26.2","slice_uuid":"4f48aa9e-280f-30bb-82d6-8bd28f97f288","build_version":"8623.1.14.10.9","platform":2,"bundleID":"com.apple.SafariViewService","share_with_app_devs":0,"is_first_party":1,"bug_type":"308","os_version":"iPhone OS 26.2.1 (23C71)","roots_installed":0,"name":"SafariViewService","incident_id":"06FBA315-C02F-41B3-BE8F-AA278A118049"}
+{
+  "uptime" : 45000,
+  "procRole" : "Unspecified",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "iPhone14,7",
+  "coalitionID" : 1782,
+  "osVersion" : {
+    "isEmbedded" : true,
+    "train" : "iPhone OS 26.2.1",
+    "releaseType" : "User",
+    "build" : "23C71"
+  },
+  "captureTime" : "2026-02-02 09:35:00.2951 -0500",
+  "codeSigningMonitor" : 2,
+  "incident" : "06FBA315-C02F-41B3-BE8F-AA278A118049",
+  "pid" : 11727,
+  "translated" : false,
+  "cpuType" : "ARM-64",
+  "procStartAbsTime" : 1096815321456,
+  "procName" : "SafariViewService",
+  "procPath" : "\/Applications\/SafariViewService.app\/SafariViewService",
+  "bundleInfo" : {"CFBundleShortVersionString":"26.2","CFBundleVersion":"8623.1.14.10.9","CFBundleIdentifier":"com.apple.SafariViewService"},
+  "storeInfo" : {"deviceIdentifierForVendor":"B2F5D26A-A595-4978-A9B9-1B655EC0E37A"},
+  "parentPid" : 1,
+  "coalitionName" : "com.apple.SafariViewService",
+  "crashReporterKey" : "70a2e716576e873bca1e75ad16ff4b60c1c4742b",
+  "developerMode" : 1,
+  "bootProgressRegister" : "0x20800004",
+  "wasUnlockedSinceBoot" : 1,
+  "isLocked" : 0,
+  "codeSigningValidationCategory" : 0,
+  "codeSigningTrustLevel" : 0,
+  "bootSessionUUID" : "F62A5B5F-7B6A-4FA0-8F70-FDB299EEC450",
+  "basebandVersion" : "4.20.01",
+  "isLightWeightCorpse" : 1,
+  "exception" : {"codes":"0x600000000000001f, 0x0000000000000000","reason":0,"message":"namespc 31 reason_code 0x0000000000000000","subtype":"GUARD_TYPE_USER","type":"EXC_GUARD","rawCodes":[6917529027641081887,0],"namespc":31},
+  "termination" : {"namespace":"WEBKIT","flags":518,"code":0},
+  "faultingThread" : 0,
+  "threads" : [{"id":601901,"frames":[{"imageOffset":2913921388,"imageIndex":0},{"imageOffset":752640,"imageIndex":0},{"imageOffset":749044,"imageIndex":0},{"imageOffset":747956,"imageIndex":0},{"imageOffset":634140,"imageIndex":0},{"imageOffset":619748,"imageIndex":0},{"imageOffset":1425284928,"imageIndex":0},{"imageOffset":1425285856,"imageIndex":0},{"imageOffset":1002519260,"imageIndex":0},{"imageOffset":1002625020,"imageIndex":0},{"imageOffset":1002554472,"imageIndex":0},{"imageOffset":1002557252,"imageIndex":0},{"imageOffset":1002599404,"imageIndex":0},{"imageOffset":1002597604,"imageIndex":0},{"imageOffset":1604142008,"imageIndex":0},{"imageOffset":1604139200,"imageIndex":0}],"threadState":{"x":[{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":0},"esr":{"value":0},"pc":{"value":0,"matchesCrashFrame":0},"far":{"value":0}}}],
+  "usedImages" : [
+  {
+    "size" : 4824830068,
+    "source" : "S",
+    "base" : 6442450944,
+    "uuid" : "5f9d3a66-1050-3b67-80f8-9de7fca478d8"
+  }
+],
+  "legacyInfo" : {
+  "threadTriggered" : {
+
+  }
+},
+  "bug_type" : "308",
+  "roots_installed" : 0,
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "652eff3d1bce5442b8d753c9",
+      "factorPackIds" : [
+        "652eff982c02f032beae83f4"
+      ],
+      "deploymentId" : 240000009
+    },
+    {
+      "rolloutId" : "67648e5334a82511f4acf879",
+      "factorPackIds" : [
+
+      ],
+      "deploymentId" : 240000008
+    }
+  ],
+  "experiments" : [
+
+  ]
+},
+  "reportNotes" : [
+  "PC register does not match crashing frame (0x0 vs 0x22DAEE96C)"
+]
+}

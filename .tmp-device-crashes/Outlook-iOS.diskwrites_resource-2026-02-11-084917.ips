@@ -1,0 +1,190 @@
+{"roots_installed":0,"app_name":"Outlook-iOS","timestamp":"2026-02-11 08:49:17.00 -0500","app_version":"5.2604.0","slice_uuid":"6253DDE0-5C69-3BED-9547-63629F3D1AC7","adam_id":"951937596","build_version":"44366402","bundleID":"com.microsoft.Office.Outlook","duration_ms":"85816292","is_first_party":0,"share_with_app_devs":0,"bug_type":"145","os_version":"iPhone OS 26.2.1 (23C71)","distributor_id":"com.apple.AppStore","name":"Outlook-iOS","incident_id":"13BF8E5E-06E4-4FB1-9426-6DBAF409574C"}
+Date/Time:        2026-02-10 08:58:56.363 -0500
+End time:         2026-02-11 08:49:12.656 -0500
+OS Version:       iPhone OS 26.2.1 (Build 23C71)
+Architecture:     arm64e
+Report Version:   67
+Incident Identifier: 13BF8E5E-06E4-4FB1-9426-6DBAF409574C
+
+Data Source:      Microstackshots
+Shared Cache:     5F9D3A66-1050-3B67-80F8-9DE7FCA478D8 slid base address 0x18aab0000, slide 0xaab0000
+
+Command:          Outlook-iOS
+Path:             /private/var/containers/Bundle/Application/BD3634FB-8B87-4393-AEEE-DEEB53D8E159/Outlook-iOS.app/Outlook-iOS
+Identifier:       com.microsoft.Office.Outlook
+Version:          5.2604.0 (44366402)
+Adam ID:          951937596
+Is First Party:   No
+Beta Identifier:  3A36D71B-449C-46AC-A2CD-81010BD4D72F
+Resource Coalition: "com.microsoft.Office.Outlook"(4235)
+Architecture:     arm64
+Parent:           UNKNOWN [1]
+PID:              94004
+
+Event:            disk writes
+Action taken:     none
+Writes:           1073.75 MB of file backed memory dirtied over 85816 seconds (12.51 KB per second average), exceeding limit of 12.43 KB per second over 86400 seconds
+Writes limit:     1073.74 MB
+Limit duration:   86400s
+Writes caused:    1073.75 MB
+Writes duration:  85816s
+Duration:         85816.29s
+Duration Sampled: 9.56s (event starts 85805.80s before samples, event ends 0.93s after samples)
+Steps:            7 (10.49 MB/step)
+
+Hardware model:   iPhone14,7
+Active cpus:      6
+Memory size:      5.58 GB
+HW page size:     16384
+VM page size:     16384
+Shared cache residency: 13.28% (751.39 MB / 5656.66 MB)
+
+Time Since Boot:  990673s
+Time Awake Since Boot: 403050s
+Time Since Wake:  15s
+
+Total CPU Time:   1.678s
+Advisory levels:  Battery -> 2, User -> 3, ThermalPressure -> 0, Combined -> 2
+Free disk space:  38.05 GB/119.07 GB, low space threshold 150 MB
+Vnodes Available: 64.02% (15364/24000, 12000 allocated, 12000 soft limit)
+Models:           none
+
+Preferred User Language: en-US
+Country Code:     US
+Keyboards:        en_US QWERTY, emoji Emoji
+OS Cryptex File Extents: 3125
+
+Heaviest stack for the target process:
+  5  ??? (libsystem_pthread.dylib + 2252) [0x1ea4838cc]
+  5  ??? (libsystem_pthread.dylib + 17484) [0x1ea48744c]
+  4  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 16247424) [0x10db82a80]
+  4  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14637312) [0x10d9f9900]
+  4  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 6832800) [0x10d2882a0]
+  4  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 7971776) [0x10d39e3c0]
+  2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 8000988) [0x10d3a55dc]
+  2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 7941084) [0x10d396bdc]
+  2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 8046540) [0x10d3b07cc]
+  2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 8383072) [0x10d402a60]
+  2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 12659476) [0x10d816b14]
+  2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14445500) [0x10d9cabbc]
+  1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14434028) [0x10d9c7eec]
+  1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14427676) [0x10d9c661c]
+  1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14437220) [0x10d9c8b64]
+  1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14389884) [0x10d9bd27c]
+  1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14459228) [0x10d9ce15c]
+  1  ??? (libsystem_kernel.dylib + 27964) [0x23859fd3c]
+
+
+Powerstats for:   Outlook-iOS (Outlook) [94004]
+UUID:             6253DDE0-5C69-3BED-9547-63629F3D1AC7
+Path:             /private/var/containers/Bundle/Application/BD3634FB-8B87-4393-AEEE-DEEB53D8E159/Outlook-iOS.app/Outlook-iOS
+Identifier:       com.microsoft.Office.Outlook
+Version:          5.2604.0 (44366402)
+Adam ID:          951937596
+Is First Party:   No
+Beta Identifier:  3A36D71B-449C-46AC-A2CD-81010BD4D72F
+Resource Coalition: 7 samples "com.microsoft.Office.Outlook"(4235)
+Architecture:     arm64
+Parent:           UNKNOWN [1]
+UID:              501
+Footprint:        35.11 MB -> 141.44 MB (+106.33 MB)
+Pageins:          3744 pages
+Start time:       2026-02-11 08:49:02.158 -0500
+End time:         2026-02-11 08:49:11.723 -0500
+Num samples:      7 (100%)
+Num threads:      4
+Primary state:    5 samples Frontmost App, Non-Suppressed, Kernel mode, Effective Thread QoS Default, Requested Thread QoS Default, Override Thread QoS Unspecified, p-core
+User Activity:    0 samples Idle, 7 samples Active
+Power Source:     7 samples on Battery, 0 samples on AC
+  5  ??? (libsystem_pthread.dylib + 2252) [0x1ea4838cc]
+    5  ??? (libsystem_pthread.dylib + 17484) [0x1ea48744c]
+      4  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 16247424) [0x10db82a80]
+        4  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14637312) [0x10d9f9900]
+          4  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 6832800) [0x10d2882a0]
+            4  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 7971776) [0x10d39e3c0]
+              2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 8000988) [0x10d3a55dc]
+                2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 7941084) [0x10d396bdc]
+                  2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 8046540) [0x10d3b07cc]
+                    2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 8383072) [0x10d402a60]
+                      2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 12659476) [0x10d816b14]
+                        2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14445500) [0x10d9cabbc]
+                          1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14434028) [0x10d9c7eec]
+                            1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14427676) [0x10d9c661c]
+                              1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14437220) [0x10d9c8b64]
+                                1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14389884) [0x10d9bd27c]
+                                  1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14459228) [0x10d9ce15c]
+                                    1  ??? (libsystem_kernel.dylib + 27964) [0x23859fd3c]
+                          1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14432228) [0x10d9c77e4]
+                            1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14459228) [0x10d9ce15c]
+                              1  ??? (libsystem_kernel.dylib + 27964) [0x23859fd3c]
+              2  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 7997700) [0x10d3a4904]
+                1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 7951052) [0x10d3992cc]
+                  1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 8327916) [0x10d3f52ec]
+                    1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 12717536) [0x10d824de0]
+                      1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14467616) [0x10d9d0220]
+                        1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14397800) [0x10d9bf168]
+                          1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14459228) [0x10d9ce15c]
+                            1  ??? (libsystem_kernel.dylib + 27964) [0x23859fd3c]
+                              1  <e-core>
+                1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 7645768) [0x10d34ea48]
+                  1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 8343140) [0x10d3f8e64]
+                    1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 12653616) [0x10d815430]
+                      1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14444136) [0x10d9ca668]
+                        1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14427676) [0x10d9c661c]
+                          1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14436988) [0x10d9c8a7c]
+                            1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14409748) [0x10d9c2014]
+                              1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14459228) [0x10d9ce15c]
+                                1  ??? (libsystem_kernel.dylib + 27964) [0x23859fd3c]
+      1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14266892) [0x10d99f20c]
+        1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14266456) [0x10d99f058]
+          1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14267720) [0x10d99f548]
+            1  ??? (libsystem_kernel.dylib + 27964) [0x23859fd3c]
+  2  ??? (libsystem_pthread.dylib + 2240) [0x1ea4838c0]
+    2  ??? (libsystem_pthread.dylib + 4988) [0x1ea48437c]
+      2  ??? (libdispatch.dylib + 83708) [0x1c66d66fc]
+        1  ??? (libdispatch.dylib + 82108) [0x1c66d60bc]
+          1  ??? (libdispatch.dylib + 230428) [0x1c66fa41c]
+            1  ??? (libdispatch.dylib + 112636) [0x1c66dd7fc]
+              1  ??? (libdispatch.dylib + 70736) [0x1c66d3450]
+                1  ??? (Outlook-iOS + 197264) [0x102a94290]
+                  1  ??? (Outlook-iOS + 4773928) [0x102ef1828]
+                    1  ??? (<3576319D-6D81-331B-A18C-3C17506BD22F> + 210352) [0x10bc7b5b0]
+                      1  ??? (<3576319D-6D81-331B-A18C-3C17506BD22F> + 76532) [0x10bc5aaf4]
+                        1  ??? (<24C9F8A1-8D8A-3C99-BF6D-EBA1DD06E621> + 2479280) [0x10e4494b0]
+                          1  ??? (Foundation + 1564828) [0x18b38a09c]
+                            1  ??? (Foundation + 1565620) [0x18b38a3b4]
+                              1  ??? (Foundation + 1197496) [0x18b3305b8]
+                                1  ??? (Foundation + 1591152) [0x18b390770]
+                                  1  ??? (Foundation + 1563328) [0x18b389ac0]
+                                    1  ??? (Foundation + 1559628) [0x18b388c4c]
+                                      1  ??? (Foundation + 474760) [0x18b27fe88]
+                                        1  ??? (Foundation + 462640) [0x18b27cf30]
+                                          1  ??? (Foundation + 463968) [0x18b27d460]
+                                            1  ??? (Foundation + 712812) [0x18b2ba06c]
+                                              1  ??? (libsystem_kernel.dylib + 23356) [0x23859eb3c]
+                                                1  <Effective Thread QoS Utility, Requested Thread QoS Utility, e-core>
+        1  ??? (libdispatch.dylib + 81736) [0x1c66d5f48]
+          1  ??? (libdispatch.dylib + 25340) [0x1c66c82fc]
+            1  ??? (libdispatch.dylib + 227300) [0x1c66f97e4]
+              1  ??? (libdispatch.dylib + 112636) [0x1c66dd7fc]
+                1  ??? (libdispatch.dylib + 6876) [0x1c66c3adc]
+                  1  ??? (<24C9F8A1-8D8A-3C99-BF6D-EBA1DD06E621> + 869052) [0x10e2c02bc]
+                    1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14681900) [0x10da0472c]
+                      1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14682848) [0x10da04ae0]
+                        1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 15022152) [0x10da57848]
+                          1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14118680) [0x10d97af18]
+                            1  ??? (<732834CD-F450-3D17-8C1D-74BEC50B44B7> + 14132260) [0x10d97e424]
+                              1  ??? (libsystem_c.dylib + 119160) [0x199401178]
+                                1  ??? (libsystem_kernel.dylib + 25760) [0x23859f4a0]
+                                  1  <Effective Thread QoS User Initiated, Requested Thread QoS User Initiated, e-core>
+
+  Binary Images:
+           0x102a64000 -                ???  com.microsoft.Office.Outlook 5.2604.0 (44366402) <6253DDE0-5C69-3BED-9547-63629F3D1AC7>  /private/var/containers/Bundle/Application/BD3634FB-8B87-4393-AEEE-DEEB53D8E159/Outlook-iOS.app/Outlook-iOS
+           0x10bc48000 -                ???  ???                                              <3576319D-6D81-331B-A18C-3C17506BD22F>
+           0x10cc04000 -                ???  ???                                              <732834CD-F450-3D17-8C1D-74BEC50B44B7>
+           0x10e1ec000 -                ???  ???                                              <24C9F8A1-8D8A-3C99-BF6D-EBA1DD06E621>
+           0x18b20c000 -        0x18c05281f  Foundation                                       <75D11B29-11A6-3507-87F7-487ACEB1476A>  /System/Library/Frameworks/Foundation.framework/Foundation
+           0x1993e4000 -        0x1994645af  libsystem_c.dylib                                <E2FB0B5B-ED93-35A7-A626-4894601E382B>  /usr/lib/system/libsystem_c.dylib
+           0x1c66c2000 -        0x1c670821f  libdispatch.dylib                                <654F736A-691D-3C6A-BD81-69BC65B9B8ED>  /usr/lib/system/libdispatch.dylib
+           0x1ea483000 -        0x1ea48f44f  libsystem_pthread.dylib                          <36408BF3-C2B3-37C8-ABC2-0251F88E8724>  /usr/lib/system/libsystem_pthread.dylib
+           0x238599000 -        0x2385d3d2b  libsystem_kernel.dylib                           <99B78925-F063-3B62-AD22-3986A636020D>  /usr/lib/system/libsystem_kernel.dylib

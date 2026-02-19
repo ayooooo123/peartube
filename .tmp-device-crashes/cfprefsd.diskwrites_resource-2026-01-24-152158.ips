@@ -1,0 +1,795 @@
+{"duration_ms":"65758482","share_with_app_devs":0,"roots_installed":0,"bug_type":"145","os_version":"iPhone OS 26.2 (23C55)","slice_uuid":"39F38D42-5F60-3406-9F4D-E5B3198523A7","is_first_party":0,"incident_id":"08A91FEB-2CAA-457A-BB43-FFDB35DAD0C3","timestamp":"2026-01-24 15:21:58.00 -0500","app_name":"cfprefsd","name":"cfprefsd"}
+Date/Time:        2026-01-23 21:05:54.942 -0500
+End time:         2026-01-24 15:21:53.424 -0500
+OS Version:       iPhone OS 26.2 (Build 23C55)
+Architecture:     arm64e
+Report Version:   67
+Incident Identifier: 08A91FEB-2CAA-457A-BB43-FFDB35DAD0C3
+
+Data Source:      Microstackshots
+Shared Cache:     100A60E3-8A3D-31DC-A7AD-78F69BDE83A6 slid base address 0x19acdc000, slide 0x1acdc000
+
+Command:          cfprefsd
+Path:             /usr/sbin/cfprefsd
+Resource Coalition: "com.apple.cfprefsd.xpc.daemon"(161)
+Architecture:     arm64e
+Parent:           launchd [1]
+PID:              110
+
+Event:            disk writes
+Action taken:     none
+Writes:           1073.75 MB of file backed memory dirtied over 65758 seconds (16.33 KB per second average), exceeding limit of 12.43 KB per second over 86400 seconds
+Writes limit:     1073.74 MB
+Limit duration:   86400s
+Writes caused:    1073.75 MB
+Writes duration:  65758s
+Duration:         65758.48s
+Duration Sampled: 65401.63s (event starts 354.47s before samples, event ends 2.37s after samples)
+Steps:            1736 (10.49 MB/step)
+
+Hardware model:   iPhone14,7
+Active cpus:      6
+Memory size:      5.58 GB
+HW page size:     16384
+VM page size:     16384
+Shared cache residency: 13.12% (742.19 MB / 5656.83 MB)
+
+Advisory levels:  Battery -> 2, User -> 3, ThermalPressure -> 0, Combined -> 2
+Free disk space:  41.66 GB/119.07 GB, low space threshold 150 MB
+Vnodes Available: 65.70% (15768/24000, 12000 allocated, 12000 soft limit)
+Models:           none
+
+Preferred User Language: en-US
+Country Code:     US
+Keyboards:        en_US QWERTY
+OS Cryptex File Extents: 3432
+
+Heaviest stack for the target process:
+  73  ??? (libsystem_pthread.dylib + 2240) [0x1fa6cf8c0]
+  73  ??? (libsystem_pthread.dylib + 5048) [0x1fa6d03b8]
+  73  ??? (libdispatch.dylib + 85220) [0x1d6926ce4]
+  73  ??? (libdispatch.dylib + 87020) [0x1d69273ec]
+  73  ??? (libdispatch.dylib + 44868) [0x1d691cf44]
+  73  ??? (libdispatch.dylib + 41680) [0x1d691c2d0]
+  73  ??? (libdispatch.dylib + 98828) [0x1d692a20c]
+  73  ??? (libdispatch.dylib + 103736) [0x1d692b538]
+  73  ??? (libdispatch.dylib + 26212) [0x1d6918664]
+  73  ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+  73  ??? (CoreFoundation + 412232) [0x19de51a48]
+  73  ??? (CoreFoundation + 142444) [0x19de0fc6c]
+  73  ??? (CoreFoundation + 135928) [0x19de0e2f8]
+  73  ??? (CoreFoundation + 135768) [0x19de0e258]
+  63  ??? (CoreFoundation + 321964) [0x19de3b9ac]
+  63  ??? (CoreFoundation + 321568) [0x19de3b820]
+  56  ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+
+
+Powerstats for:   cfprefsd [110]
+UUID:             39F38D42-5F60-3406-9F4D-E5B3198523A7
+Path:             /usr/sbin/cfprefsd
+Resource Coalition: 73 samples "com.apple.cfprefsd.xpc.daemon"(161)
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              0
+Sudden Term:      Tracked
+Footprint:        3744 KB -> 4032 KB (+288 KB) (max 10.17 MB )
+Pageins:          4 pages
+Start time:       2026-01-23 21:32:04.797 -0500
+End time:         2026-01-24 15:12:53.430 -0500
+Num samples:      73 (4%)
+Num threads:      72
+Primary state:    51 samples Non-Frontmost App, Non-Suppressed, Kernel mode, Effective Thread QoS Default, Requested Thread QoS Default, Override Thread QoS Unspecified, e-core
+User Activity:    41 samples Idle, 32 samples Active
+Power Source:     53 samples on Battery, 20 samples on AC
+  73  ??? (libsystem_pthread.dylib + 2240) [0x1fa6cf8c0]
+    73  ??? (libsystem_pthread.dylib + 5048) [0x1fa6d03b8]
+      73  ??? (libdispatch.dylib + 85220) [0x1d6926ce4]
+        73  ??? (libdispatch.dylib + 87020) [0x1d69273ec]
+          73  ??? (libdispatch.dylib + 44868) [0x1d691cf44]
+            73  ??? (libdispatch.dylib + 41680) [0x1d691c2d0]
+              73  ??? (libdispatch.dylib + 98828) [0x1d692a20c]
+                73  ??? (libdispatch.dylib + 103736) [0x1d692b538]
+                  73  ??? (libdispatch.dylib + 26212) [0x1d6918664]
+                    73  ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                      73  ??? (CoreFoundation + 412232) [0x19de51a48]
+                        73  ??? (CoreFoundation + 142444) [0x19de0fc6c]
+                          73  ??? (CoreFoundation + 135928) [0x19de0e2f8]
+                            73  ??? (CoreFoundation + 135768) [0x19de0e258]
+                              63  ??? (CoreFoundation + 321964) [0x19de3b9ac]
+                                63  ??? (CoreFoundation + 321568) [0x19de3b820]
+                                  56  ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                                    16  <Effective Thread QoS Background>
+                                  5   ??? (CoreFoundation + 310840) [0x19de38e38]
+                                    5   ??? (libsystem_kernel.dylib + 36816) [0x2487edfd0]
+                                      2   <Effective Thread QoS Background>
+                                  2   ??? (libsystem_kernel.dylib + 33360) [0x2487ed250]
+                              10  ??? (CoreFoundation + 321940) [0x19de3b994]
+                                10  ??? (CoreFoundation + 1625840) [0x19df79ef0]
+                                  10  ??? (CoreFoundation + 322116) [0x19de3ba44]
+                                    10  ??? (CoreFoundation + 322408) [0x19de3bb68]
+                                      10  ??? (CoreFoundation + 323296) [0x19de3bee0]
+                                        10  ??? (libsystem_c.dylib + 69052) [0x1a9644dbc]
+                                          10  ??? (libsystem_c.dylib + 73364) [0x1a9645e94]
+                                            10  ??? (libsystem_c.dylib + 76456) [0x1a9646aa8]
+                                              10  ??? (libsystem_kernel.dylib + 36244) [0x2487edd94]
+                                                2   <Effective Thread QoS Background>
+                                                2   <Effective Thread QoS User Initiated>
+
+  Binary Images:
+           0x1040f4000 -                ???  cfprefsd                <39F38D42-5F60-3406-9F4D-E5B3198523A7>  /usr/sbin/cfprefsd
+           0x19dded000 -        0x19e37373f  CoreFoundation          <0BE54DBE-1ADC-3588-BFFA-E7C99E8D8208>  /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation
+           0x1a9634000 -        0x1a96b45af  libsystem_c.dylib       <43D36BF4-2AA6-38F9-A6F4-372E93532913>  /usr/lib/system/libsystem_c.dylib
+           0x1d6912000 -        0x1d695821f  libdispatch.dylib       <11C047C4-33B3-39A3-AE43-BF617CFC7D2C>  /usr/lib/system/libdispatch.dylib
+           0x1fa6cf000 -        0x1fa6db44f  libsystem_pthread.dylib <741C5AFB-3F30-362E-9313-AAB3DE2497C9>  /usr/lib/system/libsystem_pthread.dylib
+           0x2487e5000 -        0x24881fd2b  libsystem_kernel.dylib  <15E8A2AE-4BFD-3BB8-944E-2EC12393C59C>  /usr/lib/system/libsystem_kernel.dylib
+
+
+Powerstats for:   installd
+UUID:             7E4F278D-5EB7-3AB2-B8A0-8D6A418CA5F8
+Path:             /usr/libexec/installd
+Resource Coalition: 522 samples "com.apple.mobile.installd"(439)
+On Behalf Of:     522 samples installcoordinationd [254] (522 samples originated by nsurlsessiond [248])
+Architecture:     arm64
+Start time:       2026-01-24 09:10:27.695 -0500
+End time:         2026-01-24 09:14:02.105 -0500
+Num samples:      522 (30%)
+Primary state:    522 samples Non-Frontmost App, Non-Suppressed, Kernel mode, Effective Thread QoS Utility, Requested Thread QoS Utility, Override Thread QoS Unspecified, e-core
+User Activity:    522 samples Idle, 0 samples Active
+Power Source:     0 samples on Battery, 522 samples on AC
+  505  ??? (libsystem_pthread.dylib + 2240) [0x1fa6cf8c0]
+    505  ??? (libsystem_pthread.dylib + 4988) [0x1fa6d037c]
+      505  ??? (libdispatch.dylib + 83708) [0x1d69266fc]
+        505  ??? (libdispatch.dylib + 82108) [0x1d69260bc]
+          505  ??? (libdispatch.dylib + 230428) [0x1d694a41c]
+            505  ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+              505  ??? (libdispatch.dylib + 6876) [0x1d6913adc]
+                505  ??? (installd + 88276) [0x1003918d4]
+                  505  ??? (installd + 86624) [0x100391260]
+                    505  ??? (installd + 163908) [0x1003a4044]
+                      494  ??? (installd + 159356) [0x1003a2e7c]
+                        494  ??? (installd + 260988) [0x1003bbb7c]
+                          494  ??? (installd + 249204) [0x1003b8d74]
+                            494  ??? (installd + 264000) [0x1003bc740]
+                              494  ??? (installd + 248764) [0x1003b8bbc]
+                                494  ??? (installd + 247736) [0x1003b87b8]
+                                  494  ??? (libParallelCompression.dylib + 55848) [0x2b3c9ba28]
+                                    494  ??? (libParallelCompression.dylib + 85308) [0x2b3ca2d3c]
+                                      494  ??? (libParallelCompression.dylib + 282124) [0x2b3cd2e0c]
+                                        478  ??? (libParallelCompression.dylib + 88604) [0x2b3ca3a1c]
+                                          477  ??? (libParallelCompression.dylib + 57996) [0x2b3c9c28c]
+                                            477  ??? (libParallelCompression.dylib + 160528) [0x2b3cb5310]
+                                              409  ??? (libParallelCompression.dylib + 159028) [0x2b3cb4d34]
+                                                409  ??? (libParallelCompression.dylib + 134364) [0x2b3caecdc]
+                                                  409  ??? (libParallelCompression.dylib + 281812) [0x2b3cd2cd4]
+                                                    409  ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                                                      409  <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+                                              53   ??? (libParallelCompression.dylib + 159128) [0x2b3cb4d98]
+                                                53   ??? (libParallelCompression.dylib + 134364) [0x2b3caecdc]
+                                                  53   ??? (libParallelCompression.dylib + 281812) [0x2b3cd2cd4]
+                                                    53   ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                                                      53   <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+                                              15   ??? (libParallelCompression.dylib + 159184) [0x2b3cb4dd0]
+                                                15   ??? (libParallelCompression.dylib + 134208) [0x2b3caec40]
+                                                  15   ??? (libParallelCompression.dylib + 281812) [0x2b3cd2cd4]
+                                                    15   ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                                                      15   <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+                                          1    ??? (libParallelCompression.dylib + 58088) [0x2b3c9c2e8]
+                                            1    ??? (libsystem_kernel.dylib + 4816) [0x2487e62d0]
+                                              1    <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+                                        16   ??? (libParallelCompression.dylib + 88448) [0x2b3ca3980]
+                                          14   ??? (libsystem_kernel.dylib + 84096) [0x2487f9880]
+                                            14   <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+                                          2    ??? (libsystem_kernel.dylib + 25628) [0x2487eb41c]
+                                            2    <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+                      6    ??? (installd + 160308) [0x1003a3234]
+                        6    ??? (installd + 305224) [0x1003c6848]
+                          6    ??? (InstalledContentLibrary + 598984) [0x1cc9e33c8]
+                            6    ??? (InstalledContentLibrary + 609580) [0x1cc9e5d2c]
+                              6    ??? (libsystem_kernel.dylib + 21664) [0x2487ea4a0]
+                                6    <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+                      5    ??? (installd + 160448) [0x1003a32c0]
+                        5    ??? (installd + 308136) [0x1003c73a8]
+                          4    ??? (installd + 37952) [0x100385440]
+                            4    ??? (MobileInstallation + 149224) [0x1da7b26e8]
+                              4    ??? (MobileInstallation + 146808) [0x1da7b1d78]
+                                4    ??? (IconFoundation + 81036) [0x1d5168c8c]
+                                  4    ??? (IconFoundation + 79112) [0x1d5168508]
+                                    3    ??? (IconFoundation + 175476) [0x1d517fd74]
+                                      3    ??? (IconFoundation + 156636) [0x1d517b3dc]
+                                        3    ??? (IconFoundation + 191272) [0x1d5183b28]
+                                          3    ??? (IconFoundation + 186904) [0x1d5182a18]
+                                            3    ??? (IconFoundation + 187884) [0x1d5182dec]
+                                              3    ??? (IconFoundation + 193784) [0x1d51844f8]
+                                                3    ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                                                  3    <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+                                    1    ??? (IconFoundation + 175228) [0x1d517fc7c]
+                                      1    ??? (IconFoundation + 139044) [0x1d5176f24]
+                                        1    ??? (IconFoundation + 176752) [0x1d5180270]
+                                          1    ??? (IconFoundation + 150968) [0x1d5179db8]
+                                            1    ??? (IconFoundation + 204120) [0x1d5186d58]
+                                              1    ??? (IconFoundation + 186904) [0x1d5182a18]
+                                                1    ??? (IconFoundation + 187884) [0x1d5182dec]
+                                                  1    ??? (IconFoundation + 193784) [0x1d51844f8]
+                                                    1    ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                                                      1    <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+                          1    ??? (installd + 38444) [0x10038562c]
+                            1    ??? (StreamingZip + 74376) [0x287a8c288]
+                              1    ??? (StreamingZip + 61488) [0x287a89030]
+                                1    ??? (StreamingZip + 64604) [0x287a89c5c]
+                                  1    ??? (StreamingZip + 39884) [0x287a83bcc]
+                                    1    ??? (StreamingZip + 50952) [0x287a86708]
+                                      1    ??? (libsystem_c.dylib + 39656) [0x1a963dae8]
+                                        1    ??? (libsystem_c.dylib + 18020) [0x1a9638664]
+                                          1    ??? (libsystem_c.dylib + 44088) [0x1a963ec38]
+                                            1    ??? (libsystem_kernel.dylib + 29580) [0x2487ec38c]
+                                              1    <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+  17   ??? (libsystem_pthread.dylib + 2252) [0x1fa6cf8cc]
+    17   ??? (libsystem_pthread.dylib + 17484) [0x1fa6d344c]
+      17   ??? (libParallelCompression.dylib + 71776) [0x2b3c9f860]
+        17   ??? (libdispatch.dylib + 27572) [0x1d6918bb4]
+          17   ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+            17   ??? (libParallelCompression.dylib + 166296) [0x2b3cb6998]
+              17   ??? (libParallelCompression.dylib + 169668) [0x2b3cb76c4]
+                17   ??? (libParallelCompression.dylib + 170204) [0x2b3cb78dc]
+                  17   ??? (libParallelCompression.dylib + 88532) [0x2b3ca39d4]
+                    17   ??? (libParallelCompression.dylib + 58912) [0x2b3c9c620]
+                      17   ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                        17   <on behalf of installcoordinationd [254] (originated by nsurlsessiond [248])>
+
+  Binary Images:
+           0x10037c000 -                ???  installd                     <7E4F278D-5EB7-3AB2-B8A0-8D6A418CA5F8>  /usr/libexec/installd
+           0x1a9634000 -        0x1a96b45af  libsystem_c.dylib            <43D36BF4-2AA6-38F9-A6F4-372E93532913>  /usr/lib/system/libsystem_c.dylib
+           0x1cc951000 -        0x1cca5389f  InstalledContentLibrary      <29325277-94AA-310D-BD1E-275DE7946DD4>  /System/Library/PrivateFrameworks/InstalledContentLibrary.framework/InstalledContentLibrary
+           0x1d5155000 -        0x1d51b3f3f  IconFoundation               <EC76C913-ADCB-3B80-B7C2-4944B5723A5D>  /System/Library/PrivateFrameworks/IconFoundation.framework/IconFoundation
+           0x1d6912000 -        0x1d695821f  libdispatch.dylib            <11C047C4-33B3-39A3-AE43-BF617CFC7D2C>  /usr/lib/system/libdispatch.dylib
+           0x1da78e000 -        0x1da7c35ff  MobileInstallation           <F8FAE847-6000-3341-8F55-2C3A3C8B91E9>  /System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation
+           0x1fa6cf000 -        0x1fa6db44f  libsystem_pthread.dylib      <741C5AFB-3F30-362E-9313-AAB3DE2497C9>  /usr/lib/system/libsystem_pthread.dylib
+           0x2487e5000 -        0x24881fd2b  libsystem_kernel.dylib       <15E8A2AE-4BFD-3BB8-944E-2EC12393C59C>  /usr/lib/system/libsystem_kernel.dylib
+           0x287a7a000 -        0x287a95c9f  StreamingZip                 <DAA590A4-4999-33FB-BCE5-B41CCF0EEF70>  /System/Library/PrivateFrameworks/StreamingZip.framework/StreamingZip
+           0x2b3c8e000 -        0x2b3cf423f  libParallelCompression.dylib <4AC55445-1FAE-34BD-BEC5-DA55BC946483>  /usr/lib/libParallelCompression.dylib
+
+
+Powerstats for:   backupd
+UUID:             04D0F513-E34A-3164-81BA-9DF8064758BF
+Path:             /System/Library/PrivateFrameworks/MobileBackup.framework/backupd
+Resource Coalition: 206 samples "com.apple.backupd"(593)
+On Behalf Of:     202 samples backupd [6517] (202 samples originated by backupd [6517]), 4 samples UNKNOWN [32] (4 samples originated by UNKNOWN [32])
+Architecture:     arm64
+Start time:       2026-01-24 01:59:28.200 -0500
+End time:         2026-01-24 14:45:58.586 -0500
+Num samples:      206 (12%)
+Primary state:    206 samples Non-Frontmost App, Non-Suppressed, Kernel mode, Effective Thread QoS Background, Requested Thread QoS Utility, Override Thread QoS Unspecified, e-core
+User Activity:    206 samples Idle, 0 samples Active
+Power Source:     4 samples on Battery, 202 samples on AC
+  206  ??? (libsystem_pthread.dylib + 2240) [0x1fa6cf8c0]
+    158  ??? (libsystem_pthread.dylib + 5048) [0x1fa6d03b8]
+      158  ??? (libdispatch.dylib + 85220) [0x1d6926ce4]
+        158  ??? (libdispatch.dylib + 87020) [0x1d69273ec]
+          158  ??? (libdispatch.dylib + 44920) [0x1d691cf78]
+            155  ??? (libdispatch.dylib + 42088) [0x1d691c468]
+              155  ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                155  ??? (libdispatch.dylib + 6876) [0x1d6913adc]
+                  155  ??? (backupd + 1337508) [0x1003468a4]
+                    139  ??? (backupd + 1847424) [0x1003c3080]
+                      139  ??? (backupd + 1837904) [0x1003c0b50]
+                        134  ??? (libsqlite3.dylib + 584288) [0x19c620a60]
+                          134  ??? (libsqlite3.dylib + 33108) [0x19c59a154]
+                            134  ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                              134  ??? (libsqlite3.dylib + 197008) [0x19c5c2190]
+                                101  ??? (libsqlite3.dylib + 744436) [0x19c647bf4]
+                                  101  ??? (libsqlite3.dylib + 587824) [0x19c621830]
+                                    101  ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                      101  ??? (libsqlite3.dylib + 327432) [0x19c5e1f08]
+                                        101  ??? (libsqlite3.dylib + 370616) [0x19c5ec7b8]
+                                          101  ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                            101  ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                              101  <on behalf of backupd [6517] (originated by backupd [6517])>
+                                32   ??? (libsqlite3.dylib + 744288) [0x19c647b60]
+                                  32   ??? (libsqlite3.dylib + 778096) [0x19c64ff70]
+                                    32   ??? (libsqlite3.dylib + 778356) [0x19c650074]
+                                      32   ??? (libsqlite3.dylib + 778368) [0x19c650080]
+                                        32   ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                          22   ??? (libsqlite3.dylib + 219388) [0x19c5c78fc]
+                                            22   ??? (libsqlite3.dylib + 325220) [0x19c5e1664]
+                                              21   ??? (libsqlite3.dylib + 313032) [0x19c5de6c8]
+                                                21   ??? (libsqlite3.dylib + 351796) [0x19c5e7e34]
+                                                  21   ??? (libsqlite3.dylib + 684760) [0x19c6392d8]
+                                                    21   ??? (libsqlite3.dylib + 751848) [0x19c6498e8]
+                                                      21   ??? (libsqlite3.dylib + 370616) [0x19c5ec7b8]
+                                                        21   ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                          21   ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                            21   <on behalf of backupd [6517] (originated by backupd [6517])>
+                                              1    ??? (libsqlite3.dylib + 313232) [0x19c5de790]
+                                                1    ??? (libsqlite3.dylib + 351796) [0x19c5e7e34]
+                                                  1    ??? (libsqlite3.dylib + 684760) [0x19c6392d8]
+                                                    1    ??? (libsqlite3.dylib + 751848) [0x19c6498e8]
+                                                      1    ??? (libsqlite3.dylib + 370616) [0x19c5ec7b8]
+                                                        1    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                          1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                            1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                          7    ??? (libsqlite3.dylib + 225540) [0x19c5c9104]
+                                            7    ??? (libsqlite3.dylib + 351796) [0x19c5e7e34]
+                                              7    ??? (libsqlite3.dylib + 684760) [0x19c6392d8]
+                                                7    ??? (libsqlite3.dylib + 751848) [0x19c6498e8]
+                                                  7    ??? (libsqlite3.dylib + 370616) [0x19c5ec7b8]
+                                                    7    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                      7    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                        7    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                          2    ??? (libsqlite3.dylib + 196508) [0x19c5c1f9c]
+                                            2    ??? (libsqlite3.dylib + 752168) [0x19c649a28]
+                                              2    ??? (libsqlite3.dylib + 236840) [0x19c5cbd28]
+                                                2    ??? (libsqlite3.dylib + 747856) [0x19c648950]
+                                                  2    ??? (libsqlite3.dylib + 684760) [0x19c6392d8]
+                                                    2    ??? (libsqlite3.dylib + 751848) [0x19c6498e8]
+                                                      2    ??? (libsqlite3.dylib + 370616) [0x19c5ec7b8]
+                                                        2    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                          2    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                            2    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                          1    ??? (libsqlite3.dylib + 210288) [0x19c5c5570]
+                                            1    ??? (libsqlite3.dylib + 325220) [0x19c5e1664]
+                                              1    ??? (libsqlite3.dylib + 319040) [0x19c5dfe40]
+                                                1    ??? (libsqlite3.dylib + 351796) [0x19c5e7e34]
+                                                  1    ??? (libsqlite3.dylib + 684760) [0x19c6392d8]
+                                                    1    ??? (libsqlite3.dylib + 751848) [0x19c6498e8]
+                                                      1    ??? (libsqlite3.dylib + 370616) [0x19c5ec7b8]
+                                                        1    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                          1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                            1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                1    ??? (libsqlite3.dylib + 744220) [0x19c647b1c]
+                                  1    ??? (libsqlite3.dylib + 778096) [0x19c64ff70]
+                                    1    ??? (libsqlite3.dylib + 778356) [0x19c650074]
+                                      1    ??? (libsqlite3.dylib + 778368) [0x19c650080]
+                                        1    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                          1    ??? (libsqlite3.dylib + 207220) [0x19c5c4974]
+                                            1    ??? (libsqlite3.dylib + 680440) [0x19c6381f8]
+                                              1    ??? (libsqlite3.dylib + 280508) [0x19c5d67bc]
+                                                1    ??? (libsqlite3.dylib + 311572) [0x19c5de114]
+                                                  1    ??? (libsqlite3.dylib + 368376) [0x19c5ebef8]
+                                                    1    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                      1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                        1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                        5    ??? (libsqlite3.dylib + 584520) [0x19c620b48]
+                          5    ??? (libsqlite3.dylib + 33108) [0x19c59a154]
+                            5    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                              5    ??? (libsqlite3.dylib + 207220) [0x19c5c4974]
+                                5    ??? (libsqlite3.dylib + 680488) [0x19c638228]
+                                  5    ??? (libsqlite3.dylib + 94252) [0x19c5a902c]
+                                    5    ??? (libsqlite3.dylib + 98372) [0x19c5aa044]
+                                      4    ??? (libsqlite3.dylib + 100900) [0x19c5aaa24]
+                                        4    ??? (libsqlite3.dylib + 686144) [0x19c639840]
+                                          4    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                            4    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                      1    ??? (libsqlite3.dylib + 102144) [0x19c5aaf00]
+                                        1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                    16   ??? (backupd + 1846880) [0x1003c2e60]
+                      16   ??? (backupd + 1841224) [0x1003c1848]
+                        16   ??? (libsqlite3.dylib + 573000) [0x19c61de48]
+                          15   ??? (libsqlite3.dylib + 424308) [0x19c5f9974]
+                            15   ??? (libsystem_kernel.dylib + 83876) [0x2487f97a4]
+                              15   <on behalf of backupd [6517] (originated by backupd [6517])>
+                          1    ??? (libsqlite3.dylib + 424076) [0x19c5f988c]
+                            1    ??? (libsystem_kernel.dylib + 83876) [0x2487f97a4]
+                              1    <on behalf of backupd [6517] (originated by backupd [6517])>
+            3    ??? (libdispatch.dylib + 42292) [0x1d691c534]
+              3    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                3    ??? (libdispatch.dylib + 6876) [0x1d6913adc]
+                  3    ??? (backupd + 1227012) [0x10032b904]
+                    3    ??? (backupd + 1314712) [0x100340f98]
+                      3    ??? (backupd + 1313800) [0x100340c08]
+                        3    ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                          3    <on behalf of UNKNOWN [32] (originated by UNKNOWN [32])>
+    48   ??? (libsystem_pthread.dylib + 4988) [0x1fa6d037c]
+      48   ??? (libdispatch.dylib + 83708) [0x1d69266fc]
+        31   ??? (libdispatch.dylib + 82108) [0x1d69260bc]
+          31   ??? (libdispatch.dylib + 230492) [0x1d694a45c]
+            31   ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+              31   ??? (libdispatch.dylib + 6876) [0x1d6913adc]
+                31   ??? (backupd + 762900) [0x1002ba414]
+                  31   ??? (backupd + 521712) [0x10027f5f0]
+                    30   ??? (backupd + 443584) [0x10026c4c0]
+                      28   ??? (backupd + 447868) [0x10026d57c]
+                        28   ??? (backupd + 447868) [0x10026d57c]
+                          24   ??? (backupd + 447868) [0x10026d57c]
+                            21   ??? (backupd + 447868) [0x10026d57c]
+                              21   ??? (backupd + 447832) [0x10026d558]
+                                21   ??? (backupd + 445808) [0x10026cd70]
+                                  21   ??? (backupd + 547184) [0x100285970]
+                                    18   ??? (backupd + 461772) [0x100270bcc]
+                                      18   ??? (backupd + 1849376) [0x1003c3820]
+                                        15   ??? (backupd + 1850304) [0x1003c3bc0]
+                                          14   ??? (backupd + 1851256) [0x1003c3f78]
+                                            14   ??? (backupd + 1722152) [0x1003a4728]
+                                              11   ??? (backupd + 1724588) [0x1003a50ac]
+                                                9    ??? (backupd + 1732176) [0x1003a6e50]
+                                                  9    ??? (backupd + 1732600) [0x1003a6ff8]
+                                                    9    ??? (backupd + 1742220) [0x1003a958c]
+                                                      9    ??? (backupd + 1744572) [0x1003a9ebc]
+                                                        9    ??? (backupd + 1752228) [0x1003abca4]
+                                                          9    ??? (backupd + 1853336) [0x1003c4798]
+                                                            8    ??? (backupd + 1860248) [0x1003c6298]
+                                                              8    ??? (backupd + 2083296) [0x1003fc9e0]
+                                                                8    ??? (backupd + 2084632) [0x1003fcf18]
+                                                                  8    ??? (backupd + 2085332) [0x1003fd1d4]
+                                                                    8    ??? (backupd + 1983824) [0x1003e4550]
+                                                                      8    ??? (libprequelite.dylib + 36612) [0x2b51b2f04]
+                                                                        8    ??? (libprequelite.dylib + 36120) [0x2b51b2d18]
+                                                                          8    ??? (libprequelite.dylib + 35948) [0x2b51b2c6c]
+                                                                            8    ??? (libprequelite.dylib + 39716) [0x2b51b3b24]
+                                                                              8    ??? (libprequelite.dylib + 39188) [0x2b51b3914]
+                                                                                8    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                                  8    ??? (libsqlite3.dylib + 207220) [0x19c5c4974]
+                                                                                    8    ??? (libsqlite3.dylib + 680488) [0x19c638228]
+                                                                                      8    ??? (libsqlite3.dylib + 94252) [0x19c5a902c]
+                                                                                        8    ??? (libsqlite3.dylib + 98372) [0x19c5aa044]
+                                                                                          5    ??? (libsqlite3.dylib + 100900) [0x19c5aaa24]
+                                                                                            5    ??? (libsqlite3.dylib + 686144) [0x19c639840]
+                                                                                              5    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                                5    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                                                                          3    ??? (libsqlite3.dylib + 102144) [0x19c5aaf00]
+                                                                                            3    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                                            1    ??? (backupd + 1862152) [0x1003c6a08]
+                                                              1    ??? (backupd + 2092540) [0x1003fedfc]
+                                                                1    ??? (backupd + 1986076) [0x1003e4e1c]
+                                                                  1    ??? (libprequelite.dylib + 27628) [0x2b51b0bec]
+                                                                    1    ??? (libprequelite.dylib + 34956) [0x2b51b288c]
+                                                                      1    ??? (libprequelite.dylib + 34580) [0x2b51b2714]
+                                                                        1    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                          1    ??? (libsqlite3.dylib + 221144) [0x19c5c7fd8]
+                                                                            1    ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                              1    ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                                1    ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                                  1    ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                                    1    ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                                      1    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                        1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                          1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                                2    ??? (backupd + 1732144) [0x1003a6e30]
+                                                  1    ??? (backupd + 1732176) [0x1003a6e50]
+                                                    1    ??? (backupd + 1732600) [0x1003a6ff8]
+                                                      1    ??? (backupd + 1742220) [0x1003a958c]
+                                                        1    ??? (backupd + 1744572) [0x1003a9ebc]
+                                                          1    ??? (backupd + 1752228) [0x1003abca4]
+                                                            1    ??? (backupd + 1853336) [0x1003c4798]
+                                                              1    ??? (backupd + 1862152) [0x1003c6a08]
+                                                                1    ??? (backupd + 2092540) [0x1003fedfc]
+                                                                  1    ??? (backupd + 1986076) [0x1003e4e1c]
+                                                                    1    ??? (libprequelite.dylib + 27628) [0x2b51b0bec]
+                                                                      1    ??? (libprequelite.dylib + 34956) [0x2b51b288c]
+                                                                        1    ??? (libprequelite.dylib + 34580) [0x2b51b2714]
+                                                                          1    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                            1    ??? (libsqlite3.dylib + 221144) [0x19c5c7fd8]
+                                                                              1    ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                                1    ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                                  1    ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                                    1    ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                                      1    ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                                        1    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                          1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                            1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                                  1    ??? (backupd + 1732144) [0x1003a6e30]
+                                                    1    ??? (backupd + 1732176) [0x1003a6e50]
+                                                      1    ??? (backupd + 1732600) [0x1003a6ff8]
+                                                        1    ??? (backupd + 1742220) [0x1003a958c]
+                                                          1    ??? (backupd + 1744572) [0x1003a9ebc]
+                                                            1    ??? (backupd + 1752228) [0x1003abca4]
+                                                              1    ??? (backupd + 1853336) [0x1003c4798]
+                                                                1    ??? (backupd + 1862152) [0x1003c6a08]
+                                                                  1    ??? (backupd + 2092540) [0x1003fedfc]
+                                                                    1    ??? (backupd + 1986076) [0x1003e4e1c]
+                                                                      1    ??? (libprequelite.dylib + 27628) [0x2b51b0bec]
+                                                                        1    ??? (libprequelite.dylib + 34956) [0x2b51b288c]
+                                                                          1    ??? (libprequelite.dylib + 34580) [0x2b51b2714]
+                                                                            1    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                              1    ??? (libsqlite3.dylib + 221144) [0x19c5c7fd8]
+                                                                                1    ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                                  1    ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                                    1    ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                                      1    ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                                        1    ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                                          1    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                            1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                              1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                              3    ??? (backupd + 1724492) [0x1003a504c]
+                                                3    ??? (backupd + 1732600) [0x1003a6ff8]
+                                                  3    ??? (backupd + 1742220) [0x1003a958c]
+                                                    3    ??? (backupd + 1744572) [0x1003a9ebc]
+                                                      3    ??? (backupd + 1752228) [0x1003abca4]
+                                                        3    ??? (backupd + 1853336) [0x1003c4798]
+                                                          3    ??? (backupd + 1860248) [0x1003c6298]
+                                                            3    ??? (backupd + 2083296) [0x1003fc9e0]
+                                                              3    ??? (backupd + 2084632) [0x1003fcf18]
+                                                                3    ??? (backupd + 2085332) [0x1003fd1d4]
+                                                                  3    ??? (backupd + 1983824) [0x1003e4550]
+                                                                    3    ??? (libprequelite.dylib + 36612) [0x2b51b2f04]
+                                                                      3    ??? (libprequelite.dylib + 36120) [0x2b51b2d18]
+                                                                        3    ??? (libprequelite.dylib + 35948) [0x2b51b2c6c]
+                                                                          3    ??? (libprequelite.dylib + 39716) [0x2b51b3b24]
+                                                                            3    ??? (libprequelite.dylib + 39188) [0x2b51b3914]
+                                                                              3    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                                3    ??? (libsqlite3.dylib + 207220) [0x19c5c4974]
+                                                                                  3    ??? (libsqlite3.dylib + 680488) [0x19c638228]
+                                                                                    3    ??? (libsqlite3.dylib + 94252) [0x19c5a902c]
+                                                                                      3    ??? (libsqlite3.dylib + 98372) [0x19c5aa044]
+                                                                                        3    ??? (libsqlite3.dylib + 100900) [0x19c5aaa24]
+                                                                                          3    ??? (libsqlite3.dylib + 686144) [0x19c639840]
+                                                                                            3    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                              3    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                          1    ??? (backupd + 1852200) [0x1003c4328]
+                                            1    ??? (backupd + 1695068) [0x10039dd5c]
+                                              1    ??? (backupd + 1690404) [0x10039cb24]
+                                                1    ??? (backupd + 1689460) [0x10039c774]
+                                                  1    ??? (backupd + 1689904) [0x10039c930]
+                                                    1    ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                                      1    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                        1    ??? (backupd + 1689700) [0x10039c864]
+                                                          1    ??? (backupd + 1690492) [0x10039cb7c]
+                                                            1    ??? (libprequelite.dylib + 35280) [0x2b51b29d0]
+                                                              1    ??? (libprequelite.dylib + 34956) [0x2b51b288c]
+                                                                1    ??? (libprequelite.dylib + 34580) [0x2b51b2714]
+                                                                  1    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                    1    ??? (libsqlite3.dylib + 233504) [0x19c5cb020]
+                                                                      1    ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                        1    ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                          1    ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                            1    ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                              1    ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                                1    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                  1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                    1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                        3    ??? (backupd + 1850344) [0x1003c3be8]
+                                          3    ??? (backupd + 2086556) [0x1003fd69c]
+                                            3    ??? (libprequelite.dylib + 32316) [0x2b51b1e3c]
+                                              3    ??? (libsqlite3.dylib + 557296) [0x19c61a0f0]
+                                                3    ??? (libsqlite3.dylib + 509692) [0x19c60e6fc]
+                                                  3    ??? (libsqlite3.dylib + 352656) [0x19c5e8190]
+                                                    3    ??? (libsqlite3.dylib + 354128) [0x19c5e8750]
+                                                      3    ??? (libsqlite3.dylib + 354764) [0x19c5e89cc]
+                                                        1    ??? (libsqlite3.dylib + 408608) [0x19c5f5c20]
+                                                          1    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                            1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                              1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                                        1    ??? (libsqlite3.dylib + 407552) [0x19c5f5800]
+                                                          1    ??? (libsystem_kernel.dylib + 33600) [0x2487ed340]
+                                                            1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                                        1    ??? (libsqlite3.dylib + 407184) [0x19c5f5690]
+                                                          1    ??? (libsqlite3.dylib + 328644) [0x19c5e23c4]
+                                                            1    ??? (libsystem_kernel.dylib + 23908) [0x2487ead64]
+                                                              1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                    3    ??? (backupd + 462884) [0x100271024]
+                                      3    ??? (backupd + 1711956) [0x1003a1f54]
+                                        3    ??? (backupd + 1695672) [0x10039dfb8]
+                                          3    ??? (backupd + 1692812) [0x10039d48c]
+                                            3    ??? (backupd + 1689460) [0x10039c774]
+                                              3    ??? (backupd + 1689904) [0x10039c930]
+                                                3    ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                                  3    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                    3    ??? (backupd + 1689700) [0x10039c864]
+                                                      3    ??? (backupd + 1986576) [0x1003e5010]
+                                                        3    ??? (backupd + 1695792) [0x10039e030]
+                                                          3    ??? (backupd + 1713044) [0x1003a2394]
+                                                            2    ??? (backupd + 1699288) [0x10039edd8]
+                                                              2    ??? (backupd + 1690124) [0x10039ca0c]
+                                                                2    ??? (backupd + 1689460) [0x10039c774]
+                                                                  2    ??? (backupd + 1689904) [0x10039c930]
+                                                                    2    ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                                                      2    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                                        2    ??? (backupd + 1689700) [0x10039c864]
+                                                                          2    ??? (backupd + 1986076) [0x1003e4e1c]
+                                                                            2    ??? (libprequelite.dylib + 27628) [0x2b51b0bec]
+                                                                              2    ??? (libprequelite.dylib + 34956) [0x2b51b288c]
+                                                                                2    ??? (libprequelite.dylib + 34580) [0x2b51b2714]
+                                                                                  2    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                                    2    ??? (libsqlite3.dylib + 221144) [0x19c5c7fd8]
+                                                                                      2    ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                                        2    ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                                          2    ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                                            2    ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                                              2    ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                                                2    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                                  2    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                                    2    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                                            1    ??? (backupd + 1699124) [0x10039ed34]
+                                                              1    ??? (backupd + 1690404) [0x10039cb24]
+                                                                1    ??? (backupd + 1689460) [0x10039c774]
+                                                                  1    ??? (backupd + 1689904) [0x10039c930]
+                                                                    1    ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                                                      1    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                                        1    ??? (backupd + 1689700) [0x10039c864]
+                                                                          1    ??? (backupd + 1690492) [0x10039cb7c]
+                                                                            1    ??? (libprequelite.dylib + 35280) [0x2b51b29d0]
+                                                                              1    ??? (libprequelite.dylib + 34956) [0x2b51b288c]
+                                                                                1    ??? (libprequelite.dylib + 34580) [0x2b51b2714]
+                                                                                  1    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                                    1    ??? (libsqlite3.dylib + 211020) [0x19c5c584c]
+                                                                                      1    ??? (libsqlite3.dylib + 1036168) [0x19c68ef88]
+                                                                                        1    ??? (libsqlite3.dylib + 75084) [0x19c5a454c]
+                                                                                          1    ??? (libsqlite3.dylib + 680488) [0x19c638228]
+                                                                                            1    ??? (libsqlite3.dylib + 94252) [0x19c5a902c]
+                                                                                              1    ??? (libsqlite3.dylib + 98372) [0x19c5aa044]
+                                                                                                1    ??? (libsqlite3.dylib + 100900) [0x19c5aaa24]
+                                                                                                  1    ??? (libsqlite3.dylib + 686144) [0x19c639840]
+                                                                                                    1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                                      1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                            3    ??? (backupd + 447832) [0x10026d558]
+                              3    ??? (backupd + 445808) [0x10026cd70]
+                                3    ??? (backupd + 547184) [0x100285970]
+                                  3    ??? (backupd + 455904) [0x10026f4e0]
+                                    3    ??? (backupd + 1358924) [0x10034bc4c]
+                                      3    ??? (backupd + 1694804) [0x10039dc54]
+                                        3    ??? (backupd + 1690404) [0x10039cb24]
+                                          3    ??? (backupd + 1689460) [0x10039c774]
+                                            3    ??? (backupd + 1689904) [0x10039c930]
+                                              3    ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                                3    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                  3    ??? (backupd + 1689700) [0x10039c864]
+                                                    3    ??? (backupd + 1690492) [0x10039cb7c]
+                                                      3    ??? (libprequelite.dylib + 35280) [0x2b51b29d0]
+                                                        3    ??? (libprequelite.dylib + 34956) [0x2b51b288c]
+                                                          3    ??? (libprequelite.dylib + 34580) [0x2b51b2714]
+                                                            3    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                              3    ??? (libsqlite3.dylib + 233504) [0x19c5cb020]
+                                                                3    ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                  3    ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                    3    ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                      3    ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                        3    ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                          3    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                            3    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                              3    <on behalf of backupd [6517] (originated by backupd [6517])>
+                          4    ??? (backupd + 447832) [0x10026d558]
+                            4    ??? (backupd + 445808) [0x10026cd70]
+                              4    ??? (backupd + 547184) [0x100285970]
+                                4    ??? (backupd + 455024) [0x10026f170]
+                                  3    ??? (backupd + 274244) [0x100242f44]
+                                    3    ??? (backupd + 271128) [0x100242318]
+                                      3    ??? (backupd + 2288708) [0x10042ec44]
+                                        3    ??? (backupd + 272016) [0x100242690]
+                                          3    ??? (backupd + 1201184) [0x100325420]
+                                            3    ??? (CoreFoundation + 1702720) [0x19df8cb40]
+                                              3    ??? (CoreFoundation + 73796) [0x19ddff044]
+                                                3    ??? (backupd + 1201316) [0x1003254a4]
+                                                  3    ??? (backupd + 276932) [0x1002439c4]
+                                                    3    ??? (backupd + 275916) [0x1002435cc]
+                                                      3    ??? (backupd + 1694496) [0x10039db20]
+                                                        3    ??? (backupd + 1690404) [0x10039cb24]
+                                                          3    ??? (backupd + 1689460) [0x10039c774]
+                                                            3    ??? (backupd + 1689904) [0x10039c930]
+                                                              3    ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                                                3    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                                  3    ??? (backupd + 1689700) [0x10039c864]
+                                                                    3    ??? (backupd + 1690492) [0x10039cb7c]
+                                                                      3    ??? (libprequelite.dylib + 35280) [0x2b51b29d0]
+                                                                        3    ??? (libprequelite.dylib + 34956) [0x2b51b288c]
+                                                                          3    ??? (libprequelite.dylib + 34580) [0x2b51b2714]
+                                                                            3    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                              3    ??? (libsqlite3.dylib + 233504) [0x19c5cb020]
+                                                                                3    ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                                  3    ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                                    3    ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                                      3    ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                                        3    ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                                          3    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                            3    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                              3    <on behalf of backupd [6517] (originated by backupd [6517])>
+                                  1    ??? (backupd + 273956) [0x100242e24]
+                                    1    ??? (backupd + 2281260) [0x10042cf2c]
+                                      1    ??? (Foundation + 725380) [0x19b4e9184]
+                                        1    ??? (Foundation + 725672) [0x19b4e92a8]
+                                          1    ??? (Foundation + 683652) [0x19b4dee84]
+                                            1    ??? (Foundation + 684504) [0x19b4df1d8]
+                                              1    ??? (Foundation + 684904) [0x19b4df368]
+                                                1    ??? (libremovefile.dylib + 2080) [0x2b5744820]
+                                                  1    ??? (libremovefile.dylib + 4292) [0x2b57450c4]
+                                                    1    ??? (libsystem_kernel.dylib + 25760) [0x2487eb4a0]
+                                                      1    <on behalf of backupd [6517] (originated by backupd [6517])>
+                      2    ??? (backupd + 447832) [0x10026d558]
+                        2    ??? (backupd + 445808) [0x10026cd70]
+                          2    ??? (backupd + 547184) [0x100285970]
+                            2    ??? (backupd + 453008) [0x10026e990]
+                              2    ??? (backupd + 2507648) [0x100464380]
+                                2    ??? (backupd + 1276300) [0x10033798c]
+                                  2    ??? (backupd + 2071868) [0x1003f9d3c]
+                                    2    ??? (<08F173EC-8CD4-3F8E-AAE6-8AD1BFE069C1> + 39688) [0x1051edb08]
+                                      2    ??? (CoreServices + 518540) [0x19c3ac98c]
+                                        2    ??? (CoreServices + 1318384) [0x19c46fdf0]
+                                          2    ??? (CoreServices + 1321504) [0x19c470a20]
+                                            2    ??? (CoreServices + 715100) [0x19c3dc95c]
+                                              2    ??? (CoreServices + 211556) [0x19c361a64]
+                                                2    ??? (CoreServicesStore + 16836) [0x1d50c81c4]
+                                                  2    ??? (CoreServicesStore + 17176) [0x1d50c8318]
+                                                    2    ??? (CoreServicesStore + 17416) [0x1d50c8408]
+                                                      2    ??? (CoreServices + 715844) [0x19c3dcc44]
+                                                        2    ??? (CoreServices + 1322100) [0x19c470c74]
+                                                          2    ??? (CoreServices + 518672) [0x19c3aca10]
+                                                            2    ??? (<08F173EC-8CD4-3F8E-AAE6-8AD1BFE069C1> + 40204) [0x1051edd0c]
+                                                              2    ??? (Foundation + 9595132) [0x19bd5e8fc]
+                                                                2    ??? (Foundation + 457364) [0x19b4a7a94]
+                                                                  2    ??? (Foundation + 457956) [0x19b4a7ce4]
+                                                                    2    ??? (Foundation + 268096) [0x19b479740]
+                                                                      2    ??? (Foundation + 461316) [0x19b4a8a04]
+                                                                        2    ??? (Foundation + 461292) [0x19b4a89ec]
+                                                                          2    ??? (Foundation + 461264) [0x19b4a89d0]
+                                                                            2    ??? (Foundation + 474760) [0x19b4abe88]
+                                                                              2    ??? (Foundation + 462640) [0x19b4a8f30]
+                                                                                2    ??? (Foundation + 463660) [0x19b4a932c]
+                                                                                  2    ??? (libsystem_kernel.dylib + 21664) [0x2487ea4a0]
+                                                                                    2    <on behalf of backupd [6517] (originated by backupd [6517])>
+                    1    ??? (backupd + 443616) [0x10026c4e0]
+                      1    ??? (backupd + 444184) [0x10026c718]
+                        1    ??? (backupd + 1703296) [0x10039fd80]
+                          1    ??? (backupd + 1679788) [0x10039a1ac]
+                            1    ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                              1    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                1    ??? (backupd + 1679936) [0x10039a240]
+                                  1    ??? (backupd + 1680436) [0x10039a434]
+                                    1    ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                      1    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                        1    ??? (backupd + 1681028) [0x10039a684]
+                                          1    ??? (libprequelite.dylib + 32316) [0x2b51b1e3c]
+                                            1    ??? (libsqlite3.dylib + 557296) [0x19c61a0f0]
+                                              1    ??? (libsqlite3.dylib + 509692) [0x19c60e6fc]
+                                                1    ??? (libsqlite3.dylib + 352656) [0x19c5e8190]
+                                                  1    ??? (libsqlite3.dylib + 354128) [0x19c5e8750]
+                                                    1    ??? (libsqlite3.dylib + 354764) [0x19c5e89cc]
+                                                      1    ??? (libsqlite3.dylib + 408608) [0x19c5f5c20]
+                                                        1    ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                          1    ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                            1    <on behalf of backupd [6517] (originated by backupd [6517])>
+        17   ??? (libdispatch.dylib + 81736) [0x1d6925f48]
+          11   ??? (libdispatch.dylib + 23768) [0x1d6917cd8]
+            11   ??? (libdispatch.dylib + 26212) [0x1d6918664]
+              11   ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                11   ??? (libdispatch.dylib + 70736) [0x1d6923450]
+                  11   ??? (backupd + 2481224) [0x10045dc48]
+                    11   ??? (backupd + 2481644) [0x10045ddec]
+                      11   ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                        11   <on behalf of backupd [6517] (originated by backupd [6517])>
+          5    ??? (libdispatch.dylib + 23952) [0x1d6917d90]
+            5    ??? (libdispatch.dylib + 26212) [0x1d6918664]
+              5    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                5    ??? (libdispatch.dylib + 70736) [0x1d6923450]
+                  5    ??? (backupd + 2481224) [0x10045dc48]
+                    5    ??? (backupd + 2481644) [0x10045ddec]
+                      5    ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                        5    <on behalf of backupd [6517] (originated by backupd [6517])>
+          1    ??? (libdispatch.dylib + 25340) [0x1d69182fc]
+            1    ??? (libdispatch.dylib + 227376) [0x1d6949830]
+              1    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                1    ??? (libdispatch.dylib + 6876) [0x1d6913adc]
+                  1    ??? (backupd + 1221148) [0x10032a21c]
+                    1    ??? (backupd + 1222000) [0x10032a570]
+                      1    ??? (backupd + 1222536) [0x10032a788]
+                        1    ??? (backupd + 2132208) [0x1004088f0]
+                          1    ??? (backupd + 2132580) [0x100408a64]
+                            1    ??? (backupd + 1678952) [0x100399e68]
+                              1    ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                1    ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                  1    ??? (backupd + 1679236) [0x100399f84]
+                                    1    ??? (backupd + 1683560) [0x10039b068]
+                                      1    ??? (backupd + 1684984) [0x10039b5f8]
+                                        1    ??? (libprequelite.dylib + 36612) [0x2b51b2f04]
+                                          1    ??? (libprequelite.dylib + 36120) [0x2b51b2d18]
+                                            1    ??? (libprequelite.dylib + 35948) [0x2b51b2c6c]
+                                              1    ??? (libprequelite.dylib + 39716) [0x2b51b3b24]
+                                                1    ??? (libprequelite.dylib + 39188) [0x2b51b3914]
+                                                  1    ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                    1    ??? (libsqlite3.dylib + 207220) [0x19c5c4974]
+                                                      1    ??? (libsqlite3.dylib + 680488) [0x19c638228]
+                                                        1    ??? (libsqlite3.dylib + 94252) [0x19c5a902c]
+                                                          1    ??? (libsqlite3.dylib + 98372) [0x19c5aa044]
+                                                            1    ??? (libsqlite3.dylib + 103580) [0x19c5ab49c]
+                                                              1    <on behalf of UNKNOWN [32] (originated by UNKNOWN [32])>
+
+  Binary Images:
+           0x100200000 -                ???  backupd                 <04D0F513-E34A-3164-81BA-9DF8064758BF>  /System/Library/PrivateFrameworks/MobileBackup.framework/backupd
+           0x1051e4000 -                ???  ???                     <08F173EC-8CD4-3F8E-AAE6-8AD1BFE069C1>
+           0x19b438000 -        0x19c2a4c5f  Foundation              <DF782AC5-CC02-358C-A2F7-149703F5F44A>  /System/Library/Frameworks/Foundation.framework/Foundation
+           0x19c32e000 -        0x19c59141f  CoreServices            <ADA5FD68-13A1-3B13-A3FB-FF7A520FA29E>  /System/Library/Frameworks/CoreServices.framework/CoreServices
+           0x19c592000 -        0x19c73b6a3  libsqlite3.dylib        <215F5D7B-4785-344B-AD2B-0994C4CD39E7>  /usr/lib/libsqlite3.dylib
+           0x19dded000 -        0x19e37373f  CoreFoundation          <0BE54DBE-1ADC-3588-BFFA-E7C99E8D8208>  /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation
+           0x1d50c4000 -        0x1d50fe67f  CoreServicesStore       <14EB6FF4-BD44-34A1-8CE7-2B4B0AD91F0B>  /System/Library/PrivateFrameworks/CoreServicesStore.framework/CoreServicesStore
+           0x1d6912000 -        0x1d695821f  libdispatch.dylib       <11C047C4-33B3-39A3-AE43-BF617CFC7D2C>  /usr/lib/system/libdispatch.dylib
+           0x1fa6cf000 -        0x1fa6db44f  libsystem_pthread.dylib <741C5AFB-3F30-362E-9313-AAB3DE2497C9>  /usr/lib/system/libsystem_pthread.dylib
+           0x2487e5000 -        0x24881fd2b  libsystem_kernel.dylib  <15E8A2AE-4BFD-3BB8-944E-2EC12393C59C>  /usr/lib/system/libsystem_kernel.dylib
+           0x2b51aa000 -        0x2b51befbf  libprequelite.dylib     <6DC04195-18BB-3B64-A601-67A8FC20D2D9>  /usr/lib/libprequelite.dylib
+           0x2b5744000 -        0x2b5746b5f  libremovefile.dylib     <734D3AFC-8CF0-3EBF-86CC-ED598EB29988>  /usr/lib/system/libremovefile.dylib

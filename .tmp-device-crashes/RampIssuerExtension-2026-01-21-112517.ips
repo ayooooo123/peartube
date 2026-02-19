@@ -1,0 +1,1082 @@
+{"app_name":"RampIssuerExtension","timestamp":"2026-01-21 11:25:17.00 -0500","app_version":"0.145.0","slice_uuid":"da690760-3606-3223-9aef-a66bf25648f1","adam_id":"1628197245","build_version":"9534.1","bundleID":"com.ramp.Ramp.ios.IssuerExtension","platform":2,"share_with_app_devs":0,"is_first_party":0,"bug_type":"309","os_version":"iPhone OS 26.2 (23C55)","roots_installed":0,"incident_id":"9E2EA1D8-E168-4D1A-938B-98E8F1CE880D","name":"RampIssuerExtension"}
+{
+  "uptime" : 310000,
+  "procRole" : "Unspecified",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "iPhone14,7",
+  "coalitionID" : 3655,
+  "osVersion" : {
+    "isEmbedded" : true,
+    "train" : "iPhone OS 26.2",
+    "releaseType" : "User",
+    "build" : "23C55"
+  },
+  "captureTime" : "2026-01-21 11:25:16.4249 -0500",
+  "codeSigningMonitor" : 2,
+  "incident" : "9E2EA1D8-E168-4D1A-938B-98E8F1CE880D",
+  "pid" : 74691,
+  "translated" : false,
+  "cpuType" : "ARM-64",
+  "procLaunch" : "2026-01-21 11:25:16.0995 -0500",
+  "procStartAbsTime" : 7529480353559,
+  "procExitAbsTime" : 7529488124637,
+  "procName" : "RampIssuerExtension",
+  "procPath" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/PlugIns\/RampIssuerExtension.appex\/RampIssuerExtension",
+  "bundleInfo" : {"CFBundleShortVersionString":"0.145.0","CFBundleVersion":"9534.1","CFBundleIdentifier":"com.ramp.Ramp.ios.IssuerExtension"},
+  "storeInfo" : {"itemID":"1628197245","storeCohortMetadata":"10|date=1747090800000&sf=143441&rdom=app.link&rapp=com.apple.mobilesafari&pgtp=Software&pgid=1628197245&ctxt=Today&lngid=1","distributorID":"com.apple.AppStore","deviceIdentifierForVendor":"46BA3B3C-B110-4EF6-BBCB-E2A5F6D8BA19","softwareVersionExternalIdentifier":"881581639","applicationVariant":"1:iPhone14,7:18","thirdParty":true},
+  "parentProc" : "launchd",
+  "parentPid" : 1,
+  "coalitionName" : "com.ramp.Ramp.ios.IssuerExtension",
+  "crashReporterKey" : "70a2e716576e873bca1e75ad16ff4b60c1c4742b",
+  "appleIntelligenceStatus" : {"state":"unavailable","reasons":["deviceNotCapable"]},
+  "developerMode" : 1,
+  "bootProgressRegister" : "0x20800004",
+  "wasUnlockedSinceBoot" : 1,
+  "isLocked" : 0,
+  "throttleTimeout" : 10,
+  "codeSigningID" : "com.ramp.Ramp.ios.IssuerExtension",
+  "codeSigningTeamID" : "74D5D3RXX2",
+  "codeSigningFlags" : 570450689,
+  "codeSigningValidationCategory" : 4,
+  "codeSigningTrustLevel" : 5,
+  "codeSigningAuxiliaryInfo" : 0,
+  "instructionByteStream" : {"beforePC":"IZApkaBjANH63gCUs4Ne+PMDAPnAAQDwADwrkVDBAJRIGxiQE2EC+Q==","atPC":"IAAg1H8jA9X9e7+p\/QMAkRAAQPnxAwCqMVzt8jAawdrxAxCq8UfB2g=="},
+  "bootSessionUUID" : "48C94FA3-D175-4A85-B41C-2E9861780599",
+  "basebandVersion" : "4.20.01",
+  "exception" : {"codes":"0x0000000000000001, 0x00000001bff4f540","rawCodes":[1,7515469120],"type":"EXC_BREAKPOINT","signal":"SIGTRAP"},
+  "termination" : {"flags":0,"code":5,"namespace":"SIGNAL","indicator":"Trace\/BPT trap: 5","byProc":"exc handler","byPid":74691},
+  "os_fault" : {"process":"RampIssuerExtension"},
+  "faultingThread" : 1,
+  "threads" : [{"id":3345530,"threadState":{"x":[{"value":268451845},{"value":21592279046},{"value":8589934592,"objc-selector":":isDonatedBySiri:startDate:durationInSeconds:interactionFields:fields:groupIdentifier:appIntentInteractionIdentifier:interactionSource:"},{"value":42893838385152},{"value":0},{"value":42893838385152},{"value":2},{"value":4294967295},{"value":0},{"value":0},{"value":2},{"value":0},{"value":0},{"value":9987},{"value":0},{"value":0},{"value":18446744073709551569},{"value":2},{"value":0},{"value":4294967295},{"value":2},{"value":42893838385152},{"value":0},{"value":42893838385152},{"value":6099837032},{"value":8589934592,"objc-selector":":isDonatedBySiri:startDate:durationInSeconds:interactionFields:fields:groupIdentifier:appIntentInteractionIdentifier:interactionSource:"},{"value":21592279046},{"value":18446744073709550527},{"value":10823548928,"symbolLocation":0,"symbol":"_libkernel_string_functions"}],"flavor":"ARM_THREAD_STATE64","lr":{"value":9426834168},"cpsr":{"value":4096},"fp":{"value":6099836880},"sp":{"value":6099836800},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":9426820308},"far":{"value":0}},"queue":"com.apple.main-thread","frames":[{"imageOffset":3284,"symbol":"mach_msg2_trap","symbolLocation":8,"imageIndex":99},{"imageOffset":17144,"symbol":"mach_msg2_internal","symbolLocation":76,"imageIndex":99},{"imageOffset":16916,"symbol":"mach_msg_overwrite","symbolLocation":428,"imageIndex":99},{"imageOffset":16476,"symbol":"mach_msg","symbolLocation":24,"imageIndex":99},{"imageOffset":288872,"symbol":"__CFRunLoopServiceMachPort","symbolLocation":160,"imageIndex":100},{"imageOffset":120904,"symbol":"__CFRunLoopRun","symbolLocation":1188,"imageIndex":100},{"imageOffset":117356,"symbol":"_CFRunLoopRunSpecificWithOptions","symbolLocation":532,"imageIndex":100},{"imageOffset":10260584,"symbol":"-[NSRunLoop(NSRunLoop) runMode:beforeDate:]","symbolLocation":212,"imageIndex":101},{"imageOffset":38172,"symbol":"-[NSRunLoop(NSRunLoop) run]","symbolLocation":64,"imageIndex":101},{"imageOffset":122608,"symbol":"_xpc_objc_main","symbolLocation":336,"imageIndex":102},{"imageOffset":132216,"symbol":"_xpc_main","symbolLocation":64,"imageIndex":102},{"imageOffset":132696,"symbol":"xpc_main","symbolLocation":64,"imageIndex":102},{"imageOffset":823084,"symbol":"-[NSXPCListener resume]","symbolLocation":308,"imageIndex":101},{"imageOffset":102344,"imageIndex":103},{"imageOffset":21692,"imageIndex":103},{"imageOffset":21348,"imageIndex":103},{"imageOffset":103196,"imageIndex":103},{"imageOffset":208888,"symbol":"EXExtensionMain(_:_:)","symbolLocation":736,"imageIndex":104},{"imageOffset":1410728,"symbol":"NSExtensionMain","symbolLocation":200,"imageIndex":101},{"imageOffset":20008,"symbol":"start","symbolLocation":7116,"imageIndex":105}]},{"triggered":true,"id":3345553,"threadState":{"x":[{"value":18446744072367374336},{"value":96},{"value":18446726483666796544},{"value":1},{"value":4538270080},{"value":0},{"value":29382749080023913},{"value":4538269952},{"value":8324345856,"symbolLocation":72,"symbol":"_OBJC_PROTOCOL_$_OS_dispatch_queue_main"},{"value":2143031279},{"value":0},{"value":0},{"value":281507193417744},{"value":263882795117568},{"value":258048},{"value":29},{"value":10749247890141511936},{"value":251659264},{"value":0},{"value":4538269824},{"value":4547131168},{"value":0},{"value":60},{"value":4367265360},{"value":25},{"value":8349126888,"symbolLocation":0,"symbol":"type metadata for MainActor"},{"value":0},{"value":4367222128},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":7515469112},"cpsr":{"value":4096},"fp":{"value":6100394624},"sp":{"value":6100394560},"esr":{"value":4060086273,"description":"(Breakpoint) brk 1"},"pc":{"value":7515469120,"matchesCrashFrame":1},"far":{"value":0}},"queue":"com.apple.extension.global-state-queue","frames":[{"imageOffset":21824,"symbol":"_dispatch_assert_queue_fail","symbolLocation":120,"imageIndex":107},{"imageOffset":227076,"symbol":"dispatch_assert_queue$V2.cold.1","symbolLocation":116,"imageIndex":107},{"imageOffset":21700,"symbol":"dispatch_assert_queue","symbolLocation":108,"imageIndex":107},{"imageOffset":20540,"symbol":"_swift_task_checkIsolatedSwift","symbolLocation":48,"imageIndex":108},{"imageOffset":411428,"symbol":"swift_task_isCurrentExecutorWithFlagsImpl(swift::SerialExecutorRef, swift::swift_task_is_current_executor_flag)","symbolLocation":356,"imageIndex":108},{"imageOffset":182416,"imageIndex":0},{"imageOffset":181552,"imageIndex":0},{"imageOffset":182744,"imageIndex":0},{"imageOffset":334292,"symbol":"__112-[EXConcreteExtensionContextVendor _beginRequestWithExtensionItems:listenerEndpoint:withContextUUID:completion:]_block_invoke","symbolLocation":676,"imageIndex":104},{"imageOffset":6876,"symbol":"_dispatch_call_block_and_release","symbolLocation":32,"imageIndex":107},{"imageOffset":112636,"symbol":"_dispatch_client_callout","symbolLocation":16,"imageIndex":107},{"imageOffset":42088,"symbol":"_dispatch_lane_serial_drain","symbolLocation":740,"imageIndex":107},{"imageOffset":44868,"symbol":"_dispatch_lane_invoke","symbolLocation":388,"imageIndex":107},{"imageOffset":87020,"symbol":"_dispatch_root_queue_drain_deferred_wlh","symbolLocation":292,"imageIndex":107},{"imageOffset":85220,"symbol":"_dispatch_workloop_worker_thread","symbolLocation":692,"imageIndex":107},{"imageOffset":5048,"symbol":"_pthread_wqthread","symbolLocation":292,"imageIndex":109},{"imageOffset":2240,"symbol":"start_wqthread","symbolLocation":8,"imageIndex":109}]},{"id":3345554,"frames":[],"threadState":{"x":[{"value":6100971520},{"value":4611},{"value":6100434944},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6100971520},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":8117057720},"far":{"value":0}}},{"id":3345555,"frames":[],"threadState":{"x":[{"value":6101544960},{"value":0},{"value":6101008384},{"value":0},{"value":278532},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6101544960},"esr":{"value":0},"pc":{"value":8117057720},"far":{"value":0}}}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4367040512,
+    "size" : 262144,
+    "uuid" : "da690760-3606-3223-9aef-a66bf25648f1",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/PlugIns\/RampIssuerExtension.appex\/RampIssuerExtension",
+    "name" : "RampIssuerExtension"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4372299776,
+    "size" : 1720320,
+    "uuid" : "98ca029a-2f46-31ec-91a9-39073701c19c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Lottie.framework\/Lottie",
+    "name" : "Lottie"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4374708224,
+    "size" : 393216,
+    "uuid" : "7f64d461-09fc-3816-8722-669a4a7e77f0",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/UserLeapKit.framework\/UserLeapKit",
+    "name" : "UserLeapKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4367400960,
+    "size" : 278528,
+    "uuid" : "cae67dcd-3935-3fe4-a448-08971ae8afc4",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Analytics_framework.framework\/Analytics_framework",
+    "name" : "Analytics_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4367843328,
+    "size" : 180224,
+    "uuid" : "d7d85651-ad18-35f5-a33e-dea44a64a395",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Configuration_framework.framework\/Configuration_framework",
+    "name" : "Configuration_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4368138240,
+    "size" : 98304,
+    "uuid" : "750671e3-7e5c-382a-af8a-202a7d1af160",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/AppInfo_framework.framework\/AppInfo_framework",
+    "name" : "AppInfo_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4369006592,
+    "size" : 81920,
+    "uuid" : "ef6e0152-fc04-328b-8871-7b7be62cd468",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Environments_framework.framework\/Environments_framework",
+    "name" : "Environments_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4375887872,
+    "size" : 229376,
+    "uuid" : "a36699aa-2014-386e-bb4f-3eb1488eace8",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RampLogging_framework.framework\/RampLogging_framework",
+    "name" : "RampLogging_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4376264704,
+    "size" : 540672,
+    "uuid" : "9c914508-c257-3ba1-8b1d-0fd5e5d96232",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Utils_framework.framework\/Utils_framework",
+    "name" : "Utils_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4377198592,
+    "size" : 49152,
+    "uuid" : "53b4b071-7b11-353e-a430-f6b855075a7e",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RampMacros_framework.framework\/RampMacros_framework",
+    "name" : "RampMacros_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4377296896,
+    "size" : 22069248,
+    "uuid" : "89db7214-f4ab-315f-bb28-8eb382a46a33",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/ThirdParties_framework.framework\/ThirdParties_framework",
+    "name" : "ThirdParties_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4413472768,
+    "size" : 720896,
+    "uuid" : "5bd388ed-4ac0-300a-acac-cf6ed9126bf2",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/CaptureConfirmation_framework.framework\/CaptureConfirmation_framework",
+    "name" : "CaptureConfirmation_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4414455808,
+    "size" : 442368,
+    "uuid" : "0e232b24-948e-324b-adf5-aaf7079e7682",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Reimbursements_framework.framework\/Reimbursements_framework",
+    "name" : "Reimbursements_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4415062016,
+    "size" : 1130496,
+    "uuid" : "bfd4e9fb-c627-359a-ae6c-7b57064c6eab",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SpendEvents_framework.framework\/SpendEvents_framework",
+    "name" : "SpendEvents_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4416602112,
+    "size" : 1687552,
+    "uuid" : "bb8ee906-967a-3c9a-b111-5db8d2365d88",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SpendRequests_framework.framework\/SpendRequests_framework",
+    "name" : "SpendRequests_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4418830336,
+    "size" : 638976,
+    "uuid" : "53b47d7b-a83c-322a-bfed-fe67db6214c5",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SpendEdits_framework.framework\/SpendEdits_framework",
+    "name" : "SpendEdits_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4419747840,
+    "size" : 229376,
+    "uuid" : "39b7a6b9-00b9-3ab4-946e-62fb5b6d897a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Business_framework.framework\/Business_framework",
+    "name" : "Business_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4420108288,
+    "size" : 1409024,
+    "uuid" : "991a1529-4394-3f4a-8be1-addb8385449c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SubmitReimbursement_framework.framework\/SubmitReimbursement_framework",
+    "name" : "SubmitReimbursement_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4421861376,
+    "size" : 327680,
+    "uuid" : "c6f88882-cab0-3ef5-bd9d-49cc62cf91d4",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/CreateTrip_framework.framework\/CreateTrip_framework",
+    "name" : "CreateTrip_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4422320128,
+    "size" : 3112960,
+    "uuid" : "f016c499-c918-3566-b230-554e76cd0fce",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SpendEventDetail_framework.framework\/SpendEventDetail_framework",
+    "name" : "SpendEventDetail_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4426285056,
+    "size" : 229376,
+    "uuid" : "348f436a-77a2-3882-a7db-157596e819f2",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/ClientAction_framework.framework\/ClientAction_framework",
+    "name" : "ClientAction_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4426645504,
+    "size" : 425984,
+    "uuid" : "b256430f-9e61-3bcf-aff6-dacbf235aaf1",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/EventHistory_framework.framework\/EventHistory_framework",
+    "name" : "EventHistory_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4427251712,
+    "size" : 229376,
+    "uuid" : "ae314f85-d743-35d0-80fa-cc4cf7937b31",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Itinerary_framework.framework\/Itinerary_framework",
+    "name" : "Itinerary_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4427595776,
+    "size" : 163840,
+    "uuid" : "93bf9688-a5e6-39b1-933c-1be7f55dbbb6",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/ReceiptAutomation_framework.framework\/ReceiptAutomation_framework",
+    "name" : "ReceiptAutomation_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4427857920,
+    "size" : 393216,
+    "uuid" : "0eed06af-614f-3a19-afb1-5cfb3659469a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/ReceiptDetection_framework.framework\/ReceiptDetection_framework",
+    "name" : "ReceiptDetection_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4428447744,
+    "size" : 344064,
+    "uuid" : "52e9a211-5d06-3497-8bcf-ce0b75d858e2",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SpendProgramSwap_framework.framework\/SpendProgramSwap_framework",
+    "name" : "SpendProgramSwap_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4428955648,
+    "size" : 1277952,
+    "uuid" : "0f3848e5-a69c-34b5-a60a-d7bab1815a4e",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SpendCore_framework.framework\/SpendCore_framework",
+    "name" : "SpendCore_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4430708736,
+    "size" : 1671168,
+    "uuid" : "ce177de6-db53-3672-9242-c72ed7a8f2b8",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/CoreUI_framework.framework\/CoreUI_framework",
+    "name" : "CoreUI_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4433051648,
+    "size" : 376832,
+    "uuid" : "40477a3b-efbc-3629-b7a0-86090b0bb704",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Location_framework.framework\/Location_framework",
+    "name" : "Location_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4433674240,
+    "size" : 409600,
+    "uuid" : "ff8aa6db-3c0c-30b9-83cd-1d753b9eedc8",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/MileageTracking_framework.framework\/MileageTracking_framework",
+    "name" : "MileageTracking_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4434345984,
+    "size" : 131072,
+    "uuid" : "acee251a-4fdb-3f96-9a00-d3627b1c136b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Map_framework.framework\/Map_framework",
+    "name" : "Map_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4434575360,
+    "size" : 212992,
+    "uuid" : "32d3a3bf-eb6b-32f8-84ac-2f4a4ede1cb4",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Profile_framework.framework\/Profile_framework",
+    "name" : "Profile_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4434886656,
+    "size" : 163840,
+    "uuid" : "83be6f92-0568-3445-af96-e65a0064cc50",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Push_framework.framework\/Push_framework",
+    "name" : "Push_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4435165184,
+    "size" : 360448,
+    "uuid" : "5fabd5ff-1503-3d19-af22-6a5a4f3731bc",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Receipts_framework.framework\/Receipts_framework",
+    "name" : "Receipts_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4435722240,
+    "size" : 770048,
+    "uuid" : "63d8d2d4-b2cb-36aa-b705-da7b04477e79",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Capture_framework.framework\/Capture_framework",
+    "name" : "Capture_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4436869120,
+    "size" : 262144,
+    "uuid" : "2dc058d2-d02b-3e86-8ed4-bd117eb1fe0a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/AppRoutes_framework.framework\/AppRoutes_framework",
+    "name" : "AppRoutes_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4437278720,
+    "size" : 262144,
+    "uuid" : "7c041f0f-7843-3859-962e-fe350216312d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NetworkingApprovals_framework.framework\/NetworkingApprovals_framework",
+    "name" : "NetworkingApprovals_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4437721088,
+    "size" : 212992,
+    "uuid" : "34938d8f-2589-3876-9fc9-7d874a2cf8fe",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SpendEventCore_framework.framework\/SpendEventCore_framework",
+    "name" : "SpendEventCore_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4438065152,
+    "size" : 950272,
+    "uuid" : "bb01b10d-9a76-3dfd-8350-831b334192ff",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NetworkingTravel_framework.framework\/NetworkingTravel_framework",
+    "name" : "NetworkingTravel_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4439621632,
+    "size" : 98304,
+    "uuid" : "fa8eac70-1822-3c5e-9c82-64a036623d3c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Permissions_framework.framework\/Permissions_framework",
+    "name" : "Permissions_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4439801856,
+    "size" : 212992,
+    "uuid" : "9b9cc986-48f4-3290-83a9-bf434508f24b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SpendLimitSwap_framework.framework\/SpendLimitSwap_framework",
+    "name" : "SpendLimitSwap_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4440113152,
+    "size" : 180224,
+    "uuid" : "32a65866-83d9-368d-bc74-c44cbee3dea4",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Money_framework.framework\/Money_framework",
+    "name" : "Money_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4440391680,
+    "size" : 327680,
+    "uuid" : "41d918ca-b526-327b-be0f-1a5fa2d0d28c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Navigation_framework.framework\/Navigation_framework",
+    "name" : "Navigation_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4440899584,
+    "size" : 114688,
+    "uuid" : "fe4dedcd-ddd7-34df-973d-fdced908773a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/ScreenTopTakeover_framework.framework\/ScreenTopTakeover_framework",
+    "name" : "ScreenTopTakeover_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4441112576,
+    "size" : 131072,
+    "uuid" : "1653f37b-cb1e-3998-a7c7-d1f12fb252f1",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/TabBar_framework.framework\/TabBar_framework",
+    "name" : "TabBar_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4441325568,
+    "size" : 393216,
+    "uuid" : "84a73c60-1697-30f9-882f-d5ae3854cf6b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Sunshine_framework.framework\/Sunshine_framework",
+    "name" : "Sunshine_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4441866240,
+    "size" : 229376,
+    "uuid" : "beb302bf-d26e-3e1c-ad1f-6edd31df6d2a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/BottomSheet_framework.framework\/BottomSheet_framework",
+    "name" : "BottomSheet_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4442243072,
+    "size" : 638976,
+    "uuid" : "174692af-99ba-3ef3-87f0-00d00b4f8277",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Inputs_framework.framework\/Inputs_framework",
+    "name" : "Inputs_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4443193344,
+    "size" : 344064,
+    "uuid" : "47c721eb-2492-337d-be29-2e400d84fda3",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/WebView_framework.framework\/WebView_framework",
+    "name" : "WebView_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4443717632,
+    "size" : 311296,
+    "uuid" : "61cb2f52-0074-3e9f-a1f8-97e3be3595f7",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NSNavigation_framework.framework\/NSNavigation_framework",
+    "name" : "NSNavigation_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4444209152,
+    "size" : 49152,
+    "uuid" : "998c35c2-a68f-3a55-b294-493b3f7c66a2",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/WebKitShims_framework.framework\/WebKitShims_framework",
+    "name" : "WebKitShims_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4444323840,
+    "size" : 180224,
+    "uuid" : "319cbfb9-3b9e-32a2-978a-b059f95854d9",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/UserActivities_framework.framework\/UserActivities_framework",
+    "name" : "UserActivities_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4444602368,
+    "size" : 212992,
+    "uuid" : "554b9dc9-e299-3fc8-865f-47da135f2523",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/DeepLinks_framework.framework\/DeepLinks_framework",
+    "name" : "DeepLinks_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4444930048,
+    "size" : 131072,
+    "uuid" : "436feffd-3da8-3491-857d-1d17c488908b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RampActions_framework.framework\/RampActions_framework",
+    "name" : "RampActions_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4445143040,
+    "size" : 245760,
+    "uuid" : "faab0ffb-3614-3256-a0d6-e75eb55fdaa5",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RampComposableArchitecture_framework.framework\/RampComposableArchitecture_framework",
+    "name" : "RampComposableArchitecture_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4445552640,
+    "size" : 163840,
+    "uuid" : "e7e93052-04d5-36f6-9550-36a116fe4416",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Toast_framework.framework\/Toast_framework",
+    "name" : "Toast_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4445831168,
+    "size" : 2195456,
+    "uuid" : "6968b0bd-3f06-3c80-bc8a-42253ba4e323",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Mew_framework.framework\/Mew_framework",
+    "name" : "Mew_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4449206272,
+    "size" : 114688,
+    "uuid" : "b7d2ff69-f003-37fa-8c7e-9b748e366c4a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/BaseUI_framework.framework\/BaseUI_framework",
+    "name" : "BaseUI_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4449402880,
+    "size" : 65536,
+    "uuid" : "772d5c74-2ecf-36a6-8846-49313fe8e6ce",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/IntrospectionHacks_framework.framework\/IntrospectionHacks_framework",
+    "name" : "IntrospectionHacks_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4449533952,
+    "size" : 81920,
+    "uuid" : "fc96e00f-bc22-3b4e-aa9d-e14ccb7465c9",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RampIcons_framework.framework\/RampIcons_framework",
+    "name" : "RampIcons_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4449681408,
+    "size" : 3178496,
+    "uuid" : "6306845b-3302-3061-a406-42884cae0eb1",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Networking_framework.framework\/Networking_framework",
+    "name" : "Networking_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4455219200,
+    "size" : 311296,
+    "uuid" : "74991caa-b6b1-32c3-b769-53cf8b59fc47",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/AuthAPI_framework.framework\/AuthAPI_framework",
+    "name" : "AuthAPI_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4455710720,
+    "size" : 196608,
+    "uuid" : "60b35e1f-a032-3811-90ca-faa24320d85a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Caching_framework.framework\/Caching_framework",
+    "name" : "Caching_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4456038400,
+    "size" : 98304,
+    "uuid" : "e664c688-14fc-3678-9b6c-0fde5cc8cb53",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Geo_framework.framework\/Geo_framework",
+    "name" : "Geo_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4456218624,
+    "size" : 65536,
+    "uuid" : "07539234-c911-3347-aa51-9b179581b3b3",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NetworkingCodegen_framework.framework\/NetworkingCodegen_framework",
+    "name" : "NetworkingCodegen_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4456333312,
+    "size" : 1032192,
+    "uuid" : "0f1083c7-0306-367d-93c4-82bc0913b91e",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NetworkingCodegenClient_framework.framework\/NetworkingCodegenClient_framework",
+    "name" : "NetworkingCodegenClient_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4458217472,
+    "size" : 540672,
+    "uuid" : "4cf46b17-cf82-3fe2-b0c1-0e0835edbfe7",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NetworkingCodegenWrappers_framework.framework\/NetworkingCodegenWrappers_framework",
+    "name" : "NetworkingCodegenWrappers_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4459364352,
+    "size" : 18841600,
+    "uuid" : "f4a7f47f-9f68-349c-bf85-b9ed9aeb1118",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NetworkingCodegenTypes_framework.framework\/NetworkingCodegenTypes_framework",
+    "name" : "NetworkingCodegenTypes_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4503207936,
+    "size" : 245760,
+    "uuid" : "87726ada-cc06-33e4-8c08-7030a3909dbe",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/PublicAPI_framework.framework\/PublicAPI_framework",
+    "name" : "PublicAPI_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4503617536,
+    "size" : 262144,
+    "uuid" : "b6c9e9de-b966-3374-9a6a-082de8221195",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NetworkingCore_framework.framework\/NetworkingCore_framework",
+    "name" : "NetworkingCore_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4504059904,
+    "size" : 81920,
+    "uuid" : "5b4c9570-ce21-3bf1-8441-ef72108bfc1f",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/E2ETestUtils_framework.framework\/E2ETestUtils_framework",
+    "name" : "E2ETestUtils_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4504223744,
+    "size" : 65536,
+    "uuid" : "6a3586ae-effe-3681-8f36-b60e50c67b75",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NetworkingBase_framework.framework\/NetworkingBase_framework",
+    "name" : "NetworkingBase_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4504371200,
+    "size" : 49152,
+    "uuid" : "26e2cfd8-94e0-331a-afc7-6de657f75df0",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RichTextModels_framework.framework\/RichTextModels_framework",
+    "name" : "RichTextModels_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4504502272,
+    "size" : 278528,
+    "uuid" : "92cc1162-2e77-3b19-9a67-670c67cf9641",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/CardProvisioning_framework.framework\/CardProvisioning_framework",
+    "name" : "CardProvisioning_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4504944640,
+    "size" : 196608,
+    "uuid" : "a979f7ab-e806-335a-83b1-6b00e46391ab",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/ExtensionSupport_framework.framework\/ExtensionSupport_framework",
+    "name" : "ExtensionSupport_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4505239552,
+    "size" : 212992,
+    "uuid" : "618fb3ef-40f2-3910-8ae0-e3b0e3ff044f",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/TargetCore_framework.framework\/TargetCore_framework",
+    "name" : "TargetCore_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4505550848,
+    "size" : 131072,
+    "uuid" : "8ff85a5b-101c-396b-b0e2-4ff37ac80bc2",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/DogHouse_framework.framework\/DogHouse_framework",
+    "name" : "DogHouse_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4505780224,
+    "size" : 163840,
+    "uuid" : "87631ade-45e1-3eff-8553-3dbb8773f4bc",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/LinkHandling_framework.framework\/LinkHandling_framework",
+    "name" : "LinkHandling_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4506042368,
+    "size" : 425984,
+    "uuid" : "52033218-4b27-37ef-985e-eae15ddb1fd8",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/LiveReceiptDetection_framework.framework\/LiveReceiptDetection_framework",
+    "name" : "LiveReceiptDetection_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4506664960,
+    "size" : 81920,
+    "uuid" : "e31f4b05-77d3-32f7-94de-0a6533386c8b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RampData_framework.framework\/RampData_framework",
+    "name" : "RampData_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4506812416,
+    "size" : 81920,
+    "uuid" : "c8505215-d85f-3875-869d-0855010e1727",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RampIntentsCore_framework.framework\/RampIntentsCore_framework",
+    "name" : "RampIntentsCore_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4506959872,
+    "size" : 147456,
+    "uuid" : "ed152499-1e56-3254-bfc0-fe42988a2919",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RampIssueReporting_framework.framework\/RampIssueReporting_framework",
+    "name" : "RampIssueReporting_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4507205632,
+    "size" : 606208,
+    "uuid" : "b1a201b3-16fa-36ca-a62b-67830f3725a0",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Settings_framework.framework\/Settings_framework",
+    "name" : "Settings_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4508123136,
+    "size" : 147456,
+    "uuid" : "377ec957-07c8-3b3b-9b49-65f914604aae",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/RatingPrompt_framework.framework\/RatingPrompt_framework",
+    "name" : "RatingPrompt_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4508368896,
+    "size" : 1048576,
+    "uuid" : "68843612-d61a-3d03-80af-3104b1c45088",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/UserOnboarding_framework.framework\/UserOnboarding_framework",
+    "name" : "UserOnboarding_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4509827072,
+    "size" : 245760,
+    "uuid" : "4f3af2b7-4982-394d-af4a-c0781b4c5f8a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Multifactor_framework.framework\/Multifactor_framework",
+    "name" : "Multifactor_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4510203904,
+    "size" : 114688,
+    "uuid" : "9990fc78-3bbb-3110-a197-4ac00b04c455",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/SprigAnalytics_framework.framework\/SprigAnalytics_framework",
+    "name" : "SprigAnalytics_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4510400512,
+    "size" : 196608,
+    "uuid" : "d4128975-b27b-3215-bf49-6616023c4028",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Treasury_framework.framework\/Treasury_framework",
+    "name" : "Treasury_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4510695424,
+    "size" : 114688,
+    "uuid" : "d0c93672-c8b7-3c64-9a06-6495c1a38841",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/NetworkingTreasury_framework.framework\/NetworkingTreasury_framework",
+    "name" : "NetworkingTreasury_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4510908416,
+    "size" : 671744,
+    "uuid" : "5e842624-fcd2-39bc-b906-fde96f298e5c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Wizard_framework.framework\/Wizard_framework",
+    "name" : "Wizard_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4511809536,
+    "size" : 1359872,
+    "uuid" : "9792f830-60df-3084-bf1d-7b2f330d178a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Trips_framework.framework\/Trips_framework",
+    "name" : "Trips_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4513513472,
+    "size" : 3784704,
+    "uuid" : "3df74aba-fe0f-39d1-bd51-18bb13b38bed",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Booking_framework.framework\/Booking_framework",
+    "name" : "Booking_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4518002688,
+    "size" : 114688,
+    "uuid" : "8ce75612-c3fe-3295-9344-511788f7c854",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Support_framework.framework\/Support_framework",
+    "name" : "Support_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4518182912,
+    "size" : 2015232,
+    "uuid" : "db9ca897-b436-301c-ae7e-cd73b26e6248",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Spend_framework.framework\/Spend_framework",
+    "name" : "Spend_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4520722432,
+    "size" : 835584,
+    "uuid" : "6b180c60-fda0-3be9-816d-aa4a772bd4b7",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/AIChat_framework.framework\/AIChat_framework",
+    "name" : "AIChat_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4521869312,
+    "size" : 507904,
+    "uuid" : "497b8265-e876-31c4-8edd-51b07208d79a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/FundsCore_framework.framework\/FundsCore_framework",
+    "name" : "FundsCore_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4522524672,
+    "size" : 147456,
+    "uuid" : "4954ceeb-d04c-3aba-ba83-e1f8398bfcaa",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Tasks_framework.framework\/Tasks_framework",
+    "name" : "Tasks_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4522770432,
+    "size" : 81920,
+    "uuid" : "a7c79fd5-05d0-3c26-810d-31192abe9043",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/WidgetsCore_framework.framework\/WidgetsCore_framework",
+    "name" : "WidgetsCore_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4522917888,
+    "size" : 393216,
+    "uuid" : "9c8046fc-d147-3464-9248-fc444cabad0e",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/F51C73C9-C54D-4837-B926-DA1088AA15C6\/Ramp.app\/Frameworks\/Widgets_framework.framework\/Widgets_framework",
+    "name" : "Widgets_framework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 9426817024,
+    "size" : 240940,
+    "uuid" : "15e8a2ae-4bfd-3bb8-944e-2ec12393c59c",
+    "path" : "\/usr\/lib\/system\/libsystem_kernel.dylib",
+    "name" : "libsystem_kernel.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6564237312,
+    "size" : 5793600,
+    "uuid" : "0be54dbe-1adc-3588-bffa-e7c99e8d8208",
+    "path" : "\/System\/Library\/Frameworks\/CoreFoundation.framework\/CoreFoundation",
+    "name" : "CoreFoundation"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6520504320,
+    "size" : 15125600,
+    "uuid" : "df782ac5-cc02-358c-a2f7-149703f5f44a",
+    "path" : "\/System\/Library\/Frameworks\/Foundation.framework\/Foundation",
+    "name" : "Foundation"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6902579200,
+    "size" : 335808,
+    "uuid" : "3921e3c2-03bb-31bb-84ee-df3c43c65059",
+    "path" : "\/usr\/lib\/system\/libxpc.dylib",
+    "name" : "libxpc.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 7704334336,
+    "size" : 240928,
+    "uuid" : "d4fcb3f5-7f9e-36b6-87c9-a59062a31841",
+    "path" : "\/System\/Library\/PrivateFrameworks\/PlugInKit.framework\/PlugInKit",
+    "name" : "PlugInKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6588309504,
+    "size" : 1215648,
+    "uuid" : "5e53407a-d9d7-3bad-b961-0a6485d6cd03",
+    "path" : "\/System\/Library\/Frameworks\/ExtensionFoundation.framework\/ExtensionFoundation",
+    "name" : "ExtensionFoundation"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6513926144,
+    "size" : 650040,
+    "uuid" : "a4040d49-9446-38e5-842b-eb8f9c971c22",
+    "path" : "\/usr\/lib\/dyld",
+    "name" : "dyld"
+  },
+  {
+    "size" : 0,
+    "source" : "A",
+    "base" : 0,
+    "uuid" : "00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 7515447296,
+    "size" : 287264,
+    "uuid" : "11c047c4-33b3-39a3-ae43-bf617cfc7d2c",
+    "path" : "\/usr\/lib\/system\/libdispatch.dylib",
+    "name" : "libdispatch.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6535630848,
+    "size" : 560536,
+    "uuid" : "5b1111b6-2106-3ae3-bdeb-34a8b033cd74",
+    "path" : "\/usr\/lib\/swift\/libswift_Concurrency.dylib",
+    "name" : "libswift_Concurrency.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 8117055488,
+    "size" : 50256,
+    "uuid" : "741c5afb-3f30-362e-9313-aab3de2497c9",
+    "path" : "\/usr\/lib\/system\/libsystem_pthread.dylib",
+    "name" : "libsystem_pthread.dylib"
+  }
+],
+  "sharedCache" : {
+  "base" : 6512787456,
+  "size" : 5117739008,
+  "uuid" : "100a60e3-8a3d-31dc-a7ad-78f69bde83a6"
+},
+  "vmSummary" : "ReadOnly portion of Libraries: Total=2.0G resident=0K(0%) swapped_out_or_unallocated=2.0G(100%)\nWritable regions: Total=31.0M written=417K(1%) resident=417K(1%) swapped_out=0K(0%) unallocated=30.6M(99%)\n\n                                VIRTUAL   REGION \nREGION TYPE                        SIZE    COUNT (non-coalesced) \n===========                     =======  ======= \nActivity Tracing                   256K        1 \nDispatch continuations            6144K        1 \nKernel Alloc Once                   32K        1 \nMALLOC                            16.7M        8 \nMALLOC guard page                 4048K        4 \nSTACK GUARD                         64K        4 \nStack                             2640K        4 \n__AUTH                            10.1M      876 \n__AUTH_CONST                     117.7M     1282 \n__CTF                               824        1 \n__DATA                            57.9M     1351 \n__DATA_CONST                      42.3M     1389 \n__DATA_DIRTY                      11.0M     1124 \n__FONT_DATA                        2352        1 \n__INFO_FILTER                         8        1 \n__LINKEDIT                       224.7M      100 \n__OBJC_RO                         84.2M        1 \n__OBJC_RW                         3176K        1 \n__TEXT                             1.8G     1411 \n__TPRO_CONST                       132K        2 \ndyld private memory                128K        1 \nmapped file                       2688K        2 \npage table in kernel               417K        1 \nshared memory                       80K        4 \n===========                     =======  ======= \nTOTAL                              2.3G     7571 \n",
+  "legacyInfo" : {
+  "threadTriggered" : {
+    "queue" : "com.apple.extension.global-state-queue"
+  }
+},
+  "logWritingSignature" : "f2fb5df21903c27440a0237553f703a5edac3710",
+  "roots_installed" : 0,
+  "bug_type" : "309",
+  "trmStatus" : 1,
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "6246d6a916a70b047e454124",
+      "factorPackIds" : [
+        "64496ae8128ed17664c618d9"
+      ],
+      "deploymentId" : 240000010
+    },
+    {
+      "rolloutId" : "63f9578e238e7b23a1f3030a",
+      "factorPackIds" : [
+        "64af1347f38420572631a103"
+      ],
+      "deploymentId" : 240000005
+    }
+  ],
+  "experiments" : [
+    {
+      "treatmentId" : "22f11035-aad5-4b21-be35-c681efe2fb92",
+      "experimentId" : "686d94732ee4ac1a56129583",
+      "deploymentId" : 400000008
+    }
+  ]
+}
+}

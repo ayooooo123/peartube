@@ -1,0 +1,417 @@
+{"roots_installed":0,"app_name":"Slack","timestamp":"2026-01-26 15:53:20.00 -0500","app_version":"26.01.30","slice_uuid":"E365B4B8-6496-3796-8D28-7131FE00DC1B","adam_id":"618783545","build_version":"454749","bundleID":"com.tinyspeck.chatlyio","duration_ms":"7301226","is_first_party":0,"share_with_app_devs":0,"bug_type":"145","os_version":"iPhone OS 26.2 (23C55)","distributor_id":"com.apple.AppStore","name":"Slack","incident_id":"549714AA-DF11-4B6D-B681-1DFAD42110D7"}
+Date/Time:        2026-01-26 13:51:32.643 -0500
+End time:         2026-01-26 15:53:13.869 -0500
+OS Version:       iPhone OS 26.2 (Build 23C55)
+Architecture:     arm64e
+Report Version:   67
+Incident Identifier: 549714AA-DF11-4B6D-B681-1DFAD42110D7
+
+Data Source:      Microstackshots
+Shared Cache:     100A60E3-8A3D-31DC-A7AD-78F69BDE83A6 slid base address 0x19acdc000, slide 0x1acdc000
+
+Command:          Slack
+Path:             /private/var/containers/Bundle/Application/303606EA-2728-419A-95A4-CBF78C79B125/Slack.app/Slack
+Identifier:       com.tinyspeck.chatlyio
+Version:          26.01.30 (454749)
+Adam ID:          618783545
+Is First Party:   No
+Beta Identifier:  CB975D30-C13C-4786-A00C-5C51590A7DCB
+Resource Coalition: "com.tinyspeck.chatlyio"(1261)
+On Behalf Of:     68 samples UNKNOWN [35, 84] (68 samples originated by UNKNOWN [35, 84, 143])
+Architecture:     arm64
+Parent:           UNKNOWN [1]
+PID:              9325
+
+Event:            disk writes
+Action taken:     none
+Writes:           1073.74 MB of file backed memory dirtied over 7301 seconds (147.06 KB per second average), exceeding limit of 12.43 KB per second over 86400 seconds
+Writes limit:     1073.74 MB
+Limit duration:   86400s
+Writes caused:    1073.74 MB
+Writes duration:  7301s
+Duration:         7301.23s
+Duration Sampled: 7289.15s (event starts 5.34s before samples, event ends 6.74s after samples)
+Steps:            74 (10.49 MB/step)
+
+Hardware model:   iPhone14,7
+Active cpus:      6
+Memory size:      5.58 GB
+HW page size:     16384
+VM page size:     16384
+Shared cache residency: 13.02% (736.39 MB / 5656.83 MB)
+
+Advisory levels:  Battery -> 1, User -> 3, ThermalPressure -> 0, Combined -> 1
+Free disk space:  41.00 GB/119.07 GB, low space threshold 150 MB
+Vnodes Available: 65.41% (15698/24000, 12000 allocated, 12000 soft limit)
+Models:           none
+
+Preferred User Language: en-US
+Country Code:     US
+Keyboards:        en_US QWERTY
+OS Cryptex File Extents: 3432
+
+Heaviest stack for the target process:
+  73  ??? (libsystem_pthread.dylib + 2240) [0x1fa6cf8c0]
+  73  ??? (libsystem_pthread.dylib + 5048) [0x1fa6d03b8]
+  73  ??? (libdispatch.dylib + 85220) [0x1d6926ce4]
+  73  ??? (libdispatch.dylib + 87020) [0x1d69273ec]
+  72  ??? (libdispatch.dylib + 44868) [0x1d691cf44]
+  72  ??? (libdispatch.dylib + 42088) [0x1d691c468]
+  72  ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+  64  ??? (libdispatch.dylib + 70736) [0x1d6923450]
+  64  ??? (Slack + 7278160) [0x105158e50]
+  64  ??? (Slack + 10546368) [0x105476cc0]
+  59  ??? (Slack + 17820312) [0x105b66a98]
+  59  ??? (Slack + 17810220) [0x105b6432c]
+  30  ??? (Slack + 17813908) [0x105b65194]
+  30  ??? (Slack + 17831220) [0x105b69534]
+  30  ??? (Slack + 17827196) [0x105b6857c]
+  30  ??? (Slack + 164240) [0x104a90190]
+  30  ??? (Slack + 166256) [0x104a90970]
+  30  ??? (libswiftDispatch.dylib + 5684) [0x1ae248634]
+  30  ??? (libswiftDispatch.dylib + 6968) [0x1ae248b38]
+  30  ??? (libswiftDispatch.dylib + 6420) [0x1ae248914]
+  30  ??? (libswiftDispatch.dylib + 7092) [0x1ae248bb4]
+  30  ??? (libswiftDispatch.dylib + 7296) [0x1ae248c80]
+  30  ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+  30  ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+  30  ??? (libswiftDispatch.dylib + 7492) [0x1ae248d44]
+  30  ??? (libswiftDispatch.dylib + 6816) [0x1ae248aa0]
+  30  ??? (libswiftDispatch.dylib + 5884) [0x1ae2486fc]
+  30  ??? (libswiftDispatch.dylib + 44572) [0x1ae251e1c]
+  30  ??? (libswiftDispatch.dylib + 6776) [0x1ae248a78]
+  30  ??? (Slack + 170124) [0x104a9188c]
+  30  ??? (Slack + 169512) [0x104a91628]
+  30  ??? (Slack + 169840) [0x104a91770]
+  30  ??? (Slack + 166572) [0x104a90aac]
+  30  ??? (Slack + 163056) [0x104a8fcf0]
+  30  ??? (Slack + 176616) [0x104a931e8]
+  27  ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+  27  ??? (libsqlite3.dylib + 233580) [0x19c5cb06c]
+  27  ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+  27  ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+  27  ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+  27  ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+  27  ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+  27  ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+  27  ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+
+
+Powerstats for:   Slack [9325]
+UUID:             E365B4B8-6496-3796-8D28-7131FE00DC1B
+Path:             /private/var/containers/Bundle/Application/303606EA-2728-419A-95A4-CBF78C79B125/Slack.app/Slack
+Identifier:       com.tinyspeck.chatlyio
+Version:          26.01.30 (454749)
+Adam ID:          618783545
+Is First Party:   No
+Beta Identifier:  CB975D30-C13C-4786-A00C-5C51590A7DCB
+Resource Coalition: 74 samples "com.tinyspeck.chatlyio"(1261)
+On Behalf Of:     68 samples UNKNOWN [35, 84] (68 samples originated by UNKNOWN [35, 84, 143])
+Architecture:     arm64
+Parent:           UNKNOWN [1]
+UID:              501
+Footprint:        501.34 MB -> 554.31 MB (+52.97 MB) (max 710.02 MB )
+Pageins:          8099 pages
+Start time:       2026-01-26 13:51:37.979 -0500
+End time:         2026-01-26 15:53:07.127 -0500
+Num samples:      74 (100%)
+Num threads:      28
+Primary state:    48 samples Non-Frontmost App, Non-Suppressed, Kernel mode, Effective Thread QoS Background, Requested Thread QoS Default, Override Thread QoS Unspecified, e-core
+User Activity:    58 samples Idle, 16 samples Active
+Power Source:     74 samples on Battery, 0 samples on AC
+  73  ??? (libsystem_pthread.dylib + 2240) [0x1fa6cf8c0]
+    73  ??? (libsystem_pthread.dylib + 5048) [0x1fa6d03b8]
+      73  ??? (libdispatch.dylib + 85220) [0x1d6926ce4]
+        73  ??? (libdispatch.dylib + 87020) [0x1d69273ec]
+          72  ??? (libdispatch.dylib + 44868) [0x1d691cf44]
+            72  ??? (libdispatch.dylib + 42088) [0x1d691c468]
+              72  ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                64  ??? (libdispatch.dylib + 70736) [0x1d6923450]
+                  64  ??? (Slack + 7278160) [0x105158e50]
+                    64  ??? (Slack + 10546368) [0x105476cc0]
+                      59  ??? (Slack + 17820312) [0x105b66a98]
+                        59  ??? (Slack + 17810220) [0x105b6432c]
+                          30  ??? (Slack + 17813908) [0x105b65194]
+                            30  ??? (Slack + 17831220) [0x105b69534]
+                              30  ??? (Slack + 17827196) [0x105b6857c]
+                                30  ??? (Slack + 164240) [0x104a90190]
+                                  30  ??? (Slack + 166256) [0x104a90970]
+                                    30  ??? (libswiftDispatch.dylib + 5684) [0x1ae248634]
+                                      30  ??? (libswiftDispatch.dylib + 6968) [0x1ae248b38]
+                                        30  ??? (libswiftDispatch.dylib + 6420) [0x1ae248914]
+                                          30  ??? (libswiftDispatch.dylib + 7092) [0x1ae248bb4]
+                                            30  ??? (libswiftDispatch.dylib + 7296) [0x1ae248c80]
+                                              30  ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                                30  ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                  30  ??? (libswiftDispatch.dylib + 7492) [0x1ae248d44]
+                                                    30  ??? (libswiftDispatch.dylib + 6816) [0x1ae248aa0]
+                                                      30  ??? (libswiftDispatch.dylib + 5884) [0x1ae2486fc]
+                                                        30  ??? (libswiftDispatch.dylib + 44572) [0x1ae251e1c]
+                                                          30  ??? (libswiftDispatch.dylib + 6776) [0x1ae248a78]
+                                                            30  ??? (Slack + 170124) [0x104a9188c]
+                                                              30  ??? (Slack + 169512) [0x104a91628]
+                                                                30  ??? (Slack + 169840) [0x104a91770]
+                                                                  30  ??? (Slack + 166572) [0x104a90aac]
+                                                                    30  ??? (Slack + 163056) [0x104a8fcf0]
+                                                                      30  ??? (Slack + 176616) [0x104a931e8]
+                                                                        27  ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                          27  ??? (libsqlite3.dylib + 233580) [0x19c5cb06c]
+                                                                            27  ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                              27  ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                                27  ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                                  27  ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                                    27  ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                                      27  ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                        27  ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                          19  <on behalf of UNKNOWN [35] (originated by UNKNOWN [35])>
+                                                                                          4   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Effective Thread QoS Default, p-core>
+                                                                                          2   <on behalf of UNKNOWN [84] (originated by UNKNOWN [84])>
+                                                                        3   ??? (libsqlite3.dylib + 192004) [0x19c5c0e04]
+                                                                          3   ??? (libsqlite3.dylib + 329244) [0x19c5e261c]
+                                                                            3   ??? (libsqlite3.dylib + 563580) [0x19c61b97c]
+                                                                              3   ??? (libsqlite3.dylib + 1165968) [0x19c6aea90]
+                                                                                3   ??? (libsqlite3.dylib + 408608) [0x19c5f5c20]
+                                                                                  3   ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                    3   ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                      1   <Effective Thread QoS Default, p-core>
+                                                                                      1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35])>
+                          29  ??? (Slack + 17814244) [0x105b652e4]
+                            29  ??? (Slack + 17831292) [0x105b6957c]
+                              29  ??? (Slack + 17830376) [0x105b691e8]
+                                29  ??? (Slack + 326172) [0x104ab7a1c]
+                                  29  ??? (Slack + 326244) [0x104ab7a64]
+                                    29  ??? (Slack + 162412) [0x104a8fa6c]
+                                      29  ??? (Slack + 162632) [0x104a8fb48]
+                                        29  ??? (libswiftDispatch.dylib + 5684) [0x1ae248634]
+                                          29  ??? (libswiftDispatch.dylib + 6968) [0x1ae248b38]
+                                            29  ??? (libswiftDispatch.dylib + 6420) [0x1ae248914]
+                                              29  ??? (libswiftDispatch.dylib + 7092) [0x1ae248bb4]
+                                                29  ??? (libswiftDispatch.dylib + 7296) [0x1ae248c80]
+                                                  29  ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                                    29  ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                      29  ??? (libswiftDispatch.dylib + 7492) [0x1ae248d44]
+                                                        29  ??? (libswiftDispatch.dylib + 6816) [0x1ae248aa0]
+                                                          29  ??? (libswiftDispatch.dylib + 5884) [0x1ae2486fc]
+                                                            29  ??? (libswiftDispatch.dylib + 44572) [0x1ae251e1c]
+                                                              29  ??? (libswiftDispatch.dylib + 6776) [0x1ae248a78]
+                                                                29  ??? (Slack + 169604) [0x104a91684]
+                                                                  29  ??? (Slack + 337312) [0x104aba5a0]
+                                                                    29  ??? (Slack + 326272) [0x104ab7a80]
+                                                                      29  ??? (Slack + 326300) [0x104ab7a9c]
+                                                                        29  ??? (Slack + 162960) [0x104a8fc90]
+                                                                          29  ??? (Slack + 163056) [0x104a8fcf0]
+                                                                            29  ??? (Slack + 176616) [0x104a931e8]
+                                                                              26  ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                                26  ??? (libsqlite3.dylib + 233504) [0x19c5cb020]
+                                                                                  26  ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                                    26  ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                                      26  ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                                        26  ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                                          25  ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                                            25  ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                              25  ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                                17  <on behalf of UNKNOWN [35] (originated by UNKNOWN [35])>
+                                                                                                2   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Effective Thread QoS Default, p-core>
+                                                                                                2   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Frontmost App, Effective Thread QoS Default, p-core>
+                                                                                                2   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Effective Thread QoS Default>
+                                                                                                1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [143])>
+                                                                                                1   <on behalf of UNKNOWN [84] (originated by UNKNOWN [84])>
+                                                                                          1   ??? (libsqlite3.dylib + 698304) [0x19c63c7c0]
+                                                                                            1   ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                              1   ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                                1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35])>
+                                                                              3   ??? (libsqlite3.dylib + 192004) [0x19c5c0e04]
+                                                                                3   ??? (libsqlite3.dylib + 329244) [0x19c5e261c]
+                                                                                  3   ??? (libsqlite3.dylib + 563580) [0x19c61b97c]
+                                                                                    3   ??? (libsqlite3.dylib + 1165968) [0x19c6aea90]
+                                                                                      3   ??? (libsqlite3.dylib + 408608) [0x19c5f5c20]
+                                                                                        3   ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                          3   ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                            3   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35])>
+                      5   ??? (Slack + 17818772) [0x105b66494]
+                        3   ??? (Slack + 17815968) [0x105b659a0]
+                          3   ??? (Slack + 17831220) [0x105b69534]
+                            3   ??? (Slack + 17827196) [0x105b6857c]
+                              3   ??? (Slack + 164240) [0x104a90190]
+                                3   ??? (Slack + 166256) [0x104a90970]
+                                  3   ??? (libswiftDispatch.dylib + 5684) [0x1ae248634]
+                                    3   ??? (libswiftDispatch.dylib + 6968) [0x1ae248b38]
+                                      3   ??? (libswiftDispatch.dylib + 6420) [0x1ae248914]
+                                        3   ??? (libswiftDispatch.dylib + 7092) [0x1ae248bb4]
+                                          3   ??? (libswiftDispatch.dylib + 7296) [0x1ae248c80]
+                                            3   ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                              3   ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                3   ??? (libswiftDispatch.dylib + 7492) [0x1ae248d44]
+                                                  3   ??? (libswiftDispatch.dylib + 6816) [0x1ae248aa0]
+                                                    3   ??? (libswiftDispatch.dylib + 5884) [0x1ae2486fc]
+                                                      3   ??? (libswiftDispatch.dylib + 44572) [0x1ae251e1c]
+                                                        3   ??? (libswiftDispatch.dylib + 6776) [0x1ae248a78]
+                                                          3   ??? (Slack + 170124) [0x104a9188c]
+                                                            3   ??? (Slack + 169512) [0x104a91628]
+                                                              3   ??? (Slack + 169840) [0x104a91770]
+                                                                3   ??? (Slack + 166572) [0x104a90aac]
+                                                                  3   ??? (Slack + 163056) [0x104a8fcf0]
+                                                                    3   ??? (Slack + 176616) [0x104a931e8]
+                                                                      3   ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                        3   ??? (libsqlite3.dylib + 233580) [0x19c5cb06c]
+                                                                          3   ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                            3   ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                              3   ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                                3   ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                                  3   ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                                    3   ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                      3   ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                        1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Effective Thread QoS Default, p-core>
+                                                                                        1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Frontmost App, Effective Thread QoS Default, p-core>
+                                                                                        1   <Frontmost App, Effective Thread QoS Default, p-core>
+                        2   ??? (Slack + 17817508) [0x105b65fa4]
+                          2   ??? (Slack + 17831320) [0x105b69598]
+                            2   ??? (Slack + 17830512) [0x105b69270]
+                              2   ??? (Slack + 164240) [0x104a90190]
+                                2   ??? (Slack + 166256) [0x104a90970]
+                                  2   ??? (libswiftDispatch.dylib + 5684) [0x1ae248634]
+                                    2   ??? (libswiftDispatch.dylib + 6968) [0x1ae248b38]
+                                      2   ??? (libswiftDispatch.dylib + 6420) [0x1ae248914]
+                                        2   ??? (libswiftDispatch.dylib + 7092) [0x1ae248bb4]
+                                          2   ??? (libswiftDispatch.dylib + 7296) [0x1ae248c80]
+                                            2   ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                              2   ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                2   ??? (libswiftDispatch.dylib + 7492) [0x1ae248d44]
+                                                  2   ??? (libswiftDispatch.dylib + 6816) [0x1ae248aa0]
+                                                    2   ??? (libswiftDispatch.dylib + 5884) [0x1ae2486fc]
+                                                      2   ??? (libswiftDispatch.dylib + 44572) [0x1ae251e1c]
+                                                        2   ??? (libswiftDispatch.dylib + 6776) [0x1ae248a78]
+                                                          2   ??? (Slack + 170124) [0x104a9188c]
+                                                            2   ??? (Slack + 169512) [0x104a91628]
+                                                              2   ??? (Slack + 169840) [0x104a91770]
+                                                                2   ??? (Slack + 166572) [0x104a90aac]
+                                                                  2   ??? (Slack + 163056) [0x104a8fcf0]
+                                                                    2   ??? (Slack + 176616) [0x104a931e8]
+                                                                      2   ??? (libsqlite3.dylib + 192004) [0x19c5c0e04]
+                                                                        2   ??? (libsqlite3.dylib + 329244) [0x19c5e261c]
+                                                                          2   ??? (libsqlite3.dylib + 563580) [0x19c61b97c]
+                                                                            2   ??? (libsqlite3.dylib + 1165968) [0x19c6aea90]
+                                                                              2   ??? (libsqlite3.dylib + 408608) [0x19c5f5c20]
+                                                                                2   ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                                  2   ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                    1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Effective Thread QoS Default, p-core>
+                                                                                    1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Frontmost App, Effective Thread QoS Default, p-core>
+                8   ??? (CoreData + 6732) [0x1a037fa4c]
+                  8   ??? (Slack + 7278160) [0x105158e50]
+                    8   ??? (Slack + 75344316) [0x1092429bc]
+                      6   ??? (Slack + 74982176) [0x1091ea320]
+                        6   ??? (Slack + 74788540) [0x1091baebc]
+                          6   ??? (CoreData + 1193172) [0x1a04a14d4]
+                            6   ??? (CoreData + 1484044) [0x1a04e850c]
+                              6   ??? (CoreData + 1444864) [0x1a04dec00]
+                                6   ??? (CoreData + 1495256) [0x1a04eb0d8]
+                                  6   ??? (CoreData + 1715716) [0x1a0520e04]
+                                    6   ??? (CoreData + 1704252) [0x1a051e13c]
+                                      6   ??? (CoreData + 2632176) [0x1a06009f0]
+                                        6   ??? (CoreData + 1422212) [0x1a04d9384]
+                                          6   ??? (CoreData + 1911480) [0x1a0550ab8]
+                                            6   ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                              6   ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                6   ??? (CoreData + 1911760) [0x1a0550bd0]
+                                                  6   ??? (CoreData + 1422420) [0x1a04d9454]
+                                                    6   ??? (CoreData + 826704) [0x1a0447d50]
+                                                      6   ??? (CoreData + 2759628) [0x1a061fbcc]
+                                                        6   ??? (CoreData + 116236) [0x1a039a60c]
+                                                          6   ??? (CoreData + 110068) [0x1a0398df4]
+                                                            6   ??? (CoreData + 37800) [0x1a03873a8]
+                                                              5   ??? (libsqlite3.dylib + 191252) [0x19c5c0b14]
+                                                                5   ??? (libsqlite3.dylib + 233580) [0x19c5cb06c]
+                                                                  5   ??? (libsqlite3.dylib + 92476) [0x19c5a893c]
+                                                                    5   ??? (libsqlite3.dylib + 259496) [0x19c5d15a8]
+                                                                      5   ??? (libsqlite3.dylib + 260608) [0x19c5d1a00]
+                                                                        5   ??? (libsqlite3.dylib + 327328) [0x19c5e1ea0]
+                                                                          5   ??? (libsqlite3.dylib + 697280) [0x19c63c3c0]
+                                                                            5   ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                              5   ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                2   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Frontmost App, Effective Thread QoS User Initiated, p-core>
+                                                                                1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [143]), Effective Thread QoS Default, Requested Thread QoS User Initiated, p-core>
+                                                                                1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Frontmost App, Effective Thread QoS User Initiated>
+                                                                                1   <on behalf of UNKNOWN [84] (originated by UNKNOWN [84]), Requested Thread QoS User Initiated>
+                                                              1   ??? (libsqlite3.dylib + 192004) [0x19c5c0e04]
+                                                                1   ??? (CoreData + 1898108) [0x1a054d67c]
+                                                                  1   ??? (CoreData + 1898284) [0x1a054d72c]
+                                                                    1   ??? (libsqlite3.dylib + 563580) [0x19c61b97c]
+                                                                      1   ??? (libsqlite3.dylib + 1165968) [0x19c6aea90]
+                                                                        1   ??? (libsqlite3.dylib + 408608) [0x19c5f5c20]
+                                                                          1   ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                            1   ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                              1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Frontmost App, Effective Thread QoS User Initiated, Requested Thread QoS User Initiated, p-core>
+                      2   ??? (CoreData + 509768) [0x1a03fa748]
+                        2   ??? (CoreData + 520732) [0x1a03fd21c]
+                          2   ??? (Slack + 74973300) [0x1091e8074]
+                            2   ??? (CoreData + 1193172) [0x1a04a14d4]
+                              2   ??? (CoreData + 1484044) [0x1a04e850c]
+                                2   ??? (CoreData + 1444864) [0x1a04dec00]
+                                  2   ??? (CoreData + 1495256) [0x1a04eb0d8]
+                                    2   ??? (CoreData + 1715716) [0x1a0520e04]
+                                      2   ??? (CoreData + 1704252) [0x1a051e13c]
+                                        2   ??? (CoreData + 2632176) [0x1a06009f0]
+                                          2   ??? (CoreData + 1422212) [0x1a04d9384]
+                                            2   ??? (CoreData + 1911480) [0x1a0550ab8]
+                                              2   ??? (libdispatch.dylib + 71872) [0x1d69238c0]
+                                                2   ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                                                  2   ??? (CoreData + 1911760) [0x1a0550bd0]
+                                                    2   ??? (CoreData + 1422420) [0x1a04d9454]
+                                                      2   ??? (CoreData + 826704) [0x1a0447d50]
+                                                        2   ??? (CoreData + 2759628) [0x1a061fbcc]
+                                                          2   ??? (CoreData + 116236) [0x1a039a60c]
+                                                            2   ??? (CoreData + 110068) [0x1a0398df4]
+                                                              2   ??? (CoreData + 37800) [0x1a03873a8]
+                                                                2   ??? (libsqlite3.dylib + 192004) [0x19c5c0e04]
+                                                                  2   ??? (CoreData + 1898108) [0x1a054d67c]
+                                                                    2   ??? (CoreData + 1898284) [0x1a054d72c]
+                                                                      2   ??? (libsqlite3.dylib + 563580) [0x19c61b97c]
+                                                                        2   ??? (libsqlite3.dylib + 1165968) [0x19c6aea90]
+                                                                          2   ??? (libsqlite3.dylib + 408608) [0x19c5f5c20]
+                                                                            2   ??? (libsqlite3.dylib + 328232) [0x19c5e2228]
+                                                                              2   ??? (libsystem_kernel.dylib + 27704) [0x2487ebc38]
+                                                                                2   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Frontmost App, Effective Thread QoS User Initiated, Requested Thread QoS User Initiated, p-core>
+          1   ??? (libdispatch.dylib + 44920) [0x1d691cf78]
+            1   ??? (libdispatch.dylib + 42088) [0x1d691c468]
+              1   ??? (libdispatch.dylib + 112636) [0x1d692d7fc]
+                1   ??? (libdispatch.dylib + 70736) [0x1d6923450]
+                  1   ??? (CFNetwork + 303516) [0x1b2a2619c]
+                    1   ??? (CFNetwork + 308636) [0x1b2a2759c]
+                      1   ??? (libsystem_kernel.dylib + 21476) [0x2487ea3e4]
+                        1   <on behalf of UNKNOWN [35] (originated by UNKNOWN [35]), Requested Thread QoS Utility>
+  1   ??? (libswift_Concurrency.dylib + 444336) [0x19c3117b0]
+    1   ??? (Slack + 92202704) [0x10a2566d0]
+      1   ??? (Slack + 92175580) [0x10a24fcdc]
+        1   ??? (Slack + 77667036) [0x109479adc]
+          1   ??? (Slack + 77657572) [0x1094775e4]
+            1   ??? (Slack + 77661880) [0x1094786b8]
+              1   ??? (Slack + 77681732) [0x10947d444]
+                1   ??? (Slack + 77681028) [0x10947d184]
+                  1   ??? (Slack + 77674468) [0x10947b7e4]
+                    1   ??? (Slack + 77674852) [0x10947b964]
+                      1   ??? (Slack + 77691748) [0x10947fb64]
+                        1   ??? (Slack + 77690064) [0x10947f4d0]
+                          1   ??? (Slack + 106802388) [0x10b042cd4]
+                            1   ??? (Slack + 106802568) [0x10b042d88]
+                              1   ??? (Slack + 106908288) [0x10b05ca80]
+                                1   ??? (Slack + 106903100) [0x10b05b63c]
+                                  1   ??? (Foundation + 1549620) [0x19b5b2534]
+                                    1   ??? (Foundation + 1197400) [0x19b55c558]
+                                      1   ??? (Foundation + 1594876) [0x19b5bd5fc]
+                                        1   ??? (Foundation + 1567052) [0x19b5b694c]
+                                          1   ??? (Foundation + 1563352) [0x19b5b5ad8]
+                                            1   ??? (Foundation + 474232) [0x19b4abc78]
+                                              1   ??? (libsystem_kernel.dylib + 20516) [0x2487ea024]
+                                                1   <Frontmost App, Effective Thread QoS User Initiated, Requested Thread QoS User Initiated, p-core>
+
+  Binary Images:
+           0x104a68000 -                ???  com.tinyspeck.chatlyio 26.01.30 (454749) <E365B4B8-6496-3796-8D28-7131FE00DC1B>  /private/var/containers/Bundle/Application/303606EA-2728-419A-95A4-CBF78C79B125/Slack.app/Slack
+           0x19b438000 -        0x19c2a4c5f  Foundation                               <DF782AC5-CC02-358C-A2F7-149703F5F44A>  /System/Library/Frameworks/Foundation.framework/Foundation
+           0x19c2a5000 -        0x19c32dd97  libswift_Concurrency.dylib               <5B1111B6-2106-3AE3-BDEB-34A8B033CD74>  /usr/lib/swift/libswift_Concurrency.dylib
+           0x19c592000 -        0x19c73b6a3  libsqlite3.dylib                         <215F5D7B-4785-344B-AD2B-0994C4CD39E7>  /usr/lib/libsqlite3.dylib
+           0x1a037e000 -        0x1a070e47f  CoreData                                 <3345184F-33CB-3697-9E10-F956F35BCF95>  /System/Library/Frameworks/CoreData.framework/CoreData
+           0x1ae247000 -        0x1ae25dcb8  libswiftDispatch.dylib                   <79534EAE-05D6-3D38-9A9A-258D3922662D>  /usr/lib/swift/libswiftDispatch.dylib
+           0x1b29dc000 -        0x1b2d91dff  CFNetwork                                <103611C7-B684-34E7-B4D8-DE21613D60A5>  /System/Library/Frameworks/CFNetwork.framework/CFNetwork
+           0x1d6912000 -        0x1d695821f  libdispatch.dylib                        <11C047C4-33B3-39A3-AE43-BF617CFC7D2C>  /usr/lib/system/libdispatch.dylib
+           0x1fa6cf000 -        0x1fa6db44f  libsystem_pthread.dylib                  <741C5AFB-3F30-362E-9313-AAB3DE2497C9>  /usr/lib/system/libsystem_pthread.dylib
+           0x2487e5000 -        0x24881fd2b  libsystem_kernel.dylib                   <15E8A2AE-4BFD-3BB8-944E-2EC12393C59C>  /usr/lib/system/libsystem_kernel.dylib

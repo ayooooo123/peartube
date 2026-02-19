@@ -1,0 +1,270 @@
+{"app_name":"com.apple.StreamingUnzipService","timestamp":"2026-02-13 15:10:34.00 -0500","app_version":"1.0","slice_uuid":"0E95BDA4-DDA9-3163-A1CF-81A481AED685","build_version":"1","bundleID":"com.apple.StreamingUnzipService","duration_ms":"4100498","share_with_app_devs":0,"is_first_party":0,"bug_type":"145","os_version":"iPhone OS 26.2.1 (23C71)","roots_installed":0,"name":"com.apple.StreamingUnzipService","incident_id":"F41A1B5A-5E5D-42AD-B4A0-E70E4F14B654"}
+Date/Time:        2026-02-13 14:02:10.197 -0500
+End time:         2026-02-13 15:10:30.695 -0500
+OS Version:       iPhone OS 26.2.1 (Build 23C71)
+Architecture:     arm64e
+Report Version:   67
+Incident Identifier: F41A1B5A-5E5D-42AD-B4A0-E70E4F14B654
+
+Data Source:      Microstackshots
+Shared Cache:     5F9D3A66-1050-3B67-80F8-9DE7FCA478D8 slid base address 0x18aab0000, slide 0xaab0000
+
+Command:          com.apple.StreamingUnzipService
+Path:             /System/Library/PrivateFrameworks/StreamingZip.framework/XPCServices/com.apple.StreamingUnzipService.xpc/com.apple.StreamingUnzipService
+Identifier:       com.apple.StreamingUnzipService
+Version:          1.0 (1)
+Resource Coalition: "com.apple.installcoordination_proxy"(5654)
+On Behalf Of:     103 samples UNKNOWN [10001] (103 samples originated by UNKNOWN [10001])
+Architecture:     arm64e
+Parent:           launchd [1]
+PID:              10003
+
+Event:            disk writes
+Action taken:     none
+Writes:           1073.80 MB of file backed memory dirtied over 4100 seconds (261.87 KB per second average), exceeding limit of 12.43 KB per second over 86400 seconds
+Writes limit:     1073.74 MB
+Limit duration:   86400s
+Writes caused:    1073.80 MB
+Writes duration:  4100s
+Duration:         4100.50s
+Duration Sampled: 4082.73s (event starts 0.73s before samples, event ends 17.04s after samples)
+Steps:            437 (10.49 MB/step)
+
+Hardware model:   iPhone14,7
+Active cpus:      6
+Memory size:      5.58 GB
+HW page size:     16384
+VM page size:     16384
+Shared cache residency: 11.66% (659.33 MB / 5656.66 MB)
+
+Time Since Boot:  1182266s
+Time Awake Since Boot: 468473s
+Time Since Wake:  8034s
+
+Total CPU Time:   169.809s
+Advisory levels:  Battery -> 3, User -> 3, ThermalPressure -> 0, Combined -> 3
+Free disk space:  37.36 GB/119.07 GB, low space threshold 150 MB
+Vnodes Available: 62.93% (15104/24000, 12000 allocated, 12000 soft limit)
+Models:           none
+
+Preferred User Language: en-US
+Country Code:     US
+Keyboards:        en_US QWERTY, emoji Emoji
+OS Cryptex File Extents: 3125
+
+Heaviest stack for the target process:
+  103  ??? (libsystem_pthread.dylib + 2240) [0x1ea4838c0]
+  103  ??? (libsystem_pthread.dylib + 5048) [0x1ea4843b8]
+  103  ??? (libdispatch.dylib + 85220) [0x1c66d6ce4]
+  103  ??? (libdispatch.dylib + 87020) [0x1c66d73ec]
+  103  ??? (libdispatch.dylib + 44920) [0x1c66ccf78]
+  103  ??? (libdispatch.dylib + 41680) [0x1c66cc2d0]
+  103  ??? (libdispatch.dylib + 126508) [0x1c66e0e2c]
+  103  ??? (libdispatch.dylib + 41680) [0x1c66cc2d0]
+  103  ??? (libdispatch.dylib + 123076) [0x1c66e00c4]
+  103  ??? (libdispatch.dylib + 112708) [0x1c66dd844]
+  103  ??? (libxpc.dylib + 84176) [0x1a1e5c8d0]
+  103  ??? (libxpc.dylib + 76796) [0x1a1e5abfc]
+  103  ??? (Foundation + 172028) [0x18b235ffc]
+  103  ??? (Foundation + 172356) [0x18b236144]
+  103  ??? (Foundation + 10937676) [0x18bc7a54c]
+  103  ??? (Foundation + 172700) [0x18b23629c]
+  103  ??? (com.apple.StreamingUnzipService + 15776) [0x104877da0]
+  103  ??? (Foundation + 9369448) [0x18bafb768]
+  103  ??? (com.apple.StreamingUnzipService + 16324) [0x104877fc4]
+  102  ??? (com.apple.StreamingUnzipService + 25636) [0x10487a424]
+  102  ??? (com.apple.StreamingUnzipService + 59660) [0x10488290c]
+  102  ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+
+
+Powerstats for:   com.apple.StreamingUnzipService [10003] [unique pid 109841]
+UUID:             0E95BDA4-DDA9-3163-A1CF-81A481AED685
+Path:             /System/Library/PrivateFrameworks/StreamingZip.framework/XPCServices/com.apple.StreamingUnzipService.xpc/com.apple.StreamingUnzipService
+Identifier:       com.apple.StreamingUnzipService
+Version:          1.0 (1)
+Resource Coalition: 103 samples "com.apple.installcoordination_proxy"(5654)
+On Behalf Of:     103 samples UNKNOWN [10001] (103 samples originated by UNKNOWN [10001])
+Architecture:     arm64e
+Parent:           launchd [1]
+UID:              501
+Sudden Term:      Tracked (allows idle exit)
+Footprint:        2768 KB -> 3344 KB (+576 KB)
+Pageins:          22 pages
+Start time:       2026-02-13 14:02:10.924 -0500
+End time:         2026-02-13 14:59:22.733 -0500
+Num samples:      103 (24%)
+Num threads:      6
+Primary state:    103 samples Non-Frontmost App, Non-Suppressed, Kernel mode, Effective Thread QoS Default, Requested Thread QoS Default, Override Thread QoS Unspecified, e-core
+User Activity:    0 samples Idle, 103 samples Active
+Power Source:     0 samples on Battery, 103 samples on AC
+  103  ??? (libsystem_pthread.dylib + 2240) [0x1ea4838c0]
+    103  ??? (libsystem_pthread.dylib + 5048) [0x1ea4843b8]
+      103  ??? (libdispatch.dylib + 85220) [0x1c66d6ce4]
+        103  ??? (libdispatch.dylib + 87020) [0x1c66d73ec]
+          103  ??? (libdispatch.dylib + 44920) [0x1c66ccf78]
+            103  ??? (libdispatch.dylib + 41680) [0x1c66cc2d0]
+              103  ??? (libdispatch.dylib + 126508) [0x1c66e0e2c]
+                103  ??? (libdispatch.dylib + 41680) [0x1c66cc2d0]
+                  103  ??? (libdispatch.dylib + 123076) [0x1c66e00c4]
+                    103  ??? (libdispatch.dylib + 112708) [0x1c66dd844]
+                      103  ??? (libxpc.dylib + 84176) [0x1a1e5c8d0]
+                        103  ??? (libxpc.dylib + 76796) [0x1a1e5abfc]
+                          103  ??? (Foundation + 172028) [0x18b235ffc]
+                            103  ??? (Foundation + 172356) [0x18b236144]
+                              103  ??? (Foundation + 10937676) [0x18bc7a54c]
+                                103  ??? (Foundation + 172700) [0x18b23629c]
+                                  103  ??? (com.apple.StreamingUnzipService + 15776) [0x104877da0]
+                                    103  ??? (Foundation + 9369448) [0x18bafb768]
+                                      103  ??? (com.apple.StreamingUnzipService + 16324) [0x104877fc4]
+                                        102  ??? (com.apple.StreamingUnzipService + 25636) [0x10487a424]
+                                          102  ??? (com.apple.StreamingUnzipService + 59660) [0x10488290c]
+                                            102  ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+                                              102  <on behalf of UNKNOWN [10001] (originated by UNKNOWN [10001])>
+                                        1    ??? (com.apple.StreamingUnzipService + 22140) [0x10487967c]
+                                          1    ??? (com.apple.StreamingUnzipService + 43052) [0x10487e82c]
+                                            1    ??? (libsystem_kernel.dylib + 4816) [0x23859a2d0]
+                                              1    <on behalf of UNKNOWN [10001] (originated by UNKNOWN [10001])>
+
+  Binary Images:
+           0x104874000 -                ???  com.apple.StreamingUnzipService 1.0 (1) <0E95BDA4-DDA9-3163-A1CF-81A481AED685>  /System/Library/PrivateFrameworks/StreamingZip.framework/XPCServices/com.apple.StreamingUnzipService.xpc/com.apple.StreamingUnzipService
+           0x18b20c000 -        0x18c05281f  Foundation                              <75D11B29-11A6-3507-87F7-487ACEB1476A>  /System/Library/Frameworks/Foundation.framework/Foundation
+           0x1a1e48000 -        0x1a1e99fbf  libxpc.dylib                            <C7EC77A9-E543-30AA-9C2D-854214EB2289>  /usr/lib/system/libxpc.dylib
+           0x1c66c2000 -        0x1c670821f  libdispatch.dylib                       <654F736A-691D-3C6A-BD81-69BC65B9B8ED>  /usr/lib/system/libdispatch.dylib
+           0x1ea483000 -        0x1ea48f44f  libsystem_pthread.dylib                 <36408BF3-C2B3-37C8-ABC2-0251F88E8724>  /usr/lib/system/libsystem_pthread.dylib
+           0x238599000 -        0x2385d3d2b  libsystem_kernel.dylib                  <99B78925-F063-3B62-AD22-3986A636020D>  /usr/lib/system/libsystem_kernel.dylib
+
+
+Powerstats for:   PearTube
+UUID:             F673CF2A-735F-3CF8-AA13-7FE813569D7F
+Resource Coalition: 228 samples "com.peartube.app"(5658)
+Architecture:     arm64
+Start time:       2026-02-13 14:03:40.370 -0500
+End time:         2026-02-13 14:20:05.355 -0500
+Num samples:      228 (52%)
+Primary state:    227 samples Frontmost App, Non-Suppressed, Kernel mode, Effective Thread QoS Default, Requested Thread QoS Default, Override Thread QoS Unspecified, p-core
+User Activity:    0 samples Idle, 228 samples Active
+Power Source:     0 samples on Battery, 228 samples on AC
+  227  ??? (libsystem_pthread.dylib + 2252) [0x1ea4838cc]
+    227  ??? (libsystem_pthread.dylib + 17484) [0x1ea48744c]
+      186  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 4680824) [0x1062aac78]
+        186  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 4673756) [0x1062a90dc]
+          186  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 4673364) [0x1062a8f54]
+            151  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1337836) [0x105f7a9ec]
+              151  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1350168) [0x105f7da18]
+                151  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1360104) [0x105f800e8]
+                  151  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 571328) [0x105ebf7c0]
+                    150  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 583324) [0x105ec269c]
+                      150  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 511876) [0x105eb0f84]
+                        150  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 510508) [0x105eb0a2c]
+                          150  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 518444) [0x105eb292c]
+                            150  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 517164) [0x105eb242c]
+                              150  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 307396) [0x105e7f0c4]
+                                150  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 309488) [0x105e7f8f0]
+                                  150  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 357508) [0x105e8b484]
+                                    149  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 356896) [0x105e8b220]
+                                      149  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3005988) [0x106111e24]
+                                        149  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3008188) [0x1061126bc]
+                                          149  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3011368) [0x106113328]
+                                            149  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 99056) [0x105e4c2f0]
+                                              120  ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 5182292) [0x106325354]
+                                                120  ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+                                                  6    <e-core>
+                                              29   ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+                                                1    <e-core>
+                                    1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 356680) [0x105e8b148]
+                                      1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3005988) [0x106111e24]
+                                        1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3008188) [0x1061126bc]
+                                          1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3011368) [0x106113328]
+                                            1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 99056) [0x105e4c2f0]
+                                              1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 5182292) [0x106325354]
+                                                1    ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+                    1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 583232) [0x105ec2640]
+                      1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 904952) [0x105f10ef8]
+                        1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3725148) [0x1061c175c]
+                          1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3726748) [0x1061c1d9c]
+                            1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3731616) [0x1061c30a0]
+                              1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3733908) [0x1061c3994]
+                                1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3005988) [0x106111e24]
+                                  1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3008188) [0x1061126bc]
+                                    1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3011368) [0x106113328]
+                                      1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 99056) [0x105e4c2f0]
+                                        1    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 5182292) [0x106325354]
+                                          1    ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+            35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1348820) [0x105f7d4d4]
+              35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1354212) [0x105f7e9e4]
+                35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1288600) [0x105f6e998]
+                  35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1285064) [0x105f6dbc8]
+                    35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1725296) [0x105fd9370]
+                      35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1739484) [0x105fdcadc]
+                        35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 387476) [0x105e92994]
+                          35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 511876) [0x105eb0f84]
+                            35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 510436) [0x105eb09e4]
+                              35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 517164) [0x105eb242c]
+                                35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 307396) [0x105e7f0c4]
+                                  35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 309488) [0x105e7f8f0]
+                                    35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 357508) [0x105e8b484]
+                                      35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 356896) [0x105e8b220]
+                                        35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3005988) [0x106111e24]
+                                          35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3008188) [0x1061126bc]
+                                            35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3011368) [0x106113328]
+                                              35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 99056) [0x105e4c2f0]
+                                                35   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 5182292) [0x106325354]
+                                                  35   ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+                                                    5    <e-core>
+      41   ??? (<7C869447-EEF6-3CB1-B8A7-03A9931B3529> + 249388) [0x10bef4e2c]
+        39   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 70316) [0x105e452ac]
+          39   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1226584) [0x105f5f758]
+            39   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1230700) [0x105f6076c]
+              39   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1260400) [0x105f67b70]
+                39   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1271804) [0x105f6a7fc]
+                  27   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1917836) [0x10600838c]
+                    27   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3008188) [0x1061126bc]
+                      27   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3011368) [0x106113328]
+                        27   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 99056) [0x105e4c2f0]
+                          27   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 5182292) [0x106325354]
+                            27   ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+                              4    <e-core>
+                  12   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1917576) [0x106008288]
+                    12   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1918432) [0x1060085e0]
+                      12   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3005988) [0x106111e24]
+                        12   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3008188) [0x1061126bc]
+                          12   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3011368) [0x106113328]
+                            12   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 99056) [0x105e4c2f0]
+                              12   ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 5182292) [0x106325354]
+                                12   ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+                                  1    <e-core>
+        2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 62708) [0x105e434f4]
+          2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1522772) [0x105fa7c54]
+            2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1524968) [0x105fa84e8]
+              2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1493884) [0x105fa0b7c]
+                2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1495580) [0x105fa121c]
+                  2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1502684) [0x105fa2ddc]
+                    2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1506820) [0x105fa3e04]
+                      2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 1514732) [0x105fa5cec]
+                        2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 387476) [0x105e92994]
+                          2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 511876) [0x105eb0f84]
+                            2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 510436) [0x105eb09e4]
+                              2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 517164) [0x105eb242c]
+                                2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 307396) [0x105e7f0c4]
+                                  2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 309488) [0x105e7f8f0]
+                                    2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 357508) [0x105e8b484]
+                                      2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 356896) [0x105e8b220]
+                                        2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3005988) [0x106111e24]
+                                          2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3008188) [0x1061126bc]
+                                            2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 3011368) [0x106113328]
+                                              2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 99056) [0x105e4c2f0]
+                                                2    ??? (<A4F08037-D069-363D-9A7E-83EE522D34C7> + 5182292) [0x106325354]
+                                                  2    ??? (libsystem_kernel.dylib + 20516) [0x23859e024]
+  1    ??? (dyld + 19928) [0x18abcadd8]
+    1    ??? (dyld + 87688) [0x18abdb688]
+      1    ??? (dyld + 344600) [0x18ac1a218]
+        1    ??? (dyld + 309912) [0x18ac11a98]
+          1    <Effective Thread QoS User Interactive, Requested Thread QoS User Interactive>
+
+  Binary Images:
+           0x100b34000 -                ???  ???                     <F673CF2A-735F-3CF8-AA13-7FE813569D7F>
+           0x105e34000 -                ???  ???                     <A4F08037-D069-363D-9A7E-83EE522D34C7>
+           0x10beb8000 -                ???  ???                     <7C869447-EEF6-3CB1-B8A7-03A9931B3529>
+           0x18abc6000 -        0x18ac64b2f  dyld                    <DBBF9813-22CC-39FC-8D40-581143766FF6>  /usr/lib/dyld
+           0x1ea483000 -        0x1ea48f44f  libsystem_pthread.dylib <36408BF3-C2B3-37C8-ABC2-0251F88E8724>  /usr/lib/system/libsystem_pthread.dylib
+           0x238599000 -        0x2385d3d2b  libsystem_kernel.dylib  <99B78925-F063-3B62-AD22-3986A636020D>  /usr/lib/system/libsystem_kernel.dylib

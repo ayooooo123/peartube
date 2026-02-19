@@ -1,0 +1,189 @@
+{"app_name":"CoinGecko Widget Extension","timestamp":"2026-02-17 15:48:39.00 -0500","app_version":"3.43.0","slice_uuid":"b720962f-9264-3d22-bc6a-525f721b9241","adam_id":"1390323960","build_version":"455","bundleID":"com.coingecko.coingeckoapp.CoinGecko-Widget","platform":2,"share_with_app_devs":0,"is_first_party":0,"bug_type":"309","os_version":"iPhone OS 26.2.1 (23C71)","roots_installed":0,"incident_id":"681ABBAC-6B55-4081-A958-A8D6BFEA0124","name":"CoinGecko Widget Extension"}
+{
+  "uptime" : 730000,
+  "procRole" : "unknown",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "iPhone14,7",
+  "coalitionID" : 7158,
+  "osVersion" : {
+    "isEmbedded" : true,
+    "train" : "iPhone OS 26.2.1",
+    "releaseType" : "User",
+    "build" : "23C71"
+  },
+  "captureTime" : "2026-02-17 15:48:38.1801 -0500",
+  "codeSigningMonitor" : 2,
+  "incident" : "681ABBAC-6B55-4081-A958-A8D6BFEA0124",
+  "pid" : 68946,
+  "translated" : false,
+  "cpuType" : "ARM-64",
+  "procLaunch" : "2026-02-17 15:48:37.7114 -0500",
+  "procStartAbsTime" : 17726599494557,
+  "procExitAbsTime" : 17726610740046,
+  "procName" : "CoinGecko Widget Extension",
+  "procPath" : "\/private\/var\/containers\/Bundle\/Application\/3060A997-2156-4331-BA93-C4C11213E258\/CoinGecko.app\/PlugIns\/CoinGecko Widget Extension.appex\/CoinGecko Widget Extension",
+  "bundleInfo" : {"CFBundleShortVersionString":"3.43.0","CFBundleVersion":"455","CFBundleIdentifier":"com.coingecko.coingeckoapp.CoinGecko-Widget"},
+  "storeInfo" : {"itemID":"1390323960","storeCohortMetadata":"7|date=1609765200000&sf=143441&pgtp=Search&pgid=952e78d4-9de2-4d5f-a914-793740a258a0&prpg=Genre_179183&ctxt=Search&issrch=1","distributorID":"com.apple.AppStore","deviceIdentifierForVendor":"5E892C21-FA77-4A90-B427-910BC143B1FE","softwareVersionExternalIdentifier":"881996776","applicationVariant":"1:iPhone14,7:18","thirdParty":true},
+  "parentProc" : "launchd",
+  "parentPid" : 1,
+  "coalitionName" : "com.coingecko.coingeckoapp.CoinGecko-Widget",
+  "crashReporterKey" : "70a2e716576e873bca1e75ad16ff4b60c1c4742b",
+  "appleIntelligenceStatus" : {"reasons":["deviceNotCapable"],"state":"unavailable"},
+  "developerMode" : 1,
+  "bootProgressRegister" : "0x20800004",
+  "wasUnlockedSinceBoot" : 1,
+  "isLocked" : 1,
+  "throttleTimeout" : 10,
+  "codeSigningID" : "com.coingecko.coingeckoapp.CoinGecko-Widget",
+  "codeSigningTeamID" : "8ZSH6R42M6",
+  "codeSigningFlags" : 570450689,
+  "codeSigningValidationCategory" : 4,
+  "codeSigningTrustLevel" : 5,
+  "codeSigningAuxiliaryInfo" : 0,
+  "instructionByteStream" : {"beforePC":"fyMD1f17v6n9AwCRD+7\/l78DAJH9e8Go\/w9f1sADX9YQKYDSARAA1A==","atPC":"AwEAVH8jA9X9e7+p\/QMAkQTu\/5e\/AwCR\/XvBqP8PX9bAA1\/WECeA0g=="},
+  "bootSessionUUID" : "F62A5B5F-7B6A-4FA0-8F70-FDB299EEC450",
+  "basebandVersion" : "4.20.01",
+  "exception" : {"codes":"0x0000000000000000, 0x0000000000000000","rawCodes":[0,0],"type":"EXC_CRASH","signal":"SIGABRT"},
+  "termination" : {"flags":0,"code":6,"namespace":"SIGNAL","indicator":"Abort trap: 6","byProc":"CoinGecko Widget Extension","byPid":68946},
+  "asi" : {"libsystem_c.dylib":["abort() called"]},
+  "exceptionReason" : {"arguments":["__NSSingleObjectArrayI","identifier","0x1480bc370"],"format_string":"-[%s %s]: unrecognized selector sent to instance %p","name":"NSInvalidArgumentException","type":"objc-exception","composed_message":"-[__NSSingleObjectArrayI identifier]: unrecognized selector sent to instance 0x1480bc370","class":"NSException"},
+  "lastExceptionBacktrace" : [{"imageOffset":809316,"symbol":"__exceptionPreprocess","symbolLocation":164,"imageIndex":7},{"imageOffset":202772,"symbol":"objc_exception_throw","symbolLocation":88,"imageIndex":6},{"imageOffset":1442496,"symbol":"+[NSObject(NSObject) instanceMethodSignatureForSelector:]","symbolLocation":0,"imageIndex":7},{"imageOffset":283484,"symbol":"___forwarding___","symbolLocation":1472,"imageIndex":7},{"imageOffset":315904,"symbol":"_CF_forwarding_prep_0","symbolLocation":96,"imageIndex":7},{"imageOffset":42876,"imageIndex":0},{"imageOffset":391728,"imageIndex":8},{"imageOffset":392092,"imageIndex":8},{"imageOffset":391252,"imageIndex":8},{"imageOffset":390948,"imageIndex":8},{"imageOffset":390480,"imageIndex":8},{"imageOffset":389400,"imageIndex":8},{"imageOffset":388332,"imageIndex":8},{"imageOffset":388072,"imageIndex":8},{"imageOffset":388012,"imageIndex":8},{"imageOffset":387204,"imageIndex":8},{"imageOffset":17160,"symbol":"partial apply for closure #1 in _unsafeInheritExecutor_withCheckedContinuation<A>(function:_:)","symbolLocation":96,"imageIndex":9},{"imageOffset":15972,"symbol":"_unsafeInheritExecutor_withUnsafeContinuation<A>(_:)","symbolLocation":128,"imageIndex":9},{"imageOffset":15569,"symbol":"withCheckedContinuation<A>(function:_:)","symbolLocation":1,"imageIndex":9},{"imageOffset":557385,"imageIndex":8},{"imageOffset":501301,"imageIndex":8},{"imageOffset":572229,"imageIndex":8},{"imageOffset":1019649,"imageIndex":8},{"imageOffset":572229,"imageIndex":8},{"imageOffset":444337,"symbol":"completeTaskWithClosure(swift::AsyncContext*, swift::SwiftError*)","symbolLocation":1,"imageIndex":9}],
+  "faultingThread" : 0,
+  "threads" : [{"triggered":true,"id":9013048,"threadState":{"x":[{"value":0},{"value":0},{"value":0},{"value":0},{"value":6623313731},{"value":6134137744},{"value":110},{"value":18446726482597246976},{"value":13035341990043482312},{"value":13035341983199828680},{"value":2},{"value":1099511627776},{"value":4294967293},{"value":0},{"value":0},{"value":0},{"value":328},{"value":8457478656,"symbolLocation":0,"symbol":"_main_thread"},{"value":0},{"value":6},{"value":259},{"value":8457478880,"symbolLocation":224,"symbol":"_main_thread"},{"value":8405286912,"symbolLocation":0,"symbol":"OBJC_IVAR_$_Object.isa"},{"value":1},{"value":1},{"value":104},{"value":6134142048},{"value":8457400240,"symbolLocation":0,"symbol":"objc_debug_tag60_permutations"},{"value":8}],"flavor":"ARM_THREAD_STATE64","lr":{"value":8225597456},"cpsr":{"value":1073745920},"fp":{"value":6134137600},"sp":{"value":6134137568},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":9535373516,"matchesCrashFrame":1},"far":{"value":0}},"queue":"com.apple.main-thread","frames":[{"imageOffset":45260,"symbol":"__pthread_kill","symbolLocation":8,"imageIndex":2},{"imageOffset":30736,"symbol":"pthread_kill","symbolLocation":268,"imageIndex":3},{"imageOffset":491364,"symbol":"abort","symbolLocation":124,"imageIndex":4},{"imageOffset":75784,"symbol":"__abort_message","symbolLocation":132,"imageIndex":5},{"imageOffset":5252,"symbol":"demangling_terminate_handler()","symbolLocation":304,"imageIndex":5},{"imageOffset":212856,"symbol":"_objc_terminate()","symbolLocation":156,"imageIndex":6},{"imageOffset":72668,"symbol":"std::__terminate(void (*)())","symbolLocation":16,"imageIndex":5},{"imageOffset":86804,"symbol":"__cxxabiv1::failed_throw(__cxxabiv1::__cxa_exception*)","symbolLocation":88,"imageIndex":5},{"imageOffset":86716,"symbol":"__cxa_throw","symbolLocation":92,"imageIndex":5},{"imageOffset":203132,"symbol":"objc_exception_throw","symbolLocation":448,"imageIndex":6},{"imageOffset":1442496,"symbol":"-[NSObject(NSObject) doesNotRecognizeSelector:]","symbolLocation":384,"imageIndex":7},{"imageOffset":283484,"symbol":"___forwarding___","symbolLocation":1472,"imageIndex":7},{"imageOffset":315904,"symbol":"_CF_forwarding_prep_0","symbolLocation":96,"imageIndex":7},{"imageOffset":42876,"imageIndex":0},{"imageOffset":391728,"imageIndex":8},{"imageOffset":392092,"imageIndex":8},{"imageOffset":391252,"imageIndex":8},{"imageOffset":390948,"imageIndex":8},{"imageOffset":390480,"imageIndex":8},{"imageOffset":389400,"imageIndex":8},{"imageOffset":388332,"imageIndex":8},{"imageOffset":388072,"imageIndex":8},{"imageOffset":388012,"imageIndex":8},{"imageOffset":387204,"imageIndex":8},{"imageOffset":17160,"symbol":"partial apply for closure #1 in _unsafeInheritExecutor_withCheckedContinuation<A>(function:_:)","symbolLocation":96,"imageIndex":9},{"imageOffset":15972,"symbol":"_unsafeInheritExecutor_withUnsafeContinuation<A>(_:)","symbolLocation":128,"imageIndex":9},{"imageOffset":15569,"symbol":"withCheckedContinuation<A>(function:_:)","symbolLocation":1,"imageIndex":9},{"imageOffset":557385,"imageIndex":8},{"imageOffset":501301,"imageIndex":8},{"imageOffset":572229,"imageIndex":8},{"imageOffset":1019649,"imageIndex":8},{"imageOffset":572229,"imageIndex":8},{"imageOffset":444337,"symbol":"completeTaskWithClosure(swift::AsyncContext*, swift::SwiftError*)","symbolLocation":1,"imageIndex":9}]},{"id":9013050,"frames":[],"threadState":{"x":[{"value":6134706176},{"value":3587},{"value":6134169600},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6134706176},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":8225568952},"far":{"value":0}}},{"id":9013051,"frames":[],"threadState":{"x":[{"value":6135279616},{"value":4611},{"value":6134743040},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6135279616},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":8225568952},"far":{"value":0}}}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4332732416,
+    "size" : 376832,
+    "uuid" : "b720962f-9264-3d22-bc6a-525f721b9241",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/3060A997-2156-4331-BA93-C4C11213E258\/CoinGecko.app\/PlugIns\/CoinGecko Widget Extension.appex\/CoinGecko Widget Extension",
+    "name" : "CoinGecko Widget Extension"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4333568000,
+    "size" : 180224,
+    "uuid" : "b052b320-2fb6-38a1-9b85-aa6460b4bf17",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/3060A997-2156-4331-BA93-C4C11213E258\/CoinGecko.app\/Frameworks\/CoinGeckoKit.framework\/CoinGeckoKit",
+    "name" : "CoinGeckoKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 9535328256,
+    "size" : 240940,
+    "uuid" : "99b78925-f063-3b62-ad22-3986a636020d",
+    "path" : "\/usr\/lib\/system\/libsystem_kernel.dylib",
+    "name" : "libsystem_kernel.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 8225566720,
+    "size" : 50256,
+    "uuid" : "36408bf3-c2b3-37c8-abc2-0251f88e8724",
+    "path" : "\/usr\/lib\/system\/libsystem_pthread.dylib",
+    "name" : "libsystem_pthread.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6865960960,
+    "size" : 525744,
+    "uuid" : "e2fb0b5b-ed93-35a7-a626-4894601e382b",
+    "path" : "\/usr\/lib\/system\/libsystem_c.dylib",
+    "name" : "libsystem_c.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6623219712,
+    "size" : 108232,
+    "uuid" : "8da47f0e-613f-35c6-abc2-bcc02bb3b573",
+    "path" : "\/usr\/lib\/libc++abi.dylib",
+    "name" : "libc++abi.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6622035968,
+    "size" : 334640,
+    "uuid" : "7203a71f-3ce4-3f60-93cf-b3063caab174",
+    "path" : "\/usr\/lib\/libobjc.A.dylib",
+    "name" : "libobjc.A.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6672723968,
+    "size" : 5793600,
+    "uuid" : "bd79fbf5-83c8-35f5-a0d5-4ca56e602111",
+    "path" : "\/System\/Library\/Frameworks\/CoreFoundation.framework\/CoreFoundation",
+    "name" : "CoreFoundation"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6924361728,
+    "size" : 2531968,
+    "uuid" : "509bfdeb-367a-371b-8e82-123fb09b2124",
+    "path" : "\/System\/Library\/Frameworks\/WidgetKit.framework\/WidgetKit",
+    "name" : "WidgetKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6644117504,
+    "size" : 560536,
+    "uuid" : "a5c11424-76f8-3d9c-8a15-d5d3b9af83be",
+    "path" : "\/usr\/lib\/swift\/libswift_Concurrency.dylib",
+    "name" : "libswift_Concurrency.dylib"
+  },
+  {
+    "size" : 0,
+    "source" : "A",
+    "base" : 0,
+    "uuid" : "00000000-0000-0000-0000-000000000000"
+  }
+],
+  "sharedCache" : {
+  "base" : 6621429760,
+  "size" : 5117575168,
+  "uuid" : "5f9d3a66-1050-3b67-80f8-9de7fca478d8"
+},
+  "vmSummary" : "ReadOnly portion of Libraries: Total=939.6M resident=0K(0%) swapped_out_or_unallocated=939.6M(100%)\nWritable regions: Total=22.4M written=353K(2%) resident=353K(2%) swapped_out=0K(0%) unallocated=22.1M(98%)\n\n                                VIRTUAL   REGION \nREGION TYPE                        SIZE    COUNT (non-coalesced) \n===========                     =======  ======= \nActivity Tracing                   256K        1 \nAttributeGraph Data               1024K        1 \nDispatch continuations            6144K        1 \nKernel Alloc Once                   32K        1 \nMALLOC                            12.7M        8 \nMALLOC guard page                 3904K        4 \nSTACK GUARD                         48K        3 \nStack                             2096K        3 \n__AUTH                            3790K      339 \n__AUTH_CONST                      56.5M      599 \n__CTF                               824        1 \n__DATA                            20.1M      557 \n__DATA_CONST                      22.5M      604 \n__DATA_DIRTY                      4317K      539 \n__FONT_DATA                        2352        1 \n__INFO_FILTER                         8        1 \n__LINKEDIT                       178.3M        3 \n__OBJC_RO                         84.2M        1 \n__OBJC_RW                         3176K        1 \n__TEXT                           761.3M      618 \n__TPRO_CONST                       128K        2 \nmapped file                       32.7M        2 \npage table in kernel               353K        1 \nshared memory                       80K        4 \n===========                     =======  ======= \nTOTAL                              1.2G     3295 \n",
+  "legacyInfo" : {
+  "threadTriggered" : {
+    "queue" : "com.apple.main-thread"
+  }
+},
+  "logWritingSignature" : "649038907766bf189feef1346694412fe79f48d9",
+  "roots_installed" : 0,
+  "bug_type" : "309",
+  "trmStatus" : 1,
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "652eff3d1bce5442b8d753c9",
+      "factorPackIds" : [
+        "652eff982c02f032beae83f4"
+      ],
+      "deploymentId" : 240000009
+    },
+    {
+      "rolloutId" : "67648e5334a82511f4acf879",
+      "factorPackIds" : [
+
+      ],
+      "deploymentId" : 240000008
+    }
+  ],
+  "experiments" : [
+
+  ]
+}
+}

@@ -1,0 +1,1303 @@
+{"app_name":"Outlook-iOS","timestamp":"2026-02-01 09:25:33.00 -0500","app_version":"5.2601.0","slice_uuid":"c077b675-5279-38d8-b079-62237a1b503f","adam_id":"951937596","build_version":"43774451","bundleID":"com.microsoft.Office.Outlook","platform":2,"share_with_app_devs":0,"is_first_party":0,"bug_type":"309","os_version":"iPhone OS 26.2.1 (23C71)","roots_installed":0,"incident_id":"1072C267-7E10-4D7D-B4F6-0140C1A76A9F","name":"Outlook-iOS"}
+{
+  "uptime" : 28000,
+  "procRole" : "Non UI",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "iPhone14,7",
+  "coalitionID" : 845,
+  "osVersion" : {
+    "isEmbedded" : true,
+    "train" : "iPhone OS 26.2.1",
+    "releaseType" : "User",
+    "build" : "23C71"
+  },
+  "captureTime" : "2026-02-01 09:25:32.6815 -0500",
+  "codeSigningMonitor" : 2,
+  "incident" : "1072C267-7E10-4D7D-B4F6-0140C1A76A9F",
+  "pid" : 7456,
+  "translated" : false,
+  "cpuType" : "ARM-64",
+  "procLaunch" : "2026-02-01 09:25:30.4206 -0500",
+  "procStartAbsTime" : 674053851700,
+  "procExitAbsTime" : 674108056593,
+  "procName" : "Outlook-iOS",
+  "procPath" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Outlook-iOS",
+  "bundleInfo" : {"CFBundleShortVersionString":"5.2601.0","CFBundleVersion":"43774451","CFBundleIdentifier":"com.microsoft.Office.Outlook","DTAppStoreToolsBuild":"17C53"},
+  "storeInfo" : {"itemID":"951937596","storeCohortMetadata":"4|date=1457334000000&sf=143441","distributorID":"com.apple.AppStore","deviceIdentifierForVendor":"3A36D71B-449C-46AC-A2CD-81010BD4D72F","softwareVersionExternalIdentifier":"881463201","applicationVariant":"1:iPhone14,7:18","thirdParty":true},
+  "parentProc" : "launchd",
+  "parentPid" : 1,
+  "coalitionName" : "com.microsoft.Office.Outlook",
+  "crashReporterKey" : "70a2e716576e873bca1e75ad16ff4b60c1c4742b",
+  "appleIntelligenceStatus" : {"reasons":["deviceNotCapable"],"state":"unavailable"},
+  "developerMode" : 1,
+  "bootProgressRegister" : "0x20800004",
+  "wasUnlockedSinceBoot" : 1,
+  "isLocked" : 1,
+  "codeSigningID" : "com.microsoft.Office.Outlook",
+  "codeSigningTeamID" : "UBF8T346G9",
+  "codeSigningFlags" : 570450689,
+  "codeSigningValidationCategory" : 4,
+  "codeSigningTrustLevel" : 5,
+  "codeSigningAuxiliaryInfo" : 0,
+  "instructionByteStream" : {"beforePC":"CAhA+egDALW\/AhPrQAIAVKGCAJHgAxSq4kL+l6kGQPnpAAC1qApA+Q==","atPC":"CQFA+T8BFev1AwiqoAAAVPv\/\/xfoAwmqKQFA+cn\/\/7X1AwiqHwET6w=="},
+  "bootSessionUUID" : "F62A5B5F-7B6A-4FA0-8F70-FDB299EEC450",
+  "basebandVersion" : "4.20.01",
+  "vmRegionInfo" : "0x300000101 is not in any region.  Bytes after previous region: 1145897218  Bytes before following region: 54760832767\n      REGION TYPE                 START - END      [ VSIZE] PRT\/MAX SHRMOD  REGION DETAIL\n      unused __TEXT            2bbb2c000-2bbb30000 [   16K] r--\/r-- SM=COW  unused  unknown system shared lib __TEXT\n--->  GAP OF 0xd044d0000 BYTES\n      commpage (reserved)      fc0000000-1000000000 [  1.0G] ---\/--- SM=NUL  reserved VM address space (unallocated)",
+  "exception" : {"codes":"0x0000000000000001, 0x0000010300000101","rawCodes":[1,1112396529921],"type":"EXC_BAD_ACCESS","signal":"SIGSEGV","subtype":"KERN_INVALID_ADDRESS at 0x0000010300000101 -> 0x0000000300000101 (possible pointer authentication failure)"},
+  "termination" : {"flags":0,"code":11,"namespace":"SIGNAL","indicator":"Segmentation fault: 11","byProc":"exc handler","byPid":7456},
+  "vmregioninfo" : "0x300000101 is not in any region.  Bytes after previous region: 1145897218  Bytes before following region: 54760832767\n      REGION TYPE                 START - END      [ VSIZE] PRT\/MAX SHRMOD  REGION DETAIL\n      unused __TEXT            2bbb2c000-2bbb30000 [   16K] r--\/r-- SM=COW  unused  unknown system shared lib __TEXT\n--->  GAP OF 0xd044d0000 BYTES\n      commpage (reserved)      fc0000000-1000000000 [  1.0G] ---\/--- SM=NUL  reserved VM address space (unallocated)",
+  "faultingThread" : 0,
+  "threads" : [{"triggered":true,"id":352898,"threadState":{"x":[{"value":4982201696},{"value":4982201696},{"value":4469744272},{"value":4982201696},{"value":4982201696},{"value":0},{"value":18446744072631617535},{"value":18446726482597246976},{"value":1112396529921},{"value":0},{"value":0},{"value":1024},{"value":1024},{"value":2814132207161440450},{"value":4582846696},{"value":4982194176},{"value":10749247890585443680},{"value":3808429056},{"value":0},{"value":4469743264,"symbolLocation":432,"symbol":"Microsoft::Applications::Events::DefaultDataViewer::s_name"},{"value":4469744264},{"value":4469743288,"symbolLocation":456,"symbol":"Microsoft::Applications::Events::DefaultDataViewer::s_name"},{"value":14987979559889010743},{"value":4469744264},{"value":4982267136},{"value":4469741944,"symbolLocation":0,"symbol":"OBJC_CLASS_$_ODWLogManager"},{"value":4982353104},{"value":4669374688},{"value":4538290176}],"flavor":"ARM_THREAD_STATE64","lr":{"value":4469267176},"cpsr":{"value":2147487744},"fp":{"value":6157148320},"sp":{"value":6157148240},"esr":{"value":2449473540,"description":"(Data Abort) byte read Translation fault"},"pc":{"value":4469267188,"matchesCrashFrame":1},"far":{"value":1112396529921}},"queue":"com.apple.main-thread","frames":[{"imageOffset":678644,"imageIndex":19},{"imageOffset":221936,"imageIndex":19},{"imageOffset":671924,"imageIndex":19},{"imageOffset":671616,"imageIndex":19},{"imageOffset":1884852,"imageIndex":81},{"imageOffset":341832,"imageIndex":81},{"imageOffset":362536,"imageIndex":81},{"imageOffset":863932,"imageIndex":0},{"imageOffset":656520,"imageIndex":0},{"imageOffset":281588,"imageIndex":62},{"imageOffset":282244,"imageIndex":62},{"imageOffset":1247852,"imageIndex":0},{"imageOffset":1246036,"imageIndex":0},{"imageOffset":858576,"imageIndex":0},{"imageOffset":865684,"imageIndex":0},{"imageOffset":859364,"imageIndex":0},{"imageOffset":2792196,"imageIndex":29},{"imageOffset":2773076,"imageIndex":29},{"imageOffset":2773524,"imageIndex":29},{"imageOffset":2771268,"imageIndex":29},{"imageOffset":21095260,"symbol":"-[UIApplication _handleDelegateCallbacksWithOptions:isSuspended:restoreState:]","symbolLocation":220,"imageIndex":125},{"imageOffset":21100920,"symbol":"-[UIApplication _callInitializationDelegatesWithActions:forScene:payload:fromOriginatingProcess:]","symbolLocation":3108,"imageIndex":125},{"imageOffset":21117340,"symbol":"-[UIApplication _runWithMainScene:transitionContext:completion:]","symbolLocation":788,"imageIndex":125},{"imageOffset":10669732,"symbol":"-[_UISceneLifecycleMultiplexer completeApplicationLaunchWithFBSScene:transitionContext:]","symbolLocation":116,"imageIndex":125},{"imageOffset":653428,"symbol":"-[UIApplication _compellApplicationLaunchToCompleteUnconditionally]","symbolLocation":48,"imageIndex":125},{"imageOffset":646612,"symbol":"-[UIApplication _run]","symbolLocation":756,"imageIndex":125},{"imageOffset":290388,"symbol":"UIApplicationMain","symbolLocation":336,"imageIndex":125},{"imageOffset":2691568,"imageIndex":29},{"imageOffset":33280,"imageIndex":0},{"imageOffset":33336,"imageIndex":0},{"imageOffset":494864,"imageIndex":62},{"imageOffset":33116,"imageIndex":0},{"imageOffset":20008,"symbol":"start","symbolLocation":7116,"imageIndex":126}]},{"id":352915,"frames":[],"threadState":{"x":[{"value":6157709312},{"value":5379},{"value":6157172736},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6157709312},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":8225568952},"far":{"value":0}}},{"id":352916,"name":"JavaScriptCore libpas scavenger","threadState":{"x":[{"value":260},{"value":0},{"value":0},{"value":0},{"value":0},{"value":160},{"value":9},{"value":999998936},{"value":6158282408},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8485041984},{"value":0},{"value":4672514112},{"value":4672514176},{"value":6158282976},{"value":999998936},{"value":9},{"value":0},{"value":2561},{"value":2816},{"value":8418271232,"symbolLocation":4715200,"symbol":"pas_mar_global_registry"},{"value":8461328384,"symbolLocation":4648,"symbol":"bmalloc_common_primitive_heap_support"}],"flavor":"ARM_THREAD_STATE64","lr":{"value":8225577816},"cpsr":{"value":1610616832},"fp":{"value":6158282528},"sp":{"value":6158282384},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":9535354324},"far":{"value":0}},"frames":[{"imageOffset":26068,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":128},{"imageOffset":11096,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":129},{"imageOffset":54096,"symbol":"scavenger_thread_main","symbolLocation":1660,"imageIndex":130},{"imageOffset":17484,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":129},{"imageOffset":2252,"symbol":"thread_start","symbolLocation":8,"imageIndex":129}]},{"id":352917,"threadState":{"x":[{"value":14},{"value":4294966935222747165},{"value":999999916},{"value":68719460488},{"value":4669911872},{"value":0},{"value":0},{"value":18446726482597246976},{"value":999999916},{"value":3},{"value":13835058055282163714},{"value":480000000},{"value":38},{"value":0},{"value":18446744073709551615},{"value":1},{"value":18446744073709551578},{"value":4502104844},{"value":0},{"value":674827500274},{"value":4980486160},{"value":1000000000},{"value":4668614976},{"value":4668403840},{"value":4668305120},{"value":4669077632},{"value":4668614976},{"value":4669077632},{"value":4668485552}],"flavor":"ARM_THREAD_STATE64","lr":{"value":7624165068},"cpsr":{"value":2147487744},"fp":{"value":6158853568},"sp":{"value":6158853536},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":9535331432},"far":{"value":0}},"queue":"com.microsoft.intune.mam.enrollment.operations (QOS: DEFAULT)","frames":[{"imageOffset":3176,"symbol":"semaphore_timedwait_trap","symbolLocation":8,"imageIndex":128},{"imageOffset":222924,"symbol":"_dispatch_sema4_timedwait","symbolLocation":64,"imageIndex":131},{"imageOffset":16008,"symbol":"_dispatch_semaphore_wait_slow","symbolLocation":76,"imageIndex":131},{"imageOffset":2760492,"imageIndex":29},{"imageOffset":2758320,"imageIndex":29},{"imageOffset":2615396,"imageIndex":29},{"imageOffset":2942892,"imageIndex":29},{"imageOffset":1459768,"imageIndex":29},{"imageOffset":2694776,"imageIndex":29},{"imageOffset":2615396,"imageIndex":29},{"imageOffset":2694256,"imageIndex":29},{"imageOffset":98012,"symbol":"__NSOPERATIONQUEUE_IS_STARTING_AN_OPERATION__","symbolLocation":16,"imageIndex":132},{"imageOffset":96152,"symbol":"__NSOQSchedule_f","symbolLocation":164,"imageIndex":132},{"imageOffset":6876,"symbol":"_dispatch_call_block_and_release","symbolLocation":32,"imageIndex":131},{"imageOffset":112636,"symbol":"_dispatch_client_callout","symbolLocation":16,"imageIndex":131},{"imageOffset":26212,"symbol":"_dispatch_continuation_pop","symbolLocation":596,"imageIndex":131},{"imageOffset":23768,"symbol":"_dispatch_async_redirect_invoke","symbolLocation":580,"imageIndex":131},{"imageOffset":81736,"symbol":"_dispatch_root_queue_drain","symbolLocation":364,"imageIndex":131},{"imageOffset":83708,"symbol":"_dispatch_worker_thread2","symbolLocation":180,"imageIndex":131},{"imageOffset":4988,"symbol":"_pthread_wqthread","symbolLocation":232,"imageIndex":129},{"imageOffset":2240,"symbol":"start_wqthread","symbolLocation":8,"imageIndex":129}]},{"id":352918,"frames":[],"threadState":{"x":[{"value":6159429632},{"value":9731},{"value":6158893056},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6159429632},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":8225568952},"far":{"value":0}}},{"id":352919,"frames":[],"threadState":{"x":[{"value":6160003072},{"value":16131},{"value":6159466496},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6160003072},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":8225568952},"far":{"value":0}}},{"id":352920,"frames":[],"threadState":{"x":[{"value":6160576512},{"value":20227},{"value":6160039936},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6160576512},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":8225568952},"far":{"value":0}}},{"id":352921,"name":"com.apple.uikit.eventfetch-thread","threadState":{"x":[{"value":268451845},{"value":21592279046},{"value":8589934592},{"value":57187489546240},{"value":2162692},{"value":57187489546240},{"value":2},{"value":4294967295},{"value":0},{"value":0},{"value":2},{"value":0},{"value":0},{"value":13315},{"value":4582828632},{"value":4671242240},{"value":18446744073709551569},{"value":18446744072367376383},{"value":0},{"value":4294967295},{"value":2},{"value":57187489546240},{"value":2162692},{"value":57187489546240},{"value":6161145224},{"value":8589934592},{"value":21592279046},{"value":18446744073709550527},{"value":10932043776,"symbolLocation":0,"symbol":"_libkernel_string_functions"}],"flavor":"ARM_THREAD_STATE64","lr":{"value":9535345400},"cpsr":{"value":4096},"fp":{"value":6161145072},"sp":{"value":6161144992},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":9535331540},"far":{"value":0}},"frames":[{"imageOffset":3284,"symbol":"mach_msg2_trap","symbolLocation":8,"imageIndex":128},{"imageOffset":17144,"symbol":"mach_msg2_internal","symbolLocation":76,"imageIndex":128},{"imageOffset":16916,"symbol":"mach_msg_overwrite","symbolLocation":428,"imageIndex":128},{"imageOffset":16476,"symbol":"mach_msg","symbolLocation":24,"imageIndex":128},{"imageOffset":288872,"symbol":"__CFRunLoopServiceMachPort","symbolLocation":160,"imageIndex":133},{"imageOffset":120904,"symbol":"__CFRunLoopRun","symbolLocation":1188,"imageIndex":133},{"imageOffset":117356,"symbol":"_CFRunLoopRunSpecificWithOptions","symbolLocation":532,"imageIndex":133},{"imageOffset":10104312,"symbol":"-[NSRunLoop(NSRunLoop) runMode:beforeDate:]","symbolLocation":212,"imageIndex":132},{"imageOffset":10104784,"symbol":"-[NSRunLoop(NSRunLoop) runUntilDate:]","symbolLocation":64,"imageIndex":132},{"imageOffset":471188,"symbol":"-[UIEventFetcher threadMain]","symbolLocation":408,"imageIndex":125},{"imageOffset":401948,"symbol":"__NSThread__start__","symbolLocation":732,"imageIndex":132},{"imageOffset":17484,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":129},{"imageOffset":2252,"symbol":"thread_start","symbolLocation":8,"imageIndex":129}]},{"id":352922,"frames":[],"threadState":{"x":[{"value":6161723392},{"value":18435},{"value":6161186816},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6161723392},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":8225568952},"far":{"value":0}}},{"id":352924,"frames":[],"threadState":{"x":[{"value":6162296832},{"value":18947},{"value":6161760256},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6162296832},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":8225568952},"far":{"value":0}}},{"id":352929,"frames":[{"imageOffset":26068,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":128},{"imageOffset":11096,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":129},{"imageOffset":1174808,"symbol":"neosmart::WaitForEvent(neosmart::neosmart_event_t_*, unsigned long long)","symbolLocation":100,"imageIndex":18},{"imageOffset":3730640,"symbol":"Msai::RequestDispatcher::DispatcherThreadProc()","symbolLocation":120,"imageIndex":18},{"imageOffset":1034444,"imageIndex":18},{"imageOffset":17484,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":129},{"imageOffset":2252,"symbol":"thread_start","symbolLocation":8,"imageIndex":129}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":6162869752},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":2},{"value":0},{"value":4668444592},{"value":4668444544},{"value":6162870496},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":8225577816},"cpsr":{"value":1610616832},"fp":{"value":6162869872},"sp":{"value":6162869728},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":9535354324},"far":{"value":0}}},{"id":352931,"threadState":{"x":[{"value":0},{"value":0},{"value":229},{"value":1},{"value":4982268064},{"value":76},{"value":18446744072631617535},{"value":18446726482597246976},{"value":6163437120},{"value":17179869187},{"value":8589934595},{"value":6163436736},{"value":4982268140},{"value":4668448768},{"value":65},{"value":8457648392,"symbolLocation":0,"symbol":"OBJC_CLASS_$__NSFileManagerBridge"},{"value":338},{"value":8485038144},{"value":0},{"value":0},{"value":4982268032},{"value":0},{"value":17293822569102704716},{"value":6163436864},{"value":6163437104},{"value":4585547552},{"value":4982268032},{"value":4982268032},{"value":12}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6629229144},"cpsr":{"value":1073745920},"fp":{"value":6163437328},"sp":{"value":6163436864},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":9535354912},"far":{"value":0}},"queue":"com.apple.cfnetwork.altservicesstorage","frames":[{"imageOffset":26656,"symbol":"stat","symbolLocation":8,"imageIndex":128},{"imageOffset":82520,"symbol":"specialized String.withFileSystemRepresentation<A>(_:)","symbolLocation":224,"imageIndex":132},{"imageOffset":82800,"symbol":"@objc _NSFileManagerBridge.fileExists(atPath:)","symbolLocation":44,"imageIndex":132},{"imageOffset":195336,"symbol":"String._standardizingPath.getter","symbolLocation":796,"imageIndex":132},{"imageOffset":291960,"symbol":"static String.homeDirectoryPath()","symbolLocation":5108,"imageIndex":132},{"imageOffset":201812,"symbol":"closure #1 in _DarwinSearchPaths(for:in:expandTilde:)","symbolLocation":216,"imageIndex":132},{"imageOffset":201248,"symbol":"specialized _copySequenceToContiguousArray<A>(_:)","symbolLocation":2056,"imageIndex":132},{"imageOffset":202208,"symbol":"_SearchPathURLs(for:in:expandTilde:)","symbolLocation":120,"imageIndex":132},{"imageOffset":743532,"symbol":"@objc _NSFileManagerBridge.urls(for:in:)","symbolLocation":36,"imageIndex":132},{"imageOffset":1202456,"symbol":"-[_NSHTTPAlternativeServicesStorageSqlite _onqueue_initializeDatabaseIfNotEmpty:]","symbolLocation":220,"imageIndex":134},{"imageOffset":1219004,"symbol":"__72-[_NSHTTPAlternativeServicesStorageSqlite HTTPServiceEntriesWithFilter:]_block_invoke","symbolLocation":60,"imageIndex":134},{"imageOffset":112636,"symbol":"_dispatch_client_callout","symbolLocation":16,"imageIndex":131},{"imageOffset":71872,"symbol":"_dispatch_lane_barrier_sync_invoke_and_complete","symbolLocation":56,"imageIndex":131},{"imageOffset":1218176,"symbol":"-[_NSHTTPAlternativeServicesStorage HTTPServiceEntriesWithFilter:]","symbolLocation":672,"imageIndex":134},{"imageOffset":214752,"symbol":"TubeManager::_onqueue_enqueueRequestForProtocol(MetaConnectionCacheClient*, HTTPRequestMessage const*, MetaConnectionOptions, BaseAwaitingTube*)","symbolLocation":340,"imageIndex":134},{"imageOffset":209720,"symbol":"invocation function for block in XTubeManager::enqueueRequestForProtocol(MetaConnectionCacheClient*, HTTPRequestMessage const*, MetaConnectionOptions, CoreSchedulingSet const*)","symbolLocation":440,"imageIndex":134},{"imageOffset":42344,"symbol":"XTubeManager::withTubeManager(CoreSchedulingSet const*, void (GlueTubeManager*) block_pointer)","symbolLocation":584,"imageIndex":134},{"imageOffset":206088,"symbol":"HTTPProtocol::asynchronouslyCreateAndOpenStream_WithMessage_AfterCookiesAndAuthenticatorHeaders(__CFHTTPMessage*)","symbolLocation":4776,"imageIndex":134},{"imageOffset":188540,"symbol":"HTTPProtocol::asynchronouslyAddAuthenticatorHeadersAndContinue(__CFHTTPMessage*)","symbolLocation":132,"imageIndex":134},{"imageOffset":188364,"symbol":"invocation function for block in HTTPProtocol::asynchronouslyAddCookiesAndContinue(__CFHTTPMessage*)","symbolLocation":32,"imageIndex":134},{"imageOffset":37180,"symbol":"invocation function for block in QCoreSchedulingSet::performAsync(void () block_pointer) const","symbolLocation":52,"imageIndex":134},{"imageOffset":6876,"symbol":"_dispatch_call_block_and_release","symbolLocation":32,"imageIndex":131},{"imageOffset":112636,"symbol":"_dispatch_client_callout","symbolLocation":16,"imageIndex":131},{"imageOffset":42088,"symbol":"_dispatch_lane_serial_drain","symbolLocation":740,"imageIndex":131},{"imageOffset":44920,"symbol":"_dispatch_lane_invoke","symbolLocation":440,"imageIndex":131},{"imageOffset":49800,"symbol":"_dispatch_workloop_invoke","symbolLocation":1612,"imageIndex":131},{"imageOffset":87020,"symbol":"_dispatch_root_queue_drain_deferred_wlh","symbolLocation":292,"imageIndex":131},{"imageOffset":85220,"symbol":"_dispatch_workloop_worker_thread","symbolLocation":692,"imageIndex":131},{"imageOffset":5048,"symbol":"_pthread_wqthread","symbolLocation":292,"imageIndex":129},{"imageOffset":2240,"symbol":"start_wqthread","symbolLocation":8,"imageIndex":129}]},{"id":352932,"frames":[],"threadState":{"x":[{"value":6164017152},{"value":0},{"value":6163480576},{"value":0},{"value":278532},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":4096},"fp":{"value":0},"sp":{"value":6164017152},"esr":{"value":0},"pc":{"value":8225568952},"far":{"value":0}}},{"id":352933,"frames":[{"imageOffset":26068,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":128},{"imageOffset":11096,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":129},{"imageOffset":1174808,"symbol":"neosmart::WaitForEvent(neosmart::neosmart_event_t_*, unsigned long long)","symbolLocation":100,"imageIndex":18},{"imageOffset":2028964,"symbol":"Msai::HttpManagerImpl::SendRequest(Msai::HttpRequest const&, std::__1::shared_ptr<Msai::TelemetryInternal> const&) const","symbolLocation":160,"imageIndex":18},{"imageOffset":2025164,"symbol":"Msai::HttpManager::SendHttpRequest(Msai::HttpRequest const&, std::__1::shared_ptr<Msai::TelemetryInternal> const&) const","symbolLocation":112,"imageIndex":18},{"imageOffset":2026460,"symbol":"Msai::HttpManager::Post(std::__1::shared_ptr<Msai::Uri> const&, std::__1::shared_ptr<Msai::TelemetryInternal> const&, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const&, std::__1::unordered_map<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, Msai::Detail::CaseInsensitiveStringHashAscii, Msai::Detail::CaseInsensitiveStringEqualToAscii, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>> const&) const","symbolLocation":64,"imageIndex":18},{"imageOffset":4014456,"symbol":"Msai::WebRequestManager::ExchangeGrant(std::__1::shared_ptr<Msai::AuthParametersInternal> const&, std::__1::shared_ptr<Msai::TelemetryInternal> const&, std::__1::unordered_map<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>, std::__1::hash<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::equal_to<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>, std::__1::allocator<std::__1::pair<std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>> const, std::__1::basic_string<char, std::__1::char_traits<char>, std::__1::allocator<char>>>>>&, std::__1::shared_ptr<Msai::SessionKeyMetadata> const&)","symbolLocation":708,"imageIndex":18},{"imageOffset":4029064,"symbol":"Msai::WebRequestManager::GetAccessTokenFromRefreshToken(std::__1::shared_ptr<Msai::AuthParametersInternal> const&, std::__1::shared_ptr<Msai::TelemetryInternal> const&, std::__1::shared_ptr<Msai::CredentialInternal> const&)","symbolLocation":504,"imageIndex":18},{"imageOffset":3338616,"symbol":"Msai::NetworkedCacheManager::TryExchangeAndStoreRefreshToken(std::__1::shared_ptr<Msai::CredentialInternal> const&, bool, bool)","symbolLocation":332,"imageIndex":18},{"imageOffset":3337032,"symbol":"Msai::NetworkedCacheManager::TryExchangeAndStoreRefreshTokens(std::__1::shared_ptr<Msai::StorageTokenResponse> const&)","symbolLocation":724,"imageIndex":18},{"imageOffset":1091588,"symbol":"Msai::NetworkedCacheManager::TryUseStorage(bool, bool)","symbolLocation":2952,"imageIndex":18},{"imageOffset":232436,"symbol":"Msai::BackgroundRequest::Execute()","symbolLocation":564,"imageIndex":18},{"imageOffset":1292196,"symbol":"Msai::ThreadPool::ExecuteQueueItemThreadProc(std::__1::shared_ptr<Msai::BackgroundRequestQueueItem> const&)","symbolLocation":116,"imageIndex":18},{"imageOffset":1296684,"symbol":"Msai::ThreadWorkLoopImpl::WaitForWork()","symbolLocation":384,"imageIndex":18},{"imageOffset":1034444,"imageIndex":18},{"imageOffset":17484,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":129},{"imageOffset":2252,"symbol":"thread_start","symbolLocation":8,"imageIndex":129}],"threadState":{"x":[{"value":260},{"value":0},{"value":0},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":6164586888},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":16828389693},{"value":0},{"value":4982264880},{"value":4982264832},{"value":6164590816},{"value":0},{"value":0},{"value":0},{"value":1},{"value":256},{"value":4466187185},{"value":4466187150}],"flavor":"ARM_THREAD_STATE64","lr":{"value":8225577816},"cpsr":{"value":1610616832},"fp":{"value":6164587008},"sp":{"value":6164586864},"esr":{"value":1442840704,"description":"(Syscall)"},"pc":{"value":9535354324},"far":{"value":0}}}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4309729280,
+    "size" : 67141632,
+    "uuid" : "c077b675-5279-38d8-b079-62237a1b503f",
+    "path" : "\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Outlook-iOS",
+    "name" : "Outlook-iOS"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4401315840,
+    "size" : 4505600,
+    "uuid" : "13b6aa4e-82b8-38ab-88a2-e60ad9f6e45d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/AddinsFramework.framework\/AddinsFramework",
+    "name" : "AddinsFramework"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4406575104,
+    "size" : 31457280,
+    "uuid" : "d8544780-0872-36ea-a637-620d3bbc60de",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/AzureCommunicationCalling.framework\/AzureCommunicationCalling",
+    "name" : "AzureCommunicationCalling"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4394614784,
+    "size" : 98304,
+    "uuid" : "13ee2f82-4f1f-3325-be53-4091b23e4d69",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/AzureCommunicationCommon.framework\/AzureCommunicationCommon",
+    "name" : "AzureCommunicationCommon"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4394795008,
+    "size" : 163840,
+    "uuid" : "9633bd41-0dc0-3ad1-917c-8e61518fdbf4",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CocoaLumberjack.framework\/CocoaLumberjack",
+    "name" : "CocoaLumberjack"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4442816512,
+    "size" : 1933312,
+    "uuid" : "8560c4f1-5b61-3ff7-a5bd-0f1eb5b4a805",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CopilotModels.framework\/CopilotModels",
+    "name" : "CopilotModels"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4395057152,
+    "size" : 49152,
+    "uuid" : "4d2f7c03-a404-35b6-840d-b635291cf2a8",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CopilotPAL.framework\/CopilotPAL",
+    "name" : "CopilotPAL"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4445503488,
+    "size" : 835584,
+    "uuid" : "93d2fe61-7820-34e5-98e3-0357e0765320",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CopilotSydneyCommon.framework\/CopilotSydneyCommon",
+    "name" : "CopilotSydneyCommon"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4446650368,
+    "size" : 196608,
+    "uuid" : "8989c8df-6804-374e-bd06-625cb7a2347f",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CopilotSydneyService.framework\/CopilotSydneyService",
+    "name" : "CopilotSydneyService"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4446945280,
+    "size" : 294912,
+    "uuid" : "eff02231-f372-3e38-944f-8c4e33de34aa",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CopilotTelemetry.framework\/CopilotTelemetry",
+    "name" : "CopilotTelemetry"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4447371264,
+    "size" : 2883584,
+    "uuid" : "e0ba0d50-0658-3c7c-96db-2a337c09572b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/EditorKit.framework\/EditorKit",
+    "name" : "EditorKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4451467264,
+    "size" : 507904,
+    "uuid" : "65f1d756-9d03-3f25-9d9d-e42db35b40b6",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/EmailRendererKit.framework\/EmailRendererKit",
+    "name" : "EmailRendererKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4452237312,
+    "size" : 163840,
+    "uuid" : "30685234-95fe-35f3-b0bc-fe5749da7118",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/FluentBrandIcons.framework\/FluentBrandIcons",
+    "name" : "FluentBrandIcons"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4452483072,
+    "size" : 1982464,
+    "uuid" : "44433b9b-433b-3aab-9c96-314295197d03",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/FluentIcons.framework\/FluentIcons",
+    "name" : "FluentIcons"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4454727680,
+    "size" : 2359296,
+    "uuid" : "f2b920df-9b4b-3ba5-80de-a21a9e408826",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/FluentUI.framework\/FluentUI",
+    "name" : "FluentUI"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4395188224,
+    "size" : 32768,
+    "uuid" : "4ec276f1-b185-3db7-87bb-19c92a58f742",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/LocalizedStringKit.framework\/LocalizedStringKit",
+    "name" : "LocalizedStringKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4457955328,
+    "size" : 1622016,
+    "uuid" : "9e90c28a-35b1-3710-9252-dd6f57292904",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/Lottie.framework\/Lottie",
+    "name" : "Lottie"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4460068864,
+    "size" : 491520,
+    "uuid" : "9273bb00-4c22-330f-95f6-942d9b9d1e86",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OfficeFloodgateSDK.framework\/OfficeFloodgateSDK",
+    "name" : "OfficeFloodgateSDK"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4460789760,
+    "size" : 5799936,
+    "uuid" : "bbdeeb99-a7eb-350b-8626-e4a8d55033ff",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OneAuth.framework\/OneAuth",
+    "name" : "OneAuth"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4468588544,
+    "size" : 1097728,
+    "uuid" : "9dbd2689-3040-353c-8224-14986065cb5d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OneDsCppSdk_iOS.framework\/OneDsCppSdk_iOS",
+    "name" : "OneDsCppSdk_iOS"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4395941888,
+    "size" : 81920,
+    "uuid" : "4f704d5d-3de3-3b0d-b070-9a563f8aa7c1",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/PINCache.framework\/PINCache",
+    "name" : "PINCache"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4470046720,
+    "size" : 2064384,
+    "uuid" : "9882eb7a-fd50-3086-9581-cdfa08190b3a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/PaywallKit.framework\/PaywallKit",
+    "name" : "PaywallKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4472569856,
+    "size" : 196608,
+    "uuid" : "fe976c35-6225-329c-8f9a-eccd2a474390",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/Reykjavik.framework\/Reykjavik",
+    "name" : "Reykjavik"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4472864768,
+    "size" : 229376,
+    "uuid" : "c8a0104d-2fb0-39e4-b64f-f731a5fffd5d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/Singular.framework\/Singular",
+    "name" : "Singular"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4473208832,
+    "size" : 2129920,
+    "uuid" : "1d38a5f5-6a05-35eb-8023-662ea0a85095",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/hermes.framework\/hermes",
+    "name" : "hermes"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4475568128,
+    "size" : 81920,
+    "uuid" : "93d53d84-951a-323f-b8ef-d33706f29b0c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/iOSODSPSharedSharing.framework\/iOSODSPSharedSharing",
+    "name" : "iOSODSPSharedSharing"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4475715584,
+    "size" : 540672,
+    "uuid" : "6797483f-4660-3eb8-b1eb-2167ac9873f0",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/AriaObjC.framework\/AriaObjC",
+    "name" : "AriaObjC"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4476551168,
+    "size" : 20070400,
+    "uuid" : "42792fd3-51a6-3637-9d5f-b0b70ac8c3c6",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/HxCore.framework\/HxCore",
+    "name" : "HxCore"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4499390464,
+    "size" : 32768,
+    "uuid" : "4f18308c-5339-3b6e-b75f-60dd19f9d0cb",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/HxCoreDecryptor.framework\/HxCoreDecryptor",
+    "name" : "HxCoreDecryptor"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4499488768,
+    "size" : 4456448,
+    "uuid" : "db82ea7e-cffa-3e40-8ede-95689bd01822",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/IntuneMAMSwift.framework\/IntuneMAMSwift",
+    "name" : "IntuneMAMSwift"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4504928256,
+    "size" : 32768,
+    "uuid" : "f14adbf6-1998-39fe-9d24-6f1aa9dc3729",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/IntuneMAMSwiftStub.framework\/IntuneMAMSwiftStub",
+    "name" : "IntuneMAMSwiftStub"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4505042944,
+    "size" : 1622016,
+    "uuid" : "cbbd2e90-b5a0-3e8e-8d20-022936954e1a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CalendarWidgetKit.framework\/CalendarWidgetKit",
+    "name" : "CalendarWidgetKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4506910720,
+    "size" : 163840,
+    "uuid" : "0dde388f-68a2-3746-8c8a-03db78d1dc41",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CalendarWidgetModelKit.framework\/CalendarWidgetModelKit",
+    "name" : "CalendarWidgetModelKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4507156480,
+    "size" : 2867200,
+    "uuid" : "81664d5a-6119-3d98-a924-cc3d4657ee83",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CopilotKit.framework\/CopilotKit",
+    "name" : "CopilotKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4510629888,
+    "size" : 360448,
+    "uuid" : "273c1722-9235-3b5b-9a59-12e6dd937dc9",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/BaseKit.framework\/BaseKit",
+    "name" : "BaseKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4511170560,
+    "size" : 114688,
+    "uuid" : "734c6a61-3e39-3f88-88ba-bd0f3af3c5fc",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailWidgetKit.framework\/MailWidgetKit",
+    "name" : "MailWidgetKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4511367168,
+    "size" : 49152,
+    "uuid" : "452d34c6-114b-3a20-914a-152f18434432",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailWidgetModelKit.framework\/MailWidgetModelKit",
+    "name" : "MailWidgetModelKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4511481856,
+    "size" : 98304,
+    "uuid" : "75071bc5-7245-31eb-b887-ff98b84e899d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/UnifiedWidgetKit.framework\/UnifiedWidgetKit",
+    "name" : "UnifiedWidgetKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4511662080,
+    "size" : 278528,
+    "uuid" : "e15dbfbf-a781-3989-8e85-f43a5a7c04d4",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OutlookUnifiedTelemetry.framework\/OutlookUnifiedTelemetry",
+    "name" : "OutlookUnifiedTelemetry"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4512104448,
+    "size" : 32768,
+    "uuid" : "0d9a55b6-814a-31c3-b3c6-b20e58846b07",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/UnifiedWidgetModelKit.framework\/UnifiedWidgetModelKit",
+    "name" : "UnifiedWidgetModelKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4512202752,
+    "size" : 49152,
+    "uuid" : "78273a7d-9bd2-35b8-9047-04bfe1d17121",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/WidgetFoundations.framework\/WidgetFoundations",
+    "name" : "WidgetFoundations"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4512333824,
+    "size" : 49152,
+    "uuid" : "ce0c5f55-7c6d-388b-84e1-2441f96229fd",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/WidgetModelKit.framework\/WidgetModelKit",
+    "name" : "WidgetModelKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4512448512,
+    "size" : 65536,
+    "uuid" : "1ba8c09d-ea8e-378c-bb84-8bdb239cf58c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/WidgetUIKit.framework\/WidgetUIKit",
+    "name" : "WidgetUIKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4512595968,
+    "size" : 49152,
+    "uuid" : "88e1f09e-66df-31c9-8425-64ea84c3b5f3",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/AppIntentsExtDataSource.framework\/AppIntentsExtDataSource",
+    "name" : "AppIntentsExtDataSource"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4512727040,
+    "size" : 196608,
+    "uuid" : "13335f7b-0022-35bf-be69-61817537c488",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/AuthOAF.framework\/AuthOAF",
+    "name" : "AuthOAF"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4513021952,
+    "size" : 32768,
+    "uuid" : "3a74e5a1-1f77-3753-9bdb-067ce9461e95",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CalendarColors.framework\/CalendarColors",
+    "name" : "CalendarColors"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4513120256,
+    "size" : 311296,
+    "uuid" : "62acf88d-7a55-397f-8785-d9e2aaaf09fc",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CalendarDataSourceKit.framework\/CalendarDataSourceKit",
+    "name" : "CalendarDataSourceKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4513546240,
+    "size" : 180224,
+    "uuid" : "cc73cd3a-62f6-33b0-88dd-d676e3d61cf7",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CalendarDatePicker.framework\/CalendarDatePicker",
+    "name" : "CalendarDatePicker"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4513841152,
+    "size" : 2867200,
+    "uuid" : "aa3cf3bf-e1a8-3453-91d7-3a8fd28b2f31",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CalendarGrid.framework\/CalendarGrid",
+    "name" : "CalendarGrid"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4517396480,
+    "size" : 196608,
+    "uuid" : "828e2833-2123-394b-804b-b33fb70fd50d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CalendarIntelligence.framework\/CalendarIntelligence",
+    "name" : "CalendarIntelligence"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4517724160,
+    "size" : 147456,
+    "uuid" : "8306ed54-7e6e-35da-bad9-a944a2ecf4e0",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CalendarWidgetExtDataSourceKit.framework\/CalendarWidgetExtDataSourceKit",
+    "name" : "CalendarWidgetExtDataSourceKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4517969920,
+    "size" : 65536,
+    "uuid" : "deb68143-f118-3324-8dba-456c086001c5",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/ConcurrencyExtensionsKit.framework\/ConcurrencyExtensionsKit",
+    "name" : "ConcurrencyExtensionsKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4518100992,
+    "size" : 655360,
+    "uuid" : "f9d61222-f94d-3f18-b07a-0f2d62927c8c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CoreAuth.framework\/CoreAuth",
+    "name" : "CoreAuth"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4519034880,
+    "size" : 163840,
+    "uuid" : "ee5b60dd-3a27-3ed4-953e-645141eebf0f",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CoreContactPicker.framework\/CoreContactPicker",
+    "name" : "CoreContactPicker"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4519313408,
+    "size" : 65536,
+    "uuid" : "13a85a97-3780-3654-a54d-b8f10ec4caea",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CoreCDN.framework\/CoreCDN",
+    "name" : "CoreCDN"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4519460864,
+    "size" : 65536,
+    "uuid" : "2073b9ba-024b-3f94-826b-792f9e07ac8b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CoreDeeplink.framework\/CoreDeeplink",
+    "name" : "CoreDeeplink"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4519608320,
+    "size" : 2392064,
+    "uuid" : "9cb9558e-3c00-3094-ba06-ac44346c35b4",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CoreFiles.framework\/CoreFiles",
+    "name" : "CoreFiles"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4522868736,
+    "size" : 147456,
+    "uuid" : "2d1c52e5-99f9-328d-bf5d-d4706ca4ae0b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CoreFocusProfiles.framework\/CoreFocusProfiles",
+    "name" : "CoreFocusProfiles"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4523114496,
+    "size" : 65536,
+    "uuid" : "8a505967-c355-3ed2-81a8-6849f6ce6c79",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CalendarOnboarding.framework\/CalendarOnboarding",
+    "name" : "CalendarOnboarding"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4523261952,
+    "size" : 409600,
+    "uuid" : "ffd27e66-760d-3ee5-b13a-e363cebd08b4",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CoreUniversalStorageQuota.framework\/CoreUniversalStorageQuota",
+    "name" : "CoreUniversalStorageQuota"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4523835392,
+    "size" : 81920,
+    "uuid" : "bbfe5372-e36a-32bd-af16-2b23f55418f8",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CoreSharedDeviceMode.framework\/CoreSharedDeviceMode",
+    "name" : "CoreSharedDeviceMode"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4524015616,
+    "size" : 65536,
+    "uuid" : "2b521b1e-4275-3bd7-b240-c277322c3732",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/DiffKit.framework\/DiffKit",
+    "name" : "DiffKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4524163072,
+    "size" : 606208,
+    "uuid" : "38a7ed42-9346-3ab8-a734-733121e62226",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/FoundationExtensionsKit.framework\/FoundationExtensionsKit",
+    "name" : "FoundationExtensionsKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4525080576,
+    "size" : 49152,
+    "uuid" : "98a0ed54-0c7d-3e37-b092-9ec84172ccf2",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/GoogleToolbox.framework\/GoogleToolbox",
+    "name" : "GoogleToolbox"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4525195264,
+    "size" : 131072,
+    "uuid" : "60c29307-7cea-3e34-8afc-f3dac900ee5e",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/GRMustache.framework\/GRMustache",
+    "name" : "GRMustache"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4525424640,
+    "size" : 49152,
+    "uuid" : "f84a152d-ce31-36ea-b679-de66b301ceba",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/HxAppOwnedObjects.framework\/HxAppOwnedObjects",
+    "name" : "HxAppOwnedObjects"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4525539328,
+    "size" : 32768,
+    "uuid" : "a8ef606a-5cea-3a9f-90c1-c71c6475d4b9",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/HxDebug.framework\/HxDebug",
+    "name" : "HxDebug"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4525637632,
+    "size" : 475136,
+    "uuid" : "0c6874ae-2e6b-3d93-a14c-608f60d92040",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/HxPlus.framework\/HxPlus",
+    "name" : "HxPlus"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4526555136,
+    "size" : 475136,
+    "uuid" : "c03d64d7-300b-3a02-afa5-02e8539713b6",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/InAppMessaging.framework\/InAppMessaging",
+    "name" : "InAppMessaging"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4527226880,
+    "size" : 65536,
+    "uuid" : "dc6442f4-bff1-38b3-9d37-2ec71c2953c5",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/IntuneCoreKit.framework\/IntuneCoreKit",
+    "name" : "IntuneCoreKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4527374336,
+    "size" : 131072,
+    "uuid" : "2e4a7084-1251-3b40-ad18-1231c7a6b41e",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/LoggerKit.framework\/LoggerKit",
+    "name" : "LoggerKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4527603712,
+    "size" : 2146304,
+    "uuid" : "aaaf6c9f-7de6-3f9a-9b1b-02ddd416bd4b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailCompose.framework\/MailCompose",
+    "name" : "MailCompose"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4530438144,
+    "size" : 32768,
+    "uuid" : "d9414afd-8dbd-36d2-b29b-4c565428ab73",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailDeferredSend.framework\/MailDeferredSend",
+    "name" : "MailDeferredSend"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4530552832,
+    "size" : 262144,
+    "uuid" : "8661b9ed-b474-3dd4-bc74-5ecff432937d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailDraftDataUICopy.framework\/MailDraftDataUICopy",
+    "name" : "MailDraftDataUICopy"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4530946048,
+    "size" : 147456,
+    "uuid" : "fa2f73ba-c6b5-3a77-9507-6017cea16217",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailDocking.framework\/MailDocking",
+    "name" : "MailDocking"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4531208192,
+    "size" : 294912,
+    "uuid" : "b4c3f460-9f44-3296-b32f-5143106732fe",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailFolderChooser.framework\/MailFolderChooser",
+    "name" : "MailFolderChooser"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4531666944,
+    "size" : 1540096,
+    "uuid" : "e6c16993-7376-377a-b397-a22f24e8ed43",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailIntelligence.framework\/MailIntelligence",
+    "name" : "MailIntelligence"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4533747712,
+    "size" : 147456,
+    "uuid" : "bd7053fb-fa49-3b41-8293-48bff4bb6afd",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailMIPLabels.framework\/MailMIPLabels",
+    "name" : "MailMIPLabels"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4534026240,
+    "size" : 49152,
+    "uuid" : "6624aea6-e5eb-3b7f-9971-345f1df1fcc1",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailRecipients.framework\/MailRecipients",
+    "name" : "MailRecipients"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4534157312,
+    "size" : 131072,
+    "uuid" : "ecfc7f3f-bc8c-3012-a2c5-a8dbdd11927d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailSMIME.framework\/MailSMIME",
+    "name" : "MailSMIME"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4534386688,
+    "size" : 344064,
+    "uuid" : "c54d9371-ac19-37d5-a8ee-b473e1885e8d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/MailSenderScreening.framework\/MailSenderScreening",
+    "name" : "MailSenderScreening"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4534894592,
+    "size" : 3391488,
+    "uuid" : "ec284e02-809c-3ff3-b0fa-d13d730b30a8",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMAnalyticsKit.framework\/OLMAnalyticsKit",
+    "name" : "OLMAnalyticsKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4540268544,
+    "size" : 49152,
+    "uuid" : "a8b49c60-2235-33ec-932e-7a4292e6b2a6",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMAnalyticsKitAdapters.framework\/OLMAnalyticsKitAdapters",
+    "name" : "OLMAnalyticsKitAdapters"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4540399616,
+    "size" : 32768,
+    "uuid" : "89e0df5a-4f45-3ce9-8262-060728d519af",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMAppExtensionKit.framework\/OLMAppExtensionKit",
+    "name" : "OLMAppExtensionKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4540497920,
+    "size" : 81920,
+    "uuid" : "50604f6b-fece-39ae-970c-18940c039887",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMAssets.framework\/OLMAssets",
+    "name" : "OLMAssets"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4540694528,
+    "size" : 65536,
+    "uuid" : "3dde0c9d-d540-3622-947a-cd8c43464d5a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMAsyncKit.framework\/OLMAsyncKit",
+    "name" : "OLMAsyncKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4540841984,
+    "size" : 425984,
+    "uuid" : "126be74f-fbc6-36d6-a8c2-35d8c55e1606",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMColorsKit.framework\/OLMColorsKit",
+    "name" : "OLMColorsKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4541497344,
+    "size" : 65536,
+    "uuid" : "9c0c7ed8-d94f-376f-8fec-50cc36b8cd9a",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMDocking.framework\/OLMDocking",
+    "name" : "OLMDocking"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4541644800,
+    "size" : 49152,
+    "uuid" : "eb8abe9f-ffbb-3d86-9e16-20f2872bd425",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMDockingUIKit.framework\/OLMDockingUIKit",
+    "name" : "OLMDockingUIKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4541775872,
+    "size" : 589824,
+    "uuid" : "c44be64b-0183-36a4-98a1-bd1a2cc64447",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMFoundationsCoreKit.framework\/OLMFoundationsCoreKit",
+    "name" : "OLMFoundationsCoreKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4542611456,
+    "size" : 344064,
+    "uuid" : "760b7242-6c3a-3ff3-aa3b-80760fdfe174",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMIntuneKit.framework\/OLMIntuneKit",
+    "name" : "OLMIntuneKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4543102976,
+    "size" : 8175616,
+    "uuid" : "1560160b-9c8b-3228-a8eb-f883a3685c6d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMKit.framework\/OLMKit",
+    "name" : "OLMKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4553998336,
+    "size" : 81920,
+    "uuid" : "1e1d9bed-ad65-34b6-8ffa-b44fc1be7db5",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMPerfKit.framework\/OLMPerfKit",
+    "name" : "OLMPerfKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4554162176,
+    "size" : 1392640,
+    "uuid" : "c29f52a9-7e6b-333f-a605-41e5a990d360",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMSyncCoreKit.framework\/OLMSyncCoreKit",
+    "name" : "OLMSyncCoreKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4556161024,
+    "size" : 147456,
+    "uuid" : "59872e73-138a-33cb-973d-7889e6d910b2",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMTeaching.framework\/OLMTeaching",
+    "name" : "OLMTeaching"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4556406784,
+    "size" : 2195456,
+    "uuid" : "8ab9fcc8-9b93-36d3-9fe4-6fa9ae8dcf7d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMUIKit.framework\/OLMUIKit",
+    "name" : "OLMUIKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4559618048,
+    "size" : 147456,
+    "uuid" : "5b04a496-30eb-3a03-82ea-567e2952a5e2",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OLMUITestKit.framework\/OLMUITestKit",
+    "name" : "OLMUITestKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4559896576,
+    "size" : 32768,
+    "uuid" : "0e2623eb-8778-32c5-95a5-e5dc34cbb73b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/OutlookiOSLegacyMigrations.framework\/OutlookiOSLegacyMigrations",
+    "name" : "OutlookiOSLegacyMigrations"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4559994880,
+    "size" : 1032192,
+    "uuid" : "ebc35d14-c6b8-3a78-bac1-b4b79c78e72e",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/PartnerAddins.framework\/PartnerAddins",
+    "name" : "PartnerAddins"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4561403904,
+    "size" : 458752,
+    "uuid" : "e6f8baff-b1b3-3f61-81ab-9654b687b8c4",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/PlatformSDK.framework\/PlatformSDK",
+    "name" : "PlatformSDK"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4562206720,
+    "size" : 65536,
+    "uuid" : "4a1cbd60-673d-336d-b238-2739796aae51",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/PlatformSDKAdapters.framework\/PlatformSDKAdapters",
+    "name" : "PlatformSDKAdapters"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4562354176,
+    "size" : 278528,
+    "uuid" : "7052743a-3a9b-3107-bfa5-2298b6a53082",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/PlatformSDKManager.framework\/PlatformSDKManager",
+    "name" : "PlatformSDKManager"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4562812928,
+    "size" : 163840,
+    "uuid" : "bddcbe7a-4d9d-346f-a87b-e3b10762a81b",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/ReduxKit.framework\/ReduxKit",
+    "name" : "ReduxKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4563075072,
+    "size" : 1425408,
+    "uuid" : "cd94379e-1f43-3c53-baca-f085a86e297c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SearchCore.framework\/SearchCore",
+    "name" : "SearchCore"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4565024768,
+    "size" : 671744,
+    "uuid" : "1cd446c1-66b4-393f-83ad-7be2ed457bbc",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SearchControls.framework\/SearchControls",
+    "name" : "SearchControls"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4566007808,
+    "size" : 294912,
+    "uuid" : "ba8d865e-7693-39cc-b9b3-e9de248bc3de",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedAvatar.framework\/SharedAvatar",
+    "name" : "SharedAvatar"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4566482944,
+    "size" : 655360,
+    "uuid" : "dfb6c636-9c28-3385-b5f7-40c4c7b905a7",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedCalendar.framework\/SharedCalendar",
+    "name" : "SharedCalendar"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4567449600,
+    "size" : 1376256,
+    "uuid" : "4a9c5a52-e97d-3aae-aef8-4a35ceb7a508",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedCompose.framework\/SharedCompose",
+    "name" : "SharedCompose"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4569464832,
+    "size" : 1163264,
+    "uuid" : "3e8f0122-ba12-3636-b541-5f4a6becf848",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedCore.framework\/SharedCore",
+    "name" : "SharedCore"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4571054080,
+    "size" : 65536,
+    "uuid" : "73c4b521-a4af-3f37-8ac4-d9a56d2f9fb5",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedCrash.framework\/SharedCrash",
+    "name" : "SharedCrash"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4571201536,
+    "size" : 65536,
+    "uuid" : "e34a3b20-b083-3eb2-981d-5fc218f62468",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedDefinitions.framework\/SharedDefinitions",
+    "name" : "SharedDefinitions"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4571348992,
+    "size" : 704512,
+    "uuid" : "c4db12cd-4bb5-3abb-8e30-1ca0360250fb",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedIntelligence.framework\/SharedIntelligence",
+    "name" : "SharedIntelligence"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4572381184,
+    "size" : 573440,
+    "uuid" : "4b379e0d-be2e-365d-a8a5-d5347c1f6d16",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedMail.framework\/SharedMail",
+    "name" : "SharedMail"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4573265920,
+    "size" : 131072,
+    "uuid" : "5b310ee8-f621-362b-9fb5-2ce06726cb5d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedMeetings.framework\/SharedMeetings",
+    "name" : "SharedMeetings"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4573495296,
+    "size" : 1916928,
+    "uuid" : "7a7a09cd-6c0a-398e-81b0-d3323c557131",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedPages.framework\/SharedPages",
+    "name" : "SharedPages"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4576149504,
+    "size" : 147456,
+    "uuid" : "604a73d3-1f93-32d4-9d62-101e91f11b1d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedPeople.framework\/SharedPeople",
+    "name" : "SharedPeople"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4576411648,
+    "size" : 32768,
+    "uuid" : "020db9c8-e576-389d-9d60-ccc2e816c615",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedPushNotification.framework\/SharedPushNotification",
+    "name" : "SharedPushNotification"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4576509952,
+    "size" : 163840,
+    "uuid" : "147b0899-afdd-3d34-9a35-3f93f8d3753d",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedSearch.framework\/SharedSearch",
+    "name" : "SharedSearch"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4576788480,
+    "size" : 147456,
+    "uuid" : "0af2b251-c0f0-3021-95e1-ff538476127f",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedSidebar.framework\/SharedSidebar",
+    "name" : "SharedSidebar"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4577050624,
+    "size" : 49152,
+    "uuid" : "db06601c-048b-3941-b578-93bab9108d7c",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedStorage.framework\/SharedStorage",
+    "name" : "SharedStorage"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4577181696,
+    "size" : 32768,
+    "uuid" : "4ae39cf8-17c0-3f7a-8665-fc790232c897",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/SharedWatchFlagsKit.framework\/SharedWatchFlagsKit",
+    "name" : "SharedWatchFlagsKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4577280000,
+    "size" : 147456,
+    "uuid" : "8ef10660-07fb-3b8e-bc08-1570cf8ecd72",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/UIExtensionsKit.framework\/UIExtensionsKit",
+    "name" : "UIExtensionsKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4577542144,
+    "size" : 507904,
+    "uuid" : "a73c4445-e47f-3aac-8679-543f9c6b44ee",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/CopilotDataKit.framework\/CopilotDataKit",
+    "name" : "CopilotDataKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4578328576,
+    "size" : 81920,
+    "uuid" : "3ff10cee-1800-35f9-9f39-772bde83ca69",
+    "path" : "\/private\/var\/containers\/Bundle\/Application\/2DC3B8D8-D968-4ED1-A1F3-BE0EC4C5AD56\/Outlook-iOS.app\/Frameworks\/BaseDataKit.framework\/BaseDataKit",
+    "name" : "BaseDataKit"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4579082240,
+    "size" : 49152,
+    "uuid" : "ed3ce61e-9386-3ea0-97ab-5406bf5531a9",
+    "path" : "\/private\/preboot\/Cryptexes\/OS\/usr\/lib\/libobjc-trampolines.dylib",
+    "name" : "libobjc-trampolines.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6766415872,
+    "size" : 38129472,
+    "uuid" : "2708bb8a-4e1b-36c1-8385-ddfc612cdda5",
+    "path" : "\/System\/Library\/PrivateFrameworks\/UIKitCore.framework\/UIKitCore",
+    "name" : "UIKitCore"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6622568448,
+    "size" : 650032,
+    "uuid" : "dbbf9813-22cc-39fc-8d40-581143766ff6",
+    "path" : "\/usr\/lib\/dyld",
+    "name" : "dyld"
+  },
+  {
+    "size" : 0,
+    "source" : "A",
+    "base" : 0,
+    "uuid" : "00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 9535328256,
+    "size" : 240940,
+    "uuid" : "99b78925-f063-3b62-ad22-3986a636020d",
+    "path" : "\/usr\/lib\/system\/libsystem_kernel.dylib",
+    "name" : "libsystem_kernel.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 8225566720,
+    "size" : 50256,
+    "uuid" : "36408bf3-c2b3-37c8-abc2-0251f88e8724",
+    "path" : "\/usr\/lib\/system\/libsystem_pthread.dylib",
+    "name" : "libsystem_pthread.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 7024680960,
+    "size" : 27788384,
+    "uuid" : "38831786-ae17-30e8-bdf4-553ed5d10817",
+    "path" : "\/System\/Library\/Frameworks\/JavaScriptCore.framework\/JavaScriptCore",
+    "name" : "JavaScriptCore"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 7623942144,
+    "size" : 287264,
+    "uuid" : "654f736a-691d-3c6a-bd81-69bc65b9b8ed",
+    "path" : "\/usr\/lib\/system\/libdispatch.dylib",
+    "name" : "libdispatch.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6629146624,
+    "size" : 14968864,
+    "uuid" : "75d11b29-11a6-3507-87f7-487aceb1476a",
+    "path" : "\/System\/Library\/Frameworks\/Foundation.framework\/Foundation",
+    "name" : "Foundation"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6672723968,
+    "size" : 5793600,
+    "uuid" : "bd79fbf5-83c8-35f5-a0d5-4ca56e602111",
+    "path" : "\/System\/Library\/Frameworks\/CoreFoundation.framework\/CoreFoundation",
+    "name" : "CoreFoundation"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 7020789760,
+    "size" : 3890688,
+    "uuid" : "140849bf-a60c-3119-a330-cb88e513b57f",
+    "path" : "\/System\/Library\/Frameworks\/CFNetwork.framework\/CFNetwork",
+    "name" : "CFNetwork"
+  }
+],
+  "sharedCache" : {
+  "base" : 6621429760,
+  "size" : 5117575168,
+  "uuid" : "5f9d3a66-1050-3b67-80f8-9de7fca478d8"
+},
+  "vmSummary" : "ReadOnly portion of Libraries: Total=2.1G resident=0K(0%) swapped_out_or_unallocated=2.1G(100%)\nWritable regions: Total=355.6M written=593K(0%) resident=593K(0%) swapped_out=0K(0%) unallocated=355.0M(100%)\n\n                                VIRTUAL   REGION \nREGION TYPE                        SIZE    COUNT (non-coalesced) \n===========                     =======  ======= \nActivity Tracing                   256K        1 \nCoreAnimation                       32K        2 \nFoundation                          16K        1 \nKernel Alloc Once                   32K        1 \nMALLOC                            84.8M       13 \nMALLOC guard page                 3568K        4 \nSTACK GUARD                        224K       14 \nStack                             8080K       14 \nVM_ALLOCATE                        144K        1 \nWebKit Malloc                    192.1M        7 \nWebKit Malloc (reserved)          64.0M        1         reserved VM address space (unallocated)\n__AUTH                            10.1M      879 \n__AUTH_CONST                     117.8M     1286 \n__CTF                               824        1 \n__DATA                            69.4M     1403 \n__DATA_CONST                      46.2M     1413 \n__DATA_DIRTY                      11.0M     1130 \n__FONT_DATA                        2352        1 \n__INFO_FILTER                         8        1 \n__LINKEDIT                       205.7M      126 \n__OBJC_RO                         84.2M        1 \n__OBJC_RW                         3176K        1 \n__TEXT                             1.9G     1441 \n__TPRO_CONST                       132K        2 \ndyld private memory                128K        1 \nmapped file                       38.5M        7 \npage table in kernel               593K        1 \nshared memory                       80K        4 \n===========                     =======  ======= \nTOTAL                              2.8G     7757 \nTOTAL, minus reserved VM space     2.7G     7757 \n",
+  "legacyInfo" : {
+  "threadTriggered" : {
+    "queue" : "com.apple.main-thread"
+  }
+},
+  "logWritingSignature" : "b2cdcbe8a2ee25915547f0689a3b9286417650b6",
+  "bug_type" : "309",
+  "roots_installed" : 0,
+  "trmStatus" : 1,
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "652eff3d1bce5442b8d753c9",
+      "factorPackIds" : [
+        "652eff982c02f032beae83f4"
+      ],
+      "deploymentId" : 240000009
+    },
+    {
+      "rolloutId" : "67648e5334a82511f4acf879",
+      "factorPackIds" : [
+
+      ],
+      "deploymentId" : 240000008
+    }
+  ],
+  "experiments" : [
+
+  ]
+}
+}

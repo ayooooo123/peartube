@@ -1,9 +1,9 @@
 {
-  "active_plan": "/Users/jd/projects/peartube/.sisyphus/plans/fix-desktop-build.md",
-  "started_at": "2026-02-07T20:01:56.365Z",
+  "active_plan": "/Users/jd/projects/peartube/.sisyphus/plans/ui-player-refactor.md",
+  "started_at": "2026-02-19T03:47:20.514Z",
   "session_ids": [
-    "ses_3c684a2deffesunryzy3O1sA99"
+    "ses_391ad84e5ffe2WujXotiEA2F7u"
   ],
-  "plan_name": "fix-desktop-build",
+  "plan_name": "ui-player-refactor",
   "agent": "atlas"
 }

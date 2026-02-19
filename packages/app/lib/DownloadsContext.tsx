@@ -179,8 +179,8 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
     }
   }, [])
 
-  const downloadForWeb = useCallback(async (id: string, url: string, filename: string, signal: AbortSignal) => {
-    console.log('[Downloads] Web download:', filename, 'from:', url)
+   const downloadForWeb = useCallback(async (id: string, url: string, filename: string, signal: AbortSignal) => {
+     console.log('[Downloads] Web download:', filename)
 
     const response = await fetch(url, { signal })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -287,10 +287,9 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
         }
 
         const blobUrl = result.filePath
-        const totalBytes = result.size || video.size || 0
-        const mimeType = (video as any).mimeType || 'video/mp4'
-        const ext = getExtension(mimeType)
-        const filename = `${sanitizeFilename(video.title)}_${video.id || 'video'}.${ext}`
+         const totalBytes = result.size || video.size || 0
+         const ext = getExtension((video as any).mimeType)
+         const filename = `${sanitizeFilename(video.title)}_${video.id || 'video'}.${ext}`
 
         console.log('[Downloads] Got blob URL:', blobUrl)
         setDownloads(prev => prev.map(d => d.id === id ? { ...d, totalBytes } : d))
@@ -332,19 +331,19 @@ export function DownloadsProvider({ children }: DownloadsProviderProps) {
 
       console.log('[Downloads] Complete:', video.title)
 
-    } catch (error: any) {
-      if (error.name === 'AbortError' || abortController.signal.aborted) {
-        console.log('[Downloads] Cancelled:', video.title)
-        setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'cancelled' } : d))
-      } else {
-        console.error('[Downloads] Error:', error)
-        setDownloads(prev => prev.map(d => d.id === id ? {
-          ...d,
-          status: 'error',
-          error: error.message || 'Download failed'
-        } : d))
-      }
-    } finally {
+       } catch (err: any) {
+         if (err.name === 'AbortError' || abortController.signal.aborted) {
+           console.log('[Downloads] Cancelled:', video.title)
+           setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'cancelled' } : d))
+         } else {
+           console.error('[Downloads] Error:', err)
+           setDownloads(prev => prev.map(d => d.id === id ? {
+             ...d,
+             status: 'error',
+             error: err.message || 'Download failed'
+           } : d))
+         }
+       } finally {
        abortControllers.current.delete(id)
        speedTrackers.current.delete(id)
      }

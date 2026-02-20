@@ -47,8 +47,6 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
   const player = useVideoPlayerContext()
   const currentVideo = player.currentVideo
   const playerMode = player.playerMode
-  const isLandscapeFullscreen = Boolean((player as any).isLandscapeFullscreen)
-  const pendingLandscapeExit = Boolean((player as any).pendingLandscapeExit)
 
   const commentsLengthRef = useRef(0)
 
@@ -110,7 +108,7 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
 
     const ch = currentVideo.channelKey
     const canonicalVid = currentVideo.id
-    const pubBee = (currentVideo as any).publicBeeKey || undefined
+    const pubBee = currentVideo.publicBeeKey || undefined
 
     const isInitialLoad = commentsLengthRef.current === 0
     if (!append && (isInitialLoad || forceRefresh)) {
@@ -182,20 +180,20 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
     setReactionCounts({})
     setUserReaction(null)
     loadSocial(0, false, true).catch(() => {})
+    if (!currentVideo?.channelKey || !currentVideo?.id) return
     rpc?.indexVideoVectors?.({ channelKey: currentVideo.channelKey, videoId: currentVideo.id }).catch(() => {})
   }, [currentVideoKey, currentVideo?.channelKey, currentVideo?.id, loadSocial])
 
   useEffect(() => {
     if (!currentVideoKey) return
     if (playerMode === 'hidden') return
-    if (isLandscapeFullscreen || pendingLandscapeExit) return
 
     const interval = setInterval(() => {
       loadSocial(0, false, false).catch(() => {})
     }, 5000)
 
     return () => clearInterval(interval)
-  }, [currentVideoKey, playerMode, isLandscapeFullscreen, pendingLandscapeExit, loadSocial])
+  }, [currentVideoKey, playerMode, loadSocial])
 
   const refreshComments = useCallback(() => {
     setRefreshingComments(true)
@@ -231,7 +229,7 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
       const res = await rpc.addComment?.({
         channelKey: currentVideo.channelKey,
         videoId: currentVideo.id,
-        publicBeeKey: (currentVideo as any).publicBeeKey || undefined,
+        publicBeeKey: currentVideo.publicBeeKey || undefined,
         text,
         parentId,
       })
@@ -265,7 +263,7 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
       setPendingComments(prev => prev.filter(p => p.commentId !== commentId && p.localId !== commentId))
       return
     }
-    const pubBee = (currentVideo as any).publicBeeKey || undefined
+    const pubBee = currentVideo.publicBeeKey || undefined
     Alert.alert(
       'Delete Comment',
       'Are you sure you want to delete this comment?',
@@ -292,7 +290,7 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
 
   const toggleReaction = useCallback(async (reactionType: string) => {
     if (!currentVideo?.channelKey || !currentVideo?.id) return
-    const pubBee = (currentVideo as any).publicBeeKey || undefined
+    const pubBee = currentVideo.publicBeeKey || undefined
     try {
       if (userReaction === reactionType) {
         await rpc.removeReaction?.({ channelKey: currentVideo.channelKey, videoId: currentVideo.id, publicBeeKey: pubBee })

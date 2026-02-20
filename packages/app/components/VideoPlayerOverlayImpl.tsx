@@ -118,7 +118,6 @@ export function VideoPlayerOverlay() {
   const exitGateStableCountRef = useRef(0)
   const exitGateAttemptsRef = useRef(0)
   const playerLogKeyRef = useRef<string | null>(null)
-  const commentsLengthRef = useRef(0)
 
   // For landscape fullscreen, track screen dimensions as shared values
   // This allows animated styles to use current screen size without React re-renders
@@ -402,11 +401,6 @@ export function VideoPlayerOverlay() {
     if (!identity?.driveKey) return false
     return c?.authorKeyHex === identity.driveKey
   }, [identity?.driveKey])
-
-  // Sync comments.length to ref to break polling interval restart cycle
-  useEffect(() => {
-    commentsLengthRef.current = comments.length
-  }, [comments.length])
 
   // Cast handlers
   const handleCastPress = useCallback(() => {

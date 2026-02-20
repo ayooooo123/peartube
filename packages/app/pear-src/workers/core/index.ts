@@ -1290,6 +1290,50 @@ rpc.onRecoverIdentity(async (req: any) => {
   };
 });
 
+rpc.onBootstrapDevice(async (req: any) => {
+  console.log('[Worker] onBootstrapDevice called');
+  try {
+    const result = await identityManager.bootstrapDevice(req.mnemonic);
+    return {
+      proof: result.proof,
+      identityPublicKey: result.identityPublicKey,
+    };
+  } catch (err: any) {
+    console.error('[Worker] bootstrapDevice failed:', err.message);
+    throw err;
+  }
+});
+
+rpc.onAttestDevice(async (req: any) => {
+  console.log('[Worker] onAttestDevice called');
+  try {
+    const proof = await identityManager.attestDevice(
+      req.identityKeyPair,
+      req.devicePublicKey,
+      req.proof || null
+    );
+    return { proof };
+  } catch (err: any) {
+    console.error('[Worker] attestDevice failed:', err.message);
+    throw err;
+  }
+});
+
+rpc.onVerifyAttestation(async (req: any) => {
+  console.log('[Worker] onVerifyAttestation called');
+  try {
+    const result = identityManager.verifyAttestation(req.proof);
+    return {
+      valid: result.valid,
+      identityPublicKey: result.identityPublicKey || '',
+      devicePublicKey: result.devicePublicKey || '',
+    };
+  } catch (err: any) {
+    console.error('[Worker] verifyAttestation failed:', err.message);
+    return { valid: false, identityPublicKey: '', devicePublicKey: '' };
+  }
+});
+
 // Channel handlers
 rpc.onGetChannel(async (req: any) => {
   const channel = await api.getChannel(req.publicKey || '');

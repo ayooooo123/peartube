@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "id": 0,
@@ -1228,6 +1228,45 @@
         "stream": false
       },
       "version": 1
+    },
+    {
+      "id": 5,
+      "name": "@peartube/bootstrap-device",
+      "request": {
+        "name": "@peartube/bootstrap-device-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/bootstrap-device-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 6,
+      "name": "@peartube/attest-device",
+      "request": {
+        "name": "@peartube/attest-device-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/attest-device-response",
+        "stream": false
+      },
+      "version": 2
+    },
+    {
+      "id": 7,
+      "name": "@peartube/verify-attestation",
+      "request": {
+        "name": "@peartube/verify-attestation-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/verify-attestation-response",
+        "stream": false
+      },
+      "version": 2
     }
   ]
 }

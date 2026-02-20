@@ -2009,6 +2009,25 @@ rpcNs.register({
   response: { name: '@peartube/recover-identity-response', stream: false }
 })
 
+// Device Attestation commands
+rpcNs.register({
+  name: 'bootstrap-device',
+  request: { name: '@peartube/bootstrap-device-request', stream: false },
+  response: { name: '@peartube/bootstrap-device-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'attest-device',
+  request: { name: '@peartube/attest-device-request', stream: false },
+  response: { name: '@peartube/attest-device-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'verify-attestation',
+  request: { name: '@peartube/verify-attestation-request', stream: false },
+  response: { name: '@peartube/verify-attestation-response', stream: false }
+})
+
 // Channel commands
 rpcNs.register({
   name: 'get-channel',

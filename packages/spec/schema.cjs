@@ -105,7 +105,8 @@ ns.register({
 ns.register({
   name: 'recover-identity-request',
   fields: [
-    { name: 'seedPhrase', type: 'string', required: true }
+    { name: 'seedPhrase', type: 'string', required: true },
+    { name: 'name', type: 'string', required: false }
   ]
 })
 
@@ -113,6 +114,56 @@ ns.register({
   name: 'recover-identity-response',
   fields: [
     { name: 'identity', type: '@peartube/identity', required: true }
+  ]
+})
+
+// ============================================
+// Device Attestation Types
+// ============================================
+
+ns.register({
+  name: 'bootstrap-device-request',
+  fields: [
+    { name: 'mnemonic', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'bootstrap-device-response',
+  fields: [
+    { name: 'proof', type: 'buffer', required: true },
+    { name: 'identityPublicKey', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'attest-device-request',
+  fields: [
+    { name: 'proof', type: 'buffer', required: true },
+    { name: 'devicePublicKey', type: 'buffer', required: true }
+  ]
+})
+
+ns.register({
+  name: 'attest-device-response',
+  fields: [
+    { name: 'proof', type: 'buffer', required: true }
+  ]
+})
+
+ns.register({
+  name: 'verify-attestation-request',
+  fields: [
+    { name: 'proof', type: 'buffer', required: true }
+  ]
+})
+
+ns.register({
+  name: 'verify-attestation-response',
+  fields: [
+    { name: 'valid', type: 'bool', required: true },
+    { name: 'identityPublicKey', type: 'string', required: true },
+    { name: 'devicePublicKey', type: 'string', required: true }
   ]
 })
 

@@ -118,7 +118,8 @@ export async function initializeStorage(config) {
     blobServerHost: blobServerHostOverride,
     blobServerBindHost: blobServerBindHostOverride,
     blindPeerMirrors = [],
-    enableBlindPeerServer = true
+    enableBlindPeerServer = true,
+    primaryKey = null
   } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
@@ -131,7 +132,10 @@ export async function initializeStorage(config) {
 
   // Initialize Corestore
   console.log('[Storage] Creating Corestore...');
-  const store = new Corestore(storagePath);
+  console.log('[Storage] Corestore primaryKey:', primaryKey ? 'provided (deterministic)' : 'not provided (random)');
+  const store = primaryKey
+    ? new Corestore(storagePath, { primaryKey, unsafe: true })
+    : new Corestore(storagePath);
 
   console.log('[Storage] Waiting for Corestore ready...');
   await store.ready();

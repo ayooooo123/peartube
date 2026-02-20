@@ -16,6 +16,8 @@ import { SeedingManager } from './seeding.js';
 import { createApi } from './api.js';
 import { createIdentityManager } from './identity.js';
 import { createUploadManager } from './upload.js';
+import { readIdentityKeyFile, writeIdentityKeyFile } from './identity-key-file.js';
+import { derivePrimaryKey } from './peartube-identity.js';
 import { initFileLogger } from './logger.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/hls-transcoder.mjs';
 
@@ -71,7 +73,16 @@ export async function createBackendContext(config) {
   console.log('[Orchestrator] ===== INITIALIZING BACKEND =====');
   console.log('[Orchestrator] Storage path:', storagePath);
 
-  const ctx = await initializeStorage({ storagePath, blobServerHost, blobServerBindHost });
+  let primaryKey = null;
+  const identityKeyData = readIdentityKeyFile(storagePath);
+  if (identityKeyData) {
+    primaryKey = identityKeyData.primaryKey;
+    console.log('[Orchestrator] Identity key file found, using deterministic primaryKey');
+  } else {
+    console.log('[Orchestrator] No identity key file, Corestore will use random primaryKey');
+  }
+
+  const ctx = await initializeStorage({ storagePath, blobServerHost, blobServerBindHost, primaryKey });
   console.log('[Orchestrator] Storage initialized, blob server port:', ctx.blobServerPort);
 
   try {
@@ -166,7 +177,14 @@ export async function createBackendContext(config) {
     seedingManager,
     videoStats,
     identityManager,
-    uploadManager
+    uploadManager,
+    async initializeIdentityFromMnemonic(mnemonic) {
+      const pk = await derivePrimaryKey(mnemonic);
+      const { identityPublicKey } = await (await import('./peartube-identity.js')).deriveIdentity(mnemonic);
+      writeIdentityKeyFile(storagePath, { primaryKey: pk, identityPublicKey });
+      console.log('[Orchestrator] Identity key file written for mnemonic-derived identity');
+      return { needsRestart: !primaryKey };
+    }
   };
 
   console.log('[Orchestrator] ===== BACKEND READY =====');

@@ -199,7 +199,13 @@ const methods = new Map([
   ['@peartube/get-recommendations', 95],
   [95, '@peartube/get-recommendations'],
   ['@peartube/get-video-recommendations', 96],
-  [96, '@peartube/get-video-recommendations']
+  [96, '@peartube/get-video-recommendations'],
+  ['@peartube/bootstrap-device', 97],
+  [97, '@peartube/bootstrap-device'],
+  ['@peartube/attest-device', 98],
+  [98, '@peartube/attest-device'],
+  ['@peartube/verify-attestation', 99],
+  [99, '@peartube/verify-attestation']
 ])
 
 class HRPC {
@@ -303,7 +309,10 @@ class HRPC {
       ['@peartube/log-watch-event', getEncoding('@peartube/log-watch-event-request')],
       ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-request')],
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-request')],
-      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-request')]
+      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-request')],
+      ['@peartube/bootstrap-device', getEncoding('@peartube/bootstrap-device-request')],
+      ['@peartube/attest-device', getEncoding('@peartube/attest-device-request')],
+      ['@peartube/verify-attestation', getEncoding('@peartube/verify-attestation-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -391,7 +400,10 @@ class HRPC {
       ['@peartube/log-watch-event', getEncoding('@peartube/log-watch-event-response')],
       ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-response')],
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-response')],
-      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-response')]
+      ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-response')],
+      ['@peartube/bootstrap-device', getEncoding('@peartube/bootstrap-device-response')],
+      ['@peartube/attest-device', getEncoding('@peartube/attest-device-response')],
+      ['@peartube/verify-attestation', getEncoding('@peartube/verify-attestation-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -877,6 +889,18 @@ class HRPC {
     return this._call('@peartube/get-video-recommendations', args)
   }
 
+  async bootstrapDevice(args) {
+    return this._call('@peartube/bootstrap-device', args)
+  }
+
+  async attestDevice(args) {
+    return this._call('@peartube/attest-device', args)
+  }
+
+  async verifyAttestation(args) {
+    return this._call('@peartube/verify-attestation', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1263,6 +1287,18 @@ class HRPC {
 
   onGetVideoRecommendations(responseFn) {
     this._handlers['@peartube/get-video-recommendations'] = responseFn
+  }
+
+  onBootstrapDevice(responseFn) {
+    this._handlers['@peartube/bootstrap-device'] = responseFn
+  }
+
+  onAttestDevice(responseFn) {
+    this._handlers['@peartube/attest-device'] = responseFn
+  }
+
+  onVerifyAttestation(responseFn) {
+    this._handlers['@peartube/verify-attestation'] = responseFn
   }
 
   _requestIsStream(command) {

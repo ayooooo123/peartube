@@ -1322,7 +1322,7 @@ rpc.onAttestDevice(async (req: any) => {
 rpc.onVerifyAttestation(async (req: any) => {
   console.log('[Worker] onVerifyAttestation called');
   try {
-    const result = identityManager.verifyAttestation(req.proof);
+    const result = await identityManager.verifyAttestation(req.proof);
     return {
       valid: result.valid,
       identityPublicKey: result.identityPublicKey || '',

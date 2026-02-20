@@ -1,12 +1,28 @@
-let fs = null;
-let path = null;
-try { fs = (await import('bare-fs')).default || (await import('bare-fs')); } catch {}
-if (!fs) { try { fs = (await import('node:fs')).default || (await import('node:fs')); } catch {} }
-try { path = (await import('bare-path')).default || (await import('bare-path')); } catch {}
-if (!path) { try { path = (await import('node:path')).default || (await import('node:path')); } catch {} }
-
 const IDENTITY_KEY_FILENAME = 'identity-key';
 const IDENTITY_KEY_FILE_VERSION = 1;
+
+let fs = null;
+let path = null;
+
+async function initModules() {
+  if (fs && path) return;
+  try { fs = (await import('bare-fs')).default || (await import('bare-fs')); } catch {}
+  if (!fs) {
+    try {
+      const nodeFsName = 'node:' + 'fs';
+      const mod = await import(nodeFsName);
+      fs = mod.default || mod;
+    } catch {}
+  }
+  try { path = (await import('bare-path')).default || (await import('bare-path')); } catch {}
+  if (!path) {
+    try {
+      const nodePathName = 'node:' + 'path';
+      const mod = await import(nodePathName);
+      path = mod.default || mod;
+    } catch {}
+  }
+}
 
 function getIdentityKeyFilePath(storagePath) {
   if (!path || !storagePath) return null;
@@ -25,7 +41,8 @@ function parseHexKey(value) {
   }
 }
 
-export function identityKeyFileExists(storagePath) {
+export async function identityKeyFileExists(storagePath) {
+  await initModules();
   if (!fs) return false;
   const filePath = getIdentityKeyFilePath(storagePath);
   if (!filePath) return false;
@@ -37,7 +54,8 @@ export function identityKeyFileExists(storagePath) {
   }
 }
 
-export function readIdentityKeyFile(storagePath) {
+export async function readIdentityKeyFile(storagePath) {
+  await initModules();
   if (!fs) return null;
   const filePath = getIdentityKeyFilePath(storagePath);
   if (!filePath) return null;
@@ -57,7 +75,8 @@ export function readIdentityKeyFile(storagePath) {
   }
 }
 
-export function writeIdentityKeyFile(storagePath, { primaryKey, identityPublicKey }) {
+export async function writeIdentityKeyFile(storagePath, { primaryKey, identityPublicKey }) {
+  await initModules();
   if (!fs || !path) {
     throw new Error('File system unavailable for identity key persistence');
   }

@@ -58,14 +58,28 @@ try {
   log.debug('blind-peer/blind-peering not available, mobile connectivity may be limited')
 }
 
-// Import bare-fs and bare-path for Bare runtime environments (mobile/desktop)
-// Note: These are only available in Bare runtime, guards below handle when they're not
 let fs = null;
 let path = null;
-try { fs = (await import('bare-fs')).default || (await import('bare-fs')); } catch {}
-if (!fs) { try { fs = (await import('node:fs')).default || (await import('node:fs')); } catch {} }
-try { path = (await import('bare-path')).default || (await import('bare-path')); } catch {}
-if (!path) { try { path = (await import('node:path')).default || (await import('node:path')); } catch {} }
+
+async function initStorageModules() {
+  if (fs && path) return;
+  try { fs = (await import('bare-fs')).default || (await import('bare-fs')); } catch {}
+  if (!fs) {
+    try {
+      const nodeFsName = 'node:' + 'fs';
+      const mod = await import(nodeFsName);
+      fs = mod.default || mod;
+    } catch {}
+  }
+  try { path = (await import('bare-path')).default || (await import('bare-path')); } catch {}
+  if (!path) {
+    try {
+      const nodePathName = 'node:' + 'path';
+      const mod = await import(nodePathName);
+      path = mod.default || mod;
+    } catch {}
+  }
+}
 
 /**
  * Wrap a corestore to add default timeout to all get() calls.
@@ -109,6 +123,8 @@ export function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
  * @returns {Promise<import('./types.js').StorageContext>}
  */
 export async function initializeStorage(config) {
+  await initStorageModules();
+
   const {
     storagePath,
     defaultTimeout = 30000,

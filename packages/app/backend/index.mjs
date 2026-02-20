@@ -1080,7 +1080,7 @@ rpc.onAttestDevice(async (req) => {
 rpc.onVerifyAttestation(async (req) => {
   console.log('[HRPC] verifyAttestation')
   try {
-    const result = identityManager.verifyAttestation(req.proof)
+    const result = await identityManager.verifyAttestation(req.proof)
     return {
       valid: result.valid,
       identityPublicKey: result.identityPublicKey || '',

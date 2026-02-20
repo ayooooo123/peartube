@@ -63,7 +63,9 @@ try {
 let fs = null;
 let path = null;
 try { fs = (await import('bare-fs')).default || (await import('bare-fs')); } catch {}
+if (!fs) { try { fs = (await import('node:fs')).default || (await import('node:fs')); } catch {} }
 try { path = (await import('bare-path')).default || (await import('bare-path')); } catch {}
+if (!path) { try { path = (await import('node:path')).default || (await import('node:path')); } catch {} }
 
 /**
  * Wrap a corestore to add default timeout to all get() calls.

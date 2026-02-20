@@ -6,6 +6,7 @@
  */
 
 import b4a from 'b4a';
+import { createRequire } from 'node:module'
 import crypto from 'hypercore-crypto';
 import { createChannel, loadChannel } from './storage.js'
 import { logger } from './logger.js'
@@ -15,6 +16,9 @@ import {
   validateMnemonic as validatePearTubeMnemonic,
   deriveIdentity
 } from './peartube-identity.js'
+
+const _require = createRequire(import.meta.url)
+const IdentityKey = _require('keet-identity-key')
 
 const log = logger('Identity')
 
@@ -313,6 +317,58 @@ export function createIdentityManager({ ctx }) {
         publicKey,
         driveKey: channelKeyHex
       };
+    },
+
+    async bootstrapDevice(mnemonic) {
+      if (!activeIdentity) {
+        throw new Error('No active identity')
+      }
+      if (!ctx?.swarm?.keyPair?.publicKey) {
+        throw new Error('Device swarm public key is unavailable')
+      }
+
+      const proof = await IdentityKey.bootstrap({ mnemonic }, ctx.swarm.keyPair.publicKey)
+      const verified = IdentityKey.verify(proof, null)
+      if (!verified) {
+        throw new Error('Generated attestation proof failed verification')
+      }
+
+      identities = identities.map(identity =>
+        identity.publicKey === activeIdentity
+          ? { ...identity, attestationProof: b4a.toString(proof, 'hex') }
+          : identity
+      )
+      await this.saveIdentities()
+
+      return {
+        proof,
+        identityPublicKey: b4a.toString(verified.identityPublicKey, 'hex')
+      }
+    },
+
+    attestDevice(identityKeyPair, devicePublicKey, existingProofBuffer = null) {
+      const normalizedDeviceKey = Buffer.isBuffer(devicePublicKey)
+        ? devicePublicKey
+        : b4a.from(devicePublicKey, 'hex')
+      return IdentityKey.attestDevice(normalizedDeviceKey, identityKeyPair, existingProofBuffer)
+    },
+
+    verifyAttestation(proofBuffer) {
+      const result = IdentityKey.verify(proofBuffer, null)
+      if (!result) return { valid: false }
+
+      return {
+        valid: true,
+        identityPublicKey: b4a.toString(result.identityPublicKey, 'hex'),
+        devicePublicKey: b4a.toString(result.devicePublicKey, 'hex')
+      }
+    },
+
+    getDeviceProof() {
+      if (!activeIdentity) return null
+      const identity = identities.find(i => i.publicKey === activeIdentity)
+      if (!identity?.attestationProof) return null
+      return b4a.from(identity.attestationProof, 'hex')
     },
 
     /**

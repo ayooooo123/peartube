@@ -74,7 +74,7 @@ export async function createBackendContext(config) {
   console.log('[Orchestrator] Storage path:', storagePath);
 
   let primaryKey = null;
-  const identityKeyData = readIdentityKeyFile(storagePath);
+  const identityKeyData = await readIdentityKeyFile(storagePath);
   if (identityKeyData) {
     primaryKey = identityKeyData.primaryKey;
     console.log('[Orchestrator] Identity key file found, using deterministic primaryKey');
@@ -181,7 +181,7 @@ export async function createBackendContext(config) {
     async initializeIdentityFromMnemonic(mnemonic) {
       const pk = await derivePrimaryKey(mnemonic);
       const { identityPublicKey } = await (await import('./peartube-identity.js')).deriveIdentity(mnemonic);
-      writeIdentityKeyFile(storagePath, { primaryKey: pk, identityPublicKey });
+      await writeIdentityKeyFile(storagePath, { primaryKey: pk, identityPublicKey });
       console.log('[Orchestrator] Identity key file written for mnemonic-derived identity');
       return { needsRestart: !primaryKey };
     }

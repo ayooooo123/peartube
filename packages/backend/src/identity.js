@@ -6,7 +6,6 @@
  */
 
 import b4a from 'b4a';
-import { createRequire } from 'node:module'
 import crypto from 'hypercore-crypto';
 import { createChannel, loadChannel } from './storage.js'
 import { logger } from './logger.js'
@@ -17,8 +16,14 @@ import {
   deriveIdentity
 } from './peartube-identity.js'
 
-const _require = createRequire(import.meta.url)
-const IdentityKey = _require('keet-identity-key')
+// Lazy load IdentityKey to support both Node.js and Bare runtime
+let IdentityKey = null
+async function getIdentityKey () {
+  if (!IdentityKey) {
+    IdentityKey = (await import('keet-identity-key')).default || (await import('keet-identity-key'))
+  }
+  return IdentityKey
+}
 
 const log = logger('Identity')
 
@@ -327,8 +332,9 @@ export function createIdentityManager({ ctx }) {
         throw new Error('Device swarm public key is unavailable')
       }
 
-      const proof = await IdentityKey.bootstrap({ mnemonic }, ctx.swarm.keyPair.publicKey)
-      const verified = IdentityKey.verify(proof, null)
+      const IK = await getIdentityKey()
+      const proof = await IK.bootstrap({ mnemonic }, ctx.swarm.keyPair.publicKey)
+      const verified = IK.verify(proof, null)
       if (!verified) {
         throw new Error('Generated attestation proof failed verification')
       }
@@ -346,15 +352,17 @@ export function createIdentityManager({ ctx }) {
       }
     },
 
-    attestDevice(identityKeyPair, devicePublicKey, existingProofBuffer = null) {
+    async attestDevice(identityKeyPair, devicePublicKey, existingProofBuffer = null) {
+      const IK = await getIdentityKey()
       const normalizedDeviceKey = Buffer.isBuffer(devicePublicKey)
         ? devicePublicKey
         : b4a.from(devicePublicKey, 'hex')
-      return IdentityKey.attestDevice(normalizedDeviceKey, identityKeyPair, existingProofBuffer)
+      return IK.attestDevice(normalizedDeviceKey, identityKeyPair, existingProofBuffer)
     },
 
-    verifyAttestation(proofBuffer) {
-      const result = IdentityKey.verify(proofBuffer, null)
+    async verifyAttestation(proofBuffer) {
+      const IK = await getIdentityKey()
+      const result = IK.verify(proofBuffer, null)
       if (!result) return { valid: false }
 
       return {

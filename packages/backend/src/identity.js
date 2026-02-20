@@ -9,9 +9,12 @@ import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 import { createChannel, loadChannel } from './storage.js'
 import { logger } from './logger.js'
-
-// BIP39 mnemonic library from Holepunch - standard 2048 word list with proper derivation
-import * as bip39 from 'bip39-mnemonic';
+import { MultiWriterChannel } from './channel/multi-writer-channel.js'
+import {
+  generateMnemonic as generatePearTubeMnemonic,
+  validateMnemonic as validatePearTubeMnemonic,
+  deriveIdentity
+} from './peartube-identity.js'
 
 const log = logger('Identity')
 
@@ -24,39 +27,14 @@ const log = logger('Identity')
  * Generate a proper BIP39 mnemonic phrase
  * Uses the standard 2048-word English word list with checksum validation.
  *
- * @param {number} [wordCount=12] - Number of words (12 or 24)
+ * @param {number} [wordCount=12] - Number of words (12 only)
  * @returns {string} Space-separated mnemonic phrase
  */
 export function generateMnemonic(wordCount = 12) {
-  // Generate appropriate entropy: 16 bytes for 12 words, 32 bytes for 24 words
-  const entropyBytes = wordCount === 24 ? 32 : 16;
-  const entropy = bip39.generateEntropy(entropyBytes);
-  return bip39.entropyToMnemonic(entropy);
-}
-
-/**
- * Derive a keypair from a mnemonic phrase using proper BIP39 derivation.
- *
- * @param {string} mnemonic - Space-separated mnemonic phrase (BIP39)
- * @param {string} [passphrase=''] - Optional BIP39 passphrase for additional security
- * @returns {{publicKey: Buffer, secretKey: Buffer}} Keypair
- */
-export async function keypairFromMnemonic(mnemonic, passphrase = '') {
-  // BIP39 derivation using PBKDF2.
-  // On some runtimes `mnemonicToSeed` is async (returns a Promise), so always await.
-  // The result is 64 bytes; we use first 32 bytes for ed25519.
-  const seed = await bip39.mnemonicToSeed(mnemonic, passphrase)
-
-  /** @type {Uint8Array | Buffer} */
-  let seedBytes = seed
-  if (seedBytes instanceof ArrayBuffer) seedBytes = new Uint8Array(seedBytes)
-  // Handle typed-array views (including Buffer)
-  if (ArrayBuffer.isView(seedBytes) && !(seedBytes instanceof Uint8Array)) {
-    seedBytes = new Uint8Array(seedBytes.buffer, seedBytes.byteOffset, seedBytes.byteLength)
+  if (wordCount !== 12) {
+    throw new Error('PearTube mnemonic generation supports 12 words only')
   }
-
-  const seedBuf = b4a.from(seedBytes)
-  return crypto.keyPair(seedBuf.subarray(0, 32))
+  return generatePearTubeMnemonic()
 }
 
 /**
@@ -65,8 +43,7 @@ export async function keypairFromMnemonic(mnemonic, passphrase = '') {
  * @returns {boolean} True if valid BIP39 mnemonic
  */
 export function validateMnemonic(mnemonic) {
-  if (!mnemonic || typeof mnemonic !== 'string') return false;
-  return bip39.validateMnemonic(mnemonic);
+  return validatePearTubeMnemonic(mnemonic)
 }
 
 /**
@@ -157,15 +134,21 @@ export function createIdentityManager({ ctx }) {
 
       let keypair;
       let mnemonic;
+      let hdDerived = false
+      let derivedPublicKey = null
 
       if (generateMnem) {
         mnemonic = generateMnemonic();
-        keypair = await keypairFromMnemonic(mnemonic);
+        const { identityKeyPair, identityPublicKey } = await deriveIdentity(mnemonic)
+        keypair = identityKeyPair
+        derivedPublicKey = identityPublicKey
+        hdDerived = true
+        log.info(' Generated HD identity keypair:', b4a.toString(identityPublicKey, 'hex').slice(0, 16));
       } else {
         keypair = crypto.keyPair();
       }
 
-      const publicKey = b4a.toString(keypair.publicKey, 'hex');
+      const publicKey = b4a.toString(derivedPublicKey || keypair.publicKey, 'hex');
       log.info(' Generated keypair:', publicKey.slice(0, 16));
 
       // Create the channel's multi-writer metadata log (Autobase)
@@ -191,7 +174,8 @@ export function createIdentityManager({ ctx }) {
         name,
         createdAt: Date.now(),
         // secretKey removed for security - derive from mnemonic when needed
-        isActive: false
+        isActive: false,
+        hdDerived
       };
 
       identities.push(identity);
@@ -271,8 +255,8 @@ export function createIdentityManager({ ctx }) {
     async recoverIdentity(mnemonic, name) {
       log.info(' Recovering from mnemonic');
 
-      const keypair = await keypairFromMnemonic(mnemonic);
-      const publicKey = b4a.toString(keypair.publicKey, 'hex');
+      const { identityPublicKey } = await deriveIdentity(mnemonic)
+      const publicKey = b4a.toString(identityPublicKey, 'hex');
 
       // Check if already exists
       const existing = identities.find(i => i.publicKey === publicKey);
@@ -285,14 +269,26 @@ export function createIdentityManager({ ctx }) {
         };
       }
 
-      // Recovery currently creates a fresh channel.
       const writerKeyName = `peartube-channel-writer:${publicKey}`
-      const { channelKeyHex, encryptionKeyHex, channel } = await createChannel(ctx, {
+      const writerKeyPair = typeof ctx.store.createKeyPair === 'function'
+        ? await ctx.store.createKeyPair(writerKeyName)
+        : null
+      const tempChannel = new MultiWriterChannel(ctx.store, {
+        key: null,
+        keyPair: writerKeyPair || undefined,
         encrypt: false,
-        writerKeyName
+        swarm: ctx.swarm
       })
-      await channel.updateMetadata({ name: name || `Recovered ${Date.now()}`, description: '', avatar: null })
-      await channel.ensureLocalBlobDrive({ deviceName: name || '' })
+      await tempChannel.ready()
+      const channelKeyHex = tempChannel.keyHex
+      const encryptionKeyHex = tempChannel.encryptionKey ? b4a.toString(tempChannel.encryptionKey, 'hex') : null
+      try { await tempChannel.close() } catch {}
+
+      await loadChannel(ctx, channelKeyHex, {
+        writerKeyName,
+        encryptionKeyHex,
+        preferWritable: true
+      })
 
       // SECURITY: Do NOT persist secretKey - it can be re-derived from mnemonic.
       // The user has proven they have the mnemonic by successfully recovering.

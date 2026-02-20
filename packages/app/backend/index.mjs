@@ -1048,6 +1048,50 @@ rpc.onRecoverIdentity(async (req) => {
   }
 })
 
+rpc.onBootstrapDevice(async (req) => {
+  console.log('[HRPC] bootstrapDevice')
+  try {
+    const result = await identityManager.bootstrapDevice(req.mnemonic)
+    return {
+      proof: result.proof,
+      identityPublicKey: result.identityPublicKey
+    }
+  } catch (e) {
+    console.error('[HRPC] bootstrapDevice failed:', e.message)
+    throw e
+  }
+})
+
+rpc.onAttestDevice(async (req) => {
+  console.log('[HRPC] attestDevice')
+  try {
+    const proof = await identityManager.attestDevice(
+      req.identityKeyPair,
+      req.devicePublicKey,
+      req.proof || null
+    )
+    return { proof }
+  } catch (e) {
+    console.error('[HRPC] attestDevice failed:', e.message)
+    throw e
+  }
+})
+
+rpc.onVerifyAttestation(async (req) => {
+  console.log('[HRPC] verifyAttestation')
+  try {
+    const result = identityManager.verifyAttestation(req.proof)
+    return {
+      valid: result.valid,
+      identityPublicKey: result.identityPublicKey || '',
+      devicePublicKey: result.devicePublicKey || ''
+    }
+  } catch (e) {
+    console.error('[HRPC] verifyAttestation failed:', e.message)
+    return { valid: false, identityPublicKey: '', devicePublicKey: '' }
+  }
+})
+
 // Channel handlers
 rpc.onGetChannel(async (req) => {
   console.log('[HRPC] getChannel:', req.publicKey?.slice(0, 16))

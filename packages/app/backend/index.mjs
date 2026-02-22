@@ -928,7 +928,7 @@ if (!backend) {
   await new Promise(() => {})
 }
 
-const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend
+const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats, initializeIdentityFromMnemonic } = backend
 
 const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
 console.log('[Backend] Backend initialized, blob server port:', blobPort, '(from blobServer.port:', ctx.blobServer?.port, ', from ctx.blobServerPort:', ctx.blobServerPort, ')')
@@ -995,6 +995,15 @@ rpc.onCreateIdentity(async (req) => {
     })
   } catch {}
   const result = await identityManager.createIdentity(req.name || 'New Channel', true)
+  // Wire identity key file so Corestore becomes deterministic on next start
+  if (result.mnemonic) {
+    try {
+      const { needsRestart } = await initializeIdentityFromMnemonic(result.mnemonic)
+      if (needsRestart) console.log('[Backend] Identity key file written — restart needed for deterministic Corestore')
+    } catch (e) {
+      console.error('[Backend] initializeIdentityFromMnemonic failed:', e.message)
+    }
+  }
   try {
     rpc?.eventLog?.({
       level: 'info',
@@ -1041,6 +1050,15 @@ rpc.onRecoverIdentity(async (req) => {
   console.log('[HRPC] recoverIdentity')
   try {
     const result = await identityManager.recoverIdentity(req.seedPhrase, req.name)
+    // Wire identity key file so Corestore becomes deterministic on next start
+    if (req.seedPhrase) {
+      try {
+        const { needsRestart } = await initializeIdentityFromMnemonic(req.seedPhrase)
+        if (needsRestart) console.log('[Backend] Identity key file written for recovery — restart needed')
+      } catch (e) {
+        console.error('[Backend] initializeIdentityFromMnemonic failed:', e.message)
+      }
+    }
     return { identity: result }
   } catch (e) {
     console.error('[HRPC] Recovery failed:', e.message)

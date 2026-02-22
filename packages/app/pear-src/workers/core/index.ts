@@ -713,7 +713,7 @@ const backend = await createBackendContext({
   onStatsUpdate: bufferStatsCallback
 });
 
-const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
+const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats, initializeIdentityFromMnemonic } = backend;
 
 // Shutdown flag to prevent RPC handlers from running during cleanup
 let isShuttingDown = false;
@@ -1239,6 +1239,13 @@ rpc.onCreateIdentity(async (req: any) => {
   console.log('[Worker] onCreateIdentity called, name:', req.name);
   try {
     const result = await identityManager.createIdentity(req.name || 'New Channel', true);
+    // Wire identity key file so Corestore becomes deterministic on next start
+    if (result.mnemonic) {
+      const { needsRestart } = await initializeIdentityFromMnemonic(result.mnemonic);
+      if (needsRestart) {
+        console.log('[Worker] Identity key file written — backend restart needed for deterministic Corestore');
+      }
+    }
     console.log('[Worker] Identity created:', result.publicKey?.slice(0, 16));
     return {
       identity: {
@@ -1280,6 +1287,13 @@ rpc.onSetActiveIdentity(async (req: any) => {
 
 rpc.onRecoverIdentity(async (req: any) => {
   const result = await identityManager.recoverIdentity(req.seedPhrase, req.name);
+  // Wire identity key file so Corestore becomes deterministic on next start
+  if (req.seedPhrase) {
+    const { needsRestart } = await initializeIdentityFromMnemonic(req.seedPhrase);
+    if (needsRestart) {
+      console.log('[Worker] Identity key file written for recovery — backend restart needed');
+    }
+  }
   return {
     identity: {
       publicKey: result.publicKey,

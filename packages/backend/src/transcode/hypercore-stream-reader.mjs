@@ -28,6 +28,7 @@ const TAIL_PREFETCH_BLOCKS = 64 // Prefetch 4MB from tail (for MKV cues)
 const INDEX_SAMPLE_INTERVAL = 1024 * 1024 // Sample every 1MB for block boundary index
 const LOOKAHEAD_BLOCKS = 512 // Prefetch 32MB ahead of read position
 const STREAMING_MODE_LOOKAHEAD_BLOCKS = 200 // Smaller, tighter look-ahead window for streaming mode
+const PREFETCH_AHEAD_BLOCKS = 300 // Background fetcher lead for streaming mode
 const PREFETCH_BATCH_SIZE = 64 // How many blocks to request at once
 
 export class HypercoreStreamReader {
@@ -84,6 +85,10 @@ export class HypercoreStreamReader {
     this._downloadRange = null
     this._lastPrefetchStart = -1
     this._prefetchPromise = null
+    this._backgroundFetcherRunning = false
+    this._backgroundFetcherPosition = 0
+    this._cacheMissRetryPosition = -1
+    this._cacheMissRetryCount = 0
   }
 
   /**
@@ -224,7 +229,69 @@ export class HypercoreStreamReader {
     }
 
     this.initialized = true
+
+    if (this.streamingMode) {
+      this.startBackgroundFetcher()
+    }
+
     return this
+  }
+
+  async startBackgroundFetcher() {
+    if (this._backgroundFetcherRunning || this._destroyed || !this.core) return
+
+    this._backgroundFetcherRunning = true
+    let fetchPos = Math.max(this.startBlock, this._positionToBlock(this.position))
+
+    while (this._backgroundFetcherRunning && !this._destroyed && this.core) {
+      const ffmpegBlock = Math.max(this.startBlock, this._positionToBlock(this.position))
+      const targetPos = Math.min(ffmpegBlock + PREFETCH_AHEAD_BLOCKS, this.endBlock - 1)
+
+      if (fetchPos > targetPos) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        continue
+      }
+
+      for (let i = fetchPos; i <= targetPos && this._backgroundFetcherRunning && !this._destroyed; i++) {
+        if (!this.cache.has(i)) {
+          try {
+            const data = await this.core.get(i, { wait: true, timeout: 15000 })
+            if (data) {
+              const copy = Buffer.allocUnsafe(data.length)
+              data.copy(copy)
+
+              if (!this._fullyLocalMode) {
+                while (this.cache.size >= CACHE_MAX_BLOCKS && this.cacheOrder.length > 0) {
+                  const oldestBlock = this.cacheOrder.shift()
+                  this.cache.delete(oldestBlock)
+                  this.blockSizes.delete(oldestBlock)
+                }
+              }
+
+              this.cache.set(i, { data: copy, size: copy.length })
+              this.cacheOrder.push(i)
+              this.blockSizes.set(i, copy.length)
+            }
+          } catch {
+            // Peer unavailable. Continue prefetch loop.
+          }
+        }
+
+        if (i % 10 === 0) {
+          await new Promise(resolve => setImmediate(resolve))
+        }
+      }
+
+      this._backgroundFetcherPosition = targetPos
+      console.log('[HypercoreStreamReader] Prefetcher at block', targetPos, ', FFmpeg at block', ffmpegBlock, ', lead:', targetPos - ffmpegBlock, 'blocks')
+      fetchPos = targetPos + 1
+    }
+
+    this._backgroundFetcherRunning = false
+  }
+
+  stopBackgroundFetcher() {
+    this._backgroundFetcherRunning = false
   }
 
   /**
@@ -532,6 +599,33 @@ export class HypercoreStreamReader {
         
         // Trigger lookahead anyway in case we can recover
         this._triggerLookahead(blockIndex)
+
+        if (this.streamingMode) {
+          if (bytesWritten > 0) {
+            this._cacheMissRetryPosition = -1
+            this._cacheMissRetryCount = 0
+            this.position = currentPos
+            return bytesWritten
+          }
+
+          if (this._cacheMissRetryPosition === currentPos) {
+            this._cacheMissRetryCount++
+          } else {
+            this._cacheMissRetryPosition = currentPos
+            this._cacheMissRetryCount = 1
+          }
+
+          if (this._cacheMissRetryCount <= 3) {
+            console.warn('[HypercoreStreamReader] Streaming cache miss retry', this._cacheMissRetryCount,
+              'at block', blockIndex, 'pos:', Math.round(currentPos / 1024 / 1024) + 'MB')
+          } else {
+            console.error('[HypercoreStreamReader] Streaming cache miss exceeded retries at block', blockIndex,
+              'pos:', Math.round(currentPos / 1024 / 1024) + 'MB')
+          }
+
+          this.position = currentPos
+          return 0
+        }
         
         // Return what we have so far
         // If bytesWritten > 0, return partial read (FFmpeg will call again)
@@ -545,6 +639,8 @@ export class HypercoreStreamReader {
       }
 
       this.cacheHits++
+      this._cacheMissRetryPosition = -1
+      this._cacheMissRetryCount = 0
 
       const offsetInBlock = this._getOffsetInBlock(currentPos, blockIndex)
 
@@ -682,6 +778,8 @@ export class HypercoreStreamReader {
 
   destroy() {
     console.log('[HypercoreStreamReader] Destroying - stats:', JSON.stringify(this.getStats()))
+
+    this.stopBackgroundFetcher()
 
     this._destroyed = true
     this.initialized = false

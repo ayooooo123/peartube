@@ -222,6 +222,7 @@ export class ChromecastDevice extends EventEmitter {
     this._socketHandlers = null
     this._buffer = Buffer.alloc(0)
     this._heartbeatTimer = null
+    this._missedHeartbeats = 0
     this._statusTimer = null
     this._transportId = null
     this._mediaSessionId = null
@@ -596,10 +597,18 @@ export class ChromecastDevice extends EventEmitter {
 
   _startHeartbeat() {
     if (this._heartbeatTimer) return
+    this._missedHeartbeats = 0
     this._heartbeatTimer = setInterval(() => {
       if (this._connected && this._socket) {
         try {
           this._sendHeartbeat({ type: 'PING' })
+          this._missedHeartbeats += 1
+          console.warn('[Chromecast] Heartbeat miss #' + this._missedHeartbeats + ' — no PONG for ' + (this._missedHeartbeats * 5) + 's')
+          if (this._missedHeartbeats >= 3) {
+            const err = new Error('Chromecast heartbeat timeout after ' + this._missedHeartbeats + ' missed PONGs')
+            this.emit('error', err)
+            this.disconnect().catch(() => {})
+          }
         } catch (err) {
           // Socket closed, will be handled by disconnect
         }
@@ -805,6 +814,8 @@ export class ChromecastDevice extends EventEmitter {
       } catch (err) {
         // Socket closed
       }
+    } else if (payload.type === 'PONG') {
+      this._missedHeartbeats = 0
     }
   }
 

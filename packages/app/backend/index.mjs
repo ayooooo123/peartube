@@ -1866,6 +1866,7 @@ let lastCastPlayTime = 0
 let castLoadCompletedAt = 0
 const CAST_PLAY_DEBOUNCE_MS = 2000
 const CAST_POST_LOAD_GRACE_MS = 5000
+const CAST_MIN_SYNC_PERCENT = 10
 
 rpc.onCastPlay(async (req) => {
   // Debounce: prevent rapid repeated calls - return success to avoid error UI
@@ -1958,6 +1959,19 @@ rpc.onCastPlay(async (req) => {
         console.warn('[Backend] Cast play: Could not check sync status:', syncErr?.message)
         isVideoComplete = true
         syncStatus = null
+      }
+
+      // Minimum sync threshold check
+      if (!isVideoComplete && syncStatus) {
+        const syncPercent = syncStatus.progress || 0
+        console.log('[Backend] Cast sync check:', syncPercent + '% synced, threshold: ' + CAST_MIN_SYNC_PERCENT + '%, decision:', syncPercent < CAST_MIN_SYNC_PERCENT ? 'REJECT' : 'PROCEED')
+        if (syncPercent < CAST_MIN_SYNC_PERCENT) {
+          console.warn('[Backend] Cast rejected: video is only ' + syncPercent + '% downloaded. Need at least ' + CAST_MIN_SYNC_PERCENT + '%.')
+          return { success: false, error: 'Video is only ' + syncPercent + '% downloaded. Please wait until at least ' + CAST_MIN_SYNC_PERCENT + '% is available.' }
+        }
+        if (syncPercent < 30) {
+          console.warn('[Backend] Cast starting with low sync (' + syncPercent + '%). Playback may stall.')
+        }
       }
 
       console.log('[Backend] Cast play: starting HLS transcode with progressive streaming...')

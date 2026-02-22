@@ -3401,14 +3401,17 @@ export async function startHlsTranscode(sourceUrl, options = {}) {
           }
       }
 
-      // Option 2: HypercoreStreamReader for large, fully-synced videos (on-demand block loading)
-      if (!inputIO && blobInfo && blobsCoreKey && store && isVideoComplete) {
+      // Option 2: HypercoreStreamReader for large videos (on-demand block loading)
+      if (!inputIO && blobInfo && blobsCoreKey && store) {
+        console.log('[HlsTranscoder] Input source selection: isVideoComplete:', isVideoComplete, 'forceHypercoreStream:', forceHypercoreStream, 'streamingMode:', !isVideoComplete)
         console.log('[HlsTranscoder] Attempting HypercoreStreamReader for large video...')
         try {
           const blobsCore = store.get(Buffer.from(blobsCoreKey, 'hex'))
           await blobsCore.ready()
 
-          const hypercoreStreamReader = new HypercoreStreamReader(blobsCore, blobInfo)
+          const hypercoreStreamReader = new HypercoreStreamReader(blobsCore, blobInfo, {
+            streamingMode: !isVideoComplete
+          })
           await hypercoreStreamReader.initialize()
 
           inputIO = hypercoreStreamReader.createIOContext(ffmpeg)

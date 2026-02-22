@@ -113,6 +113,8 @@
  * @property {string} [channelKey] - Channel key
  * @property {number} [duration] - Duration in seconds
  * @property {string} [thumbnail] - Thumbnail path
+ * @property {number} [width] - Video width in pixels
+ * @property {number} [height] - Video height in pixels
  */
 
 export const FEED_TOPIC_STRING = 'peartube-public-feed-v1';

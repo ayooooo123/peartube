@@ -1089,6 +1089,8 @@ async function probeWithBareFFmpeg(url) {
     duration: 0,
     fileSize: 0,
     moovAtEnd: false,
+    width: 0,
+    height: 0,
   }
 
   let inputIO = null
@@ -1125,6 +1127,8 @@ async function probeWithBareFFmpeg(url) {
 
     if (videoStream?.codecParameters) {
       const cp = videoStream.codecParameters
+      result.width = cp.width || 0
+      result.height = cp.height || 0
       result.videoCodec = cp.codecName?.toLowerCase() || mapCodecIdToName(cp.id, 'video')
       if (cp.profile !== undefined && cp.profile >= 0) {
         result.videoProfile = H264_PROFILE_NAME_MAP.get(cp.profile) || String(cp.profile)

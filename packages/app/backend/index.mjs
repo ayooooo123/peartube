@@ -1853,6 +1853,9 @@ rpc.onCastDisconnect(async () => {
 let activeCastTranscodeId = null
 let activeCastSourceKey = null
 
+// Stall detector for HLS segment generation during cast
+let castStallMonitor = null
+
 // Track which HLS sessions have already sent LOAD to Chromecast
 // Key: sessionId, Value: true
 const hlsSessionsWithLoadSent = new Map()
@@ -1879,6 +1882,12 @@ rpc.onCastPlay(async (req) => {
   }
 
   castPlayInProgress = true
+
+    // Clear any existing stall monitor from a previous cast (avoid duplicates)
+    if (castStallMonitor) {
+      clearInterval(castStallMonitor)
+      castStallMonitor = null
+    }
   lastCastPlayTime = now
 
   try {
@@ -2114,6 +2123,41 @@ rpc.onCastPlay(async (req) => {
       console.log('[Backend] Cast play: Marked session', activeCastTranscodeId, 'as LOAD sent')
     }
 
+    // Start stall detector for HLS segment generation
+    if (activeCastTranscodeId && contentType === 'application/x-mpegurl') {
+      // Clear any previous stall monitor before starting new one
+      if (castStallMonitor) {
+        clearInterval(castStallMonitor)
+        castStallMonitor = null
+      }
+      let lastStallSegmentCount = 0
+      let stallCheckCount = 0
+      const monitorSessionId = activeCastTranscodeId
+      castStallMonitor = setInterval(() => {
+        try {
+          const status = hlsTranscoder.getHlsStatus(monitorSessionId)
+          if (status && status.segments !== undefined) {
+            if (status.segments > lastStallSegmentCount) {
+              lastStallSegmentCount = status.segments
+              stallCheckCount = 0
+            } else {
+              stallCheckCount++
+              if (stallCheckCount >= 3) {
+                console.warn('[Backend] Cast stall detected: no new segments for ' + (stallCheckCount * 10) + 's')
+              }
+              if (stallCheckCount >= 6) {
+                console.error('[Backend] Cast stall critical: no new segments for 60s, notifying frontend')
+                clearInterval(castStallMonitor)
+                castStallMonitor = null
+                rpc.eventLog?.({ message: '[Cast] Stall detected: no new segments for 60s' })
+              }
+            }
+          }
+        } catch (e) { /* ignore stall check errors */ }
+      }, 10000)
+      console.log('[Backend] Cast play: Started stall monitor for session', monitorSessionId)
+    }
+
     // Update debounce time AFTER load completes (not at start) to properly gate subsequent calls
     lastCastPlayTime = Date.now()
 
@@ -2158,6 +2202,13 @@ rpc.onCastStop(async () => {
   try {
     await castContext.stop()
     castProxySessions.clear()
+
+    // Cleanup stall monitor
+    if (castStallMonitor) {
+      clearInterval(castStallMonitor)
+      castStallMonitor = null
+      console.log('[Backend] Cast stop: Cleared stall monitor')
+    }
 
     // Cleanup active transcode session (try HLS first, then legacy)
     if (activeCastTranscodeId) {

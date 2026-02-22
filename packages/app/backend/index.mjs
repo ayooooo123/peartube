@@ -1951,14 +1951,17 @@ rpc.onCastPlay(async (req) => {
         syncStatus = null
       }
 
-      console.log('[Backend] Cast play: starting HLS transcode (always-on for Chromecast)...')
+      console.log('[Backend] Cast play: starting HLS transcode with progressive streaming...')
       const result = await hlsTranscoder.startHlsTranscode(requestedUrl, {
         title: req.title || '',
         store: ctx.store,
         sourceKey: requestedKey,
-        // Reliability-first for Chromecast: avoid progressive EOF starvation
-        // by waiting for complete source availability before FFmpeg reads.
-        isVideoComplete: true,
+        // Use actual sync status to determine if video is complete
+        isVideoComplete,
+        // Enable progressive streaming for better responsiveness
+        forceProgressive: true,
+        // Force Hypercore stream reader for P2P efficiency
+        forceHypercoreStream: true,
         // Force full transcode path for Chromecast stability. Some "compatible"
         // sources fail in remux mode on real devices.
         forceFullTranscode: true,
@@ -1992,7 +1995,7 @@ rpc.onCastPlay(async (req) => {
         const MIN_SEGMENTS = 1
         // Reliability over startup speed: allow long initial preparation when
         // source data must fully download before transcode starts.
-        const MAX_WAIT_MS = 15 * 60 * 1000
+        const MAX_WAIT_MS = 60 * 1000
         const POLL_INTERVAL_MS = 500
         console.log('[Backend] Cast play: Waiting for', MIN_SEGMENTS, 'HLS segments...')
 

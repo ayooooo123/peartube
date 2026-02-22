@@ -565,7 +565,7 @@ async function handleHttpRequest(req, res) {
       res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,OPTIONS')
       res.setHeader('Access-Control-Allow-Headers', 'Range')
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length,Content-Range,Accept-Ranges')
-      res.setHeader('Connection', 'close')
+      res.setHeader('Connection', 'keep-alive')
     } catch (headerErr) {
       console.error('[HlsTranscoder] Failed to set CORS headers:', headerErr?.message)
     }

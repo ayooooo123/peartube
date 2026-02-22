@@ -227,7 +227,8 @@ export function VideoPlayerOverlay() {
   const isWindowLandscape = screenWidth > screenHeight
 
   // Always use 16:9 for video height calculation - don't special case PiP
-  const videoHeight = Math.round(screenWidth * 9 / 16)
+  const effectiveAR = videoAspectRatio || 16 / 9
+  const videoHeight = Math.min(Math.round(screenWidth / effectiveAR), Math.round(screenHeight * 0.65))
 
   const pipLayoutLastLogAtRef = useRef(0)
   const pipLayoutLastPayloadRef = useRef<string | null>(null)

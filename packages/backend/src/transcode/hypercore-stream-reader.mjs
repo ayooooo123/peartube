@@ -27,6 +27,7 @@ const INITIAL_PREFETCH_BLOCKS = 512 // Prefetch 32MB initially
 const TAIL_PREFETCH_BLOCKS = 64 // Prefetch 4MB from tail (for MKV cues)
 const INDEX_SAMPLE_INTERVAL = 1024 * 1024 // Sample every 1MB for block boundary index
 const LOOKAHEAD_BLOCKS = 512 // Prefetch 32MB ahead of read position
+const STREAMING_MODE_LOOKAHEAD_BLOCKS = 200 // Smaller, tighter look-ahead window for streaming mode
 const PREFETCH_BATCH_SIZE = 64 // How many blocks to request at once
 
 export class HypercoreStreamReader {
@@ -38,7 +39,8 @@ export class HypercoreStreamReader {
    * @param {number} blobInfo.byteOffset - Absolute byte offset in hypercore
    * @param {number} blobInfo.byteLength - Total byte length of blob
    */
-  constructor(blobsCore, blobInfo) {
+  constructor(blobsCore, blobInfo, options = {}) {
+    const { streamingMode = false } = options
     console.log('[HypercoreStreamReader] Constructor called with blobInfo:', JSON.stringify(blobInfo))
     this.core = blobsCore
     this.startBlock = blobInfo.blockOffset
@@ -75,6 +77,8 @@ export class HypercoreStreamReader {
     this.initialized = false
     this._destroyed = false
     this._fullyLocalMode = false // When true, no eviction - all blocks stay in cache
+    this.streamingMode = streamingMode
+    this._lookaheadBlocks = this.streamingMode ? STREAMING_MODE_LOOKAHEAD_BLOCKS : LOOKAHEAD_BLOCKS
 
     // Look-ahead prefetch state using Hypercore's download() API
     this._downloadRange = null
@@ -91,6 +95,7 @@ export class HypercoreStreamReader {
   async initialize() {
     console.log('[HypercoreStreamReader] Initializing...')
     console.log('[HypercoreStreamReader] Total blocks:', this.blockCount, 'Total size:', Math.round(this.totalSize / 1024 / 1024) + 'MB')
+    console.log('[HypercoreStreamReader] Streaming mode:', this.streamingMode, 'wait:', this.streamingMode ? 'true+timeout' : 'false')
     const startTime = Date.now()
 
     // Check if all blocks are available locally using core.has()
@@ -101,7 +106,11 @@ export class HypercoreStreamReader {
     console.log('[HypercoreStreamReader] Building block boundary index...')
     await this._buildBlockIndex()
 
-    if (isFullyLocal) {
+    if (this.streamingMode) {
+      this._fullyLocalMode = false
+    }
+
+    if (isFullyLocal && !this.streamingMode) {
       // ALL blocks are local - load them all into cache
       // This is CRITICAL: FFmpeg does NOT handle EAGAIN/retry properly
       // We MUST have all blocks cached before FFmpeg starts reading
@@ -299,7 +308,10 @@ export class HypercoreStreamReader {
     if (blockIndex < this.startBlock || blockIndex >= this.endBlock) return false
 
     try {
-      const data = await this.core.get(blockIndex, { wait: false })
+      const getOptions = this.streamingMode
+        ? { wait: true, timeout: 10000 }
+        : { wait: false }
+      const data = await this.core.get(blockIndex, getOptions)
 
       if (this._destroyed) return false
 
@@ -350,7 +362,7 @@ export class HypercoreStreamReader {
       this._downloadRange = null
     }
     
-    const endBlock = Math.min(fromBlock + LOOKAHEAD_BLOCKS, this.endBlock)
+    const endBlock = Math.min(fromBlock + this._lookaheadBlocks, this.endBlock)
     
     // Use Hypercore's download() to prefetch the range
     // This is the same approach used by hyperblobs Prefetcher
@@ -657,6 +669,14 @@ export class HypercoreStreamReader {
       seekCount: this.seekCount,
       indexSamples: this.blockBoundaries.length,
       progress: Math.round((this.position / this.totalSize) * 100)
+    }
+  }
+
+  setStreamingMode(enabled) {
+    this.streamingMode = Boolean(enabled)
+    this._lookaheadBlocks = this.streamingMode ? STREAMING_MODE_LOOKAHEAD_BLOCKS : LOOKAHEAD_BLOCKS
+    if (this.streamingMode) {
+      this._fullyLocalMode = false
     }
   }
 

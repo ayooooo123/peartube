@@ -112,7 +112,7 @@ function ThumbnailImageComponent({
         <Image
           source={imageSource}
           style={styles.image}
-          resizeMode="cover"
+          resizeMode="contain"
           onError={handleError}
           onLoadStart={handleLoadStart}
           onLoadEnd={handleLoadEnd}
@@ -162,6 +162,7 @@ const styles = StyleSheet.create({
   },
   image: {
     ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#0e0e10',
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,

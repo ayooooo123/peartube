@@ -222,14 +222,15 @@ const styles: Record<string, React.CSSProperties> = {
     position: 'relative',
     width: '100%',
     aspectRatio: '16 / 9',
-    backgroundColor: colors.bgSecondary,
+    backgroundColor: '#0e0e10',
     borderRadius: 12,
     overflow: 'hidden',
   },
   thumbnail: {
     width: '100%',
     height: '100%',
-    objectFit: 'cover',
+    objectFit: 'contain',
+    backgroundColor: '#0e0e10',
   },
   thumbnailPlaceholder: {
     width: '100%',

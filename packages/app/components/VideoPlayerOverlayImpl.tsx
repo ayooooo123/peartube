@@ -281,7 +281,11 @@ export function VideoPlayerOverlay() {
 
   // Desktop video dimensions (YouTube-style - video takes ~70% width, max 1280px)
   const desktopVideoWidth = Math.min(screenWidth * 0.65, 1280)
-  const desktopVideoHeight = Math.round(desktopVideoWidth * 9 / 16)
+  const desktopVideoHeightRaw = Math.round(desktopVideoWidth / effectiveAR)
+  const desktopVideoHeight = effectiveAR < 1
+    ? Math.min(desktopVideoHeightRaw, Math.round(screenHeight * 0.8))
+    : desktopVideoHeightRaw
+  const dynMiniWidth = Math.min(Math.round(MINI_PIP_HEIGHT * effectiveAR), MINI_PIP_WIDTH)
 
   useEffect(() => {
     if (!currentVideo || playerMode === 'hidden') return
@@ -636,10 +640,11 @@ export function VideoPlayerOverlay() {
    // Real device screen dimensions — independent of PiP window resize.
    // Android system PiP: Activity stays fullscreen at compositor level,
    // so layout must use real screen size, not PiP-sized window dimensions.
-   const realScreenWidthShared = useSharedValue(screenMetrics.width)
-   const realScreenHeightShared = useSharedValue(screenMetrics.height)
-   const videoHeightShared = useSharedValue(videoHeight)
-   const videoWrapperHeightShared = useSharedValue(videoHeight)
+    const realScreenWidthShared = useSharedValue(screenMetrics.width)
+    const realScreenHeightShared = useSharedValue(screenMetrics.height)
+    const videoHeightShared = useSharedValue(videoHeight)
+    const miniPipDynWidthShared = useSharedValue(dynMiniWidth)
+    const videoWrapperHeightShared = useSharedValue(videoHeight)
    const insetTopShared = useSharedValue(insets.top)
    const insetBottomShared = useSharedValue(insets.bottom)
     // Stable inset refs — Android PiP enter/exit can transiently report insetTop=0.
@@ -701,7 +706,7 @@ export function VideoPlayerOverlay() {
    const frozenInsetBottomShared = useSharedValue(insets.bottom)
   
   // Mini player position: fixed bottom-right corner (no drag/snap)
-  const miniPipX = useSharedValue(screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN)
+  const miniPipX = useSharedValue(screenWidth - dynMiniWidth - MINI_PIP_MARGIN)
   const miniPipY = useSharedValue(screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - TAB_BAR_HEIGHT - insets.bottom)
 
   // Track whether gesture started in fullscreen (1) or mini (0) mode
@@ -753,8 +758,9 @@ export function VideoPlayerOverlay() {
     windowWidthShared.value = windowWidth
     windowHeightShared.value = windowHeight
     realScreenWidthShared.value = screenMetrics.width
-    realScreenHeightShared.value = screenMetrics.height
+   realScreenHeightShared.value = screenMetrics.height
    videoHeightShared.value = videoHeight
+   miniPipDynWidthShared.value = dynMiniWidth
    insetTopShared.value = stableInsetTopRef.current
    insetBottomShared.value = stableInsetBottomRef.current
    // Only update frozen values when NOT in PiP (or PiP-like transition) —
@@ -784,9 +790,9 @@ export function VideoPlayerOverlay() {
 
   useEffect(() => {
     if (playerMode !== 'mini') return
-    miniPipX.value = screenWidth - MINI_PIP_WIDTH - MINI_PIP_MARGIN
+    miniPipX.value = screenWidth - dynMiniWidth - MINI_PIP_MARGIN
     miniPipY.value = screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottom
-  }, [playerMode, screenWidth, screenHeight, miniPlayerBottom])
+  }, [playerMode, screenWidth, screenHeight, miniPlayerBottom, dynMiniWidth])
 
   // When exiting landscape fullscreen, keep rendering the fullscreen container until window dimensions AND insets settle.
   // The tricky part: StatusBar visibility + safe area insets can lag behind the orientation lock by a few frames.
@@ -1061,7 +1067,7 @@ export function VideoPlayerOverlay() {
     const width = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PIP_WIDTH, screenWidthShared.value],
+      [miniPipDynWidthShared.value, screenWidthShared.value],
       Extrapolation.CLAMP
     )
 

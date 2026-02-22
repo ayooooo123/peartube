@@ -1490,7 +1490,7 @@ rpc.onUploadVideo(async (req: any) => {
   // Probe video dimensions
   let videoDimensions = { width: 0, height: 0 };
   try {
-    const dimProbe = await transcoder.probeMedia(uploadPath, req.title);
+    const dimProbe = await transcoder.probeMedia(uploadPath, req.title) as any;
     videoDimensions = { width: dimProbe.width || 0, height: dimProbe.height || 0 };
   } catch (err: any) {
     console.warn('[Worker] Dimension probe failed (non-fatal):', err?.message || err);

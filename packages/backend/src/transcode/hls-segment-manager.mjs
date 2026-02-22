@@ -489,6 +489,7 @@ export class HlsSegmentManager {
         '#EXT-X-VERSION:3',
         '#EXT-X-TARGETDURATION:4',
         '#EXT-X-MEDIA-SEQUENCE:0',
+        '#EXT-X-START:TIME-OFFSET=0,PRECISE=YES',
         ''
       ].join('\n')
     }
@@ -512,7 +513,8 @@ export class HlsSegmentManager {
       '#EXT-X-VERSION:3',
       '#EXT-X-PLAYLIST-TYPE:EVENT',
       `#EXT-X-TARGETDURATION:${targetDuration}`,
-      `#EXT-X-MEDIA-SEQUENCE:${firstSegmentIndex}`
+      `#EXT-X-MEDIA-SEQUENCE:${firstSegmentIndex}`,
+      '#EXT-X-START:TIME-OFFSET=0,PRECISE=YES'
     ]
 
     for (const segment of playlistSegments) {

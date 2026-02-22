@@ -1487,11 +1487,20 @@ rpc.onUploadVideo(async (req: any) => {
     }
   }
 
+  // Probe video dimensions
+  let videoDimensions = { width: 0, height: 0 };
+  try {
+    const dimProbe = await transcoder.probeMedia(uploadPath, req.title);
+    videoDimensions = { width: dimProbe.width || 0, height: dimProbe.height || 0 };
+  } catch (err: any) {
+    console.warn('[Worker] Dimension probe failed (non-fatal):', err?.message || err);
+  }
+
   // Upload the file to Hyperblobs
   const result = await uploadManager.uploadFromPath(
     channel,
     uploadPath,
-    { title: req.title, description: req.description, mimeType },
+    { title: req.title, description: req.description, mimeType, width: videoDimensions.width, height: videoDimensions.height },
     fs,
     (progress: number, bytesWritten: number, totalBytes: number, stats?: { speed?: number; eta?: number }) => {
       try {

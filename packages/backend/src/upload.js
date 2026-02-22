@@ -144,6 +144,8 @@ function getExtensionForMime(mimeType) {
  * @property {number} [duration] - Video duration in seconds
  * @property {string} [thumbnail] - Thumbnail blob ID
  * @property {string} [category] - Video category
+ * @property {number} [width] - Video width in pixels
+ * @property {number} [height] - Video height in pixels
  */
 
 /**
@@ -185,7 +187,7 @@ export function createUploadManager({ ctx }) {
      * @returns {Promise<UploadResult>}
      */
     async uploadFromPath(channel, filePath, options, fs, onProgress) {
-      const { title, description = '', mimeType: providedMimeType, duration, thumbnail, category = '' } = options;
+      const { title, description = '', mimeType: providedMimeType, duration, thumbnail, category = '', width = 0, height = 0 } = options;
 
       try {
         if (!channel.blobs) {
@@ -287,7 +289,9 @@ export function createUploadManager({ ctx }) {
           blobsCoreKey: channel.blobsKeyHex, // Which device's blobs core has this video
           duration,
           thumbnail,
-          category: String(category || '')
+          category: String(category || ''),
+          width,
+          height
         };
 
         // Store metadata in Autobase
@@ -319,7 +323,7 @@ export function createUploadManager({ ctx }) {
      * @returns {Promise<UploadResult>}
      */
     async uploadFromBuffer(channel, buffer, options, onProgress) {
-      const { title, description = '', mimeType: providedMimeType, duration, thumbnail, category = '' } = options;
+      const { title, description = '', mimeType: providedMimeType, duration, thumbnail, category = '', width = 0, height = 0 } = options;
 
       try {
         if (!channel.blobs) {
@@ -357,7 +361,9 @@ export function createUploadManager({ ctx }) {
           blobsCoreKey: channel.blobsKeyHex, // Which device's blobs core has this video
           duration,
           thumbnail,
-          category: String(category || '')
+          category: String(category || ''),
+          width,
+          height
         };
 
         // Store metadata in Autobase

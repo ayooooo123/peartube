@@ -59,7 +59,7 @@
     "hypercore-blob-server": "^1.12.0",
     "hypercore-byte-stream": "^2.0.2",
     "hypercore-crypto": "^3.6.0",
-    "hyperdb": "^5.0.1",
+    "hyperdb": "^6.0.0",
     "hyperdispatch": "^1.4.2",
     "hyperdrive": "^13.2.0",
     "hyperswarm": "^4.16.0",

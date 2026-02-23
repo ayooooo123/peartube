@@ -228,7 +228,9 @@ export function VideoPlayerOverlay() {
 
   // Always use 16:9 for video height calculation - don't special case PiP
   const effectiveAR = videoAspectRatio || 16 / 9
-  const videoHeight = Math.min(Math.round(screenWidth / effectiveAR), Math.round(screenHeight * 0.65))
+  const videoHeight = effectiveAR < 1
+    ? Math.min(Math.round(screenWidth / effectiveAR), Math.round(screenHeight * 0.65))
+    : Math.round(screenWidth / effectiveAR)
 
   const pipLayoutLastLogAtRef = useRef(0)
   const pipLayoutLastPayloadRef = useRef<string | null>(null)

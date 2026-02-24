@@ -1438,6 +1438,14 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           } else if (videoStats) {
             // Keep stats fresh for cached videos so upload speeds can update.
             videoStats.emitStats(driveKey, videoPath, true) // force=true for cached videos
+            // Clean up any stale download intent and register as seed (video is already fully cached)
+            deleteDownloadIntent(ctx, driveKey, videoPath).catch(() => {})
+            if (seedingManager) {
+              seedingManager.addSeed(driveKey, videoPath, 'watched', {
+                blockLength: totalBlocks,
+                byteLength: totalBytes
+              }).catch(() => {})
+            }
           }
 
           return {

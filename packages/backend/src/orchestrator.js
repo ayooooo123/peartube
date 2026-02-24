@@ -21,6 +21,17 @@ import { derivePrimaryKey } from './peartube-identity.js';
 import { initFileLogger } from './logger.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/hls-transcoder.mjs';
 
+// Shutdown flag to prevent deferred init from running during cleanup
+let isShuttingDown = false;
+
+/**
+ * Set the shutdown flag to prevent deferred background init from running
+ * @param {boolean} value - Whether the backend is shutting down
+ */
+export function setIsShuttingDown(value) {
+  isShuttingDown = value;
+}
+
 /**
  * @typedef {Object} BackendConfig
  * @property {string} storagePath - Path to storage directory
@@ -68,10 +79,26 @@ async function warmChannels(ctx, channelKeys, label) {
  * @returns {Promise<BackendContext>} - All backend components
  */
 export async function createBackendContext(config) {
-  const { storagePath, blobServerHost, blobServerBindHost, onFeedUpdate, onStatsUpdate } = config;
+  const {
+    storagePath,
+    blobServerHost,
+    blobServerBindHost,
+    onFeedUpdate,
+    onStatsUpdate,
+    corestoreWaitForLock = false,
+    ipcLog: _ipcLog
+  } = config;
+
+  const ipcLog = typeof _ipcLog === 'function' ? _ipcLog : () => {}
+
+  const defer =
+    typeof setImmediate === 'function'
+      ? setImmediate
+      : (fn) => setTimeout(fn, 0)
 
   console.log('[Orchestrator] ===== INITIALIZING BACKEND =====');
   console.log('[Orchestrator] Storage path:', storagePath);
+  ipcLog('[orchestrator] reading identity key file')
 
   let primaryKey = null;
   const identityKeyData = await readIdentityKeyFile(storagePath);
@@ -82,8 +109,80 @@ export async function createBackendContext(config) {
     console.log('[Orchestrator] No identity key file, Corestore will use random primaryKey');
   }
 
-  const ctx = await initializeStorage({ storagePath, blobServerHost, blobServerBindHost, primaryKey });
-  console.log('[Orchestrator] Storage initialized, blob server port:', ctx.blobServerPort);
+  const isCorestoreSeedMismatch = (err) => {
+    const message = err instanceof Error ? err.message : String(err || '')
+    return message.includes('Another corestore is stored here')
+  }
+
+  const isCorestoreLockError = (err) => {
+    const message = (err instanceof Error ? err.message : String(err || '')).toLowerCase()
+    return message.includes('file descriptor could not be locked') ||
+      (message.includes('corestore') && message.includes('locked'))
+  }
+
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  const initializeStorageWithRetry = async (opts) => {
+    const maxAttempts = 10
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await initializeStorage(opts)
+      } catch (err) {
+        if (!isCorestoreLockError(err) || attempt === maxAttempts) throw err
+        const backoffMs = Math.min(350 * attempt, 3000)
+        console.warn(`[Orchestrator] Corestore lock detected during init. Retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`)
+        await delay(backoffMs)
+      }
+    }
+  }
+
+  let ctx
+  ipcLog('[orchestrator] initializeStorage starting')
+  try {
+    ctx = await initializeStorageWithRetry({
+      storagePath,
+      blobServerHost,
+      blobServerBindHost,
+      primaryKey,
+      corestoreWaitForLock
+    });
+  } catch (err) {
+    if (!primaryKey || !isCorestoreSeedMismatch(err)) throw err
+
+    console.warn('[Orchestrator] Identity key file primaryKey mismatches existing Corestore seed. Falling back to stored Corestore seed.')
+    
+    // Close the first store before retrying to avoid self-deadlock
+    try {
+      if (ctx?.store) {
+        await ctx.store.close()
+      }
+    } catch (closeErr) {
+      console.warn('[Orchestrator] Error closing store before seed mismatch retry:', closeErr?.message)
+    }
+    
+    ctx = await initializeStorageWithRetry({
+      storagePath,
+      blobServerHost,
+      blobServerBindHost,
+      primaryKey: null,
+      corestoreWaitForLock
+    })
+
+    try {
+      const identityPublicKey = identityKeyData?.identityPublicKey
+      if (ctx?.store?.primaryKey && identityPublicKey) {
+        await writeIdentityKeyFile(storagePath, {
+          primaryKey: ctx.store.primaryKey,
+          identityPublicKey
+        })
+        console.log('[Orchestrator] Rewrote identity key file to match existing Corestore seed')
+      }
+    } catch (persistErr) {
+      console.warn('[Orchestrator] Failed to persist reconciled identity key file:', persistErr?.message)
+    }
+  }
+
+  ipcLog('[orchestrator] storage initialized, port: ' + ctx.blobServerPort)
 
   try {
     const _fs = (await import('bare-fs')).default
@@ -95,6 +194,7 @@ export async function createBackendContext(config) {
   } catch (err) {
     console.log('[Orchestrator] File logger setup skipped:', err?.message)
   }
+  ipcLog('[orchestrator] managers creating')
 
   // Phase 2: Create managers (synchronous, fast)
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb);
@@ -117,9 +217,11 @@ export async function createBackendContext(config) {
     console.log('[Orchestrator] Swarm connection received, passing to publicFeed.handleConnection');
     publicFeed.handleConnection(conn, info);
   });
+  ipcLog('[orchestrator] seedingManager.init starting')
 
   // Phase 5: Initialize seeding manager (fast - just loads config from db)
   await seedingManager.init();
+  ipcLog('[orchestrator] seedingManager.init done')
 
   // Phase 5.5: Load transcode settings (optional)
   try {
@@ -145,11 +247,12 @@ export async function createBackendContext(config) {
     console.log('[Orchestrator] Transcode settings load skipped:', e?.message);
   }
 
-  // Phase 6: Load identities (fast - reads from disk, needed before eventReady)
-  console.log('[Orchestrator] Loading identities...');
+  ipcLog('[orchestrator] loadIdentities starting')
   await identityManager.loadIdentities();
+  ipcLog('[orchestrator] loadIdentities done')
 
   // Phase 6.5: Start public feed discovery immediately so UIs can get updates without waiting
+  ipcLog('[orchestrator] publicFeed.start starting')
   try {
     await publicFeed.start();
     try {
@@ -160,6 +263,7 @@ export async function createBackendContext(config) {
   } catch (e) {
     console.error('[Orchestrator] Public feed start failed:', e?.message);
   }
+  ipcLog('[orchestrator] publicFeed.start done')
 
   // Phase 7: Create unified API
   const api = createApi({
@@ -187,46 +291,50 @@ export async function createBackendContext(config) {
     }
   };
 
-  console.log('[Orchestrator] ===== BACKEND READY =====');
+  ipcLog('[orchestrator] ===== BACKEND READY =====')
   console.log('[Orchestrator] Identities loaded:', identityManager.getIdentities().length);
 
   // Phase 8: Heavy initialization in background (non-blocking)
   // Drive warming and feed discovery can happen after UI is ready
-  const defer =
-    typeof setImmediate === 'function'
-      ? setImmediate
-      : (fn) => setTimeout(fn, 0)
-
   defer(async () => {
+    // Early return if shutdown was initiated during deferred init setup
+    if (isShuttingDown) {
+      console.log('[Orchestrator] Deferred init aborted: shutdown in progress')
+      return
+    }
+    
     try {
       // Load channels in the background.
       // This can be slow (sync + metadata replay) and should NOT block worker init.
+      if (isShuttingDown) return
       try {
-        await identityManager.loadChannelDrives();
+        await identityManager.loadChannelDrives()
       } catch (e) {
-        console.error('[Orchestrator] Identity background init error:', e?.message);
+        console.error('[Orchestrator] Identity background init error:', e?.message)
       }
 
       // Start public feed discovery
       // Warm subscribed / pinned / seeding channels (can be slow)
+      if (isShuttingDown) return
       try {
-        const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || [];
-        const subscriptionKeys = subs.map((s) => s.driveKey).filter(Boolean);
-        const pinnedKeys = seedingManager.getPinnedChannels?.() || [];
-        const seedKeys = seedingManager.getActiveSeeds?.().map((s) => s.driveKey).filter(Boolean) || [];
-        await warmChannels(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds');
+        const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || []
+        const subscriptionKeys = subs.map((s) => s.driveKey).filter(Boolean)
+        const pinnedKeys = seedingManager.getPinnedChannels?.() || []
+        const seedKeys = seedingManager.getActiveSeeds?.().map((s) => s.driveKey).filter(Boolean) || []
+        await warmChannels(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds')
         // Skip prefetch - it was causing errors and slowing things down
       } catch (e) {
-        console.log('[Orchestrator] Warm-up skipped:', e?.message);
+        console.log('[Orchestrator] Warm-up skipped:', e?.message)
       }
 
-      console.log('[Orchestrator] ===== BACKGROUND INIT COMPLETE =====');
-      console.log('[Orchestrator] Channels cached:', ctx.channels?.size || 0);
-      console.log('[Orchestrator] Swarm connections:', ctx.swarm.connections.size);
+      if (isShuttingDown) return
+      console.log('[Orchestrator] ===== BACKGROUND INIT COMPLETE =====')
+      console.log('[Orchestrator] Channels cached:', ctx.channels?.size || 0)
+      console.log('[Orchestrator] Swarm connections:', ctx.swarm.connections.size)
     } catch (e) {
-      console.error('[Orchestrator] Background init error:', e?.message);
+      console.error('[Orchestrator] Background init error:', e?.message)
     }
-  });
+  })
 
   return result;
 }

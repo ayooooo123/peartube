@@ -216,6 +216,7 @@ export async function createBackendContext(config) {
 
   // Phase 2: Create managers (synchronous, fast)
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb);
+  ctx.publicFeed = publicFeed
   const videoStats = new VideoStatsTracker();
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb);
   const identityManager = createIdentityManager({ ctx });

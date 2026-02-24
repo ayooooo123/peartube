@@ -763,8 +763,14 @@ export class MultiWriterChannel extends ReadyResource {
       this._blobsCore = null
       this.blobs = null
     }
-    if (this.view) await this.view.close()
-    if (this.base) await this.base.close()
+    if (this.view) {
+      try { await this.view.close() } catch {}
+      this.view = null
+    }
+    if (this.base) {
+      try { await this.base.close() } catch {}
+      this.base = null
+    }
   }
 
   async _applyOp(op, view, host, node) {

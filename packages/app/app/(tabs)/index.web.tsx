@@ -274,6 +274,7 @@ function WatchPageView({
   const [editingVideo, setEditingVideo] = useState<any>(null)
   const [videoRefreshData, setVideoRefreshData] = useState<any>(null)
   const isOwner = identity?.driveKey === channelKey
+  const publicBeeKey = (video as any)?.publicBeeKey || undefined
 
   // Reset refresh data when video changes
   useEffect(() => { setVideoRefreshData(null) }, [video?.id, channelKey])
@@ -495,7 +496,6 @@ function WatchPageView({
 
   const [reactionCounts, setReactionCounts] = useState<Record<string, number>>({})
   const [userReaction, setUserReaction] = useState<string | null>(null)
-  const publicBeeKey = (video as any)?.publicBeeKey || undefined
 
   // Download state
   const downloadId = video ? `${channelKey}:${video.id || video.path}` : null

@@ -92,21 +92,19 @@ export function VideoEditModal({ visible, video, channelKey, onClose, onSaved }:
       setError(null)
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        base64: true,
       })
 
       if (result.canceled || !result.assets?.[0]) return
 
       const asset = result.assets[0]
-      if (!asset.base64) {
-        setError('Unable to read image data')
+      if (!asset.uri) {
+        setError('Unable to read image path')
         return
       }
 
-      const thumbRes = await (rpc as any).setVideoThumbnail({
+      const thumbRes = await (rpc as any).setVideoThumbnailFromFile({
         videoId: video.id,
-        imageData: asset.base64,
-        mimeType: asset.mimeType || 'image/jpeg',
+        filePath: asset.uri,
       })
 
       if (!thumbRes?.success) {

@@ -337,6 +337,25 @@ ns.register({
   ]
 })
 
+ns.register({
+  name: 'update-video-metadata-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'title', type: 'string', required: false },
+    { name: 'description', type: 'string', required: false },
+    { name: 'category', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'update-video-metadata-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
 // ============================================
 // Subscription Types
 // ============================================
@@ -2586,6 +2605,12 @@ rpcNs.register({
   name: 'get-video-recommendations',
   request: { name: '@peartube/get-video-recommendations-request', stream: false },
   response: { name: '@peartube/get-video-recommendations-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'update-video-metadata',
+  request: { name: '@peartube/update-video-metadata-request', stream: false },
+  response: { name: '@peartube/update-video-metadata-response', stream: false }
 })
 
 // Save HRPC interface to disk

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "empty",
@@ -5011,6 +5011,64 @@
           "required": false,
           "type": "string",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "update-video-metadata-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "description",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "category",
+          "required": false,
+          "type": "string",
+          "version": 2
+        }
+      ]
+    },
+    {
+      "name": "update-video-metadata-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 2
         }
       ]
     }

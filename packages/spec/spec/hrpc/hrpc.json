@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "id": 0,
@@ -1267,6 +1267,19 @@
         "stream": false
       },
       "version": 2
+    },
+    {
+      "id": 100,
+      "name": "@peartube/update-video-metadata",
+      "request": {
+        "name": "@peartube/update-video-metadata-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/update-video-metadata-response",
+        "stream": false
+      },
+      "version": 3
     }
   ]
 }

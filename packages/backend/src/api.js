@@ -234,23 +234,104 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       }
     },
 
-    /**
-     * Update channel metadata
-     * @param {string} driveKey
-     * @param {string} name
-     * @param {string} [description]
-     * @returns {Promise<{success: boolean}>}
-     */
-    async updateChannel(driveKey, name, description) {
+    async updateChannel(driveKey, { name, description, avatar } = {}) {
       console.log('[API] UPDATE_CHANNEL:', driveKey?.slice(0, 16));
       try {
         const channel = await loadChannel(ctx, driveKey)
-        await channel.updateMetadata({ name, description: description || '', avatar: null })
-        await markAsMultiWriterChannel(driveKey)
+        const updates = {}
+        if (name !== undefined) updates.name = name
+        if (description !== undefined) updates.description = description
+        if (avatar !== undefined) updates.avatar = avatar
+        await channel.updateMetadata(updates)
+        invalidateChannelCaches(driveKey)
+        const meta = await channel.getMetadata?.() || {}
+        return {
+          success: true,
+          channel: {
+            name: meta.name || name,
+            description: meta.description || description,
+            avatar: meta.avatar || avatar
+          }
+        }
+      } catch (err) {
+        console.error('[API] updateChannel error:', err?.message)
+        return { success: false, error: err?.message }
+      }
+    },
+
+    async updateVideoMetadata(channelKey, videoId, { title, description, category } = {}) {
+      console.log('[API] UPDATE_VIDEO_METADATA:', channelKey?.slice(0, 16), videoId)
+      try {
+        const channel = await loadChannel(ctx, channelKey)
+        const updates = {}
+        if (title !== undefined) updates.title = title
+        if (description !== undefined) updates.description = description
+        if (category !== undefined) updates.category = category
+        await channel.updateVideo(videoId, updates)
+        invalidateChannelCaches(channelKey)
         return { success: true }
       } catch (err) {
-        console.error('[API] UPDATE_CHANNEL error:', err.message);
-        return { success: false, error: err.message };
+        console.error('[API] updateVideoMetadata error:', err?.message)
+        return { success: false, error: err?.message }
+      }
+    },
+
+    async updateChannelAvatar(driveKey, imageBuffer, mimeType) {
+      console.log('[API] UPDATE_CHANNEL_AVATAR:', driveKey?.slice(0, 16))
+      try {
+        const channel = await loadChannel(ctx, driveKey)
+
+        const extensionByMime = {
+          'image/jpeg': 'jpg',
+          'image/png': 'png',
+          'image/webp': 'webp'
+        }
+        const ext = extensionByMime[mimeType] || 'png'
+        const avatarPath = `/avatars/channel.${ext}`
+
+        const imageData = b4a.isBuffer(imageBuffer) ? imageBuffer : b4a.from(imageBuffer || [])
+
+        let avatarUrl = null
+
+        if (channel?.drive && typeof channel.drive.put === 'function') {
+          await channel.drive.put(avatarPath, imageData)
+          if (ctx.blobServer && channel.drive.core?.key) {
+            const byteLength = imageData.byteLength || imageData.length || 0
+            avatarUrl = ctx.blobServer.getLink(channel.drive.core.key, {
+              blob: {
+                blockOffset: 0,
+                blockLength: channel.drive.core.length || 1,
+                byteOffset: 0,
+                byteLength
+              },
+              type: mimeType || 'image/png',
+              host: ctx.blobServerHost || '127.0.0.1',
+              port: ctx.blobServer?.port || ctx.blobServerPort
+            })
+          }
+        }
+
+        if (!avatarUrl) {
+          const blob = await channel.putBlob(imageData)
+          avatarUrl = ctx.blobServer.getLink(channel.blobsKey, {
+            blob: {
+              blockOffset: blob.blockOffset,
+              blockLength: blob.blockLength,
+              byteOffset: blob.byteOffset,
+              byteLength: blob.byteLength
+            },
+            type: mimeType || 'image/png',
+            host: ctx.blobServerHost || '127.0.0.1',
+            port: ctx.blobServer?.port || ctx.blobServerPort
+          })
+        }
+
+        await channel.updateMetadata({ avatar: avatarUrl })
+        invalidateChannelCaches(driveKey)
+        return { success: true, avatarUrl }
+      } catch (err) {
+        console.error('[API] updateChannelAvatar error:', err?.message)
+        return { success: false, error: err?.message }
       }
     },
 

@@ -228,8 +228,6 @@ export default function ChannelScreen() {
 
     const pickerResult = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      allowsEditing: true,
-      quality: 0.8,
       base64: true,
     })
 

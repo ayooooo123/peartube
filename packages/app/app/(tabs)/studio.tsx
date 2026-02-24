@@ -12,6 +12,7 @@ import * as VideoThumbnails from 'expo-video-thumbnails'
 import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+import { VideoEditModal } from '@/components/VideoEditModal'
 
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
@@ -63,6 +64,7 @@ export default function StudioScreen() {
   const thumbnailGenIdRef = useRef(0)
   const [pickingVideo, setPickingVideo] = useState(false)
   const pickingVideoRef = useRef(false)
+  const [editingVideo, setEditingVideo] = useState<any>(null)
 
   const uploadThumbnailForVideo = useCallback(async (videoId: string, thumbPath: string) => {
     if (!rpc || !videoId || !thumbPath) return false
@@ -730,6 +732,18 @@ export default function StudioScreen() {
               </Text>
             </View>
             <Pressable
+              onPress={() => setEditingVideo(item)}
+              style={({ pressed }) => ({
+                width: 44,
+                justifyContent: 'center',
+                alignItems: 'center',
+                opacity: pressed ? 0.6 : 1,
+                transform: [{ scale: pressed ? 0.85 : 1 }],
+              })}
+            >
+              <Feather name="edit-2" color={colors.text} size={18} />
+            </Pressable>
+            <Pressable
               onPress={() => handleDeleteVideo(item.id, item.title)}
               className="w-12 justify-center items-center active:opacity-60"
             >
@@ -737,6 +751,19 @@ export default function StudioScreen() {
             </Pressable>
           </View>
         )}
+      />
+
+      <VideoEditModal
+        visible={!!editingVideo}
+        video={editingVideo}
+        channelKey={identity?.driveKey || ''}
+        onClose={() => setEditingVideo(null)}
+        onSaved={() => {
+          setEditingVideo(null)
+          if (identity?.driveKey) {
+            loadVideos(identity.driveKey).catch(() => {})
+          }
+        }}
       />
     </View>
   )

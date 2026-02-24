@@ -3005,7 +3005,7 @@ rpc.onEventCastTimeUpdate?.(() => {});
 // Transcode RPC handlers
 // ============================================
 
-rpc.onTranscodeStart(async (req: any) => {
+rpc.onTranscodeStart?.(async (req: any) => {
   try {
     const sourceUrl = normalizeLocalUrlForWorker(req.sourceUrl);
     const cacheKey = buildTranscodeCacheKey(sourceUrl) || sourceUrl;
@@ -3053,7 +3053,7 @@ rpc.onTranscodeStart(async (req: any) => {
   }
 });
 
-rpc.onTranscodeStop(async (req: any) => {
+rpc.onTranscodeStop?.(async (req: any) => {
   try {
     const result = transcoder.stopTranscode(req.sessionId);
     transcodeSessions.delete(req.sessionId);
@@ -3065,7 +3065,7 @@ rpc.onTranscodeStop(async (req: any) => {
   }
 });
 
-rpc.onTranscodeStatus(async (req: any) => {
+rpc.onTranscodeStatus?.(async (req: any) => {
   try {
     const status = transcoder.getStatus(req.sessionId);
     return {

@@ -1334,10 +1334,46 @@ rpc.onGetChannel(async (req) => {
 rpc.onUpdateChannel(async (req) => {
   console.log('[HRPC] updateChannel')
   const active = identityManager.getActiveIdentity()
-  if (active) {
-    await api.updateChannel(active.driveKey, req.name, req.description)
+  if (!active?.driveKey) return { success: false, error: 'No active channel' }
+  try {
+    const result = await api.updateChannel(active.driveKey, {
+      name: req.name,
+      description: req.description,
+      avatar: req.avatar
+    })
+    return result
+  } catch (err) {
+    return { success: false, error: err?.message }
   }
-  return { channel: {} }
+})
+
+rpc.onUpdateVideoMetadata(async (req) => {
+  console.log('[HRPC] updateVideoMetadata:', req.videoId)
+  const active = identityManager.getActiveIdentity()
+  if (!active?.driveKey) return { success: false, error: 'No active channel' }
+  try {
+    const result = await api.updateVideoMetadata(
+      req.channelKey || active.driveKey,
+      req.videoId,
+      { title: req.title, description: req.description, category: req.category }
+    )
+    return result
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
+})
+
+rpc.onUpdateChannelAvatar?.(async (req) => {
+  console.log('[HRPC] updateChannelAvatar')
+  const active = identityManager.getActiveIdentity()
+  if (!active?.driveKey) return { success: false, error: 'No active channel' }
+  try {
+    const imageBuffer = Buffer.from(req.imageData, 'base64')
+    const result = await api.updateChannelAvatar(active.driveKey, imageBuffer, req.mimeType || 'image/jpeg')
+    return result
+  } catch (err) {
+    return { success: false, error: err?.message }
+  }
 })
 
 // Video handlers

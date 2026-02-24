@@ -56,6 +56,9 @@ declare const HRPC: new (stream: any) => {
   getSwarmStatus(req: {}): Promise<any>;
   uploadVideo(req: { filePath: string; title: string; description: string; category?: string }): Promise<any>;
   downloadVideo(req: { channelKey: string; videoId: string; destPath: string }): Promise<any>;
+  updateChannel(req: { name?: string; description?: string; avatar?: string }): Promise<any>;
+  updateVideoMetadata(req: { channelKey: string; videoId: string; title?: string; description?: string; category?: string }): Promise<any>;
+  updateChannelAvatar(req: { imageData: string; mimeType: string }): Promise<any>;
   deleteVideo(req: { videoId: string }): Promise<any>;
   getVideoData(req: { channelKey: string; videoId: string }): Promise<any>;
   pickVideoFile(req: {}): Promise<any>;
@@ -1220,6 +1223,19 @@ export const rpc = {
 
   async resumeNetwork(): Promise<{ success: boolean }> {
     return (ensureRPC() as any).resumeNetwork({});
+  },
+
+  // Channel and metadata updates
+  async updateChannel(req: { name?: string; description?: string; avatar?: string }) {
+    return ensureRPC().updateChannel(req);
+  },
+
+  async updateVideoMetadata(req: { channelKey: string; videoId: string; title?: string; description?: string; category?: string }) {
+    return ensureRPC().updateVideoMetadata(req);
+  },
+
+  async updateChannelAvatar(req: { imageData: string; mimeType: string }) {
+    return ensureRPC().updateChannelAvatar(req);
   },
 };
 

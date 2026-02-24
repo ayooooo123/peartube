@@ -138,6 +138,71 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
     try { channelMetaCache.delete(driveKey) } catch {}
   }
 
+  // ============================================
+  // Download Intent Persistence Helpers
+  // ============================================
+
+  /**
+   * Save a download intent to metaDb
+   * @param {StorageContext} ctx
+   * @param {Object} intent - Download intent object
+   * @param {string} intent.driveKey
+   * @param {string} intent.videoPath
+   * @param {string} intent.blobsCoreKey
+   * @param {string} intent.blobId
+   * @param {number} intent.startBlock
+   * @param {number} intent.endBlock
+   * @param {number} intent.totalBlocks
+   * @param {number} intent.totalBytes
+   * @param {string} intent.mimeType
+   * @param {number} intent.startedAt
+   * @returns {Promise<void>}
+   */
+  async function saveDownloadIntent(ctx, intent) {
+    const key = `download-intent:${intent.driveKey}:${intent.videoPath}`
+    await ctx.metaDb.put(key, intent)
+  }
+
+  /**
+   * Load a download intent from metaDb
+   * @param {StorageContext} ctx
+   * @param {string} driveKey
+   * @param {string} videoPath
+   * @returns {Promise<Object|null>}
+   */
+  async function loadDownloadIntent(ctx, driveKey, videoPath) {
+    const key = `download-intent:${driveKey}:${videoPath}`
+    const entry = await ctx.metaDb.get(key)
+    return entry?.value || null
+  }
+
+  /**
+   * Delete a download intent from metaDb
+   * @param {StorageContext} ctx
+   * @param {string} driveKey
+   * @param {string} videoPath
+   * @returns {Promise<void>}
+   */
+  async function deleteDownloadIntent(ctx, driveKey, videoPath) {
+    const key = `download-intent:${driveKey}:${videoPath}`
+    await ctx.metaDb.del(key)
+  }
+
+  /**
+   * Load all download intents from metaDb
+   * @param {StorageContext} ctx
+   * @returns {Promise<Array<Object>>}
+   */
+  async function loadAllDownloadIntents(ctx) {
+    const intents = []
+    for await (const entry of ctx.metaDb.createReadStream({ gte: 'download-intent:', lt: 'download-intent:~' })) {
+      if (entry.value) {
+        intents.push(entry.value)
+      }
+    }
+    return intents
+  }
+
   return {
     invalidateChannelCaches,
     // ============================================
@@ -1079,15 +1144,28 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           const totalBlocks = blobId.blockLength
           const totalBytes = blobId.byteLength || blobMeta.byteLength || 0
 
-          // Count initial blocks already available (avoid async has() pitfalls)
+          // Count initial blocks already available
+          // For large videos, use sampling instead of all-or-nothing has(start, end)
           let initialAvailable = 0
           const fullyCached = await core.has(startBlock, endBlock)
           if (fullyCached) {
             initialAvailable = totalBlocks
           } else if (totalBlocks <= 512) {
+            // Small video: exact block-by-block count
             for (let i = startBlock; i < endBlock; i++) {
               if (await core.has(i)) initialAvailable++
             }
+          } else {
+            // Large video: sample to estimate (same pattern as checkVideoSync)
+            const sampleSize = Math.min(totalBlocks, 20)
+            const step = Math.max(1, Math.floor(totalBlocks / sampleSize))
+            let sampledHits = 0
+            let sampledTotal = 0
+            for (let i = startBlock; i < endBlock; i += step) {
+              if (await core.has(i)) sampledHits++
+              sampledTotal++
+            }
+            initialAvailable = sampledTotal > 0 ? Math.round((sampledHits / sampledTotal) * totalBlocks) : 0
           }
           console.log(`[API] Initial: ${initialAvailable}/${totalBlocks} blocks (${Math.round(initialAvailable/totalBlocks*100)}%)`)
 

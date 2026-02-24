@@ -725,6 +725,28 @@ export class MultiWriterChannel extends ReadyResource {
       this._connectionHandler = null
     }
 
+    if (this.wakeupSession) {
+      try { await this.wakeupSession.destroy?.() } catch {}
+      try { await this.wakeupSession.close?.() } catch {}
+      this.wakeupSession = null
+    }
+
+    if (this._channelDiscovery) {
+      try { this._channelDiscovery.destroy?.() } catch {}
+      try { this._channelDiscovery.close?.() } catch {}
+      this._channelDiscovery = null
+    }
+
+    if (this.commentsAutobase) {
+      try { await this.commentsAutobase.close() } catch {}
+      this.commentsAutobase = null
+    }
+
+    if (this.publicBee) {
+      try { await this.publicBee.close() } catch {}
+      this.publicBee = null
+    }
+
     // Close pairing resources
     if (this.pairingMember) {
       try { await this.pairingMember.close() } catch {}

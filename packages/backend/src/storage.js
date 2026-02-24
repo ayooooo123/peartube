@@ -135,7 +135,8 @@ export async function initializeStorage(config) {
     blobServerBindHost: blobServerBindHostOverride,
     blindPeerMirrors = [],
     enableBlindPeerServer = true,
-    primaryKey = null
+    primaryKey = null,
+    corestoreWaitForLock = false
   } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
@@ -149,9 +150,10 @@ export async function initializeStorage(config) {
   // Initialize Corestore
   console.log('[Storage] Creating Corestore...');
   console.log('[Storage] Corestore primaryKey:', primaryKey ? 'provided (deterministic)' : 'not provided (random)');
+  console.log('[Storage] Corestore lock wait:', corestoreWaitForLock ? 'enabled' : 'disabled');
   const store = primaryKey
-    ? new Corestore(storagePath, { primaryKey, unsafe: true })
-    : new Corestore(storagePath);
+    ? new Corestore(storagePath, { primaryKey, unsafe: true, wait: corestoreWaitForLock })
+    : new Corestore(storagePath, { wait: corestoreWaitForLock });
 
   console.log('[Storage] Waiting for Corestore ready...');
   await store.ready();
@@ -1045,6 +1047,114 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
     console.error('[Storage] GET_VIDEO_URL_FROM_BLOB: blobServer.getLink FAILED:', err.message, err.stack);
     throw err;
   }
+}
+
+export async function shutdownBackend(ctx) {
+  if (!ctx) return
+  if (ctx._isShutdown) return
+
+  ctx._isShutdown = true
+  ctx.isShuttingDown = true
+
+  const shutdownBody = async () => {
+    if (ctx.publicFeed) {
+      console.log('[Backend] Shutdown: persisting public feed cache...')
+      try {
+        if (typeof ctx.publicFeed._persistDiscoveredNow === 'function') {
+          await ctx.publicFeed._persistDiscoveredNow()
+        }
+      } catch (err) {
+        console.log('[Backend] Shutdown: public feed cache persist failed (non-fatal):', err?.message)
+      }
+    }
+
+    if (ctx.channels) {
+      const channelCount = ctx.channels.size
+      console.log(`[Backend] Shutdown: closing ${channelCount} channels...`)
+      try {
+        await Promise.allSettled([...ctx.channels.values()].map(async (ch) => {
+          try {
+            if (ch && typeof ch.close === 'function') {
+              await ch.close()
+            }
+          } catch {}
+        }))
+      } catch (err) {
+        console.log('[Backend] Shutdown: channel close batch failed (non-fatal):', err?.message)
+      }
+    }
+
+    if (ctx._publicBeeCache) {
+      const publicBeeCount = ctx._publicBeeCache.size
+      console.log(`[Backend] Shutdown: closing ${publicBeeCount} publicBeeCache entries...`)
+      try {
+        await Promise.allSettled([...ctx._publicBeeCache.values()].map(async (bee) => {
+          try {
+            if (bee && typeof bee.close === 'function') {
+              await bee.close()
+            }
+          } catch {}
+        }))
+      } catch (err) {
+        console.log('[Backend] Shutdown: publicBeeCache close batch failed (non-fatal):', err?.message)
+      }
+    }
+
+    if (ctx.publicFeed) {
+      console.log('[Backend] Shutdown: stopping publicFeed...')
+      try {
+        await ctx.publicFeed.stop()
+      } catch (err) {
+        console.log('[Backend] Shutdown: publicFeed stop failed (non-fatal):', err?.message)
+      }
+    }
+
+    if (ctx.blobServer) {
+      console.log('[Backend] Shutdown: closing blobServer...')
+      try {
+        await ctx.blobServer.close()
+      } catch (err) {
+        console.log('[Backend] Shutdown: blobServer close failed (non-fatal):', err?.message)
+      }
+    }
+
+    if (ctx.swarm) {
+      console.log('[Backend] Shutdown: destroying swarm...')
+      try {
+        await ctx.swarm.destroy()
+      } catch (err) {
+        console.log('[Backend] Shutdown: swarm destroy failed (non-fatal):', err?.message)
+      }
+    }
+
+    if (ctx.metaDb) {
+      console.log('[Backend] Shutdown: closing metaDb...')
+      try {
+        await ctx.metaDb.close()
+      } catch (err) {
+        console.log('[Backend] Shutdown: metaDb close failed (non-fatal):', err?.message)
+      }
+    }
+
+    if (ctx.store) {
+      console.log('[Backend] Shutdown: closing store...')
+      try {
+        await ctx.store.close()
+      } catch (err) {
+        console.log('[Backend] Shutdown: store close failed (non-fatal):', err?.message)
+      }
+    }
+  }
+
+  const timeout = (ms) => new Promise((resolve) => {
+    setTimeout(() => {
+      console.log('[Backend] Shutdown timed out after 5s')
+      resolve()
+    }, ms)
+  })
+
+  await Promise.race([shutdownBody(), timeout(5000)])
+  console.log('[Backend] Shutdown complete')
 }
 
 // =============================================================================

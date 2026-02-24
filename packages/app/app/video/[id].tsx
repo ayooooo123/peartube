@@ -245,16 +245,28 @@ function ActionButton({ icon: Icon, label, onPress, active }: {
 }
 
 // Channel Info Component
-function ChannelInfo({ channelName, channelInitial }: { channelName: string, channelInitial: string }) {
+function ChannelInfo({ channelName, channelInitial, onChannelPress }: { channelName: string, channelInitial: string, onChannelPress?: () => void }) {
   return (
     <View style={styles.channelRow}>
-      <View style={styles.channelAvatar}>
-        <Text style={styles.channelAvatarText}>{channelInitial}</Text>
-      </View>
-      <View style={styles.channelInfo}>
-        <Text style={styles.channelName}>{channelName}</Text>
-        <Text style={styles.channelSubs}>Channel</Text>
-      </View>
+      <Pressable
+        onPress={onChannelPress}
+        disabled={!onChannelPress}
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          flex: 1,
+          opacity: pressed ? 0.7 : 1,
+          transform: [{ scale: pressed ? 0.97 : 1 }],
+        })}
+      >
+        <View style={styles.channelAvatar}>
+          <Text style={styles.channelAvatarText}>{channelInitial}</Text>
+        </View>
+        <View style={styles.channelInfo}>
+          <Text style={[styles.channelName, onChannelPress && styles.channelNameLink]}>{channelName}</Text>
+          <Text style={styles.channelSubs}>Channel</Text>
+        </View>
+      </Pressable>
       <Pressable style={styles.subscribeButton}>
         <Text style={styles.subscribeText}>Subscribe</Text>
       </Pressable>
@@ -637,7 +649,7 @@ export default function VideoPlayerScreen() {
         </View>
 
         {/* Channel Info */}
-        <ChannelInfo channelName={channelName} channelInitial={channelInitial} />
+        <ChannelInfo channelName={channelName} channelInitial={channelInitial} onChannelPress={videoData?.channelKey ? () => router.push('/channel/' + videoData.channelKey) : undefined} />
 
         {/* Divider */}
         <View style={styles.divider} />
@@ -903,6 +915,10 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 15,
     fontWeight: '500',
+  },
+  channelNameLink: {
+    textDecorationLine: 'underline' as const,
+    textDecorationStyle: 'dotted' as const,
   },
   channelSubs: {
     color: colors.textMuted,

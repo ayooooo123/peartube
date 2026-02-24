@@ -6,6 +6,7 @@
  */
 import { memo, useMemo, useCallback } from 'react'
 import { View, Text, Pressable, StyleSheet } from 'react-native'
+import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated'
 import { ThumbnailImage } from './ThumbnailImage'
 
 export interface VideoData {
@@ -34,8 +35,11 @@ export interface VideoData {
 interface VideoCardProps {
   video: VideoData
   onPress: () => void
+  onChannelPress?: () => void
   showChannelInfo?: boolean
 }
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
 
 // Format time ago - handles invalid timestamps gracefully
 function formatTimeAgo(timestamp: number | undefined | null): string {
@@ -73,7 +77,7 @@ function getChannelInitial(name?: string, key?: string): string {
   return 'P'
 }
 
-function VideoCardComponent({ video, onPress, showChannelInfo = true }: VideoCardProps) {
+function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = true }: VideoCardProps) {
   const channelKey = video.channelKey || video.driveKey
 
   // Memoize derived values to prevent recalculation on every render
@@ -106,6 +110,22 @@ function VideoCardComponent({ video, onPress, showChannelInfo = true }: VideoCar
     []
   )
 
+  // Channel press feedback (spring animation)
+  const channelScale = useSharedValue(1)
+  const channelOpacity = useSharedValue(1)
+  const channelPressIn = useCallback(() => {
+    channelScale.value = withSpring(0.9, { damping: 15, stiffness: 400 })
+    channelOpacity.value = withTiming(0.7, { duration: 100 })
+  }, [channelScale, channelOpacity])
+  const channelPressOut = useCallback(() => {
+    channelScale.value = withSpring(1, { damping: 15, stiffness: 400 })
+    channelOpacity.value = withTiming(1, { duration: 100 })
+  }, [channelScale, channelOpacity])
+  const channelAnimStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: channelScale.value }],
+    opacity: channelOpacity.value,
+  }))
+
   return (
     <Pressable onPress={handlePress} style={getPressedStyle}>
       {/* Thumbnail */}
@@ -118,13 +138,25 @@ function VideoCardComponent({ video, onPress, showChannelInfo = true }: VideoCar
       {/* Video info row */}
       <View style={styles.infoRow}>
         {/* Channel avatar */}
-        {showChannelInfo && (
+        {showChannelInfo && onChannelPress ? (
+          <AnimatedPressable
+            onPress={onChannelPress}
+            onPressIn={channelPressIn}
+            onPressOut={channelPressOut}
+            style={[styles.avatarContainer, channelAnimStyle]}
+            hitSlop={4}
+          >
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{channelInitial}</Text>
+            </View>
+          </AnimatedPressable>
+        ) : showChannelInfo ? (
           <View style={styles.avatarContainer}>
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{channelInitial}</Text>
             </View>
           </View>
-        )}
+        ) : null}
 
         {/* Title and metadata */}
         <View style={styles.textContainer}>
@@ -132,14 +164,29 @@ function VideoCardComponent({ video, onPress, showChannelInfo = true }: VideoCar
             {video.title}
           </Text>
           <View style={styles.metaRow}>
-            {showChannelInfo && (
+            {showChannelInfo && onChannelPress ? (
+              <>
+                <AnimatedPressable
+                  onPress={onChannelPress}
+                  onPressIn={channelPressIn}
+                  onPressOut={channelPressOut}
+                  style={channelAnimStyle}
+                  hitSlop={4}
+                >
+                  <Text style={styles.channelNameLink} numberOfLines={1}>
+                    {channelName}
+                  </Text>
+                </AnimatedPressable>
+                <Text style={styles.dot}>·</Text>
+              </>
+            ) : showChannelInfo ? (
               <>
                 <Text style={styles.channelName} numberOfLines={1}>
                   {channelName}
                 </Text>
                 <Text style={styles.dot}>·</Text>
               </>
-            )}
+            ) : null}
             <Text style={styles.timeAgo}>{timeAgo}</Text>
           </View>
         </View>
@@ -153,6 +200,7 @@ function arePropsEqual(prevProps: VideoCardProps, nextProps: VideoCardProps): bo
   // Quick reference check first
   if (prevProps.video === nextProps.video &&
       prevProps.onPress === nextProps.onPress &&
+      prevProps.onChannelPress === nextProps.onChannelPress &&
       prevProps.showChannelInfo === nextProps.showChannelInfo) {
     return true
   }
@@ -172,7 +220,8 @@ function arePropsEqual(prevProps: VideoCardProps, nextProps: VideoCardProps): bo
     prev.channelKey === next.channelKey &&
     prev.driveKey === next.driveKey &&
     prev.channel?.name === next.channel?.name &&
-    prevProps.showChannelInfo === nextProps.showChannelInfo
+    prevProps.showChannelInfo === nextProps.showChannelInfo &&
+    prevProps.onChannelPress === nextProps.onChannelPress
   )
 }
 
@@ -226,6 +275,13 @@ const styles = StyleSheet.create({
     color: '#adadb8',
     fontSize: 12,
     maxWidth: 150,
+  },
+  channelNameLink: {
+    color: '#adadb8',
+    fontSize: 12,
+    maxWidth: 150,
+    textDecorationLine: 'underline',
+    textDecorationStyle: 'dotted',
   },
   dot: {
     color: '#adadb8',

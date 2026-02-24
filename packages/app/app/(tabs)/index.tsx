@@ -854,6 +854,7 @@ export default function HomeScreen() {
                       video={video}
                       onPress={() => playVideo(video)}
                       showChannelInfo={true}
+                      onChannelPress={video.channelKey ? () => router.push('/channel/' + video.channelKey) : undefined}
                     />
                   </View>
                 ))}
@@ -898,6 +899,7 @@ export default function HomeScreen() {
                       video={video}
                       onPress={() => playVideo(video)}
                       showChannelInfo={true}
+                      onChannelPress={video.channelKey ? () => router.push('/channel/' + video.channelKey) : undefined}
                     />
                   </View>
                 ))}

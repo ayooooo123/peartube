@@ -19,6 +19,7 @@ import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components
 import { MpvPlayer, MpvPlayerRef } from '@/components/MpvPlayer'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
+import ChannelPageWeb from '../channel/[key].web'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && !!(window as any).Pear
@@ -199,11 +200,16 @@ interface WatchRoute {
   videoId: string
 }
 
+interface ChannelRoute {
+  type: 'channel'
+  channelKey: string
+}
+
 interface HomeRoute {
   type: 'home'
 }
 
-type Route = WatchRoute | HomeRoute
+type Route = WatchRoute | ChannelRoute | HomeRoute
 
 function parseHash(hash: string): Route {
   const path = hash.replace(/^#\/?/, '') || ''
@@ -211,6 +217,9 @@ function parseHash(hash: string): Route {
 
   if (parts[0] === 'watch' && parts[1] && parts[2]) {
     return { type: 'watch', channelKey: parts[1], videoId: parts[2] }
+  }
+  if (parts[0] === 'channel' && parts[1]) {
+    return { type: 'channel', channelKey: decodeURIComponent(parts[1]) }
   }
   return { type: 'home' }
 }
@@ -1063,12 +1072,17 @@ function WatchPageView({
             </div>
 
             {/* Channel info */}
-            <div style={watchStyles.channelRow}>
+            <div
+              style={{ ...watchStyles.channelRow, cursor: 'pointer' }}
+              onClick={() => { window.location.hash = '#/channel/' + channelKey }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '0.8'; (e.currentTarget as HTMLDivElement).style.transform = 'scale(0.98)' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '1'; (e.currentTarget as HTMLDivElement).style.transform = 'scale(1)' }}
+            >
               <div style={watchStyles.avatar}>
                 <span style={watchStyles.avatarText}>{channelInitial}</span>
               </div>
               <div style={watchStyles.channelInfo}>
-                <span style={watchStyles.channelName}>{channelName}</span>
+                <span style={{ ...watchStyles.channelName, textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: '3px' }}>{channelName}</span>
                 <span style={watchStyles.channelKey}>{channelKey.slice(0, 16)}...</span>
               </div>
             </div>
@@ -2268,6 +2282,15 @@ export default function HomeScreen() {
     )
   }
 
+  // On Pear desktop with channel route, render the ChannelPageWeb
+  if (isPear && currentRoute.type === 'channel') {
+    return (
+      <div style={styles.container}>
+        <ChannelPageWeb channelKey={currentRoute.channelKey} />
+      </div>
+    )
+  }
+
   // On Pear desktop with watch route, render the WatchPageView
   if (isPear && currentRoute.type === 'watch') {
     // Get related videos (other videos from same channel + your videos)
@@ -2340,6 +2363,7 @@ export default function HomeScreen() {
                     const video = channelVideos.find(v => v.id === videoId)
                     if (video) playVideo(video)
                   }}
+                  onChannelPress={viewingChannel ? () => { window.location.hash = '#/channel/' + viewingChannel } : undefined}
                 />
               )}
             </div>
@@ -2417,6 +2441,10 @@ export default function HomeScreen() {
                   const video = feedVideos.find(v => v.id === videoId)
                   if (video) playVideo(video)
                 }}
+                onChannelPress={(videoId) => {
+                  const video = feedVideos.find(v => v.id === videoId)
+                  if (video?.channelKey) { window.location.hash = '#/channel/' + video.channelKey }
+                }}
               />
             )}
           </div>
@@ -2447,6 +2475,7 @@ export default function HomeScreen() {
               <VideoGrid
                 videos={gridVideos}
                 onVideoPress={handleVideoPress}
+                onChannelPress={identity?.driveKey ? () => { window.location.hash = '#/channel/' + identity.driveKey } : undefined}
               />
             )}
           </div>

@@ -21,6 +21,7 @@ export interface VideoCardProps {
   uploadedAt?: string
   duration?: number
   onPress?: () => void
+  onChannelPress?: () => void
 }
 
 function formatDuration(seconds: number): string {
@@ -68,9 +69,11 @@ export function VideoCardDesktop({
   uploadedAt,
   duration,
   onPress,
+  onChannelPress,
 }: VideoCardProps) {
   const [isHovered, setIsHovered] = useState(false)
   const [imageError, setImageError] = useState(false)
+  const [channelHovered, setChannelHovered] = useState(false)
 
   console.log('[VideoCard.web] Rendering:', id, 'thumbnailUrl:', thumbnailUrl?.slice(0, 50))
 
@@ -127,7 +130,18 @@ export function VideoCardDesktop({
       {/* Info section */}
       <div style={styles.info}>
         {/* Channel avatar */}
-        <div style={styles.avatarContainer}>
+        <div
+          style={{
+            ...styles.avatarContainer,
+            cursor: onChannelPress ? 'pointer' : undefined,
+            opacity: channelHovered && onChannelPress ? 0.8 : 1,
+            transform: channelHovered && onChannelPress ? 'scale(0.92)' : 'scale(1)',
+            transition: 'opacity 0.15s ease, transform 0.15s ease',
+          }}
+          onClick={onChannelPress ? (e) => { e.stopPropagation(); onChannelPress() } : undefined}
+          onMouseEnter={() => onChannelPress && setChannelHovered(true)}
+          onMouseLeave={() => setChannelHovered(false)}
+        >
           {channelAvatarUrl ? (
             <img
               src={channelAvatarUrl}
@@ -144,7 +158,18 @@ export function VideoCardDesktop({
         {/* Text content */}
         <div style={styles.textContent}>
           <h3 style={styles.title}>{title}</h3>
-          <p style={styles.channelName}>{channelName}</p>
+          <p
+            style={{
+              ...styles.channelName,
+              cursor: onChannelPress ? 'pointer' : undefined,
+              textDecoration: channelHovered && onChannelPress ? 'underline' : 'none',
+            }}
+            onClick={onChannelPress ? (e) => { e.stopPropagation(); onChannelPress() } : undefined}
+            onMouseEnter={() => onChannelPress && setChannelHovered(true)}
+            onMouseLeave={() => setChannelHovered(false)}
+          >
+            {channelName}
+          </p>
           <p style={styles.meta}>
             {views !== undefined && formatViews(views)}
             {views !== undefined && uploadedAt && ' • '}
@@ -186,8 +211,12 @@ interface VideoCardWrapperProps {
   showChannelInfo?: boolean
 }
 
+interface VideoCardWrapperPropsExtended extends VideoCardWrapperProps {
+  onChannelPress?: () => void
+}
+
 // Wrapper to match the native VideoCard interface
-export function VideoCard({ video, onPress, showChannelInfo = true }: VideoCardWrapperProps) {
+export function VideoCard({ video, onPress, showChannelInfo = true, onChannelPress }: VideoCardWrapperPropsExtended) {
   const channelKey = video.channelKey || video.driveKey
   const channelName = video.channel?.name || `Channel ${channelKey?.slice(0, 8) || 'Unknown'}`
   const timeAgo = video.uploadedAt || video.createdAt
@@ -204,6 +233,7 @@ export function VideoCard({ video, onPress, showChannelInfo = true }: VideoCardW
       uploadedAt={timeAgo}
       duration={video.duration}
       onPress={onPress}
+      onChannelPress={onChannelPress}
     />
   )
 }

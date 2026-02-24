@@ -162,21 +162,31 @@ export default function SubscriptionsScreen() {
         ItemSeparatorComponent={() => <View className="h-3" />}
         renderItem={({ item }) => (
           <View className="flex-row bg-pear-bg-elevated rounded-xl p-4 items-center">
-            {/* Avatar */}
-            <View className="w-12 h-12 rounded-full bg-pear-bg-card justify-center items-center">
-              <Text className="text-headline text-pear-text">
-                {item.name?.charAt(0)?.toUpperCase() || '?'}
-              </Text>
-            </View>
-            {/* Info */}
-            <View className="flex-1 ml-4">
-              <Text className="text-label text-pear-text">
-                {item.name || 'Unknown Channel'}
-              </Text>
-              <Text className="text-caption text-pear-text-muted mt-0.5" numberOfLines={1}>
-                {item.channelKey.substring(0, 32)}...
-              </Text>
-            </View>
+            {/* Avatar + Info - tappable to navigate to channel */}
+            <Pressable
+              onPress={() => router.push('/channel/' + item.channelKey)}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                flex: 1,
+                opacity: pressed ? 0.7 : 1,
+                transform: [{ scale: pressed ? 0.97 : 1 }],
+              })}
+            >
+              <View className="w-12 h-12 rounded-full bg-pear-bg-card justify-center items-center">
+                <Text className="text-headline text-pear-text">
+                  {item.name?.charAt(0)?.toUpperCase() || '?'}
+                </Text>
+              </View>
+              <View className="flex-1 ml-4">
+                <Text className="text-label text-pear-text" style={{ textDecorationLine: 'underline', textDecorationStyle: 'dotted' }}>
+                  {item.name || 'Unknown Channel'}
+                </Text>
+                <Text className="text-caption text-pear-text-muted mt-0.5" numberOfLines={1}>
+                  {item.channelKey.substring(0, 32)}...
+                </Text>
+              </View>
+            </Pressable>
             {/* Unsubscribe */}
             <Pressable
               onPress={() => unsubscribe(item.channelKey)}

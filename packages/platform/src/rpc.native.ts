@@ -108,7 +108,85 @@ declare const FileSystem: {
 let worklet: InstanceType<typeof Worklet> | null = null;
 let hrpc: InstanceType<typeof HRPC> | null = null;
 let _blobServerPort: number | null = null;
+let _initPromise: Promise<void> | null = null;
 let _isInitialized = false;
+let _startupState: 'idle' | 'initializing' | 'starting-worklet' | 'ready' | 'error' = 'idle';
+let _isTerminating = false;
+const BACKEND_WORKLET_ID = 'peartube-backend-core'
+const SHUTDOWN_TIMEOUT_MS = 4000
+
+/**
+ * Send a shutdown signal via IPC and wait for acknowledgment.
+ * Resolves when shutdown-complete is received or rejects on timeout.
+ */
+function sendShutdownSignalViaIpc(instance: InstanceType<typeof Worklet>): Promise<void> {
+  const ipc = instance?.IPC;
+  if (!ipc?.write) return Promise.resolve();
+
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('shutdown-timeout'));
+    }, SHUTDOWN_TIMEOUT_MS);
+
+    function onData(chunk: any) {
+      try {
+        const str = typeof chunk === 'string' ? chunk : chunk?.toString?.('utf-8') ?? String(chunk);
+        const msg = JSON.parse(str);
+        if (msg?.type === 'shutdown-complete') {
+          cleanup();
+          resolve();
+        }
+      } catch {
+        // Not JSON or not our message — ignore
+      }
+    }
+
+    function onClose() {
+      cleanup();
+      resolve(); // Worklet closed — shutdown effectively complete
+    }
+
+    function cleanup() {
+      clearTimeout(timer);
+      try { ipc.removeListener?.('data', onData); } catch {}
+      try { ipc.removeListener?.('close', onClose); } catch {}
+    }
+
+    try {
+      ipc.on('data', onData);
+      ipc.on('close', onClose);
+    } catch {
+      cleanup();
+      resolve();
+      return;
+    }
+
+    try {
+      ipc.write(JSON.stringify({ type: 'shutdown' }));
+    } catch {
+      cleanup();
+      resolve(); // Write failed — proceed to terminate
+    }
+  });
+}
+
+/**
+ * Gracefully shut down a worklet: send shutdown signal, wait, then terminate.
+ * Always calls terminate() even if the signal times out or fails.
+ */
+async function terminateWorkletWithDelay(instance: InstanceType<typeof Worklet> | null): Promise<void> {
+  if (!instance) return;
+  try {
+    await sendShutdownSignalViaIpc(instance);
+    console.log('[Platform RPC] Worklet shutdown acknowledged');
+  } catch {
+    console.log('[Platform RPC] Worklet shutdown timed out, forcing terminate');
+  }
+  try {
+    instance.terminate();
+  } catch {}
+}
 
 // Transcoder worklet state
 let transcodeWorklet: InstanceType<typeof Worklet> | null = null;
@@ -122,7 +200,7 @@ let _transcodeResolve: ((data: any) => void) | null = null;
 let _transcodeReject: ((error: Error) => void) | null = null;
 
 // Event callback types
-type ReadyCallback = (data: { blobServerPort: number }) => void;
+type ReadyCallback = (data: { blobServerPort: number | null }) => void;
 type ErrorCallback = (data: { message: string }) => void;
 type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
 type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
@@ -153,12 +231,42 @@ function removeCallback<T>(arr: T[], cb: T) {
   if (idx !== -1) arr.splice(idx, 1);
 }
 
+function resolveStorageUri(FS: any, FSLegacy: any, configuredPath?: string): string {
+  if (configuredPath && configuredPath.length > 0) {
+    return configuredPath.startsWith('file://') ? configuredPath : `file://${configuredPath}`;
+  }
+
+  const candidates = [
+    FS?.Paths?.document?.uri,
+    FSLegacy?.documentDirectory,
+    FS?.documentDirectory,
+    FS?.Paths?.cache?.uri,
+    FSLegacy?.cacheDirectory,
+    FS?.cacheDirectory,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.length > 0) {
+      return candidate;
+    }
+  }
+
+  throw new Error('No writable storage directory available from expo-file-system');
+}
+
 /**
  * Event subscription system
  */
 export const events = {
   onReady: (cb: ReadyCallback) => {
     eventCallbacks.ready.push(cb);
+    if (_isInitialized) {
+      try {
+        cb({ blobServerPort: _blobServerPort });
+      } catch (err: any) {
+        console.error('[Platform RPC] ready handler threw:', err?.message || err);
+      }
+    }
     return () => removeCallback(eventCallbacks.ready, cb);
   },
   onError: (cb: ErrorCallback) => {
@@ -211,49 +319,89 @@ export async function initPlatformRPC(config: {
   storagePath?: string;
 }): Promise<void> {
   if (_isInitialized && worklet) {
+    _startupState = 'ready';
     console.log('[Platform RPC] Already initialized');
     return;
   }
 
-  // Get dependencies at runtime
-  const WorkletClass = require('react-native-bare-kit').Worklet;
-  const HRPCClass = require('@peartube/spec');
-  const FS = require('expo-file-system');
-  const encoding = FS.EncodingType?.UTF8 || 'utf8';
-
-  // Determine storage path
-  let storagePath = config.storagePath || FS.documentDirectory || '';
-  if (storagePath.startsWith('file://')) {
-    storagePath = storagePath.slice(7);
+  if (_initPromise) {
+    await _initPromise;
+    return;
   }
 
-  console.log('[Platform RPC] Initializing with storage:', storagePath);
+  _initPromise = (async () => {
+    _startupState = 'initializing';
 
-  if (!config.downloaderWorkerSource) {
-    throw new Error('Downloader worker bundle missing');
-  }
+    // Terminate stale worklet from a previous session that may still hold
+    // the Corestore file-descriptor lock (common after days in background).
+    if (worklet) {
+      console.log('[Platform RPC] Terminating stale worklet before reinit');
+      await terminateWorkletWithDelay(worklet)
+      worklet = null;
+      hrpc = null;
+      _isInitialized = false;
+    }
 
-  const storageDir = storagePath.endsWith('/') ? storagePath : `${storagePath}/`;
-  const downloaderWorkerPath = `${storageDir}downloader-worker.bundle.js`;
-  const downloaderWorkerUri = `file://${downloaderWorkerPath}`;
+    // Get dependencies at runtime
+    const WorkletClass = require('react-native-bare-kit').Worklet;
+    const HRPCClass = require('@peartube/spec');
+    const FS = require('expo-file-system');
+    const FSLegacy = require('expo-file-system/legacy');
+    const encoding = FSLegacy.EncodingType?.UTF8 || FS.EncodingType?.UTF8 || 'utf8';
 
-  try {
-    await FS.writeAsStringAsync(downloaderWorkerUri, config.downloaderWorkerSource, { encoding });
-    console.log('[Platform RPC] Downloader worker written:', downloaderWorkerPath);
-  } catch (err: any) {
-    throw new Error(`Failed to write downloader worker bundle: ${err?.message || err}`);
-  }
+    // Determine storage path
+    const storageUri = resolveStorageUri(FS, FSLegacy, config.storagePath);
+    let storagePath = storageUri;
+    if (storagePath.startsWith('file://')) {
+      storagePath = storagePath.slice(7);
+    }
 
-  // Create worklet and HRPC client before starting to avoid missing early events.
-  const localWorklet = new WorkletClass();
-  const localHrpc = new HRPCClass(localWorklet.IPC);
-  worklet = localWorklet;
-  hrpc = localHrpc;
-  console.log('[Platform RPC] HRPC client initialized');
+    console.log('[Platform RPC] Initializing with storage:', storagePath);
 
-  console.log('[Platform RPC] IPC type:', localWorklet.IPC?.constructor?.name);
+    if (!config.downloaderWorkerSource) {
+      throw new Error('Downloader worker bundle missing');
+    }
 
-  const { decode: decodeHrpcMessage } = require('@peartube/spec/messages');
+    const storageDirUri = storageUri.endsWith('/') ? storageUri : `${storageUri}/`;
+    const downloaderWorkerUri = `${storageDirUri}downloader-worker.bundle.js`;
+    const downloaderWorkerPath = downloaderWorkerUri.startsWith('file://')
+      ? downloaderWorkerUri.slice(7)
+      : downloaderWorkerUri;
+
+    try {
+      await FSLegacy.writeAsStringAsync(downloaderWorkerUri, config.downloaderWorkerSource, { encoding });
+      console.log('[Platform RPC] Downloader worker written:', downloaderWorkerPath);
+    } catch (err: any) {
+      throw new Error(`Failed to write downloader worker bundle: ${err?.message || err}`);
+    }
+
+    // Create worklet and HRPC client before starting to avoid missing early events.
+    const localWorklet = new WorkletClass(BACKEND_WORKLET_ID);
+    const localHrpc = new HRPCClass(localWorklet.IPC);
+    worklet = localWorklet;
+    hrpc = localHrpc;
+    console.log('[Platform RPC] HRPC client initialized');
+
+    if (localWorklet?.IPC?.on) {
+      localWorklet.IPC.on('error', (err: any) => {
+        const message = String(err?.message || err || 'Backend IPC error')
+        console.error('[Platform RPC] IPC error:', message)
+        _isInitialized = false
+        _startupState = 'error'
+        safeDispatch('error', eventCallbacks.error, { message })
+      })
+      localWorklet.IPC.on('close', () => {
+        if (_isInitialized) {
+          _isInitialized = false
+          _startupState = 'error'
+          safeDispatch('error', eventCallbacks.error, { message: 'Backend IPC closed' })
+        }
+      })
+    }
+
+    console.log('[Platform RPC] IPC type:', localWorklet.IPC?.constructor?.name);
+
+    const { decode: decodeHrpcMessage } = require('@peartube/spec/messages');
 
   const safeDispatch = <T extends unknown>(label: string, callbacks: Array<(data: T) => unknown>, data: T) => {
     callbacks.forEach((cb) => {
@@ -271,19 +419,38 @@ export async function initPlatformRPC(config: {
     });
   };
 
+  if (!_isInitialized && worklet && hrpc) {
+    try {
+      const healthCheck = (hrpc as any).getStatus?.({})
+      if (healthCheck && typeof healthCheck.then === 'function') {
+        await Promise.race([
+          healthCheck,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('health-check-timeout')), 1500)),
+        ])
+        _isInitialized = true
+        _startupState = 'ready'
+        safeDispatch('ready', eventCallbacks.ready, { blobServerPort: _blobServerPort })
+        return
+      }
+    } catch {}
+  }
+
   const handleReady = (data: any) => {
     console.log('[Platform RPC] Backend ready, blobServerPort:', data?.blobServerPort);
-    _blobServerPort = data?.blobServerPort || null;
+    _blobServerPort = data?.blobServerPort ?? null;
     _isInitialized = true;
+    _startupState = 'ready';
     safeDispatch('ready', eventCallbacks.ready, data);
   };
 
   const handleError = (data: any) => {
     console.error('[Platform RPC] Backend error:', data?.message);
+    _isInitialized = false;
+    _startupState = 'error';
     safeDispatch('error', eventCallbacks.error, data);
   };
 
-  const handleVideoStats = (data: any) => {
+    const handleVideoStats = (data: any) => {
     // HRPC payload is `{ stats: VideoStats }` (see spec). Normalize to the callback shape.
     const stats = data?.stats ?? data;
     const channelKey = data?.channelKey ?? stats?.channelKey;
@@ -297,35 +464,35 @@ export async function initPlatformRPC(config: {
     }
   };
 
-  const handleUploadProgress = (data: any) => {
+    const handleUploadProgress = (data: any) => {
     safeDispatch('uploadProgress', eventCallbacks.uploadProgress, data);
   };
 
-  const handleDownloadProgress = (data: any) => {
+    const handleDownloadProgress = (data: any) => {
     safeDispatch('downloadProgress', eventCallbacks.downloadProgress, data);
   };
 
-  const handleFeedUpdate = (data: any) => {
+    const handleFeedUpdate = (data: any) => {
     safeDispatch('feedUpdate', eventCallbacks.feedUpdate, data);
   };
 
-  const handleCastDeviceFound = (data: any) => {
+    const handleCastDeviceFound = (data: any) => {
     safeDispatch('castDeviceFound', eventCallbacks.castDeviceFound, data);
   };
 
-  const handleCastDeviceLost = (data: any) => {
+    const handleCastDeviceLost = (data: any) => {
     safeDispatch('castDeviceLost', eventCallbacks.castDeviceLost, data);
   };
 
-  const handleCastPlaybackState = (data: any) => {
+    const handleCastPlaybackState = (data: any) => {
     safeDispatch('castPlaybackState', eventCallbacks.castPlaybackState, data);
   };
 
-  const handleCastTimeUpdate = (data: any) => {
+    const handleCastTimeUpdate = (data: any) => {
     safeDispatch('castTimeUpdate', eventCallbacks.castTimeUpdate, data);
   };
 
-  const handleLog = (data: any) => {
+    const handleLog = (data: any) => {
     if (data?.message) {
       console.log('[Platform RPC] Backend log:', data.message);
     } else {
@@ -333,9 +500,9 @@ export async function initPlatformRPC(config: {
     }
   };
 
-  const fallbackEventCommands: Record<number, string> = {};
-  const rawRpc = (hrpc as any)?._rpc;
-  if (rawRpc && !rawRpc._peartubePatched && Object.keys(fallbackEventCommands).length) {
+    const fallbackEventCommands: Record<number, string> = {};
+    const rawRpc = (hrpc as any)?._rpc;
+    if (rawRpc && !rawRpc._peartubePatched && Object.keys(fallbackEventCommands).length) {
     const originalOnRequest = rawRpc._onrequest;
     rawRpc._onrequest = async (req: any) => {
       try {
@@ -385,41 +552,80 @@ export async function initPlatformRPC(config: {
       }
     };
     rawRpc._peartubePatched = true;
-  }
-
-  // Wire event handlers before starting the worklet.
-  localHrpc.onEventReady(handleReady);
-  localHrpc.onEventError(handleError);
-  localHrpc.onEventVideoStats(handleVideoStats);
-  localHrpc.onEventUploadProgress(handleUploadProgress);
-  localHrpc.onEventDownloadProgress(handleDownloadProgress);
-  localHrpc.onEventFeedUpdate(handleFeedUpdate);
-  localHrpc.onEventLog(handleLog);
-  localHrpc.onEventCastDeviceFound(handleCastDeviceFound);
-  localHrpc.onEventCastDeviceLost(handleCastDeviceLost);
-  localHrpc.onEventCastPlaybackState(handleCastPlaybackState);
-  localHrpc.onEventCastTimeUpdate(handleCastTimeUpdate);
-
-  // Start worklet after handlers are registered.
-  localWorklet.start('/backend.bundle', config.backendSource, [storagePath, downloaderWorkerPath]);
-  console.log('[Platform RPC] Worklet started');
-}
-
-/**
- * Terminate platform RPC (for app lifecycle management)
- */
-export function terminatePlatformRPC(): void {
-  if (worklet) {
-    console.log('[Platform RPC] Terminating worklet');
-    try {
-      worklet.terminate();
-    } catch (err) {
-      console.error('[Platform RPC] Failed to terminate:', err);
     }
+
+    // Wire event handlers before starting the worklet.
+    localHrpc.onEventReady(handleReady);
+    localHrpc.onEventError(handleError);
+    localHrpc.onEventVideoStats(handleVideoStats);
+    localHrpc.onEventUploadProgress(handleUploadProgress);
+    localHrpc.onEventDownloadProgress(handleDownloadProgress);
+    localHrpc.onEventFeedUpdate(handleFeedUpdate);
+    localHrpc.onEventLog(handleLog);
+    localHrpc.onEventCastDeviceFound(handleCastDeviceFound);
+    localHrpc.onEventCastDeviceLost(handleCastDeviceLost);
+    localHrpc.onEventCastPlaybackState(handleCastPlaybackState);
+    localHrpc.onEventCastTimeUpdate(handleCastTimeUpdate);
+
+    // Start worklet after handlers are registered.
+    _startupState = 'starting-worklet';
+    localWorklet.start('/backend.bundle', config.backendSource, [storagePath, downloaderWorkerPath]);
+    console.log('[Platform RPC] Worklet started');
+  })();
+
+  try {
+    await _initPromise;
+  } catch (err) {
+    try {
+      worklet?.terminate();
+    } catch {}
     worklet = null;
     hrpc = null;
     _isInitialized = false;
+    _startupState = 'error';
+    _blobServerPort = null;
+    throw err;
+  } finally {
+    _initPromise = null;
   }
+}
+
+/**
+ * Terminate platform RPC (for app lifecycle management).
+ * Sends a graceful shutdown signal to the backend via IPC before terminating.
+ * Idempotent: safe to call multiple times.
+ */
+export function terminatePlatformRPC(): void {
+  if (_isTerminating) return;
+  if (!worklet) {
+    _startupState = 'idle';
+    return;
+  }
+  _isTerminating = true;
+  const w = worklet;
+  worklet = null;
+  hrpc = null;
+  _isInitialized = false;
+  _startupState = 'idle';
+
+  // Fire-and-forget: send shutdown signal, then always terminate
+  (async () => {
+    console.log('[Platform RPC] Sending shutdown signal to backend');
+    try {
+      await sendShutdownSignalViaIpc(w);
+      console.log('[Platform RPC] Shutdown complete');
+    } catch {
+      console.log('[Platform RPC] Shutdown timed out, forcing terminate');
+    }
+    try {
+      w.terminate();
+    } catch (err) {
+      console.error('[Platform RPC] Failed to terminate:', err);
+    }
+    _isTerminating = false;
+  })().catch(() => {
+    _isTerminating = false;
+  });
 }
 
 /**
@@ -427,6 +633,10 @@ export function terminatePlatformRPC(): void {
  */
 export function isInitialized(): boolean {
   return _isInitialized;
+}
+
+export function getStartupState(): 'idle' | 'initializing' | 'starting-worklet' | 'ready' | 'error' {
+  return _startupState;
 }
 
 /**
@@ -474,6 +684,7 @@ export async function startTranscodeWorklet(config: {
   // Get Worklet class at runtime
   const WorkletClass = require('react-native-bare-kit').Worklet;
   const FS = require('expo-file-system');
+  const FSLegacy = require('expo-file-system/legacy');
 
   // Terminate any existing transcode worklet
   if (transcodeWorklet) {
@@ -529,7 +740,7 @@ export async function startTranscodeWorklet(config: {
       });
 
       // Determine storage path for worklet args
-      let storagePath = FS.documentDirectory || '';
+      let storagePath = resolveStorageUri(FS, FSLegacy);
       if (storagePath.startsWith('file://')) {
         storagePath = storagePath.slice(7);
       }

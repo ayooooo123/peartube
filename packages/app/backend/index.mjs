@@ -9,6 +9,8 @@
 
 let HRPC = null
 let createBackendContext = null
+let setIsShuttingDown = null
+let shutdownBackend = null
 let generateAndStoreThumbnail = null
 let path = null
 let fs = null
@@ -17,44 +19,52 @@ let b4a = null
 let http1 = null
 let transcoder = null
 let hlsTranscoder = null
+let fsNativeExtensions = null
 
 async function loadBackendModules() {
   const [
     specMod,
     orchestratorMod,
+    storageMod,
     thumbnailMod,
     pathMod,
     fsMod,
     osMod,
     b4aMod,
     http1Mod,
+    fsNativeExtensionsMod,
     transcoderMod,
     hlsTranscoderMod,
   ] = await Promise.all([
     import('@peartube/spec'),
     import('@peartube/backend/orchestrator'),
+    import('@peartube/backend/storage'),
     import('@peartube/backend/thumbnail'),
     import('bare-path'),
     import('bare-fs'),
     import('bare-os'),
     import('b4a'),
     import('bare-http1'),
+    import('fs-native-extensions'),
     import('./transcoder.mjs'),
     import('./hls-transcoder.mjs'),
   ])
 
   HRPC = specMod?.default ?? specMod
   createBackendContext = orchestratorMod?.createBackendContext
+  setIsShuttingDown = orchestratorMod?.setIsShuttingDown
+  shutdownBackend = storageMod?.shutdownBackend
   generateAndStoreThumbnail = thumbnailMod?.generateAndStoreThumbnail
   path = pathMod?.default ?? pathMod
   fs = fsMod?.default ?? fsMod
   os = osMod?.default ?? osMod
   b4a = b4aMod?.default ?? b4aMod
   http1 = http1Mod?.default ?? http1Mod
+  fsNativeExtensions = fsNativeExtensionsMod?.default ?? fsNativeExtensionsMod
   transcoder = transcoderMod
   hlsTranscoder = hlsTranscoderMod
 
-  if (!HRPC || !createBackendContext || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !hlsTranscoder) {
+  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !hlsTranscoder || !fsNativeExtensions) {
     throw new Error('Missing required backend modules after dynamic import')
   }
 }
@@ -95,6 +105,7 @@ if (!storagePath || !storagePath.startsWith('/')) {
 
 // HRPC instance (initialized early so we can surface init errors)
 let rpc = null
+let handlersRegistered = false
 
 // ============================================
 // Cast (FCast/Chromecast) helpers
@@ -767,18 +778,26 @@ function ensureRpc() {
     console.log('[Backend] HRPC initialized')
 
     // Backward-compat shim: some mobile bundles still send old command ids.
-    // Map old refresh-feed id (16) to the new id (18) only when payload is empty,
-    // so normal join-channel requests (which include data) keep working.
+    // - old refresh-feed id (16) -> new id (18) only when payload is empty
+    // - old get-video-stats id (24) -> new id (30) when payload exists
+    // Keep join-channel/get-swarm-status semantics intact for modern clients.
     try {
       const rawRpc = rpc?._rpc
       if (rawRpc && !rawRpc._peartubeCompat) {
         const originalOnRequest = rawRpc._onrequest
         rawRpc._onrequest = async (req) => {
           try {
-            if (req?.command === 16 && (!req.data || req.data.length === 0)) {
+            const hasPayload = Boolean(req?.data && req.data.length > 0)
+            if (req?.command === 16 && !hasPayload) {
               req.command = 18
             }
+            if (req?.command === 24 && hasPayload) {
+              req.command = 30
+            }
           } catch {}
+          if (!handlersRegistered) {
+            throw new Error('Backend not ready: handlers are not registered yet')
+          }
           try {
             return await originalOnRequest(req)
           } catch (err) {
@@ -868,10 +887,14 @@ try {
   await loadBackendModules()
 } catch (err) {
   reportBackendError('Backend module import failed', err)
-  await new Promise(() => {})
+  throw err
 }
 
 ensureRpc()
+
+function ipcLog(msg) {
+  try { rpc?.eventLog?.({ level: 'info', message: msg, timestamp: Date.now() }) } catch {}
+}
 
 // Initialize storage directory
 const storageDir = path.join(storagePath, 'peartube-data')
@@ -882,14 +905,134 @@ try {
 }
 
 // Helps confirm which backend bundle is actually running on device.
-const BACKEND_BUNDLE_VERSION = 'add-audio-fifo-v4'
+const BACKEND_BUNDLE_VERSION = 'corestore-cleanup-v3'
 console.log('[Backend] Bundle version:', BACKEND_BUNDLE_VERSION)
 
-// Initialize backend
+const OWNER_LOCK_FILE = 'backend-owner.lock'
+let ownerLockFd = -1
+let backendCtx = null
+
+function closeOwnerLock(reason = 'shutdown') {
+  if (ownerLockFd === -1) return
+  const fd = ownerLockFd
+  ownerLockFd = -1
+  try {
+    fsNativeExtensions?.unlock?.(fd)
+  } catch {}
+  try {
+    fs.close(fd, () => {})
+  } catch {}
+  console.log('[Backend] Released owner lock:', reason)
+}
+
+async function acquireOwnerLock() {
+  const tryLock = fsNativeExtensions?.tryLock
+  if (typeof tryLock !== 'function') {
+    console.warn('[Backend] fs-native-extensions.tryLock unavailable, skipping owner lock')
+    return
+  }
+
+  const lockPath = path.join(storageDir, OWNER_LOCK_FILE)
+  const fd = await new Promise((resolve, reject) => {
+    fs.open(lockPath, 'a+', (err, openedFd) => {
+      if (err) return reject(err)
+      resolve(openedFd)
+    })
+  })
+
+  let acquired = false
+  const maxAttempts = 10
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      acquired = tryLock(fd)
+    } catch (err) {
+      console.warn('[Backend] tryLock error:', err.message)
+    }
+    if (acquired) break
+    await new Promise(r => setTimeout(r, 200))
+  }
+
+  if (!acquired) {
+    console.warn('[Backend] Could not acquire owner lock after', maxAttempts, 'attempts, proceeding without it')
+    try { fs.close(fd, () => {}) } catch {}
+    return
+  }
+
+  ownerLockFd = fd
+  console.log('[Backend] Acquired owner lock fd:', ownerLockFd)
+}
+
+if (typeof Bare !== 'undefined' && Bare?.on) {
+  Bare.on('exit', () => {
+    if (!backendCtx?._isShutdown) {
+      shutdownBackend?.(backendCtx).catch(() => {})
+    }
+    closeCastProxyServer('bare-exit')
+    closeOwnerLock('bare-exit')
+    return true
+  })
+}
+
+if (typeof process !== 'undefined' && process?.on) {
+  process.on('exit', () => closeOwnerLock('process-exit'))
+}
+
+await acquireOwnerLock()
+ipcLog('[init] owner lock done')
+
+// Remove stale CORESTORE device-file so Corestore can acquire a fresh FD lock.
+// When the previous worklet was killed ungracefully (force-stop, OOM, crash),
+// its FD lock on CORESTORE is never released. Since we already hold the owner
+// lock, we know no other backend is running — the stale file is safe to delete.
+try {
+  const corestoreDeviceFile = path.join(storageDir, 'CORESTORE')
+  fs.unlinkSync(corestoreDeviceFile)
+  console.log('[Backend] Removed stale CORESTORE device file')
+} catch (e) {
+  if (e.code !== 'ENOENT') console.log('[Backend] CORESTORE cleanup skipped:', e.message)
+}
+
+// Clean up stale top-level RocksDB artifacts that should live under db/.
+// hypercore-storage's tmpFixStorage migration moves these, but if it ran
+// while db/<name> already existed it would ENOTEMPTY. Remove the top-level
+// copies so the migration (if it ever re-triggers) won't fail.
+function rmdirRecursive(dir) {
+  try {
+    const entries = fs.readdirSync(dir)
+    for (const e of entries) {
+      const full = path.join(dir, e)
+      try {
+        const st = fs.statSync(full)
+        if (st.isDirectory()) rmdirRecursive(full)
+        else fs.unlinkSync(full)
+      } catch {}
+    }
+    fs.rmdirSync(dir)
+  } catch {}
+}
+try {
+  const staleTopLevel = ['logs', 'LOG', 'LOG.old', 'IDENTITY', 'CURRENT', 'MANIFEST-000001']
+  for (const name of staleTopLevel) {
+    const p = path.join(storageDir, name)
+    try {
+      const st = fs.statSync(p)
+      if (st.isDirectory()) {
+        rmdirRecursive(p)
+      } else {
+        fs.unlinkSync(p)
+      }
+    } catch {}
+  }
+} catch {}
+ipcLog('[init] CORESTORE cleanup done')
+
 let backend = null
 try {
+  ipcLog('[init] createBackendContext starting')
   backend = await createBackendContext({
     storagePath: storageDir,
+    corestoreWaitForLock: true,
+    ipcLog,
     onFeedUpdate: () => {
       if (rpc) {
         try {
@@ -902,14 +1045,10 @@ try {
     onStatsUpdate: (driveKey, videoPath, stats) => {
       if (rpc) {
         try {
-          // HRPC `event-video-stats` expects `{ stats: VideoStats }` where VideoStats matches the schema:
-          // status/progress/totalBlocks/downloadedBlocks/totalBytes/downloadedBytes/peerCount/speedMBps/uploadSpeedMBps/elapsed/isComplete
           rpc.eventVideoStats({
             stats: {
-              // Ensure identifiers are always present for routing on the client side.
               videoId: videoPath,
               channelKey: driveKey,
-              // The backend VideoStatsTracker already produces schema-compatible fields.
               ...stats
             }
           })
@@ -921,14 +1060,64 @@ try {
   })
 } catch (err) {
   reportBackendError('Backend init failed', err)
-}
-
-if (!backend) {
-  console.log('[Backend] Backend unavailable; skipping HRPC handler registration')
-  await new Promise(() => {})
+  closeOwnerLock('backend-unavailable')
+  throw err
 }
 
 const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats, initializeIdentityFromMnemonic } = backend
+backendCtx = ctx
+
+let shutdownIpcInFlight = null
+
+function closeCastProxyServer(reason = 'shutdown') {
+  if (!castProxyServer) return
+  try {
+    castProxyServer.close()
+  } catch {}
+  castProxyServer = null
+  castProxyPort = 0
+  castProxyReady = null
+  console.log('[Backend] Closed cast proxy server:', reason)
+}
+
+function parseIpcShutdownMessage(chunk) {
+  if (!chunk) return null
+  try {
+    const text = b4a.toString(chunk).trim()
+    if (!text || text[0] !== '{') return null
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+async function handleIpcShutdownRequest() {
+  if (shutdownIpcInFlight) return shutdownIpcInFlight
+  shutdownIpcInFlight = (async () => {
+    setIsShuttingDown(true)
+    await shutdownBackend(ctx)
+    closeCastProxyServer('ipc-shutdown')
+    closeOwnerLock('shutdown')
+    try {
+      IPC.write(b4a.from(JSON.stringify({ type: 'shutdown-complete' })))
+    } catch {}
+  })().finally(() => {
+    shutdownIpcInFlight = null
+  })
+  return shutdownIpcInFlight
+}
+
+if (IPC?.on) {
+  IPC.on('data', (chunk) => {
+    const msg = parseIpcShutdownMessage(chunk)
+    if (msg?.type === 'shutdown') {
+      handleIpcShutdownRequest().catch((err) => {
+        console.warn('[Backend] IPC shutdown failed:', err?.message || err)
+      })
+    }
+  })
+}
 
 const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
 console.log('[Backend] Backend initialized, blob server port:', blobPort, '(from blobServer.port:', ctx.blobServer?.port, ', from ctx.blobServerPort:', ctx.blobServerPort, ')')
@@ -936,7 +1125,7 @@ console.log('[Backend] Backend initialized, blob server port:', blobPort, '(from
 ensureRpc()
 if (!rpc) {
   reportBackendError('HRPC unavailable', 'Failed to initialize HRPC transport')
-  await new Promise(() => {})
+  throw new Error('Failed to initialize HRPC transport')
 }
 
 function getThumbnailMime(thumbPath) {
@@ -953,12 +1142,16 @@ function getThumbnailMime(thumbPath) {
 async function restoreFeedCache() {
   try {
     const cached = await ctx.metaDb.get('public-feed-cache').catch(() => null)
-    const keys = cached?.value || []
-    if (Array.isArray(keys) && keys.length) {
-      console.log('[Backend] Restoring public feed cache, entries:', keys.length)
-      for (const key of keys) {
+    const entries = cached?.value || []
+    if (Array.isArray(entries) && entries.length) {
+      console.log('[Backend] Restoring public feed cache, entries:', entries.length)
+      for (const entry of entries) {
         try {
-          publicFeed.addEntry(key, 'peer')
+          if (typeof entry === 'object' && entry.driveKey) {
+            publicFeed.addEntry(entry.driveKey, 'peer', entry.publicBeeKey || null)
+          } else if (typeof entry === 'string') {
+            publicFeed.addEntry(entry, 'peer')
+          }
         } catch {}
       }
     }
@@ -967,10 +1160,9 @@ async function restoreFeedCache() {
   }
 }
 
-// Persist feed cache
 async function persistFeedCache() {
   try {
-    const entries = publicFeed.getFeed().map((e) => e.driveKey)
+    const entries = publicFeed.getFeed().map((e) => ({ driveKey: e.driveKey, publicBeeKey: e.publicBeeKey || null }))
     await ctx.metaDb.put('public-feed-cache', entries)
     console.log('[Backend] Saved public feed cache:', entries.length)
   } catch (e) {
@@ -1866,7 +2058,10 @@ let lastCastPlayTime = 0
 let castLoadCompletedAt = 0
 const CAST_PLAY_DEBOUNCE_MS = 2000
 const CAST_POST_LOAD_GRACE_MS = 5000
-const CAST_MIN_SYNC_PERCENT = 10
+const CAST_MIN_SYNC_PERCENT = 20
+const CAST_TARGET_SYNC_PERCENT = 35
+const CAST_SYNC_WAIT_TIMEOUT_MS = 45000
+const CAST_SYNC_WAIT_INTERVAL_MS = 3000
 
 rpc.onCastPlay(async (req) => {
   // Debounce: prevent rapid repeated calls - return success to avoid error UI
@@ -1961,16 +2156,45 @@ rpc.onCastPlay(async (req) => {
         syncStatus = null
       }
 
-      // Minimum sync threshold check
-      if (!isVideoComplete && syncStatus) {
-        const syncPercent = syncStatus.progress || 0
-        console.log('[Backend] Cast sync check:', syncPercent + '% synced, threshold: ' + CAST_MIN_SYNC_PERCENT + '%, decision:', syncPercent < CAST_MIN_SYNC_PERCENT ? 'REJECT' : 'PROCEED')
-        if (syncPercent < CAST_MIN_SYNC_PERCENT) {
-          console.warn('[Backend] Cast rejected: video is only ' + syncPercent + '% downloaded. Need at least ' + CAST_MIN_SYNC_PERCENT + '%.')
-          return { success: false, error: 'Video is only ' + syncPercent + '% downloaded. Please wait until at least ' + CAST_MIN_SYNC_PERCENT + '% is available.' }
+      // Add a short buffering window before starting cast on partially-synced videos.
+      // This reduces mid-stream EOF when transcoder read speed briefly exceeds P2P download speed.
+      if (!isVideoComplete && syncStatus && !syncStatus.assumed) {
+        let latestSyncStatus = syncStatus
+        let syncPercent = latestSyncStatus.progress || 0
+
+        if (syncPercent < CAST_TARGET_SYNC_PERCENT) {
+          const waitStart = Date.now()
+          console.log('[Backend] Cast play: waiting for safer sync level:', syncPercent + '% -> target ' + CAST_TARGET_SYNC_PERCENT + '%')
+
+          while (Date.now() - waitStart < CAST_SYNC_WAIT_TIMEOUT_MS) {
+            await new Promise((resolve) => setTimeout(resolve, CAST_SYNC_WAIT_INTERVAL_MS))
+            try {
+              const refreshed = await api.checkVideoSync(requestedUrl)
+              if (refreshed) {
+                latestSyncStatus = refreshed
+                isVideoComplete = Boolean(refreshed.isComplete)
+                syncPercent = refreshed.progress || 0
+                console.log('[Backend] Cast play: sync wait progress', syncPercent + '%', isVideoComplete ? '(complete)' : '')
+                if (isVideoComplete || syncPercent >= CAST_TARGET_SYNC_PERCENT) {
+                  break
+                }
+              }
+            } catch (waitErr) {
+              console.warn('[Backend] Cast play: sync wait check failed:', waitErr?.message)
+              break
+            }
+          }
         }
-        if (syncPercent < 30) {
-          console.warn('[Backend] Cast starting with low sync (' + syncPercent + '%). Playback may stall.')
+
+        syncStatus = latestSyncStatus
+        const finalSyncPercent = syncStatus.progress || 0
+        console.log('[Backend] Cast sync check:', finalSyncPercent + '% synced, min:', CAST_MIN_SYNC_PERCENT + '%, target:', CAST_TARGET_SYNC_PERCENT + '%')
+        if (finalSyncPercent < CAST_MIN_SYNC_PERCENT) {
+          console.warn('[Backend] Cast rejected: video is only ' + finalSyncPercent + '% downloaded. Need at least ' + CAST_MIN_SYNC_PERCENT + '%.')
+          return { success: false, error: 'Video is only ' + finalSyncPercent + '% downloaded. Please wait a bit longer and try again.' }
+        }
+        if (!isVideoComplete && finalSyncPercent < CAST_TARGET_SYNC_PERCENT) {
+          console.warn('[Backend] Cast starting below target sync (' + finalSyncPercent + '%). Playback may still stall on slow peers.')
         }
       }
 
@@ -2398,15 +2622,17 @@ rpc.onEventUploadProgress(() => {})
 rpc.onEventFeedUpdate(() => {})
 rpc.onEventLog(() => {})
 rpc.onEventVideoStats(() => {})
-rpc.onEventTranscodeProgress(() => {})
+rpc.onEventTranscodeProgress?.(() => {})
 
 console.log('[Backend] HRPC handlers registered')
+handlersRegistered = true
 
-// Send ready event
+// Send ready event + initial feed update
 try {
   const port = ctx.blobServer?.port || ctx.blobServerPort || 0
   rpc.eventReady({ blobServerPort: port, blobServerHost: ctx.blobServerHost || '127.0.0.1' })
   console.log('[Backend] Sent eventReady via HRPC, blobServerPort:', port, 'host:', ctx.blobServerHost || '127.0.0.1')
+  rpc.eventFeedUpdate({ channelKey: 'feed', action: 'update' })
 } catch (e) {
   console.error('[Backend] Failed to send eventReady:', e.message)
 }

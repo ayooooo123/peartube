@@ -117,6 +117,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
   const CHANNEL_META_CACHE_TTL_MS = 30_000
   /** @type {Map<string, Promise<any>>} */
   const prefetchInFlight = new Map()
+  const activeRangeRequests = new Map() // key: `${driveKey}:${videoPath}`, value: { ranges: [], core, onDownload, onUpload }
 
   /** @type {Map<string, { ts: number, value: any[] }>} */
   const listVideosCache = new Map()
@@ -1031,6 +1032,18 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       const existing = prefetchInFlight.get(prefetchKey)
       if (existing) return existing
 
+      // Cancel any orphaned range requests from a previous prefetch session
+      const existingRanges = activeRangeRequests.get(prefetchKey)
+      if (existingRanges) {
+        console.log('[API] Cancelling orphaned range requests for:', videoPath)
+        existingRanges.ranges.forEach(r => { try { r?.destroy?.() } catch {} })
+        if (existingRanges.core) {
+          try { existingRanges.core.off('download', existingRanges.onDownload) } catch {}
+          try { existingRanges.core.off('upload', existingRanges.onUpload) } catch {}
+        }
+        activeRangeRequests.delete(prefetchKey)
+      }
+
       const prefetchPromise = (async () => {
         const prefetchStart = Date.now();
 
@@ -1090,19 +1103,31 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         return { success: false, error: 'Corestore is closed' };
       }
 
-      // Resolve the blob source from metadata
+      const existingIntent = await loadDownloadIntent(ctx, driveKey, videoPath)
       let blobMeta = null
-      const v = await this.getVideoData(driveKey, videoPath, publicBeeKey)
-      console.log('[API] Prefetch video data:', v?.id, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16), 'path:', v?.path)
-      if (v?.blobsCoreKey && v?.blobId) {
+      let v = null
+
+      if (existingIntent) {
+        console.log('[API] Resuming download from intent:', videoPath)
         blobMeta = {
-          blobsCoreKey: v.blobsCoreKey,
-          blobId: v.blobId,
-          byteLength: v?.size || v?.byteLength || 0
+          blobsCoreKey: existingIntent.blobsCoreKey,
+          blobId: existingIntent.blobId,
+          byteLength: existingIntent.totalBytes || 0
         }
-        console.log('[API] Prefetch using blobsCoreKey:', v.blobsCoreKey?.slice(0, 16))
       } else {
-        console.log('[API] Prefetch: video missing blobsCoreKey or blobId, v:', JSON.stringify(v)?.slice(0, 200))
+        // Resolve the blob source from metadata
+        v = await this.getVideoData(driveKey, videoPath, publicBeeKey)
+        console.log('[API] Prefetch video data:', v?.id, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16), 'path:', v?.path)
+        if (v?.blobsCoreKey && v?.blobId) {
+          blobMeta = {
+            blobsCoreKey: v.blobsCoreKey,
+            blobId: v.blobId,
+            byteLength: v?.size || v?.byteLength || 0
+          }
+          console.log('[API] Prefetch using blobsCoreKey:', v.blobsCoreKey?.slice(0, 16))
+        } else {
+          console.log('[API] Prefetch: video missing blobsCoreKey or blobId, v:', JSON.stringify(v)?.slice(0, 200))
+        }
       }
 
       // Clean up any existing monitor
@@ -1143,6 +1168,23 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           const endBlock = blobId.blockOffset + blobId.blockLength
           const totalBlocks = blobId.blockLength
           const totalBytes = blobId.byteLength || blobMeta.byteLength || 0
+
+          if (!existingIntent && blobMeta?.blobsCoreKey) {
+            await saveDownloadIntent(ctx, {
+              driveKey,
+              videoPath,
+              blobsCoreKey: blobMeta.blobsCoreKey,
+              blobId: typeof blobMeta.blobId === 'string'
+                ? blobMeta.blobId
+                : `${blobId.blockOffset}:${blobId.blockLength}:${blobId.byteOffset}:${blobId.byteLength}`,
+              startBlock,
+              endBlock,
+              totalBlocks,
+              totalBytes,
+              mimeType: v?.mimeType || existingIntent?.mimeType || '',
+              startedAt: Date.now()
+            }).catch(err => console.log('[API] Failed to save download intent:', err?.message))
+          }
 
           // Count initial blocks already available
           // For large videos, use sampling instead of all-or-nothing has(start, end)
@@ -1285,19 +1327,34 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             })
           }
 
+          // Initialize range tracking entry (ranges added as they're created)
+          activeRangeRequests.set(prefetchKey, { ranges: [], core, onDownload, onUpload })
+
           if (!wasCached) {
             let fullDownloadStarted = false
             const startFullDownload = () => {
               if (fullDownloadStarted) return
               fullDownloadStarted = true
               const downloadRange = core.download({ start: startBlock, end: endBlock })
-              downloadRange.done().then(() => {
+              activeRangeRequests.get(prefetchKey)?.ranges.push(downloadRange)
+              downloadRange.done().then(async () => {
                 console.log('[API] Download complete (blobs)')
+                await deleteDownloadIntent(ctx, driveKey, videoPath).catch(err =>
+                  console.log('[API] Failed to delete download intent:', err?.message)
+                )
                 downloadSpeed = 0
                 if (videoStats) {
                   videoStats.updateStats(driveKey, videoPath, { status: 'complete' })
                   videoStats.emitStats(driveKey, videoPath, true) // force=true for completion
                   setTimeout(() => videoStats.cleanupMonitor(driveKey, videoPath), 30000)
+                }
+                activeRangeRequests.delete(prefetchKey)
+                // Register completed download as a seed for quota tracking
+                if (seedingManager) {
+                  seedingManager.addSeed(driveKey, videoPath, 'watched', {
+                    blockLength: totalBlocks,
+                    byteLength: totalBytes
+                  }).catch(err => console.log('[API] Failed to register seed:', err?.message))
                 }
               }).catch(err => {
                 if (err.message?.includes('closed') || ctx.store.closed) {
@@ -1310,6 +1367,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
                   videoStats.emitStats(driveKey, videoPath, true) // force=true for cancellation
                   videoStats.cleanupMonitor(driveKey, videoPath)
                 }
+                activeRangeRequests.delete(prefetchKey)
               })
             }
 
@@ -1319,6 +1377,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
                 const headEnd = Math.min(endBlock, startBlock + headBlocks)
                 console.log('[API] Prefetch head range (blobs):', (headEnd - startBlock), 'blocks')
                 const headRange = core.download({ start: startBlock, end: headEnd })
+                activeRangeRequests.get(prefetchKey).ranges.push(headRange)
                 let headTimeout = null
                 headTimeout = setTimeout(() => {
                   console.log('[API] Head prefetch slow, starting full download in parallel')
@@ -1343,7 +1402,9 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
                 // Avoid duplicating the head range on tiny files.
                 if (tailStart > startBlock + Math.max(1, headBlocks)) {
                   console.log('[API] Prefetch tail range (blobs):', (endBlock - tailStart), 'blocks')
-                  core.download({ start: tailStart, end: endBlock }).done().then(() => {
+                  const tailRange = core.download({ start: tailStart, end: endBlock })
+                  activeRangeRequests.get(prefetchKey).ranges.push(tailRange)
+                  tailRange.done().then(() => {
                     console.log('[API] Tail prefetch complete (blobs)')
                   }).catch(err => {
                     console.log('[API] Tail prefetch error (blobs):', err?.message)
@@ -1362,7 +1423,9 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
                 const overlapsTail = midStart < endBlock && midEnd > tailStart
                 if (!overlapsHead && !overlapsTail && midEnd > midStart) {
                   console.log('[API] Prefetch mid range (blobs):', (midEnd - midStart), 'blocks')
-                  core.download({ start: midStart, end: midEnd }).done().then(() => {
+                  const midRange = core.download({ start: midStart, end: midEnd })
+                  activeRangeRequests.get(prefetchKey).ranges.push(midRange)
+                  midRange.done().then(() => {
                     console.log('[API] Mid prefetch complete (blobs)')
                   }).catch(err => {
                     console.log('[API] Mid prefetch error (blobs):', err?.message)
@@ -1395,6 +1458,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           videoStats.updateStats(driveKey, videoPath, { status: 'error', error: err.message });
           videoStats.cleanupMonitor(driveKey, videoPath);
         }
+        activeRangeRequests.delete(prefetchKey)
         return { success: false, error: err.message };
       }
       })()

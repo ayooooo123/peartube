@@ -12,9 +12,10 @@ import { VideoCardDesktop, VideoCardProps } from './VideoCard.web'
 interface VideoGridProps {
   videos: VideoCardProps[]
   onVideoPress?: (videoId: string) => void
+  onChannelPress?: (videoId: string) => void
 }
 
-export function VideoGrid({ videos, onVideoPress }: VideoGridProps) {
+export function VideoGrid({ videos, onVideoPress, onChannelPress }: VideoGridProps) {
   return (
     <div style={styles.container}>
       <div style={styles.grid} className="desktop-video-grid">
@@ -23,6 +24,7 @@ export function VideoGrid({ videos, onVideoPress }: VideoGridProps) {
             key={video.id}
             {...video}
             onPress={() => onVideoPress?.(video.id)}
+            onChannelPress={onChannelPress ? () => onChannelPress(video.id) : undefined}
           />
         ))}
       </div>

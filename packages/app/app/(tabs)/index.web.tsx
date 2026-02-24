@@ -20,6 +20,7 @@ import { MpvPlayer, MpvPlayerRef } from '@/components/MpvPlayer'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
+import { VideoEditModal } from '@/components/VideoEditModal'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && !!(window as any).Pear
@@ -268,6 +269,28 @@ function WatchPageView({
   const [seekPosition, setSeekPosition] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isRelatedCollapsed, setIsRelatedCollapsed] = useState(false)
+
+  // Video editing
+  const [editingVideo, setEditingVideo] = useState<any>(null)
+  const [videoRefreshData, setVideoRefreshData] = useState<any>(null)
+  const isOwner = identity?.driveKey === channelKey
+
+  // Reset refresh data when video changes
+  useEffect(() => { setVideoRefreshData(null) }, [video?.id, channelKey])
+
+  const refreshVideoData = useCallback(async () => {
+    if (!rpc || !video) return
+    try {
+      const result = await rpc.getVideoData({
+        channelKey,
+        videoId: video.id || videoId,
+        publicBeeKey,
+      })
+      if (result) setVideoRefreshData(result)
+    } catch (err) {
+      console.error('[WatchPage] Failed to refresh video data:', err)
+    }
+  }, [rpc, channelKey, videoId, video?.id, publicBeeKey])
 
   // Casting
   const cast = useCast()
@@ -999,7 +1022,18 @@ function WatchPageView({
 
           {/* Video info */}
           <div style={watchStyles.videoInfo}>
-            <h1 style={watchStyles.title}>{video.title}</h1>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+              <h1 style={watchStyles.title}>{videoRefreshData?.title ?? video.title}</h1>
+              {isOwner && (
+                <button
+                  onClick={() => setEditingVideo(video)}
+                  style={watchStyles.editButton}
+                  aria-label="Edit video"
+                >
+                  <Feather name="edit-2" color={colors.textMuted} size={18} />
+                </button>
+              )}
+            </div>
             {isCasting && (
               <div style={watchStyles.castBanner}>
                 <Feather name="cast" color={colors.primary} size={14} />
@@ -1126,7 +1160,7 @@ function WatchPageView({
             {/* Description */}
             {video.description && (
               <div style={watchStyles.description}>
-                <p style={watchStyles.descriptionText}>{video.description}</p>
+                <p style={watchStyles.descriptionText}>{videoRefreshData?.description ?? video.description}</p>
               </div>
             )}
 
@@ -1346,6 +1380,18 @@ function WatchPageView({
         onAddManualDevice={cast.addManualDevice}
         onRefresh={cast.startDiscovery}
       />
+
+      {/* Video Edit Modal */}
+      <VideoEditModal
+        visible={!!editingVideo}
+        video={editingVideo}
+        channelKey={channelKey}
+        onClose={() => setEditingVideo(null)}
+        onSaved={() => {
+          setEditingVideo(null)
+          refreshVideoData()
+        }}
+      />
     </div>
   )
 }
@@ -1503,6 +1549,17 @@ const watchStyles: Record<string, React.CSSProperties> = {
     color: colors.text,
     margin: 0,
     lineHeight: 1.3,
+  },
+  editButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    backgroundColor: colors.bgSecondary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 8,
+    cursor: 'pointer',
+    flexShrink: 0,
   },
   castBanner: {
     display: 'flex',

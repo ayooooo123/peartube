@@ -17,6 +17,7 @@ import { MpvPlayer } from '@/components/MpvPlayer'
 import { MpvVideoView } from '@/components/video-player/MpvVideoView'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
+import { VideoEditModal } from '@/components/VideoEditModal'
 
 // HRPC methods used: getVideoUrl, prefetchVideo, getVideoStats, getChannelMeta
 
@@ -282,7 +283,7 @@ export default function VideoPlayerScreen() {
   const { isPear } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
   const videoHeight = Math.round(screenWidth * 9 / 16)
-  const { rpc } = useApp()
+  const { rpc, identity } = useApp()
   const isFocused = useIsFocused()
 
   // VideoPlayerContext - SHARED player for continuous playback
@@ -322,6 +323,9 @@ export default function VideoPlayerScreen() {
   const [videoData, setVideoData] = useState<any>(videoDataParam)
   const [loadingMeta, setLoadingMeta] = useState(!videoDataParam && !!channelKeyParam)
   const statsPollingRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Video editing
+  const [editingVideo, setEditingVideo] = useState<any>(null)
 
   // Casting
   const cast = useCast()
@@ -613,7 +617,17 @@ export default function VideoPlayerScreen() {
 
         {/* Video Title & Meta */}
         <View style={styles.videoInfo}>
-          <Text style={styles.videoTitle}>{videoData?.title || 'Untitled'}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <Text style={[styles.videoTitle, { flex: 1 }]}>{videoData?.title || 'Untitled'}</Text>
+            {identity?.driveKey && identity.driveKey === videoData?.channelKey && (
+              <Pressable
+                onPress={() => setEditingVideo(videoData)}
+                style={{ padding: 8, marginLeft: 8 }}
+              >
+                <Feather name="edit-2" color={colors.textMuted} size={20} />
+              </Pressable>
+            )}
+          </View>
           {cast.isConnected && (
             <View style={styles.castBanner}>
               <Feather name="cast" color={colors.primary} size={14} />
@@ -735,6 +749,26 @@ export default function VideoPlayerScreen() {
           setShowCastPicker(true)
         }}
         videoTitle={videoData?.title || null}
+      />
+
+      {/* Video Edit Modal */}
+      <VideoEditModal
+        visible={!!editingVideo}
+        video={editingVideo}
+        channelKey={videoData?.channelKey || ''}
+        onClose={() => setEditingVideo(null)}
+        onSaved={() => {
+          setEditingVideo(null)
+          if (rpc && videoData?.channelKey && id) {
+            rpc.getVideoData({
+              channelKey: videoData.channelKey,
+              videoId: id,
+              publicBeeKey: videoData?.publicBeeKey || undefined,
+            }).then((result: any) => {
+              if (result) setVideoData((prev: any) => ({ ...prev, ...result }))
+            }).catch(() => {})
+          }
+        }}
       />
     </View>
   )

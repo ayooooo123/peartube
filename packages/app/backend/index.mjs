@@ -977,6 +977,28 @@ if (typeof process !== 'undefined' && process?.on) {
   process.on('exit', () => closeOwnerLock('process-exit'))
 }
 
+// Check for stale backend-owner.lock before acquiring
+try {
+  const lockPath = path.join(storageDir, OWNER_LOCK_FILE)
+  if (fs.existsSync(lockPath)) {
+    const lockContent = fs.readFileSync(lockPath, 'utf8').trim()
+    const pid = parseInt(lockContent, 10)
+    if (!isNaN(pid)) {
+      let isAlive = false
+      try {
+        process.kill(pid, 0)
+        isAlive = true
+      } catch {}
+      if (!isAlive) {
+        fs.unlinkSync(lockPath)
+        console.log(`[Backend] Removed stale backend-owner.lock (PID ${pid} is dead)`)
+      }
+    }
+  }
+} catch (err) {
+  console.warn('[Backend] Could not check backend-owner.lock:', err?.message)
+}
+
 await acquireOwnerLock()
 ipcLog('[init] owner lock done')
 

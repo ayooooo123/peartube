@@ -123,13 +123,31 @@ export async function createBackendContext(config) {
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
   const initializeStorageWithRetry = async (opts) => {
-    const maxAttempts = 10
+    const maxAttempts = 20
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await initializeStorage(opts)
       } catch (err) {
-        if (!isCorestoreLockError(err) || attempt === maxAttempts) throw err
-        const backoffMs = Math.min(350 * attempt, 3000)
+        if (!isCorestoreLockError(err) || attempt === maxAttempts) {
+          if (isCorestoreLockError(err)) {
+            console.warn('[Orchestrator] All retries exhausted. Attempting stale lock recovery...')
+            try {
+              const _fs = (await import('bare-fs')).default
+              const _path = (await import('bare-path')).default
+              const lockFile = _path.join(opts.storagePath, 'LOCK')
+              const corestoreFile = _path.join(opts.storagePath, 'CORESTORE')
+              try { _fs.unlinkSync(lockFile) } catch {}
+              try { _fs.unlinkSync(corestoreFile) } catch {}
+              const result = await initializeStorage(opts)
+              console.log('[Orchestrator] Stale lock recovery succeeded')
+              return result
+            } catch {
+              throw err
+            }
+          }
+          throw err
+        }
+        const backoffMs = Math.min(350 * attempt, 5000)
         console.warn(`[Orchestrator] Corestore lock detected during init. Retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`)
         await delay(backoffMs)
       }

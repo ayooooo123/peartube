@@ -70,6 +70,8 @@ const castKeepaliveIntervalRef = useRef<NodeJS.Timeout | null>(null)
 const castSuspendGraceTimerRef = useRef<NodeJS.Timeout | null>(null)
 const castKeepaliveLastErrorLogAtRef = useRef(0)
 const lastKnownCastActiveAtRef = useRef(0)
+const nativeInitInFlightRef = useRef<Promise<void> | null>(null)
+const nativeEventsSubscribedRef = useRef(false)
 const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
 
   const startupLog = useCallback((...args: unknown[]) => {
@@ -96,9 +98,13 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
       const t0 = Date.now()
       setLoading(true)
 
-      // Load identities
-      const result = await platformRPC.rpc.getIdentities()
-      const identities = result?.identities || []
+      let identities: any[] = []
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const result = await platformRPC.rpc.getIdentities()
+        identities = result?.identities || []
+        if (identities.length > 0 || attempt === 3) break
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
       console.log('[App] Got', identities.length, 'identities')
       startupLog('[Startup] getIdentities ms=', Date.now() - t0)
 
@@ -215,6 +221,12 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
   }, [])
 
   const initNativeBackend = useCallback(async () => {
+    if (nativeInitInFlightRef.current) {
+      await nativeInitInFlightRef.current
+      return
+    }
+
+    const run = (async () => {
     const t0 = Date.now()
     console.log('[App] Initializing native backend via platform RPC...')
     setBackendError(null)
@@ -222,46 +234,45 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
     // Import platform RPC
     platformRPC = await import('@peartube/platform/rpc')
 
-    // Subscribe to events before initialization
-    platformRPC.events.onReady(async (data: any) => {
-      console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
-      startupLog('[Startup] backend ready ms=', Date.now() - t0)
-      setBlobServerPort(data?.blobServerPort || null)
-      setReady(true)
-      setBackendError(null)
-
-      // Load identity after ready
-      await loadInitialData()
-    })
-
-    platformRPC.events.onError((data: any) => {
-      console.error('[App] Backend error:', data?.message)
-      setBackendError(data?.message || 'Backend error')
-    })
-
-    platformRPC.events.onVideoStats((data: any) => {
-      // HRPC `event-video-stats` payload is `{ stats: VideoStats }`.
-      // Some layers historically forwarded a legacy `{ channelKey, videoId, stats }` shape.
-      // Normalize both to the context emitter signature.
-      const stats = data?.stats ?? data
-      const channelKey = data?.channelKey ?? stats?.channelKey
-      const videoId = data?.videoId ?? stats?.videoId
-
-      if (channelKey && videoId && stats) {
-        videoStatsEventEmitter.emit(channelKey, videoId, stats)
-      }
-    })
-
-    platformRPC.events.onUploadProgress((data: any) => {
-      console.log('[App] Upload progress:', data?.progress + '%')
-    })
-
-    if ((platformRPC.events as any).onLog) {
-      ;(platformRPC.events as any).onLog((data: any) => {
-        const level = data?.level || 'info'
-        const msg = data?.message || JSON.stringify(data)
-        console.log(`[BackendLog/${level}]`, msg)
+    if (!nativeEventsSubscribedRef.current) {
+      platformRPC.events.onReady(async (data: any) => {
+        console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
+        startupLog('[Startup] backend ready ms=', Date.now() - t0)
+        setBlobServerPort(data?.blobServerPort || null)
+        setReady(true)
+        setBackendError(null)
+        await loadInitialData()
       })
+
+      platformRPC.events.onError((data: any) => {
+        const message = String(data?.message || 'Backend error')
+        console.error('[App] Backend error:', message)
+        setBackendError(message)
+      })
+
+      platformRPC.events.onVideoStats((data: any) => {
+        const stats = data?.stats ?? data
+        const channelKey = data?.channelKey ?? stats?.channelKey
+        const videoId = data?.videoId ?? stats?.videoId
+
+        if (channelKey && videoId && stats) {
+          videoStatsEventEmitter.emit(channelKey, videoId, stats)
+        }
+      })
+
+      platformRPC.events.onUploadProgress((data: any) => {
+        console.log('[App] Upload progress:', data?.progress + '%')
+      })
+
+      if ((platformRPC.events as any).onLog) {
+        ;(platformRPC.events as any).onLog((data: any) => {
+          const level = data?.level || 'info'
+          const msg = data?.message || JSON.stringify(data)
+          console.log(`[BackendLog/${level}]`, msg)
+        })
+      }
+
+      nativeEventsSubscribedRef.current = true
     }
 
     // Initialize with backend source
@@ -274,6 +285,11 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
       console.log('[App] Downloader worker bundle length:', downloaderWorkerSource?.length || 0)
       await platformRPC.initPlatformRPC({ backendSource, downloaderWorkerSource })
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
+
+      // Don't set ready here — wait for eventReady from backend.
+      // The backend root causes for startup stalls (FD locks, identity
+      // loading, corestore contention) are fixed, so eventReady should
+      // fire within seconds.
     } catch (err) {
       console.error('[App] Failed to initialize platform RPC:', err)
       const message = err instanceof Error ? err.message : 'Failed to initialize backend'
@@ -285,6 +301,16 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
         setBackendError('Backend bundles are missing. Run `npm run bundle:backend` in packages/app, then restart the app.')
       } else {
         setBackendError(message)
+      }
+    }
+    })()
+
+    nativeInitInFlightRef.current = run
+    try {
+      await run
+    } finally {
+      if (nativeInitInFlightRef.current === run) {
+        nativeInitInFlightRef.current = null
       }
     }
   }, [loadInitialData, startupLog])
@@ -461,7 +487,12 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
         })
       }
 
-      if (!platformRPC.isInitialized()) {
+      const startupState = platformRPC.getStartupState?.() || 'idle'
+      const shouldReinitialize = !platformRPC.isInitialized()
+        && !nativeInitInFlightRef.current
+        && (startupState === 'idle' || startupState === 'error')
+
+      if (shouldReinitialize) {
         console.log('[App] Backend not initialized, reinitializing...')
         initNativeBackend()
       }
@@ -489,8 +520,9 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
         subscription.remove()
         clearCastSuspendGraceTimer()
         stopCastKeepalive()
-        // Don't terminate worklet if playback is active (e.g., during PiP)
-        if (platformRPC && !playbackActiveEmitter.isActive) {
+        // Always terminate worklet on unmount — shutdown signal handles graceful cleanup
+        if (platformRPC) {
+          console.log('[App] Initiating backend shutdown before terminate')
           platformRPC.terminatePlatformRPC()
         }
       }

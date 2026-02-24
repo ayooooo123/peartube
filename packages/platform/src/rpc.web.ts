@@ -335,6 +335,12 @@ export const rpc = {
     return ensureRPC().downloadVideo(req);
   },
 
+  updateChannel: (req: any) => ensureRPC().updateChannel(req),
+
+  updateVideoMetadata: (req: any) => ensureRPC().updateVideoMetadata(req),
+
+  updateChannelAvatar: (req: any) => ensureRPC().updateChannelAvatar(req),
+
   async deleteVideo(videoIdOrReq: string | { videoId: string }): Promise<{ success: boolean; error?: string }> {
     const req = typeof videoIdOrReq === 'string' ? { videoId: videoIdOrReq } : videoIdOrReq;
     return ensureRPC().deleteVideo(req);

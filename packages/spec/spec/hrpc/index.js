@@ -205,7 +205,9 @@ const methods = new Map([
   ['@peartube/attest-device', 98],
   [98, '@peartube/attest-device'],
   ['@peartube/verify-attestation', 99],
-  [99, '@peartube/verify-attestation']
+  [99, '@peartube/verify-attestation'],
+  ['@peartube/update-video-metadata', 100],
+  [100, '@peartube/update-video-metadata']
 ])
 
 class HRPC {
@@ -312,7 +314,8 @@ class HRPC {
       ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-request')],
       ['@peartube/bootstrap-device', getEncoding('@peartube/bootstrap-device-request')],
       ['@peartube/attest-device', getEncoding('@peartube/attest-device-request')],
-      ['@peartube/verify-attestation', getEncoding('@peartube/verify-attestation-request')]
+      ['@peartube/verify-attestation', getEncoding('@peartube/verify-attestation-request')],
+      ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -403,7 +406,8 @@ class HRPC {
       ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-response')],
       ['@peartube/bootstrap-device', getEncoding('@peartube/bootstrap-device-response')],
       ['@peartube/attest-device', getEncoding('@peartube/attest-device-response')],
-      ['@peartube/verify-attestation', getEncoding('@peartube/verify-attestation-response')]
+      ['@peartube/verify-attestation', getEncoding('@peartube/verify-attestation-response')],
+      ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
@@ -901,6 +905,10 @@ class HRPC {
     return this._call('@peartube/verify-attestation', args)
   }
 
+  async updateVideoMetadata(args) {
+    return this._call('@peartube/update-video-metadata', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1299,6 +1307,10 @@ class HRPC {
 
   onVerifyAttestation(responseFn) {
     this._handlers['@peartube/verify-attestation'] = responseFn
+  }
+
+  onUpdateVideoMetadata(responseFn) {
+    this._handlers['@peartube/update-video-metadata'] = responseFn
   }
 
   _requestIsStream(command) {

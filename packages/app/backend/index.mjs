@@ -12,6 +12,7 @@ let createBackendContext = null
 let setIsShuttingDown = null
 let shutdownBackend = null
 let setCastActive = null
+let isCastActive = null
 let generateAndStoreThumbnail = null
 let path = null
 let fs = null
@@ -56,6 +57,7 @@ async function loadBackendModules() {
   setIsShuttingDown = orchestratorMod?.setIsShuttingDown
   shutdownBackend = storageMod?.shutdownBackend
   setCastActive = storageMod?.setCastActive
+  isCastActive = storageMod?.isCastActive
   generateAndStoreThumbnail = thumbnailMod?.generateAndStoreThumbnail
   path = pathMod?.default ?? pathMod
   fs = fsMod?.default ?? fsMod
@@ -66,7 +68,7 @@ async function loadBackendModules() {
   transcoder = transcoderMod
   hlsTranscoder = hlsTranscoderMod
 
-  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !hlsTranscoder || !fsNativeExtensions || !setCastActive) {
+  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !hlsTranscoder || !fsNativeExtensions || !setCastActive || !isCastActive) {
     throw new Error('Missing required backend modules after dynamic import')
   }
 }
@@ -118,7 +120,7 @@ let castProxyPort = 0
 let castProxyReady = null
 const castProxySessions = new Map()
 const castProxyPlaylistLogged = new Set()
-const CAST_PROXY_TTL_MS = 30 * 60 * 1000
+const CAST_PROXY_TTL_MS = 8 * 60 * 60 * 1000
 
 let CastContext = null
 let castLoadError = null
@@ -138,11 +140,22 @@ function normalizeCastVolume(volume) {
 }
 
 function cleanupCastProxySessions(now = Date.now()) {
+  // Skip cleanup entirely when a cast is active to prevent session loss
+  if (isCastActive && isCastActive()) {
+    return
+  }
   for (const [token, entry] of castProxySessions.entries()) {
     const lastSeen = entry.lastAccessAt || entry.createdAt
     if (now - lastSeen > CAST_PROXY_TTL_MS) {
       castProxySessions.delete(token)
     }
+  }
+}
+
+function refreshCastProxySessions() {
+  const now = Date.now()
+  for (const entry of castProxySessions.values()) {
+    entry.lastAccessAt = now
   }
 }
 
@@ -2561,6 +2574,8 @@ rpc.onCastSetVolume(async (req) => {
 })
 
 rpc.onCastGetState(async () => {
+  // Refresh proxy session timestamps during active cast keepalive (called every 15s)
+  refreshCastProxySessions()
   // compact-encoding uint requires positive integers (>=1)
   // For optional uint fields, omit them or use 1 as minimum
   if (!castContext) {

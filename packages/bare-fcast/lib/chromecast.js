@@ -244,6 +244,10 @@ export class ChromecastDevice extends EventEmitter {
     this._lastEmittedError = null
     this._loadStartedAt = 0
     this._intentionalStopAt = 0 // Track stop() calls to suppress stale IDLE:ERROR
+    this._shouldAutoReconnect = true
+    this._lastPlayOptions = null
+    this._reconnectInProgress = false
+    this._reconnectSession = 0
     // If play() is called repeatedly during debounce, keep only the latest request.
     this._pendingLoadOptions = null
     this._pendingLoadTimer = null
@@ -379,6 +383,10 @@ export class ChromecastDevice extends EventEmitter {
    * Disconnect from the device
    */
   async disconnect() {
+    this._shouldAutoReconnect = false
+    this._lastPlayOptions = null
+    this._reconnectSession += 1
+    this._reconnectInProgress = false
     const wasConnected = this._connected
     this._connected = false
     this.emit('connectionStateChanged', 'disconnected')
@@ -401,6 +409,15 @@ export class ChromecastDevice extends EventEmitter {
   async play(options) {
     if (!this._connected) {
       throw new Error('Not connected')
+    }
+
+    this._shouldAutoReconnect = true
+    this._reconnectSession += 1
+    this._reconnectInProgress = false
+    const currentTime = typeof options?.time === 'number' ? options.time : this._state.currentTime
+    this._lastPlayOptions = {
+      ...(options || {}),
+      ...(typeof currentTime === 'number' ? { time: currentTime } : {})
     }
 
     // Debounce: prevent rapid consecutive LOAD calls that cause native crashes
@@ -539,6 +556,10 @@ export class ChromecastDevice extends EventEmitter {
       return
     }
     this._intentionalStopAt = Date.now()
+    this._shouldAutoReconnect = false
+    this._lastPlayOptions = null
+    this._reconnectSession += 1
+    this._reconnectInProgress = false
     this._sendMediaMessage({
       type: 'STOP',
       requestId: this._nextRequestId(),
@@ -607,7 +628,7 @@ export class ChromecastDevice extends EventEmitter {
           if (this._missedHeartbeats >= 3) {
             const err = new Error('Chromecast heartbeat timeout after ' + this._missedHeartbeats + ' missed PONGs')
             this.emit('error', err)
-            this.disconnect().catch(() => {})
+            this._handleDisconnect(err)
           }
         } catch (err) {
           // Socket closed, will be handled by disconnect
@@ -933,6 +954,12 @@ export class ChromecastDevice extends EventEmitter {
 
       if (typeof status.currentTime === 'number') {
         this._state.currentTime = status.currentTime
+        if (this._lastPlayOptions) {
+          this._lastPlayOptions = {
+            ...this._lastPlayOptions,
+            time: status.currentTime
+          }
+        }
         this.emit('timeChanged', status.currentTime)
       }
 
@@ -1010,6 +1037,7 @@ export class ChromecastDevice extends EventEmitter {
   _handleError(err) {
     if (!err) return
     const wasConnected = this._connected
+    const shouldReconnect = this._shouldAutoReconnect === true && wasConnected
     this._connected = false
     this.emit('connectionStateChanged', 'error')
     this.emit('error', err)
@@ -1017,18 +1045,77 @@ export class ChromecastDevice extends EventEmitter {
       console.warn('[Chromecast] socket error, graceful:', wasConnected, (err && err.message) ? err.message : err)
     } catch {}
     this._scheduleCleanup(err, { graceful: wasConnected })
+    if (shouldReconnect) {
+      this._attemptReconnect().catch(() => {})
+    }
   }
 
-  _handleDisconnect() {
+  _handleDisconnect(err) {
     if (!this._connected && !this._connecting) return
     const wasConnected = this._connected
+    const shouldReconnect = this._shouldAutoReconnect === true && wasConnected
     this._connected = false
     this._connecting = false
     this.emit('connectionStateChanged', 'disconnected')
     try {
       console.warn('[Chromecast] socket closed, graceful:', wasConnected)
     } catch {}
-    this._scheduleCleanup(new Error('Connection closed'), { graceful: wasConnected })
+    this._scheduleCleanup(err || new Error('Connection closed'), { graceful: wasConnected })
+    if (shouldReconnect) {
+      this._attemptReconnect().catch(() => {})
+    }
+  }
+
+  async _attemptReconnect() {
+    if (this._reconnectInProgress) return
+    if (this._shouldAutoReconnect !== true) return
+
+    const maxAttempts = 3
+    const reconnectSession = this._reconnectSession
+    this._reconnectInProgress = true
+
+    try {
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (this._shouldAutoReconnect !== true || reconnectSession !== this._reconnectSession) {
+          return
+        }
+
+        const delay = 2000 * Math.pow(2, attempt - 1)
+        this.emit('reconnecting', { attempt, maxAttempts })
+        await new Promise((resolve) => setTimeout(resolve, delay))
+
+        if (this._shouldAutoReconnect !== true || reconnectSession !== this._reconnectSession) {
+          return
+        }
+
+        try {
+          await this.connect()
+
+          if (this._lastPlayOptions) {
+            const resumeTime = typeof this._state.currentTime === 'number'
+              ? this._state.currentTime
+              : this._lastPlayOptions.time
+            const resumeOptions = {
+              ...this._lastPlayOptions,
+              ...(typeof resumeTime === 'number' ? { time: resumeTime } : {})
+            }
+            this._lastPlayOptions = resumeOptions
+            await this.play(resumeOptions)
+          }
+
+          return
+        } catch (reconnectErr) {
+          if (attempt === maxAttempts) {
+            this.emit('reconnectFailed', { attempts: maxAttempts })
+            return
+          }
+        }
+      }
+    } finally {
+      if (reconnectSession === this._reconnectSession) {
+        this._reconnectInProgress = false
+      }
+    }
   }
 
   _scheduleCleanup(err, options) {

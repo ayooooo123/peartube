@@ -207,6 +207,14 @@ export class CastContext extends EventEmitter {
           this.emit('error', error)
         })
 
+        device.on('reconnecting', (payload) => {
+          this.emit('reconnecting', payload)
+        })
+
+        device.on('reconnectFailed', (payload) => {
+          this.emit('reconnectFailed', payload)
+        })
+
         return device
       } catch (err) {
         this._connectedDevice = null

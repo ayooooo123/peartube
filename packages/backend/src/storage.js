@@ -13,6 +13,7 @@ import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
 import { logger } from './logger.js'
+import http from 'bare-http1'
 
 const log = logger('Storage')
 
@@ -34,6 +35,7 @@ let globalChannels = null;
 
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
+let watchdogTimer = null
 
 /**
  * Generate a random session token for blob server URL auth.
@@ -1221,6 +1223,15 @@ export async function suspendNetworking() {
 export function setCastActive(active) {
   globalCastActive = active
   console.log('[CastDiag] castActive flag set to:', active)
+  if (active) {
+    startBlobServerWatchdog()
+  } else {
+    if (watchdogTimer) {
+      clearInterval(watchdogTimer)
+      watchdogTimer = null
+      console.log('[CastDiag] BlobServer watchdog stopped')
+    }
+  }
 }
 
 /**
@@ -1229,6 +1240,53 @@ export function setCastActive(active) {
  */
 export function isCastActive() {
   return globalCastActive
+}
+
+/**
+ * Start a watchdog that probes the blob server every 30 seconds during active cast.
+ * If the blob server is unresponsive, force-resume it.
+ */
+export function startBlobServerWatchdog() {
+  if (watchdogTimer) return
+  console.log('[CastDiag] BlobServer watchdog started')
+  watchdogTimer = setInterval(() => {
+    if (!isCastActive()) {
+      clearInterval(watchdogTimer)
+      watchdogTimer = null
+      console.log('[CastDiag] BlobServer watchdog stopped (cast no longer active)')
+      return
+    }
+
+    const port = globalBlobServer?.port
+    if (!port) {
+      console.log('[CastDiag] BlobServer watchdog: no port available, skipping probe')
+      return
+    }
+
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port,
+      path: '/',
+      method: 'HEAD',
+      timeout: 5000
+    }, (res) => {
+      res.resume()
+      console.log('[CastDiag] BlobServer watchdog: healthy (status ' + res.statusCode + ')')
+    })
+
+    req.on('timeout', () => {
+      req.destroy()
+      console.log('[CastDiag] BlobServer unresponsive during cast — force resuming')
+      if (globalBlobServer) globalBlobServer.resume()
+    })
+
+    req.on('error', (err) => {
+      console.log('[CastDiag] BlobServer unresponsive during cast — force resuming')
+      if (globalBlobServer) globalBlobServer.resume()
+    })
+
+    req.end()
+  }, 30000)
 }
 
 export async function prefetchVideoForCast(drive, filePath, signal) {

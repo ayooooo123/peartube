@@ -2307,7 +2307,6 @@ rpc.onCastPlay(async (req) => {
     const requestedKey = buildTranscodeCacheKey(requestedUrl) || requestedUrl
 
     if (
-      protocol === 'chromecast' &&
       activeCastTranscodeId &&
       hlsSessionsWithLoadSent.has(activeCastTranscodeId) &&
       activeCastSourceKey === requestedKey
@@ -2316,10 +2315,11 @@ rpc.onCastPlay(async (req) => {
       return { success: true }
     }
 
-    // For Chromecast, ALL videos go through HLS (remux or transcode).
+    // For ALL cast protocols, ALL videos go through HLS (remux or transcode).
     // HLS segments are stored in memory — once generated, the blob server
-    // is no longer needed. This lets casting survive app backgrounding.
-    if (protocol === 'chromecast') {
+    // is no longer needed. This lets casting survive app backgrounding
+    // regardless of the cast destination (Chromecast, FCast, etc.).
+    {
       transcodeRequired = true
 
       try {
@@ -2542,7 +2542,7 @@ rpc.onCastPlay(async (req) => {
       activeCastSourceKey = requestedKey
     }
 
-    console.log('[Backend] Cast play: >>> SENDING LOAD TO CHROMECAST <<<')
+    console.log('[Backend] Cast play: >>> SENDING LOAD TO CAST DEVICE <<<')
     console.log('[Backend] Cast play: URL:', url)
     console.log('[Backend] Cast play: contentType:', contentType, 'streamType:', streamType || 'BUFFERED')
 

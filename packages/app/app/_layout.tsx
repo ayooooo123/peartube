@@ -71,6 +71,7 @@ const castSuspendGraceTimerRef = useRef<NodeJS.Timeout | null>(null)
 const castKeepaliveLastErrorLogAtRef = useRef(0)
 const lastKnownCastActiveAtRef = useRef(0)
 const nativeInitInFlightRef = useRef<Promise<void> | null>(null)
+const suspendInFlightRef = useRef(false)
 const nativeEventsSubscribedRef = useRef(false)
 const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
 
@@ -389,7 +390,7 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
         try {
           const state = await platformRPC.rpc.castGetState({})
           const castState = String(state?.state || '').toLowerCase()
-          if (castState === 'idle' || castState === 'stopped') {
+          if (castState === 'stopped') {
             console.log('[CastDiag] isCastSessionActive: castState is', castState, '- returning false');
             return false
           }
@@ -416,6 +417,7 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
   const startCastKeepalive = useCallback(() => {
     if (castKeepaliveIntervalRef.current) return
     if (!platformRPC?.rpc?.castGetState) return
+    lastKnownCastActiveAtRef.current = Date.now()
 
     castKeepaliveIntervalRef.current = setInterval(() => {
       platformRPC.rpc.castGetState({}).catch(() => {
@@ -443,39 +445,46 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
       clearCastSuspendGraceTimer()
 
       const maybeSuspendWithGrace = async () => {
-        if (playbackActiveEmitter.isActive) {
-          console.log('[App] Skipping network suspend - local playback is active (state:', nextState + ')')
-          return
-        }
+        if (suspendInFlightRef.current) return
+        suspendInFlightRef.current = true
 
-        if (await isCastSessionActive()) {
-          console.log('[App] Skipping network suspend - cast session is active (state:', nextState + ')')
-          startCastKeepalive()
-          return
-        }
-
-        castSuspendGraceTimerRef.current = setTimeout(async () => {
-          castSuspendGraceTimerRef.current = null
-          console.log('[CastDiag] maybeSuspendWithGrace: grace timer fired, checking cast state again');
-
+        try {
           if (playbackActiveEmitter.isActive) {
-            console.log('[App] Grace check: local playback active, skip suspend')
+            console.log('[App] Skipping network suspend - local playback is active (state:', nextState + ')')
             return
           }
 
           if (await isCastSessionActive()) {
-            console.log('[App] Grace check: cast session active, skip suspend')
+            console.log('[App] Skipping network suspend - cast session is active (state:', nextState + ')')
             startCastKeepalive()
             return
           }
 
-          stopCastKeepalive();
-          console.log('[CastDiag] maybeSuspendWithGrace: proceeding with suspendNetwork()');
-          console.log('[App] Suspending network for app state:', nextState)
-          platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
-            console.log('[App] suspendNetwork error:', err?.message)
-          })
-        }, 8000)
+          castSuspendGraceTimerRef.current = setTimeout(async () => {
+            castSuspendGraceTimerRef.current = null
+            console.log('[CastDiag] maybeSuspendWithGrace: grace timer fired, checking cast state again');
+
+            if (playbackActiveEmitter.isActive) {
+              console.log('[App] Grace check: local playback active, skip suspend')
+              return
+            }
+
+            if (await isCastSessionActive()) {
+              console.log('[App] Grace check: cast session active, skip suspend')
+              startCastKeepalive()
+              return
+            }
+
+            stopCastKeepalive();
+            console.log('[CastDiag] maybeSuspendWithGrace: proceeding with suspendNetwork()');
+            console.log('[App] Suspending network for app state:', nextState)
+            platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
+              console.log('[App] suspendNetwork error:', err?.message)
+            })
+          }, 8000)
+        } finally {
+          suspendInFlightRef.current = false
+        }
       }
 
       void maybeSuspendWithGrace()
@@ -546,6 +555,25 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
     initPearBackend,
     stopCastKeepalive,
   ])
+
+  // Fix 3: Track cast playback state to populate lastKnownCastActiveAtRef
+  // BEFORE the first background cycle. Without this, the ref stays at 0 until
+  // isCastSessionActive() is first called, and the timestamp fallback fails.
+  useEffect(() => {
+    const events = platformRPC?.events
+    if (!events?.onCastPlaybackState) return
+
+    const unsub = events.onCastPlaybackState((data: any) => {
+      const state = String(data?.state || '').toLowerCase()
+      if (state === 'playing' || state === 'buffering' || state === 'loading') {
+        lastKnownCastActiveAtRef.current = Date.now()
+      }
+    })
+
+    return () => {
+      if (typeof unsub === 'function') unsub()
+    }
+  }, [])
 
   // Update cache when state changes
   useEffect(() => {

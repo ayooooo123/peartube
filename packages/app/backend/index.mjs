@@ -128,6 +128,8 @@ let CastContext = null
 let castLoadError = null
 let castLoadPromise = null
 let castContext = null
+let isHeadlessMode = false
+let headlessShutdownTimer = null
 
 const CAST_LOCALHOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '::1'])
 
@@ -139,6 +141,29 @@ function normalizeCastVolume(volume) {
     return Math.max(0, Math.min(100, value)) / 100
   }
   return Math.max(0, Math.min(1, value))
+}
+
+/**
+ * Headless cast flag file management
+ * Used to detect if a cast session is active after the app UI closes
+ */
+function setHeadlessCastFlag(active) {
+  const flagPath = path.join(storagePath, '.peartube-cast-headless')
+  try {
+    if (active) {
+      const data = JSON.stringify({ pid: Bare.pid, startedAt: Date.now() })
+      fs.writeFileSync(flagPath, data, 'utf8')
+    } else {
+      try {
+        fs.unlinkSync(flagPath)
+      } catch (err) {
+        // Ignore ENOENT (file doesn't exist)
+        if (err.code !== 'ENOENT') throw err
+      }
+    }
+  } catch (err) {
+    console.error('[Backend] setHeadlessCastFlag error:', err.message)
+  }
 }
 
 function cleanupCastProxySessions(now = Date.now()) {
@@ -753,8 +778,32 @@ function getCastContext() {
 
     castContext.on('playbackStateChanged', (state) => {
       try {
+        console.log('[CastDiag] playbackStateChanged:', state)
         if (state === 'playing' || state === 'paused' || state === 'buffering') {
           castLoadCompletedAt = 0
+          setHeadlessCastFlag(true)
+          console.log('[CastDiag] Headless cast flag set active')
+          if (headlessShutdownTimer) {
+            clearTimeout(headlessShutdownTimer)
+            headlessShutdownTimer = null
+            console.log('[CastDiag] Cast resumed, cancelling headless shutdown timer')
+          }
+        }
+        if (state === 'stopped' || state === 'idle' || state === 'disconnected') {
+          setHeadlessCastFlag(false)
+          console.log('[CastDiag] Headless cast flag cleared (cast stopped/idle/disconnected)')
+          if (isHeadlessMode) {
+            if (headlessShutdownTimer) clearTimeout(headlessShutdownTimer)
+            console.log('[CastDiag] Headless mode active, scheduling self-termination in 60s')
+            headlessShutdownTimer = setTimeout(() => {
+              headlessShutdownTimer = null
+              console.log('[CastDiag] Headless cast ended, self-terminating worklet')
+              setHeadlessCastFlag(false)
+              Bare.exit(0)
+            }, 60000)
+          } else {
+            console.log('[CastDiag] Not in headless mode, skipping self-termination timer')
+          }
         }
         rpc?.eventCastPlaybackState?.({ state })
       } catch {}
@@ -1179,6 +1228,15 @@ async function handleIpcShutdownRequest() {
   return shutdownIpcInFlight
 }
 
+function enterHeadlessMode(reason = 'ipc-close') {
+  if (isHeadlessMode) {
+    console.log('[CastDiag] enterHeadlessMode: already headless, ignoring reason:', reason)
+    return
+  }
+  isHeadlessMode = true
+  console.log('[CastDiag] Entering headless mode:', reason)
+}
+
 if (IPC?.on) {
   IPC.on('data', (chunk) => {
     const msg = parseIpcShutdownMessage(chunk)
@@ -1187,6 +1245,12 @@ if (IPC?.on) {
         console.warn('[Backend] IPC shutdown failed:', err?.message || err)
       })
     }
+  })
+  IPC.on('close', () => {
+    enterHeadlessMode('ipc-close')
+  })
+  IPC.on('end', () => {
+    enterHeadlessMode('ipc-end')
   })
 }
 

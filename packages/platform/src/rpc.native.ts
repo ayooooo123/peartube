@@ -258,6 +258,28 @@ function resolveStorageUri(FS: any, FSLegacy: any, configuredPath?: string): str
 }
 
 /**
+ * Check if a headless cast session is active
+ * Asynchronously checks if the cast flag file exists using expo-file-system
+ * This allows detection of active cast sessions even after the app UI closes
+ */
+export async function isHeadlessCastActive(): Promise<boolean> {
+  try {
+    // Get the storage path the same way initPlatformRPC does
+    const FS = require('expo-file-system');
+    const FSLegacy = require('expo-file-system/legacy');
+    const storageUri = resolveStorageUri(FS, FSLegacy);
+    const flagUri = storageUri.endsWith('/')
+      ? `${storageUri}.peartube-cast-headless`
+      : `${storageUri}/.peartube-cast-headless`;
+    const info = await FS.getInfoAsync(flagUri);
+    return info.exists === true;
+  } catch (err) {
+    console.error('[Platform RPC] isHeadlessCastActive error:', err);
+    return false;
+  }
+}
+
+/**
  * Event subscription system
  */
 export const events = {
@@ -360,6 +382,40 @@ export async function initPlatformRPC(config: {
     }
 
     console.log('[Platform RPC] Initializing with storage:', storagePath);
+
+    const headlessCastActive = await isHeadlessCastActive()
+    console.log('[CastDiag] initPlatformRPC: isHeadlessCastActive =', headlessCastActive)
+    if (headlessCastActive) {
+      console.log('[CastDiag] Headless cast was active, sending shutdown to old worklet');
+
+      const cleanupWorklet = worklet ?? new WorkletClass(BACKEND_WORKLET_ID);
+      try {
+        await sendShutdownSignalViaIpc(cleanupWorklet);
+        console.log('[CastDiag] Shutdown signal sent to old worklet');
+      } catch (err: any) {
+        console.warn('[CastDiag] Shutdown signal failed:', err?.message || err);
+      }
+
+      const lockUri = `${storageUri.endsWith('/') ? storageUri : storageUri + '/'}corestore/primary/LOCK`;
+      const flagUri = `${storageUri.endsWith('/') ? storageUri : storageUri + '/'}${'.peartube-cast-headless'}`;
+
+      try {
+        await FSLegacy.deleteAsync(lockUri, { idempotent: true });
+        console.log('[CastDiag] Deleted stale Corestore LOCK file');
+      } catch (e: any) {
+        console.warn('[CastDiag] Could not delete LOCK file:', e?.message);
+      }
+
+      try {
+        await FSLegacy.deleteAsync(flagUri, { idempotent: true });
+        console.log('[CastDiag] Cleared stale headless cast flag file');
+      } catch (e: any) {
+        console.warn('[CastDiag] Could not delete headless cast flag file:', e?.message);
+      }
+
+      console.log('[CastDiag] Waiting 2s for old headless worklet cleanup');
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
 
     if (!config.downloaderWorkerSource) {
       throw new Error('Downloader worker bundle missing');

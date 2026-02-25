@@ -558,10 +558,9 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
         if (requestId !== playRequestIdRef.current) return false
 
         if (result?.success) {
-          if (device?.protocol === 'chromecast') {
-            const deviceName = device.name || 'Chromecast'
-            await startCastKeepalive(options.title || 'PearTube', deviceName)
-          }
+          // Start foreground service + wake lock for ALL cast protocols (FCast is Chromecast-compatible)
+          const deviceName = device?.name || 'Cast Device'
+          await startCastKeepalive(options.title || 'PearTube', deviceName)
           setPlaybackState(prev => ({ ...prev, state: 'playing' }))
           return true
         }

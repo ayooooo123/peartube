@@ -375,10 +375,12 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
 
   const isCastSessionActive = useCallback(async (): Promise<boolean> => {
     if (!platformRPC?.rpc?.castIsConnected) return false
+    console.log('[CastDiag] isCastSessionActive: checking cast status');
 
     try {
       const connected = await platformRPC.rpc.castIsConnected({})
       if (!connected?.connected) {
+        console.log('[CastDiag] isCastSessionActive: RPC failed, using timestamp fallback, lastKnown:', lastKnownCastActiveAtRef.current);
         return Date.now() - lastKnownCastActiveAtRef.current < CAST_ACTIVITY_GRACE_MS
       }
       lastKnownCastActiveAtRef.current = Date.now()
@@ -388,6 +390,7 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
           const state = await platformRPC.rpc.castGetState({})
           const castState = String(state?.state || '').toLowerCase()
           if (castState === 'idle' || castState === 'stopped') {
+            console.log('[CastDiag] isCastSessionActive: castState is', castState, '- returning false');
             return false
           }
           lastKnownCastActiveAtRef.current = Date.now()
@@ -396,6 +399,7 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
         }
       }
 
+      console.log('[CastDiag] isCastSessionActive: cast is active (no state polled)');
       return true
     } catch {
       return Date.now() - lastKnownCastActiveAtRef.current < CAST_ACTIVITY_GRACE_MS
@@ -452,6 +456,7 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
 
         castSuspendGraceTimerRef.current = setTimeout(async () => {
           castSuspendGraceTimerRef.current = null
+          console.log('[CastDiag] maybeSuspendWithGrace: grace timer fired, checking cast state again');
 
           if (playbackActiveEmitter.isActive) {
             console.log('[App] Grace check: local playback active, skip suspend')
@@ -464,7 +469,8 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
             return
           }
 
-          stopCastKeepalive()
+          stopCastKeepalive();
+          console.log('[CastDiag] maybeSuspendWithGrace: proceeding with suspendNetwork()');
           console.log('[App] Suspending network for app state:', nextState)
           platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
             console.log('[App] suspendNetwork error:', err?.message)

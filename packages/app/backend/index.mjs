@@ -11,6 +11,7 @@ let HRPC = null
 let createBackendContext = null
 let setIsShuttingDown = null
 let shutdownBackend = null
+let setCastActive = null
 let generateAndStoreThumbnail = null
 let path = null
 let fs = null
@@ -54,6 +55,7 @@ async function loadBackendModules() {
   createBackendContext = orchestratorMod?.createBackendContext
   setIsShuttingDown = orchestratorMod?.setIsShuttingDown
   shutdownBackend = storageMod?.shutdownBackend
+  setCastActive = storageMod?.setCastActive
   generateAndStoreThumbnail = thumbnailMod?.generateAndStoreThumbnail
   path = pathMod?.default ?? pathMod
   fs = fsMod?.default ?? fsMod
@@ -64,7 +66,7 @@ async function loadBackendModules() {
   transcoder = transcoderMod
   hlsTranscoder = hlsTranscoderMod
 
-  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !hlsTranscoder || !fsNativeExtensions) {
+  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !hlsTranscoder || !fsNativeExtensions || !setCastActive) {
     throw new Error('Missing required backend modules after dynamic import')
   }
 }
@@ -176,6 +178,7 @@ async function ensureCastProxyServer() {
 
     castProxyServer = http1.createServer((req, res) => {
       try {
+        console.log('[CastDiag] cast proxy: incoming request', req.method || 'GET', req.url?.substring(0, 80));
         console.log('[CastProxy] incoming', req.method || 'GET', req.url || '/')
       } catch {}
       setCorsHeaders(res)
@@ -304,6 +307,7 @@ async function ensureCastProxyServer() {
       }
 
       if (!token || !castProxySessions.has(token)) {
+        console.log('[CastDiag] cast proxy: session NOT found for token', token?.substring(0, 8));
         console.warn('[CastProxy] missing token or session', token || 'none')
         res.statusCode = 404
         res.setHeader('Content-Type', 'text/plain')
@@ -2056,6 +2060,7 @@ rpc.onCastConnect(async (req) => {
       }
     } catch {}
     await ctx.connect(req.deviceId)
+    setCastActive(true)
     return deviceInfo ? {
       success: true,
       device: {
@@ -2092,6 +2097,7 @@ rpc.onCastDisconnect(async () => {
       activeCastTranscodeId = null
       activeCastSourceKey = null
     }
+    setCastActive(false)
 
     return { success: true }
   } catch (err) {
@@ -2143,6 +2149,7 @@ rpc.onCastPlay(async (req) => {
       castStallMonitor = null
     }
   lastCastPlayTime = now
+  setCastActive(true)
 
   try {
     if (!castContext?.isConnected()) {
@@ -2521,6 +2528,7 @@ rpc.onCastStop(async () => {
       activeCastTranscodeId = null
       activeCastSourceKey = null
     }
+    setCastActive(false)
 
     return { success: true }
   } catch (err) {

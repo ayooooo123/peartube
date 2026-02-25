@@ -2,7 +2,7 @@
  * Home Tab - YouTube-style Video Feed with P2P Public Feed Discovery
  */
 import { useCallback, useState, useEffect, useRef } from 'react'
-import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, AppState, AppStateStatus, TextInput } from 'react-native'
+import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, AppState, AppStateStatus } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -90,11 +90,6 @@ export default function HomeScreen() {
   // Aggregated feed videos from all discovered channels
   const [feedVideos, setFeedVideos] = useState<VideoData[]>([])
   const [loadingFeedVideos, setLoadingFeedVideos] = useState(false)
-
-  // Search (local + federated)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searching, setSearching] = useState(false)
-  const [searchResults, setSearchResults] = useState<VideoData[]>([])
 
   // Category filter state
   const categories = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
@@ -202,38 +197,6 @@ export default function HomeScreen() {
       setFeedLoading(false)
     }
   }, [rpc, channelMeta, loadChannelMeta])
-
-  const runSearch = useCallback(async () => {
-    if (!rpc || !identity?.driveKey) return
-    const q = searchQuery.trim()
-    if (!q) {
-      setSearchResults([])
-      return
-    }
-
-    setSearching(true)
-    try {
-      const res = await (rpc as any).searchVideos?.({ channelKey: identity.driveKey, query: q, topK: 10, federated: true })
-      const results = res?.results || []
-      const vids = await Promise.all(
-        results.map(async (r: any) => {
-          try {
-            const vd = await rpc.getVideoData({ channelKey: identity.driveKey, videoId: r.id })
-            if (vd?.video) {
-              return { ...vd.video, channelKey: identity.driveKey } as VideoData
-            }
-          } catch {}
-          return null
-        })
-      )
-      setSearchResults(vids.filter(Boolean) as VideoData[])
-    } catch (err) {
-      console.error('[Home] searchVideos failed:', err)
-      setSearchResults([])
-    } finally {
-      setSearching(false)
-    }
-  }, [rpc, identity?.driveKey, searchQuery])
 
   const refreshFeed = useCallback(async () => {
     if (!rpc) return
@@ -708,64 +671,6 @@ export default function HomeScreen() {
                           ? 'You can browse the UI while the backend starts.'
                           : 'Fetching identities and videos in the background.'}
                       </Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-            )}
-
-            {/* Search (your channel) */}
-            {identity?.driveKey && (
-              <View style={{ marginBottom: 12 }}>
-                <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 6 }}>Search your channel</Text>
-                <View style={{ flexDirection: 'row', gap: 8 }}>
-                  <TextInput
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                    placeholder="Search videos…"
-                    placeholderTextColor={colors.textMuted}
-                    style={{
-                      flex: 1,
-                      color: colors.text,
-                      borderWidth: 1,
-                      borderColor: colors.border,
-                      backgroundColor: colors.bgSecondary,
-                      borderRadius: 10,
-                      paddingHorizontal: 12,
-                      paddingVertical: 10,
-                      fontSize: 14,
-                    }}
-                    autoCapitalize="none"
-                    returnKeyType="search"
-                    onSubmitEditing={runSearch}
-                  />
-                  <Pressable
-                    onPress={runSearch}
-                    disabled={searching || !searchQuery.trim()}
-                    style={{
-                      paddingHorizontal: 14,
-                      justifyContent: 'center',
-                      borderRadius: 10,
-                      backgroundColor: colors.primary,
-                      opacity: (searching || !searchQuery.trim()) ? 0.5 : 1,
-                    }}
-                  >
-                    <Text style={{ color: 'white', fontWeight: '600' }}>{searching ? '…' : 'Search'}</Text>
-                  </Pressable>
-                </View>
-
-                {searchResults.length > 0 && (
-                  <View style={{ marginTop: 10 }}>
-                    <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 6 }}>Results</Text>
-                    <View style={{ gap: 12 }}>
-                      {searchResults.map((video) => (
-                        <VideoCard
-                          key={`search-${video.id}`}
-                          video={video}
-                          onPress={() => playVideo(video)}
-                          showChannelInfo={false}
-                        />
-                      ))}
                     </View>
                   </View>
                 )}

@@ -32,6 +32,9 @@ let globalSwarm = null;
 let globalBlobServer = null;
 let globalChannels = null;
 
+// Cast active flag — set by API handlers to prevent network suspension during active cast
+let globalCastActive = false
+
 /**
  * Generate a random session token for blob server URL auth.
  * This token is included in blob URLs and verified by the server.
@@ -1169,6 +1172,17 @@ export async function shutdownBackend(ctx) {
  * @returns {Promise<void>}
  */
 export async function suspendNetworking() {
+  console.log('[CastDiag] suspendNetworking called - will check cast state before suspending');
+  
+  // GUARD: Skip entire suspend when cast is active.
+  // The foreground service keeps the process alive, and the cast session needs
+  // both the blob server (for serving video) and the swarm (for fetching sparse data).
+  if (isCastActive()) {
+    console.log('[Network] Skipping suspend — cast is active');
+    console.log('[CastDiag] suspendNetworking: SKIPPED (cast is active)');
+    return;
+  }
+  
   console.log('[Network] Suspending...');
   try {
     // Mark all wakeup sessions as inactive
@@ -1190,6 +1204,7 @@ export async function suspendNetworking() {
       console.log('[Network] Swarm suspended');
     }
     if (globalBlobServer) {
+      console.log('[CastDiag] suspendNetworking: suspending BlobServer (cast not active)');
       await globalBlobServer.suspend();
       console.log('[Network] BlobServer suspended');
     }
@@ -1197,6 +1212,23 @@ export async function suspendNetworking() {
   } catch (err) {
     console.log('[Network] Suspend error (non-fatal):', err?.message);
   }
+}
+
+/**
+ * Set the cast active flag to prevent network suspension during active cast sessions.
+ * @param {boolean} active - Whether cast is currently active
+ */
+export function setCastActive(active) {
+  globalCastActive = active
+  console.log('[CastDiag] castActive flag set to:', active)
+}
+
+/**
+ * Check if cast is currently active.
+ * @returns {boolean} True if cast is active
+ */
+export function isCastActive() {
+  return globalCastActive
 }
 
 /**

@@ -1231,6 +1231,91 @@ export function isCastActive() {
   return globalCastActive
 }
 
+export async function prefetchVideoForCast(drive, filePath, signal) {
+  if (!drive || typeof drive.createReadStream !== 'function') {
+    throw new Error('Invalid drive passed to prefetchVideoForCast')
+  }
+  if (!filePath || typeof filePath !== 'string') {
+    throw new Error('Invalid filePath passed to prefetchVideoForCast')
+  }
+
+  const abortError = () => {
+    const err = new Error('Cast pre-buffer aborted')
+    err.name = 'AbortError'
+    return err
+  }
+
+  if (signal?.aborted) throw abortError()
+
+  let totalBytes = 0
+  try {
+    const entry = await drive.entry(filePath)
+    totalBytes = Number(
+      entry?.value?.blob?.byteLength ??
+      entry?.value?.byteLength ??
+      entry?.value?.size ??
+      entry?.size ??
+      0
+    ) || 0
+  } catch {
+    totalBytes = 0
+  }
+
+  const driveKeyHex = drive?.key ? b4a.toString(drive.key, 'hex') : 'unknown'
+  const logKey = driveKeyHex === 'unknown' ? 'unknown' : driveKeyHex.slice(0, 16)
+  let bytesRead = 0
+  let chunkCount = 0
+  let nextPercentLog = 10
+  const chunkLogInterval = 256
+
+  const stream = drive.createReadStream(filePath)
+  let settled = false
+
+  const onAbort = () => {
+    try {
+      stream.destroy(abortError())
+    } catch {}
+  }
+  if (signal) signal.addEventListener('abort', onAbort)
+
+  try {
+    await new Promise((resolve, reject) => {
+      stream.on('data', (chunk) => {
+        const chunkLen = chunk?.byteLength || chunk?.length || 0
+        bytesRead += chunkLen
+        chunkCount++
+
+        if (totalBytes > 0) {
+          const percent = Math.max(0, Math.min(100, Math.floor((bytesRead / totalBytes) * 100)))
+          if (percent >= nextPercentLog) {
+            console.log(`[CastDiag] Pre-buffering video for cast: ${logKey} — ${percent}%`)
+            nextPercentLog += 10
+          }
+        } else if (chunkCount % chunkLogInterval === 0) {
+          console.log(`[CastDiag] Pre-buffering video for cast: ${logKey} — ${chunkCount} chunks`)
+        }
+      })
+
+      stream.once('end', () => {
+        settled = true
+        if (totalBytes > 0) {
+          console.log(`[CastDiag] Pre-buffering video for cast: ${logKey} — 100%`)
+        }
+        resolve()
+      })
+      stream.once('error', (err) => {
+        settled = true
+        reject(err)
+      })
+    })
+  } finally {
+    if (signal) signal.removeEventListener('abort', onAbort)
+    if (!settled) {
+      try { stream.destroy() } catch {}
+    }
+  }
+}
+
 /**
  * Resume networking when app returns to foreground.
  * Resumes DHT operations and re-establishes connections.

@@ -13,6 +13,7 @@ let setIsShuttingDown = null
 let shutdownBackend = null
 let setCastActive = null
 let isCastActive = null
+let prefetchVideoForCast = null
 let generateAndStoreThumbnail = null
 let path = null
 let fs = null
@@ -58,6 +59,7 @@ async function loadBackendModules() {
   shutdownBackend = storageMod?.shutdownBackend
   setCastActive = storageMod?.setCastActive
   isCastActive = storageMod?.isCastActive
+  prefetchVideoForCast = storageMod?.prefetchVideoForCast
   generateAndStoreThumbnail = thumbnailMod?.generateAndStoreThumbnail
   path = pathMod?.default ?? pathMod
   fs = fsMod?.default ?? fsMod
@@ -68,7 +70,7 @@ async function loadBackendModules() {
   transcoder = transcoderMod
   hlsTranscoder = hlsTranscoderMod
 
-  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !hlsTranscoder || !fsNativeExtensions || !setCastActive || !isCastActive) {
+  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !hlsTranscoder || !fsNativeExtensions || !setCastActive || !isCastActive || !prefetchVideoForCast) {
     throw new Error('Missing required backend modules after dynamic import')
   }
 }
@@ -638,6 +640,36 @@ function buildTranscodeCacheKey(url) {
     }
     parsed.search = params.toString()
     return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+function decodeMaybe(value) {
+  if (typeof value !== 'string') return null
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function normalizeCastFilePath(value) {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const decoded = decodeMaybe(value)?.trim()
+  if (!decoded) return null
+  return decoded.startsWith('/') ? decoded : `/${decoded}`
+}
+
+function extractCastPrefetchTarget(rawUrl) {
+  if (typeof rawUrl !== 'string' || !rawUrl) return null
+  try {
+    const parsed = new URL(rawUrl)
+    const driveKey = parsed.searchParams.get('driveKey') || parsed.searchParams.get('channelKey') || parsed.searchParams.get('dk')
+    const pathFromParams = parsed.searchParams.get('videoPath') || parsed.searchParams.get('path') || parsed.searchParams.get('vp')
+    const filePath = normalizeCastFilePath(pathFromParams) || (parsed.pathname?.startsWith('/videos/') ? normalizeCastFilePath(parsed.pathname) : null)
+    if (!driveKey || !filePath) return null
+    return { driveKey, filePath }
   } catch {
     return null
   }
@@ -2090,6 +2122,11 @@ rpc.onCastConnect(async (req) => {
 })
 
 rpc.onCastDisconnect(async () => {
+  if (castPrefetchAbortController) {
+    castPrefetchAbortController.abort()
+    castPrefetchAbortController = null
+    console.log('[CastDiag] Cast pre-buffer aborted on disconnect')
+  }
   if (!castContext) return { success: true }
   try {
     await castContext.disconnect()
@@ -2128,6 +2165,7 @@ let castStallMonitor = null
 // Track which HLS sessions have already sent LOAD to Chromecast
 // Key: sessionId, Value: true
 const hlsSessionsWithLoadSent = new Map()
+let castPrefetchAbortController = null
 
 // Guard against concurrent/repeated castPlay calls
 let castPlayInProgress = false
@@ -2163,6 +2201,31 @@ rpc.onCastPlay(async (req) => {
     }
   lastCastPlayTime = now
   setCastActive(true)
+
+  if (castPrefetchAbortController) {
+    castPrefetchAbortController.abort()
+    castPrefetchAbortController = null
+  }
+
+  const castPrefetchTarget = extractCastPrefetchTarget(req?.url)
+  if (castPrefetchTarget?.driveKey && castPrefetchTarget?.filePath) {
+    const channel = ctx?.channels?.get?.(castPrefetchTarget.driveKey)
+    const drive = channel?.drive || channel?.hyperdrive || null
+    if (drive && typeof prefetchVideoForCast === 'function') {
+      castPrefetchAbortController = new AbortController()
+      console.log('[CastDiag] Starting pre-buffer for cast')
+      prefetchVideoForCast(drive, castPrefetchTarget.filePath, castPrefetchAbortController.signal)
+        .catch((err) => {
+          if (err?.name === 'AbortError') {
+            console.log('[CastDiag] Cast pre-buffer aborted')
+          } else {
+            console.warn('[CastDiag] Cast pre-buffer failed:', err?.message || err)
+          }
+        })
+    } else {
+      console.log('[CastDiag] Cast pre-buffer skipped: drive unavailable for key', castPrefetchTarget.driveKey.slice(0, 16))
+    }
+  }
 
   try {
     if (!castContext?.isConnected()) {
@@ -2512,6 +2575,11 @@ rpc.onCastResume(async () => {
 })
 
 rpc.onCastStop(async () => {
+  if (castPrefetchAbortController) {
+    castPrefetchAbortController.abort()
+    castPrefetchAbortController = null
+    console.log('[CastDiag] Cast pre-buffer aborted on stop')
+  }
   if (!castContext?.isConnected()) {
     return { success: false, error: 'Not connected' }
   }

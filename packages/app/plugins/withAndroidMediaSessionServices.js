@@ -40,6 +40,8 @@ function withAndroidMediaSessionServices(config) {
     ensurePermission(manifest, 'android.permission.FOREGROUND_SERVICE');
     ensurePermission(manifest, 'android.permission.WAKE_LOCK');
     ensurePermission(manifest, 'android.permission.POST_NOTIFICATIONS');
+    ensurePermission(manifest, 'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE');
+    ensurePermission(manifest, 'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
 
     const application = manifest.application?.[0];
     if (!application) {
@@ -84,7 +86,7 @@ function withAndroidMediaSessionServices(config) {
       $: {
         'android:name': 'to.holepunch.modules.mediasession.MediaPlaybackService',
         'android:exported': 'false',
-        'android:foregroundServiceType': 'mediaPlayback',
+        'android:foregroundServiceType': 'mediaPlayback|connectedDevice',
       },
     });
 

@@ -140,7 +140,7 @@ class MediaPlaybackService : Service() {
             }
 
             val wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager
-            wifiLock = wifiManager?.createWifiLock(WifiManager.WIFI_MODE_FULL, LOCK_TAG)?.apply {
+            wifiLock = wifiManager?.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, LOCK_TAG)?.apply {
                 setReferenceCounted(false)
             }
         } catch (e: Exception) {
@@ -186,7 +186,10 @@ class MediaPlaybackService : Service() {
         if (isForeground) return
         try {
             val notification = buildNotification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && isCastMode) {
+                startForeground(NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
             } else {
                 startForeground(NOTIFICATION_ID, notification)

@@ -84,7 +84,7 @@ let castProxyServer: any = null;
 let castProxyPort = 0;
 let castProxyReady: Promise<number> | null = null;
 const castProxySessions = new Map<string, { url: string; createdAt: number; lastAccessAt?: number; transcodeSessionId?: string; isHls?: boolean }>();
-const CAST_PROXY_TTL_MS = 30 * 60 * 1000;
+const CAST_PROXY_TTL_MS = 8 * 60 * 60 * 1000;
 const castProxyPlaylistLogged = new Set<string>();
 
 interface TranscodeSession {

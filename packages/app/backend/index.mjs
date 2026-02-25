@@ -2315,11 +2315,10 @@ rpc.onCastPlay(async (req) => {
       return { success: true }
     }
 
-    // For ALL cast protocols, ALL videos go through HLS (remux or transcode).
-    // HLS segments are stored in memory — once generated, the blob server
-    // is no longer needed. This lets casting survive app backgrounding
-    // regardless of the cast destination (Chromecast, FCast, etc.).
-    {
+    // For Chromecast: use HLS transcoding (remux/transcode).
+    // For FCast and other protocols: use cast proxy to serve blob URL directly.
+    // This avoids ffmpeg/HLS for FCast, which can stall while app is backgrounded.
+    if (protocol === 'chromecast') {
       transcodeRequired = true
 
       try {
@@ -2494,6 +2493,17 @@ rpc.onCastPlay(async (req) => {
       url = hlsUrl
       contentType = 'application/x-mpegurl'
       console.log('[Backend] Cast play: using HLS URL', url)
+    } else {
+      // FCast and other protocols: use cast proxy to serve blob URL directly
+      // No ffmpeg needed — the FCast receiver handles the format natively
+      await ensureCastProxyServer()
+      const proxyUrl = await createCastProxyUrl(deviceHost, requestedUrl)
+      if (!proxyUrl) {
+        throw new Error('Could not create cast proxy URL for FCast device')
+      }
+      url = proxyUrl
+      // contentType stays as req.contentType (e.g. 'video/mp4')
+      console.log('[Backend] Cast play: FCast using proxy URL:', proxyUrl)
     }
 
     try {

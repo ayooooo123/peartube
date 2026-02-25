@@ -34,6 +34,9 @@ export const Opcode = {
   INITIAL_INFO: 14
 }
 
+// Keepalive interval for TCP connection (5 seconds)
+const KEEPALIVE_INTERVAL = 5000
+
 /**
  * FCastDevice - Handles communication with an FCast receiver
  */
@@ -44,6 +47,7 @@ export class FCastDevice extends EventEmitter {
     this._socket = null
     this._connected = false
     this._buffer = Buffer.alloc(0)
+    this._keepaliveTimer = null
 
     // Playback state
     this._state = {
@@ -80,6 +84,7 @@ export class FCastDevice extends EventEmitter {
 
         // Request version info
         this._sendMessage(Opcode.VERSION, {})
+        this._startKeepalive()
         resolve()
       })
 
@@ -96,6 +101,7 @@ export class FCastDevice extends EventEmitter {
       })
 
       this._socket.on('close', () => {
+        this._stopKeepalive()
         this._connected = false
         this.emit('connectionStateChanged', 'disconnected')
       })
@@ -106,6 +112,7 @@ export class FCastDevice extends EventEmitter {
    * Disconnect from the receiver
    */
   async disconnect() {
+    this._stopKeepalive()
     if (this._socket) {
       this._socket.destroy()
       this._socket = null
@@ -339,6 +346,35 @@ export class FCastDevice extends EventEmitter {
 
     if (body.speed !== undefined) {
       this._state.speed = body.speed
+    }
+  }
+
+  /**
+   * Start TCP keepalive timer
+   * @private
+   */
+  _startKeepalive() {
+    if (this._keepaliveTimer) return
+    this._keepaliveTimer = setInterval(() => {
+      if (this._connected && this._socket) {
+        try {
+          this._sendMessage(Opcode.VERSION, {})
+        } catch (err) {
+          // Socket closed, will be handled by disconnect
+          this._stopKeepalive()
+        }
+      }
+    }, KEEPALIVE_INTERVAL)
+  }
+
+  /**
+   * Stop TCP keepalive timer
+   * @private
+   */
+  _stopKeepalive() {
+    if (this._keepaliveTimer) {
+      clearInterval(this._keepaliveTimer)
+      this._keepaliveTimer = null
     }
   }
 }

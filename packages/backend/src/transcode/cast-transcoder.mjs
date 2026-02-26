@@ -1,12 +1,11 @@
 import http from 'bare-http1'
-import fs from 'bare-fs'
-import os from 'bare-os'
-import path from 'bare-path'
 
 import { probeMedia, loadBareFfmpeg } from './transcoder.mjs'
 import { safeDestroy, safeUnref, copyCodecParameters } from './ffmpeg-utils.mjs'
 import { TempFileReader } from './temp-file-reader.mjs'
 import { getHttpFileSize } from './http-file-size.mjs'
+import { MemorySegmentStore } from './segment-store.mjs'
+import { FMP4Segmenter } from './fmp4-segmenter.mjs'
 
 const sessions = new Map()
 let castServer = null
@@ -23,11 +22,32 @@ function setCorsHeaders(res) {
 
 function parseByteRange(rangeHeader, fileSize) {
   if (!rangeHeader) return null
-  const match = rangeHeader.match(/bytes=(\d+)-(\d*)/)
+  const match = rangeHeader.match(/bytes=(\d*)-(\d*)/)
   if (!match) return null
-  const start = parseInt(match[1], 10)
-  const end = match[2] ? parseInt(match[2], 10) : fileSize - 1
-  return { start, end: Math.min(end, fileSize - 1) }
+  const rawStart = match[1]
+  const rawEnd = match[2]
+
+  if (rawStart && rawEnd) {
+    const start = parseInt(rawStart, 10)
+    const end = parseInt(rawEnd, 10)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) return null
+    return { start, end: Math.min(end, fileSize - 1) }
+  }
+
+  if (rawStart && !rawEnd) {
+    const start = parseInt(rawStart, 10)
+    if (!Number.isFinite(start) || start < 0) return null
+    return { start, end: fileSize - 1 }
+  }
+
+  if (!rawStart && rawEnd) {
+    const suffixLength = parseInt(rawEnd, 10)
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) return null
+    const start = Math.max(0, fileSize - suffixLength)
+    return { start, end: fileSize - 1 }
+  }
+
+  return null
 }
 
 function makeSessionId() {
@@ -136,20 +156,26 @@ function getCastServerPort() {
 
 function createCastSession(sourceUrl, sourceKey = null) {
   const id = makeSessionId()
-  const outputPath = path.join(os.tmpdir(), `peartube_cast_${id}.mp4`)
   const session = {
     id,
     sourceUrl,
     sourceKey,
     status: 'pending',
-    outputPath,
-    fragments: [],
-    initSegmentEnd: 0,
-    bytesWritten: 0,
     isComplete: false,
     cancelled: false,
     ffmpegCleanup: null,
+    segmenter: null,
     error: null,
+    segmentStore: new MemorySegmentStore({ maxSegments: 50, isFmp4: true }),
+    requestStats: {
+      playlistRequests: 0,
+      initRequests: 0,
+      segmentRequests: 0,
+      notFoundResponses: 0,
+      lastPath: null,
+      lastStatus: null,
+      lastError: null,
+    },
     createdAt: Date.now(),
   }
   sessions.set(id, session)
@@ -177,10 +203,10 @@ function getCastStatus(sessionId) {
     status: session.status,
     error: session.error,
     cancelled: session.cancelled,
-    bytesWritten: session.bytesWritten,
-    initSegmentEnd: session.initSegmentEnd,
-    fragmentCount: session.fragments.length,
+    fragmentCount: session.segmentStore?.getSegmentCount?.() || 0,
     isComplete: session.isComplete,
+    requestStats: session.requestStats,
+    storeSnapshot: session.segmentStore?.debugSnapshot?.() || null,
   }
 }
 
@@ -199,52 +225,27 @@ function stopCastTranscode(sessionId, reason = 'cancelled') {
     session.error = reason
   }
 
-  if (typeof session.ffmpegCleanup === 'function') {
-    try { session.ffmpegCleanup() } catch {}
+  if (typeof session.ffmpegCleanup === 'function' && (session.isComplete || session.status === 'error')) {
+    try {
+      session.ffmpegCleanup()
+    } catch (err) {
+      console.warn('[cast-transcoder] stop cleanup error:', err?.message || err)
+    }
     session.ffmpegCleanup = null
   }
+
+  if (session.segmenter) {
+    try { session.segmenter.finish?.() } catch {}
+    session.segmenter = null
+  }
+
+  try { session.segmentStore?.destroy?.() } catch {}
 
   return { success: true }
 }
 
 function generatePlaylist(session) {
-  const fragments = session.fragments || []
-  const maxDur = fragments.reduce((max, f) => Math.max(max, f.duration || 0), 0)
-  const targetDuration = Math.max(1, Math.ceil(maxDur || 10))
-
-  const lines = [
-    '#EXTM3U',
-    '#EXT-X-VERSION:7',
-    `#EXT-X-TARGETDURATION:${targetDuration}`,
-    '#EXT-X-PLAYLIST-TYPE:EVENT',
-    `#EXT-X-MAP:URI="video.mp4",BYTERANGE="${session.initSegmentEnd || 0}@0"`,
-  ]
-
-  for (const fragment of fragments) {
-    lines.push(`#EXTINF:${(fragment.duration || 0).toFixed(3)},`)
-    lines.push(`#EXT-X-BYTERANGE:${fragment.size}@${fragment.offset}`)
-    lines.push('video.mp4')
-  }
-
-  if (session.isComplete) {
-    lines.push('#EXT-X-ENDLIST')
-  }
-
-  lines.push('')
-  return lines.join('\n')
-}
-
-function readFileChunk(filePath, start, end) {
-  const size = Math.max(0, end - start + 1)
-  if (size <= 0) return Buffer.alloc(0)
-  const fd = fs.openSync(filePath, 'r')
-  try {
-    const buffer = Buffer.alloc(size)
-    const bytesRead = fs.readSync(fd, buffer, 0, size, start)
-    return bytesRead === size ? buffer : buffer.slice(0, bytesRead)
-  } finally {
-    try { fs.closeSync(fd) } catch {}
-  }
+  return session.segmentStore?.generateManifest?.() || null
 }
 
 function startCastFileServer() {
@@ -260,9 +261,16 @@ function startCastFileServer() {
         res.end()
         return
       }
+      if (method !== 'GET' && method !== 'HEAD') {
+        res.statusCode = 405
+        res.setHeader('Allow', 'GET,HEAD,OPTIONS')
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('Method not allowed')
+        return
+      }
 
       const parsed = new URL(req.url || '/', 'http://localhost')
-      const match = parsed.pathname.match(/^\/cast\/([^/]+)\/(playlist\.m3u8|video\.mp4)$/)
+      const match = parsed.pathname.match(/^\/cast\/([^/]+)\/(playlist\.m3u8|init\.mp4|seg-\d+\.(?:m4s|ts))$/)
       if (!match) {
         res.statusCode = 404
         res.setHeader('Content-Type', 'text/plain')
@@ -281,46 +289,77 @@ function startCastFileServer() {
       }
 
       if (fileName === 'playlist.m3u8') {
+        session.requestStats.playlistRequests += 1
+        session.requestStats.lastPath = fileName
         const playlist = generatePlaylist(session)
+        console.log('[cast-transcoder] playlist request', sessionId, 'segments=', session.segmentStore?.getSegmentCount?.() || 0)
+        if (!playlist) {
+          res.statusCode = 503
+          session.requestStats.lastStatus = 503
+          session.requestStats.lastError = 'Manifest not ready'
+          res.setHeader('Retry-After', '1')
+          res.setHeader('Content-Type', 'text/plain')
+          res.end('Manifest not ready')
+          return
+        }
         res.statusCode = 200
-        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')
-        res.setHeader('Cache-Control', 'no-cache')
+        session.requestStats.lastStatus = 200
+        session.requestStats.lastError = null
+        res.setHeader('Content-Type', 'application/x-mpegURL')
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        res.setHeader('Pragma', 'no-cache')
         res.setHeader('Content-Length', Buffer.byteLength(playlist))
-        res.end(playlist)
+        if (method === 'HEAD') res.end()
+        else res.end(playlist)
         return
       }
 
-      const available = Number(session.bytesWritten || 0)
-      const range = parseByteRange(req.headers?.range, Math.max(1, available)) || { start: 0, end: Math.max(0, available - 1) }
-      if (range.start >= available) {
-        res.statusCode = 503
-        res.setHeader('Retry-After', '1')
-        res.setHeader('Content-Type', 'text/plain')
-        res.end('Data not written yet')
-        return
-      }
-
-      const end = Math.min(range.end, available - 1)
-      if (end < range.start) {
-        res.statusCode = 416
-        res.setHeader('Content-Range', `bytes */${available}`)
-        res.end()
-        return
-      }
-
-      try {
-        const chunk = readFileChunk(session.outputPath, range.start, end)
-        res.statusCode = req.headers?.range ? 206 : 200
+      if (fileName === 'init.mp4') {
+        session.requestStats.initRequests += 1
+        session.requestStats.lastPath = fileName
+        const initData = session.segmentStore?.getInit?.()
+        if (!initData) {
+          res.statusCode = 404
+          session.requestStats.notFoundResponses += 1
+          session.requestStats.lastStatus = 404
+          session.requestStats.lastError = 'Init not ready'
+          res.setHeader('Content-Type', 'text/plain')
+          res.end('Init not ready')
+          return
+        }
+        res.statusCode = 200
+        session.requestStats.lastStatus = 200
+        session.requestStats.lastError = null
         res.setHeader('Content-Type', 'video/mp4')
-        res.setHeader('Accept-Ranges', 'bytes')
-        res.setHeader('Content-Length', chunk.length)
-        res.setHeader('Content-Range', `bytes ${range.start}-${end}/${available}`)
-        res.end(chunk)
-      } catch (err) {
-        res.statusCode = 500
-        res.setHeader('Content-Type', 'text/plain')
-        res.end(`Read error: ${err?.message || err}`)
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+        res.setHeader('Content-Length', initData.length)
+        if (method === 'HEAD') res.end()
+        else res.end(initData)
+        return
       }
+
+      session.requestStats.segmentRequests += 1
+      session.requestStats.lastPath = fileName
+      const segmentData = session.segmentStore?.getSegment?.(fileName)
+      if (!segmentData) {
+        res.statusCode = 404
+        session.requestStats.notFoundResponses += 1
+        session.requestStats.lastStatus = 404
+        session.requestStats.lastError = 'Segment not found'
+        res.setHeader('Content-Type', 'text/plain')
+        res.end('Segment not found')
+        return
+      }
+
+      const isFmp4 = fileName.endsWith('.m4s')
+      res.statusCode = 200
+      session.requestStats.lastStatus = 200
+      session.requestStats.lastError = null
+      res.setHeader('Content-Type', isFmp4 ? 'video/mp4' : 'video/mp2t')
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      res.setHeader('Content-Length', segmentData.length)
+      if (method === 'HEAD') res.end()
+      else res.end(segmentData)
     })
 
     castServer.on('error', (err) => {
@@ -361,71 +400,40 @@ function stopCastFileServer() {
   })
 }
 
-function ptsToSeconds(pts, timeBase) {
-  const p = typeof pts === 'bigint' ? Number(pts) : Number(pts || 0)
-  if (!timeBase || !timeBase.denominator) return 0
-  return (p * Number(timeBase.numerator || 0)) / Number(timeBase.denominator || 1)
-}
-
-function pushFragmentFromBoundary(session, startOffset, endOffset, startPts, endPts, timeBase) {
-  const size = Math.max(0, endOffset - startOffset)
-  if (size <= 0 || startOffset < (session.initSegmentEnd || 0)) return
-
-  const duration = Math.max(0.001, ptsToSeconds(endPts, timeBase) - ptsToSeconds(startPts, timeBase))
-  session.fragments.push({
-    offset: startOffset,
-    size,
-    duration,
-  })
-  if (session.fragments.length === 1 && session.status !== 'cancelled' && session.status !== 'error') {
-    session.status = 'ready'
-  }
-}
-
 async function runRemuxCast(session, sourceUrl, onProgress) {
-  let fd = null
-  let bytesWritten = 0
-
   let inputFormat = null
   let outputIO = null
   let outputFormat = null
   let packet = null
   let dict = null
   let reader = null
+  let segmenter = null
 
   try {
     const fileSize = await getHttpFileSize(sourceUrl)
     if (!fileSize) throw new Error('Could not determine source file size for cast')
-    reader = new TempFileReader(sourceUrl, fileSize)
+
+    // waitForComplete: true — prevents premature EOF when transcoder catches up to P2P download
+    reader = new TempFileReader(sourceUrl, fileSize, { waitForComplete: true })
     await reader.startDownload()
+
     const inputIO = reader.createIOContext(ffmpeg)
     inputFormat = new ffmpeg.InputFormatContext(inputIO)
     const videoStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.VIDEO)
     const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO)
     if (!videoStream) throw new Error('No video stream found')
 
-    fd = fs.openSync(session.outputPath, 'w')
+    // Create segmenter — bytes from IOContext onwrite flow directly into MemorySegmentStore
+    segmenter = new FMP4Segmenter(session.segmentStore, { targetDuration: 6 })
+    session.segmenter = segmenter
 
+    // Non-seekable output — fMP4 with empty_moov writes sequentially
     outputIO = new ffmpeg.IOContext(1024 * 1024, {
       onwrite: (buf) => {
-        const written = fs.writeSync(fd, buf, 0, buf.length, bytesWritten)
-        bytesWritten += written
-        session.bytesWritten = bytesWritten
-        return written
+        segmenter.write(Buffer.from(buf))
+        return buf.length
       },
-      onseek: (offset, whence) => {
-        const SEEK_SET = 0
-        const SEEK_CUR = 1
-        const SEEK_END = 2
-        const AVSEEK_SIZE = 0x10000
-        if (whence === AVSEEK_SIZE) return bytesWritten
-        if (whence === SEEK_SET) bytesWritten = offset
-        else if (whence === SEEK_CUR) bytesWritten += offset
-        else if (whence === SEEK_END) bytesWritten = bytesWritten + offset
-        bytesWritten = Math.max(0, bytesWritten)
-        session.bytesWritten = bytesWritten
-        return bytesWritten
-      }
+      onseek: () => -1,
     })
 
     outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
@@ -443,34 +451,16 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
 
     dict = ffmpeg.Dictionary.from({ movflags: 'frag_keyframe+empty_moov+default_base_moof' })
     outputFormat.writeHeader(dict)
-    session.initSegmentEnd = bytesWritten
+    outputFormat.flush()
     session.status = 'transcoding'
 
     packet = new ffmpeg.Packet()
     let packetCount = 0
 
-    let lastKeyframeBytes = session.initSegmentEnd
-    let lastKeyframePts = 0n
-
     while (inputFormat.readFrame(packet)) {
       if (session.cancelled) break
 
       if (packet.streamIndex === videoStream.index) {
-        const isKeyframe = (packet.flags & 1) !== 0
-        if (isKeyframe) {
-          if (lastKeyframeBytes > 0 && bytesWritten > lastKeyframeBytes) {
-            pushFragmentFromBoundary(
-              session,
-              lastKeyframeBytes,
-              bytesWritten,
-              lastKeyframePts,
-              packet.pts,
-              outVideo.timeBase || videoStream.timeBase
-            )
-          }
-          lastKeyframeBytes = bytesWritten
-          lastKeyframePts = packet.pts ?? lastKeyframePts
-        }
         packet.streamIndex = outVideo.index
         outputFormat.writeFrame(packet)
       } else if (audioStream && outAudio && packet.streamIndex === audioStream.index) {
@@ -492,17 +482,7 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
 
     if (!session.cancelled) {
       outputFormat.writeTrailer()
-      if (bytesWritten > lastKeyframeBytes) {
-        pushFragmentFromBoundary(
-          session,
-          lastKeyframeBytes,
-          bytesWritten,
-          lastKeyframePts,
-          lastKeyframePts + 1n,
-          outVideo.timeBase || videoStream.timeBase
-        )
-      }
-      session.bytesWritten = bytesWritten
+      segmenter.finish()
       session.isComplete = true
       session.status = 'complete'
     }
@@ -514,10 +494,6 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
       safeDestroy(outputIO)
       safeDestroy(inputFormat)
       if (reader) { try { reader.destroy() } catch {} reader = null }
-      if (fd !== null) {
-        try { fs.closeSync(fd) } catch {}
-        fd = null
-      }
     }
     session.ffmpegCleanup = cleanup
     cleanup()
@@ -526,9 +502,6 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
 }
 
 async function runFullTranscodeCast(session, sourceUrl) {
-  let fd = null
-  let bytesWritten = 0
-
   let inputFormat = null
   let outputIO = null
   let outputFormat = null
@@ -548,11 +521,12 @@ async function runFullTranscodeCast(session, sourceUrl) {
   let resampledFrame = null
   let outputPacket = null
   let reader = null
+  let segmenter = null
 
   try {
     const fileSize = await getHttpFileSize(sourceUrl)
     if (!fileSize) throw new Error('Could not determine source file size for cast')
-    reader = new TempFileReader(sourceUrl, fileSize)
+    reader = new TempFileReader(sourceUrl, fileSize, { waitForComplete: true })
     await reader.startDownload()
     const inputIO = reader.createIOContext(ffmpeg)
     inputFormat = new ffmpeg.InputFormatContext(inputIO)
@@ -560,27 +534,16 @@ async function runFullTranscodeCast(session, sourceUrl) {
     const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO)
     if (!videoStream) throw new Error('No video stream found')
 
-    fd = fs.openSync(session.outputPath, 'w')
+    // Create segmenter — bytes from IOContext onwrite flow directly into MemorySegmentStore
+    segmenter = new FMP4Segmenter(session.segmentStore, { targetDuration: 6 })
+    session.segmenter = segmenter
+
     outputIO = new ffmpeg.IOContext(1024 * 1024, {
       onwrite: (buf) => {
-        const written = fs.writeSync(fd, buf, 0, buf.length, bytesWritten)
-        bytesWritten += written
-        session.bytesWritten = bytesWritten
-        return written
+        segmenter.write(Buffer.from(buf))
+        return buf.length
       },
-      onseek: (offset, whence) => {
-        const SEEK_SET = 0
-        const SEEK_CUR = 1
-        const SEEK_END = 2
-        const AVSEEK_SIZE = 0x10000
-        if (whence === AVSEEK_SIZE) return bytesWritten
-        if (whence === SEEK_SET) bytesWritten = offset
-        else if (whence === SEEK_CUR) bytesWritten += offset
-        else if (whence === SEEK_END) bytesWritten = bytesWritten + offset
-        bytesWritten = Math.max(0, bytesWritten)
-        session.bytesWritten = bytesWritten
-        return bytesWritten
-      }
+      onseek: () => -1,
     })
     outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
 
@@ -666,7 +629,7 @@ async function runFullTranscodeCast(session, sourceUrl) {
 
     dict = ffmpeg.Dictionary.from({ movflags: 'frag_keyframe+empty_moov+default_base_moof' })
     outputFormat.writeHeader(dict)
-    session.initSegmentEnd = bytesWritten
+    outputFormat.flush()
     session.status = 'transcoding'
 
     packet = new ffmpeg.Packet()
@@ -692,8 +655,6 @@ async function runFullTranscodeCast(session, sourceUrl) {
     }
 
     let packetCount = 0
-    let lastKeyframeBytes = session.initSegmentEnd
-    let lastKeyframePts = 0n
 
     while (inputFormat.readFrame(packet)) {
       if (session.cancelled) break
@@ -711,22 +672,6 @@ async function runFullTranscodeCast(session, sourceUrl) {
             }
             if (videoEncoder.sendFrame(frameToEncode)) {
               while (videoEncoder.receivePacket(outputPacket)) {
-                const isKeyframe = (outputPacket.flags & 1) !== 0
-                if (isKeyframe) {
-                  if (lastKeyframeBytes > 0 && bytesWritten > lastKeyframeBytes) {
-                    pushFragmentFromBoundary(
-                      session,
-                      lastKeyframeBytes,
-                      bytesWritten,
-                      lastKeyframePts,
-                      outputPacket.pts,
-                      outVideoStream.timeBase || videoEncoder.timeBase
-                    )
-                  }
-                  lastKeyframeBytes = bytesWritten
-                  lastKeyframePts = outputPacket.pts ?? lastKeyframePts
-                }
-
                 outputPacket.streamIndex = outVideoStream.index
                 outputFormat.writeFrame(outputPacket)
                 safeUnref(outputPacket)
@@ -763,21 +708,6 @@ async function runFullTranscodeCast(session, sourceUrl) {
     if (!session.cancelled) {
       videoEncoder.sendFrame(null)
       while (videoEncoder.receivePacket(outputPacket)) {
-        const isKeyframe = (outputPacket.flags & 1) !== 0
-        if (isKeyframe) {
-          if (lastKeyframeBytes > 0 && bytesWritten > lastKeyframeBytes) {
-            pushFragmentFromBoundary(
-              session,
-              lastKeyframeBytes,
-              bytesWritten,
-              lastKeyframePts,
-              outputPacket.pts,
-              outVideoStream.timeBase || videoEncoder.timeBase
-            )
-          }
-          lastKeyframeBytes = bytesWritten
-          lastKeyframePts = outputPacket.pts ?? lastKeyframePts
-        }
         outputPacket.streamIndex = outVideoStream.index
         outputFormat.writeFrame(outputPacket)
         safeUnref(outputPacket)
@@ -793,17 +723,7 @@ async function runFullTranscodeCast(session, sourceUrl) {
       }
 
       outputFormat.writeTrailer()
-      if (bytesWritten > lastKeyframeBytes) {
-        pushFragmentFromBoundary(
-          session,
-          lastKeyframeBytes,
-          bytesWritten,
-          lastKeyframePts,
-          lastKeyframePts + 1n,
-          outVideoStream.timeBase || videoEncoder.timeBase
-        )
-      }
-      session.bytesWritten = bytesWritten
+      segmenter.finish()
       session.isComplete = true
       session.status = 'complete'
     }
@@ -826,10 +746,8 @@ async function runFullTranscodeCast(session, sourceUrl) {
       safeDestroy(outputIO)
       safeDestroy(inputFormat)
       if (reader) { try { reader.destroy() } catch {} reader = null }
-      if (fd !== null) {
-        try { fs.closeSync(fd) } catch {}
-        fd = null
-      }
+      reader = null
+      segmenter = null
     }
     session.ffmpegCleanup = cleanup
     cleanup()

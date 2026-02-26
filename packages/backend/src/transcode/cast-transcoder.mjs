@@ -408,6 +408,7 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
   let dict = null
   let reader = null
   let segmenter = null
+  let writePos = 0
 
   try {
     const fileSize = await getHttpFileSize(sourceUrl)
@@ -431,9 +432,18 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
     outputIO = new ffmpeg.IOContext(1024 * 1024, {
       onwrite: (buf) => {
         segmenter.write(Buffer.from(buf))
+        writePos += buf.length
         return buf.length
       },
-      onseek: () => -1,
+      onseek: (offset, whence) => {
+        const AVSEEK_SIZE = 0x10000
+        if (whence === AVSEEK_SIZE) return writePos
+        if (whence === 0) writePos = offset
+        else if (whence === 1) writePos += offset
+        else if (whence === 2) writePos += offset
+        writePos = Math.max(0, writePos)
+        return writePos
+      },
     })
 
     outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
@@ -451,7 +461,6 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
 
     dict = ffmpeg.Dictionary.from({ movflags: 'frag_keyframe+empty_moov+default_base_moof' })
     outputFormat.writeHeader(dict)
-    outputFormat.flush()
     session.status = 'transcoding'
 
     packet = new ffmpeg.Packet()
@@ -522,6 +531,7 @@ async function runFullTranscodeCast(session, sourceUrl) {
   let outputPacket = null
   let reader = null
   let segmenter = null
+  let writePos = 0
 
   try {
     const fileSize = await getHttpFileSize(sourceUrl)
@@ -541,9 +551,18 @@ async function runFullTranscodeCast(session, sourceUrl) {
     outputIO = new ffmpeg.IOContext(1024 * 1024, {
       onwrite: (buf) => {
         segmenter.write(Buffer.from(buf))
+        writePos += buf.length
         return buf.length
       },
-      onseek: () => -1,
+      onseek: (offset, whence) => {
+        const AVSEEK_SIZE = 0x10000
+        if (whence === AVSEEK_SIZE) return writePos
+        if (whence === 0) writePos = offset
+        else if (whence === 1) writePos += offset
+        else if (whence === 2) writePos += offset
+        writePos = Math.max(0, writePos)
+        return writePos
+      },
     })
     outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
 
@@ -629,7 +648,6 @@ async function runFullTranscodeCast(session, sourceUrl) {
 
     dict = ffmpeg.Dictionary.from({ movflags: 'frag_keyframe+empty_moov+default_base_moof' })
     outputFormat.writeHeader(dict)
-    outputFormat.flush()
     session.status = 'transcoding'
 
     packet = new ffmpeg.Packet()

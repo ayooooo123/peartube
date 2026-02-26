@@ -5,6 +5,8 @@ import path from 'bare-path'
 
 import { probeMedia, loadBareFfmpeg } from './transcoder.mjs'
 import { safeDestroy, safeUnref, copyCodecParameters } from './ffmpeg-utils.mjs'
+import { TempFileReader } from './temp-file-reader.mjs'
+import { getHttpFileSize } from './http-file-size.mjs'
 
 const sessions = new Map()
 let castServer = null
@@ -389,9 +391,15 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
   let outputFormat = null
   let packet = null
   let dict = null
+  let reader = null
 
   try {
-    inputFormat = new ffmpeg.InputFormatContext(sourceUrl)
+    const fileSize = await getHttpFileSize(sourceUrl)
+    if (!fileSize) throw new Error('Could not determine source file size for cast')
+    reader = new TempFileReader(sourceUrl, fileSize)
+    await reader.startDownload()
+    const inputIO = reader.createIOContext(ffmpeg)
+    inputFormat = new ffmpeg.InputFormatContext(inputIO)
     const videoStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.VIDEO)
     const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO)
     if (!videoStream) throw new Error('No video stream found')
@@ -505,6 +513,7 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
       safeDestroy(outputFormat)
       safeDestroy(outputIO)
       safeDestroy(inputFormat)
+      if (reader) { try { reader.destroy() } catch {} reader = null }
       if (fd !== null) {
         try { fs.closeSync(fd) } catch {}
         fd = null
@@ -538,9 +547,15 @@ async function runFullTranscodeCast(session, sourceUrl) {
   let audioFrame = null
   let resampledFrame = null
   let outputPacket = null
+  let reader = null
 
   try {
-    inputFormat = new ffmpeg.InputFormatContext(sourceUrl)
+    const fileSize = await getHttpFileSize(sourceUrl)
+    if (!fileSize) throw new Error('Could not determine source file size for cast')
+    reader = new TempFileReader(sourceUrl, fileSize)
+    await reader.startDownload()
+    const inputIO = reader.createIOContext(ffmpeg)
+    inputFormat = new ffmpeg.InputFormatContext(inputIO)
     const videoStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.VIDEO)
     const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO)
     if (!videoStream) throw new Error('No video stream found')
@@ -810,6 +825,7 @@ async function runFullTranscodeCast(session, sourceUrl) {
       safeDestroy(outputFormat)
       safeDestroy(outputIO)
       safeDestroy(inputFormat)
+      if (reader) { try { reader.destroy() } catch {} reader = null }
       if (fd !== null) {
         try { fs.closeSync(fd) } catch {}
         fd = null

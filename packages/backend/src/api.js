@@ -14,7 +14,7 @@ import { getVideoUrlFromBlob, loadChannel, loadPublicBee, pairDevice as pairChan
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
-import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/hls-transcoder.mjs';
+import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext

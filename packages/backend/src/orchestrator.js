@@ -19,7 +19,7 @@ import { createUploadManager } from './upload.js';
 import { readIdentityKeyFile, writeIdentityKeyFile } from './identity-key-file.js';
 import { derivePrimaryKey } from './peartube-identity.js';
 import { initFileLogger } from './logger.js';
-import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/hls-transcoder.mjs';
+import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 
 // Shutdown flag to prevent deferred init from running during cleanup
 let isShuttingDown = false;

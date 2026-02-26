@@ -17,7 +17,7 @@ import http1 from 'bare-http1';
 // @ts-ignore - backend transcode modules are JavaScript
 import * as transcoder from '@peartube/backend/transcode/transcoder';
 // @ts-ignore - backend transcode modules are JavaScript
-import * as hlsTranscoder from '@peartube/backend/transcode/hls-transcoder';
+import * as castTranscoder from '@peartube/backend/transcode/cast-transcoder';
 // @ts-ignore - backend thumbnail module
 import { generateAndStoreThumbnail } from '@peartube/backend/thumbnail';
 
@@ -640,9 +640,9 @@ function cleanupTranscodeSessions() {
 
   if (activeCastTranscodeId) {
     try {
-      hlsTranscoder.stopHlsTranscode(activeCastTranscodeId);
+      castTranscoder.stopCastTranscode(activeCastTranscodeId);
     } catch {}
-    hlsSessionsWithLoadSent.delete(activeCastTranscodeId);
+    castSessionsWithLoadSent.delete(activeCastTranscodeId);
     activeCastTranscodeId = null;
     activeCastSourceKey = null;
   }
@@ -2279,7 +2279,7 @@ let castLoadPromise: Promise<void> | null = null;
 let castContext: any = null; // Singleton instance
 let activeCastTranscodeId: string | null = null; // Track active transcode for cleanup
 let activeCastSourceKey: string | null = null; // Stable source key for active cast session
-const hlsSessionsWithLoadSent = new Set<string>();
+const castSessionsWithLoadSent = new Set<string>();
 
 // Worker-level debouncing for castPlay to prevent native crashes from concurrent calls
 let castPlayInProgress = false;
@@ -2602,14 +2602,8 @@ rpc.onCastDisconnect(async () => {
     // Clean up active transcode session when cast session ends
     if (activeCastTranscodeId) {
       console.log('[Worker] Cleaning up transcode cache:', activeCastTranscodeId);
-      hlsSessionsWithLoadSent.delete(activeCastTranscodeId);
-      try {
-        hlsTranscoder.stopHlsTranscode(activeCastTranscodeId);
-      } catch {
-        try {
-          transcoder.stopTranscode(activeCastTranscodeId);
-        } catch {}
-      }
+      castSessionsWithLoadSent.delete(activeCastTranscodeId);
+      castTranscoder.stopCastTranscode(activeCastTranscodeId);
       transcodeSessions.delete(activeCastTranscodeId);
       activeCastTranscodeId = null;
       activeCastSourceKey = null;
@@ -2647,7 +2641,7 @@ rpc.onCastPlay(async (req: any) => {
   if (
     protocol === 'chromecast' &&
     activeCastTranscodeId &&
-    hlsSessionsWithLoadSent.has(activeCastTranscodeId) &&
+    castSessionsWithLoadSent.has(activeCastTranscodeId) &&
     activeCastSourceKey === requestedKey
   ) {
     console.log('[Worker] Cast play: HLS already active for this source, skipping reload');
@@ -2680,11 +2674,21 @@ rpc.onCastPlay(async (req: any) => {
           reason: probeResult.reason,
         });
 
-        const needsProcessing = probeResult.needsTranscode || probeResult.needsRemux;
-        if (needsProcessing) {
-          console.log('[Worker] Cast play: HLS transcoding needed -', probeResult.reason);
+        const needsProcessing = probeResult.needsVideoTranscode || probeResult.needsAudioTranscode || probeResult.needsRemux;
 
-          // Check if video is fully synced before attempting transcode
+        const localIp = await getLocalIPv4ForTarget(deviceHost);
+
+        if (!needsProcessing) {
+          if (localIp) {
+            url = rewriteUrlHost(requestedUrl, localIp);
+          } else {
+            url = requestedUrl;
+          }
+          contentType = 'video/mp4';
+          console.log('[Worker] Cast play: direct serve (no transcode needed):', url);
+        } else {
+          console.log('[Worker] Cast play: fMP4 transcoding needed -', probeResult.reason);
+
           let isVideoComplete = true;
           let syncStatus: any = null;
           try {
@@ -2694,15 +2698,13 @@ rpc.onCastPlay(async (req: any) => {
               '(' + syncStatus.availableBlocks + '/' + syncStatus.totalBlocks + ' blocks)',
               syncStatus.isComplete ? 'COMPLETE' : 'INCOMPLETE',
               syncStatus.assumed ? '(ASSUMED)' : '');
-
             isVideoComplete = syncStatus.isComplete;
-
             if (!syncStatus.isComplete && !syncStatus.assumed) {
               const sizeMB = Math.round((syncStatus.byteLength || 0) / 1024 / 1024);
               const downloadedMB = Math.round(sizeMB * syncStatus.progress / 100);
               console.warn('[Worker] Cast play: Video may not be fully synced!',
                 downloadedMB + 'MB /', sizeMB + 'MB downloaded.',
-                'Proceeding anyway - TempFileReader will handle gracefully.');
+                'Proceeding anyway.');
             }
           } catch (syncErr: any) {
             console.warn('[Worker] Cast play: Could not check sync status:', syncErr?.message);
@@ -2710,108 +2712,71 @@ rpc.onCastPlay(async (req: any) => {
             syncStatus = null;
           }
 
-          let forceSoftwareDecode = true;
-          try {
-            const vtSettings = hlsTranscoder.getVideoToolboxDecodeSettings?.();
-            if (vtSettings?.videoToolboxDecodeLocked && vtSettings.videoToolboxDecodeEnabled) {
-              forceSoftwareDecode = false;
-            }
-          } catch {}
+          void isVideoComplete;
+          void syncStatus;
 
-          const result = await hlsTranscoder.startHlsTranscode(requestedUrl, {
-            title: req.title || '',
-            store: ctx.store,
+          console.log('[Worker] Cast play: starting fMP4 cast transcode...');
+          const result = await castTranscoder.startCastTranscode(requestedUrl, {
             sourceKey: requestedKey,
-            isVideoComplete,
-            blobInfo: syncStatus?.blobInfo || null,
-            blobsCoreKey: syncStatus?.blobsCoreKey || null,
-            forceSoftwareDecode,
-            forceProgressive: true,
-            forceHypercoreStream: true,
-            onProgress: (sessionId: string, percent: number) => {
-              if (percent % 10 === 0) {
-                console.log(`[Worker] HLS transcode progress: ${percent}%`);
-              }
-            }
           });
 
           if (!result.success) {
-            throw new Error(result.error || 'HLS transcode failed');
+            throw new Error(result.error || 'Cast transcode failed');
           }
 
           currentTranscodeSessionId = result.sessionId;
+          console.log('[Worker] Cast play: cast session:', result.sessionId, 'reused:', result.reused || false);
 
           if (result.reused) {
-            const status = hlsTranscoder.getHlsStatus(result.sessionId);
-            console.log('[Worker] Cast play: Reused session has', status?.segments || 0, 'segments');
-
-            if (hlsSessionsWithLoadSent.has(result.sessionId)) {
+            const status = castTranscoder.getCastStatus(result.sessionId);
+            console.log('[Worker] Cast play: Reused session has', status?.fragmentCount || 0, 'fragments');
+            if (castSessionsWithLoadSent.has(result.sessionId)) {
               activeCastTranscodeId = result.sessionId;
               activeCastSourceKey = requestedKey;
               console.log('[Worker] Cast play: LOAD already sent for this session, skipping duplicate LOAD');
               return { success: true };
             }
           } else {
-            const MIN_SEGMENTS = 1;
             const MAX_WAIT_MS = 30000;
             const POLL_INTERVAL_MS = 500;
-            console.log('[Worker] Cast play: Waiting for', MIN_SEGMENTS, 'HLS segments...');
-
+            console.log('[Worker] Cast play: Waiting for first fMP4 fragment...');
             const waitStart = Date.now();
-            let segmentCount = 0;
-            let playlistReady = false;
+            let fragmentCount = 0;
             while (Date.now() - waitStart < MAX_WAIT_MS) {
-              const status = hlsTranscoder.getHlsStatus(result.sessionId);
-              segmentCount = status?.segments || 0;
-              playlistReady = status?.playlistReady || false;
-
-              const ready = segmentCount >= MIN_SEGMENTS && playlistReady;
-              if (ready) {
-                console.log('[Worker] Cast play:', segmentCount, 'segments ready, playlistReady:', playlistReady);
+              const status = castTranscoder.getCastStatus(result.sessionId);
+              fragmentCount = status?.fragmentCount || 0;
+              if (fragmentCount >= 1) {
+                console.log('[Worker] Cast play:', fragmentCount, 'fragments ready');
                 break;
               }
-
               if (status?.status === 'error') {
-                throw new Error(status.error || 'Transcode failed while waiting for segments');
+                throw new Error(status.error || 'Cast transcode failed while waiting for fragments');
               }
-
               const elapsed = Date.now() - waitStart;
               if (elapsed % 3000 < POLL_INTERVAL_MS) {
-                console.log('[Worker] Cast play: waiting...', segmentCount, '/', MIN_SEGMENTS, 'segments, playlistReady:', playlistReady, 'elapsed:', Math.round(elapsed / 1000) + 's');
+                console.log('[Worker] Cast play: waiting...', fragmentCount, 'fragments, elapsed:', Math.round(elapsed / 1000) + 's');
               }
-
               await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
             }
-
-            if (segmentCount < MIN_SEGMENTS) {
-              console.warn('[Worker] Cast play: Timeout waiting for segments, proceeding anyway with', segmentCount, 'segments');
+            if (fragmentCount < 1) {
+              console.warn('[Worker] Cast play: Timeout waiting for fragments, proceeding anyway with', fragmentCount, 'fragments');
             }
           }
 
-          if (!result.hlsUrl) {
-            throw new Error('Transcode did not return HLS URL');
+          const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, localIp || '127.0.0.1');
+          if (!hlsUrl) {
+            throw new Error('Could not get cast HLS URL');
           }
-          let hlsUrl = result.hlsUrl;
-          const localIp = await getLocalIPv4ForTarget(deviceHost);
-          if (localIp) {
-            hlsUrl = hlsUrl.replace('127.0.0.1', localIp);
-            console.log('[Worker] Cast play: using HLS URL with LAN IP:', hlsUrl);
-          } else {
-            console.warn('[Worker] Cast play: could not get local IP for HLS URL rewrite');
-          }
-
           url = hlsUrl;
-          contentType = 'application/x-mpegurl';
-          // Use BUFFERED mode - LIVE mode has a 16-segment buffer limit on Chromecast
-          // that causes playback to stall around 2 minutes. BUFFERED mode allows
-          // unlimited buffering and works better for progressive HLS transcoding.
+          contentType = 'application/vnd.apple.mpegurl';
           streamType = 'BUFFERED';
+          console.log('[Worker] Cast play: using fMP4 HLS URL', url);
         }
       } catch (probeErr: any) {
         console.warn('[Worker] Cast play: probe/transcode failed, trying direct play:', probeErr?.message);
       }
 
-      if (contentType === 'application/x-mpegurl') {
+      if (contentType === 'application/vnd.apple.mpegurl') {
         console.log('[Worker] Cast play: skipping proxy for HLS (direct access to segments needed)');
       } else {
         let usedDirect = false;
@@ -2882,14 +2847,8 @@ rpc.onCastPlay(async (req: any) => {
         console.log('[Worker] Cast play: Keeping existing HLS session for same source');
       } else {
         console.log('[Worker] Cast play: Cleaning up previous transcode session:', previousSessionId);
-        hlsSessionsWithLoadSent.delete(previousSessionId);
-        try {
-          hlsTranscoder.stopHlsTranscode(previousSessionId);
-        } catch {
-          try {
-            transcoder.stopTranscode(previousSessionId);
-          } catch {}
-        }
+        castSessionsWithLoadSent.delete(previousSessionId);
+        castTranscoder.stopCastTranscode(previousSessionId);
         if (!currentTranscodeSessionId) {
           activeCastTranscodeId = null;
           activeCastSourceKey = null;
@@ -2913,8 +2872,8 @@ rpc.onCastPlay(async (req: any) => {
       duration: mediaDuration,
     });
 
-    if (activeCastTranscodeId && contentType === 'application/x-mpegurl') {
-      hlsSessionsWithLoadSent.add(activeCastTranscodeId);
+    if (activeCastTranscodeId && contentType === 'application/vnd.apple.mpegurl') {
+      castSessionsWithLoadSent.add(activeCastTranscodeId);
     }
 
     lastCastPlayTime = Date.now();
@@ -2960,14 +2919,8 @@ rpc.onCastStop(async () => {
     // Clean up active transcode session when cast stops
     if (activeCastTranscodeId) {
       console.log('[Worker] Cleaning up transcode cache on stop:', activeCastTranscodeId);
-      hlsSessionsWithLoadSent.delete(activeCastTranscodeId);
-      try {
-        hlsTranscoder.stopHlsTranscode(activeCastTranscodeId);
-      } catch {
-        try {
-          transcoder.stopTranscode(activeCastTranscodeId);
-        } catch {}
-      }
+      castSessionsWithLoadSent.delete(activeCastTranscodeId);
+      castTranscoder.stopCastTranscode(activeCastTranscodeId);
       transcodeSessions.delete(activeCastTranscodeId);
       activeCastTranscodeId = null;
       activeCastSourceKey = null;

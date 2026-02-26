@@ -21,7 +21,7 @@ let os = null
 let b4a = null
 let http1 = null
 let transcoder = null
-let hlsTranscoder = null
+let castTranscoder = null
 let fsNativeExtensions = null
 
 async function loadBackendModules() {
@@ -37,7 +37,7 @@ async function loadBackendModules() {
     http1Mod,
     fsNativeExtensionsMod,
     transcoderMod,
-    hlsTranscoderMod,
+    castTranscoderMod,
   ] = await Promise.all([
     import('@peartube/spec'),
     import('@peartube/backend/orchestrator'),
@@ -50,7 +50,7 @@ async function loadBackendModules() {
     import('bare-http1'),
     import('fs-native-extensions'),
     import('./transcoder.mjs'),
-    import('./hls-transcoder.mjs'),
+    import('@peartube/backend/transcode/cast-transcoder'),
   ])
 
   HRPC = specMod?.default ?? specMod
@@ -68,9 +68,9 @@ async function loadBackendModules() {
   http1 = http1Mod?.default ?? http1Mod
   fsNativeExtensions = fsNativeExtensionsMod?.default ?? fsNativeExtensionsMod
   transcoder = transcoderMod
-  hlsTranscoder = hlsTranscoderMod
+  castTranscoder = castTranscoderMod
 
-  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !hlsTranscoder || !fsNativeExtensions || !setCastActive || !isCastActive || !prefetchVideoForCast) {
+  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !castTranscoder || !fsNativeExtensions || !setCastActive || !isCastActive || !prefetchVideoForCast) {
     throw new Error('Missing required backend modules after dynamic import')
   }
 }
@@ -130,6 +130,7 @@ let castLoadPromise = null
 let castContext = null
 let isHeadlessMode = false
 let headlessShutdownTimer = null
+const HEADLESS_SHUTDOWN_DELAY_MS = 8 * 60 * 60 * 1000
 
 const CAST_LOCALHOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0', '::1'])
 
@@ -794,13 +795,13 @@ function getCastContext() {
           console.log('[CastDiag] Headless cast flag cleared (cast stopped/idle/disconnected)')
           if (isHeadlessMode) {
             if (headlessShutdownTimer) clearTimeout(headlessShutdownTimer)
-            console.log('[CastDiag] Headless mode active, scheduling self-termination in 60s')
+            console.log('[CastDiag] Headless mode active, scheduling self-termination in', HEADLESS_SHUTDOWN_DELAY_MS, 'ms')
             headlessShutdownTimer = setTimeout(() => {
               headlessShutdownTimer = null
               console.log('[CastDiag] Headless cast ended, self-terminating worklet')
               setHeadlessCastFlag(false)
               Bare.exit(0)
-            }, 60000)
+            }, HEADLESS_SHUTDOWN_DELAY_MS)
           } else {
             console.log('[CastDiag] Not in headless mode, skipping self-termination timer')
           }
@@ -2196,18 +2197,11 @@ rpc.onCastDisconnect(async () => {
     await castContext.disconnect()
     castProxySessions.clear()
 
-    // Cleanup active transcode session (try HLS first, then legacy)
+    // Cleanup active transcode session
     if (activeCastTranscodeId) {
-      hlsSessionsWithLoadSent.delete(activeCastTranscodeId) // Clear LOAD tracking
-      try {
-        hlsTranscoder.stopHlsTranscode(activeCastTranscodeId)
-        console.log('[Backend] Cleaned up HLS transcode session:', activeCastTranscodeId)
-      } catch {
-        try {
-          transcoder.stopTranscode(activeCastTranscodeId)
-          console.log('[Backend] Cleaned up legacy transcode session:', activeCastTranscodeId)
-        } catch {}
-      }
+      castSessionsWithLoadSent.delete(activeCastTranscodeId) // Clear LOAD tracking
+      castTranscoder.stopCastTranscode(activeCastTranscodeId)
+      console.log('[Backend] Cleaned up cast transcode session:', activeCastTranscodeId)
       activeCastTranscodeId = null
       activeCastSourceKey = null
     }
@@ -2226,9 +2220,8 @@ let activeCastSourceKey = null
 // Stall detector for HLS segment generation during cast
 let castStallMonitor = null
 
-// Track which HLS sessions have already sent LOAD to Chromecast
-// Key: sessionId, Value: true
-const hlsSessionsWithLoadSent = new Map()
+// Track which cast sessions have already sent LOAD to Chromecast
+const castSessionsWithLoadSent = new Set()
 let castPrefetchAbortController = null
 
 // Guard against concurrent/repeated castPlay calls
@@ -2308,21 +2301,23 @@ rpc.onCastPlay(async (req) => {
 
     if (
       activeCastTranscodeId &&
-      hlsSessionsWithLoadSent.has(activeCastTranscodeId) &&
+      castSessionsWithLoadSent.has(activeCastTranscodeId) &&
       activeCastSourceKey === requestedKey
     ) {
-      console.log('[Backend] Cast play: HLS already active for this source, skipping reload')
+      console.log('[Backend] Cast play: cast stream already active for this source, skipping reload')
       return { success: true }
     }
 
-    // For Chromecast: use HLS transcoding (remux/transcode).
+    // For Chromecast: use cast transcoding (or direct-serve if fully compatible).
     // For FCast and other protocols: use cast proxy to serve blob URL directly.
     // This avoids ffmpeg/HLS for FCast, which can stall while app is backgrounded.
     if (protocol === 'chromecast') {
       transcodeRequired = true
 
+      // Probe media
+      let probeResult = null
       try {
-        const probeResult = await transcoder.probeMedia(requestedUrl, req.title)
+        probeResult = await transcoder.probeMedia(requestedUrl, req.title)
         console.log('[Backend] Probe result:', {
           video: probeResult.videoCodec,
           audio: probeResult.audioCodec,
@@ -2332,167 +2327,138 @@ rpc.onCastPlay(async (req) => {
           reason: probeResult.reason,
         })
       } catch (probeErr) {
-        console.warn('[Backend] Cast play: probe failed (HLS transcoder will re-detect):', probeErr?.message)
-      }
-
-      let isVideoComplete = true
-      let syncStatus = null
-      try {
-        syncStatus = await api.checkVideoSync(requestedUrl)
-        console.log('[Backend] Cast play: video sync status -',
-          syncStatus.progress + '%',
-          '(' + syncStatus.availableBlocks + '/' + syncStatus.totalBlocks + ' blocks)',
-          syncStatus.isComplete ? 'COMPLETE' : 'INCOMPLETE',
-          syncStatus.assumed ? '(ASSUMED)' : '')
-
-        isVideoComplete = syncStatus.isComplete
-
-        if (!syncStatus.isComplete && !syncStatus.assumed) {
-          const sizeMB = Math.round((syncStatus.byteLength || 0) / 1024 / 1024)
-          const downloadedMB = Math.round(sizeMB * syncStatus.progress / 100)
-          console.warn('[Backend] Cast play: Video may not be fully synced!',
-            downloadedMB + 'MB /', sizeMB + 'MB downloaded.',
-            'Proceeding anyway - TempFileReader will handle gracefully.')
-        }
-      } catch (syncErr) {
-        console.warn('[Backend] Cast play: Could not check sync status:', syncErr?.message)
-        isVideoComplete = true
-        syncStatus = null
-      }
-
-      // Add a short buffering window before starting cast on partially-synced videos.
-      // This reduces mid-stream EOF when transcoder read speed briefly exceeds P2P download speed.
-      if (!isVideoComplete && syncStatus && !syncStatus.assumed) {
-        let latestSyncStatus = syncStatus
-        let syncPercent = latestSyncStatus.progress || 0
-
-        if (syncPercent < CAST_TARGET_SYNC_PERCENT) {
-          const waitStart = Date.now()
-          console.log('[Backend] Cast play: waiting for safer sync level:', syncPercent + '% -> target ' + CAST_TARGET_SYNC_PERCENT + '%')
-
-          while (Date.now() - waitStart < CAST_SYNC_WAIT_TIMEOUT_MS) {
-            await new Promise((resolve) => setTimeout(resolve, CAST_SYNC_WAIT_INTERVAL_MS))
-            try {
-              const refreshed = await api.checkVideoSync(requestedUrl)
-              if (refreshed) {
-                latestSyncStatus = refreshed
-                isVideoComplete = Boolean(refreshed.isComplete)
-                syncPercent = refreshed.progress || 0
-                console.log('[Backend] Cast play: sync wait progress', syncPercent + '%', isVideoComplete ? '(complete)' : '')
-                if (isVideoComplete || syncPercent >= CAST_TARGET_SYNC_PERCENT) {
-                  break
-                }
-              }
-            } catch (waitErr) {
-              console.warn('[Backend] Cast play: sync wait check failed:', waitErr?.message)
-              break
-            }
-          }
-        }
-
-        syncStatus = latestSyncStatus
-        const finalSyncPercent = syncStatus.progress || 0
-        console.log('[Backend] Cast sync check:', finalSyncPercent + '% synced, min:', CAST_MIN_SYNC_PERCENT + '%, target:', CAST_TARGET_SYNC_PERCENT + '%')
-        if (finalSyncPercent < CAST_MIN_SYNC_PERCENT) {
-          console.warn('[Backend] Cast rejected: video is only ' + finalSyncPercent + '% downloaded. Need at least ' + CAST_MIN_SYNC_PERCENT + '%.')
-          return { success: false, error: 'Video is only ' + finalSyncPercent + '% downloaded. Please wait a bit longer and try again.' }
-        }
-        if (!isVideoComplete && finalSyncPercent < CAST_TARGET_SYNC_PERCENT) {
-          console.warn('[Backend] Cast starting below target sync (' + finalSyncPercent + '%). Playback may still stall on slow peers.')
-        }
-      }
-
-      console.log('[Backend] Cast play: starting HLS transcode with progressive streaming...')
-      const result = await hlsTranscoder.startHlsTranscode(requestedUrl, {
-        title: req.title || '',
-        store: ctx.store,
-        sourceKey: requestedKey,
-        // Use actual sync status to determine if video is complete
-        isVideoComplete,
-        // Enable progressive streaming for better responsiveness
-        forceProgressive: true,
-        // Force Hypercore stream reader for P2P efficiency
-        forceHypercoreStream: true,
-        // Force full transcode path for Chromecast stability. Some "compatible"
-        // sources fail in remux mode on real devices.
-        forceFullTranscode: true,
-        blobInfo: syncStatus?.blobInfo || null,
-        blobsCoreKey: syncStatus?.blobsCoreKey || null,
-        onProgress: (sessionId, percent) => {
-          if (percent % 10 === 0) {
-            console.log(`[Backend] HLS transcode progress: ${percent}%`)
-          }
-        }
-      })
-
-      if (!result.success) {
-        throw new Error(result.error || 'HLS transcode failed')
-      }
-
-      currentTranscodeSessionId = result.sessionId
-      console.log('[Backend] Cast play: HLS session:', result.sessionId, 'hlsUrl:', result.hlsUrl, 'reused:', result.reused || false)
-
-      if (result.reused) {
-        const status = hlsTranscoder.getHlsStatus(result.sessionId)
-        console.log('[Backend] Cast play: Reused session has', status?.segments || 0, 'segments')
-
-        if (hlsSessionsWithLoadSent.has(result.sessionId)) {
-          activeCastTranscodeId = result.sessionId
-          activeCastSourceKey = requestedKey
-          console.log('[Backend] Cast play: LOAD already sent for this session, skipping duplicate LOAD')
-          return { success: true }
-        }
-      } else {
-        const MIN_SEGMENTS = 1
-        // Reliability over startup speed: allow long initial preparation when
-        // source data must fully download before transcode starts.
-        const MAX_WAIT_MS = 60 * 1000
-        const POLL_INTERVAL_MS = 500
-        console.log('[Backend] Cast play: Waiting for', MIN_SEGMENTS, 'HLS segments...')
-
-        const waitStart = Date.now()
-        let segmentCount = 0
-        let playlistReady = false
-        while (Date.now() - waitStart < MAX_WAIT_MS) {
-          const status = hlsTranscoder.getHlsStatus(result.sessionId)
-          segmentCount = status?.segments || 0
-          playlistReady = status?.playlistReady || false
-
-          if (segmentCount >= MIN_SEGMENTS && playlistReady) {
-            console.log('[Backend] Cast play:', segmentCount, 'segments ready')
-            break
-          }
-
-          if (status?.status === 'error') {
-            throw new Error(status.error || 'Transcode failed while waiting for segments')
-          }
-
-          const elapsed = Date.now() - waitStart
-          if (elapsed % 3000 < POLL_INTERVAL_MS) {
-            console.log('[Backend] Cast play: waiting...', segmentCount, '/', MIN_SEGMENTS, 'segments, elapsed:', Math.round(elapsed/1000) + 's')
-          }
-
-          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
-        }
-
-        if (segmentCount < MIN_SEGMENTS) {
-          throw new Error('HLS startup timeout: no playable segments generated')
-        }
+        console.warn('[Backend] Cast play: probe failed:', probeErr?.message)
       }
 
       const localIp = await getLocalIPv4ForTarget(deviceHost)
-      let hlsUrl = result.hlsUrl
-
-      if (localIp) {
-        hlsUrl = hlsUrl.replace('127.0.0.1', localIp)
-        console.log('[Backend] Cast play: HLS URL with LAN IP:', hlsUrl)
-      } else {
+      if (!localIp) {
         throw new Error('Could not determine LAN IP for HLS cast URL')
       }
 
-      url = hlsUrl
-      contentType = 'application/x-mpegurl'
-      console.log('[Backend] Cast play: using HLS URL', url)
+      const needsProcessing = probeResult
+        ? (probeResult.needsVideoTranscode || probeResult.needsAudioTranscode || probeResult.needsRemux)
+        : true
+
+      if (!needsProcessing) {
+        // Direct serve: compatible H.264+AAC MP4 — rewrite host to LAN IP
+        url = requestedUrl.replace('127.0.0.1', localIp).replace('localhost', localIp)
+        contentType = 'video/mp4'
+        console.log('[Backend] Cast play: direct serve (no transcode needed):', url)
+      } else {
+        // Check sync status before transcoding
+        let isVideoComplete = true
+        let syncStatus = null
+        try {
+          syncStatus = await api.checkVideoSync(requestedUrl)
+          console.log('[Backend] Cast play: video sync status -',
+            syncStatus.progress + '%',
+            '(' + syncStatus.availableBlocks + '/' + syncStatus.totalBlocks + ' blocks)',
+            syncStatus.isComplete ? 'COMPLETE' : 'INCOMPLETE',
+            syncStatus.assumed ? '(ASSUMED)' : '')
+          isVideoComplete = syncStatus.isComplete
+          if (!syncStatus.isComplete && !syncStatus.assumed) {
+            const sizeMB = Math.round((syncStatus.byteLength || 0) / 1024 / 1024)
+            const downloadedMB = Math.round(sizeMB * syncStatus.progress / 100)
+            console.warn('[Backend] Cast play: Video may not be fully synced!',
+              downloadedMB + 'MB /', sizeMB + 'MB downloaded.',
+              'Proceeding anyway.')
+          }
+        } catch (syncErr) {
+          console.warn('[Backend] Cast play: Could not check sync status:', syncErr?.message)
+          isVideoComplete = true
+          syncStatus = null
+        }
+
+        // Sync wait (keep existing logic for partially-synced videos)
+        if (!isVideoComplete && syncStatus && !syncStatus.assumed) {
+          let latestSyncStatus = syncStatus
+          let syncPercent = latestSyncStatus.progress || 0
+          if (syncPercent < CAST_TARGET_SYNC_PERCENT) {
+            const waitStart = Date.now()
+            console.log('[Backend] Cast play: waiting for safer sync level:', syncPercent + '% -> target ' + CAST_TARGET_SYNC_PERCENT + '%')
+            while (Date.now() - waitStart < CAST_SYNC_WAIT_TIMEOUT_MS) {
+              await new Promise((resolve) => setTimeout(resolve, CAST_SYNC_WAIT_INTERVAL_MS))
+              try {
+                const refreshed = await api.checkVideoSync(requestedUrl)
+                if (refreshed) {
+                  latestSyncStatus = refreshed
+                  isVideoComplete = Boolean(refreshed.isComplete)
+                  syncPercent = refreshed.progress || 0
+                  console.log('[Backend] Cast play: sync wait progress', syncPercent + '%', isVideoComplete ? '(complete)' : '')
+                  if (isVideoComplete || syncPercent >= CAST_TARGET_SYNC_PERCENT) break
+                }
+              } catch (waitErr) {
+                console.warn('[Backend] Cast play: sync wait check failed:', waitErr?.message)
+                break
+              }
+            }
+          }
+          syncStatus = latestSyncStatus
+          const finalSyncPercent = syncStatus.progress || 0
+          console.log('[Backend] Cast sync check:', finalSyncPercent + '% synced, min:', CAST_MIN_SYNC_PERCENT + '%, target:', CAST_TARGET_SYNC_PERCENT + '%')
+          if (finalSyncPercent < CAST_MIN_SYNC_PERCENT) {
+            console.warn('[Backend] Cast rejected: video is only ' + finalSyncPercent + '% downloaded.')
+            return { success: false, error: 'Video is only ' + finalSyncPercent + '% downloaded. Please wait a bit longer and try again.' }
+          }
+        }
+
+        // Start fMP4 cast transcode
+        console.log('[Backend] Cast play: starting fMP4 cast transcode...')
+        const result = await castTranscoder.startCastTranscode(requestedUrl, {
+          sourceKey: requestedKey,
+        })
+
+        if (!result.success) {
+          throw new Error(result.error || 'Cast transcode failed')
+        }
+
+        currentTranscodeSessionId = result.sessionId
+        console.log('[Backend] Cast play: cast session:', result.sessionId, 'reused:', result.reused || false)
+
+        if (result.reused) {
+          const status = castTranscoder.getCastStatus(result.sessionId)
+          console.log('[Backend] Cast play: Reused session has', status?.fragmentCount || 0, 'fragments')
+          if (castSessionsWithLoadSent.has(result.sessionId)) {
+            activeCastTranscodeId = result.sessionId
+            activeCastSourceKey = requestedKey
+            console.log('[Backend] Cast play: LOAD already sent for this session, skipping duplicate LOAD')
+            return { success: true }
+          }
+        } else {
+          const MAX_WAIT_MS = 180 * 1000
+          const POLL_INTERVAL_MS = 500
+          console.log('[Backend] Cast play: Waiting for first fMP4 fragment...')
+          const waitStart = Date.now()
+          let fragmentCount = 0
+          while (Date.now() - waitStart < MAX_WAIT_MS) {
+            const status = castTranscoder.getCastStatus(result.sessionId)
+            fragmentCount = status?.fragmentCount || 0
+            if (fragmentCount >= 1) {
+              console.log('[Backend] Cast play:', fragmentCount, 'fragments ready')
+              break
+            }
+            if (status?.status === 'error') {
+              throw new Error(status.error || 'Cast transcode failed while waiting for fragments')
+            }
+            const elapsed = Date.now() - waitStart
+            if (elapsed % 3000 < POLL_INTERVAL_MS) {
+              console.log('[Backend] Cast play: waiting...', fragmentCount, 'fragments, elapsed:', Math.round(elapsed / 1000) + 's')
+            }
+            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
+          }
+          if (fragmentCount < 1) {
+            throw new Error('Cast transcode startup timeout: no fragments generated')
+          }
+        }
+
+        const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, localIp)
+        if (!hlsUrl) {
+          throw new Error('Could not get cast HLS URL')
+        }
+        url = hlsUrl
+        contentType = 'application/vnd.apple.mpegurl'
+        console.log('[Backend] Cast play: using fMP4 HLS URL', url)
+      }
     } else {
       // FCast and other protocols: use cast proxy to serve blob URL directly
       // No ffmpeg needed — the FCast receiver handles the format natively
@@ -2528,18 +2494,16 @@ rpc.onCastPlay(async (req) => {
       console.log('[Backend] Cast play: Stop before load failed (ok if nothing playing):', stopErr?.message)
     }
 
-    // Cleanup any PREVIOUS HLS transcode sessions (not the current one!)
+    // Cleanup any PREVIOUS cast transcode sessions (not the current one!)
     // currentTranscodeSessionId is set in the try block above, or null if no transcode
     const previousSessionId = activeCastTranscodeId
     if (previousSessionId && previousSessionId !== currentTranscodeSessionId) {
       if (!currentTranscodeSessionId && activeCastSourceKey === requestedKey) {
-        console.log('[Backend] Cast play: Keeping existing HLS session for same source')
+        console.log('[Backend] Cast play: Keeping existing cast session for same source')
       } else {
         console.log('[Backend] Cast play: Cleaning up previous transcode session:', previousSessionId)
-        hlsSessionsWithLoadSent.delete(previousSessionId)
-        try {
-          hlsTranscoder.stopHlsTranscode(previousSessionId)
-        } catch {}
+        castSessionsWithLoadSent.delete(previousSessionId)
+        castTranscoder.stopCastTranscode(previousSessionId)
         if (!currentTranscodeSessionId) {
           activeCastTranscodeId = null
           activeCastSourceKey = null
@@ -2570,14 +2534,14 @@ rpc.onCastPlay(async (req) => {
     console.log('[Backend] Cast play: >>> LOAD SENT SUCCESSFULLY <<<')
     castLoadCompletedAt = Date.now()
 
-    // Track that LOAD was sent for this HLS session to prevent duplicate LOADs
-    if (activeCastTranscodeId && contentType === 'application/x-mpegurl') {
-      hlsSessionsWithLoadSent.set(activeCastTranscodeId, true)
+    // Track that LOAD was sent for this cast HLS session to prevent duplicate LOADs
+    if (activeCastTranscodeId && contentType === 'application/vnd.apple.mpegurl') {
+      castSessionsWithLoadSent.add(activeCastTranscodeId)
       console.log('[Backend] Cast play: Marked session', activeCastTranscodeId, 'as LOAD sent')
     }
 
     // Start stall detector for HLS segment generation
-    if (activeCastTranscodeId && contentType === 'application/x-mpegurl') {
+    if (activeCastTranscodeId && contentType === 'application/vnd.apple.mpegurl') {
       // Clear any previous stall monitor before starting new one
       if (castStallMonitor) {
         clearInterval(castStallMonitor)
@@ -2588,10 +2552,10 @@ rpc.onCastPlay(async (req) => {
       const monitorSessionId = activeCastTranscodeId
       castStallMonitor = setInterval(() => {
         try {
-          const status = hlsTranscoder.getHlsStatus(monitorSessionId)
-          if (status && status.segments !== undefined) {
-            if (status.segments > lastStallSegmentCount) {
-              lastStallSegmentCount = status.segments
+          const status = castTranscoder.getCastStatus(monitorSessionId)
+          if (status && status.fragmentCount !== undefined) {
+            if (status.fragmentCount > lastStallSegmentCount) {
+              lastStallSegmentCount = status.fragmentCount
               stallCheckCount = 0
             } else {
               stallCheckCount++
@@ -2602,7 +2566,7 @@ rpc.onCastPlay(async (req) => {
                 console.error('[Backend] Cast stall critical: no new segments for 60s, notifying frontend')
                 clearInterval(castStallMonitor)
                 castStallMonitor = null
-                rpc.eventLog?.({ message: '[Cast] Stall detected: no new segments for 60s' })
+                rpc.eventLog?.({ message: '[Cast] Stall detected: no new fragments for 60s' })
               }
             }
           }
@@ -2668,18 +2632,11 @@ rpc.onCastStop(async () => {
       console.log('[Backend] Cast stop: Cleared stall monitor')
     }
 
-    // Cleanup active transcode session (try HLS first, then legacy)
+    // Cleanup active transcode session
     if (activeCastTranscodeId) {
-      hlsSessionsWithLoadSent.delete(activeCastTranscodeId) // Clear LOAD tracking
-      try {
-        hlsTranscoder.stopHlsTranscode(activeCastTranscodeId)
-        console.log('[Backend] Cleaned up HLS transcode session:', activeCastTranscodeId)
-      } catch {
-        try {
-          transcoder.stopTranscode(activeCastTranscodeId)
-          console.log('[Backend] Cleaned up legacy transcode session:', activeCastTranscodeId)
-        } catch {}
-      }
+      castSessionsWithLoadSent.delete(activeCastTranscodeId) // Clear LOAD tracking
+      castTranscoder.stopCastTranscode(activeCastTranscodeId)
+      console.log('[Backend] Cleaned up cast transcode session:', activeCastTranscodeId)
       activeCastTranscodeId = null
       activeCastSourceKey = null
     }
@@ -2865,9 +2822,8 @@ if (preloadFfmpeg) {
   backendLog('[Backend] Pre-loading bare-ffmpeg...')
   Promise.all([
     transcoder.loadBareFfmpeg(),
-    hlsTranscoder.loadBareFfmpeg()
-  ]).then(([legacyLoaded, hlsLoaded]) => {
-    backendLog('[Backend] bare-ffmpeg pre-load: legacy=' + legacyLoaded + ', hls=' + hlsLoaded)
+  ]).then(([legacyLoaded]) => {
+    backendLog('[Backend] bare-ffmpeg pre-load: legacy=' + legacyLoaded)
   }).catch(err => {
     backendLog('[Backend] bare-ffmpeg pre-load error: ' + (err?.message || err))
   })

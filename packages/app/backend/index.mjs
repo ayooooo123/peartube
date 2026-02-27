@@ -2,13 +2,13 @@
  * PearTube Mobile Backend - Thin HRPC layer over @peartube/backend
  *
  * This is a minimal wrapper that:
- * 1. Initializes the backend using createBackendContext
+ * 1. Initializes the backend using createBackend
  * 2. Registers HRPC handlers that delegate to backend API
  * 3. Handles mobile-specific concerns (BareKit IPC, single identity)
  */
 
 let HRPC = null
-let createBackendContext = null
+let createBackend = null
 let setIsShuttingDown = null
 let shutdownBackend = null
 let setCastActive = null
@@ -28,6 +28,7 @@ async function loadBackendModules() {
   const [
     specMod,
     orchestratorMod,
+    backendEntryMod,
     storageMod,
     thumbnailMod,
     pathMod,
@@ -41,6 +42,7 @@ async function loadBackendModules() {
   ] = await Promise.all([
     import('@peartube/spec'),
     import('@peartube/backend/orchestrator'),
+    import('@peartube/backend/src/backend-entry.js'),
     import('@peartube/backend/storage'),
     import('@peartube/backend/thumbnail'),
     import('bare-path'),
@@ -54,7 +56,7 @@ async function loadBackendModules() {
   ])
 
   HRPC = specMod?.default ?? specMod
-  createBackendContext = orchestratorMod?.createBackendContext
+  createBackend = backendEntryMod?.createBackend
   setIsShuttingDown = orchestratorMod?.setIsShuttingDown
   shutdownBackend = storageMod?.shutdownBackend
   setCastActive = storageMod?.setCastActive
@@ -70,7 +72,7 @@ async function loadBackendModules() {
   transcoder = transcoderMod
   castTranscoder = castTranscoderMod
 
-  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !castTranscoder || !fsNativeExtensions || !setCastActive || !isCastActive || !prefetchVideoForCast) {
+  if (!HRPC || !createBackend || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !os || !b4a || !http1 || !transcoder || !castTranscoder || !fsNativeExtensions || !setCastActive || !isCastActive || !prefetchVideoForCast) {
     throw new Error('Missing required backend modules after dynamic import')
   }
 }
@@ -878,49 +880,50 @@ function reportBackendError(label, err) {
 }
 
 function ensureRpc() {
-  if (rpc) return true
-  try {
-    rpc = new HRPC(IPC)
-    console.log('[Backend] HRPC initialized')
-
-    // Backward-compat shim: some mobile bundles still send old command ids.
-    // - old refresh-feed id (16) -> new id (18) only when payload is empty
-    // - old get-video-stats id (24) -> new id (30) when payload exists
-    // Keep join-channel/get-swarm-status semantics intact for modern clients.
+  if (!rpc) {
     try {
-      const rawRpc = rpc?._rpc
-      if (rawRpc && !rawRpc._peartubeCompat) {
-        const originalOnRequest = rawRpc._onrequest
-        rawRpc._onrequest = async (req) => {
-          try {
-            const hasPayload = Boolean(req?.data && req.data.length > 0)
-            if (req?.command === 16 && !hasPayload) {
-              req.command = 18
-            }
-            if (req?.command === 24 && hasPayload) {
-              req.command = 30
-            }
-          } catch {}
-          if (!handlersRegistered) {
-            throw new Error('Backend not ready: handlers are not registered yet')
-          }
-          try {
-            return await originalOnRequest(req)
-          } catch (err) {
-            reportBackendError(`HRPC request failed (${req?.command})`, err)
-            // Let HRPC propagate the error back to the caller.
-            throw err
-          }
-        }
-        rawRpc._peartubeCompat = true
-      }
-    } catch {}
-
-    return true
-  } catch (e) {
-    console.log('[Backend] HRPC init failed:', e?.message)
-    return false
+      rpc = new HRPC(IPC)
+      console.log('[Backend] HRPC initialized')
+    } catch (e) {
+      console.log('[Backend] HRPC init failed:', e?.message)
+      return false
+    }
   }
+
+  // Backward-compat shim: some mobile bundles still send old command ids.
+  // - old refresh-feed id (16) -> new id (18) only when payload is empty
+  // - old get-video-stats id (24) -> new id (30) when payload exists
+  // Keep join-channel/get-swarm-status semantics intact for modern clients.
+  try {
+    const rawRpc = rpc?._rpc
+    if (rawRpc && !rawRpc._peartubeCompat) {
+      const originalOnRequest = rawRpc._onrequest
+      rawRpc._onrequest = async (req) => {
+        try {
+          const hasPayload = Boolean(req?.data && req.data.length > 0)
+          if (req?.command === 16 && !hasPayload) {
+            req.command = 18
+          }
+          if (req?.command === 24 && hasPayload) {
+            req.command = 30
+          }
+        } catch {}
+        if (!handlersRegistered) {
+          throw new Error('Backend not ready: handlers are not registered yet')
+        }
+        try {
+          return await originalOnRequest(req)
+        } catch (err) {
+          reportBackendError(`HRPC request failed (${req?.command})`, err)
+          // Let HRPC propagate the error back to the caller.
+          throw err
+        }
+      }
+      rawRpc._peartubeCompat = true
+    }
+  } catch {}
+
+  return true
 }
 
 function attachUnhandledHandlers() {
@@ -995,8 +998,6 @@ try {
   reportBackendError('Backend module import failed', err)
   throw err
 }
-
-ensureRpc()
 
 function ipcLog(msg) {
   try { rpc?.eventLog?.({ level: 'info', message: msg, timestamp: Date.now() }) } catch {}
@@ -1156,21 +1157,20 @@ ipcLog('[init] CORESTORE cleanup done')
 
 let backend = null
 try {
-  ipcLog('[init] createBackendContext starting')
-  backend = await createBackendContext({
+  ipcLog('[init] createBackend starting')
+  const initialized = await createBackend({
     storagePath: storageDir,
-    corestoreWaitForLock: true,
-    ipcLog,
-    onFeedUpdate: () => {
-      if (rpc) {
-        try {
-          rpc.eventFeedUpdate({ channelKey: 'feed', action: 'update' })
-        } catch (e) {
-          console.log('[Backend] Failed to send feed update:', e.message)
-        }
-      }
+    stream: IPC,
+    platform: 'mobile',
+    onReady: ({ blobServerPort }) => {
+      try {
+        rpc?.eventReady?.({ blobServerPort, blobServerHost: '127.0.0.1' })
+      } catch {}
     },
-    onStatsUpdate: (driveKey, videoPath, stats) => {
+    onError: (err) => {
+      reportBackendError('Backend init failed', err)
+    },
+    onVideoStats: (driveKey, videoPath, stats) => {
       if (rpc) {
         try {
           rpc.eventVideoStats({
@@ -1184,8 +1184,22 @@ try {
           console.log('[Backend] Failed to send video stats:', e.message)
         }
       }
+    },
+    corestoreWaitForLock: true,
+    ipcLog,
+    onFeedUpdate: () => {
+      if (rpc) {
+        try {
+          rpc.eventFeedUpdate({ channelKey: 'feed', action: 'update' })
+        } catch (e) {
+          console.log('[Backend] Failed to send feed update:', e.message)
+        }
+      }
     }
   })
+  rpc = initialized.rpc
+  backend = initialized.backend
+  ensureRpc()
 } catch (err) {
   reportBackendError('Backend init failed', err)
   closeOwnerLock('backend-unavailable')

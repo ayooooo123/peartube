@@ -23,7 +23,7 @@
   "dependencies": {
     "@peartube/backend": "workspace:*",
     "b4a": "^1.6.7",
-    "compact-encoding": "^2.18.0",
+    "compact-encoding": "^2.19.0",
     "graceful-goodbye": "^1.3.3",
     "hypercore-crypto": "^3.6.0",
     "hypercore-id-encoding": "^1.3.0",

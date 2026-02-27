@@ -2527,6 +2527,7 @@ rpc.onCastPlay(async (req) => {
     console.log('[Backend] Cast play: >>> SENDING LOAD TO CAST DEVICE <<<')
     console.log('[Backend] Cast play: URL:', url)
     console.log('[Backend] Cast play: contentType:', contentType, 'streamType:', streamType || 'BUFFERED')
+    console.log('[CastDiag] LOAD payload:', { url, contentType, streamType, title: req.title })
 
     await castContext.play({
       url,

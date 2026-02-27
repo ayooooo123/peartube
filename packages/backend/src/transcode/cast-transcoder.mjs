@@ -287,6 +287,7 @@ function startCastFileServer() {
         res.end('Session not found')
         return
       }
+      console.log('[CastDiag] HTTP', method, fileName, 'session:', sessionId.slice(0, 8))
 
       if (fileName === 'playlist.m3u8') {
         session.requestStats.playlistRequests += 1
@@ -400,7 +401,7 @@ function stopCastFileServer() {
   })
 }
 
-async function runRemuxCast(session, sourceUrl, onProgress) {
+async function runRemuxCast(session, sourceUrl, onProgress, { isVideoComplete = true } = {}) {
   let inputFormat = null
   let outputIO = null
   let outputFormat = null
@@ -414,8 +415,8 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
     const fileSize = await getHttpFileSize(sourceUrl)
     if (!fileSize) throw new Error('Could not determine source file size for cast')
 
-    // waitForComplete: true — prevents premature EOF when transcoder catches up to P2P download
-    reader = new TempFileReader(sourceUrl, fileSize, { waitForComplete: true })
+    // waitForComplete: !isVideoComplete — fully-synced videos start fast (false); partially-synced wait for full download (true)
+    reader = new TempFileReader(sourceUrl, fileSize, { waitForComplete: !isVideoComplete })
     await reader.startDownload()
 
     const inputIO = reader.createIOContext(ffmpeg)
@@ -510,7 +511,7 @@ async function runRemuxCast(session, sourceUrl, onProgress) {
   }
 }
 
-async function runFullTranscodeCast(session, sourceUrl) {
+async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true } = {}) {
   let inputFormat = null
   let outputIO = null
   let outputFormat = null
@@ -536,7 +537,7 @@ async function runFullTranscodeCast(session, sourceUrl) {
   try {
     const fileSize = await getHttpFileSize(sourceUrl)
     if (!fileSize) throw new Error('Could not determine source file size for cast')
-    reader = new TempFileReader(sourceUrl, fileSize, { waitForComplete: true })
+    reader = new TempFileReader(sourceUrl, fileSize, { waitForComplete: !isVideoComplete })
     await reader.startDownload()
     const inputIO = reader.createIOContext(ffmpeg)
     inputFormat = new ffmpeg.InputFormatContext(inputIO)
@@ -774,16 +775,20 @@ async function runFullTranscodeCast(session, sourceUrl) {
 }
 
 async function startCastTranscode(sourceUrl, options = {}) {
-  const { sourceKey = null, onProgress } = options
+  const { sourceKey = null, onProgress, isVideoComplete = true } = options
 
   if (sourceKey) {
     const existing = findSessionBySourceKey(sourceKey)
-    if (existing && existing.status !== 'error' && existing.status !== 'cancelled') {
+    if (existing && existing.status !== 'error' && existing.status !== 'cancelled' && existing.status !== 'complete') {
       return {
         success: true,
         sessionId: existing.id,
         reused: true,
       }
+    }
+    // If existing session is 'complete', clean it up so a fresh one is created
+    if (existing && existing.status === 'complete') {
+      stopCastTranscode(existing.id, 'replaced')
     }
   }
 
@@ -801,9 +806,9 @@ async function startCastTranscode(sourceUrl, options = {}) {
     ;(async () => {
       try {
         if (needsVideoTranscode || needsAudioTranscode) {
-          await runFullTranscodeCast(session, sourceUrl)
+          await runFullTranscodeCast(session, sourceUrl, { isVideoComplete })
         } else {
-          await runRemuxCast(session, sourceUrl, onProgress)
+          await runRemuxCast(session, sourceUrl, onProgress, { isVideoComplete })
         }
       } catch (err) {
         if (session.cancelled) {

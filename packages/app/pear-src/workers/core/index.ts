@@ -2341,6 +2341,11 @@ function getCastContext(): any {
     // Forward playback events
     castContext.on('playbackStateChanged', (state: string) => {
       try {
+        // Bug 3 fix: clear source key on terminal states so retry is not suppressed
+        if (state === 'stopped' || state === 'idle' || state === 'disconnected' || state === 'error') {
+          activeCastSourceKey = null;
+          if (activeCastTranscodeId) castSessionsWithLoadSent.delete(activeCastTranscodeId);
+        }
         rpc.eventCastPlaybackState?.({ state });
       } catch {}
     });
@@ -2354,7 +2359,11 @@ function getCastContext(): any {
 
     castContext.on('error', (error: any) => {
       try {
+        // Bug 3 fix: clear source key so retry is not suppressed after error
+        activeCastSourceKey = null;
+        if (activeCastTranscodeId) castSessionsWithLoadSent.delete(activeCastTranscodeId);
         const message = error?.message || (error ? String(error) : 'Unknown error');
+        console.warn('[CastDiag] Chromecast error (raw):', message);
         console.warn('[Worker] Cast error:', message);
         // Only emit error state if we have a meaningful error message
         if (message && message !== 'undefined' && message !== '[object Object]') {
@@ -2712,12 +2721,12 @@ rpc.onCastPlay(async (req: any) => {
             syncStatus = null;
           }
 
-          void isVideoComplete;
           void syncStatus;
 
           console.log('[Worker] Cast play: starting fMP4 cast transcode...');
           const result = await castTranscoder.startCastTranscode(requestedUrl, {
             sourceKey: requestedKey,
+            isVideoComplete,
           });
 
           if (!result.success) {
@@ -2761,6 +2770,7 @@ rpc.onCastPlay(async (req: any) => {
             if (fragmentCount < 1) {
               console.warn('[Worker] Cast play: Timeout waiting for fragments, proceeding anyway with', fragmentCount, 'fragments');
             }
+            console.log('[CastDiag] fragmentCount after wait:', fragmentCount);
           }
 
           const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, localIp || '127.0.0.1');
@@ -2770,6 +2780,7 @@ rpc.onCastPlay(async (req: any) => {
           url = hlsUrl;
           contentType = 'application/vnd.apple.mpegurl';
           streamType = 'BUFFERED';
+          console.log('[CastDiag] streamType:', streamType, 'mediaDuration:', mediaDuration);
           console.log('[Worker] Cast play: using fMP4 HLS URL', url);
         }
       } catch (probeErr: any) {
@@ -2861,6 +2872,7 @@ rpc.onCastPlay(async (req: any) => {
       activeCastSourceKey = requestedKey;
     }
 
+    console.log('[CastDiag] LOAD payload:', { url, contentType, streamType, title: req.title });
     await castContext.play({
       url,
       contentType,

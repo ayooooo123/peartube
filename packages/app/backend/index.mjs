@@ -791,6 +791,9 @@ function getCastContext() {
           }
         }
         if (state === 'stopped' || state === 'idle' || state === 'disconnected') {
+          // Bug 3 fix: clear source key so retry is not suppressed after stop/idle/disconnect
+          activeCastSourceKey = null
+          if (activeCastTranscodeId) castSessionsWithLoadSent.delete(activeCastTranscodeId)
           setHeadlessCastFlag(false)
           console.log('[CastDiag] Headless cast flag cleared (cast stopped/idle/disconnected)')
           if (isHeadlessMode) {
@@ -819,7 +822,11 @@ function getCastContext() {
 
     castContext.on('error', (error) => {
       try {
+        // Bug 3 fix: clear source key so retry is not suppressed after error
+        activeCastSourceKey = null
+        if (activeCastTranscodeId) castSessionsWithLoadSent.delete(activeCastTranscodeId)
         const message = error?.message || String(error)
+        console.warn('[CastDiag] Chromecast error (raw, before suppression):', message)
         console.warn('[Backend] Cast error:', message)
 
         // During active load sequence, suppress transient errors — the castPlay
@@ -2406,7 +2413,7 @@ rpc.onCastPlay(async (req) => {
         console.log('[Backend] Cast play: starting fMP4 cast transcode...')
         const result = await castTranscoder.startCastTranscode(requestedUrl, {
           sourceKey: requestedKey,
-        })
+          isVideoComplete,
 
         if (!result.success) {
           throw new Error(result.error || 'Cast transcode failed')
@@ -2482,6 +2489,7 @@ rpc.onCastPlay(async (req) => {
     } catch {}
 
     const streamType = req.duration && req.duration > 0 ? 'BUFFERED' : 'LIVE'
+    console.log('[CastDiag] streamType:', streamType, 'req.duration:', req.duration)
 
     // IMPORTANT: Stop any current media first to clear Chromecast's cached state
     // Otherwise Chromecast may keep polling the old URL instead of loading new one

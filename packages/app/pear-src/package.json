@@ -49,7 +49,6 @@
     "pear-bridge": "^1.2.0",
     "pear-electron": "^1.7.27",
     "pear-pipe": "^1.0.6",
-    "pear-run": "^2.0.0",
     "ready-resource": "^1.2.0",
     "z32": "^1.1.0"
   },

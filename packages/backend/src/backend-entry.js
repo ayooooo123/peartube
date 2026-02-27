@@ -1,7 +1,3 @@
-import { createRequire } from 'node:module'
-
-const require = createRequire(import.meta.url)
-
 function noop() {}
 
 function toCallback(fn) {
@@ -53,8 +49,6 @@ export async function createBackend(opts = {}) {
     })
 
     const rpc = new HRPC(stream)
-    const { registerSharedHandlers } = require('./hrpc-handlers')
-    await registerSharedHandlers(rpc, backend, { platform })
 
     readyCallback({ blobServerPort: getBlobServerPort(backend) })
 

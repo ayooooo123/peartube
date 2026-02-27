@@ -1,7 +1,8 @@
 import React, { RefObject, useEffect, useMemo, useRef } from 'react'
-import { Platform, requireNativeComponent, StyleProp, ViewStyle } from 'react-native'
-import { getHostComponent } from 'react-native-nitro-modules'
-import { MpvCommands, MpvPlayerSource } from '../../../react-native-mpv/src'
+import { StyleProp, ViewStyle } from 'react-native'
+import { MpvCommands, MpvPlayerSource, MpvPlayerView as NativeMpvPlayerView } from '../../../react-native-mpv/src'
+
+const MpvPlayerHostView = NativeMpvPlayerView as any
 
 type MpvPlayerProps = {
   style?: StyleProp<ViewStyle>
@@ -23,41 +24,6 @@ type MpvPlayerProps = {
   onVideoStateChange?: (event: { type?: string; mVideoWidth?: number; mVideoHeight?: number }) => void
   onPictureInPictureChanged?: (event: { isInPictureInPicture: boolean; width: number; height: number }) => void
 }
-
-const IOSMpvPlayerHostView = Platform.OS === 'ios'
-  ? requireNativeComponent<MpvPlayerProps>('MpvPlayerView')
-  : null
-
-const AndroidMpvPlayerHostView = Platform.OS === 'android'
-  ? getHostComponent<MpvPlayerProps, any>('MpvPlayerView', () => ({
-    uiViewClassName: 'MpvPlayerView',
-    supportsRawText: false,
-    bubblingEventTypes: {},
-    directEventTypes: {
-      topLoad: { registrationName: 'onLoad' },
-      topProgress: { registrationName: 'onProgress' },
-      topPlaying: { registrationName: 'onPlaying' },
-      topPaused: { registrationName: 'onPaused' },
-      topBuffering: { registrationName: 'onBuffering' },
-      topEnded: { registrationName: 'onEnded' },
-      topError: { registrationName: 'onError' },
-      topVideoStateChange: { registrationName: 'onVideoStateChange' },
-    },
-    validAttributes: {
-      source: true,
-      paused: true,
-      rate: true,
-      volume: true,
-      muted: true,
-      seek: true,
-      resizeMode: true,
-    },
-  }))
-  : null
-
-const MpvPlayerHostView: any = Platform.OS === 'ios'
-  ? IOSMpvPlayerHostView
-  : AndroidMpvPlayerHostView
 
 type Props = MpvPlayerProps & {
   playerRef?: RefObject<any>

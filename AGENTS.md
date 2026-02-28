@@ -455,6 +455,16 @@ RootLayout
 1. Check worker console logs
 2. Verify worker path in `worker-client.js`
 3. Ensure `pear/build/workers/core/index.js` exists
+4. Ensure shared HRPC handlers are registered via `packages/backend/src/backend-entry.js`
+
+### "No handler registered for command" on desktop
+
+**Cause:** Worker and backend handler wiring out of sync or stale build output.
+
+**Fix:**
+1. Rebuild desktop output: `npm run pear:build`
+2. Relaunch desktop app: `npm run pear:dev`
+3. Confirm logs show backend ready and feed API calls succeeding
 
 ### Desktop changes not working
 
@@ -573,4 +583,4 @@ RootLayout
 
 ---
 
-*Last updated: December 2024*
+*Last updated: February 2026*

@@ -52,12 +52,13 @@ peartube/
 │   │   ├── backend/      # Mobile BareKit worklet
 │   │   └── pear-src/     # Desktop Pear assets
 │   ├── backend/          # Backend business logic
-│   ├── backend-core/     # P2P primitives
-│   ├── core/             # Shared types
+│   ├── core/             # Shared types + UI helpers
 │   ├── platform/         # Platform abstraction
-│   ├── rpc/              # RPC layer
 │   ├── spec/             # HRPC schema
-│   └── ui/               # Shared UI
+│   ├── bare-ffmpeg/      # Bare native ffmpeg binding
+│   ├── bare-fcast/       # Chromecast bridge
+│   ├── bare-mpv/         # mpv binding for desktop playback
+│   └── bare-tls/         # TLS support for Bare runtime
 └── package.json
 ```
 
@@ -71,6 +72,7 @@ npm run android        # Run Android app
 npm run pear           # Run Pear desktop app
 npm run pear:build     # Build Pear desktop only
 npm run bundle:backend # Bundle mobile backend
+npm run build:android:apk  # Build Android release APKs
 npm start              # Start Expo dev server
 ```
 
@@ -81,6 +83,7 @@ npm run ios            # Run iOS
 npm run pear:dev       # Build and run Pear
 npm run pear:build     # Build Pear only
 npm run bundle:backend # Bundle backend worklet
+npm run build:android:apk # Build release APKs
 ```
 
 ## Troubleshooting
@@ -113,6 +116,15 @@ ls packages/app/backend.bundle.js
 If missing, rebuild:
 ```bash
 npm run bundle:backend
+```
+
+### Create Channel Hangs / "No handler registered"
+
+If desktop logs include `No handler registered for command`, rebuild and relaunch Pear so worker and backend handler wiring are in sync:
+
+```bash
+npm run pear:build
+npm run pear
 ```
 
 ## What's Next?

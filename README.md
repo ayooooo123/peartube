@@ -64,6 +64,9 @@ npm run android
 
 # Run Pear desktop app
 npm run pear
+
+# Build Android APK
+npm run build:android:apk
 ```
 
 ## Development Commands
@@ -77,9 +80,14 @@ npm start            # Start Expo dev server
 # Desktop
 npm run pear         # Build and run Pear desktop app
 npm run pear:build   # Build Pear desktop only
+npm run pear:dev     # Same as npm run pear from root
 
-# Backend
-npm run bundle:backend   # Bundle mobile backend worklet
+# Android release artifacts
+npm run build:android:apk
+npm run build:android:aab
+
+# Backend bundles
+npm run bundle:backend   # Bundle mobile backend + downloader worker
 
 # Quality
 npm run typecheck    # Run TypeScript checks
@@ -93,6 +101,7 @@ npm run lint:fix     # Fix linting issues
 
 - **Mobile (iOS/Android)**: React Native app with BareKit worklet running P2P backend
 - **Desktop (Pear)**: Expo web export served by Pear runtime with pear-run worker
+- **Desktop Dev CLI**: `pear run --dev` (the old `pear dev` command is removed)
 
 Both platforms share:
 - The same React components
@@ -108,6 +117,10 @@ Both platforms share:
 - **Hyperswarm** manages peer connections
 - Channels are discovered via a shared public feed
 - Multiple peers can serve the same video
+
+### Runtime Notes
+- Desktop backend request handlers are registered via shared HRPC handler wiring in `@peartube/backend`.
+- Mobile startup treats downloader worker bundle as optional; missing worker no longer blocks backend boot.
 
 ### Identity
 - Self-sovereign keypairs

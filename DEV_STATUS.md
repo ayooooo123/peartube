@@ -1,75 +1,33 @@
 # Development Status
 
-## Current Status: Working
+## Current Status: Stable (Feb 2026)
 
-Both mobile and desktop platforms are functional:
+| Platform | Status | Primary Command |
+|----------|--------|-----------------|
+| iOS | Working | `npm run ios` |
+| Android | Working | `npm run android` |
+| Android APK Build | Working | `npm run build:android:apk` |
+| Pear Desktop | Working | `npm run pear` |
 
-| Platform | Status | Command |
-|----------|--------|---------|
-| iOS | ✅ Working | `npm run ios` |
-| Android | ⏳ Pending | `npm run android` |
-| Pear Desktop | ✅ Working | `npm run pear` |
+## Recent Stabilization Work
 
-## Recent Changes
+- Fixed desktop CLI migration to modern Pear dev command (`pear run --dev`).
+- Fixed desktop backend RPC initialization regressions by re-wiring shared HRPC handler registration in backend entry.
+- Added capability-based shared handler registration to avoid crashes when optional HRPC methods are absent.
+- Fixed mobile startup resilience: backend can start even when downloader worker bundle is unavailable.
+- Hardened Android release pipeline with reliable prebuild + SDK path restoration before Gradle release builds.
 
-### Unified App Consolidation (2025-12-07)
+## What Changed in Build/Run Flow
 
-Merged `packages/mobile` and `packages/desktop` into single `packages/app`:
+- Desktop: `npm run pear:dev` now runs `pear run --dev` internally.
+- Android releases: `build:android:apk` and `build:android:aab` run Android prebuild before Gradle.
+- Backend bundles: `npm run bundle:backend` now generates both backend and downloader-worker bundles.
 
-- **Before**: Separate mobile and desktop packages with duplicated code
-- **After**: Single unified app serving iOS, Android, and Pear Desktop
+## Known Constraints
 
-Key changes:
-1. Renamed `packages/mobile` → `packages/app`
-2. Created `pear-src/` directory with desktop assets
-3. Added pear build scripts to package.json
-4. Removed duplicate xcframeworks that conflicted with react-native-bare-kit
-5. Deleted `packages/desktop`
-
-### Platform RPC Wiring (2025-12-06)
-
-Unified RPC layer across mobile and desktop:
-- Single `@peartube/spec` HRPC schema
-- Platform abstraction via `@peartube/platform`
-- BareKit on mobile, pear-run on desktop
-
-## Package Structure
-
-```
-packages/
-├── app/              # Unified app (iOS, Android, Pear)
-├── backend/          # Backend business logic
-├── backend-core/     # P2P primitives (hypercore, etc)
-├── core/             # Shared types
-├── platform/         # Platform abstraction
-├── rpc/              # RPC client/server
-├── spec/             # HRPC schema
-└── ui/               # Shared UI components
-```
-
-## Build Commands
-
-```bash
-# Mobile
-npm run ios              # Run iOS app
-npm run bundle:backend   # Bundle mobile worklet
-
-# Desktop
-npm run pear             # Build and run Pear
-npm run pear:build       # Build Pear only
-```
-
-## Known Issues
-
-None currently.
-
-## Next Steps
-
-1. Implement video player with HLS streaming
-2. Add channel creation UI
-3. Implement video upload
-4. Add Android support
+- Some `packages/platform` typecheck issues remain environment/type-definition related and predate the runtime fixes.
+- P2P peer visibility still depends on NAT/firewall and available peers on the public feed topic.
 
 ---
 
-**Last Updated**: 2025-12-07
+**Last Updated**: 2026-02-27

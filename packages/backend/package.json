@@ -18,6 +18,7 @@
     "./identity": "./src/identity.js",
     "./upload": "./src/upload.js",
     "./src/backend-entry.js": "./src/backend-entry.js",
+    "./hrpc-handlers": "./src/hrpc-handlers.js",
     "./types": "./src/types.js",
     "./transcode": "./src/transcode/index.js",
     "./transcode/transcoder": "./src/transcode/transcoder.mjs",

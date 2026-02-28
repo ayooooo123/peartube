@@ -64,12 +64,13 @@ peartube/
 │   │   └── Frameworks/   # iOS native addons
 │   │
 │   ├── backend/          # Backend business logic
-│   ├── backend-core/     # P2P primitives
 │   ├── core/             # Shared types
 │   ├── platform/         # Platform abstraction
-│   ├── rpc/              # RPC layer
 │   ├── spec/             # HRPC schema
-│   └── ui/               # Shared UI
+│   ├── bare-ffmpeg/      # Bare ffmpeg binding
+│   ├── bare-fcast/       # Cast integration
+│   ├── bare-mpv/         # mpv integration
+│   └── bare-tls/         # Bare TLS support
 │
 └── package.json          # Root package with scripts
 ```
@@ -85,6 +86,7 @@ peartube/
 | `npm run pear` | Build and run Pear desktop |
 | `npm run pear:build` | Build Pear desktop only |
 | `npm run bundle:backend` | Bundle mobile backend worklet |
+| `npm run build:android:apk` | Build Android release APKs |
 | `npm start` | Start Expo dev server |
 
 ### Package Level (packages/app)
@@ -97,6 +99,7 @@ peartube/
 | `npm run pear:export` | Export Expo web |
 | `npm run pear:worker` | Compile desktop worker |
 | `npm run bundle:backend` | Bundle mobile worklet |
+| `npm run build:android:apk` | Build release APKs |
 
 ## Platform Architecture
 
@@ -146,6 +149,12 @@ cd packages/app/Frameworks
 1. Check worklet exists: `ls packages/app/backend.bundle.js`
 2. Rebuild: `npm run bundle:backend`
 
+### "No handler registered for command" on Desktop
+
+1. Rebuild Pear app + worker: `npm run pear:build`
+2. Relaunch desktop app: `npm run pear`
+3. Confirm desktop uses `pear run --dev` under the hood (the old `pear dev` command is deprecated)
+
 ## Environment
 
 - Node.js 18+
@@ -154,4 +163,4 @@ cd packages/app/Frameworks
 
 ---
 
-**Last Updated**: 2025-12-07
+**Last Updated**: 2026-02-27

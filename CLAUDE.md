@@ -20,7 +20,7 @@ npm run bundle:backend         # Bundle mobile BareKit worklet
 # Desktop development (Pear)
 npm run pear                   # Build and run Pear desktop app
 npm run pear:build             # Build Pear desktop only
-cd packages/app/pear && pear run --dev .  # Run without rebuilding
+cd packages/app/pear && pear run --dev --store=$HOME/.peartube .  # Run without rebuilding
 
 # Quality checks
 npm run typecheck              # TypeScript validation (runs in packages/platform)
@@ -124,5 +124,7 @@ cd packages/app/ios && rm -rf Pods Podfile.lock && pod install --repo-update
 **Desktop changes not working:** Check for `.web.tsx` file variants that override the base component.
 
 **Backend not connecting:** Ensure `packages/app/backend.bundle.js` exists. Rebuild with `npm run bundle:backend`.
+
+**Desktop "No handler registered" errors:** Rebuild and relaunch Pear (`npm run pear:build && npm run pear`). Shared HRPC handlers are wired through `packages/backend/src/backend-entry.js`.
 
 **"Cannot find module" in Pear:** Ensure relative paths in HTML (`./_expo/` not `/_expo/`). Rebuild with `npm run pear:build`.

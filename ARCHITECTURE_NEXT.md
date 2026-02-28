@@ -1,12 +1,16 @@
 # Architecture Improvements Roadmap
 
-## Current State (Dec 2024)
+> Status note (Feb 2026): this roadmap is historical and contains pre-consolidation path examples.
+> The live codebase uses `packages/app` (not `apps/desktop` / `apps/mobile`).
+> Keep roadmap ideas, but map paths to current package structure before implementation.
 
-Desktop has begun consolidation:
-- `apps/desktop/src/state/appStore.tsx` - Shared state via React context + useReducer
-- `apps/desktop/src/platform/desktopAdapter.ts` - Platform abstraction interface
+## Current State (Historical: Dec 2024)
 
-Mobile still uses separate contexts per concern (`_layout.tsx`, `VideoPlayerContext.tsx`).
+Desktop had begun consolidation:
+- (historical) `apps/desktop/src/state/appStore.tsx` - Shared state via React context + useReducer
+- (historical) `apps/desktop/src/platform/desktopAdapter.ts` - Platform abstraction interface
+
+Current equivalent areas are in `packages/app/app/_layout.tsx` and `packages/app/lib/VideoPlayerContext.tsx`.
 
 ---
 

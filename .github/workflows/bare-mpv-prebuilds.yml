@@ -149,7 +149,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download all prebuilds
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: prebuild-*
           path: packages/bare-mpv/prebuilds

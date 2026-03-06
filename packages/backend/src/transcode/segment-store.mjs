@@ -4,6 +4,13 @@
  * Stores fMP4 init segment and a sliding window of media segments.
  * Generates HLS manifests for Chromecast consumption.
  *
+ * Manifest behaviour:
+ *   - While transcoding is in progress, generates a live-style manifest
+ *     (no EXT-X-PLAYLIST-TYPE) with a sliding window of segments.
+ *   - Once transcoding completes (setFinished), switches to
+ *     EXT-X-PLAYLIST-TYPE:VOD with EXT-X-ENDLIST.
+ *   - TARGETDURATION is computed dynamically from actual segment durations.
+ *
  * API used by FMP4Segmenter:
  *   store.writeInit(Buffer)              — store the init segment (moov box)
  *   store.registerSegmentMeta(name, dur) — register segment metadata before data arrives
@@ -20,15 +27,18 @@
  *   store.destroy()                      — release all memory
  */
 export class MemorySegmentStore {
-  constructor({ maxSegments = 50, isFmp4 = true } = {}) {
+  constructor({ maxSegments = 50, isFmp4 = true, startupPinned = false, startupPinnedSegments = 120 } = {}) {
     this.maxSegments = maxSegments
     this.isFmp4 = isFmp4
+    this.startupPinned = !!startupPinned
+    this.startupPinnedSegments = Number.isFinite(startupPinnedSegments) ? Math.max(1, Math.floor(startupPinnedSegments)) : 120
 
     this._init = null          // Buffer: fMP4 init segment (moov)
     this._segments = new Map() // name -> { data: Buffer, duration: number, finalized: boolean }
     this._segmentOrder = []    // ordered list of segment names (for manifest + eviction)
     this._finished = false     // true when transcoding is complete
     this._destroyed = false
+    this._maxDuration = 0      // track max segment duration for TARGETDURATION
   }
 
   // ─── Write API (called by FMP4Segmenter) ────────────────────────────────────
@@ -40,9 +50,11 @@ export class MemorySegmentStore {
 
   registerSegmentMeta(name, duration) {
     if (this._destroyed) return
+    const dur = (duration && Number.isFinite(duration) && duration > 0) ? duration : 6
     if (!this._segments.has(name)) {
-      this._segments.set(name, { data: null, duration: duration || 6, finalized: false })
+      this._segments.set(name, { data: null, duration: dur, finalized: false })
       this._segmentOrder.push(name)
+      if (dur > this._maxDuration) this._maxDuration = dur
       this._evictOldSegments()
     }
   }
@@ -66,6 +78,12 @@ export class MemorySegmentStore {
   setFinished() {
     if (this._destroyed) return
     this._finished = true
+  }
+
+  setStartupPinned(pinned) {
+    if (this._destroyed) return
+    this.startupPinned = !!pinned
+    this._evictOldSegments()
   }
 
   // ─── Read API (called by HTTP server) ───────────────────────────────────────
@@ -92,6 +110,9 @@ export class MemorySegmentStore {
 
   /**
    * Generate HLS manifest. Returns null if init segment or no finalized segments yet.
+   *
+   * Live (during transcode): no playlist type, sliding window, no ENDLIST.
+   * VOD (after finish):      EXT-X-PLAYLIST-TYPE:VOD + EXT-X-ENDLIST.
    */
   generateManifest() {
     if (this._destroyed) return null
@@ -99,20 +120,40 @@ export class MemorySegmentStore {
 
     const finalized = this._segmentOrder.filter(name => {
       const entry = this._segments.get(name)
-      return entry && entry.finalized
+      return entry && entry.finalized && !!entry.data
     })
 
-    if (finalized.length === 0) return null
-
-    // Compute max target duration (ceiling of all segment durations)
-    let maxDuration = 6
+    // Keep only a contiguous segment run to avoid serving playlists with holes.
+    const contiguous = []
+    let expectedIndex = null
     for (const name of finalized) {
+      const index = this._parseSegmentIndex(name)
+      if (index < 0) break
+      if (expectedIndex == null) {
+        contiguous.push(name)
+        expectedIndex = index + 1
+        continue
+      }
+      if (index !== expectedIndex) break
+      contiguous.push(name)
+      expectedIndex = index + 1
+    }
+
+    if (contiguous.length === 0) return null
+
+    // Compute max target duration dynamically from actual segment durations
+    let maxDuration = 0
+    for (const name of contiguous) {
       const entry = this._segments.get(name)
       if (entry && entry.duration > maxDuration) maxDuration = entry.duration
     }
+    // Also consider global max in case evicted segments had larger durations
+    if (this._maxDuration > maxDuration) maxDuration = this._maxDuration
+    // Ensure at least 1 second
+    if (maxDuration < 1) maxDuration = 6
 
     // Compute media sequence (first segment index in current window)
-    const firstSegName = finalized[0]
+    const firstSegName = contiguous[0]
     const firstSegIndex = this._parseSegmentIndex(firstSegName)
     const mediaSequence = firstSegIndex >= 0 ? firstSegIndex : 0
 
@@ -121,11 +162,19 @@ export class MemorySegmentStore {
       '#EXT-X-VERSION:7',
       `#EXT-X-TARGETDURATION:${Math.ceil(maxDuration)}`,
       `#EXT-X-MEDIA-SEQUENCE:${mediaSequence}`,
-      '#EXT-X-PLAYLIST-TYPE:EVENT',
-      '#EXT-X-MAP:URI="init.mp4"',
     ]
 
-    for (const name of finalized) {
+    // During transcoding, use EVENT playlist type for better Chromecast behavior.
+    // Once finished, switch to VOD + ENDLIST.
+    if (this._finished) {
+      lines.push('#EXT-X-PLAYLIST-TYPE:VOD')
+    } else {
+      lines.push('#EXT-X-PLAYLIST-TYPE:EVENT')
+    }
+
+    lines.push('#EXT-X-MAP:URI="init.mp4"')
+
+    for (const name of contiguous) {
       const entry = this._segments.get(name)
       const dur = entry ? entry.duration : 6
       lines.push(`#EXTINF:${dur.toFixed(3)},`)
@@ -146,11 +195,13 @@ export class MemorySegmentStore {
       totalSegments: this._segmentOrder.length,
       finalizedSegments: this.getSegmentCount(),
       finished: this._finished,
+      maxDuration: this._maxDuration,
       segments: this._segmentOrder.slice(-5).map(name => {
         const entry = this._segments.get(name)
         return {
           name,
           size: entry?.data?.length || 0,
+          duration: entry?.duration || 0,
           finalized: entry?.finalized || false,
         }
       }),
@@ -167,7 +218,11 @@ export class MemorySegmentStore {
   // ─── Internal ────────────────────────────────────────────────────────────────
 
   _evictOldSegments() {
-    while (this._segmentOrder.length > this.maxSegments) {
+    const startupFloor = this.startupPinned ? this.startupPinnedSegments : 0
+    const effectiveMax = Number.isFinite(this.maxSegments)
+      ? Math.max(this.maxSegments, startupFloor)
+      : this.maxSegments
+    while (this._segmentOrder.length > effectiveMax) {
       const oldest = this._segmentOrder.shift()
       this._segments.delete(oldest)
     }

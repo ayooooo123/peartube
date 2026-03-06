@@ -1,5 +1,5 @@
 /**
- * PearTube Mobile Cast - FCast/Chromecast casting support for mobile backend
+ * PearTube Mobile Cast - Chromecast casting support for mobile backend
  *
  * Extracted from index.mjs to keep the main shim thin.
  * Provides cast handler implementations that are attached to the backend object.
@@ -32,10 +32,6 @@ let lastCastPlayTime = 0
 let castLoadCompletedAt = 0
 const CAST_PLAY_DEBOUNCE_MS = 2000
 const CAST_POST_LOAD_GRACE_MS = 5000
-const CAST_MIN_SYNC_PERCENT = 20
-const CAST_TARGET_SYNC_PERCENT = 35
-const CAST_SYNC_WAIT_TIMEOUT_MS = 45000
-const CAST_SYNC_WAIT_INTERVAL_MS = 3000
 
 function normalizeCastVolume(volume) {
   const value = typeof volume === 'number' && Number.isFinite(volume) ? volume : 1
@@ -260,31 +256,31 @@ export function attachCastHandlers(B, deps) {
     console.log('[CastDiag] Entering headless mode:', reason)
   }
 
-  async function loadBareFcast() {
+async function loadCastContext() {
     if (CastContext || castLoadError) return
     if (castLoadPromise) return castLoadPromise
     castLoadPromise = (async () => {
       let lastError
       if (typeof require === 'function') {
         try {
-          const mod = require('bare-fcast')
+          const mod = require('@peartube/backend/cast')
           CastContext = mod?.CastContext ?? mod?.default ?? mod
-          console.log('[Backend] bare-fcast loaded')
+          console.log('[Backend] cast context loaded')
           return
         } catch (err) {
           lastError = err
         }
       }
       try {
-        const mod = await import('bare-fcast')
+        const mod = await import('@peartube/backend/cast')
         CastContext = mod?.CastContext ?? mod?.default ?? mod
-        console.log('[Backend] bare-fcast loaded')
+        console.log('[Backend] cast context loaded')
         return
       } catch (err) {
         lastError = err
       }
       castLoadError = lastError?.message || 'Unknown error'
-      console.warn('[Backend] bare-fcast not available:', castLoadError)
+      console.warn('[Backend] cast context not available:', castLoadError)
     })()
     return castLoadPromise
   }
@@ -714,13 +710,13 @@ export function attachCastHandlers(B, deps) {
   // --- Attach cast handlers to backend ---
 
   B.castAvailable = async () => {
-    await loadBareFcast()
+    await loadCastContext()
     return { available: CastContext !== null, error: castLoadError }
   }
 
   B.castStartDiscovery = async () => {
-    await loadBareFcast()
-    if (!CastContext) return { success: false, error: castLoadError || 'bare-fcast not available' }
+    await loadCastContext()
+    if (!CastContext) return { success: false, error: castLoadError || 'cast context not available' }
     try {
       const ctx = getCastContext()
       await ctx.startDiscovery()
@@ -753,12 +749,12 @@ export function attachCastHandlers(B, deps) {
   }
 
   B.castAddManualDevice = async (r) => {
-    await loadBareFcast()
-    if (!CastContext) return { success: false, error: castLoadError || 'bare-fcast not available' }
+    await loadCastContext()
+    if (!CastContext) return { success: false, error: castLoadError || 'cast context not available' }
     try {
       const ctx = getCastContext()
-      const device = ctx._discoverer.addManualDevice({
-        name: r.name, host: r.host, port: r.port, protocol: r.protocol || 'fcast',
+      const device = ctx.addManualDevice({
+        name: r.name, host: r.host, port: r.port, protocol: r.protocol || 'chromecast',
       })
       return { success: true, device: {
         id: device.id, name: device.name, host: device.host, port: device.port, protocol: device.protocol,
@@ -769,8 +765,22 @@ export function attachCastHandlers(B, deps) {
   }
 
   B.castConnect = async (r) => {
-    await loadBareFcast()
-    if (!CastContext) return { success: false, error: castLoadError || 'bare-fcast not available' }
+    const normalizeErrorMessage = (err, fallback) => {
+      if (!err) return fallback
+      if (typeof err === 'string' && err.trim()) return err
+      if (err && typeof err.message === 'string' && err.message.trim()) return err.message
+      try {
+        const serialized = JSON.stringify(err)
+        if (serialized && serialized !== '{}') return serialized
+      } catch (jsonErr) {
+        // ignore serialization errors
+      }
+      const asString = String(err)
+      return asString && asString !== '[object Object]' ? asString : fallback
+    }
+
+    await loadCastContext()
+    if (!CastContext) return { success: false, error: castLoadError || 'cast context not available' }
     const c = getCastContext()
     try {
       const devices = c.getDevices?.() || []
@@ -782,7 +792,7 @@ export function attachCastHandlers(B, deps) {
         device: { id: device.id, name: device.name, host: device.host, port: device.port, protocol: device.protocol },
       } : { success: true }
     } catch (err) {
-      return { success: false, error: err?.message }
+      return { success: false, error: normalizeErrorMessage(err, 'Cannot connect to Chromecast device') }
     }
   }
 
@@ -870,8 +880,12 @@ export function attachCastHandlers(B, deps) {
 
   B.castPlay = async (r) => {
     const now = Date.now()
-    if (now - lastCastPlayTime < CAST_PLAY_DEBOUNCE_MS) return { success: true }
-    if (castPlayInProgress) return { success: true }
+    if (now - lastCastPlayTime < CAST_PLAY_DEBOUNCE_MS) {
+      return { success: true, reason: 'debounced' }
+    }
+    if (castPlayInProgress) {
+      return { success: true, reason: 'in-progress' }
+    }
 
     castPlayInProgress = true
     if (castStallMonitor) { clearInterval(castStallMonitor); castStallMonitor = null }
@@ -911,18 +925,10 @@ export function attachCastHandlers(B, deps) {
       const requestedUrl = normalizeLocalUrlForCast(r.url)
       const requestedKey = buildTranscodeCacheKey(requestedUrl) || requestedUrl
 
-      if (
-        activeCastTranscodeId &&
-        castSessionsWithLoadSent.has(activeCastTranscodeId) &&
-        activeCastSourceKey === requestedKey
-      ) {
-        return { success: true }
-      }
-
+      let probeResult = null
       if (protocol === 'chromecast') {
         transcodeRequired = true
 
-        let probeResult = null
         try {
           probeResult = await transcoder.probeMedia(requestedUrl, r.title)
         } catch (probeErr) {
@@ -932,90 +938,64 @@ export function attachCastHandlers(B, deps) {
         const localIp = await getLocalIPv4ForTarget(deviceHost)
         if (!localIp) throw new Error('Could not determine LAN IP for HLS cast URL')
 
-        const needsProcessing = probeResult
-          ? (probeResult.needsVideoTranscode || probeResult.needsAudioTranscode || probeResult.needsRemux)
-          : true
+        const result = await castTranscoder.startCastTranscode(requestedUrl, {
+          sourceKey: requestedKey,
+          // Keep transcode startup progressive so cast can begin before full source sync.
+          // Underflowed sessions are now rejected in cast-transcoder.
+          isVideoComplete: false,
+        })
 
-        if (!needsProcessing) {
-          url = requestedUrl.replace('127.0.0.1', localIp).replace('localhost', localIp)
-          contentType = 'video/mp4'
-        } else {
-          // Check sync status before transcoding
-          let isVideoComplete = true
-          let syncStatus = null
-          try {
-            syncStatus = await api.checkVideoSync(requestedUrl)
-            isVideoComplete = syncStatus.isComplete
-            if (!syncStatus.isComplete && !syncStatus.assumed) {
-              const syncPercent = syncStatus.progress || 0
-              if (syncPercent < CAST_TARGET_SYNC_PERCENT) {
-                const waitStart = Date.now()
-                while (Date.now() - waitStart < CAST_SYNC_WAIT_TIMEOUT_MS) {
-                  await new Promise((resolve) => setTimeout(resolve, CAST_SYNC_WAIT_INTERVAL_MS))
-                  try {
-                    const refreshed = await api.checkVideoSync(requestedUrl)
-                    if (refreshed) {
-                      syncStatus = refreshed
-                      isVideoComplete = Boolean(refreshed.isComplete)
-                      if (isVideoComplete || (refreshed.progress || 0) >= CAST_TARGET_SYNC_PERCENT) break
-                    }
-                  } catch { break }
-                }
-              }
-              const finalSyncPercent = syncStatus.progress || 0
-              if (finalSyncPercent < CAST_MIN_SYNC_PERCENT) {
-                return { success: false, error: 'Video is only ' + finalSyncPercent + '% downloaded. Please wait a bit longer and try again.' }
-              }
-            }
-          } catch {
-            isVideoComplete = true
-            syncStatus = null
-          }
+        if (!result.success) throw new Error(result.error || 'Cast transcode failed')
 
-          const result = await castTranscoder.startCastTranscode(requestedUrl, {
-            sourceKey: requestedKey,
-            isVideoComplete,
-          })
+        currentTranscodeSessionId = result.sessionId
 
-          if (!result.success) throw new Error(result.error || 'Cast transcode failed')
-
-          currentTranscodeSessionId = result.sessionId
-
-          if (result.reused) {
-            if (castSessionsWithLoadSent.has(result.sessionId)) {
-              activeCastTranscodeId = result.sessionId
-              activeCastSourceKey = requestedKey
-              return { success: true }
-            }
-          } else {
-            const MAX_WAIT_MS = 180 * 1000
-            const POLL_INTERVAL_MS = 500
-            const waitStart = Date.now()
-            let fragmentCount = 0
-            while (Date.now() - waitStart < MAX_WAIT_MS) {
-              const status = castTranscoder.getCastStatus(result.sessionId)
-              fragmentCount = status?.fragmentCount || 0
-              if (fragmentCount >= 1) break
-              if (status?.status === 'error') throw new Error(status.error || 'Cast transcode failed')
-              await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
-            }
-            if (fragmentCount < 1) throw new Error('Cast transcode startup timeout: no fragments generated')
-          }
-
-          const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, localIp)
-          if (!hlsUrl) throw new Error('Could not get cast HLS URL')
-          url = hlsUrl
-          contentType = 'application/vnd.apple.mpegurl'
+        const MAX_WAIT_MS = 90 * 1000
+        const POLL_INTERVAL_MS = 500
+        const MIN_STARTUP_FRAGMENTS = 1
+        const waitStart = Date.now()
+        let fragmentCount = 0
+        let hasInit = false
+        let startupStatus = 'pending'
+        while (Date.now() - waitStart < MAX_WAIT_MS) {
+          const status = castTranscoder.getCastStatus(result.sessionId)
+          fragmentCount = status?.fragmentCount || 0
+          const snapshot = status?.storeSnapshot || null
+          hasInit = !!snapshot?.hasInit
+          startupStatus = status?.status || startupStatus
+          if (hasInit && fragmentCount >= MIN_STARTUP_FRAGMENTS) break
+          if (status?.status === 'error') throw new Error(status.error || 'Cast transcode failed')
+          if (status?.status === 'cancelled') throw new Error(status.error || 'Cast transcode cancelled')
+          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS))
         }
+        if (!hasInit || fragmentCount < MIN_STARTUP_FRAGMENTS) {
+          throw new Error(
+            `Cast transcode startup timeout: only ${fragmentCount}/${MIN_STARTUP_FRAGMENTS} fragments ready (init=${hasInit ? 1 : 0}, status=${startupStatus})`
+          )
+        }
+
+        const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, localIp)
+        if (!hlsUrl) throw new Error('Could not get cast HLS URL')
+        console.log('[CastDiag] Chromecast HLS URL:', hlsUrl)
+        console.log('[CastDiag] Chromecast HLS probe:', `curl -sv "${hlsUrl}"`)
+        url = hlsUrl
+        contentType = 'application/vnd.apple.mpegurl'
       } else {
-        // FCast and other protocols: use cast proxy
+        // Non-Chromecast protocols: use cast proxy
         await ensureCastProxyServer()
         const proxyUrl = await createCastProxyUrl(deviceHost, requestedUrl)
-        if (!proxyUrl) throw new Error('Could not create cast proxy URL for FCast device')
+        if (!proxyUrl) throw new Error('Could not create cast proxy URL for cast device')
         url = proxyUrl
       }
 
-      const streamType = r.duration && r.duration > 0 ? 'BUFFERED' : 'LIVE'
+      const probedDuration = Number(probeResult?.duration || 0)
+      const requestedDuration = Number(r.duration || 0)
+      const castDuration = requestedDuration > 0 ? requestedDuration : (probedDuration > 0 ? probedDuration : 0)
+      const isHlsCast = contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl'
+      const hasKnownDuration = castDuration > 0
+      const streamType = isHlsCast
+        ? 'LIVE'
+        : (hasKnownDuration ? 'BUFFERED' : 'LIVE')
+      const loadDuration = (streamType === 'BUFFERED' && hasKnownDuration) ? castDuration : undefined
 
       try {
         await castContext.stop()
@@ -1041,15 +1021,58 @@ export function attachCastHandlers(B, deps) {
         activeCastSourceKey = requestedKey
       }
 
-      await castContext.play({
-        url, contentType, title: r.title, thumbnail: r.thumbnail,
-        time: r.time, volume: normalizeCastVolume(r.volume),
-        duration: r.duration, streamType,
-      })
+      let playRejected = null
+      try {
+        await castContext.play({
+          url, contentType, title: r.title, thumbnail: r.thumbnail,
+          time: r.time, volume: normalizeCastVolume(r.volume),
+          duration: loadDuration, streamType,
+          startTimeoutMs: 30000,
+        })
+      } catch (playErr) {
+        playRejected = playErr
+      }
+
+      if (playRejected) {
+        const isCastTimeoutIdle = /timed out waiting for chromecast playback to start/i.test(String(playRejected?.message || ''))
+          && /state=IDLE/i.test(String(playRejected?.message || ''))
+          && /idle=none/i.test(String(playRejected?.message || ''))
+
+        const isHlsTranscodeSession = !!currentTranscodeSessionId
+          && (contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl')
+
+        if (isCastTimeoutIdle && isHlsTranscodeSession) {
+          const status = castTranscoder.getCastStatus(currentTranscodeSessionId)
+          const stats = status?.requestStats || {}
+          const segmentHits = Number(stats.successfulSegmentResponses || status?.fragmentCount || 0)
+          const playlistHits = Number(stats.playlistRequests || (segmentHits > 0 ? 2 : 0))
+          const hasReceiverConsumption = segmentHits >= 3 && playlistHits >= 2
+
+          if (hasReceiverConsumption) {
+            console.warn(
+              '[CastDiag] IDLE timeout with sustained HLS fetches; waiting longer and nudging resume',
+              'session=',
+              currentTranscodeSessionId,
+              'segmentHits=',
+              segmentHits,
+              'playlistHits=',
+              playlistHits,
+            )
+            try {
+              await new Promise(resolve => setTimeout(resolve, 6000))
+              await castContext.resume()
+            } catch {}
+          } else {
+            throw playRejected
+          }
+        } else {
+          throw playRejected
+        }
+      }
 
       castLoadCompletedAt = Date.now()
 
-      if (activeCastTranscodeId && contentType === 'application/vnd.apple.mpegurl') {
+      if (activeCastTranscodeId && (contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl')) {
         castSessionsWithLoadSent.add(activeCastTranscodeId)
 
         if (castStallMonitor) { clearInterval(castStallMonitor); castStallMonitor = null }

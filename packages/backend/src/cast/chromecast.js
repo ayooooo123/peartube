@@ -35,8 +35,7 @@ export const Namespace = {
 
 const SOURCE_ID = 'sender-0'
 const RECEIVER_ID = 'receiver-0'
-const HEARTBEAT_INTERVAL = 10000
-const STATUS_POLL_INTERVAL = 10000
+const HEARTBEAT_INTERVAL = 5000
 const LOCALHOST_HOSTS = new Set(['127.0.0.1', 'localhost', '0.0.0.0'])
 
 function encodeVarint(value) {
@@ -224,7 +223,6 @@ export class ChromecastDevice extends EventEmitter {
     this._buffer = Buffer.alloc(0)
     this._heartbeatTimer = null
     this._missedHeartbeats = 0
-    this._awaitingPong = false
     this._statusTimer = null
     this._transportId = null
     this._mediaSessionId = null
@@ -245,6 +243,12 @@ export class ChromecastDevice extends EventEmitter {
     this._loadDebounceMs = 1000 // Minimum 1 second between LOAD calls
     this._lastEmittedError = null
     this._loadStartedAt = 0
+    this._lastLoadRequest = null
+    this._lastMediaStatus = null
+    this._loadPlayNudged = false
+    this._loadStatusProbeSent = false
+    this._loadRetrySent = false
+    this._loadErrorRetrySent = false
     this._intentionalStopAt = 0 // Track stop() calls to suppress stale IDLE:ERROR
     this._shouldAutoReconnect = true
     this._lastPlayOptions = null
@@ -303,39 +307,12 @@ export class ChromecastDevice extends EventEmitter {
       }, timeout)
       this._connectTimer = timer
 
-      // Fix 1: Wrap TLS connection in try-catch to handle native crashes gracefully
-      let socket
-      try {
-        console.log('[Chromecast] About to call tls.createConnection to', this.deviceInfo.host, this.deviceInfo.port || CHROMECAST_PORT)
-        socket = tls.createConnection(this.deviceInfo.port || CHROMECAST_PORT, this.deviceInfo.host)
-        console.log('[Chromecast] tls.createConnection returned successfully')
-      } catch (err) {
-        clearTimeout(timer)
-        this._connecting = false
-        this._connectPromise = null
-        this._connectResolve = null
-        this._connectReject = null
-        this.emit('connectionStateChanged', 'error')
-        this.emit('error', err)
-        reject(err)
-        return
-      }
-
+      const socket = tls.createConnection(this.deviceInfo.port || CHROMECAST_PORT, this.deviceInfo.host)
       this._socket = socket
-
-      // Fix 5: Add early handshake timeout (native TLS can hang)
-      const handshakeTimeout = setTimeout(() => {
-        if (!this._connected && socket && this._activeConnectToken === token) {
-          console.error('[Chromecast] TLS handshake timeout')
-          try { if (socket.destroy) socket.destroy() } catch (e) {}
-          this._handleError(new Error('TLS handshake timeout'))
-        }
-      }, 3000)
 
       const onConnect = () => {
         if (this._activeConnectToken !== token) return
         clearTimeout(timer)
-        clearTimeout(handshakeTimeout)
         this._connected = true
         this._connecting = false
         this.emit('connectionStateChanged', 'connected')
@@ -353,21 +330,18 @@ export class ChromecastDevice extends EventEmitter {
           this._handleAppData(data)
         } catch (err) {
           console.error('[Chromecast] onData error:', (err && err.message) ? err.message : err)
-          // Don't re-throw - socket handlers must not throw or they crash the app
         }
       }
 
       const onError = (err) => {
         if (this._activeConnectToken !== token) return
         clearTimeout(timer)
-        clearTimeout(handshakeTimeout)
         this._handleError(err)
       }
 
       const onClose = () => {
         if (this._activeConnectToken !== token) return
         clearTimeout(timer)
-        clearTimeout(handshakeTimeout)
         this._handleDisconnect()
       }
 
@@ -458,7 +432,6 @@ export class ChromecastDevice extends EventEmitter {
       } catch {}
 
       const contentType = options.contentType || 'video/mp4'
-      const isHls = contentType === 'application/vnd.apple.mpegurl' || contentType === 'application/x-mpegURL'
       try {
         const parsed = new URL(mediaUrl)
         console.log('[Chromecast] LOAD', {
@@ -477,26 +450,55 @@ export class ChromecastDevice extends EventEmitter {
         images: options.thumbnail ? [{ url: options.thumbnail }] : []
       }
 
-      // Support LIVE streamType for real-time transcoding (no seeking)
-      const streamType = options.streamType || 'BUFFERED'
+      const isHlsContent = /mpegurl/i.test(contentType) || /\.m3u8(?:$|\?)/i.test(mediaUrl)
+      const streamType = isHlsContent ? 'LIVE' : (options.streamType || 'BUFFERED')
+
+      const mediaPayload = {
+        contentId: mediaUrl,
+        contentUrl: mediaUrl,
+        streamType,
+        contentType,
+        metadata,
+        ...(isHlsContent ? {
+          hlsSegmentFormat: 'fmp4',
+          hlsVideoSegmentFormat: 'fmp4',
+        } : {}),
+        ...(!isHlsContent && options.duration ? { duration: options.duration } : {})
+      }
 
       const payload = {
         type: 'LOAD',
         requestId: this._nextRequestId(),
         autoplay: true,
-        currentTime: options.time || 0,
-        media: {
-          contentId: mediaUrl,
-          streamType,
-          contentType,
-          ...(isHls ? { hlsSegmentFormat: 'FMP4', hlsVideoSegmentFormat: 'FMP4' } : {}),
-          metadata,
-          ...(options.duration ? { duration: options.duration } : {})
-        }
+        currentTime: isHlsContent ? 0 : (streamType === 'LIVE' ? 0 : (options.time || 0)),
+        media: mediaPayload
       }
+
+      try {
+        console.log('[Chromecast] LOAD media payload', {
+          contentId: mediaPayload.contentId,
+          contentUrl: mediaPayload.contentUrl,
+          contentType: mediaPayload.contentType,
+          streamType: mediaPayload.streamType,
+          duration: mediaPayload.duration,
+          hlsSegmentFormat: mediaPayload.hlsSegmentFormat,
+          hlsVideoSegmentFormat: mediaPayload.hlsVideoSegmentFormat,
+        })
+      } catch {}
 
       console.log('[Chromecast] sending LOAD to transport', this._transportId)
       this._lastEmittedError = null
+      this._lastLoadRequest = {
+        contentId: mediaUrl,
+        contentType,
+        streamType,
+        media: mediaPayload,
+        startedAt: Date.now(),
+      }
+      this._loadPlayNudged = false
+      this._loadStatusProbeSent = false
+      this._loadRetrySent = false
+      this._loadErrorRetrySent = false
       this._sendMediaMessage(payload)
       try {
         this._sendMediaMessage({ type: 'GET_STATUS', requestId: this._nextRequestId() })
@@ -504,6 +506,7 @@ export class ChromecastDevice extends EventEmitter {
       this._loadStartedAt = Date.now()
       this._state.state = 'loading'
       this.emit('playbackStateChanged', 'loading')
+      await this._waitForPlaybackStart(options?.startTimeoutMs)
     } finally {
       // Clear load-in-progress after a short delay to allow the LOAD to complete
       setTimeout(() => {
@@ -513,6 +516,196 @@ export class ChromecastDevice extends EventEmitter {
         }
       }, 500)
     }
+  }
+
+  async _waitForPlaybackStart(timeoutMs = 30000) {
+    const immediateState = this._state?.state
+    if (immediateState === 'playing' || immediateState === 'buffering' || immediateState === 'paused') {
+      return immediateState
+    }
+
+    return new Promise((resolve, reject) => {
+      let settled = false
+      let timer = null
+
+      const cleanup = () => {
+        if (timer) {
+          clearTimeout(timer)
+          timer = null
+        }
+        this.off('playbackStateChanged', onPlaybackStateChanged)
+        this.off('mediaStatus', onMediaStatus)
+        this.off('error', onError)
+        this.off('connectionStateChanged', onConnectionStateChanged)
+      }
+
+      const finishResolve = (state) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve(state)
+      }
+
+      const finishReject = (err) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(err)
+      }
+
+      const onPlaybackStateChanged = (state) => {
+        if (state === 'playing' || state === 'buffering' || state === 'paused') {
+          finishResolve(state)
+          return
+        }
+        if (state === 'error') {
+          if (!this._loadErrorRetrySent) {
+            this._loadErrorRetrySent = true
+            try {
+              const retry = this._lastLoadRequest
+              if (retry?.contentId) {
+                this._sendMediaMessage({
+                  type: 'LOAD',
+                  requestId: this._nextRequestId(),
+                  autoplay: true,
+                  currentTime: 0,
+                  media: retry.media || {
+                    contentId: retry.contentId,
+                    streamType: retry.streamType || 'BUFFERED',
+                    contentType: retry.contentType || 'application/vnd.apple.mpegurl',
+                    metadata: {
+                      metadataType: 0,
+                      title: 'PearTube',
+                    },
+                  },
+                })
+                this._loadStartedAt = Date.now()
+                return
+              }
+            } catch {}
+          }
+          finishReject(new Error('Chromecast reported a media error while starting playback'))
+        }
+      }
+
+      const onMediaStatus = (status) => {
+        if (!status || typeof status !== 'object') return
+        const playerState = status.playerState || null
+        if (!playerState) return
+        if (playerState === 'IDLE' && status.idleReason === 'ERROR') {
+          if (!this._loadErrorRetrySent) {
+            this._loadErrorRetrySent = true
+            try {
+              const retry = this._lastLoadRequest
+              if (retry?.contentId) {
+                this._sendMediaMessage({
+                  type: 'LOAD',
+                  requestId: this._nextRequestId(),
+                  autoplay: true,
+                  currentTime: 0,
+                  media: retry.media || {
+                    contentId: retry.contentId,
+                    streamType: retry.streamType || 'BUFFERED',
+                    contentType: retry.contentType || 'application/vnd.apple.mpegurl',
+                    metadata: {
+                      metadataType: 0,
+                      title: 'PearTube',
+                    },
+                  },
+                })
+                this._loadStartedAt = Date.now()
+                return
+              }
+            } catch {}
+          }
+          finishReject(new Error('Chromecast reported IDLE:ERROR while starting playback'))
+          return
+        }
+        if (playerState === 'IDLE' && !status.idleReason) {
+          const loadAgeMs = this._loadStartedAt > 0 ? (Date.now() - this._loadStartedAt) : 0
+          const hasSession = typeof status.mediaSessionId === 'number'
+          if (hasSession && loadAgeMs > 2500 && !this._loadPlayNudged) {
+            this._loadPlayNudged = true
+            try {
+              this._sendMediaMessage({
+                type: 'PLAY',
+                requestId: this._nextRequestId(),
+                mediaSessionId: status.mediaSessionId,
+              })
+              this._sendMediaMessage({
+                type: 'GET_STATUS',
+                requestId: this._nextRequestId(),
+              })
+            } catch {}
+            return
+          }
+          if (loadAgeMs > 3000 && !hasSession && !this._loadRetrySent) {
+            if (!this._loadStatusProbeSent) {
+              this._loadStatusProbeSent = true
+              try {
+                this._sendMediaMessage({
+                  type: 'GET_STATUS',
+                  requestId: this._nextRequestId(),
+                })
+              } catch {}
+              return
+            }
+          }
+          if (loadAgeMs > 9000 && !hasSession && !this._loadRetrySent) {
+            this._loadRetrySent = true
+            try {
+              const retry = this._lastLoadRequest
+              if (retry?.contentId) {
+                this._sendMediaMessage({
+                  type: 'LOAD',
+                  requestId: this._nextRequestId(),
+                  autoplay: true,
+                  currentTime: 0,
+                  media: retry.media || {
+                    contentId: retry.contentId,
+                    streamType: retry.streamType || 'BUFFERED',
+                    contentType: retry.contentType || 'application/vnd.apple.mpegurl',
+                    metadata: {
+                      metadataType: 0,
+                      title: 'PearTube',
+                    },
+                  },
+                })
+                this._loadStartedAt = Date.now()
+                return
+              }
+            } catch {}
+          }
+          if (loadAgeMs > 15000 && !hasSession) {
+            finishReject(new Error('Chromecast stayed IDLE without media session after LOAD'))
+          }
+        }
+      }
+
+      const onError = (err) => {
+        finishReject(err instanceof Error ? err : new Error(String(err || 'Chromecast playback failed')))
+      }
+
+      const onConnectionStateChanged = (state) => {
+        if (state === 'disconnected' || state === 'error') {
+          finishReject(new Error('Chromecast disconnected while starting playback'))
+        }
+      }
+
+      timer = setTimeout(() => {
+        const last = this._lastMediaStatus || null
+        const lastState = last && last.playerState ? String(last.playerState) : 'unknown'
+        const lastIdleReason = last && last.idleReason ? String(last.idleReason) : 'none'
+        const load = this._lastLoadRequest || null
+        const loadUrl = load && load.contentId ? String(load.contentId) : 'unknown'
+        finishReject(new Error('Timed out waiting for Chromecast playback to start (state=' + lastState + ', idle=' + lastIdleReason + ', url=' + loadUrl + ')'))
+    }, Math.max(3000, Number(timeoutMs) || 30000))
+
+      this.on('playbackStateChanged', onPlaybackStateChanged)
+      this.on('mediaStatus', onMediaStatus)
+      this.on('error', onError)
+      this.on('connectionStateChanged', onConnectionStateChanged)
+    })
   }
 
   /**
@@ -623,19 +816,14 @@ export class ChromecastDevice extends EventEmitter {
   _startHeartbeat() {
     if (this._heartbeatTimer) return
     this._missedHeartbeats = 0
-    this._awaitingPong = false
     this._heartbeatTimer = setInterval(() => {
       if (this._connected && this._socket) {
         try {
-          if (this._awaitingPong) {
-            this._missedHeartbeats += 1
-            console.warn('[Chromecast] Heartbeat miss #' + this._missedHeartbeats + ' — no PONG for ' + (this._missedHeartbeats * 10) + 's')
-          } else {
-            this._awaitingPong = true
-            this._sendHeartbeat({ type: 'PING' })
-          }
-          if (this._missedHeartbeats >= 2) {
-            const err = new Error('Chromecast heartbeat timeout after ' + this._missedHeartbeats + ' missed PONGs')
+          this._sendHeartbeat({ type: 'PING' })
+          this._missedHeartbeats += 1
+          console.warn('[Chromecast] Heartbeat miss #' + this._missedHeartbeats + ' — no PONG for ' + (this._missedHeartbeats * 5) + 's')
+      if (this._missedHeartbeats >= 6) {
+        const err = new Error('Chromecast heartbeat timeout after ' + this._missedHeartbeats + ' missed PONGs')
             this.emit('error', err)
             this._handleDisconnect(err)
           }
@@ -651,8 +839,6 @@ export class ChromecastDevice extends EventEmitter {
       clearInterval(this._heartbeatTimer)
       this._heartbeatTimer = null
     }
-    this._awaitingPong = false
-    this._missedHeartbeats = 0
   }
 
   _startStatusPolling() {
@@ -671,7 +857,7 @@ export class ChromecastDevice extends EventEmitter {
           // Socket closed, will be handled by disconnect
         }
       }
-    }, STATUS_POLL_INTERVAL)
+    }, 5000)
   }
 
   _stopStatusPolling() {
@@ -848,7 +1034,6 @@ export class ChromecastDevice extends EventEmitter {
       }
     } else if (payload.type === 'PONG') {
       this._missedHeartbeats = 0
-      this._awaitingPong = false
     }
   }
 
@@ -910,6 +1095,7 @@ export class ChromecastDevice extends EventEmitter {
       try {
         console.error('[Chromecast] LOAD_FAILED details:', JSON.stringify(payload))
       } catch (e) {}
+      this._loadStartedAt = 0
       this._state.state = 'error'
       this.emit('playbackStateChanged', 'error')
       this.emit('error', new Error('Chromecast LOAD_FAILED'))
@@ -919,6 +1105,7 @@ export class ChromecastDevice extends EventEmitter {
     // Handle LOAD_CANCELLED
     if (payload.type === 'LOAD_CANCELLED') {
       console.warn('[Chromecast] LOAD_CANCELLED received')
+      this._loadStartedAt = 0
       this._state.state = 'stopped'
       this.emit('playbackStateChanged', 'stopped')
       return
@@ -960,6 +1147,14 @@ export class ChromecastDevice extends EventEmitter {
 
       if (!status) return
 
+      this._lastMediaStatus = {
+        playerState: status.playerState || null,
+        idleReason: status.idleReason || null,
+        mediaSessionId: typeof status.mediaSessionId === 'number' ? status.mediaSessionId : null,
+        currentTime: typeof status.currentTime === 'number' ? status.currentTime : null,
+      }
+      this.emit('mediaStatus', this._lastMediaStatus)
+
       if (typeof status.mediaSessionId === 'number') {
         this._mediaSessionId = status.mediaSessionId
       }
@@ -996,11 +1191,15 @@ export class ChromecastDevice extends EventEmitter {
             // Suppress stale IDLE:ERROR that arrives after intentional stop() (pre-LOAD cleanup)
             // or while a new LOAD is in flight. These belong to the OLD media session.
             const sinceStopped = this._intentionalStopAt > 0 ? (Date.now() - this._intentionalStopAt) : Infinity
-            const isLoading = this._loadStartedAt > 0
-            if (sinceStopped < 8000 || isLoading) {
-              console.log('[Chromecast] Suppressing stale IDLE:ERROR (stop ' + Math.round(sinceStopped) + 'ms ago, loading:', isLoading + ')')
+            const now = Date.now()
+            const loadingForMs = this._loadStartedAt > 0 ? (now - this._loadStartedAt) : 0
+            const suppressLoadingError = this._loadStartedAt > 0 && loadingForMs < 1500
+            if (sinceStopped < 8000 || suppressLoadingError) {
+              console.log('[Chromecast] Suppressing stale IDLE:ERROR (stop ' + Math.round(sinceStopped) + 'ms ago, loadingForMs:', loadingForMs + ')')
               return
             }
+
+            this._loadStartedAt = 0
 
             let errType = 'unknown'
             let detailedCode = null

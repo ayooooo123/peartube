@@ -93,6 +93,7 @@ export class TempFileReader {
     this.downloadComplete = false
     this.downloadError = null
     this.downloadAborted = false
+    this.downloadUnderflow = false
     this.downloadRequest = null
 
     // Current read position
@@ -104,11 +105,17 @@ export class TempFileReader {
     this.waitCount = 0  // Times we had to wait for download
 
     // Calculate initial buffer size
-    this.initialBufferSize = Math.min(
+    const computedInitialBuffer = Math.min(
       Math.max(MIN_INITIAL_BUFFER, Math.floor(fileSize * MIN_INITIAL_BUFFER_PCT)),
       MAX_INITIAL_BUFFER,
       fileSize
     )
+    const requestedInitialBuffer = Number.isFinite(options.initialBufferBytes)
+      ? Math.max(1, Math.floor(options.initialBufferBytes))
+      : null
+    this.initialBufferSize = requestedInitialBuffer
+      ? Math.min(fileSize, requestedInitialBuffer)
+      : computedInitialBuffer
 
     // Tail prefetch (for MKV cues)
     this.tailBytes = Math.min(TAIL_PREFETCH_BYTES, this.fileSize)
@@ -541,6 +548,7 @@ export class TempFileReader {
     // which prevents the HTTP download from receiving more data (deadlock!)
     if (!this.downloadComplete && availableToRead <= 0) {
       this.waitCount++
+      this.downloadUnderflow = true
       console.error('[TempFileReader] Transcoder caught up to download! STOPPING.',
         'pos:', Math.round(this.currentPos / 1024 / 1024) + 'MB',
         'downloaded:', Math.round(this.downloadedBytes / 1024 / 1024) + 'MB',

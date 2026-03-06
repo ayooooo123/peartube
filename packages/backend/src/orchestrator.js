@@ -234,7 +234,11 @@ export async function createBackendContext(config) {
   // Phase 4: Wire up swarm connection handling
   ctx.swarm.on('connection', (conn, info) => {
     console.log('[Orchestrator] Swarm connection received, passing to publicFeed.handleConnection');
-    publicFeed.handleConnection(conn, info);
+    try {
+      publicFeed.handleConnection(conn, info);
+    } catch (err) {
+      console.error('[Orchestrator] publicFeed.handleConnection failed:', err?.message);
+    }
   });
   ipcLog('[orchestrator] seedingManager.init starting')
 

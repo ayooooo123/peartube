@@ -71,20 +71,39 @@ interface MediaSessionModuleInterface {
   stopCastForegroundService?(): Promise<void>
 }
 
-// Get native module or provide web fallback
-const MediaSessionNative: MediaSessionModuleInterface = Platform.OS !== 'web'
-  ? requireNativeModule('MediaSession')
-  : {
-      setActive: async () => {},
-      setNowPlaying: async () => {},
-      setPlaybackState: async () => {},
-      clearNowPlaying: async () => {},
-    }
+const mediaSessionFallback: MediaSessionModuleInterface = {
+  setActive: async () => {},
+  setNowPlaying: async () => {},
+  setPlaybackState: async () => {},
+  clearNowPlaying: async () => {},
+}
 
-// Event emitter for native events
-const emitter = Platform.OS !== 'web' 
-  ? new EventEmitter(requireNativeModule('MediaSession'))
-  : null
+let mediaSessionNativeCache: MediaSessionModuleInterface | null = null
+let mediaSessionEmitterCache: any = null
+
+function getMediaSessionNative(): MediaSessionModuleInterface {
+  if (Platform.OS === 'web') return mediaSessionFallback
+  if (mediaSessionNativeCache) return mediaSessionNativeCache
+  try {
+    mediaSessionNativeCache = requireNativeModule<MediaSessionModuleInterface>('MediaSession')
+    return mediaSessionNativeCache
+  } catch (err) {
+    console.warn('[MediaSession] Native module unavailable:', err)
+    return mediaSessionFallback
+  }
+}
+
+function getMediaSessionEmitter(): any {
+  if (Platform.OS === 'web') return null
+  if (mediaSessionEmitterCache) return mediaSessionEmitterCache
+  try {
+    mediaSessionEmitterCache = new EventEmitter(getMediaSessionNative() as any)
+    return mediaSessionEmitterCache
+  } catch (err) {
+    console.warn('[MediaSession] EventEmitter unavailable:', err)
+    return null
+  }
+}
 
 /**
  * Activate the media session.
@@ -94,7 +113,7 @@ const emitter = Platform.OS !== 'web'
  * Call this when playback starts.
  */
 export async function setActive(active: boolean): Promise<void> {
-  return MediaSessionNative.setActive(active)
+  return getMediaSessionNative().setActive(active)
 }
 
 /**
@@ -103,7 +122,7 @@ export async function setActive(active: boolean): Promise<void> {
  * @param metadata - Track metadata (title, artist, artwork, duration)
  */
 export async function setNowPlaying(metadata: NowPlayingMetadata): Promise<void> {
-  return MediaSessionNative.setNowPlaying(metadata)
+  return getMediaSessionNative().setNowPlaying(metadata)
 }
 
 /**
@@ -114,7 +133,7 @@ export async function setNowPlaying(metadata: NowPlayingMetadata): Promise<void>
  * @param state - Current playback state (isPlaying, position, duration, rate)
  */
 export async function setPlaybackState(state: PlaybackState): Promise<void> {
-  return MediaSessionNative.setPlaybackState(state)
+  return getMediaSessionNative().setPlaybackState(state)
 }
 
 /**
@@ -122,7 +141,7 @@ export async function setPlaybackState(state: PlaybackState): Promise<void> {
  * Call this when playback stops completely.
  */
 export async function clearNowPlaying(): Promise<void> {
-  return MediaSessionNative.clearNowPlaying()
+  return getMediaSessionNative().clearNowPlaying()
 }
 
 /**
@@ -130,45 +149,39 @@ export async function clearNowPlaying(): Promise<void> {
  * Returns true if PiP was entered successfully.
  */
 export async function enterPictureInPicture(): Promise<boolean> {
-  if (Platform.OS !== 'android' || !MediaSessionNative.enterPictureInPicture) {
+  if (Platform.OS !== 'android') {
     return false
   }
-  return MediaSessionNative.enterPictureInPicture()
+  const native = getMediaSessionNative()
+  if (!native.enterPictureInPicture) return false
+  return native.enterPictureInPicture()
 }
 
-/**
- * Check if PiP is supported on this device (Android only).
- */
 export async function isPictureInPictureSupported(): Promise<boolean> {
   if (Platform.OS === 'web') return false
-  if (!MediaSessionNative.isPictureInPictureSupported) return false
-  return MediaSessionNative.isPictureInPictureSupported()
+  const native = getMediaSessionNative()
+  if (!native.isPictureInPictureSupported) return false
+  return native.isPictureInPictureSupported()
 }
 
-/**
- * Enable/disable auto Picture-in-Picture on home press (Android 12+ only).
- * When enabled, the app will automatically enter PiP when the user presses home
- * while video is playing.
- */
 export async function setAutoPictureInPicture(enabled: boolean): Promise<void> {
   if (Platform.OS !== 'android') return
-  if (!(MediaSessionNative as any).setAutoPictureInPicture) return
+  const native = getMediaSessionNative() as any
+  if (!native.setAutoPictureInPicture) return
   try {
-    await (MediaSessionNative as any).setAutoPictureInPicture(enabled)
+    await native.setAutoPictureInPicture(enabled)
   } catch (err) {
     console.error('[MediaSession] setAutoPictureInPicture failed:', err)
   }
 }
 
-/**
- * Set the source rect hint for PiP (Android only).
- * This tells Android which part of the screen contains the video.
- */
 export async function setPictureInPictureSourceRect(rect: { x: number; y: number; width: number; height: number }): Promise<void> {
-  if (Platform.OS !== 'android' || !(MediaSessionNative as any).setPictureInPictureSourceRect) {
+  if (Platform.OS !== 'android') return
+  const native = getMediaSessionNative() as any
+  if (!native.setPictureInPictureSourceRect) {
     return
   }
-  return (MediaSessionNative as any).setPictureInPictureSourceRect(rect)
+  return native.setPictureInPictureSourceRect(rect)
 }
 
 /**
@@ -179,10 +192,14 @@ export async function setPictureInPictureSourceRect(rect: { x: number; y: number
  * @param height - Video height in pixels
  */
 export async function setPictureInPictureAspectRatio(width: number, height: number): Promise<void> {
-  if (Platform.OS !== 'android' || !(MediaSessionNative as any).setPictureInPictureAspectRatio) {
+  if (Platform.OS !== 'android') {
     return
   }
-  return (MediaSessionNative as any).setPictureInPictureAspectRatio(width, height)
+  const native = getMediaSessionNative() as any
+  if (!native.setPictureInPictureAspectRatio) {
+    return
+  }
+  return native.setPictureInPictureAspectRatio(width, height)
 }
 
 /**
@@ -199,9 +216,10 @@ export async function setPictureInPictureAspectRatio(width: number, height: numb
  */
 export async function setStatusBarOverlayEnabled(enabled: boolean): Promise<void> {
   if (Platform.OS !== 'android') return
-  if (!(MediaSessionNative as any).setStatusBarOverlayEnabled) return
+  const native = getMediaSessionNative() as any
+  if (!native.setStatusBarOverlayEnabled) return
   try {
-    await (MediaSessionNative as any).setStatusBarOverlayEnabled(enabled)
+    await native.setStatusBarOverlayEnabled(enabled)
   } catch (err) {
     console.error('[MediaSession] setStatusBarOverlayEnabled failed:', err)
   }
@@ -212,25 +230,32 @@ export async function setStatusBarOverlayEnabled(enabled: boolean): Promise<void
  * This avoids layout changes while moving the video below the cutout.
  */
 export async function setSurfaceViewInset(topInsetDp: number): Promise<void> {
-  if (Platform.OS !== 'android' || !(MediaSessionNative as any).setSurfaceViewInset) {
+  if (Platform.OS !== 'android') {
     return
   }
-  return (MediaSessionNative as any).setSurfaceViewInset(topInsetDp)
+  const native = getMediaSessionNative() as any
+  if (!native.setSurfaceViewInset) {
+    return
+  }
+  return native.setSurfaceViewInset(topInsetDp)
 }
 
 export async function startCastForegroundService(title: string, subtitle: string): Promise<void> {
-  if (Platform.OS !== 'android' || !MediaSessionNative.startCastForegroundService) return
-  return MediaSessionNative.startCastForegroundService(title, subtitle)
+  const native = getMediaSessionNative()
+  if (Platform.OS !== 'android' || !native.startCastForegroundService) return
+  return native.startCastForegroundService(title, subtitle)
 }
 
 export async function updateCastForegroundService(title: string, subtitle: string): Promise<void> {
-  if (Platform.OS !== 'android' || !MediaSessionNative.updateCastForegroundService) return
-  return MediaSessionNative.updateCastForegroundService(title, subtitle)
+  const native = getMediaSessionNative()
+  if (Platform.OS !== 'android' || !native.updateCastForegroundService) return
+  return native.updateCastForegroundService(title, subtitle)
 }
 
 export async function stopCastForegroundService(): Promise<void> {
-  if (Platform.OS !== 'android' || !MediaSessionNative.stopCastForegroundService) return
-  return MediaSessionNative.stopCastForegroundService()
+  const native = getMediaSessionNative()
+  if (Platform.OS !== 'android' || !native.stopCastForegroundService) return
+  return native.stopCastForegroundService()
 }
 
 /**
@@ -243,6 +268,7 @@ export async function stopCastForegroundService(): Promise<void> {
 export function addRemoteCommandListener(
   listener: (event: RemoteCommandEvent) => void
 ): Subscription {
+  const emitter = getMediaSessionEmitter()
   if (!emitter) {
     return { remove: () => {} }
   }
@@ -258,6 +284,7 @@ export function addRemoteCommandListener(
 export function addAudioInterruptionListener(
   listener: (event: AudioInterruptionEvent) => void
 ): Subscription {
+  const emitter = getMediaSessionEmitter()
   if (!emitter) {
     return { remove: () => {} }
   }
@@ -273,6 +300,7 @@ export function addAudioInterruptionListener(
 export function addAudioRouteChangeListener(
   listener: (event: AudioRouteChangeEvent) => void
 ): Subscription {
+  const emitter = getMediaSessionEmitter()
   if (!emitter) {
     return { remove: () => {} }
   }
@@ -302,6 +330,7 @@ export interface PictureInPictureEvent {
 export function addPictureInPictureListener(
   listener: (event: PictureInPictureEvent) => void
 ): Subscription {
+  const emitter = getMediaSessionEmitter()
   if (!emitter) {
     return { remove: () => {} }
   }

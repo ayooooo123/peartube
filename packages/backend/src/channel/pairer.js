@@ -144,8 +144,15 @@ export class ChannelPairer extends ReadyResource {
                   console.log('[ChannelPairer] Connection already replicated, skipping')
                   continue
                 }
+                if (!conn || conn.destroyed) {
+                  continue
+                }
                 this._replicatedConns.add(conn)
                 try {
+                  if (conn.destroyed) {
+                    this._replicatedConns.delete(conn)
+                    continue
+                  }
                   this.channel.base.replicate(conn)
                 } catch (err) {
                   console.log('[ChannelPairer] Error replicating:', err?.message)
@@ -185,5 +192,4 @@ export class ChannelPairer extends ReadyResource {
     this.swarm = null
   }
 }
-
 

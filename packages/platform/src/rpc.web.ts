@@ -596,7 +596,7 @@ export const rpc = {
     return ensureRPC().castDisconnect({});
   },
 
-  async castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number }): Promise<{ success: boolean; error?: string | null }> {
+  async castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number; duration?: number; forceTranscode?: boolean }): Promise<{ success: boolean; error?: string | null }> {
     return ensureRPC().castPlay(req);
   },
 

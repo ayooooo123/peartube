@@ -21,7 +21,7 @@ else()
   enable_language(ASM)
 endif()
 
-fetch_package("github:google/boringssl#0.20250818.0")
+fetch_package("github:google/boringssl#0.20260211.0")
 
 add_bare_module(bare_tls)
 

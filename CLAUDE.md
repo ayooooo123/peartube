@@ -48,7 +48,7 @@ packages/
 ├── core/             # Shared types and utilities
 ├── platform/         # Platform abstraction layer (RPC, detection)
 ├── spec/             # HRPC schema definitions (schema.cjs generates spec/hrpc/)
-└── bare-*/           # Native addon packages (bare-mpv, bare-fcast, bare-tls, bare-ffmpeg)
+└── bare-*/           # Native addon packages (bare-mpv, bare-tls, bare-ffmpeg)
 ```
 
 ### Platform Architecture

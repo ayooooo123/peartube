@@ -21,6 +21,7 @@ import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
 import { VideoEditModal } from '@/components/VideoEditModal'
+import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && !!(window as any).Pear
@@ -140,42 +141,6 @@ interface ChannelMeta {
   name?: string
   description?: string
   videoCount?: number
-}
-
-// Format helpers
-function formatTimeAgo(timestamp: number | string | null | undefined): string {
-  const value = typeof timestamp === 'string'
-    ? (Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.parse(timestamp))
-    : Number(timestamp)
-  if (!Number.isFinite(value) || value <= 0) return 'recently'
-  const seconds = Math.floor((Date.now() - value) / 1000)
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
-
-function formatBytes(bytes: number | string | null | undefined): string {
-  const value = Number(bytes)
-  if (!Number.isFinite(value) || value <= 0) return '0 B'
-  if (value < 1024) return `${value} B`
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`
-  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
-  return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`
-}
-
-function formatDuration(seconds: number | null | undefined): string {
-  const value = Number(seconds)
-  if (!Number.isFinite(value) || value <= 0) return '0:00'
-  const totalSeconds = Math.floor(value)
-  const hrs = Math.floor(totalSeconds / 3600)
-  const mins = Math.floor((totalSeconds % 3600) / 60)
-  const secs = totalSeconds % 60
-  if (hrs > 0) return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
-  return `${mins}:${String(secs).padStart(2, '0')}`
 }
 
 function toCountMap(countsData: any): Record<string, number> {
@@ -1367,7 +1332,7 @@ function WatchPageView({
           const success = await cast.connect(deviceId)
           if (!success) {
             if (typeof window !== 'undefined' && typeof window.alert === 'function') {
-              window.alert('Failed to connect to Chromecast device.')
+              window.alert(cast.lastError || 'Failed to connect to Chromecast device.')
             }
             return
           }

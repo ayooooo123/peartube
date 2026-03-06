@@ -58,7 +58,7 @@ export function CastHeaderButton({
     try {
       const success = await cast.connect(deviceId)
       if (!success) {
-        Alert.alert('Chromecast', 'Failed to connect to Chromecast device.')
+        Alert.alert('Chromecast', cast.lastError || 'Failed to connect to Chromecast device.')
         return
       }
       setRecentDeviceId(deviceId)

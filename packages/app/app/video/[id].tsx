@@ -12,22 +12,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
+import { formatBytes as formatSize, formatTimeAgo, formatViews } from '@/lib/formatters'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { MpvPlayer } from '@/components/MpvPlayer'
 import { MpvVideoView } from '@/components/video-player/MpvVideoView'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
+import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 
 // HRPC methods used: getVideoUrl, prefetchVideo, getVideoStats, getChannelMeta
-
-// Format helpers
-function formatSize(bytes: number | string): string {
-  const value = Number(bytes)
-  if (!Number.isFinite(value) || value <= 0) return '0 B'
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)} KB`
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`
-}
 
 function formatDate(timestamp: number | string): string {
   const value = typeof timestamp === 'string'
@@ -44,31 +38,6 @@ function showCastAlert(message: string) {
     return
   }
   Alert.alert('Chromecast', message)
-}
-
-function formatTimeAgo(timestamp: number | string): string {
-  const value = typeof timestamp === 'string'
-    ? (Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.parse(timestamp))
-    : Number(timestamp)
-  if (!Number.isFinite(value) || value <= 0) return 'recently'
-  const seconds = Math.floor((Date.now() - value) / 1000)
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d ago`
-  const weeks = Math.floor(days / 7)
-  if (weeks < 4) return `${weeks}w ago`
-  const months = Math.floor(days / 30)
-  return `${months}mo ago`
-}
-
-function formatViews(views: number): string {
-  if (views < 1000) return `${views} views`
-  if (views < 1000000) return `${(views / 1000).toFixed(1)}K views`
-  return `${(views / 1000000).toFixed(1)}M views`
 }
 
 // P2P Stats Overlay Component
@@ -289,6 +258,7 @@ export default function VideoPlayerScreen() {
   // VideoPlayerContext - SHARED player for continuous playback
   // Stats come via EVENT_VIDEO_STATS events from backend -> videoStatsEventEmitter -> context
   const {
+    currentVideo,
     videoUrl,
     isPlaying,
     isLoading: loadingVideo,
@@ -423,6 +393,17 @@ export default function VideoPlayerScreen() {
         console.log('[VideoPlayer] Got stats:', stats ? `${stats.progress}%` : 'null')
         if (stats) {
           setLocalStats(stats as VideoStats)
+          const done =
+            stats.isComplete ||
+            stats.status === 'complete' ||
+            stats.progress >= 100 ||
+            (typeof stats.totalBlocks === 'number' &&
+              stats.totalBlocks > 0 &&
+              stats.downloadedBlocks >= stats.totalBlocks)
+          if (done && statsPollingRef.current) {
+            clearInterval(statsPollingRef.current)
+            statsPollingRef.current = null
+          }
         }
       } catch (err) {
         console.error('[VideoPlayer] Stats polling error:', err)
@@ -449,6 +430,20 @@ export default function VideoPlayerScreen() {
 
       // Get video URL from backend - use instant path if we have blob info
       const videoAny = videoData as any
+      const cacheKey = makeVideoUrlCacheKey(
+        videoData.channelKey,
+        videoRef,
+        videoAny.blobId || undefined,
+        videoAny.blobsCoreKey || undefined,
+      )
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
+      if (cachedUrl) {
+        loadAndPlayVideo(videoData, cachedUrl)
+        if (Platform.OS !== 'web' || isPear) {
+          setTimeout(() => startStatsPolling(), 500)
+        }
+        return
+      }
       const result = await rpc.getVideoUrl({
         channelKey: videoData.channelKey,
         videoId: videoRef,
@@ -458,6 +453,7 @@ export default function VideoPlayerScreen() {
       })
 
       if (result?.url) {
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         // Use context's loadAndPlayVideo - this uses the shared player
         loadAndPlayVideo(videoData, result.url)
 
@@ -476,23 +472,36 @@ export default function VideoPlayerScreen() {
   // Load video when videoData is available (either from params or fetched)
   useEffect(() => {
     if (!videoData || loadingMeta) return
+    const channelInfoTimer = setTimeout(() => {
+      void loadChannelInfo()
+    }, 250)
 
-    if (!fromMiniPlayer && !videoLoaded) {
-      loadVideo()
+    const currentRef = (currentVideo?.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
+      ? currentVideo.path
+      : currentVideo?.id
+    const targetRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
+      ? videoData.path
+      : videoData.id
+    const sameChannel = !currentVideo?.channelKey || !videoData?.channelKey || currentVideo.channelKey === videoData.channelKey
+    const isSameVideoAsCurrent = Boolean(currentRef && targetRef && currentRef === targetRef && sameChannel)
+
+    if (!videoLoaded) {
+      if (fromMiniPlayer && isSameVideoAsCurrent && (Platform.OS !== 'web' || isPear)) {
+        startStatsPolling()
+      } else {
+        loadVideo()
+      }
       setVideoLoaded(true)
-    } else if (fromMiniPlayer && (Platform.OS !== 'web' || isPear)) {
-      // Coming from mini player - start polling for stats
-      startStatsPolling()
     }
-    loadChannelInfo()
 
     return () => {
+      clearTimeout(channelInfoTimer)
       if (statsPollingRef.current) {
         clearInterval(statsPollingRef.current)
         statsPollingRef.current = null
       }
     }
-  }, [videoData, loadingMeta, fromMiniPlayer, isPear, videoLoaded, loadVideo, startStatsPolling, loadChannelInfo])
+  }, [videoData, loadingMeta, fromMiniPlayer, isPear, videoLoaded, loadVideo, startStatsPolling, loadChannelInfo, currentVideo])
 
   // Back/minimize button - beforeRemove listener handles minimizePlayer()
   const goBack = () => {
@@ -694,7 +703,7 @@ export default function VideoPlayerScreen() {
           try {
             const success = await cast.connect(deviceId)
             if (!success) {
-              showCastAlert('Failed to connect to Chromecast device.')
+              showCastAlert(cast.lastError || 'Failed to connect to Chromecast device.')
               return
             }
             setRecentCastDeviceId(deviceId)

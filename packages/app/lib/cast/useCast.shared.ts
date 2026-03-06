@@ -1,8 +1,8 @@
 /**
- * useCast - React hook for casting videos to FCast/Chromecast devices
+ * useCast - React hook for casting videos to Chromecast devices
  *
  * This hook provides access to the casting functionality via RPC to the worker,
- * which uses the bare-fcast module to handle FCast and Chromecast protocols.
+ * which uses the backend cast context to handle Chromecast protocol operations.
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
@@ -15,7 +15,7 @@ export interface CastDevice {
   name: string
   host: string
   port: number
-  protocol: 'fcast' | 'chromecast'
+  protocol: 'chromecast'
 }
 
 export interface CastPlaybackState {
@@ -58,6 +58,7 @@ export interface UseCastReturn {
   addManualDevice: (name: string, host: string, port?: number, protocol?: string) => Promise<CastDevice | null>
 
   // Connection
+  lastError: string | null
   connect: (deviceId: string) => Promise<boolean>
   disconnect: () => Promise<void>
 
@@ -134,7 +135,9 @@ function showCastError(message: string) {
       return
     }
     Alert.alert('Chromecast', message)
-  } catch {}
+  } catch (err) {
+    console.warn('[useCast] Failed to display cast error alert:', err)
+  }
 }
 
 function normalizeVolumeToCast(volume: number | undefined): number {
@@ -184,6 +187,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
   const [isDiscovering, setIsDiscovering] = useState(false)
   const [devices, setDevices] = useState<CastDevice[]>([])
   const [connectedDevice, setConnectedDevice] = useState<CastDevice | null>(null)
+  const [lastError, setLastError] = useState<string | null>(null)
   const connectedDeviceRef = useRef<CastDevice | null>(null)
   const [playbackState, setPlaybackState] = useState<CastPlaybackState>({
     state: 'idle',
@@ -226,7 +230,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     }
   }, [])
 
-  // Serialize Chromecast/FCast commands that are known to be crash-prone when fired rapidly
+  // Serialize cast commands that are known to be crash-prone when fired rapidly
   // (e.g. switching videos quickly while already casting).
   const playSequenceRef = useRef(Promise.resolve())
   const playRequestIdRef = useRef(0)
@@ -244,7 +248,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     })
   }, [])
 
-  // Check if casting is available
+  // Check if casting is available (with retry for backend startup race)
   useEffect(() => {
     if (!rpc) return
 
@@ -254,21 +258,48 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       return
     }
 
-    rpc.castAvailable({})
-      .then((result: { available: boolean }) => {
-        if (mountedRef.current) {
-          setAvailable(result?.available ?? false)
-        }
-      })
-      .catch((err: Error) => {
-        console.error('[useCast] castAvailable check failed:', err)
-        if (mountedRef.current) {
-          setAvailable(false)
-        }
-      })
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let attempts = 0
+    const MAX_ATTEMPTS = 8
+    const RETRY_DELAY_MS = 1500
+
+    function checkAvailable() {
+      rpc.castAvailable({})
+        .then((result: { available: boolean; error?: string | null }) => {
+          if (!mountedRef.current) return
+          if (result?.available) {
+            setAvailable(true)
+          } else {
+            // Backend responded but cast context not loaded yet — retry
+            attempts++
+            if (attempts < MAX_ATTEMPTS) {
+              console.log(`[useCast] castAvailable returned false, retrying (${attempts}/${MAX_ATTEMPTS})`)
+              retryTimer = setTimeout(checkAvailable, RETRY_DELAY_MS)
+            } else {
+              console.warn('[useCast] castAvailable still false after retries, error:', result?.error)
+              setAvailable(false)
+            }
+          }
+        })
+        .catch((err: Error) => {
+          if (!mountedRef.current) return
+          // Backend not ready yet (handler not registered) — retry
+          attempts++
+          if (attempts < MAX_ATTEMPTS) {
+            console.log(`[useCast] castAvailable call failed, retrying (${attempts}/${MAX_ATTEMPTS}):`, err?.message)
+            retryTimer = setTimeout(checkAvailable, RETRY_DELAY_MS)
+          } else {
+            console.error('[useCast] castAvailable check failed after retries:', err)
+            setAvailable(false)
+          }
+        })
+    }
+
+    checkAvailable()
 
     return () => {
       mountedRef.current = false
+      if (retryTimer) clearTimeout(retryTimer)
     }
   }, [rpc])
 
@@ -434,7 +465,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
         name,
         host,
         port: port || 0,
-        protocol: protocol || 'fcast'
+        protocol: protocol || 'chromecast'
       })
 
       if (result?.success && result?.device) {
@@ -452,8 +483,36 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
   const connect = useCallback(async (deviceId: string): Promise<boolean> => {
     if (!rpc) return false
 
+    const shouldRetryConnect = (message: string): boolean => {
+      const normalized = message.toLowerCase()
+      if (normalized.includes('cast context not available')) return false
+      if (normalized.includes('not available')) return false
+      return (
+        normalized.includes('timeout')
+        || normalized.includes('timed out')
+        || normalized.includes('handshake')
+        || normalized.includes('network')
+        || normalized.includes('econn')
+        || normalized.includes('refused')
+        || normalized.includes('closed')
+        || normalized.includes('reset')
+      )
+    }
+
+    const attemptConnect = async () => rpc.castConnect({ deviceId })
+
     try {
-      const result = await rpc.castConnect({ deviceId })
+      setLastError(null)
+      let result = await attemptConnect()
+
+      if (!result?.success) {
+        const firstError = typeof result?.error === 'string' ? result.error : ''
+        if (firstError && shouldRetryConnect(firstError)) {
+          console.warn('[useCast] connect failed, retrying once:', firstError)
+          await new Promise<void>((resolve) => setTimeout(resolve, 700))
+          result = await attemptConnect()
+        }
+      }
 
       if (result?.success) {
         let device = result?.device || devices.find((d: CastDevice) => d.id === deviceId) || null
@@ -474,13 +533,22 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
           }
         }
         notifyConnectedDevice(device)
+        setLastError(null)
         return true
       }
 
-      console.error('[useCast] connect failed:', result?.error)
+      const errorMessage = typeof result?.error === 'string' && result.error.trim()
+        ? result.error
+        : 'Failed to connect to Chromecast device.'
+      console.error('[useCast] connect failed:', errorMessage)
+      setLastError(errorMessage)
       return false
     } catch (err) {
+      const errorMessage = err instanceof Error && err.message
+        ? err.message
+        : 'Failed to connect to Chromecast device.'
       console.error('[useCast] connect failed:', err)
+      setLastError(errorMessage)
       return false
     }
   }, [rpc, devices])
@@ -557,39 +625,57 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       try {
         pendingCastStartAtRef.current = Date.now()
         lastPlayAtRef.current = Date.now()
-        const result = await rpc.castPlay({
-          url: options.url,
-          contentType: options.contentType,
-          title: options.title || '',
-          thumbnail: options.thumbnail || '',
-          time: Math.floor(options.time || 0),
-          volume: normalizeVolumeToCast(playbackState.volume),
-          duration: options.duration || 0,
-        })
 
-        if (requestId !== playRequestIdRef.current) return false
+        const maxTransientAttempts = 4
+        let attempt = 0
 
-        if (result?.success) {
-          // Start foreground service + wake lock for ALL cast protocols (FCast is Chromecast-compatible)
-          const deviceName = device?.name || 'Cast Device'
-          await startCastKeepalive(options.title || 'PearTube', deviceName)
-          setPlaybackState(prev => ({ ...prev, state: 'playing' }))
-          return true
-        }
+        while (attempt < maxTransientAttempts) {
+          attempt += 1
+          const result = await rpc.castPlay({
+            url: options.url,
+            contentType: options.contentType,
+            title: options.title || '',
+            thumbnail: options.thumbnail || '',
+            time: Math.floor(options.time || 0),
+            volume: normalizeVolumeToCast(playbackState.volume),
+            duration: options.duration || 0,
+          })
 
-        const nonFatalOutcome = result?.outcome === 'superseded' || result?.reason === 'debounced' || result?.reason === 'in-progress' || result?.reason === 'already-active'
-        if (nonFatalOutcome) {
-          console.log('[useCast] play superseded/rejected without fatal error:', result?.reason || result?.outcome)
+          if (requestId !== playRequestIdRef.current) return false
+
+          if (result?.success) {
+            const transientBusy = result?.reason === 'debounced' || result?.reason === 'in-progress'
+            if (transientBusy) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 350))
+              continue
+            }
+
+            // Start foreground service + wake lock for cast sessions
+            const deviceName = device?.name || 'Cast Device'
+            await startCastKeepalive(options.title || 'PearTube', deviceName)
+            setPlaybackState(prev => ({ ...prev, state: 'playing' }))
+            return true
+          }
+
+          const nonFatalOutcome = result?.outcome === 'superseded' || result?.reason === 'already-active'
+          if (nonFatalOutcome) {
+            console.log('[useCast] play superseded/rejected without fatal error:', result?.reason || result?.outcome)
+            return false
+          }
+
+          console.error('[useCast] play failed:', result?.error)
+          if (typeof result?.error === 'string' && result.error.includes('Not connected to cast device')) {
+            notifyConnectedDevice(null)
+          }
+          await stopCastKeepalive()
+          setPlaybackState(prev => ({ ...prev, state: 'idle' }))
+          showCastError(`Chromecast failed to start playback.${result?.error ? ` ${result.error}` : ''}`)
           return false
         }
 
-        console.error('[useCast] play failed:', result?.error)
-        if (typeof result?.error === 'string' && result.error.includes('Not connected to cast device')) {
-          notifyConnectedDevice(null)
-        }
         await stopCastKeepalive()
         setPlaybackState(prev => ({ ...prev, state: 'idle' }))
-        showCastError(`Chromecast failed to start playback.${result?.error ? ` ${result.error}` : ''}`)
+        showCastError('Chromecast did not start playback in time. Please try again.')
         return false
       } catch (err) {
         console.error('[useCast] play failed:', err)
@@ -713,6 +799,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     isDiscovering,
     devices,
     connectedDevice,
+    lastError,
     isConnected,
     playbackState,
     transcodeStatus,
@@ -732,6 +819,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
     isDiscovering,
     devices,
     connectedDevice,
+    lastError,
     isConnected,
     playbackState,
     transcodeStatus,

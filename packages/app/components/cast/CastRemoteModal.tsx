@@ -12,6 +12,7 @@ import {
   Pressable,
   StyleSheet,
   ActivityIndicator,
+  Platform,
 } from 'react-native'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
@@ -43,6 +44,7 @@ function formatCastState(state: string) {
 }
 
 export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }: Props) {
+  const useAndroidTextIcons = Platform.OS === 'android'
   const cast = useCast()
   const deviceName = cast.connectedDevice?.name || 'Cast device'
   const playback = cast.playbackState
@@ -124,7 +126,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
             </View>
 
             <Pressable style={styles.closeButton} onPress={onClose} accessibilityRole="button" accessibilityLabel="Close cast remote">
-              <Feather name="x" size={22} color={colors.text} />
+              {useAndroidTextIcons ? <Text style={styles.androidIcon}>X</Text> : <Feather name="x" size={22} color={colors.text} />}
             </Pressable>
           </View>
 
@@ -150,11 +152,15 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
               accessibilityRole="button"
               accessibilityLabel={playback.state === 'playing' ? 'Pause' : 'Play'}
             >
-              <Ionicons
-                name={(playback.state === 'playing' || playback.state === 'buffering') ? 'pause' : 'play'}
-                size={22}
-                color="#fff"
-              />
+              {useAndroidTextIcons ? (
+                <Text style={styles.androidPrimaryIcon}>{(playback.state === 'playing' || playback.state === 'buffering') ? '||' : '>'}</Text>
+              ) : (
+                <Ionicons
+                  name={(playback.state === 'playing' || playback.state === 'buffering') ? 'pause' : 'play'}
+                  size={22}
+                  color="#fff"
+                />
+              )}
               <Text style={styles.primaryButtonText}>
                 {(playback.state === 'playing' || playback.state === 'buffering') ? 'Pause' : 'Play'}
               </Text>
@@ -166,7 +172,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
               accessibilityRole="button"
               accessibilityLabel="Switch cast device"
             >
-              <Feather name="tv" size={18} color={colors.text} />
+              {useAndroidTextIcons ? <Text style={styles.androidIcon}>TV</Text> : <Feather name="tv" size={18} color={colors.text} />}
               <Text style={styles.secondaryButtonText}>Switch</Text>
             </Pressable>
           </View>
@@ -205,7 +211,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
                 accessibilityRole="button"
                 accessibilityLabel="Volume down"
               >
-                <Feather name="minus" size={18} color={colors.text} />
+                {useAndroidTextIcons ? <Text style={styles.androidIcon}>-</Text> : <Feather name="minus" size={18} color={colors.text} />}
               </Pressable>
               <View style={styles.volumeBarOuter}>
                 <View style={[styles.volumeBarInner, { width: `${Math.max(0, Math.min(100, playback.volume || 0))}%` }]} />
@@ -217,7 +223,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
                 accessibilityRole="button"
                 accessibilityLabel="Volume up"
               >
-                <Feather name="plus" size={18} color={colors.text} />
+                {useAndroidTextIcons ? <Text style={styles.androidIcon}>+</Text> : <Feather name="plus" size={18} color={colors.text} />}
               </Pressable>
             </View>
           </View>
@@ -230,7 +236,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
               accessibilityRole="button"
               accessibilityLabel="Disconnect casting"
             >
-              <Feather name="x-circle" size={18} color="#fff" />
+              {useAndroidTextIcons ? <Text style={styles.androidDangerIcon}>X</Text> : <Feather name="x-circle" size={18} color="#fff" />}
               <Text style={styles.dangerButtonText}>Disconnect</Text>
             </Pressable>
 
@@ -241,7 +247,7 @@ export function CastRemoteModal({ visible, onClose, onSwitchDevice, videoTitle }
               accessibilityRole="button"
               accessibilityLabel="Stop playback"
             >
-              <Feather name="square" size={18} color={colors.text} />
+              {useAndroidTextIcons ? <Text style={styles.androidIcon}>[]</Text> : <Feather name="square" size={18} color={colors.text} />}
               <Text style={styles.secondaryButtonText}>Stop</Text>
             </Pressable>
           </View>
@@ -439,6 +445,27 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.5,
+  },
+  androidIcon: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+    minWidth: 16,
+    textAlign: 'center',
+  },
+  androidPrimaryIcon: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+    minWidth: 16,
+    textAlign: 'center',
+  },
+  androidDangerIcon: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+    minWidth: 16,
+    textAlign: 'center',
   },
 })
 

@@ -200,7 +200,7 @@ export function DesktopHeader() {
           try {
             const success = await cast.connect(deviceId)
             if (!success && typeof window !== 'undefined' && typeof window.alert === 'function') {
-              window.alert('Failed to connect to Chromecast device.')
+              window.alert(cast.lastError || 'Failed to connect to Chromecast device.')
               return
             }
             setShowCastPicker(false)

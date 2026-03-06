@@ -21,7 +21,10 @@ import {
   safeUnref,
   safeBufferCopy,
   ResourceTracker,
-  copyCodecParameters
+  copyCodecParameters,
+  selectDecoderForId as _selectDecoderForId,
+  selectH264Encoder as _selectH264Encoder,
+  selectAacEncoder as _selectAacEncoder,
 } from './ffmpeg-utils.mjs'
 
 console.log('[Transcoder] Module loaded')
@@ -119,92 +122,17 @@ export function getLoadError() {
   return ffmpegLoadError
 }
 
+// Codec selection wrappers — delegate to shared ffmpeg-utils, passing module-level ffmpeg
 function selectDecoderForId(codecId) {
-  if (!ffmpeg) return null
-
-  const hwDecoders = new Set([
-    'h264_mediacodec',
-    'hevc_mediacodec',
-    'h264_videotoolbox',
-    'hevc_videotoolbox'
-  ])
-
-  let candidates = []
-  if (codecId === ffmpeg.constants.codecs.H264) {
-    candidates = ['h264_mediacodec', 'h264_videotoolbox', 'h264']
-  } else if (codecId === ffmpeg.constants.codecs.HEVC) {
-    candidates = ['hevc_mediacodec', 'hevc_videotoolbox', 'hevc']
-  }
-
-  for (const name of candidates) {
-    try {
-      const decoder = ffmpeg.findDecoderByName?.(name)
-      if (decoder && decoder._handle) {
-        return { decoder, name, isHardware: hwDecoders.has(name) }
-      }
-    } catch {}
-  }
-
-  const codec = ffmpeg.Codec?.for?.(codecId)
-  const decoder = codec?.decoder
-  if (decoder && decoder._handle) {
-    return { decoder, name: `codec:${codecId}`, isHardware: false }
-  }
-  return null
+  return _selectDecoderForId(ffmpeg, codecId, 'Transcoder')
 }
 
 function selectH264Encoder() {
-  if (!ffmpeg) return null
-
-  const hwEncoders = new Set(['h264_mediacodec', 'h264_videotoolbox'])
-  const candidates = [
-    'h264_mediacodec',
-    'h264_videotoolbox',
-    'libx264',
-    'h264'
-  ]
-
-  for (const name of candidates) {
-    try {
-      const encoder = ffmpeg.findEncoderByName?.(name)
-      if (encoder && encoder._handle) {
-        return {
-          encoder,
-          name,
-          isHardware: hwEncoders.has(name),
-          pixelFormat: hwEncoders.has(name)
-            ? ffmpeg.constants.pixelFormats.NV12
-            : ffmpeg.constants.pixelFormats.YUV420P
-        }
-      }
-    } catch {}
-  }
-  const fallback = ffmpeg.Codec?.H264?.encoder
-  if (fallback && fallback._handle) {
-    return {
-      encoder: fallback,
-      name: 'codec:H264',
-      isHardware: false,
-      pixelFormat: ffmpeg.constants.pixelFormats.YUV420P
-    }
-  }
-  return null
+  return _selectH264Encoder(ffmpeg, 'Transcoder')
 }
 
 function selectAacEncoder() {
-  if (!ffmpeg) return null
-  const candidates = ['aac', 'libfdk_aac', 'libvo_aacenc']
-  for (const name of candidates) {
-    try {
-      const encoder = ffmpeg.findEncoderByName?.(name)
-      if (encoder && encoder._handle) {
-        return { encoder, name }
-      }
-    } catch {}
-  }
-  const fallback = ffmpeg.Codec?.AAC?.encoder
-  if (fallback && fallback._handle) return { encoder: fallback, name: 'codec:AAC' }
-  return null
+  return _selectAacEncoder(ffmpeg, 'Transcoder')
 }
 
 /**

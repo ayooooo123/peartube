@@ -24,6 +24,7 @@
     "./transcode/transcoder": "./src/transcode/transcoder.mjs",
     "./transcode/cast-transcoder": "./src/transcode/cast-transcoder.mjs",
     "./transcode/videotoolbox-settings": "./src/transcode/videotoolbox-settings.mjs",
+    "./cast": "./src/cast/index.js",
     "./logger": "./src/logger.js",
     "./thumbnail": "./src/thumbnail.js"
   },

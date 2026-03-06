@@ -47,20 +47,12 @@ function generateSessionToken() {
   return b4a.toString(tokenBytes, 'hex')
 }
 
-// Blind peering for mobile connectivity (keeps Autobases available through mirror servers)
-// This solves the issue where mobile devices behind CGNAT can't establish direct P2P connections
-// - BlindPeer (server): Desktop instances run as mirrors to keep data available
-// - BlindPeering (client): Mobile instances connect to mirrors when direct P2P fails
-let BlindPeer = null;
-let BlindPeering = null;
+// Wakeup for fast content announcements to peers
 let Wakeup = null;
 try {
-  BlindPeer = (await import('blind-peer')).default;
-  BlindPeering = (await import('blind-peering')).default;
   Wakeup = (await import('protomux-wakeup')).default;
 } catch (e) {
-  // blind-peering is optional - will work without it but mobile may have connectivity issues
-  log.debug('blind-peer/blind-peering not available, mobile connectivity may be limited')
+  log.debug('protomux-wakeup not available, content announcements may be slower')
 }
 
 let fs = null;
@@ -94,7 +86,7 @@ async function initStorageModules() {
  * @param {number} [defaultTimeout=30000] - Default timeout in ms
  * @returns {import('corestore')} Wrapped store
  */
-export function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
+function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
   const originalGet = store.get.bind(store);
   store.get = function(keyOrOpts = {}) {
     // Handle both store.get(key) and store.get({ key, ... }) signatures
@@ -118,13 +110,10 @@ export function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
  * @param {Object} config
  * @param {string} config.storagePath - Path to storage directory
  * @param {number} [config.defaultTimeout=30000] - Default timeout for operations
- * @param {boolean} [config.wrapTimeout=true] - Whether to wrap store with timeout
  * @param {string} [config.swarmKeyPath] - Optional path to persist Hyperswarm keypair
  * @param {number} [config.blobServerPort] - Optional fixed blob server port
  * @param {string} [config.blobServerHost] - Optional blob server host (defaults to 127.0.0.1)
  * @param {string} [config.blobServerBindHost] - Optional blob server bind host (defaults to blobServerHost)
- * @param {string[]} [config.blindPeerMirrors] - Z32-encoded keys of blind peer mirrors to connect to
- * @param {boolean} [config.enableBlindPeerServer=true] - Whether to run as blind peer server (desktop)
  * @returns {Promise<import('./types.js').StorageContext>}
  */
 export async function initializeStorage(config) {
@@ -133,13 +122,10 @@ export async function initializeStorage(config) {
   const {
     storagePath,
     defaultTimeout = 30000,
-    wrapTimeout = true,
     swarmKeyPath,
     blobServerPort: blobServerPortOverride,
     blobServerHost: blobServerHostOverride,
     blobServerBindHost: blobServerBindHostOverride,
-    blindPeerMirrors = [],
-    enableBlindPeerServer = true,
     primaryKey = null,
     corestoreWaitForLock = false
   } = config;
@@ -164,8 +150,8 @@ export async function initializeStorage(config) {
   await store.ready();
   console.log('[Storage] Corestore ready, opened:', store.opened, 'closed:', store.closed);
 
-  // Optionally wrap with timeout for P2P operations
-  const blobStore = wrapTimeout ? wrapStoreWithTimeout(store, defaultTimeout) : store;
+  // Wrap store with timeout for P2P operations to prevent indefinite hangs
+  const blobStore = wrapStoreWithTimeout(store, defaultTimeout);
 
   // Initialize blob server for video streaming
   let blobServer = null;
@@ -367,8 +353,6 @@ export async function initializeStorage(config) {
   // Desktop (non-firewalled): runs as blind peer server to keep data available
   // Mobile (firewalled): connects to mirrors to sync when direct P2P fails
   // DISABLED: Testing if this affects playback
-  let blindPeering = null;
-  let blindPeerServer = null;
   let wakeup = null;
 
   // Initialize protomux-wakeup for content announcements
@@ -382,58 +366,6 @@ export async function initializeStorage(config) {
     }
   }
 
-  // if (BlindPeering && Wakeup) {
-  //   try {
-  //     wakeup = new Wakeup();
-  //
-  //     // Set up blind peering client (for connecting to mirrors)
-  //     // This helps mobile devices sync through desktop mirrors when direct P2P fails
-  //     const mirrors = blindPeerMirrors.length > 0 ? blindPeerMirrors : [];
-  //
-  //     if (mirrors.length > 0 || enableBlindPeerServer) {
-  //       blindPeering = new BlindPeering(swarm, store, {
-  //         mirrors,
-  //         wakeup
-  //       });
-  //       console.log('[Storage] BlindPeering client initialized with', mirrors.length, 'mirrors');
-  //     }
-  //
-  //     // Set up blind peer server on desktop (when not firewalled)
-  //     // This allows desktop to act as a mirror for mobile devices
-  //     if (enableBlindPeerServer && BlindPeer) {
-  //       // Wait for DHT to bootstrap before checking firewall status
-  //       const setupBlindPeerServer = async () => {
-  //         // Wait a bit for DHT state to stabilize
-  //         await new Promise(r => setTimeout(r, 5000));
-  //
-  //         const isFirewalled = swarm.dht?.firewalled;
-  //         console.log('[Storage] DHT firewalled:', isFirewalled);
-  //
-  //         // Only run blind peer server if NOT behind firewall (i.e., can accept connections)
-  //         if (!isFirewalled) {
-  //           try {
-  //             blindPeerServer = new BlindPeer(swarm, store, { wakeup });
-  //             await blindPeerServer.ready();
-  //             const serverKey = blindPeerServer.key ? b4a.toString(blindPeerServer.key, 'hex').slice(0, 16) : 'unknown';
-  //             console.log('[Storage] BlindPeer server started, key:', serverKey);
-  //             console.log('[Storage] Other devices can use this as a mirror for mobile connectivity');
-  //           } catch (err) {
-  //             console.log('[Storage] BlindPeer server setup failed (non-fatal):', err?.message);
-  //           }
-  //         } else {
-  //           console.log('[Storage] Firewalled, skipping blind peer server (will use client mode only)');
-  //         }
-  //       };
-  //
-  //       // Run in background, don't block initialization
-  //       setupBlindPeerServer().catch(err => {
-  //         console.log('[Storage] BlindPeer server setup error:', err?.message);
-  //       });
-  //     }
-  //   } catch (err) {
-  //     console.log('[Storage] BlindPeering setup failed (non-fatal):', err?.message);
-  //   }
-  // }
 
   // Set global reference for suspend/resume lifecycle management
   globalChannels = channels;
@@ -455,9 +387,6 @@ export async function initializeStorage(config) {
     blobServerBindHost,
     blobSessionToken, // Session token for URL authentication
     channels,
-    // Blind peering for mobile connectivity
-    blindPeering,
-    blindPeerServer,
     wakeup
   };
 }
@@ -536,8 +465,12 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
         new Promise((_, reject) => setTimeout(() => reject(new Error('loadChannel wait timeout')), timeoutMs))
       ])
     } catch (err) {
-      console.warn('[Storage] loadChannel: wait timed out, retrying fresh:', channelKeyHex.slice(0, 16), err?.message)
-      loadingChannels.delete(channelKeyHex)
+      if (ctx.store?.closed) {
+        throw new Error('Corestore is closed')
+      }
+
+      console.warn('[Storage] loadChannel: pending load failed:', channelKeyHex.slice(0, 16), err?.message)
+      throw err
     }
   }
 
@@ -614,18 +547,6 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
       }
     }
 
-    // Register Autobase with blind-peering for mobile connectivity
-    // This ensures the channel data is available through mirror servers even when
-    // direct P2P connections fail (common on mobile behind CGNAT)
-    // DISABLED: Testing if this affects playback
-    // if (ctx.blindPeering && ch.base) {
-    //   try {
-    //     ctx.blindPeering.addAutobaseBackground(ch.base)
-    //     console.log('[Storage] Registered channel with blind-peering:', channelKeyHex.slice(0, 16))
-    //   } catch (err) {
-    //     console.log('[Storage] Blind-peering registration failed (non-fatal):', err?.message)
-    //   }
-    // }
 
     // Create wakeup session for this channel
     // This enables fast content announcements to peers when new videos/comments are added
@@ -804,16 +725,6 @@ export async function createChannel(ctx, options = {}) {
     }
   }
 
-  // Register with blind-peering for mobile connectivity
-  if (ctx.blindPeering && ch.base) {
-    try {
-      ctx.blindPeering.addAutobaseBackground(ch.base)
-      console.log('[Storage] Registered new channel with blind-peering:', channelKeyHex.slice(0, 16))
-    } catch (err) {
-      console.log('[Storage] Blind-peering registration failed (non-fatal):', err?.message)
-    }
-  }
-
   // Create wakeup session for this channel
   if (ctx.wakeup && ch.base) {
     try {
@@ -867,16 +778,6 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
       await channel.setupPairing(ctx.swarm)
     } catch (err) {
       console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
-    }
-  }
-
-  // Register with blind-peering for mobile connectivity
-  if (ctx.blindPeering && channel.base) {
-    try {
-      ctx.blindPeering.addAutobaseBackground(channel.base)
-      console.log('[Storage] Registered paired channel with blind-peering:', channelKeyHex.slice(0, 16))
-    } catch (err) {
-      console.log('[Storage] Blind-peering registration failed (non-fatal):', err?.message)
     }
   }
 

@@ -262,62 +262,52 @@ export default function RootLayout() {
     }
   }, [ready, identity, videos, blobServerPort])
 
-  const loadVideosFromBackend = useCallback(async (driveKey: string, retryCount = 0) => {
+  const loadVideosFromBackend = useCallback(async (driveKey: string, options?: { allowEmptyResult?: boolean }) => {
     if (!platformRPC) return
     const maxRetries = 3
-    const retryDelay = 5000 // 5 seconds between retries
+    const retryDelay = 5000
+    const allowEmptyResult = Boolean(options?.allowEmptyResult)
 
-    try {
-      console.log('[App] loadVideosFromBackend calling listVideos for:', driveKey?.slice(0, 16), 'retry:', retryCount)
+    const loadAttempt = async (retryCount: number): Promise<void> => {
+      try {
+        console.log('[App] loadVideosFromBackend calling listVideos for:', driveKey?.slice(0, 16), 'retry:', retryCount)
+        const timeout = retryCount === 0 ? 30000 : 15000
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('listVideos timeout')), timeout)
+        )
+        const listPromise = platformRPC.rpc.listVideos({ channelKey: driveKey })
 
-      // Longer timeout for initial sync after pairing (30s), shorter for retries (15s)
-      // Backend smart sync can take up to 25s (15s peer discovery + 10s data sync)
-      const timeout = retryCount === 0 ? 30000 : 15000
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('listVideos timeout')), timeout)
-      )
-      const listPromise = platformRPC.rpc.listVideos({ channelKey: driveKey })
+        const result = await Promise.race([listPromise, timeoutPromise]) as any
+        console.log('[App] loadVideosFromBackend got', result?.videos?.length, 'videos')
 
-      const result = await Promise.race([listPromise, timeoutPromise]) as any
-      console.log('[App] loadVideosFromBackend got', result?.videos?.length, 'videos')
+        if (result?.videos?.length > 0) {
+          setVideos(result.videos)
+          return
+        }
 
-      // Only update if we got videos, don't clear existing videos with empty result
-      // This prevents race conditions where a refresh returns empty before sync completes
-      if (result?.videos?.length > 0) {
-        setVideos(result.videos)
-      } else if (result?.videos?.length === 0) {
-        console.log('[App] loadVideosFromBackend: got 0 videos, checking if we should clear...')
-        // Only clear if we truly have no videos (not a sync issue)
-        // Keep existing videos if this might be a transient empty result
-        setVideos(prev => {
-          if (prev.length === 0) return []
-          console.log('[App] loadVideosFromBackend: keeping', prev.length, 'existing videos (not clearing)')
-          return prev
-        })
-
-        // Schedule automatic retry in background if no videos found
-        // This helps when DHT discovery is slow after device pairing
+        if (result?.videos?.length === 0) {
+          if (allowEmptyResult) {
+            setVideos([])
+            return
+          }
+          setVideos(prev => (prev.length === 0 ? [] : prev))
+          if (retryCount < maxRetries) {
+            setTimeout(() => {
+              void loadAttempt(retryCount + 1)
+            }, retryDelay)
+          }
+        }
+      } catch (err: any) {
+        console.error('[App] Failed to load videos:', err?.message || err)
         if (retryCount < maxRetries) {
-          console.log(`[App] No videos found, scheduling retry ${retryCount + 1}/${maxRetries} in ${retryDelay}ms...`)
           setTimeout(() => {
-            loadVideosFromBackend(driveKey, retryCount + 1)
+            void loadAttempt(retryCount + 1)
           }, retryDelay)
-        } else {
-          console.log('[App] Max retries reached, giving up auto-retry')
         }
       }
-    } catch (err: any) {
-      console.error('[App] Failed to load videos:', err?.message || err)
-      // Don't clear videos on error - keep stale data
-
-      // Also retry on timeout errors (common after pairing while DHT syncs)
-      if (retryCount < maxRetries) {
-        console.log(`[App] Load failed, scheduling retry ${retryCount + 1}/${maxRetries} in ${retryDelay}ms...`)
-        setTimeout(() => {
-          loadVideosFromBackend(driveKey, retryCount + 1)
-        }, retryDelay)
-      }
     }
+
+    await loadAttempt(0)
   }, [])
 
   const loadIdentityFromBackend = useCallback(async () => {
@@ -344,7 +334,11 @@ export default function RootLayout() {
     if (!platformRPC) throw new Error('RPC not ready')
     setLoading(true)
     try {
-      const result = await platformRPC.rpc.createIdentity(name)
+      const createPromise = platformRPC.rpc.createIdentity(name)
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Create channel timed out. Backend may still be starting.')), 30000)
+      })
+      const result = await Promise.race([createPromise, timeoutPromise]) as any
       const id = result?.identity
       if (id) setIdentity(id)
       return id
@@ -445,6 +439,7 @@ export default function RootLayout() {
     loadIdentity: loadIdentityFromBackend,
     createIdentity: createIdentityHandler,
     loadVideos: loadVideosFromBackend,
+    removeVideo: (videoId: string) => setVideos(prev => prev.filter(v => v.id !== videoId)),
   }
 
   return (

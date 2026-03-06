@@ -1,6 +1,14 @@
 import type { VideoData } from '@peartube/core'
 import { useReducer } from 'react'
-import type { PlayerMode } from './video-player'
+import {
+  canTransition,
+  reducePlayerViewMode,
+} from './video-player'
+import type {
+  PlayerMode,
+  PlayerViewMode,
+  PlayerViewModeEvent,
+} from './video-player'
 
 export type PlayerStateMode =
   | 'hidden'
@@ -73,6 +81,7 @@ export type PlayerEvent =
   | {
       type: 'MINIMIZE'
       source: 'minimizePlayer'
+      platform: 'ios' | 'android' | 'web'
     }
   | {
       type: 'MAXIMIZE'
@@ -208,6 +217,72 @@ export type TransitionDecision<
     }
 
 const DEV_INVALID_TRANSITION = '[player-state-machine] Invalid transition:'
+const DEV_CONTRACT_MISMATCH = '[player-state-machine] Contract mismatch:'
+const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false
+
+function toUnifiedViewMode(mode: PlayerStateMode): PlayerViewMode {
+  switch (mode) {
+    case 'hidden':
+      return 'hidden'
+    case 'loading':
+    case 'fullscreen':
+      return 'fullscreen'
+    case 'mini':
+      return 'mini'
+    case 'pip_entering':
+    case 'pip_active':
+    case 'pip_exiting':
+      return 'pip'
+  }
+}
+
+function toUnifiedEvent(event: PlayerEvent): PlayerViewModeEvent | null {
+  switch (event.type) {
+    case 'MINIMIZE':
+      return { type: 'MINIMIZE', origin: 'user' }
+    case 'MAXIMIZE':
+      return { type: 'MAXIMIZE', origin: 'user' }
+    case 'CLOSE_VIDEO':
+      return {
+        type: 'CLOSE',
+        origin: event.source === 'closeVideo' ? 'user' : 'appState',
+      }
+    case 'PIP_ENTERED_ANDROID':
+      return { type: 'ENTER_PIP', origin: 'system' }
+    case 'PIP_EXITED_ANDROID':
+      return {
+        type: 'EXIT_PIP',
+        target: event.restoreMode,
+        origin: 'system',
+      }
+    default:
+      return null
+  }
+}
+
+function assertContractCompatibility(
+  previous: PlayerState,
+  event: PlayerEvent,
+  next: PlayerState,
+): void {
+  if (!__DEV__) return
+
+  const unifiedEvent = toUnifiedEvent(event)
+  if (!unifiedEvent) return
+
+  const currentUnified = toUnifiedViewMode(previous.mode)
+  if (!canTransition(currentUnified, unifiedEvent.type)) return
+
+  const contractNext = reducePlayerViewMode(currentUnified, unifiedEvent)
+  const actualNext = toUnifiedViewMode(next.mode)
+  if (contractNext !== actualNext) {
+    console.log(
+      DEV_CONTRACT_MISMATCH,
+      `${previous.mode} + ${event.type} -> ${next.mode} (contract expected ${contractNext})`,
+      `(${event.source})`,
+    )
+  }
+}
 
 function invalidTransition(state: PlayerState, event: PlayerEvent): PlayerState {
   if (__DEV__) {
@@ -250,7 +325,7 @@ function withMode(state: ActivePlayerState, mode: ActivePlayerState['mode']): Pl
   }
 }
 
-export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerState {
+function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerState {
   switch (state.mode) {
     case 'hidden': {
       switch (event.type) {
@@ -310,6 +385,9 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         case 'FORCE_RELOAD_PLAYBACK':
           return invalidTransition(state, event)
         case 'MINIMIZE':
+          if (event.platform === 'android') {
+            return withMode(state, 'fullscreen')
+          }
           return withMode(state, 'mini')
         case 'MAXIMIZE':
           return withMode(state, 'fullscreen')
@@ -345,6 +423,9 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
         case 'MINIMIZE':
+          if (event.platform === 'android') {
+            return withMode(state, 'fullscreen')
+          }
           return withMode(state, 'mini')
         case 'MAXIMIZE':
           return withMode(state, 'fullscreen')
@@ -388,28 +469,50 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
         case 'MINIMIZE':
+          if (event.platform === 'android') {
+            return withMode(state, 'fullscreen')
+          }
           return withMode(state, 'mini')
         case 'MAXIMIZE':
           return withMode(state, 'fullscreen')
         case 'APP_BACKGROUND':
+          if (ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            return {
+              ...state,
+              mode: 'fullscreen',
+              wasPlayingWhenBackgrounded: event.isPlaying,
+            }
+          }
           return {
             ...state,
             mode: event.isPlaying ? 'fullscreen' : 'mini',
             wasPlayingWhenBackgrounded: event.isPlaying,
           }
         case 'APP_FOREGROUND':
+          if (ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            return withMode(state, 'fullscreen')
+          }
           return {
             ...state,
             mode: event.wasInPip ? 'fullscreen' : 'mini',
           }
         case 'REMOTE_PLAY':
+          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            return withMode(state, 'fullscreen')
+          }
           return {
             ...state,
             mode: event.isBackgrounded && event.platform === 'android' ? 'fullscreen' : 'mini',
           }
         case 'REMOTE_PAUSE':
+          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            return withMode(state, 'fullscreen')
+          }
           return withMode(state, 'mini')
         case 'REMOTE_TOGGLE_PLAY_PAUSE':
+          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            return withMode(state, 'fullscreen')
+          }
           return {
             ...state,
             mode:
@@ -512,6 +615,12 @@ export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerSta
   }
 
   return invalidTransition(state, event)
+}
+
+export function playerReducer(state: PlayerState, event: PlayerEvent): PlayerState {
+  const next = playerReducerInternal(state, event)
+  assertContractCompatibility(state, event, next)
+  return next
 }
 
 export function usePlayerStateMachine(initialState: PlayerState) {

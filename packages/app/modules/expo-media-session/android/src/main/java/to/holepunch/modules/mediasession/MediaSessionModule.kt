@@ -43,6 +43,7 @@ import java.net.URL
 object PipBridge {
     private var moduleInstance: MediaSessionModule? = null
     private var pipEnabled: Boolean = false
+    private var suppressNextMainActivityUserLeaveHint: Boolean = false
     @Volatile private var lastIsInPip: Boolean = false
     @Volatile private var surfaceViewInsetPx: Float = 0f
 
@@ -101,6 +102,10 @@ object PipBridge {
         // On Android 12+, set PiP params with autoEnterEnabled so the system
         // handles PiP entry automatically when user presses home
         moduleInstance?.updateActivityPipParams(enabled)
+    }
+
+    fun suppressNextMainUserLeaveHint() {
+        suppressNextMainActivityUserLeaveHint = true
     }
 
     @JvmStatic
@@ -168,6 +173,18 @@ object PipBridge {
 
         if (activity.isInPictureInPictureMode) {
             android.util.Log.d("PipBridge", "onUserLeaveHint: already in PiP, skipping")
+            return
+        }
+
+        if (!isPipHostActivity(activity)) {
+            android.util.Log.d("PipBridge", "onUserLeaveHint: skip non-pip-host activity ${activity.javaClass.name}")
+            return
+        }
+
+        val isMainActivity = activity.javaClass.name == "${activity.packageName}.MainActivity"
+        if (isMainActivity && suppressNextMainActivityUserLeaveHint) {
+            suppressNextMainActivityUserLeaveHint = false
+            android.util.Log.d("PipBridge", "onUserLeaveHint: suppressing one MainActivity PiP enter")
             return
         }
 
@@ -369,6 +386,12 @@ object PipBridge {
         return android.graphics.Rect(0, 0, size.x, size.y)
     }
 
+    private fun isPipHostActivity(activity: Activity): Boolean {
+        val className = activity.javaClass.name
+        return className == "${activity.packageName}.MainActivity" ||
+            className == "${activity.packageName}.PlayerActivity"
+    }
+
     @JvmStatic
     fun notifyPipModeChanged(activity: Activity, isInPip: Boolean, newConfig: Configuration? = null) {
         android.util.Log.d("PipBridge", "notifyPipModeChanged: isInPip=$isInPip")
@@ -436,8 +459,8 @@ object PipBridge {
     }
 
     fun notifyPipDismissed() {
-        android.util.Log.d("PipBridge", "notifyPipDismissed: pausing playback")
-        moduleInstance?.handlePipPause()
+        android.util.Log.d("PipBridge", "notifyPipDismissed: stopping playback")
+        moduleInstance?.handlePipStop()
     }
 
     private fun notifyPlayerViews(isInPip: Boolean) {
@@ -589,6 +612,26 @@ object PipBridge {
 
 }
 
+object PlayerLaunchBridge {
+    private var moduleInstance: MediaSessionModule? = null
+
+    fun register(module: MediaSessionModule) {
+        moduleInstance = module
+    }
+
+    fun unregister(module: MediaSessionModule) {
+        if (moduleInstance === module) {
+            moduleInstance = null
+        }
+    }
+
+    fun onPlayerActivityReady(activity: Activity) {
+        if (activity.javaClass.name != "${activity.packageName}.PlayerActivity") return
+        moduleInstance?.emitPlayerLaunchPayloadFromIntent(activity.intent)
+        moduleInstance?.emitPendingPlayerLaunchPayloadIfAny()
+    }
+}
+
 class MediaSessionModule : Module() {
     private var mediaSession: MediaSessionCompat? = null
     private var audioManager: AudioManager? = null
@@ -604,6 +647,8 @@ class MediaSessionModule : Module() {
     private var isAutoPipEnabled: Boolean = false
     private var pipAspectRatioWidth: Int = 16
     private var pipAspectRatioHeight: Int = 9
+    private var lastPlayerLaunchEmitToken: String? = null
+    private var lastPlayerLaunchEmitAtMs: Long = 0L
 
     override fun definition() = ModuleDefinition {
         Name("MediaSession")
@@ -612,7 +657,8 @@ class MediaSessionModule : Module() {
             "onRemoteCommand",
             "onAudioInterruption",
             "onAudioRouteChange",
-            "onPictureInPictureChanged"
+            "onPictureInPictureChanged",
+            "onPlayerLaunchPayload"
         )
 
         AsyncFunction("setActive") { active: Boolean, promise: Promise ->
@@ -806,14 +852,47 @@ class MediaSessionModule : Module() {
             promise.resolve(null)
         }
 
+        AsyncFunction("openPlayerActivity") { payload: Map<String, Any?>, promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    val opened = openPlayerActivity(payload)
+                    promise.resolve(opened)
+                } catch (e: Exception) {
+                    promise.reject("PLAYER_ACTIVITY_ERROR", e.message ?: "Failed to open player activity", e)
+                }
+            }
+        }
+
+        AsyncFunction("consumePendingPlayerLaunchPayload") { promise: Promise ->
+            val payload = pendingPlayerLaunchPayload
+            pendingPlayerLaunchPayload = null
+            promise.resolve(payload)
+        }
+
+        AsyncFunction("clearPendingPlayerLaunchPayload") { promise: Promise ->
+            pendingPlayerLaunchPayload = null
+            lastPlayerLaunchEmitToken = null
+            lastPlayerLaunchEmitAtMs = 0L
+            promise.resolve(null)
+        }
+
+        AsyncFunction("isInPlayerActivity") { promise: Promise ->
+            val activity = appContext.currentActivity
+            val inPlayerActivity = activity?.javaClass?.name == "com.peartube.app.PlayerActivity"
+            promise.resolve(inPlayerActivity)
+        }
+
         OnCreate {
             PipBridge.register(this@MediaSessionModule)
+            PlayerLaunchBridge.register(this@MediaSessionModule)
             PipServiceBridge.register(this@MediaSessionModule)
             MediaSessionRegistry.setCallback(mediaSessionCallback)
+            emitPendingPlayerLaunchPayloadIfAny()
         }
 
         OnDestroy {
             PipBridge.unregister(this@MediaSessionModule)
+            PlayerLaunchBridge.unregister(this@MediaSessionModule)
             PipServiceBridge.unregister(this@MediaSessionModule)
             cleanup()
         }
@@ -839,6 +918,152 @@ class MediaSessionModule : Module() {
             stopMediaBrowserService()
             isSessionActive = false
         }
+    }
+
+    private fun openPlayerActivity(payload: Map<String, Any?>): Boolean {
+        val activity = appContext.currentActivity ?: return false
+        val playerActivityClassName = "${activity.packageName}.PlayerActivity"
+        val alreadyInPlayerActivity = activity.javaClass.name == playerActivityClassName
+
+        pendingPlayerLaunchPayload = payload
+
+        if (alreadyInPlayerActivity) {
+            emitPlayerLaunchPayload(payload)
+            return true
+        }
+
+        if (activity.javaClass.name == "${activity.packageName}.MainActivity") {
+            PipBridge.suppressNextMainUserLeaveHint()
+        }
+
+        val intent = Intent().apply {
+            setClassName(activity.packageName, playerActivityClassName)
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            putPayloadExtras(this, payload)
+        }
+
+        val resolvedActivity = intent.resolveActivity(activity.packageManager)
+        if (resolvedActivity == null) {
+            throw IllegalStateException(
+                "Unable to resolve PlayerActivity ($playerActivityClassName) for package ${activity.packageName}",
+            )
+        }
+
+        activity.startActivity(intent)
+        activity.overridePendingTransition(0, 0)
+        return true
+    }
+
+    internal fun emitPendingPlayerLaunchPayloadIfAny() {
+        val payload = pendingPlayerLaunchPayload ?: return
+        emitPlayerLaunchPayload(payload)
+    }
+
+    internal fun emitPlayerLaunchPayloadFromIntent(intent: Intent?) {
+        val payload = extractPayloadFromIntent(intent) ?: return
+        emitPlayerLaunchPayload(payload)
+    }
+
+    private fun emitPlayerLaunchPayload(payload: Map<String, Any?>) {
+        pendingPlayerLaunchPayload = payload
+
+        val sessionId = payload["sessionId"] as? String
+        val sourceUrl = payload["sourceUrl"] as? String
+        val videoId = payload["videoId"] as? String
+        val startPositionMs = (payload["startPositionMs"] as? Number)?.toLong() ?: 0L
+        val token = when {
+            !sessionId.isNullOrBlank() -> sessionId
+            !sourceUrl.isNullOrBlank() -> "${videoId ?: "video"}|$sourceUrl|$startPositionMs"
+            else -> null
+        }
+
+        val now = SystemClock.uptimeMillis()
+        if (
+            token != null &&
+            token == lastPlayerLaunchEmitToken &&
+            now - lastPlayerLaunchEmitAtMs < 500
+        ) {
+            return
+        }
+
+        if (token != null) {
+            lastPlayerLaunchEmitToken = token
+            lastPlayerLaunchEmitAtMs = now
+        }
+
+        sendEvent("onPlayerLaunchPayload", payload)
+    }
+
+    private fun putPayloadExtras(intent: Intent, payload: Map<String, Any?>) {
+        val sessionId = payload["sessionId"] as? String
+        val videoId = payload["videoId"] as? String
+        val sourceUrl = payload["sourceUrl"] as? String
+        val startPositionMs = (payload["startPositionMs"] as? Number)?.toLong()
+        val shouldAutoplay = payload["shouldAutoplay"] as? Boolean
+        val title = payload["title"] as? String
+        val description = payload["description"] as? String
+        val path = payload["path"] as? String
+        val size = (payload["size"] as? Number)?.toLong()
+        val uploadedAt = (payload["uploadedAt"] as? Number)?.toLong()
+        val channelKey = payload["channelKey"] as? String
+        val mimeType = payload["mimeType"] as? String
+        val duration = (payload["duration"] as? Number)?.toDouble()
+        val thumbnail = payload["thumbnail"] as? String
+        val requestPipOnLaunch = payload["requestPipOnLaunch"] as? Boolean
+
+        if (!sessionId.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_SESSION_ID, sessionId)
+        if (!videoId.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_VIDEO_ID, videoId)
+        if (!sourceUrl.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_SOURCE_URL, sourceUrl)
+        if (startPositionMs != null) intent.putExtra(EXTRA_PLAYER_START_POSITION_MS, startPositionMs)
+        if (shouldAutoplay != null) intent.putExtra(EXTRA_PLAYER_SHOULD_AUTOPLAY, shouldAutoplay)
+        if (!title.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_TITLE, title)
+        if (!description.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_DESCRIPTION, description)
+        if (!path.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_PATH, path)
+        if (size != null) intent.putExtra(EXTRA_PLAYER_SIZE, size)
+        if (uploadedAt != null) intent.putExtra(EXTRA_PLAYER_UPLOADED_AT, uploadedAt)
+        if (!channelKey.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_CHANNEL_KEY, channelKey)
+        if (!mimeType.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_MIME_TYPE, mimeType)
+        if (duration != null) intent.putExtra(EXTRA_PLAYER_DURATION, duration)
+        if (!thumbnail.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_THUMBNAIL, thumbnail)
+        if (requestPipOnLaunch != null) intent.putExtra(EXTRA_PLAYER_REQUEST_PIP_ON_LAUNCH, requestPipOnLaunch)
+    }
+
+    private fun extractPayloadFromIntent(intent: Intent?): Map<String, Any?>? {
+        if (intent == null) return null
+        val extras = intent.extras ?: return null
+        if (!extras.containsKey(EXTRA_PLAYER_SOURCE_URL)) return null
+
+        val payload = mutableMapOf<String, Any?>()
+        extras.getString(EXTRA_PLAYER_SESSION_ID)?.let { payload["sessionId"] = it }
+        extras.getString(EXTRA_PLAYER_VIDEO_ID)?.let { payload["videoId"] = it }
+        extras.getString(EXTRA_PLAYER_SOURCE_URL)?.let { payload["sourceUrl"] = it }
+        if (extras.containsKey(EXTRA_PLAYER_START_POSITION_MS)) {
+            payload["startPositionMs"] = extras.getLong(EXTRA_PLAYER_START_POSITION_MS)
+        }
+        if (extras.containsKey(EXTRA_PLAYER_SHOULD_AUTOPLAY)) {
+            payload["shouldAutoplay"] = extras.getBoolean(EXTRA_PLAYER_SHOULD_AUTOPLAY)
+        }
+        extras.getString(EXTRA_PLAYER_TITLE)?.let { payload["title"] = it }
+        extras.getString(EXTRA_PLAYER_DESCRIPTION)?.let { payload["description"] = it }
+        extras.getString(EXTRA_PLAYER_PATH)?.let { payload["path"] = it }
+        if (extras.containsKey(EXTRA_PLAYER_SIZE)) {
+            payload["size"] = extras.getLong(EXTRA_PLAYER_SIZE)
+        }
+        if (extras.containsKey(EXTRA_PLAYER_UPLOADED_AT)) {
+            payload["uploadedAt"] = extras.getLong(EXTRA_PLAYER_UPLOADED_AT)
+        }
+        extras.getString(EXTRA_PLAYER_CHANNEL_KEY)?.let { payload["channelKey"] = it }
+        extras.getString(EXTRA_PLAYER_MIME_TYPE)?.let { payload["mimeType"] = it }
+        if (extras.containsKey(EXTRA_PLAYER_DURATION)) {
+            payload["duration"] = extras.getDouble(EXTRA_PLAYER_DURATION)
+        }
+        extras.getString(EXTRA_PLAYER_THUMBNAIL)?.let { payload["thumbnail"] = it }
+        if (extras.containsKey(EXTRA_PLAYER_REQUEST_PIP_ON_LAUNCH)) {
+            payload["requestPipOnLaunch"] = extras.getBoolean(EXTRA_PLAYER_REQUEST_PIP_ON_LAUNCH)
+        }
+        return payload
     }
 
     private fun getSafeInsetTopPx(activity: Activity): Int {
@@ -1244,6 +1469,10 @@ class MediaSessionModule : Module() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
         val activity = appContext.currentActivity ?: return
+        val className = activity.javaClass.name
+        val isPipHostActivity =
+            className == "${activity.packageName}.MainActivity" ||
+                className == "${activity.packageName}.PlayerActivity"
 
         try {
             val aspectRatio = PipBridge.getPipAspectRatio()
@@ -1260,7 +1489,7 @@ class MediaSessionModule : Module() {
                 // See enterPiP(): prefer seamless resize for video playback.
                 builder.setSeamlessResizeEnabled(true)
                 // This is the key - auto-enter PiP when going to background
-                builder.setAutoEnterEnabled(enabled)
+                builder.setAutoEnterEnabled(enabled && isPipHostActivity)
             }
 
             builder.setActions(buildPipActions(activity))
@@ -1457,6 +1686,13 @@ class MediaSessionModule : Module() {
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }
 
+    internal fun handlePipStop() {
+        android.util.Log.d("MediaSession", "handlePipStop")
+        updatePipPlayState(false)
+        notifyPlayerPlaybackPaused(true)
+        sendEvent("onRemoteCommand", mapOf("command" to "stop"))
+    }
+
     internal fun handlePipRewind() {
         android.util.Log.d("MediaSession", "handlePipRewind")
         sendEvent("onRemoteCommand", mapOf("command" to "skipBackward", "interval" to 10))
@@ -1507,6 +1743,24 @@ class MediaSessionModule : Module() {
     }
 
     companion object {
+        private var pendingPlayerLaunchPayload: Map<String, Any?>? = null
+
+        private const val EXTRA_PLAYER_SESSION_ID = "pt.sessionId"
+        private const val EXTRA_PLAYER_VIDEO_ID = "pt.videoId"
+        private const val EXTRA_PLAYER_SOURCE_URL = "pt.sourceUrl"
+        private const val EXTRA_PLAYER_START_POSITION_MS = "pt.startPositionMs"
+        private const val EXTRA_PLAYER_SHOULD_AUTOPLAY = "pt.shouldAutoplay"
+        private const val EXTRA_PLAYER_TITLE = "pt.title"
+        private const val EXTRA_PLAYER_DESCRIPTION = "pt.description"
+        private const val EXTRA_PLAYER_PATH = "pt.path"
+        private const val EXTRA_PLAYER_SIZE = "pt.size"
+        private const val EXTRA_PLAYER_UPLOADED_AT = "pt.uploadedAt"
+        private const val EXTRA_PLAYER_CHANNEL_KEY = "pt.channelKey"
+        private const val EXTRA_PLAYER_MIME_TYPE = "pt.mimeType"
+        private const val EXTRA_PLAYER_DURATION = "pt.duration"
+        private const val EXTRA_PLAYER_THUMBNAIL = "pt.thumbnail"
+        private const val EXTRA_PLAYER_REQUEST_PIP_ON_LAUNCH = "pt.requestPipOnLaunch"
+
         const val ACTION_PIP_PLAY = "to.holepunch.mediasession.PIP_PLAY"
         const val ACTION_PIP_PAUSE = "to.holepunch.mediasession.PIP_PAUSE"
         const val ACTION_PIP_REWIND = "to.holepunch.mediasession.PIP_REWIND"

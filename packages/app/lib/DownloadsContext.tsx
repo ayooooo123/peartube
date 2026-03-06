@@ -7,6 +7,7 @@ import { createContext, useContext, useState, useCallback, useEffect, ReactNode,
 import { Platform, Alert } from 'react-native'
 import { events } from '@peartube/platform/rpc'
 import type { VideoData } from '@peartube/core'
+import { formatBytes } from '@/lib/formatters'
 
 // Download item status
 export type DownloadStatus = 'queued' | 'downloading' | 'complete' | 'error' | 'cancelled'
@@ -64,15 +65,6 @@ export function useDownloads() {
   const ctx = useContext(DownloadsContext)
   if (!ctx) throw new Error('useDownloads must be used within DownloadsProvider')
   return ctx
-}
-
-// Helper to format bytes
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
 // Helper to sanitize filename

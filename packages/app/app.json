@@ -3,7 +3,6 @@
     "name": "PearTube",
     "slug": "peartube",
     "version": "1.0.0",
-    "newArchEnabled": true,
     "orientation": "default",
     "scheme": "peartube",
     "icon": "./assets/images/icon.png",
@@ -19,10 +18,11 @@
       "infoPlist": {
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
-        "UIBackgroundModes": ["audio"],
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "NSLocalNetworkUsageDescription": "PearTube uses the local network to discover cast devices and peer-to-peer streams.",
         "NSBonjourServices": [
-          "_fcast._tcp",
           "_googlecast._tcp",
           "_CC1AD845._googlecast._tcp"
         ]
@@ -48,7 +48,9 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
-      ["expo-router"],
+      [
+        "expo-router"
+      ],
       "./plugins/withEnsureBackendBundles.js",
       [
         "expo-build-properties",
@@ -70,7 +72,8 @@
       "./plugins/withAndroidPiP.js",
       "./plugins/withMainActivityPiPCallback.js",
       "./plugins/withAndroidMediaSessionServices.js",
-      "./plugins/withAndroidAbiSplits.js"
+      "./plugins/withAndroidAbiSplits.js",
+      "expo-font"
     ]
   }
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator } from 'react-native'
 import { useApp, colors } from '../_layout'
+import { formatTimeAgo } from '@/lib/formatters'
 
 type ChannelMeta = {
   name?: string
@@ -28,19 +29,6 @@ type ChannelPageProps = {
   params?: {
     key?: string
   }
-}
-
-function formatTimeAgo(timestamp?: number): string {
-  const value = Number(timestamp)
-  if (!Number.isFinite(value) || value <= 0) return 'recently'
-  const seconds = Math.floor((Date.now() - value) / 1000)
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
 }
 
 function parseChannelKeyFromHash(hash: string): string {

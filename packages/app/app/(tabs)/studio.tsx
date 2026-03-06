@@ -13,14 +13,10 @@ import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { VideoEditModal } from '@/components/VideoEditModal'
+import { formatBytes } from '@/lib/formatters'
 
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp)
@@ -728,7 +724,7 @@ export default function StudioScreen() {
             <View className="flex-1 p-4 justify-center">
               <Text className="text-label text-pear-text" numberOfLines={1}>{item.title}</Text>
               <Text className="text-caption text-pear-text-muted mt-1">
-                {formatSize(item.size)} · {formatDate(item.uploadedAt)}
+                {formatBytes(item.size)} · {formatDate(item.uploadedAt)}
               </Text>
             </View>
             <Pressable

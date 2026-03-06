@@ -90,7 +90,6 @@
 	<string>PearTube uses local network for peer-to-peer video streaming</string>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_fcast._tcp</string>
 		<string>_googlecast._tcp</string>
 		<string>_CC1AD845._googlecast._tcp</string>
 	</array>

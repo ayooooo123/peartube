@@ -218,9 +218,7 @@ async function ensureCastProxyServer(): Promise<number> {
           proxyRes.setEncoding('utf8');
           proxyRes.on('data', (chunk: string) => { body += chunk; });
           proxyRes.on('end', () => {
-            const streamUrl = baseUrl
-              ? `${baseUrl}/cast/${token}/stream.m3u8`
-              : `/cast/${token}/stream.m3u8`;
+            const streamUrl = `/cast/${token}/stream.m3u8`;
             const master = [
               '#EXTM3U',
               '#EXT-X-VERSION:3',
@@ -352,14 +350,14 @@ const castSessionsWithLoadSent = new Set<string>()
 let castPlayInProgress = false
 let lastCastPlayTime = 0
 const CAST_PLAY_DEBOUNCE_MS = 1500
-async function loadBareFcast(): Promise<void> {
+async function loadCastContext(): Promise<void> {
   if (CastContext || castLoadError) return
   if (castLoadPromise) return castLoadPromise
   castLoadPromise = (async () => {
     try {
-      if (typeof require === 'function') { const m = require('bare-fcast'); CastContext = m?.CastContext ?? m?.default ?? m; if (CastContext) return }
-      const m = await import('bare-fcast'); CastContext = (m as any)?.CastContext ?? (m as any)?.default ?? m
-    } catch (err: any) { castLoadError = err?.message || 'Unknown error'; console.warn('[Worker] bare-fcast not available:', castLoadError) }
+      if (typeof require === 'function') { const m = require('@peartube/backend/cast'); CastContext = m?.CastContext ?? m?.default ?? m; if (CastContext) return }
+      const m = await import('@peartube/backend/cast'); CastContext = (m as any)?.CastContext ?? (m as any)?.default ?? m
+    } catch (err: any) { castLoadError = err?.message || 'Unknown error'; console.warn('[Worker] cast context not available:', castLoadError) }
   })()
   return castLoadPromise
 }
@@ -568,6 +566,61 @@ B.createDeviceInvite = async (r: any) => { const res = await api.createDeviceInv
 B.pairDevice = async (r: any) => { const res = await api.pairDevice(r.inviteCode, r.deviceName || ''); try { const ex = identityManager.getIdentities?.() || []; if (ex.length === 0 && res?.channelKey) await identityManager.addPairedChannelIdentity?.(res.channelKey, 'Paired Channel') } catch {} return { success: Boolean(res.success), channelKey: res.channelKey } }
 B.listDevices = async (r: any) => { const res = await api.listDevices(r.channelKey); return { devices: res.devices || [] } }
 B.globalSearchVideos = async (r: any) => { try { const raw = await api.globalSearchVideos(r.query, { topK: r.topK || 20 }); return { results: raw.map((i: any) => ({ id: String(i.id || ''), score: i.score != null ? String(i.score) : null, metadata: i.metadata ? JSON.stringify(i.metadata) : null })) } } catch { return { results: [] } } }
+B.searchVideos = async (r: any) => {
+  try {
+    const raw = await api.searchVideos(r.channelKey, r.query, { topK: r.topK || 10, federated: Boolean(r.federated) })
+    return {
+      results: (raw || []).map((item: any) => ({
+        id: String(item.id || ''),
+        score: item.score != null ? String(item.score) : null,
+        metadata: item.metadata ? JSON.stringify(item.metadata) : null,
+      })),
+    }
+  } catch {
+    return { results: [] }
+  }
+}
+B.retrySyncChannel = async (r: any) => {
+  try {
+    const res = await api.retrySyncChannel?.(r.channelKey)
+    if (res && typeof res === 'object') return res
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'Retry failed' }
+  }
+}
+B.logWatchEvent = async (r: any) => {
+  try {
+    await api.logWatchEvent?.(r.channelKey, r.videoId, r.watchTime)
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'Failed to log watch event' }
+  }
+}
+B.indexVideoVectors = async (r: any) => {
+  try {
+    const result = await api.indexVideoVectors?.(r.channelKey)
+    return result && typeof result === 'object' ? result : { indexedCount: 0 }
+  } catch {
+    return { indexedCount: 0 }
+  }
+}
+B.getRecommendations = async (r: any) => {
+  try {
+    const recommendations = await api.getRecommendations?.(r.query, r.channelKey, { topK: r.topK || 10 })
+    return { recommendations: Array.isArray(recommendations) ? recommendations : [] }
+  } catch {
+    return { recommendations: [] }
+  }
+}
+B.getVideoRecommendations = async (r: any) => {
+  try {
+    const recommendations = await api.getVideoRecommendations?.(r.channelKey, r.videoId, { topK: r.topK || 10 })
+    return { recommendations: Array.isArray(recommendations) ? recommendations : [] }
+  } catch {
+    return { recommendations: [] }
+  }
+}
 B.createIdentity = async (r: any) => {
   const result = await identityManager.createIdentity(r.name || 'New Channel', true)
   if (result.mnemonic) { const { needsRestart } = await initializeIdentityFromMnemonic(result.mnemonic); if (needsRestart) console.log('[Worker] Identity key file written') }
@@ -614,12 +667,12 @@ B.mpvSeek = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) re
 B.mpvGetState = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false, error: 'Player not found' }; try { return { success: true, currentTime: s.player.currentTime || 0, duration: s.player.duration || 0, paused: s.player.paused ?? true } } catch { return { success: false, error: 'Failed to read state' } } }
 B.mpvRenderFrame = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false, hasFrame: false, frameData: null, error: 'Player not found' }; try { if (!s.player.needsRender()) return { success: true, hasFrame: false, frameData: null }; const d = s.player.renderFrame(); if (!d?.length) return { success: true, hasFrame: false, frameData: null }; return { success: true, hasFrame: true, frameData: b4a.toString(d, 'base64'), width: s.width, height: s.height } } catch { return { success: false, hasFrame: false, frameData: null, error: 'render failed' } } }
 B.mpvDestroy = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false }; try { s.player.destroy(); mpvPlayers.delete(r.playerId); return { success: true } } catch { mpvPlayers.delete(r.playerId); return { success: false } } }
-B.castAvailable = async () => { await loadBareFcast(); return { available: CastContext !== null, error: castLoadError } }
-B.castStartDiscovery = async () => { await loadBareFcast(); if (!CastContext) return { success: false, error: castLoadError || 'not available' }; try { await getCastContext().startDiscovery(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
+B.castAvailable = async () => { await loadCastContext(); return { available: CastContext !== null, error: castLoadError } }
+B.castStartDiscovery = async () => { await loadCastContext(); if (!CastContext) return { success: false, error: castLoadError || 'not available' }; try { await getCastContext().startDiscovery(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castStopDiscovery = async () => { if (!castContext) return { success: true }; try { castContext.stopDiscovery(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castGetDevices = async () => { if (!castContext) return { devices: [] }; try { return { devices: castContext.getDevices().map((d: any) => ({ id: d.id, name: d.name, host: d.host, port: d.port, protocol: d.protocol })) } } catch { return { devices: [] } } }
-B.castAddManualDevice = async (r: any) => { await loadBareFcast(); if (!CastContext) return { success: false, error: 'not available' }; try { const d = getCastContext()._discoverer.addManualDevice({ name: r.name, host: r.host, port: r.port, protocol: r.protocol || 'fcast' }); return { success: true, device: { id: d.id, name: d.name, host: d.host, port: d.port, protocol: d.protocol } } } catch (e: any) { return { success: false, error: e?.message } } }
-B.castConnect = async (r: any) => { await loadBareFcast(); if (!CastContext) return { success: false, error: 'not available' }; const c = getCastContext(); try { const devices = c.getDevices?.() || []; const dev = devices.find((d: any) => d.id === r.deviceId); await c.connect(r.deviceId); return dev ? { success: true, device: { id: dev.id, name: dev.name, host: dev.host, port: dev.port, protocol: dev.protocol } } : { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
+B.castAddManualDevice = async (r: any) => { await loadCastContext(); if (!CastContext) return { success: false, error: 'not available' }; try { const d = getCastContext().addManualDevice({ name: r.name, host: r.host, port: r.port, protocol: r.protocol || 'chromecast' }); return { success: true, device: { id: d.id, name: d.name, host: d.host, port: d.port, protocol: d.protocol } } } catch (e: any) { return { success: false, error: e?.message } } }
+B.castConnect = async (r: any) => { await loadCastContext(); if (!CastContext) return { success: false, error: 'not available' }; const c = getCastContext(); try { const devices = c.getDevices?.() || []; const dev = devices.find((d: any) => d.id === r.deviceId); await c.connect(r.deviceId); return dev ? { success: true, device: { id: dev.id, name: dev.name, host: dev.host, port: dev.port, protocol: dev.protocol } } : { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castDisconnect = async () => { if (!castContext) return { success: true }; try { await castContext.disconnect(); castProxySessions.clear(); if (activeCastTranscodeId) { castSessionsWithLoadSent.delete(activeCastTranscodeId); castTranscoder.stopCastTranscode(activeCastTranscodeId); transcodeSessions.delete(activeCastTranscodeId); activeCastTranscodeId = null; activeCastSourceKey = null } return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castPause = async () => { if (!castContext?.isConnected()) return { success: false, error: 'Not connected' }; try { await castContext.pause(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castResume = async () => { if (!castContext?.isConnected()) return { success: false, error: 'Not connected' }; try { await castContext.resume(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
@@ -631,8 +684,8 @@ B.castIsConnected = async () => ({ connected: Boolean(castContext?.isConnected()
 B.castPlay = async (r: any) => {
   if (!castContext?.isConnected()) return { success: false, error: 'Not connected to cast device' }
   const now = Date.now()
-  if (castPlayInProgress) return { success: true }
-  if (now - lastCastPlayTime < CAST_PLAY_DEBOUNCE_MS) return { success: true }
+  if (castPlayInProgress) return { success: true, reason: 'in-progress' }
+  if (now - lastCastPlayTime < CAST_PLAY_DEBOUNCE_MS) return { success: true, reason: 'debounced' }
   castPlayInProgress = true; lastCastPlayTime = now
   const requestedUrl = normalizeLocalUrlForWorker(r.url)
   const protocol = castContext?._connectedDevice?.deviceInfo?.protocol
@@ -648,15 +701,14 @@ B.castPlay = async (r: any) => {
         const localIp = await getLocalIPv4ForTarget(deviceHost)
         if (!needsProcessing) { url = localIp ? rewriteUrlHost(requestedUrl, localIp) : requestedUrl; contentType = 'video/mp4' }
         else {
-          let isVideoComplete = true; try { const ss = await api.checkVideoSync(requestedUrl); isVideoComplete = ss.isComplete } catch { isVideoComplete = true }
-          const result = await castTranscoder.startCastTranscode(requestedUrl, { sourceKey: requestedKey, isVideoComplete })
+          const result = await castTranscoder.startCastTranscode(requestedUrl, { sourceKey: requestedKey, isVideoComplete: true })
           if (!result.success) throw new Error(result.error || 'Cast transcode failed')
           currentTranscodeSessionId = result.sessionId
           if (result.reused && castSessionsWithLoadSent.has(result.sessionId)) { activeCastTranscodeId = result.sessionId; activeCastSourceKey = requestedKey; return { success: true } }
           if (!result.reused) { const waitStart = Date.now(); while (Date.now() - waitStart < 30000) { const st = castTranscoder.getCastStatus(result.sessionId); if (st?.fragmentCount >= 1 || st?.status === 'error') break; await new Promise(resolve => setTimeout(resolve, 500)) } }
           const hlsUrl = castTranscoder.getCastHlsUrl(result.sessionId, localIp || '127.0.0.1')
           if (!hlsUrl) throw new Error('Could not get cast HLS URL')
-          url = hlsUrl; contentType = 'application/vnd.apple.mpegurl'; streamType = 'BUFFERED'
+          url = hlsUrl; contentType = 'application/vnd.apple.mpegurl'; streamType = 'LIVE'
         }
       } catch (e: any) { console.warn('[Worker] Cast probe/transcode failed, direct play:', e?.message) }
       if (contentType !== 'application/vnd.apple.mpegurl') {
@@ -670,7 +722,9 @@ B.castPlay = async (r: any) => {
     const prev = activeCastTranscodeId
     if (prev && prev !== currentTranscodeSessionId) { if (!currentTranscodeSessionId && activeCastSourceKey === requestedKey) { /* keep */ } else { castSessionsWithLoadSent.delete(prev); castTranscoder.stopCastTranscode(prev); if (!currentTranscodeSessionId) { activeCastTranscodeId = null; activeCastSourceKey = null } } }
     if (currentTranscodeSessionId) { activeCastTranscodeId = currentTranscodeSessionId; activeCastSourceKey = requestedKey }
-    await castContext.play({ url, contentType, title: r.title, thumbnail: r.thumbnail, time: r.time || 0, volume: normalizeCastVolume(r.volume), streamType, duration: mediaDuration })
+    const isHlsCast = contentType === 'application/vnd.apple.mpegurl'
+    const loadDuration = isHlsCast ? undefined : mediaDuration
+    await castContext.play({ url, contentType, title: r.title, thumbnail: r.thumbnail, time: r.time || 0, volume: normalizeCastVolume(r.volume), streamType, duration: loadDuration })
     if (activeCastTranscodeId && contentType === 'application/vnd.apple.mpegurl') castSessionsWithLoadSent.add(activeCastTranscodeId)
     lastCastPlayTime = Date.now(); return { success: true }
   } catch (e: any) { return { success: false, error: e?.message } }

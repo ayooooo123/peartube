@@ -56,7 +56,7 @@ peartube/
 │   ├── platform/         # Platform abstraction
 │   ├── spec/             # HRPC schema
 │   ├── bare-ffmpeg/      # Bare native ffmpeg binding
-│   ├── bare-fcast/       # Chromecast bridge
+│   ├── backend/src/cast/ # Chromecast sender implementation
 │   ├── bare-mpv/         # mpv binding for desktop playback
 │   └── bare-tls/         # TLS support for Bare runtime
 └── package.json

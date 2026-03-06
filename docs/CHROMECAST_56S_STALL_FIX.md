@@ -74,7 +74,7 @@ const MAX_SEGMENT_DURATION = 10    // Was 4
 - Pass `duration` parameter to Chromecast LOAD command
 - Keep `streamType = 'LIVE'` for growing playlists
 
-**`packages/bare-fcast/lib/chromecast.js`**
+**`packages/backend/src/cast/chromecast.js`**
 - Added debug logging for `streamType` and `duration` in LOAD
 
 ### Issue 2 (3-Minute Error) Files:

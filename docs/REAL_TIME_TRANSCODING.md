@@ -43,7 +43,7 @@ The transcoding system is built across multiple layers:
          │
          ▼
 ┌─────────────────────────────────────────────┐
-│   bare-fcast (chromecast.js)           │
+│   @peartube/backend/cast (chromecast.js) │
 │  - Chromecast protocol implementation    │
 │  - TLS + protobuf messaging            │
 │  - Session management                 │
@@ -61,12 +61,11 @@ All runtime behavior and fixes should be validated against that fork, not upstre
 
 ## 1. Device Discovery (mDNS)
 
-### Service Discovery (`packages/bare-fcast/lib/discovery.js`)
+### Service Discovery (`packages/backend/src/cast/discovery.js`)
 
 The system automatically discovers both FCast and Chromecast devices on the local network using mDNS (multicast DNS):
 
 - **mDNS Address**: `224.0.0.251:5353`
-- **FCast Service**: `_fcast._tcp.local.`
 - **Chromecast Service**: `_googlecast._tcp.local.`
 
 The discovery process:
@@ -80,11 +79,11 @@ Device information includes:
 - `name`: Human-readable device name
 - `host`: IP address
 - `port`: Service port (46899 for FCast, 8009 for Chromecast)
-- `protocol`: 'fcast' or 'chromecast'
+- `protocol`: 'chromecast'
 
 ## 2. Chromecast Protocol Implementation
 
-### Connection Layer (`packages/bare-fcast/lib/chromecast.js`)
+### Connection Layer (`packages/backend/src/cast/chromecast.js`)
 
 Chromecast uses a sophisticated protocol stack:
 

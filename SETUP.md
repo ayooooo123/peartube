@@ -68,7 +68,7 @@ peartube/
 │   ├── platform/         # Platform abstraction
 │   ├── spec/             # HRPC schema
 │   ├── bare-ffmpeg/      # Bare ffmpeg binding
-│   ├── bare-fcast/       # Cast integration
+│   ├── backend/src/cast/ # Cast integration
 │   ├── bare-mpv/         # mpv integration
 │   └── bare-tls/         # Bare TLS support
 │

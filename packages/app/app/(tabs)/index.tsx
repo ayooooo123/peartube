@@ -13,6 +13,8 @@ import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
+import { formatTimeAgo } from '@/lib/formatters'
+import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 
 // Public feed types
 interface FeedEntry {
@@ -30,18 +32,6 @@ interface ChannelMeta {
   videoCount?: number
 }
 
-// Format helpers
-function formatTimeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000)
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
-
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
     promise,
@@ -55,7 +45,7 @@ const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(wind
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
-  const { ready, identity, videos, loading, loadVideos, rpc, backendError, retryBackend, platformEvents, blobServerPort } = useApp()
+  const { ready, identity, videos, loading, loadVideos, rpc, backendError, startupStatus, retryBackend, platformEvents, blobServerPort } = useApp()
   const { loadAndPlayVideo } = useVideoPlayerContext()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
@@ -411,6 +401,17 @@ export default function HomeScreen() {
       // INSTANT PATH: Pass blobId and blobsCoreKey directly if available
       // This skips metadata fetch entirely for instant playback
       const videoAny = video as any
+      const cacheKey = makeVideoUrlCacheKey(
+        video.channelKey,
+        videoRef,
+        videoAny.blobId || undefined,
+        videoAny.blobsCoreKey || undefined,
+      )
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
+      if (cachedUrl) {
+        loadAndPlayVideo(video, cachedUrl)
+        return
+      }
       const result = await rpc.getVideoUrl({
         channelKey: video.channelKey,
         videoId: videoRef,
@@ -422,6 +423,7 @@ export default function HomeScreen() {
       })
 
       if (result?.url) {
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         loadAndPlayVideo(video, result.url)
       }
     } catch (err) {
@@ -453,6 +455,17 @@ export default function HomeScreen() {
 
       // Get video URL from backend - use instant path if we have blob info
       const videoAny = video as any
+      const cacheKey = makeVideoUrlCacheKey(
+        video.channelKey,
+        videoRef,
+        videoAny.blobId || undefined,
+        videoAny.blobsCoreKey || undefined,
+      )
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
+      if (cachedUrl) {
+        loadAndPlayVideo(video, cachedUrl)
+        return
+      }
       const result = await rpc.getVideoUrl({
         channelKey: video.channelKey,
         videoId: videoRef,
@@ -463,6 +476,7 @@ export default function HomeScreen() {
       })
 
       if (result?.url) {
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         // Load video into the overlay player (animates from mini to fullscreen)
         loadAndPlayVideo(video, result.url)
       }
@@ -664,7 +678,9 @@ export default function HomeScreen() {
                     <ActivityIndicator size="small" color={colors.primary} />
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
-                        {backendConnecting ? 'Connecting to P2P network…' : 'Loading…'}
+                        {backendConnecting
+                          ? (startupStatus || 'Connecting to P2P network…')
+                          : 'Loading…'}
                       </Text>
                       <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
                         {backendConnecting

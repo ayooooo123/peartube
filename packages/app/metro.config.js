@@ -70,8 +70,6 @@ config.resolver.extraNodeModules = {
   '@peartube/spec': path.resolve(specRoot, 'spec/hrpc/index.js'),
   '@peartube/spec/messages': path.resolve(specRoot, 'spec/hrpc/messages.js'),
   '@peartube/spec/schema': path.resolve(specRoot, 'spec/schema/index.js'),
-  // Force all packages to use the app's copies (prevents duplicate module instances)
-  'react-native-nitro-modules': path.resolve(projectRoot, 'node_modules/react-native-nitro-modules'),
   'react': path.resolve(projectRoot, 'node_modules/react'),
 }
 
@@ -83,7 +81,9 @@ if (process.env.PEARTUBE_WEB_EXPORT === '1') {
 // Force web bundles to resolve react-native to react-native-web.
 // Without this, Metro can bundle native react-native internals which crash at runtime
 // with: __fbBatchedBridgeConfig is not set.
-if (metroResolve) {
+// Only override for web builds — applying a custom resolveRequest globally bypasses
+// Metro's unstable_enablePackageExports handling and breaks native Android/iOS builds.
+if (metroResolve && process.env.PEARTUBE_WEB_EXPORT === '1') {
   config.resolver.resolveRequest = (context, moduleName, platform) => {
     if (platform === 'web' && moduleName === 'react-native') {
       return metroResolve(context, 'react-native-web', platform)

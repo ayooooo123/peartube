@@ -14,6 +14,7 @@ const bundleFiles = [
 const sourceRoots = [
   path.join(projectRoot, 'backend'),
   path.join(repoRoot, 'packages', 'backend', 'src'),
+  path.join(repoRoot, 'packages', 'bare-tls'),
   path.join(repoRoot, 'packages', 'platform', 'src'),
   path.join(repoRoot, 'packages', 'spec', 'spec'),
 ]
@@ -21,6 +22,7 @@ const sourceRoots = [
 const sourceFiles = [
   path.join(projectRoot, 'package.json'),
   path.join(repoRoot, 'packages', 'backend', 'package.json'),
+  path.join(repoRoot, 'packages', 'bare-tls', 'package.json'),
   path.join(repoRoot, 'packages', 'platform', 'package.json'),
   path.join(repoRoot, 'packages', 'spec', 'package.json'),
 ]

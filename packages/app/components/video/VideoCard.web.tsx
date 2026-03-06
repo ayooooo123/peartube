@@ -10,6 +10,7 @@
  */
 import React, { useState } from 'react'
 import { colors } from '@/lib/colors'
+import { formatDuration, formatViews, formatTimeAgo } from '@/lib/formatters'
 
 export interface VideoCardProps {
   id: string
@@ -22,41 +23,6 @@ export interface VideoCardProps {
   duration?: number
   onPress?: () => void
   onChannelPress?: () => void
-}
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const secs = seconds % 60
-
-  if (hours > 0) {
-    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-  }
-  return `${minutes}:${secs.toString().padStart(2, '0')}`
-}
-
-function formatViews(views: number): string {
-  if (views >= 1000000) {
-    return `${(views / 1000000).toFixed(1)}M views`
-  }
-  if (views >= 1000) {
-    return `${(views / 1000).toFixed(1)}K views`
-  }
-  return `${views} views`
-}
-
-function formatTimeAgo(dateString: string): string {
-  const date = new Date(dateString)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-  if (diffDays === 0) return 'Today'
-  if (diffDays === 1) return '1 day ago'
-  if (diffDays < 7) return `${diffDays} days ago`
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
-  if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`
-  return `${Math.floor(diffDays / 365)} years ago`
 }
 
 export function VideoCardDesktop({

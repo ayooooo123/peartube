@@ -17,6 +17,9 @@
     "build:ios:device": "npm run build:ios:device --prefix packages/app",
     "build:android": "npm run build:android --prefix packages/app",
     "build:android:apk": "npm run build:android:apk --prefix packages/app",
+    "build:android:apk:arm64": "npm run build:android:apk:arm64 --prefix packages/app",
+    "build:android:apk:armv7": "npm run build:android:apk:armv7 --prefix packages/app",
+    "build:android:apk:x86_64": "npm run build:android:apk:x86_64 --prefix packages/app",
     "build:android:aab": "npm run build:android:aab --prefix packages/app",
     "build:eas:ios": "npm run build:eas:ios --prefix packages/app",
     "build:eas:android": "npm run build:eas:android --prefix packages/app",
@@ -51,8 +54,8 @@
     "bare-ffmpeg": "file:packages/bare-ffmpeg",
     "bare-ipc": "^1.1.1",
     "bare-worker": "^4.1.0",
-    "expo": "~54.0.25",
-    "react": "19.1.0",
-    "react-native": "0.81.5"
+    "expo": "~55.0.4",
+    "react": "^19.2.0",
+    "react-native": "0.83.2"
   }
 }

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Modal,
-  SafeAreaView,
   ScrollView,
   Text,
   TextInput,
@@ -10,7 +9,8 @@ import {
   Pressable,
   Image,
   type PressableProps,
-} from 'react-native'
+  } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'

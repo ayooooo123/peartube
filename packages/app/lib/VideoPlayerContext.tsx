@@ -14,6 +14,16 @@ import * as MediaSession from '../modules/expo-media-session/src'
 import { usePlayerStateMachine } from './playerStateMachine'
 import type { ModeBeforePip, PlayerState } from './playerStateMachine'
 
+const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false
+const CAST_ACTIVE_GLOBAL_KEY = '__PEARTUBE_CAST_ACTIVE__'
+let ACTIVE_VIDEO_PLAYER_CONTROLLER_ID: number | null = null
+let NEXT_VIDEO_PLAYER_CONTROLLER_ID = 1
+
+function isCastSessionLikelyActiveGlobally(): boolean {
+  const g = globalThis as Record<string, unknown>
+  return g[CAST_ACTIVE_GLOBAL_KEY] === true
+}
+
 // Re-export types for backwards compatibility
 export type { VideoData, VideoStats } from '@peartube/core'
 
@@ -50,6 +60,7 @@ interface VideoPlayerContextType {
   
   // Unified PiP gating - single source of truth for whether PiP should be enabled
   shouldEnablePip: boolean
+  androidSplitPlayerEnabled: boolean
 
   videoAspectRatio: number | null
 
@@ -73,7 +84,7 @@ interface VideoPlayerContextType {
   suppressForegroundRestoreOnce: () => void
   suppressForegroundRestoreFor: (ms: number) => void
   clearLastClosedVideo: () => void
-  minimizePlayer: () => void
+  minimizePlayer: (optionsOrEvent?: unknown) => void
   maximizePlayer: () => void
   maximizedForPipRef: React.MutableRefObject<boolean>
   seekTo: (time: number) => void
@@ -104,6 +115,9 @@ interface VideoPlayerProviderProps {
 }
 
 export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
+  const controllerIdRef = useRef<number>(NEXT_VIDEO_PLAYER_CONTROLLER_ID++)
+  const [isPrimaryController, setIsPrimaryController] = useState(false)
+  const androidSplitPlayerEnabled = Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY
   const initialState = useMemo<PlayerState>(() => ({
     mode: 'hidden',
     video: null,
@@ -121,7 +135,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const [isLoading, setIsLoading] = useState(false)
   const playerMode: PlayerMode =
     state.mode === 'mini'
-      ? 'mini'
+      ? (androidSplitPlayerEnabled ? 'fullscreen' : 'mini')
       : state.mode === 'hidden'
         ? 'hidden'
         : 'fullscreen'
@@ -163,8 +177,27 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const pipExitReassertLoggedAtRef = useRef(0)
   const iosIgnorePausedUntilRef = useRef(0)
   const pendingSeekSecondsRef = useRef<number | null>(null)
+  const lastHandledSplitLaunchTokenRef = useRef<string | null>(null)
+  const lastPlaybackStartKeyRef = useRef<string | null>(null)
+  const lastPlaybackStartAtRef = useRef(0)
+  const queuedPlaybackStartRef = useRef<{ video: VideoData; url: string; source: string } | null>(null)
+  const playbackStartDrainTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const playbackStartInFlightRef = useRef(false)
+  const playbackStartCooldownUntilRef = useRef(0)
+  const lastSplitLaunchRequestKeyRef = useRef<string | null>(null)
+  const lastSplitLaunchRequestAtRef = useRef(0)
   const seekConfirmRef = useRef<{ targetSeconds: number; startedAt: number } | null>(null)
   const seekClearTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const closingVideoRef = useRef(false)
+  const pendingAndroidMinimizeCloseRef = useRef(false)
+
+  const parseSplitLaunchStartedAt = useCallback((sessionId: unknown): number | null => {
+    if (typeof sessionId !== 'string' || sessionId.trim().length === 0) return null
+    const firstSegment = sessionId.split('-')[0]
+    const startedAt = Number(firstSegment)
+    if (!Number.isFinite(startedAt) || startedAt <= 0) return null
+    return startedAt
+  }, [])
 
   // Background playback tracking refs
   const wasPlayingWhenBackgroundedRef = useRef(state.wasPlayingWhenBackgrounded)
@@ -186,6 +219,29 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // Throttled UI state update interval (ms) - ~4fps for seek bar updates
   const UI_UPDATE_INTERVAL = 250
   const lastUIUpdateRef = useRef(0)
+
+  useEffect(() => {
+    const controllerId = controllerIdRef.current
+    const tryAcquireController = () => {
+      const activeId = ACTIVE_VIDEO_PLAYER_CONTROLLER_ID
+      if (activeId === null || activeId === controllerId) {
+        ACTIVE_VIDEO_PLAYER_CONTROLLER_ID = controllerId
+        setIsPrimaryController(true)
+        return
+      }
+      setIsPrimaryController(false)
+    }
+
+    tryAcquireController()
+    const timer = setInterval(tryAcquireController, 300)
+
+    return () => {
+      clearInterval(timer)
+      if (ACTIVE_VIDEO_PLAYER_CONTROLLER_ID === controllerId) {
+        ACTIVE_VIDEO_PLAYER_CONTROLLER_ID = null
+      }
+    }
+  }, [])
 
   // Refs are now the source of truth for high-frequency values
   // State is only updated at throttled intervals for UI components
@@ -396,6 +452,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
    // AppState listener for background/foreground transitions (mobile only)
    useEffect(() => {
      if (Platform.OS === 'web') return
+     if (!isPrimaryController) return
 
         const handleAppStateChange = (nextState: AppStateStatus) => {
         const goingToBackground = nextState === 'background' || nextState === 'inactive'
@@ -403,12 +460,18 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
       if (goingToBackground && !isBackgroundedRef.current) {
         isBackgroundedRef.current = true
-        dispatch({
-          type: 'APP_BACKGROUND',
-          source: 'appStateBackgroundMiniAutoMaximizeForPip',
-          appState: nextState,
-          isPlaying: isPlayingRef.current,
-        })
+        const skipLifecycleDispatchForSplitAndroid =
+          Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY
+        const skipAppBackgroundDispatchForPip =
+          Platform.OS === 'android' && (isInPipModeRef.current || pipTransitionInFlightRef.current)
+        if (!skipLifecycleDispatchForSplitAndroid && !skipAppBackgroundDispatchForPip) {
+          dispatch({
+            type: 'APP_BACKGROUND',
+            source: 'appStateBackgroundMiniAutoMaximizeForPip',
+            appState: nextState,
+            isPlaying: isPlayingRef.current,
+          })
+        }
         console.log('[VideoPlayerContext] Going to background, wasPlaying:', isPlayingRef.current, 'playerMode:', playerModeRef.current)
 
         // Expand mini player to fullscreen before PiP activates.
@@ -447,15 +510,21 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         const suppressWindow = suppressForegroundRestoreUntilRef.current > now
         const shouldSuppressRestore = suppressOnce || suppressWindow || wasInPip
 
-        dispatch({
-          type: 'APP_FOREGROUND',
-          source: 'appStateForegroundHiddenRestore',
-          appState: 'active',
-          wasInPip,
-          suppressRestore: shouldSuppressRestore,
-        })
+        const skipLifecycleDispatchForSplitAndroid =
+          Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY
+        const skipAppForegroundDispatchForPip = Platform.OS === 'android' && wasInPip
+        if (!skipLifecycleDispatchForSplitAndroid && !skipAppForegroundDispatchForPip) {
+          dispatch({
+            type: 'APP_FOREGROUND',
+            source: 'appStateForegroundHiddenRestore',
+            appState: 'active',
+            wasInPip,
+            suppressRestore: shouldSuppressRestore,
+          })
+        }
 
-        if (!shouldSuppressRestore) {
+        const allowForegroundRestore = !(Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY)
+        if (!shouldSuppressRestore && allowForegroundRestore) {
           if (!currentVideoRef.current) {
             restoreLastClosedVideo('foreground')
           }
@@ -463,7 +532,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
         if (remotePlayWhileBackgroundedRef.current) {
           remotePlayWhileBackgroundedRef.current = false
-          if (!forceReloadPlayback('foreground-remote-play')) {
+          if (allowForegroundRestore && !forceReloadPlayback('foreground-remote-play')) {
             restoreLastClosedVideo('foreground-remote-play')
           }
         }
@@ -480,17 +549,19 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
      const subscription = AppState.addEventListener('change', handleAppStateChange)
      return () => subscription.remove()
-    }, [dispatch, forceReloadPlayback, restoreLastClosedVideo])
+    }, [dispatch, forceReloadPlayback, isPrimaryController, restoreLastClosedVideo])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
+    if (!isPrimaryController) return
     const shouldAvoidCutout = playerMode === 'fullscreen' && !isInPipMode
     MediaSession.setStatusBarOverlayEnabled(shouldAvoidCutout).catch(() => {})
-  }, [playerMode, isInPipMode])
+  }, [isPrimaryController, playerMode, isInPipMode])
 
 // MediaSession remote command listener (mobile only)
- useEffect(() => {
+useEffect(() => {
     if (Platform.OS === 'web') return
+    if (!isPrimaryController) return
 
     const subscription = MediaSession.addRemoteCommandListener((event) => {
       console.log('[VideoPlayerContext] Remote command received:', event.command)
@@ -553,7 +624,31 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           break
         case 'stop':
           console.log('[VideoPlayerContext] Stopping playback')
+          closingVideoRef.current = true
+          pipExitShouldResumeRef.current = false
+          pipExitExpectedPlayingRef.current = false
+          pipExitResumeUntilRef.current = 0
+          remotePlayWhileBackgroundedRef.current = false
+          try {
+            playerRef.current?.stop?.()
+            playerRef.current?.pause?.()
+          } catch {}
           setIsPlaying(false)
+          lastClosedVideoRef.current = null
+          lastClosedUrlRef.current = null
+          lastClosedTimeRef.current = null
+          currentVideoRef.current = null
+          videoUrlRef.current = null
+          dispatch({ type: 'CLOSE_VIDEO', source: 'closeVideo' })
+          setVideoStats(null)
+          setCurrentTime(0)
+          setDuration(0)
+          if (Platform.OS !== 'web') {
+            MediaSession.clearNowPlaying().catch(() => {})
+            MediaSession.clearPendingPlayerLaunchPayload().catch(() => {})
+            setMediaSessionActive(false)
+          }
+          mediaSessionActiveRef.current = false
           break
         case 'togglePlayPause':
           console.log('[VideoPlayerContext] Toggling play/pause')
@@ -593,11 +688,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     })
 
     return () => subscription.remove()
-  }, [restoreLastClosedVideo, reassertNativePlayAfterPipExit])
+  }, [dispatch, isPrimaryController, restoreLastClosedVideo, reassertNativePlayAfterPipExit, setMediaSessionActive])
 
   // Audio interruption listener (iOS only) - Android relies on remote commands from AudioFocus
   useEffect(() => {
     if (Platform.OS !== 'ios') return
+    if (!isPrimaryController) return
 
     const subscription = MediaSession.addAudioInterruptionListener((event) => {
       if (event.type === 'began') {
@@ -616,11 +712,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     })
 
     return () => subscription.remove()
-  }, [dispatch])
+  }, [dispatch, isPrimaryController])
 
   // Route change listener (headphone unplug) - mobile only
   useEffect(() => {
     if (Platform.OS === 'web') return
+    if (!isPrimaryController) return
 
     const subscription = MediaSession.addAudioRouteChangeListener((event: MediaSession.AudioRouteChangeEvent) => {
       if (event.reason === 'oldDeviceUnavailable') {
@@ -629,16 +726,25 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     })
 
     return () => subscription.remove()
-  }, [])
+  }, [isPrimaryController])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
+    if (!isPrimaryController) return
 
     const subscription = MediaSession.addPictureInPictureListener((event: MediaSession.PictureInPictureEvent & {
       currentTimeMs?: number
       durationMs?: number
       isPlaying?: boolean
     }) => {
+      if (closingVideoRef.current) {
+        isInPipModeRef.current = event.isInPictureInPicture
+        if (!event.isInPictureInPicture) {
+          setPipWindowSize(null)
+          pipTransitionInFlightRef.current = false
+        }
+        return
+      }
       const now = Date.now()
       const wasInPip = isInPipModeRef.current
 
@@ -670,6 +776,15 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
       // Update state immediately - RAF doesn't fire in PiP/background mode
       if (event.isInPictureInPicture) {
+        if (pendingAndroidMinimizeCloseRef.current) {
+          pendingAndroidMinimizeCloseRef.current = false
+          try {
+            playerRef.current?.stop?.()
+            playerRef.current?.pause?.()
+          } catch {}
+          setIsPlaying(false)
+          dispatch({ type: 'CLOSE_VIDEO', source: 'closeVideo' })
+        }
         dispatch({
           type: 'PIP_ENTERED_ANDROID',
           source: 'androidPipExitRestorePreviousMode',
@@ -715,7 +830,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
             platform: 'android',
             wasInPip,
             shouldResume,
-            restoreMode: modeBeforePipRef.current,
+            restoreMode: ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY ? 'fullscreen' : modeBeforePipRef.current,
             dimensions:
               event.width && event.height
                 ? { width: event.width, height: event.height }
@@ -723,7 +838,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           })
           setIsPlaying(shouldResume)
 
-          if (shouldResume) {
+          if (shouldResume && !ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
             // Proactively reassert play during the first few frames after PiP exit.
             // This is a no-op on healthy devices but prevents short silent gaps on others.
             reassertNativePlayAfterPipExit('pip-exit-immediate')
@@ -738,10 +853,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     return () => {
       subscription.remove()
     }
-  }, [dispatch, reassertNativePlayAfterPipExit])
+  }, [dispatch, isPrimaryController, reassertNativePlayAfterPipExit])
 
   // Subscribe to video stats events from backend
   useEffect(() => {
+     if (!isPrimaryController) return
      const unsubscribe = _videoStatsEventEmitter.subscribe((driveKey, videoPath, stats) => {
        // Use ref for synchronous access (state may not be updated yet)
        const video = currentVideoRef.current
@@ -765,19 +881,18 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
          return base.replace(/\.[^./]+$/, '')
        }
 
-       const currentKey = (video as any)?.channelKey || (video as any)?.driveKey || null
+      const currentKeyRaw = (video as any)?.channelKey || (video as any)?.driveKey || null
+      const currentKey =
+        typeof currentKeyRaw === 'string' && currentKeyRaw.trim().length > 0 && currentKeyRaw !== 'unknown'
+          ? currentKeyRaw
+          : null
        const currentId = extractVideoId((video as any)?.id) ?? extractVideoId(video?.path)
        const incomingId = extractVideoId(videoPath)
 
-       const sameVideo =
-         Boolean(video) &&
-         (currentKey ? currentKey === driveKey : true) &&
-         (
-           // Exact path match
-           video?.path === videoPath ||
-           // Id-based match
-           (currentId && incomingId && currentId === incomingId)
-         )
+      const keysCompatible = !currentKey || !driveKey || currentKey === driveKey
+      const samePath = video?.path === videoPath
+      const sameId = Boolean(currentId && incomingId && currentId === incomingId)
+      const sameVideo = Boolean(video) && (samePath || sameId) && (keysCompatible || sameId)
 
        if (sameVideo) {
          console.log('[VideoPlayerContext] Received stats event:', stats.progress + '%')
@@ -787,26 +902,47 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
        }
      })
      return () => { unsubscribe() }
-   }, [])
+   }, [isPrimaryController])
 
-  // Load and play a new video (triggers overlay to fullscreen)
-  const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {
-    console.log('[VideoPlayerContext] Loading video:', video.title, 'URL:', url)
-    // Stop any existing playback before swapping sources to avoid overlap.
+  const performPlaybackStartNow = useCallback((video: VideoData, url: string, source: string) => {
+    const playbackKey = `${video.channelKey || ''}:${video.id || video.path || ''}:${url}`
+    const now = Date.now()
+    if (
+      lastPlaybackStartKeyRef.current === playbackKey &&
+      now - lastPlaybackStartAtRef.current < 1000
+    ) {
+      if (__DEV__) {
+        console.log('[VideoPlayerContext] Skipping duplicate playback start:', source)
+      }
+      return
+    }
+    lastPlaybackStartKeyRef.current = playbackKey
+    lastPlaybackStartAtRef.current = now
+
     try {
       playerRef.current?.stop?.()
       playerRef.current?.pause?.()
     } catch {}
+    pendingAndroidMinimizeCloseRef.current = false
+    if (Platform.OS !== 'web') {
+      MediaSession.clearPendingPlayerLaunchPayload().catch(() => {})
+    }
+    closingVideoRef.current = false
+    pipExitShouldResumeRef.current = false
+    pipExitExpectedPlayingRef.current = false
+    pipExitResumeUntilRef.current = 0
+    pipTransitionInFlightRef.current = false
+    isInPipModeRef.current = false
     setPlaybackSession((prev) => prev + 1)
-    // Update refs synchronously FIRST (before emitting event)
     currentVideoRef.current = video
     videoUrlRef.current = url
     dispatch({ type: 'LOAD_VIDEO', source: 'loadAndPlayVideo', video, url })
     setIsPlaying(true)
     setVideoStats(null)
-    // Show loading overlay until playback actually starts.
-    // Some player builds don't reliably emit initial buffering events, which can
-    // otherwise lead to a confusing black screen while data is loading.
+    const cachedStats = _videoStatsEventEmitter.getLatest(video.channelKey, video.path || video.id)
+    if (cachedStats) {
+      setVideoStats(cachedStats)
+    }
     setIsLoading(true)
     setCurrentTime(0)
     setDuration(0)
@@ -814,9 +950,276 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     if (Platform.OS === 'ios') {
       iosIgnorePausedUntilRef.current = Date.now() + 1500
     }
-    // Emit load event so _layout.tsx can trigger prefetch
     _videoLoadEventEmitter.emit(video)
   }, [dispatch])
+
+  const drainQueuedPlaybackStart = useCallback(() => {
+    if (playbackStartInFlightRef.current) return
+    const request = queuedPlaybackStartRef.current
+    if (!request) return
+
+    const now = Date.now()
+    const cooldownRemaining = playbackStartCooldownUntilRef.current - now
+    if (cooldownRemaining > 0) {
+      if (playbackStartDrainTimerRef.current) {
+        clearTimeout(playbackStartDrainTimerRef.current)
+      }
+      playbackStartDrainTimerRef.current = setTimeout(() => {
+        playbackStartDrainTimerRef.current = null
+        drainQueuedPlaybackStart()
+      }, Math.min(250, cooldownRemaining))
+      return
+    }
+
+    queuedPlaybackStartRef.current = null
+    playbackStartInFlightRef.current = true
+    try {
+      performPlaybackStartNow(request.video, request.url, request.source)
+    } finally {
+      playbackStartInFlightRef.current = false
+      playbackStartCooldownUntilRef.current = Date.now() + 250
+      if (queuedPlaybackStartRef.current) {
+        if (playbackStartDrainTimerRef.current) {
+          clearTimeout(playbackStartDrainTimerRef.current)
+        }
+        playbackStartDrainTimerRef.current = setTimeout(() => {
+          playbackStartDrainTimerRef.current = null
+          drainQueuedPlaybackStart()
+        }, 260)
+      }
+    }
+  }, [performPlaybackStartNow])
+
+  const startInActivityPlayback = useCallback((video: VideoData, url: string, source: string = 'direct') => {
+    queuedPlaybackStartRef.current = { video, url, source }
+    if (playbackStartDrainTimerRef.current) {
+      clearTimeout(playbackStartDrainTimerRef.current)
+      playbackStartDrainTimerRef.current = null
+    }
+    drainQueuedPlaybackStart()
+  }, [drainQueuedPlaybackStart])
+
+  useEffect(() => {
+    return () => {
+      if (playbackStartDrainTimerRef.current) {
+        clearTimeout(playbackStartDrainTimerRef.current)
+        playbackStartDrainTimerRef.current = null
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) return
+    if (!isPrimaryController) return
+
+    let cancelled = false
+
+    const handleLaunchPayload = async (payload: MediaSession.PlayerLaunchPayloadEvent | null | undefined) => {
+      try {
+        if (!payload?.sourceUrl || cancelled) return
+
+        const inPlayerActivity = await MediaSession.isInPlayerActivity()
+        if (!inPlayerActivity || cancelled) return
+
+        const launchStartedAt = parseSplitLaunchStartedAt(payload.sessionId)
+        if (
+          launchStartedAt !== null &&
+          lastSplitLaunchRequestAtRef.current > 0 &&
+          launchStartedAt + 150 < lastSplitLaunchRequestAtRef.current
+        ) {
+          if (__DEV__) {
+            console.log(
+              '[VideoPlayerContext] Dropping stale split payload:',
+              launchStartedAt,
+              'latest request:',
+              lastSplitLaunchRequestAtRef.current,
+            )
+          }
+          return
+        }
+
+        const launchToken =
+          (typeof payload.sessionId === 'string' && payload.sessionId.trim().length > 0)
+            ? payload.sessionId
+            : payload.sourceUrl
+        if (lastHandledSplitLaunchTokenRef.current === launchToken) return
+        lastHandledSplitLaunchTokenRef.current = launchToken
+
+        const now = Date.now()
+        const resolvedId = payload.videoId || payload.path || `launch-${now}`
+        const resolvedPath = payload.path || payload.videoId || resolvedId
+        const resolvedChannelKey =
+          payload.channelKey
+          || (payload as any).driveKey
+          || (payload as any).publicKey
+          || 'unknown'
+        const uploadedAtCandidate = Number(payload.uploadedAt)
+        const sizeCandidate = Number(payload.size)
+        const resolvedUploadedAt = Number.isFinite(uploadedAtCandidate) && uploadedAtCandidate > 0
+          ? uploadedAtCandidate
+          : now
+        const resolvedSize = Number.isFinite(sizeCandidate) && sizeCandidate > 0
+          ? sizeCandidate
+          : 0
+
+        const video: VideoData = {
+          id: resolvedId,
+          title: payload.title || 'Video',
+          description: payload.description || '',
+          path: resolvedPath,
+          size: resolvedSize,
+          uploadedAt: resolvedUploadedAt,
+          channelKey: resolvedChannelKey,
+          mimeType: payload.mimeType,
+          duration: payload.duration,
+          thumbnail: payload.thumbnail,
+        }
+
+        if (typeof payload.startPositionMs === 'number' && payload.startPositionMs > 0) {
+          pendingSeekSecondsRef.current = payload.startPositionMs / 1000
+        }
+        if (launchStartedAt !== null) {
+          console.log('[VideoPlayerContext] split-launch handoff ms:', Date.now() - launchStartedAt)
+        }
+
+        startInActivityPlayback(video, payload.sourceUrl, 'split-pending-payload')
+
+        if (payload.requestPipOnLaunch) {
+          setTimeout(() => {
+            MediaSession.enterPictureInPicture().catch((err) => {
+              console.log('[VideoPlayerContext] requestPipOnLaunch failed:', err)
+            })
+          }, 150)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.log('[VideoPlayerContext] PlayerActivity launch payload handling failed:', err)
+        }
+      }
+    }
+
+    const subscription = MediaSession.addPlayerLaunchPayloadListener((payload) => {
+      void handleLaunchPayload(payload)
+    })
+
+    const consumePendingLaunchPayloadOnce = async () => {
+      try {
+        const payload = await MediaSession.consumePendingPlayerLaunchPayload()
+        await handleLaunchPayload(payload)
+      } catch (err) {
+        if (!cancelled) {
+          console.log('[VideoPlayerContext] Initial pending payload consume failed:', err)
+        }
+      }
+    }
+
+    void consumePendingLaunchPayloadOnce()
+
+    return () => {
+      cancelled = true
+      subscription.remove()
+    }
+  }, [isPrimaryController, parseSplitLaunchStartedAt, startInActivityPlayback])
+
+  // Load and play a new video (triggers overlay to fullscreen)
+  const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {
+    console.log('[VideoPlayerContext] Loading video:', video.title, 'URL:', url)
+
+    const requestKey = `${video.channelKey || ''}:${video.id || video.path || ''}:${url}`
+
+    if (Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+      const isFirstPlayFromHidden =
+        playerModeRef.current === 'hidden' &&
+        !isInPipModeRef.current &&
+        !pipTransitionInFlightRef.current
+
+      if (isFirstPlayFromHidden) {
+        startInActivityPlayback(video, url, 'split-first-play-inline')
+        return
+      }
+
+      if (isCastSessionLikelyActiveGlobally()) {
+        startInActivityPlayback(video, url, 'direct-cast-active')
+        return
+      }
+
+      const now = Date.now()
+      const inPipTransitionWindow = isInPipModeRef.current || pipTransitionInFlightRef.current
+      if (
+        lastSplitLaunchRequestKeyRef.current === requestKey &&
+        now - lastSplitLaunchRequestAtRef.current < 1000
+      ) {
+        return
+      }
+      lastSplitLaunchRequestKeyRef.current = requestKey
+      lastSplitLaunchRequestAtRef.current = now
+
+      suppressForegroundRestoreUntilRef.current = Math.max(suppressForegroundRestoreUntilRef.current, Date.now() + 3000)
+      if (inPipTransitionWindow) {
+        pipExitShouldResumeRef.current = false
+        pipExitExpectedPlayingRef.current = false
+        pipExitResumeUntilRef.current = 0
+      }
+      const videoId = video.id || video.path || ''
+      const channelKey =
+        video.channelKey
+        || (video as any).driveKey
+        || (video as any).publicKey
+        || (video as any).channel?.key
+        || (video as any).channel?.driveKey
+        || (video as any).channel?.channelKey
+        || ''
+      const uploadedAt =
+        (typeof video.uploadedAt === 'number' && video.uploadedAt > 0)
+          ? video.uploadedAt
+          : (typeof (video as any).timestamp === 'number' && (video as any).timestamp > 0)
+            ? (video as any).timestamp
+            : (typeof (video as any).publishedAt === 'number' && (video as any).publishedAt > 0)
+              ? (video as any).publishedAt
+              : Date.now()
+      const size =
+        (typeof video.size === 'number' && video.size > 0)
+          ? video.size
+          : (typeof (video as any).fileSize === 'number' && (video as any).fileSize > 0)
+            ? (video as any).fileSize
+            : (typeof (video as any).byteLength === 'number' && (video as any).byteLength > 0)
+              ? (video as any).byteLength
+              : 0
+      const launchStartedAt = Date.now()
+      const sessionId = `${launchStartedAt}-${videoId || 'video'}`
+      MediaSession.openPlayerActivity({
+        sessionId,
+        videoId,
+        sourceUrl: url,
+        startPositionMs: 0,
+        shouldAutoplay: true,
+        title: video.title,
+        description: video.description,
+        path: video.path,
+        size,
+        uploadedAt,
+        channelKey,
+        mimeType: video.mimeType,
+        duration: video.duration,
+        thumbnail: video.thumbnail,
+        requestPipOnLaunch: false,
+      })
+        .then((opened) => {
+          if (!opened) {
+            startInActivityPlayback(video, url, 'split-open-fallback')
+            return
+          }
+          console.log('[VideoPlayerContext] split-launch openPlayerActivity ms:', Date.now() - launchStartedAt)
+        })
+        .catch((err) => {
+          console.log('[VideoPlayerContext] openPlayerActivity failed in split-activity mode:', err)
+          startInActivityPlayback(video, url, 'split-open-error-fallback')
+        })
+      return
+    }
+
+    startInActivityPlayback(video, url, 'direct-load')
+  }, [startInActivityPlayback])
 
   // Pause video
   const pauseVideo = useCallback(() => {
@@ -855,11 +1258,32 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const closeVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Closing video')
 
+    closingVideoRef.current = true
+    pendingAndroidMinimizeCloseRef.current = false
+
+    queuedPlaybackStartRef.current = null
+    playbackStartInFlightRef.current = false
+    playbackStartCooldownUntilRef.current = 0
+    if (playbackStartDrainTimerRef.current) {
+      clearTimeout(playbackStartDrainTimerRef.current)
+      playbackStartDrainTimerRef.current = null
+    }
+
     if (seekClearTimeoutRef.current) {
       clearTimeout(seekClearTimeoutRef.current)
       seekClearTimeoutRef.current = null
     }
     seekConfirmRef.current = null
+
+    pipExitShouldResumeRef.current = false
+    pipExitExpectedPlayingRef.current = false
+    pipExitResumeUntilRef.current = 0
+    pipTransitionInFlightRef.current = false
+
+    try {
+      playerRef.current?.stop?.()
+      playerRef.current?.pause?.()
+    } catch {}
 
     suppressForegroundRestoreRef.current = true
     const suppressUntil = Date.now() + 2000
@@ -878,7 +1302,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setVideoStats(null)
     setCurrentTime(0)
     setDuration(0)
-  }, [dispatch])
+    if (Platform.OS !== 'web') {
+      MediaSession.clearNowPlaying().catch(() => {})
+      MediaSession.clearPendingPlayerLaunchPayload().catch(() => {})
+      setMediaSessionActive(false)
+    }
+    mediaSessionActiveRef.current = false
+  }, [dispatch, setMediaSessionActive])
 
   const suppressForegroundRestoreOnce = useCallback(() => {
     suppressForegroundRestoreRef.current = true
@@ -898,9 +1328,73 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     lastClosedTimeRef.current = null
   }, [])
 
-  const minimizePlayer = useCallback(() => {
+  const minimizePlayer = useCallback((_optionsOrEvent?: unknown) => {
+    if (Platform.OS === 'android') {
+      const currentVideo = currentVideoRef.current
+      const currentUrl = videoUrlRef.current
+      if (!currentVideo || !currentUrl) {
+        console.log('[VideoPlayerContext] No active video to minimize on Android')
+        return
+      }
+
+      const videoId = currentVideo.id || currentVideo.path || ''
+      const sessionId = `${Date.now()}-${videoId || 'video'}`
+      const startPositionMs = Math.max(0, Math.floor(currentTimeRef.current * 1000))
+      const wasPlaying = isPlayingRef.current
+
+      queuedPlaybackStartRef.current = null
+      playbackStartInFlightRef.current = false
+      playbackStartCooldownUntilRef.current = 0
+      pendingAndroidMinimizeCloseRef.current = false
+      if (playbackStartDrainTimerRef.current) {
+        clearTimeout(playbackStartDrainTimerRef.current)
+        playbackStartDrainTimerRef.current = null
+      }
+
+      MediaSession.openPlayerActivity({
+        sessionId,
+        videoId,
+        sourceUrl: currentUrl,
+        startPositionMs,
+        shouldAutoplay: wasPlaying,
+        title: currentVideo.title,
+        description: currentVideo.description,
+        path: currentVideo.path,
+        size: currentVideo.size,
+        uploadedAt: currentVideo.uploadedAt,
+        channelKey: currentVideo.channelKey,
+        mimeType: currentVideo.mimeType,
+        duration: currentVideo.duration,
+        thumbnail: currentVideo.thumbnail,
+        requestPipOnLaunch: true,
+      })
+        .then((opened) => {
+          if (!opened) {
+            pendingAndroidMinimizeCloseRef.current = false
+            console.log('[VideoPlayerContext] Android minimize handoff failed to open PlayerActivity')
+            MediaSession.enterPictureInPicture().catch((err) => {
+              console.log('[VideoPlayerContext] Android minimize fallback PiP failed:', err)
+            })
+            return
+          }
+          pendingAndroidMinimizeCloseRef.current = true
+        })
+        .catch((err) => {
+          pendingAndroidMinimizeCloseRef.current = false
+          console.log('[VideoPlayerContext] Android minimize handoff failed:', err)
+          MediaSession.enterPictureInPicture().catch((fallbackErr) => {
+            console.log('[VideoPlayerContext] Android minimize error fallback PiP failed:', fallbackErr)
+          })
+        })
+      return
+    }
+
     console.log('[VideoPlayerContext] Minimizing to in-app mini player')
-    dispatch({ type: 'MINIMIZE', source: 'minimizePlayer' })
+    dispatch({
+      type: 'MINIMIZE',
+      source: 'minimizePlayer',
+      platform: Platform.OS === 'web' ? 'web' : 'ios',
+    })
   }, [dispatch])
 
   // Maximize from mini player
@@ -935,7 +1429,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       platform: 'android',
       wasInPip,
       shouldResume: isPlayingRef.current,
-      restoreMode: modeBeforePipRef.current,
+      restoreMode: ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY ? 'fullscreen' : modeBeforePipRef.current,
       dimensions: pipWindowSizeRef.current ?? undefined,
     })
   }, [dispatch])
@@ -1169,6 +1663,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     pipWindowSize,
     setPipWindowSize,
     shouldEnablePip,
+    androidSplitPlayerEnabled,
     videoAspectRatio,
     seekPosition,
     playerRef,
@@ -1199,7 +1694,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     currentVideo, videoUrl, videoStats,
     // Medium-frequency dependencies (control state)
     isPlaying, isLoading, playerMode, playbackRate, playbackSession,
-    isInPipMode, pipWindowSize, shouldEnablePip, videoAspectRatio, seekPosition,
+    isInPipMode, pipWindowSize, shouldEnablePip, androidSplitPlayerEnabled, videoAspectRatio, seekPosition,
     // High-frequency dependencies (progress - NOTE: this still causes re-renders at 4Hz)
     currentTime, duration, progress,
     // Callbacks (stable references via useCallback)

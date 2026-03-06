@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
 import { View, Image, Text, StyleSheet, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
+import { formatDuration } from '@/lib/formatters'
 
 interface ThumbnailImageProps {
   thumbnailUrl?: string | null
@@ -16,18 +17,6 @@ interface ThumbnailImageProps {
 }
 
 const MAX_IMAGE_RETRIES = 2
-
-// Format duration as mm:ss or h:mm:ss
-function formatDuration(seconds: number): string {
-  if (!seconds || isNaN(seconds)) return ''
-  const hrs = Math.floor(seconds / 3600)
-  const mins = Math.floor((seconds % 3600) / 60)
-  const secs = Math.floor(seconds % 60)
-  if (hrs > 0) {
-    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-  }
-  return `${mins}:${secs.toString().padStart(2, '0')}`
-}
 
 function ThumbnailImageComponent({
   thumbnailUrl,

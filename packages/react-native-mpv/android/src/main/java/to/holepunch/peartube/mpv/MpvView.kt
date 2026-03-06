@@ -14,15 +14,30 @@ import androidx.core.view.WindowInsetsCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.ReactContext
-import com.facebook.react.uimanager.events.RCTEventEmitter
+import com.facebook.react.uimanager.UIManagerHelper
+import com.facebook.react.uimanager.events.Event
 import dev.jdtech.mpv.MPVLib
 import java.util.Collections
 import java.util.WeakHashMap
 
 class MpvView(context: Context) : TextureView(context), TextureView.SurfaceTextureListener, MPVLib.EventObserver {
+  private class MpvDirectEvent(
+    surfaceId: Int,
+    viewId: Int,
+    private val name: String,
+    private val payload: com.facebook.react.bridge.WritableMap,
+  ) : Event<MpvDirectEvent>(surfaceId, viewId) {
+    override fun getEventName(): String = name
+
+    override fun getEventData(): com.facebook.react.bridge.WritableMap = payload
+
+    override fun canCoalesce(): Boolean = false
+  }
+
   companion object {
     private const val TAG = "MpvView"
     private val registry: MutableSet<MpvView> = Collections.newSetFromMap(WeakHashMap())
+    private val mpvInitLock = Any()
 
     @Volatile
     private var pipTransitionUntilUptimeMs: Long = 0
@@ -67,6 +82,15 @@ class MpvView(context: Context) : TextureView(context), TextureView.SurfaceTextu
     fun setAllPlaybackPaused(paused: Boolean) {
       registry.toList().forEach { it.setPaused(paused) }
     }
+
+    @JvmStatic
+    fun releaseAllExcept(owner: MpvView?) {
+      registry.toList().forEach {
+        if (it !== owner) {
+          it.teardown()
+        }
+      }
+    }
   }
 
   private val reactContext = context as? ReactContext
@@ -106,6 +130,17 @@ class MpvView(context: Context) : TextureView(context), TextureView.SurfaceTextu
       if (sameUri) {
         return
       }
+      configureAndLoad(uri)
+    }
+  }
+
+  fun setSourceUri(uri: String) {
+    val sameUri = sourceUri == uri
+    Log.d(TAG, "setSourceUri uri=$uri initialized=$initialized sameUri=$sameUri")
+    sourceUri = uri
+    sourceHeaders = null
+    if (initialized) {
+      if (sameUri) return
       configureAndLoad(uri)
     }
   }
@@ -173,15 +208,18 @@ class MpvView(context: Context) : TextureView(context), TextureView.SurfaceTextu
   override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
     try {
       Log.d(TAG, "surface available ${width}x${height}")
-      surface = Surface(surfaceTexture)
-      MPVLib.create(context.applicationContext)
-      initOptions()
-      MPVLib.init()
-      MPVLib.attachSurface(surface!!)
-      MPVLib.setPropertyString("android-surface-size", "${width}x${height}")
-      MPVLib.addObserver(this)
-      observeProperties()
-      initialized = true
+      synchronized(mpvInitLock) {
+        releaseAllExcept(this)
+        surface = Surface(surfaceTexture)
+        MPVLib.create(context.applicationContext)
+        initOptions()
+        MPVLib.init()
+        MPVLib.attachSurface(surface!!)
+        MPVLib.setPropertyString("android-surface-size", "${width}x${height}")
+        MPVLib.addObserver(this)
+        observeProperties()
+        initialized = true
+      }
       sourceUri?.let { configureAndLoad(it) }
     } catch (error: Exception) {
       Log.e(TAG, "mpv init failed", error)
@@ -284,17 +322,19 @@ class MpvView(context: Context) : TextureView(context), TextureView.SurfaceTextu
   }
 
   fun teardown() {
-    Log.d(TAG, "teardown initialized=$initialized")
-    cancelPendingEndFileError()
-    if (initialized) {
-      MPVLib.removeObserver(this)
-      MPVLib.detachSurface()
-      MPVLib.destroy()
-      initialized = false
+    synchronized(mpvInitLock) {
+      Log.d(TAG, "teardown initialized=$initialized")
+      cancelPendingEndFileError()
+      if (initialized) {
+        MPVLib.removeObserver(this)
+        MPVLib.detachSurface()
+        MPVLib.destroy()
+        initialized = false
+      }
+      surface?.release()
+      surface = null
+      registry.remove(this)
     }
-    surface?.release()
-    surface = null
-    registry.remove(this)
   }
 
   private fun isInPipTransition(): Boolean {
@@ -533,8 +573,8 @@ class MpvView(context: Context) : TextureView(context), TextureView.SurfaceTextu
 
   private fun emit(eventName: String, event: com.facebook.react.bridge.WritableMap) {
     val react = reactContext ?: return
-    react
-      .getJSModule(RCTEventEmitter::class.java)
-      .receiveEvent(id, eventName, event)
+    val dispatcher = UIManagerHelper.getEventDispatcherForReactTag(react, id) ?: return
+    val surfaceId = UIManagerHelper.getSurfaceId(this)
+    dispatcher.dispatchEvent(MpvDirectEvent(surfaceId, id, eventName, event))
   }
 }

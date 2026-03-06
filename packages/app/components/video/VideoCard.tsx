@@ -8,6 +8,7 @@ import { memo, useMemo, useCallback } from 'react'
 import { View, Text, Pressable, StyleSheet } from 'react-native'
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated'
 import { ThumbnailImage } from './ThumbnailImage'
+import { formatTimeAgo } from '@/lib/formatters'
 
 export interface VideoData {
   id: string
@@ -40,35 +41,6 @@ interface VideoCardProps {
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
-
-// Format time ago - handles invalid timestamps gracefully
-function formatTimeAgo(timestamp: number | undefined | null): string {
-  // Handle invalid timestamps
-  if (!timestamp || isNaN(timestamp) || timestamp <= 0) {
-    return 'recently'
-  }
-
-  const seconds = Math.floor((Date.now() - timestamp) / 1000)
-
-  // Handle future dates or invalid calculations
-  if (isNaN(seconds) || seconds < 0) {
-    return 'recently'
-  }
-
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d ago`
-  const weeks = Math.floor(days / 7)
-  if (weeks < 4) return `${weeks}w ago`
-  const months = Math.floor(days / 30)
-  if (months < 12) return `${months}mo ago`
-  const years = Math.floor(days / 365)
-  return `${years}y ago`
-}
 
 // Get channel initial for avatar placeholder
 function getChannelInitial(name?: string, key?: string): string {

@@ -10,6 +10,7 @@ export interface AppContextType {
   rpc: any
   platformEvents?: any
   backendError?: string | null
+  startupStatus?: string | null
   retryBackend?: () => void
   uploadVideo: (
     filePath: string,

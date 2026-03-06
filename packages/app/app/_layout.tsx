@@ -44,11 +44,32 @@ const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(wind
 // Types from shared package
 import type { Identity, Video } from '@peartube/core'
 
+/**
+ * Map raw backend ipcLog messages to short, user-facing status strings.
+ * Returns null for messages that don't map to a meaningful UI step.
+ */
+function friendlyStartupStatus(raw: string): string | null {
+  if (!raw) return null
+  const s = raw.toLowerCase()
+  if (s.includes('owner lock')) return 'Acquiring storage lock…'
+  if (s.includes('corestore') || s.includes('lock cleanup')) return 'Cleaning up storage…'
+  if (s.includes('initializestorage') || s.includes('storage starting')) return 'Opening local storage…'
+  if (s.includes('storage initialized')) return 'Storage ready, starting managers…'
+  if (s.includes('managers creating')) return 'Starting background services…'
+  if (s.includes('seedingmanager')) return 'Initializing seeding…'
+  if (s.includes('loadidentities')) return 'Loading your identity…'
+  if (s.includes('publicfeed')) return 'Connecting to P2P feed…'
+  if (s.includes('backend ready')) return 'Almost there…'
+  if (s.includes('lock retry')) return 'Waiting for storage lock…'
+  return null
+}
+
 // Platform RPC - conditionally imported
 let platformRPC: any = null
 
 const BACKEND_SOURCE_CACHE_KEY = '__PEARTUBE_BACKEND_SOURCE__'
 const DOWNLOADER_SOURCE_CACHE_KEY = '__PEARTUBE_DOWNLOADER_WORKER_SOURCE__'
+const CAST_ACTIVE_GLOBAL_KEY = '__PEARTUBE_CAST_ACTIVE__'
 
 function coerceBundleSource(mod: any): string | null {
   if (typeof mod === 'string') return mod
@@ -63,37 +84,46 @@ function readCachedBundleSources(): { backendSource: string | null; downloaderWo
   return { backendSource, downloaderWorkerSource }
 }
 
-function cacheBundleSources(backendSource: string, downloaderWorkerSource: string): void {
+function cacheBundleSources(backendSource: string, downloaderWorkerSource?: string | null): void {
   const g = globalThis as any
   g[BACKEND_SOURCE_CACHE_KEY] = backendSource
-  g[DOWNLOADER_SOURCE_CACHE_KEY] = downloaderWorkerSource
+  if (typeof downloaderWorkerSource === 'string' && downloaderWorkerSource.length > 0) {
+    g[DOWNLOADER_SOURCE_CACHE_KEY] = downloaderWorkerSource
+  }
 }
 
-function loadNativeBundleSources(): { backendSource: string; downloaderWorkerSource: string } {
+function loadNativeBundleSources(): { backendSource: string; downloaderWorkerSource?: string } {
   let backendSource: string | null = null
   let downloaderWorkerSource: string | null = null
-  let loadError: unknown = null
+  let backendLoadError: unknown = null
 
   try {
     backendSource = coerceBundleSource(require('../backend.bundle.js'))
-    downloaderWorkerSource = coerceBundleSource(require('../downloader-worker.bundle.js'))
   } catch (err) {
-    loadError = err
+    backendLoadError = err
+  }
+
+  try {
+    downloaderWorkerSource = coerceBundleSource(require('../downloader-worker.bundle.js'))
+  } catch {
+    downloaderWorkerSource = null
   }
 
   const cached = readCachedBundleSources()
   if (!backendSource) backendSource = cached.backendSource
   if (!downloaderWorkerSource) downloaderWorkerSource = cached.downloaderWorkerSource
 
-  if (backendSource && downloaderWorkerSource) {
-    if (loadError) {
+  if (backendSource) {
+    if (backendLoadError) {
       console.warn('[App] Using cached backend bundle sources after reload resolution miss')
     }
     cacheBundleSources(backendSource, downloaderWorkerSource)
-    return { backendSource, downloaderWorkerSource }
+    return downloaderWorkerSource
+      ? { backendSource, downloaderWorkerSource }
+      : { backendSource }
   }
 
-  if (loadError) throw loadError
+  if (backendLoadError) throw backendLoadError
   throw new Error('Backend bundles could not be resolved')
 }
 
@@ -115,6 +145,7 @@ export default function RootLayout() {
   const [loading, setLoading] = useState(() => cachedAppState === null)
   const [blobServerPort, setBlobServerPort] = useState<number | null>(() => cachedAppState?.blobServerPort ?? null)
   const [backendError, setBackendError] = useState<string | null>(null)
+  const [startupStatus, setStartupStatus] = useState<string | null>(null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
 const castKeepaliveIntervalRef = useRef<NodeJS.Timeout | null>(null)
 const castSuspendGraceTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -125,7 +156,11 @@ const suspendInFlightRef = useRef(false)
 const castActiveRef = useRef<boolean>(false)
 const nativeEventsSubscribedRef = useRef(false)
 const castPlaybackStateUnsubRef = useRef<(() => void) | null>(null)
+const backendReadyRef = useRef(false)
+const startupTimerRef = useRef<NodeJS.Timeout | null>(null)
+const startupProbeIntervalRef = useRef<NodeJS.Timeout | null>(null)
 const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
+const BACKEND_STARTUP_TIMEOUT_MS = 30000
 
   const startupLog = useCallback((...args: unknown[]) => {
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -195,6 +230,25 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
     }
   }, [startupLog])
 
+  const markBackendReady = useCallback(async (source: string, port: number | null) => {
+    if (backendReadyRef.current) return
+    backendReadyRef.current = true
+    if (startupTimerRef.current) {
+      clearTimeout(startupTimerRef.current)
+      startupTimerRef.current = null
+    }
+    if (startupProbeIntervalRef.current) {
+      clearInterval(startupProbeIntervalRef.current)
+      startupProbeIntervalRef.current = null
+    }
+    startupLog('[Startup] backend ready via', source)
+    setBlobServerPort(port)
+    setReady(true)
+    setBackendError(null)
+    setStartupStatus(null)
+    await loadInitialData()
+  }, [loadInitialData, startupLog])
+
   // Subscribe to video load events to trigger prefetch
   useEffect(() => {
     if (!ready || !platformRPC) return
@@ -202,42 +256,64 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
     const unsubscribe = videoLoadEventEmitter.subscribe(async (video: VideoData) => {
       console.log('[App] Video loaded, starting prefetch for:', video.title)
       try {
+        const resolvedChannelKey =
+          video.channelKey
+          || (video as any).driveKey
+          || (video as any).publicKey
+          || (video as any).channel?.key
+          || (video as any).channel?.driveKey
+          || (video as any).channel?.channelKey
+          || ''
         const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
           ? video.path
           : video.id
+        if (!resolvedChannelKey) {
+          console.log('[App] Prefetch skipped: missing channel key for video', videoRef)
+          return
+        }
         await platformRPC.rpc.prefetchVideo({
-          channelKey: video.channelKey,
+          channelKey: resolvedChannelKey,
           videoId: videoRef,
           publicBeeKey: (video as any).publicBeeKey || undefined
         })
         console.log('[App] prefetchVideo sent for:', videoRef)
 
-        // Proactively prefetch next videos in background for smooth playback
-        platformRPC.rpc.prefetchNextVideos?.(video.channelKey, videoRef, 3).then((res: any) => {
-          if (res?.prefetchedCount > 0) {
-            console.log('[App] Prefetching', res.prefetchedCount, 'next videos in background')
-          }
-        }).catch(() => {})
+        setTimeout(() => {
+          platformRPC.rpc.prefetchNextVideos?.(resolvedChannelKey, videoRef, 3).then((res: any) => {
+            if (res?.prefetchedCount > 0) {
+              console.log('[App] Prefetching', res.prefetchedCount, 'next videos in background')
+            }
+          }).catch(() => {})
+        }, 1500)
 
         // Fallback: poll getVideoStats and feed into the context emitter.
         // Some mobile runtimes can be flaky with push events (eventVideoStats) over BareKit IPC.
         // Polling keeps the UI stats bar updated regardless.
-        const pollKey = `${video.channelKey}:${videoRef}`
+        const pollKey = `${resolvedChannelKey}:${videoRef}`
         if (!statsPollersRef.current.has(pollKey)) {
           let attempts = 0
           const poll = async () => {
             attempts++
             try {
-              const res = await platformRPC.rpc.getVideoStats({ channelKey: video.channelKey, videoId: videoRef })
+              const res = await platformRPC.rpc.getVideoStats({ channelKey: resolvedChannelKey, videoId: videoRef })
               const stats = res?.stats
               if (stats) {
                 // Normalize identifiers (some backends include them in stats, some don't)
-                videoStatsEventEmitter.emit(video.channelKey, videoRef, {
+                videoStatsEventEmitter.emit(resolvedChannelKey, videoRef, {
                   ...stats,
-                  channelKey: stats.channelKey || video.channelKey,
+                  channelKey: stats.channelKey || resolvedChannelKey,
                   videoId: stats.videoId || videoRef,
                 })
-                if (stats.isComplete) return true
+                if (
+                  stats.isComplete ||
+                  stats.status === 'complete' ||
+                  stats.progress >= 100 ||
+                  (typeof stats.totalBlocks === 'number' &&
+                    stats.totalBlocks > 0 &&
+                    stats.downloadedBlocks >= stats.totalBlocks)
+                ) {
+                  return true
+                }
               }
             } catch (err) {
               // Ignore polling errors
@@ -283,6 +359,16 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
     const t0 = Date.now()
     console.log('[App] Initializing native backend via platform RPC...')
     setBackendError(null)
+    setStartupStatus(null)
+    backendReadyRef.current = false
+    if (startupTimerRef.current) {
+      clearTimeout(startupTimerRef.current)
+      startupTimerRef.current = null
+    }
+    if (startupProbeIntervalRef.current) {
+      clearInterval(startupProbeIntervalRef.current)
+      startupProbeIntervalRef.current = null
+    }
 
     // Import platform RPC
     platformRPC = await import('@peartube/platform/rpc')
@@ -291,10 +377,8 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
       platformRPC.events.onReady(async (data: any) => {
         console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
         startupLog('[Startup] backend ready ms=', Date.now() - t0)
-        setBlobServerPort(data?.blobServerPort || null)
-        setReady(true)
-        setBackendError(null)
-        await loadInitialData()
+        const readyPort = typeof data?.blobServerPort === 'number' ? data.blobServerPort : null
+        await markBackendReady('eventReady', readyPort)
       })
 
       platformRPC.events.onError((data: any) => {
@@ -320,12 +404,15 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
       if ((platformRPC.events as any).onCastPlaybackState) {
         castPlaybackStateUnsubRef.current = (platformRPC.events as any).onCastPlaybackState((data: any) => {
           const state = String(data?.state || '').toLowerCase()
+          const g = globalThis as Record<string, unknown>
           if (state === 'playing' || state === 'buffering' || state === 'loading' || state === 'paused') {
             lastKnownCastActiveAtRef.current = Date.now()
             castActiveRef.current = true
+            g[CAST_ACTIVE_GLOBAL_KEY] = true
             console.log('[CastDiag] onCastPlaybackState: cast active state =', state)
           } else {
             castActiveRef.current = false
+            g[CAST_ACTIVE_GLOBAL_KEY] = false
             console.log('[CastDiag] onCastPlaybackState: cast inactive state =', state)
           }
         })
@@ -336,6 +423,13 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
           const level = data?.level || 'info'
           const msg = data?.message || JSON.stringify(data)
           console.log(`[BackendLog/${level}]`, msg)
+          // Surface startup progress to UI while backend is still initializing
+          if (!backendReadyRef.current && msg) {
+            const friendly = friendlyStartupStatus(msg)
+            if (friendly) {
+              setStartupStatus(friendly)
+            }
+          }
         })
       }
 
@@ -348,23 +442,68 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
     try {
       const { backendSource, downloaderWorkerSource } = loadNativeBundleSources()
       console.log('[App] Backend bundle length:', backendSource?.length || 0)
-      console.log('[App] Downloader worker bundle length:', downloaderWorkerSource?.length || 0)
+      if (downloaderWorkerSource) {
+        console.log('[App] Downloader worker bundle length:', downloaderWorkerSource.length)
+      } else {
+        console.warn('[App] Downloader worker bundle unavailable - continuing without downloader worker')
+      }
       await platformRPC.initPlatformRPC({ backendSource, downloaderWorkerSource })
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
 
-      // Don't set ready here — wait for eventReady from backend.
-      // The backend root causes for startup stalls (FD locks, identity
-      // loading, corestore contention) are fixed, so eventReady should
-      // fire within seconds.
+      // Startup timeout: if eventReady hasn't fired within the timeout,
+      // something is stuck (stale Corestore lock, module load failure, etc.).
+      // Enter degraded mode so the user isn't stuck on "Connecting..." forever.
+      // If eventReady arrives later the onReady handler will overwrite with full state.
+      if (!backendReadyRef.current) {
+        const probeStartedAt = Date.now()
+        startupProbeIntervalRef.current = setInterval(() => {
+          if (backendReadyRef.current) {
+            if (startupProbeIntervalRef.current) {
+              clearInterval(startupProbeIntervalRef.current)
+              startupProbeIntervalRef.current = null
+            }
+            return
+          }
+
+          const pollElapsed = Date.now() - probeStartedAt
+          if (pollElapsed >= BACKEND_STARTUP_TIMEOUT_MS - 1000) {
+            if (startupProbeIntervalRef.current) {
+              clearInterval(startupProbeIntervalRef.current)
+              startupProbeIntervalRef.current = null
+            }
+            return
+          }
+
+          platformRPC.rpc?.getStatus?.({})
+            .then(async () => {
+              if (backendReadyRef.current) return
+              console.log('[App] Backend status probe succeeded before eventReady')
+              const modulePort = platformRPC.getBlobServerPort?.()
+              const readyPort = typeof modulePort === 'number' ? modulePort : null
+              await markBackendReady('statusProbe', readyPort)
+            })
+            .catch(() => {})
+        }, 1000)
+
+        startupTimerRef.current = setTimeout(() => {
+          if (!backendReadyRef.current) {
+            console.warn('[App] Backend startup timeout after', BACKEND_STARTUP_TIMEOUT_MS, 'ms — entering degraded mode')
+            startupLog('[Startup] TIMEOUT ms=', Date.now() - t0)
+            setBackendError('Backend is taking longer than expected. You can browse the UI — it will connect when ready.')
+            setReady(true)
+          }
+          startupTimerRef.current = null
+        }, BACKEND_STARTUP_TIMEOUT_MS)
+      }
     } catch (err) {
       console.error('[App] Failed to initialize platform RPC:', err)
       const message = err instanceof Error ? err.message : 'Failed to initialize backend'
       const isMissingBundle =
         message.includes('backend.bundle.js') ||
-        message.includes('downloader-worker.bundle.js')
+        message.includes('Backend bundles could not be resolved')
 
       if (isMissingBundle) {
-        setBackendError('Backend bundles are missing. Run `npm run bundle:backend` in packages/app, then restart the app.')
+        setBackendError('Backend bundle is missing. Run `npm run bundle:backend` in packages/app, then restart the app.')
       } else {
         setBackendError(message)
       }
@@ -375,11 +514,11 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
     try {
       await run
     } finally {
-      if (nativeInitInFlightRef.current === run) {
+    if (nativeInitInFlightRef.current === run) {
         nativeInitInFlightRef.current = null
       }
     }
-  }, [loadInitialData, startupLog])
+  }, [markBackendReady, startupLog])
 
   const initPearBackend = useCallback(async () => {
     console.log('[App] Initializing Pear desktop backend via platform RPC...')
@@ -561,9 +700,12 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
             stopCastKeepalive();
             console.log('[CastDiag] maybeSuspendWithGrace: proceeding with suspendNetwork()');
             console.log('[App] Suspending network for app state:', nextState)
-            platformRPC.rpc?.suspendNetwork?.().catch((err: any) => {
-              console.log('[App] suspendNetwork error:', err?.message)
-            })
+            const suspendResult = platformRPC.rpc?.suspendNetwork?.()
+            if (suspendResult && typeof (suspendResult as Promise<unknown>).catch === 'function') {
+              ;(suspendResult as Promise<unknown>).catch((err: any) => {
+                console.log('[App] suspendNetwork error:', err?.message)
+              })
+            }
             suspendInFlightRef.current = false
           }, 8000)
         } catch (err: any) {
@@ -577,9 +719,12 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
       suspendInFlightRef.current = false
       stopCastKeepalive()
       console.log('[App] Resuming network from foreground')
-      platformRPC.rpc?.resumeNetwork?.().catch((err: any) => {
-        console.log('[App] resumeNetwork error:', err?.message)
-      })
+      const resumeResult = platformRPC.rpc?.resumeNetwork?.()
+      if (resumeResult && typeof (resumeResult as Promise<unknown>).catch === 'function') {
+        ;(resumeResult as Promise<unknown>).catch((err: any) => {
+          console.log('[App] resumeNetwork error:', err?.message)
+        })
+      }
 
       if (typeof platformRPC.rpc?.castStartDiscovery === 'function') {
         platformRPC.rpc.castStartDiscovery({}).catch((err: any) => {
@@ -620,16 +765,19 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
         subscription.remove()
         castPlaybackStateUnsubRef.current?.()
         clearCastSuspendGraceTimer()
+        if (startupTimerRef.current) {
+          clearTimeout(startupTimerRef.current)
+          startupTimerRef.current = null
+        }
+        if (startupProbeIntervalRef.current) {
+          clearInterval(startupProbeIntervalRef.current)
+          startupProbeIntervalRef.current = null
+        }
         if (castActiveRef.current) {
           console.log('[CastDiag] Unmount: cast active, keeping worklet alive for headless cast')
         } else {
           console.log('[CastDiag] Unmount: cast inactive, terminating worklet')
           stopCastKeepalive()
-          // Always terminate worklet on unmount — shutdown signal handles graceful cleanup
-          if (platformRPC) {
-            console.log('[App] Initiating backend shutdown before terminate')
-            platformRPC.terminatePlatformRPC()
-          }
         }
       }
     } else if (isPear) {
@@ -745,7 +893,11 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
     if (!platformRPC) throw new Error('RPC not ready')
     setLoading(true)
     try {
-      const result = await platformRPC.rpc.createIdentity(name)
+      const createPromise = platformRPC.rpc.createIdentity(name)
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Create channel timed out. Backend may still be starting.')), 30000)
+      })
+      const result = await Promise.race([createPromise, timeoutPromise]) as any
       const id = result?.identity
       if (id) setIdentity(id)
       return id
@@ -852,6 +1004,7 @@ const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
     rpc: platformRPC?.rpc,
     platformEvents: platformRPC?.events,
     backendError,
+    startupStatus,
     retryBackend,
     uploadVideo: uploadVideoHandler,
     pickVideoFile: pickVideoFileHandler,

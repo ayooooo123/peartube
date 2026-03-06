@@ -1,7 +1,7 @@
 /**
  * DevicePickerModal - Modal to select cast devices
  *
- * Shows available FCast and Chromecast devices on the network.
+ * Shows available Chromecast devices on the network.
  * Also allows adding devices manually by IP address.
  */
 
@@ -48,11 +48,12 @@ export function DevicePickerModal({
   onAddManualDevice,
   onRefresh,
 }: DevicePickerModalProps) {
+  const useAndroidTextIcons = Platform.OS === 'android'
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [manualName, setManualName] = useState('')
   const [manualHost, setManualHost] = useState('')
   const [manualPort, setManualPort] = useState('')
-  const [manualProtocol, setManualProtocol] = useState<'fcast' | 'chromecast'>('fcast')
+  const manualProtocol = 'chromecast'
   const [isAdding, setIsAdding] = useState(false)
 
   const sortedDevices = (() => {
@@ -74,7 +75,7 @@ export function DevicePickerModal({
     try {
       const port = manualPort ? parseInt(manualPort, 10) : undefined
       const device = await onAddManualDevice(
-        manualName.trim() || `${manualProtocol === 'chromecast' ? 'Chromecast' : 'FCast'} @ ${manualHost}`,
+        manualName.trim() || `Chromecast @ ${manualHost}`,
         manualHost.trim(),
         port,
         manualProtocol
@@ -112,7 +113,7 @@ export function DevicePickerModal({
           <View style={styles.header}>
             <Text style={styles.title}>Cast</Text>
             <Pressable style={styles.closeButton} onPress={onClose}>
-              <Feather name="x" size={24} color={colors.text} />
+              {useAndroidTextIcons ? <Text style={styles.androidIcon}>X</Text> : <Feather name="x" size={24} color={colors.text} />}
             </Pressable>
           </View>
 
@@ -127,13 +128,13 @@ export function DevicePickerModal({
                   </>
                 ) : (
                   <>
-                    <Feather name="cast" size={48} color={colors.textMuted} />
+                    {useAndroidTextIcons ? <Text style={styles.androidHeroIcon}>TV</Text> : <Feather name="cast" size={48} color={colors.textMuted} />}
                     <Text style={styles.emptyText}>No devices found</Text>
                     <Text style={styles.emptySubtext}>
                       Make sure your phone and cast device are on the same Wi-Fi.
                     </Text>
                     <Pressable style={styles.emptyRefresh} onPress={onRefresh}>
-                      <Feather name="refresh-cw" size={16} color={colors.primary} />
+                      {useAndroidTextIcons ? <Text style={styles.androidIconPrimary}>R</Text> : <Feather name="refresh-cw" size={16} color={colors.primary} />}
                       <Text style={styles.emptyRefreshText}>Refresh</Text>
                     </Pressable>
                   </>
@@ -151,11 +152,15 @@ export function DevicePickerModal({
                   disabled={Boolean(connectingDeviceId) && connectingDeviceId !== device.id}
                 >
                   <View style={styles.deviceIcon}>
-                    <Feather
-                      name={device.protocol === 'chromecast' ? 'tv' : 'cast'}
-                      size={24}
-                      color={connectedDevice?.id === device.id ? colors.primary : colors.text}
-                    />
+                    {useAndroidTextIcons ? (
+                      <Text style={[styles.androidIcon, connectedDevice?.id === device.id && styles.androidIconConnected]}>TV</Text>
+                    ) : (
+                      <Feather
+                        name={device.protocol === 'chromecast' ? 'tv' : 'cast'}
+                        size={24}
+                        color={connectedDevice?.id === device.id ? colors.primary : colors.text}
+                      />
+                    )}
                   </View>
                   <View style={styles.deviceInfo}>
                     <Text style={[
@@ -188,7 +193,7 @@ export function DevicePickerModal({
               {isDiscovering ? (
                 <ActivityIndicator size={16} color={colors.primary} />
               ) : (
-                <Feather name="refresh-cw" size={16} color={colors.primary} />
+                useAndroidTextIcons ? <Text style={styles.androidIconPrimary}>R</Text> : <Feather name="refresh-cw" size={16} color={colors.primary} />
               )}
               <Text style={styles.actionText}>Refresh</Text>
             </Pressable>
@@ -197,7 +202,7 @@ export function DevicePickerModal({
               style={styles.actionButton}
               onPress={() => setShowAdvanced(!showAdvanced)}
             >
-              <Feather name={showAdvanced ? 'chevron-down' : 'chevron-up'} size={16} color={colors.primary} />
+              {useAndroidTextIcons ? <Text style={styles.androidIconPrimary}>{showAdvanced ? 'v' : '^'}</Text> : <Feather name={showAdvanced ? 'chevron-down' : 'chevron-up'} size={16} color={colors.primary} />}
               <Text style={styles.actionText}>Advanced</Text>
             </Pressable>
           </View>
@@ -238,40 +243,7 @@ export function DevicePickerModal({
                 />
               </View>
 
-              <View style={styles.protocolRow}>
-                <Pressable
-                  style={[
-                    styles.protocolButton,
-                    manualProtocol === 'fcast' && styles.protocolButtonActive,
-                  ]}
-                  onPress={() => setManualProtocol('fcast')}
-                >
-                  <Text
-                    style={[
-                      styles.protocolText,
-                      manualProtocol === 'fcast' && styles.protocolTextActive,
-                    ]}
-                  >
-                    FCast (custom)
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={[
-                    styles.protocolButton,
-                    manualProtocol === 'chromecast' && styles.protocolButtonActive,
-                  ]}
-                  onPress={() => setManualProtocol('chromecast')}
-                >
-                  <Text
-                    style={[
-                      styles.protocolText,
-                      manualProtocol === 'chromecast' && styles.protocolTextActive,
-                    ]}
-                  >
-                    Chromecast
-                  </Text>
-                </Pressable>
-              </View>
+              <Text style={styles.manualHint}>Protocol: Chromecast</Text>
 
               <Pressable
                 style={[styles.addButton, !manualHost.trim() && styles.addButtonDisabled]}
@@ -499,6 +471,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#fff',
+  },
+  androidIcon: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+    minWidth: 16,
+    textAlign: 'center',
+  },
+  androidIconPrimary: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.primary,
+    minWidth: 16,
+    textAlign: 'center',
+  },
+  androidIconConnected: {
+    color: colors.primary,
+  },
+  androidHeroIcon: {
+    fontSize: 34,
+    fontWeight: '700',
+    color: colors.textMuted,
   },
 })
 

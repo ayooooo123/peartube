@@ -167,7 +167,11 @@ export function attachMobileHandlers(B, deps) {
   B.eventCastDeviceFound = () => {}; B.eventCastDeviceLost = () => {}
   B.eventCastPlaybackState = () => {}; B.eventCastTimeUpdate = () => {}
   B.eventUploadProgress = () => {}; B.eventFeedUpdate = () => {}
-  B.eventLog = () => {}; B.eventVideoStats = () => {}; B.eventTranscodeProgress = () => {}
+  B.eventLog = () => {}
+  B.eventVideoStats = (data) => {
+    try { rpc.eventVideoStats?.(data) } catch {}
+  }
+  B.eventTranscodeProgress = () => {}
 
   // --- Mobile-specific file handlers (use bare-fs/bare-path) ---
   B.uploadVideo = async (r) => {

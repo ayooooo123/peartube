@@ -59,8 +59,20 @@ async function loadBackendModules() {
   fsNativeExtensions = fsNativeExtensionsMod?.default ?? fsNativeExtensionsMod
   transcoder = transcoderMod
   castTranscoder = castTranscoderMod
-  if (!HRPC || !createBackendContext || !setIsShuttingDown || !shutdownBackend || !generateAndStoreThumbnail || !path || !fs || !b4a || !http1 || !transcoder || !castTranscoder || !fsNativeExtensions || !setCastActive || !isCastActive || !prefetchVideoForCast) {
-    throw new Error('Missing required backend modules after dynamic import')
+  const _checks = { HRPC, createBackendContext, setIsShuttingDown, shutdownBackend, generateAndStoreThumbnail, path, fs, b4a, http1, transcoder, castTranscoder, fsNativeExtensions, setCastActive, isCastActive, prefetchVideoForCast }
+  const _missing = Object.entries(_checks).filter(([, v]) => !v).map(([k]) => k)
+  if (_missing.length) {
+    console.error('[Backend] Missing modules:', _missing.join(', '))
+    console.error('[Backend] Module details:', JSON.stringify({
+      specMod: typeof specMod, orchestratorMod: typeof orchestratorMod,
+      storageMod: typeof storageMod, thumbnailMod: typeof thumbnailMod,
+      transcoderMod: typeof transcoderMod, castTranscoderMod: typeof castTranscoderMod,
+      fsNativeExtensionsMod: typeof fsNativeExtensionsMod,
+    }))
+    console.error('[Backend] storageMod keys:', storageMod ? Object.keys(storageMod) : 'null')
+    console.error('[Backend] orchestratorMod keys:', orchestratorMod ? Object.keys(orchestratorMod) : 'null')
+    console.error('[Backend] castTranscoderMod keys:', castTranscoderMod ? Object.keys(castTranscoderMod) : 'null')
+    throw new Error('Missing required backend modules: ' + _missing.join(', '))
   }
 }
 
@@ -128,7 +140,6 @@ function attachUnhandledHandlers() {
   }
 }
 
-console.log('[Backend] Starting PearTube mobile backend, storagePath:', storagePath)
 attachUnhandledHandlers()
 try { await loadBackendModules() } catch (err) { reportBackendError('Backend module import failed', err); throw err }
 ensureRpc()
@@ -178,13 +189,17 @@ try {
 await acquireOwnerLock()
 ipcLog('[init] owner lock done')
 
-// Remove stale CORESTORE
+// Remove stale CORESTORE file and Corestore FD lock files.
+// On mobile the previous worklet may have been killed by the OS, leaving behind
+// lock files that prevent the new Corestore from opening.
 try { fs.unlinkSync(path.join(storageDir, 'CORESTORE')) } catch (e) { if (e.code !== 'ENOENT') console.log('[Backend] CORESTORE cleanup skipped:', e.message) }
-
+try { fs.unlinkSync(path.join(storageDir, 'LOCK')) } catch (e) { if (e.code !== 'ENOENT') console.log('[Backend] LOCK cleanup skipped:', e.message) }
+// Also clean primary corestore subdirectory lock (Corestore nests under primary/)
+try { fs.unlinkSync(path.join(storageDir, 'primary', 'LOCK')) } catch (e) { if (e?.code !== 'ENOENT') {} }
 // Clean stale RocksDB artifacts
 function rmdirRecursive(dir) { try { for (const e of fs.readdirSync(dir)) { const f = path.join(dir, e); try { fs.statSync(f).isDirectory() ? rmdirRecursive(f) : fs.unlinkSync(f) } catch {} }; fs.rmdirSync(dir) } catch {} }
 try { for (const n of ['logs', 'LOG', 'LOG.old', 'IDENTITY', 'CURRENT', 'MANIFEST-000001']) { const p = path.join(storageDir, n); try { fs.statSync(p).isDirectory() ? rmdirRecursive(p) : fs.unlinkSync(p) } catch {} } } catch {}
-ipcLog('[init] CORESTORE cleanup done')
+ipcLog('[init] CORESTORE + LOCK cleanup done')
 
 // ============================================
 // Initialize backend
@@ -193,7 +208,7 @@ let backend = null
 try {
   ipcLog('[init] createBackendContext starting')
   backend = await createBackendContext({
-    storagePath: storageDir, corestoreWaitForLock: true, ipcLog,
+    storagePath: storageDir, corestoreWaitForLock: false, ipcLog,
     onFeedUpdate: () => { try { rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' }) } catch {} },
     onStatsUpdate: (driveKey, videoPath, stats) => { try { rpc?.eventVideoStats?.({ stats: { videoId: videoPath, channelKey: driveKey, ...stats } }) } catch {} }
   })

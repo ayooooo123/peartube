@@ -1,11 +1,11 @@
 /**
  * CastButton - Button to open cast device picker
  *
- * Shows a cast icon that opens a modal to select FCast/Chromecast devices.
+ * Shows a cast icon that opens a modal to select Chromecast devices.
  * When connected, the icon is highlighted.
  */
 
-import { Pressable, ActivityIndicator, StyleSheet, Platform } from 'react-native'
+import { Pressable, ActivityIndicator, StyleSheet, Platform, Text } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
 
@@ -44,11 +44,15 @@ export function CastButton({
       {isConnecting ? (
         <ActivityIndicator size={size} color={activeColor} />
       ) : (
-        <Feather
-          name="cast"
-          size={size}
-          color={isConnected ? activeColor : color}
-        />
+        Platform.OS === 'android' ? (
+          <Text style={[styles.androidGlyph, { color: isConnected ? activeColor : color }]}>TV</Text>
+        ) : (
+          <Feather
+            name="cast"
+            size={size}
+            color={isConnected ? activeColor : color}
+          />
+        )
       )}
     </Pressable>
   )
@@ -59,6 +63,11 @@ const styles = StyleSheet.create({
     padding: 8,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  androidGlyph: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.4,
   },
 })
 

@@ -20,7 +20,7 @@ import Animated, {
   Extrapolation,
   cancelAnimation,
 } from 'react-native-reanimated'
-import { Feather, Ionicons } from '@expo/vector-icons'
+import { Feather as ExpoFeather, Ionicons as ExpoIonicons } from '@expo/vector-icons'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { useDownloads } from '@/lib/DownloadsContext'
@@ -71,6 +71,61 @@ function showCastAlert(message: string) {
   Alert.alert('Chromecast', message)
 }
 
+const ANDROID_ICON_GLYPHS: Record<string, string> = {
+  cast: 'TV',
+  play: '>',
+  pause: '||',
+  x: 'X',
+  'x-circle': 'X',
+  'chevron-up': '^',
+  'chevron-down': 'v',
+  'rotate-ccw': '<',
+  'rotate-cw': '>',
+  check: 'OK',
+  download: 'D',
+  minus: '-',
+  plus: '+',
+  maximize: '[]',
+  minimize: '_',
+  'more-horizontal': '...',
+  'share-2': 'S',
+  'thumbs-up': '+',
+  'thumbs-down': '-',
+  'corner-up-left': '<',
+  'trash-2': 'X',
+  tv: 'TV',
+}
+
+function resolveAndroidGlyph(name?: string) {
+  if (!name) return '?'
+  return ANDROID_ICON_GLYPHS[name] || ANDROID_ICON_GLYPHS[name.toLowerCase()] || '?'
+}
+
+function Feather(props: React.ComponentProps<typeof ExpoFeather>) {
+  if (Platform.OS !== 'android') return <ExpoFeather {...props} />
+  const glyph = resolveAndroidGlyph(typeof props.name === 'string' ? props.name : undefined)
+  const size = typeof props.size === 'number' ? props.size : 16
+  return (
+    <Text style={{ color: props.color || '#fff', fontSize: Math.max(12, Math.round(size * 0.85)), fontWeight: '700' }}>
+      {glyph}
+    </Text>
+  )
+}
+
+function Ionicons(props: React.ComponentProps<typeof ExpoIonicons>) {
+  if (Platform.OS !== 'android') return <ExpoIonicons {...props} />
+  const glyph = resolveAndroidGlyph(typeof props.name === 'string' ? props.name : undefined)
+  const size = typeof props.size === 'number' ? props.size : 16
+  return (
+    <Text style={{ color: props.color || '#fff', fontSize: Math.max(12, Math.round(size * 0.85)), fontWeight: '700' }}>
+      {glyph}
+    </Text>
+  )
+}
+
+const CHANNEL_META_CACHE_TTL_MS = 5 * 60 * 1000
+const channelMetaNameCache = new Map<string, { name: string | null; expiresAt: number }>()
+
 export function VideoPlayerOverlay() {
   const insets = useSafeAreaInsets()
   const { width: windowWidth, height: windowHeight } = useWindowDimensions()
@@ -82,8 +137,9 @@ export function VideoPlayerOverlay() {
     if (__DEV__) {
       console.log('[VideoPlayerOverlay] Mounted. isPear:', isPear, 'isDesktop:', isDesktop, 'Platform.OS:', Platform.OS)
       if (typeof window !== 'undefined') {
-        console.log('[VideoPlayerOverlay] window.Pear:', !!(window as any).Pear)
-        console.log('[VideoPlayerOverlay] PearWorkerClient:', !!(window as any).PearWorkerClient)
+        const windowState = window as unknown as Record<string, unknown>
+        console.log('[VideoPlayerOverlay] window.Pear:', !!windowState.Pear)
+        console.log('[VideoPlayerOverlay] PearWorkerClient:', !!windowState.PearWorkerClient)
         console.log('[VideoPlayerOverlay] userAgent:', navigator?.userAgent?.substring(0, 100))
       }
     }
@@ -157,6 +213,7 @@ export function VideoPlayerOverlay() {
     playbackRate,
     seekPosition: playerSeekPosition,
     isInPipMode,
+    androidSplitPlayerEnabled,
     setIsInPipMode,
     pipWindowSize,
     setPipWindowSize,
@@ -335,6 +392,13 @@ export function VideoPlayerOverlay() {
   const [miniPlayerDragOffset, setMiniPlayerDragOffset] = useState({ x: 0, y: 0 })
   const miniPlayerDragStartRef = useRef({ x: 0, y: 0, cornerX: 0, cornerY: 0 })
   const [pendingLandscapeExit, setPendingLandscapeExit] = useState(false)
+  const disableMiniLayoutOnAndroidSplit = Platform.OS === 'android'
+  const showLegacyMiniUi =
+    playerMode === 'mini' &&
+    !isLandscapeFullscreen &&
+    !pendingLandscapeExit &&
+    !isInPipMode &&
+    !disableMiniLayoutOnAndroidSplit
   const isLandscapeFullscreenShared = useSharedValue(false)
   const [channelMetaName, setChannelMetaName] = useState<string | null>(null)
 
@@ -419,14 +483,17 @@ export function VideoPlayerOverlay() {
   }, [cast])
 
   const handleCastDeviceSelect = useCallback(async (deviceId: string) => {
+    setShowCastPicker(false)
     setIsConnectingCast(true)
     // Set in-flight flag BEFORE connect to prevent auto-cast effect from also calling play
     // The auto-cast effect checks this flag and bails out if true
     castAutoPlayInFlightRef.current = true
     try {
+      pauseVideo()
       const success = await cast.connect(deviceId)
       if (!success) {
-        showCastAlert('Failed to connect to Chromecast device.')
+        setShowCastPicker(true)
+        showCastAlert(cast.lastError || 'Failed to connect to Chromecast device.')
         castAutoPlayInFlightRef.current = false
         return
       }
@@ -443,17 +510,13 @@ export function VideoPlayerOverlay() {
           const videoRef = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
             ? currentVideo.path
             : currentVideo.id
-          const videoAny = currentVideo as any
           const result = await rpc.getVideoUrl({
             channelKey: currentVideo.channelKey,
             videoId: videoRef,
-            publicBeeKey: videoAny.publicBeeKey || undefined,
-            blobId: videoAny.blobId || undefined,
-            blobsCoreKey: videoAny.blobsCoreKey || undefined,
-            mimeType: videoAny.mimeType || undefined,
           })
           urlToCast = result?.url || null
         } catch (err: any) {
+          setShowCastPicker(true)
           showCastAlert(err?.message || 'Failed to resolve video URL for casting.')
           castAutoPlayInFlightRef.current = false
           return
@@ -461,6 +524,7 @@ export function VideoPlayerOverlay() {
       }
 
       if (!urlToCast) {
+        setShowCastPicker(true)
         showCastAlert('Video URL is not ready yet. Try again once playback starts.')
         castAutoPlayInFlightRef.current = false
         return
@@ -468,7 +532,6 @@ export function VideoPlayerOverlay() {
 
       // Set ref BEFORE play to prevent auto-cast effect from also calling play
       castAutoPlayRef.current = `${currentVideo.channelKey}:${currentVideo.id}`
-      setShowCastPicker(false)
 
       // Start casting the current video
       await cast.play({
@@ -482,11 +545,16 @@ export function VideoPlayerOverlay() {
       // Reset in-flight flag - auto-cast effect can now run for different videos
       castAutoPlayInFlightRef.current = false
     }
-  }, [cast, videoUrl, currentVideo, currentTime, rpc])
+  }, [cast, videoUrl, currentVideo, currentTime, rpc, pauseVideo])
 
   const handleCastDisconnect = useCallback(async () => {
     await cast.disconnect()
-  }, [cast])
+    if (currentVideo && videoUrl) {
+      setTimeout(() => {
+        resumeVideo()
+      }, 80)
+    }
+  }, [cast, currentVideo, videoUrl, resumeVideo])
 
   const handleCloseCastPicker = useCallback(() => {
     setShowCastPicker(false)
@@ -516,14 +584,9 @@ export function VideoPlayerOverlay() {
           const videoRef = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
             ? currentVideo.path
             : currentVideo.id
-          const videoAny = currentVideo as any
           const result = await rpc.getVideoUrl({
             channelKey: currentVideo.channelKey,
             videoId: videoRef,
-            publicBeeKey: videoAny.publicBeeKey || undefined,
-            blobId: videoAny.blobId || undefined,
-            blobsCoreKey: videoAny.blobsCoreKey || undefined,
-            mimeType: videoAny.mimeType || undefined,
           })
           urlToCast = result?.url || null
         }
@@ -632,6 +695,7 @@ export function VideoPlayerOverlay() {
    const isPipLayoutActiveShared = useSharedValue(false)
    const isAutoPipEnabledShared = useSharedValue(false)
   const isFullscreenShared = useSharedValue(playerMode === 'fullscreen')
+  const splitPanTranslationY = useSharedValue(0)
   const overlayInVlcViewShared = useSharedValue(Platform.OS !== 'web')
     const screenWidthShared = useSharedValue(screenWidth)
     const screenHeightShared = useSharedValue(screenHeight)
@@ -876,10 +940,22 @@ export function VideoPlayerOverlay() {
         return
       }
 
+      const now = Date.now()
+      const cached = channelMetaNameCache.get(channelKey)
+      if (cached && cached.expiresAt > now) {
+        setChannelMetaName(cached.name)
+        return
+      }
+
       try {
         const result = await rpc.getChannelMeta({ channelKey })
         if (cancelled) return
-        setChannelMetaName(result?.name || null)
+        const name = result?.name || null
+        channelMetaNameCache.set(channelKey, {
+          name,
+          expiresAt: now + CHANNEL_META_CACHE_TTL_MS,
+        })
+        setChannelMetaName(name)
       } catch (err) {
         if (cancelled) return
         console.warn('[VideoPlayerOverlay] Failed to load channel meta:', err)
@@ -898,6 +974,10 @@ export function VideoPlayerOverlay() {
     // Avoid forcing animProgress synchronously during render (it kills transitions
     // and can fight gesture worklets).
     if (isInPipMode) return
+    if (disableMiniLayoutOnAndroidSplit) {
+      animProgress.value = withTiming(1, { duration: 150 })
+      return
+    }
     if (playerMode === 'fullscreen') {
       if (maximizedForPipRef.current) {
         // Snap instantly — user is going to background, no need to animate
@@ -911,7 +991,7 @@ export function VideoPlayerOverlay() {
     } else if (playerMode === 'hidden') {
       animProgress.value = withTiming(0, { duration: 150 })
     }
-  }, [playerMode, isInPipMode])
+  }, [playerMode, isInPipMode, disableMiniLayoutOnAndroidSplit])
 
   const maximizeFromMini = useCallback(() => {
     maximizePlayer()
@@ -950,6 +1030,14 @@ export function VideoPlayerOverlay() {
     .maxPointers(1)
     .onStart(() => {
       'worklet'
+      if (disableMiniLayoutOnAndroidSplit) {
+        if (!isFullscreenShared.value) return
+        if (isLandscapeFullscreenShared.value) return
+        if (isPipLayoutActiveShared.value) return
+        isGestureActive.value = true
+        splitPanTranslationY.value = 0
+        return
+      }
       if (isLandscapeFullscreenShared.value) return
       if (isPipLayoutActiveShared.value) return
 
@@ -963,6 +1051,11 @@ export function VideoPlayerOverlay() {
     })
     .onUpdate((event) => {
       'worklet'
+      if (disableMiniLayoutOnAndroidSplit) {
+        if (!isGestureActive.value) return
+        splitPanTranslationY.value = event.translationY
+        return
+      }
       if (!isGestureActive.value) return
       if (isLandscapeFullscreenShared.value) return
       if (isPipLayoutActiveShared.value) return
@@ -973,6 +1066,19 @@ export function VideoPlayerOverlay() {
     })
     .onEnd((event) => {
       'worklet'
+      if (disableMiniLayoutOnAndroidSplit) {
+        const wasActive = isGestureActive.value
+        isGestureActive.value = false
+        const dragDownDistance = splitPanTranslationY.value
+        splitPanTranslationY.value = 0
+        if (wasActive && (dragDownDistance > 80 || event.velocityY > 500)) {
+          runOnJS(minimizePlayer)()
+          animProgress.value = withTiming(1, { duration: 120 })
+          return
+        }
+        animProgress.value = withTiming(1, { duration: 120 })
+        return
+      }
       const wasActive = isGestureActive.value
       isGestureActive.value = false
       if (!wasActive) return
@@ -994,7 +1100,7 @@ export function VideoPlayerOverlay() {
 
       if (shouldMinimize) {
         animProgress.value = withSpring(0, SPRING_CONFIG_TIGHT)
-        runOnJS(minimizePlayer)()
+          runOnJS(minimizePlayer)()
       } else {
         animProgress.value = withSpring(1, SPRING_CONFIG_BOUNCY)
         runOnJS(maximizePlayer)()
@@ -1003,7 +1109,8 @@ export function VideoPlayerOverlay() {
     .onFinalize(() => {
       'worklet'
       isGestureActive.value = false
-    }), [minimizePlayer, maximizePlayer])
+      splitPanTranslationY.value = 0
+  }), [disableMiniLayoutOnAndroidSplit, minimizePlayer, maximizePlayer])
 
   const composedGesture = panGesture
 
@@ -1768,28 +1875,49 @@ export function VideoPlayerOverlay() {
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
-    const shouldInset = playerMode === 'fullscreen' && !isInPipMode && !isLandscapeFullscreen
+    const shouldInset = (playerMode === 'fullscreen' || disableMiniLayoutOnAndroidSplit) && !isInPipMode && !isLandscapeFullscreen
     MediaSession.setSurfaceViewInset(shouldInset ? -1 : 0).catch(() => {})
-  }, [playerMode, isInPipMode, isLandscapeFullscreen])
+  }, [playerMode, isInPipMode, isLandscapeFullscreen, disableMiniLayoutOnAndroidSplit])
 
   useEffect(() => {
     if (Platform.OS === 'web') return
     if (Platform.OS === 'android' && pipSupported === false) return
-    const shouldAutoPip =
-      (playerMode === 'fullscreen' || playerMode === 'mini') &&
-      currentVideo !== null &&
-      !isCasting
+    const shouldAutoPip = Platform.OS === 'android'
+      ? currentVideo !== null && !isCasting && isPlaying
+      : (playerMode === 'fullscreen' || (playerMode === 'mini' && !disableMiniLayoutOnAndroidSplit)) &&
+        currentVideo !== null &&
+        !isCasting
     autoPipEnabledRef.current = shouldAutoPip
     if (isInPipMode) return
     console.log('[VideoPlayerOverlay] Auto-PiP effect, playerMode:', playerMode, 'hasVideo:', !!currentVideo, 'enabling:', shouldAutoPip)
     if (Platform.OS === 'android') {
-      MediaSession.setAutoPictureInPicture(shouldAutoPip)
-        .then(() => console.log('[VideoPlayerOverlay] Auto-PiP set:', shouldAutoPip))
-        .catch((err) => console.error('[VideoPlayerOverlay] Auto-PiP failed:', err))
+      let cancelled = false
+      const applyAutoPip = async () => {
+        try {
+          let enabled = shouldAutoPip
+          if (androidSplitPlayerEnabled) {
+            const inPlayerActivity = await MediaSession.isInPlayerActivity()
+            if (cancelled) return
+            enabled = enabled && inPlayerActivity
+          }
+          await MediaSession.setAutoPictureInPicture(enabled)
+          if (!cancelled) {
+            console.log('[VideoPlayerOverlay] Auto-PiP set:', enabled)
+          }
+        } catch (err) {
+          if (!cancelled) {
+            console.error('[VideoPlayerOverlay] Auto-PiP failed:', err)
+          }
+        }
+      }
+      applyAutoPip()
+      return () => {
+        cancelled = true
+      }
     } else if (Platform.OS === 'ios') {
       setIosPipEnabled(shouldAutoPip)
     }
-  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode])
+  }, [playerMode, currentVideo, isCasting, isPlaying, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, androidSplitPlayerEnabled])
 
   // PiP entry is handled natively via onUserLeaveHint in MainActivity
   // Same activity shrinks, same player continues (single-player architecture)
@@ -1849,6 +1977,10 @@ export function VideoPlayerOverlay() {
   }, [currentVideo, playerMode, videoUrl, isPear, isDesktop])
 
   if (!currentVideo) {
+    return null
+  }
+
+  if (disableMiniLayoutOnAndroidSplit && playerMode === 'mini' && !isInPipMode) {
     return null
   }
 
@@ -2247,7 +2379,7 @@ export function VideoPlayerOverlay() {
                   <Feather name="cast" color={colors.primary} size={14} />
                   <span style={desktopStyles.castBannerText}>Casting to {castDeviceName}</span>
                   <button
-                    onClick={() => cast.disconnect()}
+                    onClick={handleCastDisconnect}
                     style={desktopStyles.castDisconnectButton}
                     aria-label="Disconnect casting"
                   >
@@ -2551,7 +2683,7 @@ export function VideoPlayerOverlay() {
         </Animated.View>
       )}
 
-      {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
+      {showLegacyMiniUi && (
         <Animated.View style={[styles.miniPipProgressBar, miniInfoStyle]} pointerEvents="none">
           <View style={[styles.miniPipProgressFill, { width: `${effectiveProgress * 100}%` }]} />
         </Animated.View>
@@ -2660,7 +2792,7 @@ export function VideoPlayerOverlay() {
         </Animated.View>
         </GestureDetector>
 
-        {playerMode === 'mini' && !isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && showControls && (
+        {showLegacyMiniUi && showControls && (
           <>
             <View style={styles.miniPipTopRow} pointerEvents="box-none">
               <Pressable
@@ -2703,7 +2835,7 @@ export function VideoPlayerOverlay() {
                 <View style={styles.castBanner}>
                   <Feather name="cast" color={colors.primary} size={14} />
                   <Text style={styles.castBannerText}>Casting to {castDeviceName}</Text>
-                  <Pressable onPress={() => cast.disconnect()} style={styles.castBannerAction}>
+                  <Pressable onPress={handleCastDisconnect} style={styles.castBannerAction}>
                     <Text style={styles.castBannerActionText}>Disconnect</Text>
                   </Pressable>
                 </View>

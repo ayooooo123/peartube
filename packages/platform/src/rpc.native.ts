@@ -79,7 +79,7 @@ declare const HRPC: new (stream: any) => {
   castAddManualDevice(req: { name: string; host: string; port?: number; protocol?: string }): Promise<any>;
   castConnect(req: { deviceId: string }): Promise<any>;
   castDisconnect(req: {}): Promise<any>;
-  castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number }): Promise<any>;
+  castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number; duration?: number; forceTranscode?: boolean }): Promise<any>;
   castPause(req: {}): Promise<any>;
   castResume(req: {}): Promise<any>;
   castStop(req: {}): Promise<any>;
@@ -257,6 +257,10 @@ function resolveStorageUri(FS: any, FSLegacy: any, configuredPath?: string): str
   throw new Error('No writable storage directory available from expo-file-system');
 }
 
+function normalizeFsModule(mod: any): any {
+  return mod?.default ?? mod;
+}
+
 /**
  * Check if a headless cast session is active
  * Asynchronously checks if the cast flag file exists using expo-file-system
@@ -265,13 +269,17 @@ function resolveStorageUri(FS: any, FSLegacy: any, configuredPath?: string): str
 export async function isHeadlessCastActive(): Promise<boolean> {
   try {
     // Get the storage path the same way initPlatformRPC does
-    const FS = require('expo-file-system');
-    const FSLegacy = require('expo-file-system/legacy');
+    const FS = normalizeFsModule(require('expo-file-system'));
+    const FSLegacy = normalizeFsModule(require('expo-file-system/legacy'));
     const storageUri = resolveStorageUri(FS, FSLegacy);
     const flagUri = storageUri.endsWith('/')
       ? `${storageUri}.peartube-cast-headless`
       : `${storageUri}/.peartube-cast-headless`;
-    const info = await FS.getInfoAsync(flagUri);
+    const getInfoAsync = FSLegacy?.getInfoAsync;
+    if (typeof getInfoAsync !== 'function') {
+      throw new Error('expo-file-system/legacy getInfoAsync is unavailable');
+    }
+    const info = await getInfoAsync(flagUri);
     return info.exists === true;
   } catch (err) {
     console.error('[Platform RPC] isHeadlessCastActive error:', err);
@@ -370,8 +378,8 @@ export async function initPlatformRPC(config: {
     // Get dependencies at runtime
     const WorkletClass = require('react-native-bare-kit').Worklet;
     const HRPCClass = require('@peartube/spec');
-    const FS = require('expo-file-system');
-    const FSLegacy = require('expo-file-system/legacy');
+    const FS = normalizeFsModule(require('expo-file-system'));
+    const FSLegacy = normalizeFsModule(require('expo-file-system/legacy'));
     const encoding = FSLegacy.EncodingType?.UTF8 || FS.EncodingType?.UTF8 || 'utf8';
 
     // Determine storage path
@@ -742,8 +750,8 @@ export async function startTranscodeWorklet(config: {
 }> {
   // Get Worklet class at runtime
   const WorkletClass = require('react-native-bare-kit').Worklet;
-  const FS = require('expo-file-system');
-  const FSLegacy = require('expo-file-system/legacy');
+  const FS = normalizeFsModule(require('expo-file-system'));
+  const FSLegacy = normalizeFsModule(require('expo-file-system/legacy'));
 
   // Terminate any existing transcode worklet
   if (transcodeWorklet) {
@@ -1205,7 +1213,7 @@ export const rpc = {
     return ensureRPC().castDisconnect({});
   },
 
-  async castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number }): Promise<{ success: boolean; error?: string | null }> {
+  async castPlay(req: { url: string; contentType: string; title?: string; thumbnail?: string; time?: number; volume?: number; duration?: number; forceTranscode?: boolean }): Promise<{ success: boolean; error?: string | null }> {
     return ensureRPC().castPlay(req);
   },
 

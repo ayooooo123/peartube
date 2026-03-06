@@ -342,6 +342,7 @@ export function VideoPlayerOverlay() {
   const [showCastPicker, setShowCastPicker] = useState(false)
   const [isConnectingCast, setIsConnectingCast] = useState(false)
   const cast = useCast()
+  const castPlay = cast.play
   const isCasting = cast.isConnected
   const castDeviceName = cast.connectedDevice?.name || 'Casting device'
   const castPlayback = cast.playbackState
@@ -529,16 +530,14 @@ export function VideoPlayerOverlay() {
 
         if (!urlToCast || cancelled) return
 
-        await cast.play({
+        castAutoPlayRef.current = castKey
+        await castPlay({
           url: urlToCast,
           contentType: currentVideo.mimeType || 'video/mp4',
           title: currentVideo.title,
           time: Math.floor(currentTime || 0),
         })
       } finally {
-        if (!cancelled) {
-          castAutoPlayRef.current = castKey
-        }
         castAutoPlayInFlightRef.current = false
       }
     }
@@ -547,7 +546,7 @@ export function VideoPlayerOverlay() {
     return () => {
       cancelled = true
     }
-  }, [isCasting, currentVideo?.channelKey, currentVideo?.id, videoUrl, rpc, cast])
+  }, [isCasting, currentVideo?.channelKey, currentVideo?.id, videoUrl, rpc, castPlay])
 
   useEffect(() => {
     if (Platform.OS === 'web') return

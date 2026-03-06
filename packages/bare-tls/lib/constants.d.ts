@@ -1,3 +1,8 @@
-declare const constants: { state: { HANDSHAKE: number } }
+declare const constants: {
+  state: {
+    CONNECTED: number
+    ATTACHED: number
+  }
+}
 
 export = constants

@@ -301,12 +301,6 @@ export async function initializeStorage(config) {
     log.debug('Swarm update event', { connections: swarm.connections?.size || 0, peers: swarm.peers?.size || 0 })
   });
 
-  // Log connection events
-  swarm.on('connection', (conn, info) => {
-    const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown'
-    console.log('[Storage] NEW CONNECTION:', remoteKey, 'total:', swarm.connections?.size || 0)
-  })
-
   // Log peer discovery events (DHT found a peer)
   swarm.on('peer', (peer) => {
     const peerKey = peer?.publicKey ? b4a.toString(peer.publicKey, 'hex').slice(0, 16) : 'unknown'
@@ -317,40 +311,55 @@ export async function initializeStorage(config) {
 
   // Set up replication for all connections
   swarm.on('connection', (conn, info) => {
-    const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
-    console.log('[Storage] Peer connected:', remoteKey);
+    try {
+      if (!conn || conn.destroyed) return
+      const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
+      console.log('[Storage] Peer connected:', remoteKey);
 
-    // Register stream with wakeup protocol for content announcements
-    if (wakeup) {
-      try {
-        wakeup.addStream(conn);
-      } catch (err) {
-        console.log('[Storage] Wakeup addStream error (non-fatal):', err?.message);
+      // Register stream with wakeup protocol for content announcements
+      if (wakeup) {
+        try {
+          wakeup.addStream(conn);
+        } catch (err) {
+          console.log('[Storage] Wakeup addStream error (non-fatal):', err?.message);
+        }
       }
-    }
 
-    // Replicate all Hypercore data in the Corestore:
-    // - Autobase cores (channel metadata, videos, comments, etc.)
-    // - Hyperblobs cores (video bytes, thumbnails)
-    store.replicate(conn);
+      // Replicate all Hypercore data in the Corestore:
+      // - Autobase cores (channel metadata, videos, comments, etc.)
+      // - Hyperblobs cores (video bytes, thumbnails)
+      try {
+        if (conn.destroyed) return
+        store.replicate(conn);
+      } catch (err) {
+        console.log('[Storage] store.replicate failed (non-fatal):', err?.message);
+      }
 
-    // CRITICAL: Also replicate all loaded Autobase channels
-    // Each channel's setupPairing registers its own handler, but that only fires for
-    // connections established AFTER the channel is loaded. This ensures channels loaded
-    // BEFORE this peer connected also get replicated.
-    if (channels.size > 0) {
-      console.log('[Storage] Replicating', channels.size, 'Autobase channel(s) on new connection');
-      for (const [keyHex, channel] of channels) {
-        if (channel.base && channel._replicatedConns && !channel._replicatedConns.has(conn)) {
-          try {
-            channel._replicatedConns.add(conn)
-            channel.base.replicate(conn)
-            console.log('[Storage] Replicated Autobase for channel:', keyHex.slice(0, 16))
-          } catch (err) {
-            console.log('[Storage] Error replicating channel', keyHex.slice(0, 16), ':', err?.message)
+      // CRITICAL: Also replicate all loaded Autobase channels
+      // Each channel's setupPairing registers its own handler, but that only fires for
+      // connections established AFTER the channel is loaded. This ensures channels loaded
+      // BEFORE this peer connected also get replicated.
+      if (channels.size > 0) {
+        console.log('[Storage] Replicating', channels.size, 'Autobase channel(s) on new connection');
+        for (const [keyHex, channel] of channels) {
+          if (conn.destroyed) break
+          if (channel?.base && channel._replicatedConns && !channel._replicatedConns.has(conn)) {
+            try {
+              channel._replicatedConns.add(conn)
+              if (conn.destroyed) {
+                channel._replicatedConns.delete(conn)
+                continue
+              }
+              channel.base.replicate(conn)
+              console.log('[Storage] Replicated Autobase for channel:', keyHex.slice(0, 16))
+            } catch (err) {
+              console.log('[Storage] Error replicating channel', keyHex.slice(0, 16), ':', err?.message)
+            }
           }
         }
       }
+    } catch (err) {
+      console.log('[Storage] connection handler error (non-fatal):', err?.message)
     }
   });
 

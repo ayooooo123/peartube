@@ -276,23 +276,17 @@ export class PublicFeedManager {
     this.setupFeedProtocol(conn);
   }
 
-  /**
-   * Set up the feed protocol on a connection using mux.pair() pattern
-   * @param {any} conn
-   */
   setupFeedProtocol(conn) {
     console.log('[PublicFeed] setupFeedProtocol: getting Protomux from connection');
     // Get or create Protomux instance for this connection
-    const mux = Protomux.from(conn);
+    let mux;
+    try {
+      mux = Protomux.from(conn);
+    } catch (err) {
+      console.log('[PublicFeed] Protomux.from failed (non-fatal):', err?.message);
+      return;
+    }
 
-    // Use mux.pair() to handle when remote opens this protocol
-    console.log('[PublicFeed] setupFeedProtocol: registering mux.pair() for', PROTOCOL_NAME);
-    mux.pair({ protocol: PROTOCOL_NAME }, () => {
-        console.log('[PublicFeed] mux.pair() triggered - remote opened protocol');
-        this.createFeedChannel(mux, conn);
-      });
-
-    // Also try to open from our side (one side will succeed first)
     console.log('[PublicFeed] setupFeedProtocol: creating feed channel from our side');
     this.createFeedChannel(mux, conn);
 
@@ -325,20 +319,30 @@ export class PublicFeedManager {
     console.log('[PublicFeed] createFeedChannel: creating channel with protocol:', PROTOCOL_NAME);
 
     // Create channel with messages defined in options
-    const channel = mux.createChannel({
+    let channel;
+    try {
+      channel = mux.createChannel({
       protocol: PROTOCOL_NAME,
       messages: [{
         encoding: c.json,
       onmessage: (msg) => {
         log.debug('Received message', { type: msg?.type, keys: msg?.keys?.length || 0 })
-        this.handleMessage(msg, conn);
+        try {
+          this.handleMessage(msg, conn);
+        } catch (err) {
+          console.log('[PublicFeed] handleMessage failed (non-fatal):', err?.message);
+        }
       }
       }],
       onopen: () => {
         console.log('[PublicFeed] Feed channel opened! Total feed connections:', this.feedConnections.size + 1);
         this.feedConnections.add(conn);
         // Immediately send our feed when channel opens
-        this.sendHaveFeed(conn);
+        try {
+          this.sendHaveFeed(conn);
+        } catch (err) {
+          console.log('[PublicFeed] sendHaveFeed failed on open (non-fatal):', err?.message);
+        }
       },
       onclose: () => {
         console.log('[PublicFeed] Feed channel closed');
@@ -346,6 +350,10 @@ export class PublicFeedManager {
         this.feedConnections.delete(conn);
       }
     });
+    } catch (err) {
+      console.log('[PublicFeed] createChannel failed (non-fatal):', err?.message);
+      return;
+    }
 
     if (!channel) {
       console.log('[PublicFeed] Channel already exists or failed to create');
@@ -358,8 +366,13 @@ export class PublicFeedManager {
     this.peerChannels.set(conn, channel);
 
     // Open the channel
-    channel.open();
-    console.log('[PublicFeed] createFeedChannel: channel.open() called');
+    try {
+      channel.open();
+      console.log('[PublicFeed] createFeedChannel: channel.open() called');
+    } catch (err) {
+      console.log('[PublicFeed] channel.open failed (non-fatal):', err?.message);
+      this.peerChannels.delete(conn);
+    }
   }
 
   /**

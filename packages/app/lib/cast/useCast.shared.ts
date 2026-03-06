@@ -231,6 +231,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
   const playSequenceRef = useRef(Promise.resolve())
   const playRequestIdRef = useRef(0)
   const lastPlayAtRef = useRef(0)
+  const pendingCastStartAtRef = useRef(0)
 
   useEffect(() => {
     connectedDeviceRef.current = connectedDevice
@@ -304,12 +305,22 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
 
     const handlePlaybackState = (data: any) => {
       if (!data?.state) return
+      const state = String(data.state).toLowerCase()
+
+      if (state === 'playing') {
+        pendingCastStartAtRef.current = 0
+      } else if (state === 'loading' && pendingCastStartAtRef.current === 0) {
+        pendingCastStartAtRef.current = Date.now()
+      }
+
       if (data.state === 'error') {
         const message = data?.error ? `Chromecast error: ${data.error}` : 'Chromecast error.'
         showCastError(message)
+        pendingCastStartAtRef.current = 0
         setPlaybackState(prev => ({ ...prev, state: 'idle' }))
         return
       }
+
       setPlaybackState(prev => ({ ...prev, state: data.state }))
     }
 
@@ -544,6 +555,7 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
       // session via onCastStop, then castPlay starts a new one from scratch.
 
       try {
+        pendingCastStartAtRef.current = Date.now()
         lastPlayAtRef.current = Date.now()
         const result = await rpc.castPlay({
           url: options.url,
@@ -565,7 +577,16 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
           return true
         }
 
+        const nonFatalOutcome = result?.outcome === 'superseded' || result?.reason === 'debounced' || result?.reason === 'in-progress' || result?.reason === 'already-active'
+        if (nonFatalOutcome) {
+          console.log('[useCast] play superseded/rejected without fatal error:', result?.reason || result?.outcome)
+          return false
+        }
+
         console.error('[useCast] play failed:', result?.error)
+        if (typeof result?.error === 'string' && result.error.includes('Not connected to cast device')) {
+          notifyConnectedDevice(null)
+        }
         await stopCastKeepalive()
         setPlaybackState(prev => ({ ...prev, state: 'idle' }))
         showCastError(`Chromecast failed to start playback.${result?.error ? ` ${result.error}` : ''}`)

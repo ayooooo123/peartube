@@ -1,5 +1,6 @@
 module.exports = {
   state: {
-    HANDSHAKE: 0x1
+    CONNECTED: 0x1,
+    ATTACHED: 0x2
   }
 }

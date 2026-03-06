@@ -8,13 +8,25 @@ interface DownloadsSaveModule {
   ): Promise<string>
 }
 
-const DownloadsSave: DownloadsSaveModule = Platform.OS !== 'web'
-  ? requireNativeModule('DownloadsSave')
-  : {
-      saveToDownloads: async () => {
-        throw new Error('saveToDownloads is not available on web')
-      }
-    }
+const downloadsSaveFallback: DownloadsSaveModule = {
+  saveToDownloads: async () => {
+    throw new Error('saveToDownloads is not available on this runtime')
+  }
+}
+
+let downloadsSaveCache: DownloadsSaveModule | null = null
+
+function getDownloadsSaveModule(): DownloadsSaveModule {
+  if (Platform.OS === 'web') return downloadsSaveFallback
+  if (downloadsSaveCache) return downloadsSaveCache
+  try {
+    downloadsSaveCache = requireNativeModule<DownloadsSaveModule>('DownloadsSave')
+    return downloadsSaveCache
+  } catch (err) {
+    console.warn('[DownloadsSave] Native module unavailable:', err)
+    return downloadsSaveFallback
+  }
+}
 
 /**
  * Save a file from app storage to the system Downloads folder
@@ -29,7 +41,7 @@ export async function saveToDownloads(
   filename: string,
   mimeType: string = 'video/mp4'
 ): Promise<string> {
-  return DownloadsSave.saveToDownloads(sourceFilePath, filename, mimeType)
+  return getDownloadsSaveModule().saveToDownloads(sourceFilePath, filename, mimeType)
 }
 
 export default {

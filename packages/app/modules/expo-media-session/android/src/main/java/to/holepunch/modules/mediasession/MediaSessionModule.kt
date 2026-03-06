@@ -1160,7 +1160,7 @@ class MediaSessionModule : Module() {
             putExtra(EXTRA_CAST_SUBTITLE, subtitle)
             putExtra("mediaSessionToken", mediaSession?.sessionToken)
         }
-        ContextCompat.startForegroundService(context, intent)
+        context.startService(intent)
     }
 
     private fun updateCastForegroundService(title: String, subtitle: String) {

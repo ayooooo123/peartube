@@ -197,11 +197,16 @@ export class MultiWriterChannel extends ReadyResource {
     // Handler that either replicates immediately (if base ready) or queues
     this._earlyConnectionHandler = (conn) => {
       if (this._replicatedConns.has(conn)) return
+      if (!conn || conn.destroyed) return
 
       if (this._baseReady && this.base) {
         // Base is ready, replicate immediately
         this._replicatedConns.add(conn)
         try {
+          if (conn.destroyed) {
+            this._replicatedConns.delete(conn)
+            return
+          }
           this.base.replicate(conn)
           console.log('[Channel] Early handler: replicated on connection for:', this.keyHex?.slice(0, 16))
         } catch (err) {

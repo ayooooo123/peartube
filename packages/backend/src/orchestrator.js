@@ -123,7 +123,11 @@ export async function createBackendContext(config) {
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
   const initializeStorageWithRetry = async (opts) => {
-    const maxAttempts = 20
+    // Mobile callers clean stale locks before reaching here, so we only need
+    // a few quick retries for genuine race conditions (e.g. two worklets
+    // starting near-simultaneously).  Desktop can tolerate a slightly longer
+    // window, but 5 attempts at ≤500 ms each keeps total wait under 2 s.
+    const maxAttempts = 5
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await initializeStorage(opts)
@@ -135,8 +139,10 @@ export async function createBackendContext(config) {
               const _fs = (await import('bare-fs')).default
               const _path = (await import('bare-path')).default
               const lockFile = _path.join(opts.storagePath, 'LOCK')
+              const primaryLockFile = _path.join(opts.storagePath, 'primary', 'LOCK')
               const corestoreFile = _path.join(opts.storagePath, 'CORESTORE')
               try { _fs.unlinkSync(lockFile) } catch {}
+              try { _fs.unlinkSync(primaryLockFile) } catch {}
               try { _fs.unlinkSync(corestoreFile) } catch {}
               const result = await initializeStorage(opts)
               console.log('[Orchestrator] Stale lock recovery succeeded')
@@ -147,8 +153,9 @@ export async function createBackendContext(config) {
           }
           throw err
         }
-        const backoffMs = Math.min(350 * attempt, 5000)
+        const backoffMs = Math.min(300 * attempt, 500)
         console.warn(`[Orchestrator] Corestore lock detected during init. Retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`)
+        ipcLog(`[orchestrator] lock retry ${attempt}/${maxAttempts}`)
         await delay(backoffMs)
       }
     }

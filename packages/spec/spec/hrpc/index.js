@@ -411,16 +411,26 @@ class HRPC {
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
+      if (!command) {
+        return
+      }
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
+      const handler = this._handlers[command]
+      if (typeof handler !== 'function') {
+        if (this._requestIsSend(command)) {
+          return
+        }
+        throw new Error(`No handler registered for command: ${command}`)
+      }
       if (this._requestIsSend(command)) {
         const request = req.data ? c.decode(requestEncoding, req.data) : null
-        await this._handlers[command](request)
+        await handler(request)
         return
       }
       if (!this._requestIsStream(command) && !this._responseIsStream(command)) {
         const request = req.data ? c.decode(requestEncoding, req.data) : null
-        const response = await this._handlers[command](request)
+        const response = await handler(request)
         req.reply(c.encode(responseEncoding, response))
       }
       if (!this._requestIsStream(command) && this._responseIsStream(command)) {
@@ -432,7 +442,7 @@ class HRPC {
           responseEncoding
         )
         responseStream.data = request
-        await this._handlers[command](responseStream)
+        await handler(responseStream)
       }
       if (this._requestIsStream(command) && !this._responseIsStream(command)) {
         const requestStream = new RPCRequestStream(
@@ -441,7 +451,7 @@ class HRPC {
           req.createRequestStream(),
           requestEncoding
         )
-        const response = await this._handlers[command](requestStream)
+        const response = await handler(requestStream)
         req.reply(c.encode(responseEncoding, response))
       }
       if (this._requestIsStream(command) && this._responseIsStream(command)) {
@@ -453,7 +463,7 @@ class HRPC {
           req.createResponseStream(),
           responseEncoding
         )
-        await this._handlers[command](requestStream)
+        await handler(requestStream)
       }
     })
   }

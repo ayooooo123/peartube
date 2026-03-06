@@ -221,8 +221,10 @@ exports.Socket = class TLSSocket extends Duplex {
     this._attach()
 
     try {
-      if (binding.handshake(this._handle)) this._onconnect()
+      const result = binding.handshake(this._handle)
+      if (result) this._onconnect()
     } catch (err) {
+      console.error('[bare-tls] handshake error:', err.message)
       this._pendingOpen = null
 
       cb(errors.from(err))

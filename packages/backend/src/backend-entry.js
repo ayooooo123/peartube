@@ -35,10 +35,11 @@ export async function createBackend(opts = {}) {
   }
 
   try {
-    const [{ createBackendContext }, { shutdownBackend }, specModule] = await Promise.all([
+    const [{ createBackendContext }, { shutdownBackend }, specModule, { registerSharedHandlers }] = await Promise.all([
       import('./orchestrator.js'),
       import('./storage.js'),
-      import('@peartube/spec')
+      import('@peartube/spec'),
+      import('./hrpc-handlers.js')
     ])
 
     const HRPC = specModule?.default ?? specModule
@@ -49,6 +50,7 @@ export async function createBackend(opts = {}) {
     })
 
     const rpc = new HRPC(stream)
+    registerSharedHandlers(rpc, backend)
 
     readyCallback({ blobServerPort: getBlobServerPort(backend) })
 

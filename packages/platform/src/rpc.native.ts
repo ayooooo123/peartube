@@ -7,6 +7,9 @@
 
 import type { VideoStats } from './types';
 
+declare function require(moduleName: string): any;
+declare const Buffer: any;
+
 // Types for external dependencies (provided at runtime)
 declare const Worklet: new () => {
   start(name: string, source: string, args?: string[]): void;
@@ -166,7 +169,13 @@ function sendShutdownSignalViaIpc(instance: InstanceType<typeof Worklet>): Promi
     }
 
     try {
-      ipc.write(JSON.stringify({ type: 'shutdown' }));
+      const shutdownPayload = JSON.stringify({ type: 'shutdown' })
+      if (typeof shutdownPayload !== 'string' || shutdownPayload.length === 0) {
+        cleanup()
+        resolve()
+        return
+      }
+      ipc.write(Buffer.from(shutdownPayload))
     } catch {
       cleanup();
       resolve(); // Write failed — proceed to terminate
@@ -226,6 +235,7 @@ const eventCallbacks = {
   castDeviceLost: [] as CastDeviceLostCallback[],
   castPlaybackState: [] as CastPlaybackStateCallback[],
   castTimeUpdate: [] as CastTimeUpdateCallback[],
+  log: [] as ((data: { level?: string; message: string; timestamp?: number }) => void)[],
 };
 
 // Helper to remove callback
@@ -338,6 +348,10 @@ export const events = {
     eventCallbacks.castTimeUpdate.push(cb);
     return () => removeCallback(eventCallbacks.castTimeUpdate, cb);
   },
+  onLog: (cb: (data: { level?: string; message: string; timestamp?: number }) => void) => {
+    eventCallbacks.log.push(cb);
+    return () => removeCallback(eventCallbacks.log, cb);
+  },
 };
 
 /**
@@ -425,21 +439,23 @@ export async function initPlatformRPC(config: {
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
 
-    if (!config.downloaderWorkerSource) {
-      throw new Error('Downloader worker bundle missing');
-    }
-
     const storageDirUri = storageUri.endsWith('/') ? storageUri : `${storageUri}/`;
     const downloaderWorkerUri = `${storageDirUri}downloader-worker.bundle.js`;
     const downloaderWorkerPath = downloaderWorkerUri.startsWith('file://')
       ? downloaderWorkerUri.slice(7)
       : downloaderWorkerUri;
 
-    try {
-      await FSLegacy.writeAsStringAsync(downloaderWorkerUri, config.downloaderWorkerSource, { encoding });
-      console.log('[Platform RPC] Downloader worker written:', downloaderWorkerPath);
-    } catch (err: any) {
-      throw new Error(`Failed to write downloader worker bundle: ${err?.message || err}`);
+    let workerArgPath = '';
+    if (config.downloaderWorkerSource) {
+      try {
+        await FSLegacy.writeAsStringAsync(downloaderWorkerUri, config.downloaderWorkerSource, { encoding });
+        console.log('[Platform RPC] Downloader worker written:', downloaderWorkerPath);
+        workerArgPath = downloaderWorkerPath;
+      } catch (err: any) {
+        console.warn('[Platform RPC] Downloader worker write failed, continuing without worker:', err?.message || err);
+      }
+    } else {
+      console.warn('[Platform RPC] Downloader worker source missing, continuing without worker');
     }
 
     // Create worklet and HRPC client before starting to avoid missing early events.
@@ -458,17 +474,16 @@ export async function initPlatformRPC(config: {
         safeDispatch('error', eventCallbacks.error, { message })
       })
       localWorklet.IPC.on('close', () => {
-        if (_isInitialized) {
-          _isInitialized = false
-          _startupState = 'error'
-          safeDispatch('error', eventCallbacks.error, { message: 'Backend IPC closed' })
-        }
+        const duringStartup = _startupState !== 'ready'
+        _isInitialized = false
+        _startupState = 'error'
+        safeDispatch('error', eventCallbacks.error, {
+          message: duringStartup ? 'Backend IPC closed during startup' : 'Backend IPC closed'
+        })
       })
     }
 
     console.log('[Platform RPC] IPC type:', localWorklet.IPC?.constructor?.name);
-
-    const { decode: decodeHrpcMessage } = require('@peartube/spec/messages');
 
   const safeDispatch = <T extends unknown>(label: string, callbacks: Array<(data: T) => unknown>, data: T) => {
     callbacks.forEach((cb) => {
@@ -502,7 +517,16 @@ export async function initPlatformRPC(config: {
     } catch {}
   }
 
+  let readyProbeTimer: ReturnType<typeof setInterval> | null = null;
+  const stopReadyProbe = () => {
+    if (readyProbeTimer) {
+      clearInterval(readyProbeTimer);
+      readyProbeTimer = null;
+    }
+  };
+
   const handleReady = (data: any) => {
+    stopReadyProbe();
     console.log('[Platform RPC] Backend ready, blobServerPort:', data?.blobServerPort);
     _blobServerPort = data?.blobServerPort ?? null;
     _isInitialized = true;
@@ -511,10 +535,51 @@ export async function initPlatformRPC(config: {
   };
 
   const handleError = (data: any) => {
+    stopReadyProbe();
     console.error('[Platform RPC] Backend error:', data?.message);
     _isInitialized = false;
     _startupState = 'error';
     safeDispatch('error', eventCallbacks.error, data);
+  };
+
+  const startReadyProbe = () => {
+    stopReadyProbe();
+    const startedAt = Date.now();
+    readyProbeTimer = setInterval(() => {
+      if (_isInitialized || !hrpc) {
+        stopReadyProbe();
+        return;
+      }
+      if (_startupState === 'error') {
+        stopReadyProbe();
+        return;
+      }
+      if (Date.now() - startedAt > 30000) {
+        stopReadyProbe();
+        return;
+      }
+
+      const statusCall = (hrpc as any).getStatus?.({});
+      if (!statusCall || typeof statusCall.then !== 'function') {
+        return;
+      }
+
+      Promise.race([
+        statusCall,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('ready-probe-timeout')), 1200)),
+      ])
+        .then((status: any) => {
+          if (_isInitialized) {
+            stopReadyProbe();
+            return;
+          }
+          const probedPort = status?.status?.blobServerPort;
+          const readyData = { blobServerPort: typeof probedPort === 'number' ? probedPort : _blobServerPort };
+          console.log('[Platform RPC] Backend ready via status probe, blobServerPort:', readyData.blobServerPort);
+          handleReady(readyData);
+        })
+        .catch(() => {});
+    }, 1000);
   };
 
     const handleVideoStats = (data: any) => {
@@ -565,61 +630,8 @@ export async function initPlatformRPC(config: {
     } else {
       console.log('[Platform RPC] Backend log:', data);
     }
+    safeDispatch('log', eventCallbacks.log, data);
   };
-
-    const fallbackEventCommands: Record<number, string> = {};
-    const rawRpc = (hrpc as any)?._rpc;
-    if (rawRpc && !rawRpc._peartubePatched && Object.keys(fallbackEventCommands).length) {
-    const originalOnRequest = rawRpc._onrequest;
-    rawRpc._onrequest = async (req: any) => {
-      try {
-        const fallbackEvent = fallbackEventCommands[req?.command];
-        if (fallbackEvent) {
-          const hasPayload = Boolean(req?.data && req.data.length > 0);
-          if (!hasPayload) {
-            return await originalOnRequest(req);
-          }
-          let payload = null;
-          try {
-            payload = decodeHrpcMessage(fallbackEvent, req.data);
-          } catch (decodeErr: any) {
-            console.error('[Platform RPC] Fallback decode failed:', decodeErr?.message || decodeErr, 'command:', req?.command);
-            return await originalOnRequest(req);
-          }
-
-          switch (fallbackEvent) {
-            case '@peartube/event-ready':
-              handleReady(payload || {});
-              break;
-            case '@peartube/event-error':
-              handleError(payload || {});
-              break;
-            case '@peartube/event-upload-progress':
-              handleUploadProgress(payload || {});
-              break;
-            case '@peartube/event-download-progress':
-              handleDownloadProgress(payload || {});
-              break;
-            case '@peartube/event-feed-update':
-              handleFeedUpdate(payload || {});
-              break;
-            case '@peartube/event-log':
-              handleLog(payload || {});
-              break;
-            case '@peartube/event-video-stats':
-              handleVideoStats(payload || {});
-              break;
-          }
-          return;
-        }
-        return await originalOnRequest(req);
-      } catch (err: any) {
-        console.error('[Platform RPC] HRPC handler error:', err?.message || err, 'command:', req?.command);
-        return;
-      }
-    };
-    rawRpc._peartubePatched = true;
-    }
 
     // Wire event handlers before starting the worklet.
     localHrpc.onEventReady(handleReady);
@@ -636,7 +648,8 @@ export async function initPlatformRPC(config: {
 
     // Start worklet after handlers are registered.
     _startupState = 'starting-worklet';
-    localWorklet.start('/backend.bundle', config.backendSource, [storagePath, downloaderWorkerPath]);
+    localWorklet.start('/backend.bundle', config.backendSource, [storagePath, workerArgPath]);
+    startReadyProbe();
     console.log('[Platform RPC] Worklet started');
   })();
 
@@ -1282,11 +1295,21 @@ export const rpc = {
 
   // Network lifecycle (background playback)
   async suspendNetwork(): Promise<{ success: boolean }> {
-    return (ensureRPC() as any).suspendNetwork({});
+    const rpc = ensureRPC() as unknown as Record<string, unknown>
+    const fn = rpc.suspendNetwork
+    if (typeof fn !== 'function') {
+      return { success: true }
+    }
+    return await (fn as (req: {}) => Promise<{ success: boolean }>).call(rpc, {})
   },
 
   async resumeNetwork(): Promise<{ success: boolean }> {
-    return (ensureRPC() as any).resumeNetwork({});
+    const rpc = ensureRPC() as unknown as Record<string, unknown>
+    const fn = rpc.resumeNetwork
+    if (typeof fn !== 'function') {
+      return { success: true }
+    }
+    return await (fn as (req: {}) => Promise<{ success: boolean }>).call(rpc, {})
   },
 
   // Channel and metadata updates

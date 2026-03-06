@@ -14,28 +14,6 @@ import crypto from 'hypercore-crypto';
 import b4a from 'b4a';
 
 /**
- * Video file signatures (magic bytes) for MIME type detection
- * Based on file format specifications
- */
-const VIDEO_SIGNATURES = [
-  // MP4/M4V/MOV (ftyp box)
-  { offset: 4, bytes: [0x66, 0x74, 0x79, 0x70], mime: 'video/mp4' },
-  // WebM/MKV (EBML header)
-  { offset: 0, bytes: [0x1A, 0x45, 0xDF, 0xA3], mime: null }, // Need to check DocType
-  // AVI (RIFF....AVI)
-  { offset: 0, bytes: [0x52, 0x49, 0x46, 0x46], mime: null }, // Need to check for AVI
-  // FLV
-  { offset: 0, bytes: [0x46, 0x4C, 0x56, 0x01], mime: 'video/x-flv' },
-  // MPEG
-  { offset: 0, bytes: [0x00, 0x00, 0x01, 0xBA], mime: 'video/mpeg' },
-  { offset: 0, bytes: [0x00, 0x00, 0x01, 0xB3], mime: 'video/mpeg' },
-  // Ogg
-  { offset: 0, bytes: [0x4F, 0x67, 0x67, 0x53], mime: 'video/ogg' },
-  // 3GP
-  { offset: 4, bytes: [0x66, 0x74, 0x79, 0x70, 0x33, 0x67, 0x70], mime: 'video/3gpp' },
-];
-
-/**
  * Detect MIME type from file magic bytes
  * Simple implementation without external dependencies for Bare runtime compatibility
  * @param {Buffer} buffer - First few KB of file data

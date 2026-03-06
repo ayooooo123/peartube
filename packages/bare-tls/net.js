@@ -4,11 +4,13 @@ const tls = require('bare-tls')
 
 class TLSNetSocket extends tls.Socket {
   ref() {
-    this.socket.ref()
+    const socket = this.socket
+    if (socket && socket.ref) socket.ref()
   }
 
   unref() {
-    this.socket.unref()
+    const socket = this.socket
+    if (socket && socket.unref) socket.unref()
   }
 }
 

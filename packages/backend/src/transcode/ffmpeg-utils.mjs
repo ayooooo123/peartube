@@ -207,6 +207,128 @@ export function copyCodecParameters(destCP, srcCP) {
   }
 }
 
+// ─── Codec Selection ──────────────────────────────────────────────────────────
+// Shared codec selection helpers. Each accepts the bare-ffmpeg module as the
+// first argument so callers that load ffmpeg differently can share the logic.
+
+const HW_DECODERS = new Set([
+  'h264_mediacodec',
+  'hevc_mediacodec',
+  'h264_videotoolbox',
+  'hevc_videotoolbox',
+])
+
+const HW_ENCODERS = new Set([
+  'h264_mediacodec',
+  'h264_videotoolbox',
+])
+
+/**
+ * Select a decoder for a given codec ID, preferring HW-accelerated decoders.
+ *
+ * @param {object} ff - bare-ffmpeg module
+ * @param {number} codecId - ffmpeg codec ID (e.g. ff.constants.codecs.H264)
+ * @param {string} [tag='ffmpeg-utils'] - log prefix
+ * @returns {{ decoder, name: string, isHardware: boolean } | null}
+ */
+export function selectDecoderForId(ff, codecId, tag = 'ffmpeg-utils') {
+  if (!ff) return null
+
+  let candidates = []
+  if (codecId === ff.constants.codecs.H264) {
+    candidates = ['h264_mediacodec', 'h264_videotoolbox', 'h264']
+  } else if (codecId === ff.constants.codecs.HEVC) {
+    candidates = ['hevc_mediacodec', 'hevc_videotoolbox', 'hevc']
+  }
+
+  for (const name of candidates) {
+    try {
+      const decoder = ff.findDecoderByName?.(name)
+      if (decoder && decoder._handle) {
+        try { console.log(`[${tag}] selected decoder`, name, 'hw=', HW_DECODERS.has(name)) } catch {}
+        return { decoder, name, isHardware: HW_DECODERS.has(name) }
+      }
+    } catch {}
+  }
+
+  const codec = ff.Codec?.for?.(codecId)
+  const decoder = codec?.decoder
+  if (decoder && decoder._handle) {
+    try { console.log(`[${tag}] selected decoder codec fallback`, codecId) } catch {}
+    return { decoder, name: `codec:${codecId}`, isHardware: false }
+  }
+  return null
+}
+
+/**
+ * Select an H.264 encoder, preferring HW-accelerated encoders.
+ *
+ * @param {object} ff - bare-ffmpeg module
+ * @param {string} [tag='ffmpeg-utils'] - log prefix
+ * @returns {{ encoder, name: string, isHardware: boolean, pixelFormat: number } | null}
+ */
+export function selectH264Encoder(ff, tag = 'ffmpeg-utils', options = {}) {
+  if (!ff) return null
+
+  const preferHardware = options?.preferHardware === true
+
+  const candidates = preferHardware
+    ? ['h264_mediacodec', 'h264_videotoolbox', 'libx264', 'h264']
+    : ['libx264', 'h264', 'h264_mediacodec', 'h264_videotoolbox']
+
+  for (const name of candidates) {
+    try {
+      const encoder = ff.findEncoderByName?.(name)
+      if (encoder && encoder._handle) {
+        try { console.log(`[${tag}] selected H264 encoder`, name, 'hw=', HW_ENCODERS.has(name)) } catch {}
+        return {
+          encoder,
+          name,
+          isHardware: HW_ENCODERS.has(name),
+          pixelFormat: HW_ENCODERS.has(name)
+            ? ff.constants.pixelFormats.NV12
+            : ff.constants.pixelFormats.YUV420P,
+        }
+      }
+    } catch {}
+  }
+
+  const fallback = ff.Codec?.H264?.encoder
+  if (fallback && fallback._handle) {
+    return {
+      encoder: fallback,
+      name: 'codec:H264',
+      isHardware: false,
+      pixelFormat: ff.constants.pixelFormats.YUV420P,
+    }
+  }
+  return null
+}
+
+/**
+ * Select an AAC encoder.
+ *
+ * @param {object} ff - bare-ffmpeg module
+ * @param {string} [tag='ffmpeg-utils'] - log prefix
+ * @returns {{ encoder, name: string } | null}
+ */
+export function selectAacEncoder(ff, tag = 'ffmpeg-utils') {
+  if (!ff) return null
+  const candidates = ['aac', 'libfdk_aac', 'libvo_aacenc']
+  for (const name of candidates) {
+    try {
+      const encoder = ff.findEncoderByName?.(name)
+      if (encoder && encoder._handle) {
+        try { console.log(`[${tag}] selected AAC encoder`, name) } catch {}
+        return { encoder, name }
+      }
+    } catch {}
+  }
+  const fallback = ff.Codec?.AAC?.encoder
+  if (fallback && fallback._handle) return { encoder: fallback, name: 'codec:AAC' }
+  return null
+}
+
 export default {
   safeDestroy,
   safeUnref,
@@ -215,4 +337,7 @@ export default {
   safeRangeCheck,
   ResourceTracker,
   copyCodecParameters,
+  selectDecoderForId,
+  selectH264Encoder,
+  selectAacEncoder,
 }

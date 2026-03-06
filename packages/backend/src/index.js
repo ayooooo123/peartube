@@ -6,7 +6,6 @@
 
 // Storage module - Corestore, BlobServer
 export {
-  wrapStoreWithTimeout,
   initializeStorage,
   loadChannel,
   createChannel,
@@ -50,3 +49,5 @@ export { logger, setLogLevel, LogLevel } from './logger.js';
 
 // Orchestrator - one-shot initialization for all components
 export { createBackendContext } from './orchestrator.js';
+
+export * as cast from './cast/index.js';

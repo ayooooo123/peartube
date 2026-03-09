@@ -74,7 +74,7 @@ jobs:
 
       - name: Set up QEMU (for ARM64 emulation)
         if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Build in Docker container
         run: |

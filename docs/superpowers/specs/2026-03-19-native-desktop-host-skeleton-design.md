@@ -90,6 +90,52 @@ Responsibilities:
 - Attach shared handlers.
 - Expose a small host launch contract that both mobile and desktop runners can consume.
 
+Host launch contract:
+
+```ts
+type StartHostOptions = {
+  platform: 'mobile' | 'desktop'
+  storagePath: string
+  entrypoint: string
+  args?: string[]
+}
+
+type HostReady = {
+  blobServerPort: number | null
+  protocolVersion: 1
+}
+
+type HostErrorCode =
+  | 'HOST_START_FAILED'
+  | 'STORAGE_INIT_FAILED'
+  | 'PERMISSION_DENIED'
+  | 'TRANSPORT_DISCONNECTED'
+  | 'PROTOCOL_VERSION_MISMATCH'
+  | 'CAPABILITY_UNAVAILABLE'
+  | 'OFFLINE_UNAVAILABLE'
+  | 'REPLICATION_TIMEOUT'
+  | 'PLAYBACK_URL_UNAVAILABLE'
+  | 'PLAYER_LOAD_FAILED'
+
+type HostLifecycleEvent =
+  | { type: 'host.ready', data: HostReady }
+  | { type: 'host.error', code: HostErrorCode, message: string, retryable: boolean }
+  | { type: 'transport.closed', reason?: string }
+
+type HostSession = {
+  stream: Duplex
+  waitUntilReady(): Promise<HostReady>
+  terminate(): Promise<void>
+  onLifecycle(cb: (event: HostLifecycleEvent) => void): () => void
+}
+
+type HostRunner = {
+  start(options: StartHostOptions): Promise<HostSession>
+}
+```
+
+The implementation can vary by platform, but the shell should only depend on this interface.
+
 ### `packages/protocol`
 
 Purpose:
@@ -107,6 +153,32 @@ Key boundary:
 - Domain operations stay in the shared host contract.
 - Shell capabilities become explicit adapters rather than leaking into the domain layer by default.
 
+Initial protocol capability groups:
+
+- `system`: status, storage stats, swarm status
+- `identity`: create, get, list, recover, activate
+- `feed`: public feed, refresh, publish, unpublish
+- `channel`: join, subscribe, unsubscribe, metadata, devices
+- `video`: list, detail, thumbnail, playback URL, metadata update, delete, prefetch
+- `watch`: watch logging and recommendation reads
+- `transfer`: upload and download
+- `search`: channel search, global search, vector indexing
+- `shell`: file picking, cast, player-specific adapters, and other edge capabilities
+
+Initial shared event names:
+
+- `host.ready`
+- `host.error`
+- `upload.progress`
+- `download.progress`
+- `feed.updated`
+- `video.stats`
+- `cast.deviceFound`
+- `cast.deviceLost`
+- `cast.playbackState`
+- `cast.timeUpdate`
+- `transport.closed`
+
 ### `packages/desktop-native`
 
 Purpose:
@@ -119,6 +191,15 @@ Responsibilities:
 - Start the shared host through an Apple-native bridge.
 - Use `AVPlayer` for the first playback path.
 - Subscribe to shared protocol events and send commands through the shared protocol client.
+
+Desktop runner decision:
+
+- The macOS shell will launch the host out of process relative to the Swift UI.
+- The host process will run Bare code and expose a framed duplex byte stream.
+- The first implementation will launch a bundled host sidecar with `Process` and connect it with paired `Pipe` streams.
+- The Swift shell will not host backend state in process.
+- The Apple bridge is responsible for process lifecycle and byte transport only.
+- `packages/protocol` sits above that transport and hides bridge details from the rest of the shell.
 
 ### Existing app packages
 
@@ -200,6 +281,8 @@ Phase 1 does not need to fully redesign the schema. It does need to establish th
 
 The macOS app will be a native Swift shell. The first pass should use a simple Apple-native playback path with `AVPlayer`, fed by host-resolved local blob or HTTP URLs.
 
+The native desktop host will run out of process and communicate with the shell over a duplex stream exposed through the Apple bridge layer. The initial bridge will be a child `Process` plus paired `Pipe` streams so the implementation plan has a concrete transport target. That transport can be replaced later without changing the shell-facing runner contract.
+
 This branch is intentionally desktop-first:
 
 - It proves the native shell direction quickly.
@@ -218,15 +301,38 @@ Requirements:
 - Host shutdown should be idempotent.
 - Capability failures should return typed errors where possible.
 - Playback resolution failures should be distinct from player failures.
+- Storage initialization failures should stop startup before the shell enters a connected state.
+- Permission failures should surface a stable code and a shell-actionable reason.
+- Protocol version mismatch should fail fast at handshake time.
+- Retryable transport failures should be marked retryable and non-destructive.
+- Offline or replication-lag states should be distinguishable from hard failures.
+- Shell reconnect behavior should be explicit: reconnect on transport loss, do not silently retry after fatal startup failure.
 
 The native shell should be able to show:
 
 - host start failure
+- storage unavailable
+- permission denied
+- protocol version mismatch
 - disconnected or degraded backend state
+- offline or waiting-for-replication state
 - missing playback URL
 - player load failure
 
 without needing to understand backend internals.
+
+Typed error codes for the initial protocol surface:
+
+- `HOST_START_FAILED`
+- `STORAGE_INIT_FAILED`
+- `PERMISSION_DENIED`
+- `TRANSPORT_DISCONNECTED`
+- `PROTOCOL_VERSION_MISMATCH`
+- `CAPABILITY_UNAVAILABLE`
+- `OFFLINE_UNAVAILABLE`
+- `REPLICATION_TIMEOUT`
+- `PLAYBACK_URL_UNAVAILABLE`
+- `PLAYER_LOAD_FAILED`
 
 ## Testing and Verification Strategy
 
@@ -247,7 +353,7 @@ Behavior verification for the first native slice:
 
 Because this repository restricts build and install commands to explicit requests, implementation-phase build and test commands should be run deliberately once the plan is approved.
 
-## Migration Phases
+## Migration Phases For This Plan
 
 ### Phase 0: Branch and spec
 
@@ -269,7 +375,7 @@ Success criteria:
 
 ### Phase 2: Desktop runner parity
 
-- Add a desktop runner abstraction that mirrors the mobile worklet launch shape.
+- Add a desktop runner abstraction that mirrors the mobile host-launch API.
 - Move desktop-specific transport setup behind that runner.
 
 Success criteria:
@@ -287,17 +393,6 @@ Success criteria:
 
 - The native macOS app launches.
 - Browse to detail to play works against the shared host.
-
-### Phase 4: Surface expansion and old desktop de-risking
-
-- Add settings, subscriptions, studio scaffolding, downloads, and diagnostics.
-- Shift new desktop work to the native shell.
-- Keep the old desktop path only as fallback until confidence is high.
-
-Success criteria:
-
-- The native shell covers the important daily-use flows.
-- Old desktop-specific glue stops being the default place for new feature work.
 
 ## First Files to Change
 
@@ -320,6 +415,17 @@ That order keeps the branch aligned with the real goal: one backend model, then 
 - The native shell will need a stable Apple-side bridge to the shared host before UI work can move quickly.
 - Video playback may surface assumptions in the current app that were implicitly handled by the web or Pear environment.
 - Keeping the old desktop path as fallback reduces delivery risk but increases temporary duplication.
+
+## Explicitly Deferred
+
+The following work is intentionally out of scope for the first implementation plan and should be covered by a follow-on spec after the skeleton lands:
+
+- settings parity
+- subscriptions parity beyond what browse requires
+- studio and upload UI in the native shell
+- downloads management UI
+- diagnostics and advanced tooling surfaces
+- retirement of the old desktop path
 
 ## Recommendation
 

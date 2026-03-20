@@ -1,4 +1,4 @@
-import { createProtocolClient, PROTOCOL_EVENTS } from '@peartube/protocol'
+import { PROTOCOL_EVENTS } from '../../protocol/src/event-map.js'
 
 export type HostReadyData = {
   blobServerPort: number | null
@@ -46,9 +46,18 @@ export type PlatformRunner = {
 
 export type PlatformRunnerSession = {
   stream: any
+  client?: ProtocolClientLike
   waitUntilReady(): Promise<HostReadyData>
   terminate(): Promise<void>
   onLifecycle(cb: (event: PlatformLifecycleEvent) => void): () => void
+}
+
+export type ProtocolClientLike = {
+  rpc: any
+  events: {
+    on(event: string, listener: (payload: any) => void): () => void
+  }
+  ready(): Promise<HostReadyData>
 }
 
 type ReadyCallback = (data: HostReadyData) => void
@@ -83,7 +92,7 @@ type PlatformRpcBridgeOptions = {
   entrypoint: string
   getStoragePath(): string
   getArgs?(): string[]
-  createProtocolClientImpl?: typeof createProtocolClient
+  createProtocolClientImpl?: (options: { stream: any }) => ProtocolClientLike
 }
 
 function removeCallback<T>(callbacks: T[], callback: T) {
@@ -119,10 +128,10 @@ function safeDispatch<T>(callbacks: T[], value: Parameters<Extract<T, (...args: 
 
 export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
   const callbacks = createCallbackStore()
-  const createClient = options.createProtocolClientImpl ?? createProtocolClient
+  const createClient = options.createProtocolClientImpl
 
   let session: PlatformRunnerSession | null = null
-  let client: ReturnType<typeof createProtocolClient> | null = null
+  let client: ProtocolClientLike | null = null
   let initPromise: Promise<void> | null = null
   let blobServerPort: number | null = null
   let initialized = false
@@ -156,7 +165,7 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
     protocolUnsubscribes = []
   }
 
-  const bindClientEvents = (nextClient: ReturnType<typeof createProtocolClient>) => {
+  const bindClientEvents = (nextClient: ProtocolClientLike) => {
     protocolUnsubscribes = [
       nextClient.events.on(PROTOCOL_EVENTS.UPLOAD_PROGRESS, (data: any) => safeDispatch(callbacks.uploadProgress, data)),
       nextClient.events.on(PROTOCOL_EVENTS.LOG, (data: any) => safeDispatch(callbacks.log, data)),
@@ -258,7 +267,11 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
           args: options.getArgs?.() ?? []
         })
 
-        const nextClient = createClient({ stream: nextSession.stream })
+        const nextClient = nextSession.client ?? createClient?.({ stream: nextSession.stream })
+
+        if (!nextClient) {
+          throw new Error('Platform runner did not provide a protocol client')
+        }
 
         session = nextSession
         client = nextClient

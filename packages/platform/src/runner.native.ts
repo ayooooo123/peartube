@@ -118,6 +118,7 @@ export function createNativeRunner(dependencies: NativeRunnerDependencies): Plat
 
       return {
         stream,
+        client,
         waitUntilReady() {
           return readyPromise
         },

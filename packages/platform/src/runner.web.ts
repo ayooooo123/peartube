@@ -1,6 +1,6 @@
-import { createProtocolClient, PROTOCOL_EVENTS } from '@peartube/protocol'
+import { PROTOCOL_EVENTS } from '../../protocol/src/event-map.js'
 
-import type { PlatformLifecycleEvent, PlatformRunner } from './rpc.shared'
+import type { PlatformLifecycleEvent, PlatformRunner, ProtocolClientLike } from './rpc.shared'
 
 type WebRunnerDependencies = {
   connectTransport(options: {
@@ -10,10 +10,9 @@ type WebRunnerDependencies = {
     args?: string[]
   }): Promise<{
     stream: any
-    client?: ReturnType<typeof createProtocolClient>
+    client?: ProtocolClientLike
     terminate?(): Promise<void> | void
   }>
-  createProtocolClientImpl?: typeof createProtocolClient
 }
 
 function createLifecycleController() {
@@ -31,13 +30,16 @@ function createLifecycleController() {
 }
 
 export function createWebRunner(dependencies: WebRunnerDependencies): PlatformRunner {
-  const createClient = dependencies.createProtocolClientImpl ?? createProtocolClient
-
   return {
     async start(options) {
       const lifecycle = createLifecycleController()
       const transport = await dependencies.connectTransport(options)
-      const client = transport.client ?? createClient({ stream: transport.stream })
+      const client = transport.client
+
+      if (!client) {
+        throw new Error('Web runner requires a pre-created protocol client')
+      }
+
       const readyPromise = client.ready()
 
       client.events.on(PROTOCOL_EVENTS.HOST_READY, (data: any) => {
@@ -56,6 +58,7 @@ export function createWebRunner(dependencies: WebRunnerDependencies): PlatformRu
 
       return {
         stream: transport.stream,
+        client,
         waitUntilReady() {
           return readyPromise
         },

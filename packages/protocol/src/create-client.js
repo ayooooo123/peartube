@@ -1,9 +1,7 @@
-import { createRequire } from 'node:module'
 import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from '@peartube/host'
+import DefaultHRPC from '@peartube/spec'
 
 import { PROTOCOL_EVENT_BINDINGS, PROTOCOL_EVENTS } from './event-map.js'
-
-const require = createRequire(import.meta.url)
 
 const NAMESPACE_METHODS = Object.freeze({
   identity: {
@@ -195,8 +193,7 @@ function bindTransport(stream, events, emitHostError) {
 }
 
 function loadDefaultHRPC() {
-  const module = require('@peartube/spec')
-  return module?.default ?? module
+  return DefaultHRPC?.default ?? DefaultHRPC
 }
 
 export function createProtocolClient({ stream, HRPCImpl } = {}) {

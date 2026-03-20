@@ -5,6 +5,8 @@
  * Handles BareKit Worklet initialization, HRPC setup, and event subscriptions.
  */
 
+import { createPlatformRpcBridge } from './rpc.shared';
+import { createNativeRunner } from './runner.native';
 import type { VideoStats } from './types';
 
 declare function require(moduleName: string): any;
@@ -111,8 +113,6 @@ declare const FileSystem: {
 };
 
 // Module state
-let worklet: InstanceType<typeof Worklet> | null = null;
-let hrpc: InstanceType<typeof HRPC> | null = null;
 let _blobServerPort: number | null = null;
 let _initPromise: Promise<void> | null = null;
 let _isInitialized = false;
@@ -120,6 +120,66 @@ let _startupState: 'idle' | 'initializing' | 'starting-worklet' | 'ready' | 'err
 let _isTerminating = false;
 const BACKEND_WORKLET_ID = 'peartube-backend-core'
 const SHUTDOWN_TIMEOUT_MS = 4000
+
+type BareWorkletCtor = new (name?: string) => {
+  start(name: string, source: string, args?: string[]): void;
+  terminate(): void;
+  IPC: any;
+};
+
+const nativeRuntimeConfig: {
+  WorkletCtor: BareWorkletCtor | null;
+  backendSource: string;
+  storagePath: string;
+  workerArgs: string[];
+} = {
+  WorkletCtor: null,
+  backendSource: '',
+  storagePath: '',
+  workerArgs: [],
+};
+
+const mainRunner = createNativeRunner({
+  get WorkletCtor() {
+    if (!nativeRuntimeConfig.WorkletCtor) {
+      throw new Error('Native worklet runtime is not configured');
+    }
+    return nativeRuntimeConfig.WorkletCtor;
+  },
+  get backendSource() {
+    if (!nativeRuntimeConfig.backendSource) {
+      throw new Error('Native backend source is not configured');
+    }
+    return nativeRuntimeConfig.backendSource;
+  },
+  workletId: BACKEND_WORKLET_ID,
+  resolveLaunchArgs(options) {
+    return [options.storagePath, ...nativeRuntimeConfig.workerArgs];
+  },
+});
+
+const mainBridge = createPlatformRpcBridge({
+  platform: 'mobile',
+  runner: mainRunner,
+  entrypoint: 'mobile-entry',
+  getStoragePath() {
+    return nativeRuntimeConfig.storagePath;
+  },
+  getArgs() {
+    return nativeRuntimeConfig.workerArgs;
+  },
+});
+
+mainBridge.events.onReady((data: any) => {
+  _blobServerPort = data?.blobServerPort ?? null;
+  _isInitialized = true;
+  _startupState = 'ready';
+});
+
+mainBridge.events.onError((data: any) => {
+  _isInitialized = false;
+  _startupState = 'error';
+});
 
 /**
  * Send a shutdown signal via IPC and wait for acknowledgment.
@@ -223,27 +283,6 @@ type CastDeviceLostCallback = (data: { deviceId: string }) => void;
 type CastPlaybackStateCallback = (data: { state: string; error?: string }) => void;
 type CastTimeUpdateCallback = (data: { currentTime: number }) => void;
 
-// Event callback storage
-const eventCallbacks = {
-  ready: [] as ReadyCallback[],
-  error: [] as ErrorCallback[],
-  videoStats: [] as VideoStatsCallback[],
-  uploadProgress: [] as UploadProgressCallback[],
-  downloadProgress: [] as DownloadProgressCallback[],
-  feedUpdate: [] as FeedUpdateCallback[],
-  castDeviceFound: [] as CastDeviceFoundCallback[],
-  castDeviceLost: [] as CastDeviceLostCallback[],
-  castPlaybackState: [] as CastPlaybackStateCallback[],
-  castTimeUpdate: [] as CastTimeUpdateCallback[],
-  log: [] as ((data: { level?: string; message: string; timestamp?: number }) => void)[],
-};
-
-// Helper to remove callback
-function removeCallback<T>(arr: T[], cb: T) {
-  const idx = arr.indexOf(cb);
-  if (idx !== -1) arr.splice(idx, 1);
-}
-
 function resolveStorageUri(FS: any, FSLegacy: any, configuredPath?: string): string {
   if (configuredPath && configuredPath.length > 0) {
     return configuredPath.startsWith('file://') ? configuredPath : `file://${configuredPath}`;
@@ -300,59 +339,7 @@ export async function isHeadlessCastActive(): Promise<boolean> {
 /**
  * Event subscription system
  */
-export const events = {
-  onReady: (cb: ReadyCallback) => {
-    eventCallbacks.ready.push(cb);
-    if (_isInitialized) {
-      try {
-        cb({ blobServerPort: _blobServerPort });
-      } catch (err: any) {
-        console.error('[Platform RPC] ready handler threw:', err?.message || err);
-      }
-    }
-    return () => removeCallback(eventCallbacks.ready, cb);
-  },
-  onError: (cb: ErrorCallback) => {
-    eventCallbacks.error.push(cb);
-    return () => removeCallback(eventCallbacks.error, cb);
-  },
-  onVideoStats: (cb: VideoStatsCallback) => {
-    eventCallbacks.videoStats.push(cb);
-    return () => removeCallback(eventCallbacks.videoStats, cb);
-  },
-  onUploadProgress: (cb: UploadProgressCallback) => {
-    eventCallbacks.uploadProgress.push(cb);
-    return () => removeCallback(eventCallbacks.uploadProgress, cb);
-  },
-  onDownloadProgress: (cb: DownloadProgressCallback) => {
-    eventCallbacks.downloadProgress.push(cb);
-    return () => removeCallback(eventCallbacks.downloadProgress, cb);
-  },
-  onFeedUpdate: (cb: FeedUpdateCallback) => {
-    eventCallbacks.feedUpdate.push(cb);
-    return () => removeCallback(eventCallbacks.feedUpdate, cb);
-  },
-  onCastDeviceFound: (cb: CastDeviceFoundCallback) => {
-    eventCallbacks.castDeviceFound.push(cb);
-    return () => removeCallback(eventCallbacks.castDeviceFound, cb);
-  },
-  onCastDeviceLost: (cb: CastDeviceLostCallback) => {
-    eventCallbacks.castDeviceLost.push(cb);
-    return () => removeCallback(eventCallbacks.castDeviceLost, cb);
-  },
-  onCastPlaybackState: (cb: CastPlaybackStateCallback) => {
-    eventCallbacks.castPlaybackState.push(cb);
-    return () => removeCallback(eventCallbacks.castPlaybackState, cb);
-  },
-  onCastTimeUpdate: (cb: CastTimeUpdateCallback) => {
-    eventCallbacks.castTimeUpdate.push(cb);
-    return () => removeCallback(eventCallbacks.castTimeUpdate, cb);
-  },
-  onLog: (cb: (data: { level?: string; message: string; timestamp?: number }) => void) => {
-    eventCallbacks.log.push(cb);
-    return () => removeCallback(eventCallbacks.log, cb);
-  },
-};
+export const events = mainBridge.events;
 
 /**
  * Initialize platform RPC for mobile
@@ -365,7 +352,7 @@ export async function initPlatformRPC(config: {
   downloaderWorkerSource?: string;
   storagePath?: string;
 }): Promise<void> {
-  if (_isInitialized && worklet) {
+  if (_isInitialized && mainBridge.isInitialized()) {
     _startupState = 'ready';
     console.log('[Platform RPC] Already initialized');
     return;
@@ -379,19 +366,8 @@ export async function initPlatformRPC(config: {
   _initPromise = (async () => {
     _startupState = 'initializing';
 
-    // Terminate stale worklet from a previous session that may still hold
-    // the Corestore file-descriptor lock (common after days in background).
-    if (worklet) {
-      console.log('[Platform RPC] Terminating stale worklet before reinit');
-      await terminateWorkletWithDelay(worklet)
-      worklet = null;
-      hrpc = null;
-      _isInitialized = false;
-    }
-
     // Get dependencies at runtime
-    const WorkletClass = require('react-native-bare-kit').Worklet;
-    const HRPCClass = require('@peartube/spec');
+    const WorkletClass = require('react-native-bare-kit').Worklet as BareWorkletCtor;
     const FS = normalizeFsModule(require('expo-file-system'));
     const FSLegacy = normalizeFsModule(require('expo-file-system/legacy'));
     const encoding = FSLegacy.EncodingType?.UTF8 || FS.EncodingType?.UTF8 || 'utf8';
@@ -403,6 +379,11 @@ export async function initPlatformRPC(config: {
       storagePath = storagePath.slice(7);
     }
 
+    nativeRuntimeConfig.WorkletCtor = WorkletClass;
+    nativeRuntimeConfig.backendSource = config.backendSource;
+    nativeRuntimeConfig.storagePath = storagePath;
+    nativeRuntimeConfig.workerArgs = [];
+
     console.log('[Platform RPC] Initializing with storage:', storagePath);
 
     const headlessCastActive = await isHeadlessCastActive()
@@ -410,7 +391,7 @@ export async function initPlatformRPC(config: {
     if (headlessCastActive) {
       console.log('[CastDiag] Headless cast was active, sending shutdown to old worklet');
 
-      const cleanupWorklet = worklet ?? new WorkletClass(BACKEND_WORKLET_ID);
+      const cleanupWorklet = new WorkletClass(BACKEND_WORKLET_ID);
       try {
         await sendShutdownSignalViaIpc(cleanupWorklet);
         console.log('[CastDiag] Shutdown signal sent to old worklet');
@@ -458,209 +439,25 @@ export async function initPlatformRPC(config: {
       console.warn('[Platform RPC] Downloader worker source missing, continuing without worker');
     }
 
-    // Create worklet and HRPC client before starting to avoid missing early events.
-    const localWorklet = new WorkletClass(BACKEND_WORKLET_ID);
-    const localHrpc = new HRPCClass(localWorklet.IPC);
-    worklet = localWorklet;
-    hrpc = localHrpc;
-    console.log('[Platform RPC] HRPC client initialized');
+    nativeRuntimeConfig.workerArgs = workerArgPath ? [workerArgPath] : [];
 
-    if (localWorklet?.IPC?.on) {
-      localWorklet.IPC.on('error', (err: any) => {
-        const message = String(err?.message || err || 'Backend IPC error')
-        console.error('[Platform RPC] IPC error:', message)
-        _isInitialized = false
-        _startupState = 'error'
-        safeDispatch('error', eventCallbacks.error, { message })
-      })
-      localWorklet.IPC.on('close', () => {
-        const duringStartup = _startupState !== 'ready'
-        _isInitialized = false
-        _startupState = 'error'
-        safeDispatch('error', eventCallbacks.error, {
-          message: duringStartup ? 'Backend IPC closed during startup' : 'Backend IPC closed'
-        })
-      })
+    if (mainBridge.isInitialized()) {
+      console.log('[Platform RPC] Terminating stale shared bridge before reinit');
+      await mainBridge.terminate().catch(() => {});
+      _isInitialized = false;
+      _blobServerPort = null;
     }
 
-    console.log('[Platform RPC] IPC type:', localWorklet.IPC?.constructor?.name);
-
-  const safeDispatch = <T extends unknown>(label: string, callbacks: Array<(data: T) => unknown>, data: T) => {
-    callbacks.forEach((cb) => {
-      if (typeof cb !== 'function') return;
-      try {
-        const result = cb(data);
-        if (result && typeof (result as any).then === 'function') {
-          (result as Promise<any>).catch((err) => {
-            console.error(`[Platform RPC] ${label} handler rejected:`, err?.message || err);
-          });
-        }
-      } catch (err: any) {
-        console.error(`[Platform RPC] ${label} handler threw:`, err?.message || err);
-      }
-    });
-  };
-
-  if (!_isInitialized && worklet && hrpc) {
-    try {
-      const healthCheck = (hrpc as any).getStatus?.({})
-      if (healthCheck && typeof healthCheck.then === 'function') {
-        await Promise.race([
-          healthCheck,
-          new Promise((_, reject) => setTimeout(() => reject(new Error('health-check-timeout')), 1500)),
-        ])
-        _isInitialized = true
-        _startupState = 'ready'
-        safeDispatch('ready', eventCallbacks.ready, { blobServerPort: _blobServerPort })
-        return
-      }
-    } catch {}
-  }
-
-  let readyProbeTimer: ReturnType<typeof setInterval> | null = null;
-  const stopReadyProbe = () => {
-    if (readyProbeTimer) {
-      clearInterval(readyProbeTimer);
-      readyProbeTimer = null;
-    }
-  };
-
-  const handleReady = (data: any) => {
-    stopReadyProbe();
-    console.log('[Platform RPC] Backend ready, blobServerPort:', data?.blobServerPort);
-    _blobServerPort = data?.blobServerPort ?? null;
-    _isInitialized = true;
-    _startupState = 'ready';
-    safeDispatch('ready', eventCallbacks.ready, data);
-  };
-
-  const handleError = (data: any) => {
-    stopReadyProbe();
-    console.error('[Platform RPC] Backend error:', data?.message);
-    _isInitialized = false;
-    _startupState = 'error';
-    safeDispatch('error', eventCallbacks.error, data);
-  };
-
-  const startReadyProbe = () => {
-    stopReadyProbe();
-    const startedAt = Date.now();
-    readyProbeTimer = setInterval(() => {
-      if (_isInitialized || !hrpc) {
-        stopReadyProbe();
-        return;
-      }
-      if (_startupState === 'error') {
-        stopReadyProbe();
-        return;
-      }
-      if (Date.now() - startedAt > 30000) {
-        stopReadyProbe();
-        return;
-      }
-
-      const statusCall = (hrpc as any).getStatus?.({});
-      if (!statusCall || typeof statusCall.then !== 'function') {
-        return;
-      }
-
-      Promise.race([
-        statusCall,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('ready-probe-timeout')), 1200)),
-      ])
-        .then((status: any) => {
-          if (_isInitialized) {
-            stopReadyProbe();
-            return;
-          }
-          const probedPort = status?.status?.blobServerPort;
-          const readyData = { blobServerPort: typeof probedPort === 'number' ? probedPort : _blobServerPort };
-          console.log('[Platform RPC] Backend ready via status probe, blobServerPort:', readyData.blobServerPort);
-          handleReady(readyData);
-        })
-        .catch(() => {});
-    }, 1000);
-  };
-
-    const handleVideoStats = (data: any) => {
-    // HRPC payload is `{ stats: VideoStats }` (see spec). Normalize to the callback shape.
-    const stats = data?.stats ?? data;
-    const channelKey = data?.channelKey ?? stats?.channelKey;
-    const videoId = data?.videoId ?? stats?.videoId;
-
-    if (channelKey && videoId && stats) {
-      safeDispatch('videoStats', eventCallbacks.videoStats, { channelKey, videoId, stats });
-    } else {
-      // Fallback: forward raw data for debugging rather than dropping it.
-      safeDispatch('videoStats', eventCallbacks.videoStats, data);
-    }
-  };
-
-    const handleUploadProgress = (data: any) => {
-    safeDispatch('uploadProgress', eventCallbacks.uploadProgress, data);
-  };
-
-    const handleDownloadProgress = (data: any) => {
-    safeDispatch('downloadProgress', eventCallbacks.downloadProgress, data);
-  };
-
-    const handleFeedUpdate = (data: any) => {
-    safeDispatch('feedUpdate', eventCallbacks.feedUpdate, data);
-  };
-
-    const handleCastDeviceFound = (data: any) => {
-    safeDispatch('castDeviceFound', eventCallbacks.castDeviceFound, data);
-  };
-
-    const handleCastDeviceLost = (data: any) => {
-    safeDispatch('castDeviceLost', eventCallbacks.castDeviceLost, data);
-  };
-
-    const handleCastPlaybackState = (data: any) => {
-    safeDispatch('castPlaybackState', eventCallbacks.castPlaybackState, data);
-  };
-
-    const handleCastTimeUpdate = (data: any) => {
-    safeDispatch('castTimeUpdate', eventCallbacks.castTimeUpdate, data);
-  };
-
-    const handleLog = (data: any) => {
-    if (data?.message) {
-      console.log('[Platform RPC] Backend log:', data.message);
-    } else {
-      console.log('[Platform RPC] Backend log:', data);
-    }
-    safeDispatch('log', eventCallbacks.log, data);
-  };
-
-    // Wire event handlers before starting the worklet.
-    localHrpc.onEventReady(handleReady);
-    localHrpc.onEventError(handleError);
-    localHrpc.onEventVideoStats(handleVideoStats);
-    localHrpc.onEventUploadProgress(handleUploadProgress);
-    localHrpc.onEventDownloadProgress(handleDownloadProgress);
-    localHrpc.onEventFeedUpdate(handleFeedUpdate);
-    localHrpc.onEventLog(handleLog);
-    localHrpc.onEventCastDeviceFound(handleCastDeviceFound);
-    localHrpc.onEventCastDeviceLost(handleCastDeviceLost);
-    localHrpc.onEventCastPlaybackState(handleCastPlaybackState);
-    localHrpc.onEventCastTimeUpdate(handleCastTimeUpdate);
-
-    // Start worklet after handlers are registered.
     _startupState = 'starting-worklet';
-    localWorklet.start('/backend.bundle', config.backendSource, [storagePath, workerArgPath]);
-    startReadyProbe();
+    await mainBridge.init();
+    _blobServerPort = mainBridge.getBlobServerPort();
     console.log('[Platform RPC] Worklet started');
   })();
 
   try {
     await _initPromise;
   } catch (err) {
-    try {
-      worklet?.terminate();
-    } catch {}
-    worklet = null;
-    hrpc = null;
+    await mainBridge.terminate().catch(() => {});
     _isInitialized = false;
     _startupState = 'error';
     _blobServerPort = null;
@@ -677,28 +474,18 @@ export async function initPlatformRPC(config: {
  */
 export function terminatePlatformRPC(): void {
   if (_isTerminating) return;
-  if (!worklet) {
+  if (!mainBridge.isInitialized()) {
     _startupState = 'idle';
     return;
   }
   _isTerminating = true;
-  const w = worklet;
-  worklet = null;
-  hrpc = null;
   _isInitialized = false;
   _startupState = 'idle';
+  _blobServerPort = null;
 
-  // Fire-and-forget: send shutdown signal, then always terminate
   (async () => {
-    console.log('[Platform RPC] Sending shutdown signal to backend');
     try {
-      await sendShutdownSignalViaIpc(w);
-      console.log('[Platform RPC] Shutdown complete');
-    } catch {
-      console.log('[Platform RPC] Shutdown timed out, forcing terminate');
-    }
-    try {
-      w.terminate();
+      await mainBridge.terminate();
     } catch (err) {
       console.error('[Platform RPC] Failed to terminate:', err);
     }
@@ -730,7 +517,7 @@ export function getBlobServerPort(): number | null {
  * Get raw HRPC instance (for advanced use cases)
  */
 export function getHRPCInstance(): any {
-  return hrpc;
+  return mainBridge.getRpc();
 }
 
 // ============================================
@@ -941,8 +728,9 @@ export function isTranscodeWorkletRunning(): boolean {
 
 // Helper to ensure RPC is ready
 function ensureRPC() {
-  if (!hrpc) throw new Error('Platform RPC not initialized');
-  return hrpc;
+  const rpc = mainBridge.getRpc();
+  if (!rpc) throw new Error('Platform RPC not initialized');
+  return rpc;
 }
 
 /**

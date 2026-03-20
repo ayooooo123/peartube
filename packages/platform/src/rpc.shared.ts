@@ -61,10 +61,12 @@ type CastDeviceFoundCallback = (data: any) => void
 type CastDeviceLostCallback = (data: any) => void
 type CastPlaybackStateCallback = (data: any) => void
 type CastTimeUpdateCallback = (data: any) => void
+type LogCallback = (data: { level?: string; message: string; timestamp?: number }) => void
 
 type PlatformCallbacks = {
   ready: ReadyCallback[]
   error: ErrorCallback[]
+  log: LogCallback[]
   videoStats: VideoStatsCallback[]
   uploadProgress: UploadProgressCallback[]
   downloadProgress: DownloadProgressCallback[]
@@ -93,6 +95,7 @@ function createCallbackStore(): PlatformCallbacks {
   return {
     ready: [],
     error: [],
+    log: [],
     videoStats: [],
     uploadProgress: [],
     downloadProgress: [],
@@ -156,6 +159,7 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
   const bindClientEvents = (nextClient: ReturnType<typeof createProtocolClient>) => {
     protocolUnsubscribes = [
       nextClient.events.on(PROTOCOL_EVENTS.UPLOAD_PROGRESS, (data: any) => safeDispatch(callbacks.uploadProgress, data)),
+      nextClient.events.on(PROTOCOL_EVENTS.LOG, (data: any) => safeDispatch(callbacks.log, data)),
       nextClient.events.on(PROTOCOL_EVENTS.DOWNLOAD_PROGRESS, (data: any) => safeDispatch(callbacks.downloadProgress, data)),
       nextClient.events.on(PROTOCOL_EVENTS.FEED_UPDATED, (data: any) => safeDispatch(callbacks.feedUpdate, data)),
       nextClient.events.on(PROTOCOL_EVENTS.VIDEO_STATS, (data: any) => safeDispatch(callbacks.videoStats, data)),
@@ -191,11 +195,22 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
     events: {
       onReady(callback: ReadyCallback) {
         callbacks.ready.push(callback)
+        if (lastReady) {
+          try {
+            callback(lastReady)
+          } catch (error) {
+            console.error('[Platform RPC] ready callback failed:', error)
+          }
+        }
         return () => removeCallback(callbacks.ready, callback)
       },
       onError(callback: ErrorCallback) {
         callbacks.error.push(callback)
         return () => removeCallback(callbacks.error, callback)
+      },
+      onLog(callback: LogCallback) {
+        callbacks.log.push(callback)
+        return () => removeCallback(callbacks.log, callback)
       },
       onVideoStats(callback: VideoStatsCallback) {
         callbacks.videoStats.push(callback)
@@ -260,6 +275,14 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       try {
         await initPromise
       } catch (error) {
+        const activeSession = session
+        teardownSubscriptions()
+        session = null
+        client = null
+        initialized = false
+        blobServerPort = null
+        lastReady = null
+        await activeSession?.terminate?.().catch(() => {})
         dispatchError({
           message: error instanceof Error ? error.message : String(error)
         })

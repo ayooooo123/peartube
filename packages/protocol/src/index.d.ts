@@ -21,6 +21,7 @@ export const HOST_ERROR_CODES: {
 export const PROTOCOL_EVENTS: {
   readonly HOST_READY: 'host.ready'
   readonly HOST_ERROR: 'host.error'
+  readonly LOG: 'log'
   readonly UPLOAD_PROGRESS: 'upload.progress'
   readonly DOWNLOAD_PROGRESS: 'download.progress'
   readonly FEED_UPDATED: 'feed.updated'

@@ -22,6 +22,10 @@ class FakeHRPC {
   onEventFeedUpdate(handler) {
     this.handlers.feedUpdate = handler
   }
+
+  onEventLog(handler) {
+    this.handlers.log = handler
+  }
 }
 
 test('createProtocolClient remaps feed update events', async (t) => {
@@ -50,6 +54,25 @@ test('createProtocolClient remaps feed update events', async (t) => {
   FakeHRPC.instances[0].handlers.feedUpdate({ action: 'update', channelKey: 'abc' })
 
   t.alike(events[0], { action: 'update', channelKey: 'abc' })
+})
+
+test('createProtocolClient forwards log events through the shared event map', async (t) => {
+  FakeHRPC.instances.length = 0
+  const logEvents = []
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: FakeHRPC
+  })
+
+  client.events.on(PROTOCOL_EVENTS.LOG, (payload) => {
+    logEvents.push(payload)
+  })
+
+  await client.ready()
+  FakeHRPC.instances[0].handlers.log({ level: 'info', message: 'backend ready' })
+
+  t.alike(logEvents, [{ level: 'info', message: 'backend ready' }])
 })
 
 test('createProtocolClient fails fast on protocol version mismatch', async (t) => {

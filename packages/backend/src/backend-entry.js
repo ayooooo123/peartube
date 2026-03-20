@@ -1,4 +1,5 @@
 function noop() {}
+const PROTOCOL_VERSION = 1
 
 function toCallback(fn) {
   return typeof fn === 'function' ? fn : noop
@@ -52,7 +53,7 @@ export async function createBackend(opts = {}) {
     const rpc = new HRPC(stream)
     registerSharedHandlers(rpc, backend)
 
-    readyCallback({ blobServerPort: getBlobServerPort(backend) })
+    readyCallback({ blobServerPort: getBlobServerPort(backend), protocolVersion: PROTOCOL_VERSION })
 
     let destroyed = false
     const destroy = async () => {

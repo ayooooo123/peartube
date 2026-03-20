@@ -5,6 +5,7 @@
   "description": "Shared protocol client layer for PearTube",
   "type": "module",
   "main": "./src/index.js",
+  "types": "./src/index.d.ts",
   "exports": {
     ".": "./src/index.js"
   },

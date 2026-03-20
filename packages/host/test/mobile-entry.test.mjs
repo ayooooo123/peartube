@@ -1,6 +1,6 @@
 import test from 'brittle'
 
-import { startHost } from '../src/index.js'
+import { startHost } from '../src/start-host.js'
 import { startMobileBackend } from '../../app/backend/mobile-entry.mjs'
 
 function createFakeStream() {

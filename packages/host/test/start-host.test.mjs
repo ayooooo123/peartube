@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'brittle'
 
-import { HOST_ERROR_CODES, startHost } from '../src/index.js'
+import { HOST_ERROR_CODES } from '../src/index.js'
+import { startHost } from '../src/start-host.js'
 
 function createFakeStream() {
   return {

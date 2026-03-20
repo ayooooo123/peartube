@@ -6,7 +6,7 @@
  * mobile runtime under the default `createMobileRuntimeBackend()` path.
  */
 
-import { startHost } from '../../host/src/index.js'
+import { startHost } from '../../host/src/start-host.js'
 
 let HRPC = null
 let createBackendContext = null

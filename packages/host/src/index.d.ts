@@ -28,33 +28,3 @@ export function createHostError(
   message: string,
   options?: { cause?: unknown; retryable?: boolean }
 ): Error & { code: string; retryable: boolean; cause?: unknown }
-
-export function startHost(options: {
-  platform: 'mobile' | 'desktop'
-  storagePath: string
-  entrypoint: string
-  args?: string[]
-  stream: any
-  createBackendImpl?: (options: any) => Promise<{ destroy?: () => Promise<void> | void }>
-  onLifecycle?: (event: HostLifecycleEvent) => void
-}): Promise<{
-  stream: any
-  entrypoint: string
-  args: string[]
-  waitUntilReady(): Promise<HostReadyData>
-  terminate(): Promise<void>
-  onLifecycle(cb: (event: HostLifecycleEvent) => void): () => void
-}>
-
-export function runHostSidecar(options?: {
-  platform?: 'mobile' | 'desktop'
-  storagePath?: string
-  entrypoint?: string
-  args?: string[]
-}): ReturnType<typeof startHost>
-
-export function parseSidecarArgv(argv?: string[]): {
-  storagePath: string
-  entrypoint: string
-  args: string[]
-}

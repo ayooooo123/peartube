@@ -1,10 +1,12 @@
 /* eslint-disable no-console */
 const fs = require('fs')
 const path = require('path')
+const { applyPearBridgePatch } = require('./patch-pear-bridge')
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..')
 const srcRoot = path.join(repoRoot, 'packages', 'bare-mpv')
 const destRoot = path.join(repoRoot, 'packages', 'app', 'pear', 'node_modules', 'bare-mpv')
+const pearBridgePath = path.join(repoRoot, 'packages', 'app', 'pear', 'node_modules', 'pear-bridge', 'index.js')
 
 const filesToCopy = [
   'binding.js',
@@ -48,6 +50,13 @@ try {
   }
 
   console.log('[ensure-bare-mpv] Copied bare-mpv into pear node_modules')
+
+  const bridgePatched = applyPearBridgePatch(pearBridgePath)
+  console.log(
+    bridgePatched
+      ? '[ensure-bare-mpv] Patched pear-bridge request URL rewrite for bare-http1 compatibility'
+      : '[ensure-bare-mpv] pear-bridge URL rewrite patch already present'
+  )
 } catch (err) {
   console.error('[ensure-bare-mpv] Failed:', err?.message || err)
   process.exitCode = 1

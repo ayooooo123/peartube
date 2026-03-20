@@ -1,14 +1,12 @@
 /**
- * PearTube Mobile Backend - Thin HRPC shim over @peartube/backend
+ * PearTube Mobile Backend Entry
  *
- * This is a minimal wrapper that:
- * 1. Initializes storage and the backend context via createBackendContext()
- * 2. Attaches mobile handler implementations via mobile-handlers.mjs
- * 3. Attaches cast handlers via mobile-cast.mjs
- * 4. Registers shared HRPC handlers via registerSharedHandlers()
- * 5. Registers mobile-only handlers directly on rpc
- * 6. Handles BareKit IPC lifecycle, owner lock, and feed cache
+ * The module now exposes a testable `startMobileBackend()` entry that routes
+ * lifecycle through `@peartube/host`, while preserving the existing BareKit
+ * mobile runtime under the default `createMobileRuntimeBackend()` path.
  */
+
+import { startHost } from '../../host/src/index.js'
 
 let HRPC = null
 let createBackendContext = null
@@ -28,9 +26,17 @@ let fsNativeExtensions = null
 
 async function loadBackendModules() {
   const [
-    specMod, orchestratorMod, storageMod, thumbnailMod,
-    pathMod, fsMod, b4aMod, http1Mod,
-    fsNativeExtensionsMod, transcoderMod, castTranscoderMod,
+    specMod,
+    orchestratorMod,
+    storageMod,
+    thumbnailMod,
+    pathMod,
+    fsMod,
+    b4aMod,
+    http1Mod,
+    fsNativeExtensionsMod,
+    transcoderMod,
+    castTranscoderMod
   ] = await Promise.all([
     import('@peartube/spec'),
     import('@peartube/backend/orchestrator'),
@@ -42,8 +48,9 @@ async function loadBackendModules() {
     import('bare-http1'),
     import('fs-native-extensions'),
     import('./transcoder.mjs'),
-    import('@peartube/backend/transcode/cast-transcoder'),
+    import('@peartube/backend/transcode/cast-transcoder')
   ])
+
   HRPC = specMod?.default ?? specMod
   createBackendContext = orchestratorMod?.createBackendContext
   setIsShuttingDown = orchestratorMod?.setIsShuttingDown
@@ -59,238 +66,578 @@ async function loadBackendModules() {
   fsNativeExtensions = fsNativeExtensionsMod?.default ?? fsNativeExtensionsMod
   transcoder = transcoderMod
   castTranscoder = castTranscoderMod
-  const _checks = { HRPC, createBackendContext, setIsShuttingDown, shutdownBackend, generateAndStoreThumbnail, path, fs, b4a, http1, transcoder, castTranscoder, fsNativeExtensions, setCastActive, isCastActive, prefetchVideoForCast }
-  const _missing = Object.entries(_checks).filter(([, v]) => !v).map(([k]) => k)
-  if (_missing.length) {
-    console.error('[Backend] Missing modules:', _missing.join(', '))
-    console.error('[Backend] Module details:', JSON.stringify({
-      specMod: typeof specMod, orchestratorMod: typeof orchestratorMod,
-      storageMod: typeof storageMod, thumbnailMod: typeof thumbnailMod,
-      transcoderMod: typeof transcoderMod, castTranscoderMod: typeof castTranscoderMod,
-      fsNativeExtensionsMod: typeof fsNativeExtensionsMod,
-    }))
-    console.error('[Backend] storageMod keys:', storageMod ? Object.keys(storageMod) : 'null')
-    console.error('[Backend] orchestratorMod keys:', orchestratorMod ? Object.keys(orchestratorMod) : 'null')
-    console.error('[Backend] castTranscoderMod keys:', castTranscoderMod ? Object.keys(castTranscoderMod) : 'null')
-    throw new Error('Missing required backend modules: ' + _missing.join(', '))
+
+  const checks = {
+    HRPC,
+    createBackendContext,
+    setIsShuttingDown,
+    shutdownBackend,
+    setCastActive,
+    isCastActive,
+    prefetchVideoForCast,
+    generateAndStoreThumbnail,
+    path,
+    fs,
+    b4a,
+    http1,
+    transcoder,
+    castTranscoder,
+    fsNativeExtensions
+  }
+
+  const missing = Object.entries(checks)
+    .filter(([, value]) => !value)
+    .map(([name]) => name)
+
+  if (missing.length) {
+    throw new Error(`Missing required backend modules: ${missing.join(', ')}`)
   }
 }
 
-const { IPC } = BareKit
-let bareStorageDir = null
-try { bareStorageDir = require('bare-storage').persistent() } catch {}
-const storagePath = Bare.argv[0] || bareStorageDir || ''
-const workerBundlePath = Bare.argv[1] || ''
-if (workerBundlePath) { globalThis.__PEARTUBE_WORKER_PATH__ = workerBundlePath }
-
-let rpc = null
-let handlersRegistered = false
-
-function formatError(err) {
-  if (!err) return 'Unknown error'
-  if (err instanceof Error) return err.stack || err.message || String(err)
-  if (typeof err === 'string') return err
-  try { return JSON.stringify(err) } catch { return String(err) }
-}
-
-function reportBackendError(label, err) {
-  const message = err instanceof Error ? err.message : (typeof err === 'string' ? err : 'Unknown error')
-  console.error(`[Backend] ${label}:`, message)
-  if (err?.stack) console.error(err.stack)
-  try { rpc?.eventError?.({ message: `${label}: ${message}` }) } catch {}
-}
-
-function ensureRpc() {
-  if (rpc) return true
+function formatError(error) {
+  if (!error) return 'Unknown error'
+  if (error instanceof Error) return error.stack || error.message || String(error)
+  if (typeof error === 'string') return error
   try {
-    rpc = new HRPC(IPC)
-    try {
-      const rawRpc = rpc?._rpc
-      if (rawRpc && !rawRpc._peartubeCompat) {
-        const orig = rawRpc._onrequest
-        rawRpc._onrequest = async (req) => {
-          try {
-            const hasPayload = Boolean(req?.data && req.data.length > 0)
-            if (req?.command === 16 && !hasPayload) req.command = 18
-            if (req?.command === 24 && hasPayload) req.command = 30
-          } catch {}
-          if (!handlersRegistered) throw new Error('Backend not ready')
-          try { return await orig(req) } catch (err) { reportBackendError(`HRPC request failed (${req?.command})`, err); throw err }
+    return JSON.stringify(error)
+  } catch {
+    return String(error)
+  }
+}
+
+function attachUnhandledHandlers(reportBackendError) {
+  if (typeof Bare !== 'undefined' && Bare?.on) {
+    Bare.on('unhandledRejection', (reason) => {
+      try {
+        console.error('[Backend] Unhandled rejection:', formatError(reason))
+      } catch {}
+      return true
+    })
+
+    Bare.on('uncaughtException', (error) => {
+      try {
+        console.error('[Backend] Uncaught exception:', formatError(error))
+      } catch {}
+      return true
+    })
+  }
+
+  const proc = typeof process !== 'undefined' ? process : null
+  if (proc?.on) {
+    proc.on('unhandledRejection', (reason) => reportBackendError('Unhandled rejection', reason))
+    proc.on('uncaughtException', (error) => reportBackendError('Uncaught exception', error))
+  }
+
+  if (typeof globalThis?.addEventListener === 'function') {
+    globalThis.addEventListener('unhandledrejection', (event) => {
+      reportBackendError('Unhandled rejection', event?.reason ?? event)
+      event?.preventDefault?.()
+    })
+
+    globalThis.addEventListener('error', (event) => {
+      reportBackendError('Uncaught error', event?.error ?? event?.message ?? event)
+    })
+  }
+}
+
+function attachMobileOnlyRpcHandlers(rpc, api) {
+  if (typeof rpc.onSearchVideos === 'function') {
+    rpc.onSearchVideos(async (request) => {
+      try {
+        const raw = await api.searchVideos(request.channelKey, request.query, {
+          topK: request.topK || 10,
+          federated: Boolean(request.federated)
+        })
+
+        return {
+          results: (raw || []).map((result) => ({
+            id: String(result.id || ''),
+            score: result.score != null ? String(result.score) : null,
+            metadata: result.metadata ? JSON.stringify(result.metadata) : null
+          }))
         }
-        rawRpc._peartubeCompat = true
+      } catch {
+        return { results: [] }
+      }
+    })
+  }
+
+  if (typeof rpc.onGetRecommendations === 'function') {
+    rpc.onGetRecommendations(async () => ({ success: true, recommendations: [] }))
+  }
+
+  if (typeof rpc.onGetVideoRecommendations === 'function') {
+    rpc.onGetVideoRecommendations(async () => ({ success: true, recommendations: [] }))
+  }
+
+  if (typeof rpc.onIndexVideoVectors === 'function') {
+    rpc.onIndexVideoVectors(async (request) => {
+      try {
+        const result = await api.indexVideoVectors?.(request.channelKey, request.videoId)
+        return { success: Boolean(result?.success), error: result?.error || null }
+      } catch (error) {
+        return { success: false, error: error?.message }
+      }
+    })
+  }
+
+  if (typeof rpc.onLogWatchEvent === 'function') {
+    rpc.onLogWatchEvent(async () => ({ success: true }))
+  }
+
+  if (typeof rpc.onRetrySyncChannel === 'function') {
+    rpc.onRetrySyncChannel(async (request) => {
+      try {
+        await api.retrySyncChannel?.(request.channelKey)
+        return { success: true }
+      } catch (error) {
+        return { success: false, error: error?.message }
+      }
+    })
+  }
+}
+
+function resolveMobileStoragePath(providedStoragePath) {
+  if (providedStoragePath) return providedStoragePath
+
+  let bareStorageDir = ''
+  try {
+    bareStorageDir = require('bare-storage').persistent()
+  } catch {}
+
+  return Bare?.argv?.[0] || bareStorageDir || ''
+}
+
+export async function startMobileBackend(options = {}) {
+  const {
+    storagePath: providedStoragePath,
+    stream = globalThis.BareKit?.IPC,
+    entrypoint = 'mobile-entry',
+    args = (typeof Bare !== 'undefined' && Array.isArray(Bare?.argv)) ? Bare.argv.slice(1) : [],
+    startHostImpl = startHost,
+    createBackendImpl = createMobileRuntimeBackend,
+    attachMobileHandlersImpl,
+    attachCastHandlersImpl
+  } = options
+
+  const storagePath = resolveMobileStoragePath(providedStoragePath)
+
+  return startHostImpl({
+    platform: 'mobile',
+    storagePath,
+    entrypoint,
+    args,
+    stream,
+    createBackendImpl: async (hostOptions) => {
+      const backendSession = await createBackendImpl({
+        ...hostOptions,
+        storagePath: hostOptions.storagePath || storagePath,
+        stream: hostOptions.stream || stream,
+        args: hostOptions.args ?? args
+      })
+
+      if (backendSession?.backend && typeof attachMobileHandlersImpl === 'function') {
+        attachMobileHandlersImpl(backendSession.backend, backendSession.handlerDeps ?? {})
+      }
+
+      if (backendSession?.backend && typeof attachCastHandlersImpl === 'function') {
+        attachCastHandlersImpl(backendSession.backend, backendSession.handlerDeps ?? {})
+      }
+
+      return backendSession
+    }
+  })
+}
+
+export async function createMobileRuntimeBackend(options = {}) {
+  const {
+    storagePath,
+    stream,
+    args = [],
+    onReady = () => {},
+    onError = () => {}
+  } = options
+
+  if (!stream) throw new Error('createMobileRuntimeBackend requires a stream transport')
+  if (!storagePath) throw new Error('createMobileRuntimeBackend requires a storagePath')
+
+  const IPC = stream
+  const workerBundlePath = args[0] || ''
+  if (workerBundlePath) globalThis.__PEARTUBE_WORKER_PATH__ = workerBundlePath
+
+  let rpc = null
+  let handlersRegistered = false
+  let ownerLockFd = -1
+  let backendCtx = null
+  let closeCastProxyServer = () => {}
+  let feedRefreshInterval = null
+  let shutdownInFlight = null
+
+  function reportBackendError(label, error) {
+    const message = error instanceof Error ? error.message : (typeof error === 'string' ? error : 'Unknown error')
+    console.error(`[Backend] ${label}:`, message)
+    if (error?.stack) console.error(error.stack)
+    try {
+      rpc?.eventError?.({ message: `${label}: ${message}` })
+    } catch {}
+    try {
+      onError(error instanceof Error ? error : new Error(message))
+    } catch {}
+  }
+
+  function ensureRpc() {
+    if (rpc) return true
+
+    try {
+      rpc = new HRPC(IPC)
+
+      try {
+        const rawRpc = rpc?._rpc
+        if (rawRpc && !rawRpc._peartubeCompat) {
+          const originalOnRequest = rawRpc._onrequest
+          rawRpc._onrequest = async (request) => {
+            try {
+              const hasPayload = Boolean(request?.data && request.data.length > 0)
+              if (request?.command === 16 && !hasPayload) request.command = 18
+              if (request?.command === 24 && hasPayload) request.command = 30
+            } catch {}
+
+            if (!handlersRegistered) throw new Error('Backend not ready')
+
+            try {
+              return await originalOnRequest(request)
+            } catch (error) {
+              reportBackendError(`HRPC request failed (${request?.command})`, error)
+              throw error
+            }
+          }
+          rawRpc._peartubeCompat = true
+        }
+      } catch {}
+
+      return true
+    } catch (error) {
+      console.log('[Backend] HRPC init failed:', error?.message)
+      return false
+    }
+  }
+
+  function ipcLog(message) {
+    try {
+      rpc?.eventLog?.({ level: 'info', message, timestamp: Date.now() })
+    } catch {}
+  }
+
+  function closeOwnerLock() {
+    if (ownerLockFd === -1) return
+    const fd = ownerLockFd
+    ownerLockFd = -1
+    try { fsNativeExtensions?.unlock?.(fd) } catch {}
+    try { fs.close(fd, () => {}) } catch {}
+  }
+
+  async function acquireOwnerLock(storageDir) {
+    const tryLock = fsNativeExtensions?.tryLock
+    if (typeof tryLock !== 'function') return
+
+    const lockPath = path.join(storageDir, 'backend-owner.lock')
+    const fd = await new Promise((resolve, reject) => {
+      fs.open(lockPath, 'a+', (error, handle) => error ? reject(error) : resolve(handle))
+    })
+
+    let acquired = false
+    for (let index = 0; index < 10; index++) {
+      try {
+        acquired = tryLock(fd)
+      } catch {}
+      if (acquired) break
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+
+    if (!acquired) {
+      try { fs.close(fd, () => {}) } catch {}
+      return
+    }
+
+    ownerLockFd = fd
+  }
+
+  function removeStaleLocks(storageDir) {
+    try { fs.unlinkSync(path.join(storageDir, 'CORESTORE')) } catch (error) { if (error.code !== 'ENOENT') console.log('[Backend] CORESTORE cleanup skipped:', error.message) }
+    try { fs.unlinkSync(path.join(storageDir, 'LOCK')) } catch (error) { if (error.code !== 'ENOENT') console.log('[Backend] LOCK cleanup skipped:', error.message) }
+    try { fs.unlinkSync(path.join(storageDir, 'primary', 'LOCK')) } catch (error) { if (error?.code !== 'ENOENT') {} }
+
+    function removeDirRecursive(dir) {
+      try {
+        for (const entry of fs.readdirSync(dir)) {
+          const file = path.join(dir, entry)
+          try {
+            fs.statSync(file).isDirectory() ? removeDirRecursive(file) : fs.unlinkSync(file)
+          } catch {}
+        }
+        fs.rmdirSync(dir)
+      } catch {}
+    }
+
+    for (const name of ['logs', 'LOG', 'LOG.old', 'IDENTITY', 'CURRENT', 'MANIFEST-000001']) {
+      const filePath = path.join(storageDir, name)
+      try {
+        fs.statSync(filePath).isDirectory() ? removeDirRecursive(filePath) : fs.unlinkSync(filePath)
+      } catch {}
+    }
+  }
+
+  function parseIpcMessage(chunk) {
+    if (!chunk) return null
+    try {
+      const text = b4a.toString(chunk).trim()
+      if (!text || text[0] !== '{') return null
+      const parsed = JSON.parse(text)
+      return parsed && typeof parsed === 'object' ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
+  function encodeIpcMessage(value) {
+    return b4a.from(JSON.stringify(value))
+  }
+
+  attachUnhandledHandlers(reportBackendError)
+  await loadBackendModules()
+  ensureRpc()
+
+  const storageDir = path.join(storagePath, 'peartube-data')
+  try { fs.mkdirSync(storageDir, { recursive: true }) } catch {}
+
+  try {
+    const lockPath = path.join(storageDir, 'backend-owner.lock')
+    if (fs.existsSync(lockPath)) {
+      const pid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10)
+      if (!Number.isNaN(pid)) {
+        let alive = false
+        try {
+          process.kill(pid, 0)
+          alive = true
+        } catch {}
+        if (!alive) fs.unlinkSync(lockPath)
+      }
+    }
+  } catch {}
+
+  await acquireOwnerLock(storageDir)
+  ipcLog('[init] owner lock done')
+
+  removeStaleLocks(storageDir)
+  ipcLog('[init] CORESTORE + LOCK cleanup done')
+
+  let backend = null
+  try {
+    ipcLog('[init] createBackendContext starting')
+    backend = await createBackendContext({
+      storagePath: storageDir,
+      corestoreWaitForLock: false,
+      ipcLog,
+      onFeedUpdate: () => {
+        try {
+          rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' })
+        } catch {}
+      },
+      onStatsUpdate: (driveKey, videoPath, stats) => {
+        try {
+          rpc?.eventVideoStats?.({
+            stats: { videoId: videoPath, channelKey: driveKey, ...stats }
+          })
+        } catch {}
+      }
+    })
+  } catch (error) {
+    reportBackendError('Backend init failed', error)
+    closeOwnerLock()
+    throw error
+  }
+
+  const {
+    ctx,
+    api,
+    identityManager,
+    uploadManager,
+    publicFeed,
+    initializeIdentityFromMnemonic
+  } = backend
+
+  backendCtx = ctx
+
+  ensureRpc()
+  if (!rpc) {
+    throw new Error('Failed to initialize HRPC transport')
+  }
+
+  const { attachMobileHandlers } = await import('./mobile-handlers.mjs')
+  attachMobileHandlers(backend, {
+    api,
+    identityManager,
+    uploadManager,
+    ctx,
+    initializeIdentityFromMnemonic,
+    rpc,
+    fs,
+    path,
+    generateAndStoreThumbnail,
+    transcoder,
+    storagePath
+  })
+
+  const { attachCastHandlers } = await import('./mobile-cast.mjs')
+  const castCleanup = attachCastHandlers(backend, {
+    rpc,
+    ctx,
+    api,
+    setCastActive,
+    isCastActive,
+    prefetchVideoForCast,
+    http1,
+    path,
+    fs,
+    transcoder,
+    castTranscoder,
+    storagePath
+  })
+
+  closeCastProxyServer = castCleanup.closeCastProxyServer || (() => {})
+
+  const { registerSharedHandlers } = await import('@peartube/backend/hrpc-handlers')
+  registerSharedHandlers(rpc, backend)
+  handlersRegistered = true
+  attachMobileOnlyRpcHandlers(rpc, api)
+
+  async function destroy() {
+    if (shutdownInFlight) return shutdownInFlight
+
+    shutdownInFlight = (async () => {
+      setIsShuttingDown(true)
+      if (feedRefreshInterval) clearInterval(feedRefreshInterval)
+      await shutdownBackend(ctx)
+      closeCastProxyServer('host-terminate')
+      closeOwnerLock()
+    })().finally(() => {
+      shutdownInFlight = null
+    })
+
+    return shutdownInFlight
+  }
+
+  if (IPC?.on) {
+    IPC.on('data', (chunk) => {
+      const message = parseIpcMessage(chunk)
+      if (message?.type !== 'shutdown') return
+
+      destroy()
+        .then(() => {
+          try {
+            IPC.write(encodeIpcMessage({ type: 'shutdown-complete' }))
+          } catch {}
+        })
+        .catch(() => {})
+    })
+
+    IPC.on('close', () => castCleanup.enterHeadlessMode?.('ipc-close'))
+    IPC.on('end', () => castCleanup.enterHeadlessMode?.('ipc-end'))
+  }
+
+  async function restoreFeedCache() {
+    try {
+      const cache = await ctx.metaDb.get('public-feed-cache').catch(() => null)
+      const entries = cache?.value || []
+      if (!Array.isArray(entries) || entries.length === 0) return
+      for (const entry of entries) {
+        try {
+          if (typeof entry === 'object' && entry.driveKey) {
+            publicFeed.addEntry(entry.driveKey, 'peer', entry.publicBeeKey || null)
+          } else if (typeof entry === 'string') {
+            publicFeed.addEntry(entry, 'peer')
+          }
+        } catch {}
       }
     } catch {}
-    return true
-  } catch (e) { console.log('[Backend] HRPC init failed:', e?.message); return false }
-}
+  }
 
-function attachUnhandledHandlers() {
-  const notify = (label, err) => reportBackendError(label, err)
+  async function persistFeedCache() {
+    try {
+      await ctx.metaDb.put(
+        'public-feed-cache',
+        publicFeed.getFeed().map((entry) => ({
+          driveKey: entry.driveKey,
+          publicBeeKey: entry.publicBeeKey || null
+        }))
+      )
+    } catch {}
+  }
+
+  await restoreFeedCache()
+
+  const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
+  onReady({ blobServerPort: blobPort, protocolVersion: 1 })
+
+  try {
+    rpc.eventReady({
+      blobServerPort: blobPort,
+      blobServerHost: ctx.blobServerHost || '127.0.0.1'
+    })
+    rpc.eventFeedUpdate({ channelKey: 'feed', action: 'update' })
+  } catch (error) {
+    console.error('[Backend] Failed to send eventReady:', error.message)
+  }
+
+  feedRefreshInterval = setInterval(() => {
+    try {
+      publicFeed.requestFeedsFromPeers()
+      persistFeedCache()
+    } catch {}
+  }, 30000)
+
+  publicFeed.setOnFeedUpdate(() => {
+    persistFeedCache()
+    try {
+      rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' })
+    } catch {}
+  })
+
   if (typeof Bare !== 'undefined' && Bare?.on) {
-    Bare.on('unhandledRejection', (reason) => { try { console.error('[Backend] Unhandled rejection:', formatError(reason)) } catch {}; return true })
-    Bare.on('uncaughtException', (err) => { try { console.error('[Backend] Uncaught exception:', formatError(err)) } catch {}; return true })
+    Bare.on('exit', () => {
+      if (!backendCtx?._isShutdown) destroy().catch(() => {})
+      return true
+    })
   }
-  const proc = typeof process !== 'undefined' ? process : null
-  if (proc?.on) { proc.on('unhandledRejection', (r) => notify('Unhandled rejection', r)); proc.on('uncaughtException', (e) => notify('Uncaught exception', e)) }
-  const g = typeof globalThis !== 'undefined' ? globalThis : null
-  if (!g) return
-  if (typeof g.addEventListener === 'function') {
-    g.addEventListener('unhandledrejection', (ev) => { notify('Unhandled rejection', ev?.reason ?? ev); ev?.preventDefault?.() })
-    g.addEventListener('error', (ev) => { notify('Uncaught error', ev?.error ?? ev?.message ?? ev) })
+
+  if (typeof process !== 'undefined' && process?.on) {
+    process.on('exit', () => closeOwnerLock())
+  }
+
+  if (typeof process !== 'undefined' && process?.env?.PEARTUBE_PRELOAD_FFMPEG === '1') {
+    transcoder.loadBareFfmpeg().catch(() => {})
+  }
+
+  return {
+    rpc,
+    backend,
+    handlerDeps: {
+      api,
+      identityManager,
+      uploadManager,
+      ctx,
+      initializeIdentityFromMnemonic,
+      rpc,
+      fs,
+      path,
+      generateAndStoreThumbnail,
+      transcoder,
+      storagePath
+    },
+    destroy
   }
 }
 
-attachUnhandledHandlers()
-try { await loadBackendModules() } catch (err) { reportBackendError('Backend module import failed', err); throw err }
-ensureRpc()
-
-function ipcLog(msg) { try { rpc?.eventLog?.({ level: 'info', message: msg, timestamp: Date.now() }) } catch {} }
-
-const storageDir = path.join(storagePath, 'peartube-data')
-try { fs.mkdirSync(storageDir, { recursive: true }) } catch {}
-
-// ============================================
-// Owner lock
-// ============================================
-const OWNER_LOCK_FILE = 'backend-owner.lock'
-let ownerLockFd = -1
-let backendCtx = null
-
-function closeOwnerLock(reason = 'shutdown') {
-  if (ownerLockFd === -1) return; const fd = ownerLockFd; ownerLockFd = -1
-  try { fsNativeExtensions?.unlock?.(fd) } catch {}
-  try { fs.close(fd, () => {}) } catch {}
+if (globalThis.BareKit?.IPC && (typeof Bare !== 'undefined')) {
+  await startMobileBackend()
 }
-
-async function acquireOwnerLock() {
-  const tryLock = fsNativeExtensions?.tryLock
-  if (typeof tryLock !== 'function') return
-  const lockPath = path.join(storageDir, OWNER_LOCK_FILE)
-  const fd = await new Promise((resolve, reject) => fs.open(lockPath, 'a+', (err, f) => err ? reject(err) : resolve(f)))
-  let acquired = false
-  for (let i = 0; i < 10; i++) { try { acquired = tryLock(fd) } catch {}; if (acquired) break; await new Promise(r => setTimeout(r, 200)) }
-  if (!acquired) { try { fs.close(fd, () => {}) } catch {}; return }
-  ownerLockFd = fd
-}
-
-let closeCastProxyServer = () => {}
-
-if (typeof Bare !== 'undefined' && Bare?.on) {
-  Bare.on('exit', () => { if (!backendCtx?._isShutdown) shutdownBackend?.(backendCtx).catch(() => {}); closeCastProxyServer('bare-exit'); closeOwnerLock('bare-exit'); return true })
-}
-if (typeof process !== 'undefined' && process?.on) process.on('exit', () => closeOwnerLock('process-exit'))
-
-// Check stale lock
-try {
-  const lp = path.join(storageDir, OWNER_LOCK_FILE)
-  if (fs.existsSync(lp)) { const pid = parseInt(fs.readFileSync(lp, 'utf8').trim(), 10); if (!isNaN(pid)) { let alive = false; try { process.kill(pid, 0); alive = true } catch {}; if (!alive) fs.unlinkSync(lp) } }
-} catch {}
-
-await acquireOwnerLock()
-ipcLog('[init] owner lock done')
-
-// Remove stale CORESTORE file and Corestore FD lock files.
-// On mobile the previous worklet may have been killed by the OS, leaving behind
-// lock files that prevent the new Corestore from opening.
-try { fs.unlinkSync(path.join(storageDir, 'CORESTORE')) } catch (e) { if (e.code !== 'ENOENT') console.log('[Backend] CORESTORE cleanup skipped:', e.message) }
-try { fs.unlinkSync(path.join(storageDir, 'LOCK')) } catch (e) { if (e.code !== 'ENOENT') console.log('[Backend] LOCK cleanup skipped:', e.message) }
-// Also clean primary corestore subdirectory lock (Corestore nests under primary/)
-try { fs.unlinkSync(path.join(storageDir, 'primary', 'LOCK')) } catch (e) { if (e?.code !== 'ENOENT') {} }
-// Clean stale RocksDB artifacts
-function rmdirRecursive(dir) { try { for (const e of fs.readdirSync(dir)) { const f = path.join(dir, e); try { fs.statSync(f).isDirectory() ? rmdirRecursive(f) : fs.unlinkSync(f) } catch {} }; fs.rmdirSync(dir) } catch {} }
-try { for (const n of ['logs', 'LOG', 'LOG.old', 'IDENTITY', 'CURRENT', 'MANIFEST-000001']) { const p = path.join(storageDir, n); try { fs.statSync(p).isDirectory() ? rmdirRecursive(p) : fs.unlinkSync(p) } catch {} } } catch {}
-ipcLog('[init] CORESTORE + LOCK cleanup done')
-
-// ============================================
-// Initialize backend
-// ============================================
-let backend = null
-try {
-  ipcLog('[init] createBackendContext starting')
-  backend = await createBackendContext({
-    storagePath: storageDir, corestoreWaitForLock: false, ipcLog,
-    onFeedUpdate: () => { try { rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' }) } catch {} },
-    onStatsUpdate: (driveKey, videoPath, stats) => { try { rpc?.eventVideoStats?.({ stats: { videoId: videoPath, channelKey: driveKey, ...stats } }) } catch {} }
-  })
-} catch (err) { reportBackendError('Backend init failed', err); closeOwnerLock('backend-unavailable'); throw err }
-
-const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats, initializeIdentityFromMnemonic } = backend
-backendCtx = ctx
-
-ensureRpc()
-if (!rpc) { reportBackendError('HRPC unavailable', 'Failed to initialize HRPC transport'); throw new Error('Failed to initialize HRPC transport') }
-
-// ============================================
-// Attach handler implementations to backend object
-// ============================================
-const { attachMobileHandlers } = await import('./mobile-handlers.mjs')
-attachMobileHandlers(backend, { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder, storagePath })
-
-const { attachCastHandlers } = await import('./mobile-cast.mjs')
-const castCleanup = attachCastHandlers(backend, { rpc, ctx, api, setCastActive, isCastActive, prefetchVideoForCast, http1, path, fs, transcoder, castTranscoder, storagePath })
-closeCastProxyServer = castCleanup.closeCastProxyServer
-
-// ============================================
-// Register shared HRPC handlers (lazy dispatch to backend.camelCase(name))
-// ============================================
-const { registerSharedHandlers } = await import('@peartube/backend/hrpc-handlers')
-registerSharedHandlers(rpc, backend)
-console.log('[Backend] HRPC handlers registered')
-handlersRegistered = true
-
-// ============================================
-// Mobile-only handlers (NOT in SHARED_HANDLER_NAMES)
-// ============================================
-if (typeof rpc.onSearchVideos === 'function') {
-  rpc.onSearchVideos(async (req) => {
-    try { const raw = await api.searchVideos(req.channelKey, req.query, { topK: req.topK || 10, federated: Boolean(req.federated) }); return { results: (raw || []).map((r) => ({ id: String(r.id || ''), score: r.score != null ? String(r.score) : null, metadata: r.metadata ? JSON.stringify(r.metadata) : null })) } }
-    catch { return { results: [] } }
-  })
-}
-if (typeof rpc.onGetRecommendations === 'function') rpc.onGetRecommendations(async () => ({ success: true, recommendations: [] }))
-if (typeof rpc.onGetVideoRecommendations === 'function') rpc.onGetVideoRecommendations(async () => ({ success: true, recommendations: [] }))
-if (typeof rpc.onIndexVideoVectors === 'function') {
-  rpc.onIndexVideoVectors(async (req) => { try { const r = await api.indexVideoVectors?.(req.channelKey, req.videoId); return { success: Boolean(r?.success), error: r?.error || null } } catch (e) { return { success: false, error: e?.message } } })
-}
-if (typeof rpc.onLogWatchEvent === 'function') rpc.onLogWatchEvent(async () => ({ success: true }))
-if (typeof rpc.onRetrySyncChannel === 'function') {
-  rpc.onRetrySyncChannel(async (req) => { try { await api.retrySyncChannel?.(req.channelKey); return { success: true } } catch (e) { return { success: false, error: e?.message } } })
-}
-
-// ============================================
-// IPC shutdown
-// ============================================
-let shutdownIpcInFlight = null
-function parseIpcMsg(chunk) { if (!chunk) return null; try { const t = b4a.toString(chunk).trim(); if (!t || t[0] !== '{') return null; const p = JSON.parse(t); return p && typeof p === 'object' ? p : null } catch { return null } }
-async function handleIpcShutdown() {
-  if (shutdownIpcInFlight) return shutdownIpcInFlight
-  shutdownIpcInFlight = (async () => { setIsShuttingDown(true); await shutdownBackend(ctx); closeCastProxyServer('ipc-shutdown'); closeOwnerLock('shutdown'); try { IPC.write(b4a.from(JSON.stringify({ type: 'shutdown-complete' }))) } catch {} })().finally(() => { shutdownIpcInFlight = null })
-  return shutdownIpcInFlight
-}
-if (IPC?.on) {
-  IPC.on('data', (chunk) => { const msg = parseIpcMsg(chunk); if (msg?.type === 'shutdown') handleIpcShutdown().catch(() => {}) })
-  IPC.on('close', () => castCleanup.enterHeadlessMode('ipc-close'))
-  IPC.on('end', () => castCleanup.enterHeadlessMode('ipc-end'))
-}
-
-// ============================================
-// Feed cache + eventReady
-// ============================================
-async function restoreFeedCache() {
-  try { const c = await ctx.metaDb.get('public-feed-cache').catch(() => null); const e = c?.value || []; if (Array.isArray(e) && e.length) for (const entry of e) { try { typeof entry === 'object' && entry.driveKey ? publicFeed.addEntry(entry.driveKey, 'peer', entry.publicBeeKey || null) : typeof entry === 'string' && publicFeed.addEntry(entry, 'peer') } catch {} } } catch {}
-}
-async function persistFeedCache() {
-  try { await ctx.metaDb.put('public-feed-cache', publicFeed.getFeed().map((e) => ({ driveKey: e.driveKey, publicBeeKey: e.publicBeeKey || null }))) } catch {}
-}
-
-await restoreFeedCache()
-
-const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
-console.log('[Backend] Backend initialized, blob server port:', blobPort)
-try { rpc.eventReady({ blobServerPort: blobPort, blobServerHost: ctx.blobServerHost || '127.0.0.1' }); rpc.eventFeedUpdate({ channelKey: 'feed', action: 'update' }) } catch (e) { console.error('[Backend] Failed to send eventReady:', e.message) }
-
-setInterval(() => { try { publicFeed.requestFeedsFromPeers(); persistFeedCache() } catch {} }, 30000)
-publicFeed.setOnFeedUpdate(() => { persistFeedCache(); try { rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' }) } catch {} })
-
-const preloadFfmpeg = typeof process !== 'undefined' && process?.env?.PEARTUBE_PRELOAD_FFMPEG === '1'
-if (preloadFfmpeg) transcoder.loadBareFfmpeg().catch(() => {})

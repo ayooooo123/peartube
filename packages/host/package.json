@@ -7,7 +7,9 @@
   "main": "./src/index.js",
   "types": "./src/index.d.ts",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./start-host": "./src/start-host.js",
+    "./sidecar-entry": "./src/sidecar-entry.js"
   },
   "scripts": {
     "test": "brittle test/*.test.mjs"

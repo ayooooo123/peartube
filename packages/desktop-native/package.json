@@ -1,0 +1,12 @@
+{
+  "name": "@peartube/desktop-native",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Native macOS shell scaffold for PearTube",
+  "scripts": {
+    "generate": "xcodegen generate",
+    "build": "xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO build",
+    "test": "xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO test",
+    "run": "open ./build/Build/Products/Debug/PearTubeDesktop.app"
+  }
+}

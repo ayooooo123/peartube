@@ -7,6 +7,7 @@
   "types": "./src/index.d.ts",
   "exports": {
     ".": "./src/index.js",
+    "./backend-entry": "./src/backend-entry.js",
     "./orchestrator": "./src/orchestrator.js",
     "./storage": "./src/storage.js",
     "./channel": "./src/channel/index.js",

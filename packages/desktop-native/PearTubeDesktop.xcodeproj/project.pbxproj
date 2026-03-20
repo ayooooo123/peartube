@@ -1,0 +1,479 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		37993C50C7C90977E0F1CC33 /* FeedListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77AF744D09EEDA796275141 /* FeedListView.swift */; };
+		49C847A5D592CE82E6A7307C /* PearTubeDesktopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */; };
+		8874F56E2BD2B922A4BA5C7B /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7175777FE7EB2ED57D81E6F9 /* AppState.swift */; };
+		AE360874F598E0D1DAA50689 /* AppCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28AE8EA242EEDC984D56DDE8 /* AppCommands.swift */; };
+		C0A331D388D7CA666D654530 /* AppSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 473A62DA158C871632E018CA /* AppSection.swift */; };
+		C664B5BE30943A3931CAC128 /* VideoDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258C43C8FA77D46F45DDAD07 /* VideoDetailView.swift */; };
+		D0A004BABD4119FAA8265AB4 /* NativeVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A710571B74E25FAFCFEFCBB /* NativeVideo.swift */; };
+		E6DB0A0138800DD757FEFACA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766601D0D17A7572CEC138EC /* SettingsView.swift */; };
+		F6170C1D6F4F8C8514E04782 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63719969BBA69B73A7A712EA /* SidebarView.swift */; };
+		F811BF5721CFF5D378111D39 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6371626F67CB4A3CEE1DB14 /* ContentView.swift */; };
+		F953E672F2AA6BC58967D580 /* HostBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D7848BE612D57A42D5D136 /* HostBridgeService.swift */; };
+		FA411943C07D7FB12845B20D /* PearTubeDesktopApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5F5C579330B5D98478CB80 /* PearTubeDesktopApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B5EC9E88082FCE2D682967C8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AF97AF55D8CE964834CDBADD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 71BF0D37F53C3186E1AC7267;
+			remoteInfo = PearTubeDesktop;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0F5F5C579330B5D98478CB80 /* PearTubeDesktopApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PearTubeDesktopApp.swift; sourceTree = "<group>"; };
+		258C43C8FA77D46F45DDAD07 /* VideoDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDetailView.swift; sourceTree = "<group>"; };
+		28AE8EA242EEDC984D56DDE8 /* AppCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCommands.swift; sourceTree = "<group>"; };
+		2A710571B74E25FAFCFEFCBB /* NativeVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeVideo.swift; sourceTree = "<group>"; };
+		40D7848BE612D57A42D5D136 /* HostBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBridgeService.swift; sourceTree = "<group>"; };
+		473A62DA158C871632E018CA /* AppSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSection.swift; sourceTree = "<group>"; };
+		5D6BAF2F7A554E305ECEC681 /* PearTubeDesktop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PearTubeDesktop.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		63719969BBA69B73A7A712EA /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		7175777FE7EB2ED57D81E6F9 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		766601D0D17A7572CEC138EC /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A6371626F67CB4A3CEE1DB14 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A77AF744D09EEDA796275141 /* FeedListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedListView.swift; sourceTree = "<group>"; };
+		AE1F2F95F9DEBD76DB721994 /* PearTubeDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PearTubeDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PearTubeDesktopTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		05AD4381F4E025F8DF7FEAB0 = {
+			isa = PBXGroup;
+			children = (
+				50F5FF584C42CDEF23B2EEAE /* Sources */,
+				83142860037B1F9DCC24BB70 /* Tests */,
+				15FD9EBBE7B0FF2282A6538C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		15FD9EBBE7B0FF2282A6538C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5D6BAF2F7A554E305ECEC681 /* PearTubeDesktop.app */,
+				AE1F2F95F9DEBD76DB721994 /* PearTubeDesktopTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		50F5FF584C42CDEF23B2EEAE /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				AD4A42103A574206E398775B /* App */,
+				DADE895B205FB5132BD077DF /* Models */,
+				BA4229CAC76BC6D44F7829E8 /* Services */,
+				BA0D11036ABD4D06D21B7CA9 /* Views */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		83142860037B1F9DCC24BB70 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		AD4A42103A574206E398775B /* App */ = {
+			isa = PBXGroup;
+			children = (
+				28AE8EA242EEDC984D56DDE8 /* AppCommands.swift */,
+				7175777FE7EB2ED57D81E6F9 /* AppState.swift */,
+				0F5F5C579330B5D98478CB80 /* PearTubeDesktopApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		BA0D11036ABD4D06D21B7CA9 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				A6371626F67CB4A3CEE1DB14 /* ContentView.swift */,
+				A77AF744D09EEDA796275141 /* FeedListView.swift */,
+				766601D0D17A7572CEC138EC /* SettingsView.swift */,
+				63719969BBA69B73A7A712EA /* SidebarView.swift */,
+				258C43C8FA77D46F45DDAD07 /* VideoDetailView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		BA4229CAC76BC6D44F7829E8 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				40D7848BE612D57A42D5D136 /* HostBridgeService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		DADE895B205FB5132BD077DF /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				473A62DA158C871632E018CA /* AppSection.swift */,
+				2A710571B74E25FAFCFEFCBB /* NativeVideo.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		31BD62CFB9A4A06424CA40F9 /* PearTubeDesktopTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3B3C947BB371C6A06985D1D3 /* Build configuration list for PBXNativeTarget "PearTubeDesktopTests" */;
+			buildPhases = (
+				98A9EB233141225875FE87E6 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B1F517264F5B388CD28DFAB5 /* PBXTargetDependency */,
+			);
+			name = PearTubeDesktopTests;
+			packageProductDependencies = (
+			);
+			productName = PearTubeDesktopTests;
+			productReference = AE1F2F95F9DEBD76DB721994 /* PearTubeDesktopTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		71BF0D37F53C3186E1AC7267 /* PearTubeDesktop */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E395BFDFC383A8FC93AB2F12 /* Build configuration list for PBXNativeTarget "PearTubeDesktop" */;
+			buildPhases = (
+				B7053AF2D6AAAF2DCE781289 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PearTubeDesktop;
+			packageProductDependencies = (
+			);
+			productName = PearTubeDesktop;
+			productReference = 5D6BAF2F7A554E305ECEC681 /* PearTubeDesktop.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AF97AF55D8CE964834CDBADD /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					31BD62CFB9A4A06424CA40F9 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					71BF0D37F53C3186E1AC7267 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = A1D4A0284D42ED931F3D18C2 /* Build configuration list for PBXProject "PearTubeDesktop" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 05AD4381F4E025F8DF7FEAB0;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 15FD9EBBE7B0FF2282A6538C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				71BF0D37F53C3186E1AC7267 /* PearTubeDesktop */,
+				31BD62CFB9A4A06424CA40F9 /* PearTubeDesktopTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		98A9EB233141225875FE87E6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				49C847A5D592CE82E6A7307C /* PearTubeDesktopTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B7053AF2D6AAAF2DCE781289 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AE360874F598E0D1DAA50689 /* AppCommands.swift in Sources */,
+				C0A331D388D7CA666D654530 /* AppSection.swift in Sources */,
+				8874F56E2BD2B922A4BA5C7B /* AppState.swift in Sources */,
+				F811BF5721CFF5D378111D39 /* ContentView.swift in Sources */,
+				37993C50C7C90977E0F1CC33 /* FeedListView.swift in Sources */,
+				F953E672F2AA6BC58967D580 /* HostBridgeService.swift in Sources */,
+				D0A004BABD4119FAA8265AB4 /* NativeVideo.swift in Sources */,
+				FA411943C07D7FB12845B20D /* PearTubeDesktopApp.swift in Sources */,
+				E6DB0A0138800DD757FEFACA /* SettingsView.swift in Sources */,
+				F6170C1D6F4F8C8514E04782 /* SidebarView.swift in Sources */,
+				C664B5BE30943A3931CAC128 /* VideoDetailView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B1F517264F5B388CD28DFAB5 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 71BF0D37F53C3186E1AC7267 /* PearTubeDesktop */;
+			targetProxy = B5EC9E88082FCE2D682967C8 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4DF52D27D4E892F126742869 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.desktop.native;
+				PRODUCT_NAME = PearTubeDesktop;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+		4E5EDC9ED68BBA3EA2FD31C6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Resources/Tests-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_MODULE_NAME = PearTubeDesktopTests;
+				PRODUCT_NAME = PearTubeDesktopTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PearTubeDesktop.app/Contents/MacOS/PearTubeDesktop";
+			};
+			name = Release;
+		};
+		577901B7597EFDF78FA78586 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Resources/Tests-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_MODULE_NAME = PearTubeDesktopTests;
+				PRODUCT_NAME = PearTubeDesktopTests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PearTubeDesktop.app/Contents/MacOS/PearTubeDesktop";
+			};
+			name = Debug;
+		};
+		8B09316470068808CF86F8F2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_ENTITLEMENTS = Resources/PearTubeDesktop.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_STRICT_CONCURRENCY = complete;
+			};
+			name = Debug;
+		};
+		9446F7EF40ECCC465EE24D7D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_ENTITLEMENTS = Resources/PearTubeDesktop.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				SDKROOT = macosx;
+				SWIFT_STRICT_CONCURRENCY = complete;
+			};
+			name = Release;
+		};
+		C1F680D29D644346AFB5BC3F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.desktop.native;
+				PRODUCT_NAME = PearTubeDesktop;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3B3C947BB371C6A06985D1D3 /* Build configuration list for PBXNativeTarget "PearTubeDesktopTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				577901B7597EFDF78FA78586 /* Debug */,
+				4E5EDC9ED68BBA3EA2FD31C6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A1D4A0284D42ED931F3D18C2 /* Build configuration list for PBXProject "PearTubeDesktop" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1F680D29D644346AFB5BC3F /* Debug */,
+				4DF52D27D4E892F126742869 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E395BFDFC383A8FC93AB2F12 /* Build configuration list for PBXNativeTarget "PearTubeDesktop" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8B09316470068808CF86F8F2 /* Debug */,
+				9446F7EF40ECCC465EE24D7D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AF97AF55D8CE964834CDBADD /* Project object */;
+}

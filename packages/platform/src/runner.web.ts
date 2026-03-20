@@ -10,6 +10,7 @@ type WebRunnerDependencies = {
     args?: string[]
   }): Promise<{
     stream: any
+    client?: ReturnType<typeof createProtocolClient>
     terminate?(): Promise<void> | void
   }>
   createProtocolClientImpl?: typeof createProtocolClient
@@ -36,7 +37,7 @@ export function createWebRunner(dependencies: WebRunnerDependencies): PlatformRu
     async start(options) {
       const lifecycle = createLifecycleController()
       const transport = await dependencies.connectTransport(options)
-      const client = createClient({ stream: transport.stream })
+      const client = transport.client ?? createClient({ stream: transport.stream })
       const readyPromise = client.ready()
 
       client.events.on(PROTOCOL_EVENTS.HOST_READY, (data: any) => {

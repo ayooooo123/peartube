@@ -2,24 +2,24 @@
  * RPC Client - Web (Pear Desktop)
  *
  * Unified platform RPC layer for Pear desktop apps.
- * Uses the existing PearWorkerClient set up by worker-client.js (unbundled script).
- *
- * NOTE: The actual HRPC/pear-run initialization happens in worker-client.js,
- * which is loaded as an unbundled ESM script in Pear. This module just
- * provides a clean interface to that existing infrastructure.
+ * Uses the shared runner/bridge contract on top of the PearWorkerClient
+ * transport exposed by worker-client.js.
  */
 
+import { createPlatformRpcBridge } from './rpc.shared';
+import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';
 
 // PearWorkerClient is set on window by worker-client.js (unbundled)
 declare global {
   interface Window {
     PearWorkerClient?: {
-      rpc: any;
       isConnected: boolean;
       blobServerPort: number | null;
       initialize(): Promise<void>;
+      connect(): Promise<{ stream: any; client?: any; terminate?: () => Promise<void> | void }>;
       getRpc(): any;
+      close(): void;
     };
   }
 }
@@ -27,142 +27,43 @@ declare global {
 // Module state
 let _blobServerPort: number | null = null;
 let _isInitialized = false;
+const mainRunner = createWebRunner({
+  async connectTransport() {
+    if (typeof window === 'undefined') {
+      throw new Error('Platform RPC can only be initialized in browser context');
+    }
 
-// Event callback types
-type ReadyCallback = (data: { blobServerPort: number }) => void;
-type ErrorCallback = (data: { message: string }) => void;
-type VideoStatsCallback = (data: { channelKey: string; videoId: string; stats: VideoStats }) => void;
-type UploadProgressCallback = (data: { progress: number; videoId?: string }) => void;
-type FeedUpdateCallback = (data: { channelKey: string; action: string }) => void;
-type CastDeviceFoundCallback = (data: { device: { id: string; name: string; host: string; port: number; protocol: string } }) => void;
-type CastDeviceLostCallback = (data: { deviceId: string }) => void;
-type CastPlaybackStateCallback = (data: { state: string }) => void;
-type CastTimeUpdateCallback = (data: { currentTime: number }) => void;
+    const workerClient = window.PearWorkerClient;
+    if (!workerClient) {
+      throw new Error('PearWorkerClient not available - ensure worker-client.js is loaded');
+    }
 
-// Event callback storage
-const eventCallbacks = {
-  ready: [] as ReadyCallback[],
-  error: [] as ErrorCallback[],
-  videoStats: [] as VideoStatsCallback[],
-  uploadProgress: [] as UploadProgressCallback[],
-  feedUpdate: [] as FeedUpdateCallback[],
-  castDeviceFound: [] as CastDeviceFoundCallback[],
-  castDeviceLost: [] as CastDeviceLostCallback[],
-  castPlaybackState: [] as CastPlaybackStateCallback[],
-  castTimeUpdate: [] as CastTimeUpdateCallback[],
-};
+    return workerClient.connect();
+  }
+});
 
-// Helper to remove callback
-function removeCallback<T>(arr: T[], cb: T) {
-  const idx = arr.indexOf(cb);
-  if (idx !== -1) arr.splice(idx, 1);
-}
+const mainBridge = createPlatformRpcBridge({
+  platform: 'desktop',
+  runner: mainRunner,
+  entrypoint: 'legacy-desktop',
+  getStoragePath() {
+    return 'pear-desktop';
+  }
+});
+
+mainBridge.events.onReady((data: any) => {
+  _blobServerPort = data?.blobServerPort ?? null;
+  _isInitialized = true;
+});
+
+mainBridge.events.onError(() => {
+  _isInitialized = false;
+});
 
 /**
  * Event subscription system
  */
-export const events = {
-  onReady: (cb: ReadyCallback) => {
-    eventCallbacks.ready.push(cb);
-    return () => removeCallback(eventCallbacks.ready, cb);
-  },
-  onError: (cb: ErrorCallback) => {
-    eventCallbacks.error.push(cb);
-    return () => removeCallback(eventCallbacks.error, cb);
-  },
-  onVideoStats: (cb: VideoStatsCallback) => {
-    eventCallbacks.videoStats.push(cb);
-    return () => removeCallback(eventCallbacks.videoStats, cb);
-  },
-  onUploadProgress: (cb: UploadProgressCallback) => {
-    eventCallbacks.uploadProgress.push(cb);
-    return () => removeCallback(eventCallbacks.uploadProgress, cb);
-  },
-  onFeedUpdate: (cb: FeedUpdateCallback) => {
-    eventCallbacks.feedUpdate.push(cb);
-    return () => removeCallback(eventCallbacks.feedUpdate, cb);
-  },
-  onCastDeviceFound: (cb: CastDeviceFoundCallback) => {
-    eventCallbacks.castDeviceFound.push(cb);
-    return () => removeCallback(eventCallbacks.castDeviceFound, cb);
-  },
-  onCastDeviceLost: (cb: CastDeviceLostCallback) => {
-    eventCallbacks.castDeviceLost.push(cb);
-    return () => removeCallback(eventCallbacks.castDeviceLost, cb);
-  },
-  onCastPlaybackState: (cb: CastPlaybackStateCallback) => {
-    eventCallbacks.castPlaybackState.push(cb);
-    return () => removeCallback(eventCallbacks.castPlaybackState, cb);
-  },
-  onCastTimeUpdate: (cb: CastTimeUpdateCallback) => {
-    eventCallbacks.castTimeUpdate.push(cb);
-    return () => removeCallback(eventCallbacks.castTimeUpdate, cb);
-  },
-};
-
-// Event listeners for window events (dispatched by worker-client.js)
-let eventListenersSetup = false;
-
-function setupEventListeners() {
-  if (eventListenersSetup || typeof window === 'undefined') return;
-  eventListenersSetup = true;
-
-  window.addEventListener('pearVideoStats', ((e: CustomEvent) => {
-    const data: any = e.detail;
-    const stats = data?.stats ?? data;
-    const channelKey = data?.channelKey ?? stats?.channelKey;
-    const videoId = data?.videoId ?? stats?.videoId;
-
-    console.log('[Platform RPC] pearVideoStats event received:', { channelKey: channelKey?.slice?.(0, 16), videoId: videoId?.slice?.(0, 30), progress: stats?.progress });
-
-    if (channelKey && videoId && stats) {
-      console.log('[Platform RPC] Dispatching to', eventCallbacks.videoStats.length, 'listeners');
-      eventCallbacks.videoStats.forEach((cb) => {
-        cb({ channelKey, videoId, stats });
-      });
-    } else {
-      eventCallbacks.videoStats.forEach((cb) => {
-        cb(data);
-      });
-    }
-  }) as EventListener);
-
-  window.addEventListener('pearUploadProgress', ((e: CustomEvent) => {
-    eventCallbacks.uploadProgress.forEach((cb) => {
-      cb(e.detail);
-    });
-  }) as EventListener);
-
-  window.addEventListener('pearFeedUpdate', ((e: CustomEvent) => {
-    eventCallbacks.feedUpdate.forEach((cb) => {
-      cb(e.detail);
-    });
-  }) as EventListener);
-
-  window.addEventListener('pearCastDeviceFound', ((e: CustomEvent) => {
-    eventCallbacks.castDeviceFound.forEach((cb) => {
-      cb(e.detail);
-    });
-  }) as EventListener);
-
-  window.addEventListener('pearCastDeviceLost', ((e: CustomEvent) => {
-    eventCallbacks.castDeviceLost.forEach((cb) => {
-      cb(e.detail);
-    });
-  }) as EventListener);
-
-  window.addEventListener('pearCastPlaybackState', ((e: CustomEvent) => {
-    eventCallbacks.castPlaybackState.forEach((cb) => {
-      cb(e.detail);
-    });
-  }) as EventListener);
-
-  window.addEventListener('pearCastTimeUpdate', ((e: CustomEvent) => {
-    eventCallbacks.castTimeUpdate.forEach((cb) => {
-      cb(e.detail);
-    });
-  }) as EventListener);
-}
+export const events = mainBridge.events;
 
 /**
  * Initialize platform RPC for Pear desktop
@@ -171,7 +72,7 @@ function setupEventListeners() {
  * The worker-client.js script must be loaded before calling this.
  */
 export async function initPlatformRPC(): Promise<void> {
-  if (_isInitialized) {
+  if (_isInitialized && mainBridge.isInitialized()) {
     console.log('[Platform RPC] Already initialized');
     return;
   }
@@ -180,29 +81,17 @@ export async function initPlatformRPC(): Promise<void> {
     throw new Error('Platform RPC can only be initialized in browser context');
   }
 
-  const workerClient = window.PearWorkerClient;
-  if (!workerClient) {
+  if (!window.PearWorkerClient) {
     throw new Error('PearWorkerClient not available - ensure worker-client.js is loaded');
   }
 
   console.log('[Platform RPC] Initializing via PearWorkerClient...');
 
-  // Set up DOM event listeners for worker events
-  setupEventListeners();
-
   try {
-    // Initialize the worker client (spawns worker, sets up HRPC)
-    await workerClient.initialize();
+    await mainBridge.init();
 
-    _blobServerPort = workerClient.blobServerPort;
-    _isInitialized = true;
-
+    _blobServerPort = mainBridge.getBlobServerPort();
     console.log('[Platform RPC] Initialized, blobServerPort:', _blobServerPort);
-
-    // Fire ready callbacks
-    eventCallbacks.ready.forEach((cb) => {
-      cb({ blobServerPort: _blobServerPort! });
-    });
   } catch (err) {
     console.error('[Platform RPC] Failed to initialize:', err);
     throw err;
@@ -213,13 +102,18 @@ export async function initPlatformRPC(): Promise<void> {
  * Terminate platform RPC
  */
 export function terminatePlatformRPC(): void {
-  const workerClient = window?.PearWorkerClient;
-  if (workerClient && (workerClient as any).close) {
-    console.log('[Platform RPC] Closing worker client');
-    (workerClient as any).close();
+  if (!mainBridge.isInitialized()) {
+    _isInitialized = false;
+    _blobServerPort = null;
+    return;
   }
+
   _isInitialized = false;
   _blobServerPort = null;
+
+  void mainBridge.terminate().catch((err) => {
+    console.error('[Platform RPC] Failed to terminate:', err);
+  });
 }
 
 /**
@@ -240,12 +134,12 @@ export function getBlobServerPort(): number | null {
  * Get raw HRPC instance (for advanced use cases)
  */
 export function getHRPCInstance(): any {
-  return window?.PearWorkerClient?.getRpc?.() || window?.PearWorkerClient?.rpc;
+  return mainBridge.getRpc();
 }
 
 // Helper to get RPC and ensure it's ready
 function ensureRPC() {
-  const rpc = getHRPCInstance();
+  const rpc = mainBridge.getRpc();
   if (!rpc) throw new Error('Platform RPC not initialized');
   return rpc;
 }

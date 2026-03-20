@@ -8,6 +8,7 @@
     "@peartube/backend": "file:../../backend",
     "@peartube/core": "file:../../core",
     "@peartube/platform": "file:../../platform",
+    "@peartube/protocol": "file:../../protocol",
     "@peartube/spec": "file:../../spec",
     "autobase": "^7.25.1",
     "keet-identity-key": "^3.1.0",

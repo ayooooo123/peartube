@@ -61,6 +61,11 @@ export async function runHostSidecar({ platform = 'desktop', storagePath, entryp
   })
 }
 
+export function parseSidecarArgv(argv = []) {
+  const [storagePath = '', entrypoint = 'sidecar-entry', ...args] = argv
+  return { storagePath, entrypoint, args }
+}
+
 function isDirectRun() {
   if (typeof process === 'undefined' || !process.argv?.[1]) return false
 
@@ -73,6 +78,5 @@ function isDirectRun() {
 
 if (isDirectRun()) {
   const argv = globalThis.Bare?.argv ?? process.argv.slice(2)
-  const [storagePath = '', ...args] = argv
-  await runHostSidecar({ storagePath, args })
+  await runHostSidecar(parseSidecarArgv(argv))
 }

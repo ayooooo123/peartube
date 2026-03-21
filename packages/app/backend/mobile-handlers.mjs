@@ -88,7 +88,17 @@ export function attachMobileHandlers(B, deps) {
       }
     }).filter(Boolean) }
   }
-  B.getVideoUrl = async (r) => { const res = await api.getVideoUrl(r.channelKey, r.videoId, r.publicBeeKey); return { url: res.url } }
+  B.getVideoUrl = async (r) => {
+    const res = await api.getVideoUrl(
+      r.channelKey,
+      r.videoId,
+      r.publicBeeKey,
+      r.blobId,
+      r.blobsCoreKey,
+      r.mimeType
+    )
+    return { url: res.url }
+  }
   B.getVideoData = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoMetadata = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId); return { url: res.url || null, exists: res.exists || false, dataUrl: null } }

@@ -153,6 +153,10 @@ async function populateSection(section, sources, config, fetchChannelData, regis
         tags: normalizeTags(source, video, section),
         accentHex: pickAccentHex(source.channelKey),
         thumbnailURL: video.thumbnail || null,
+        path: video.path || null,
+        blobId: video.blobId || null,
+        blobsCoreKey: video.blobsCoreKey || null,
+        mimeType: video.mimeType || null,
       })
 
       if (!normalized.sections.includes(section)) {
@@ -281,6 +285,10 @@ export async function buildSearchResults({
       accentHex: pickAccentHex(channelKey),
       sections: ['home'],
       thumbnailURL: metadata.thumbnail || null,
+      path: metadata.path || null,
+      blobId: metadata.blobId || null,
+      blobsCoreKey: metadata.blobsCoreKey || null,
+      mimeType: metadata.mimeType || null,
     })
   }
 

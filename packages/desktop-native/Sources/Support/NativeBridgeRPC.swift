@@ -14,6 +14,7 @@ enum NativeBridgeCommand: UInt {
   case subscribeChannel = 9
   case unsubscribeChannel = 10
   case uploadVideo = 11
+  case resolveThumbnail = 12
 }
 
 enum NativeBridgeEventCommand: UInt {
@@ -37,11 +38,28 @@ struct NativeBridgeResolvePlaybackRequest: Equatable {
   let channelKey: String
   let publicBeeKey: String?
   let videoId: String
+  let videoPath: String?
+  let blobId: String?
+  let blobsCoreKey: String?
+  let mimeType: String?
 }
 
 struct NativeBridgeResolvePlaybackResponse: Equatable {
   let videoId: String
   let url: String
+}
+
+struct NativeBridgeResolveThumbnailRequest: Equatable {
+  let channelKey: String
+  let publicBeeKey: String?
+  let videoId: String
+  let videoPath: String?
+}
+
+struct NativeBridgeResolveThumbnailResponse: Equatable {
+  let videoId: String
+  let url: String?
+  let exists: Bool
 }
 
 struct NativeBridgeSearchRequest: Equatable {
@@ -191,19 +209,31 @@ struct NativeBridgeResolvePlaybackRequestCodec: Codec {
     string.preencode(&state, value.channelKey)
     optionalString.preencode(&state, value.publicBeeKey)
     string.preencode(&state, value.videoId)
+    optionalString.preencode(&state, value.videoPath)
+    optionalString.preencode(&state, value.blobId)
+    optionalString.preencode(&state, value.blobsCoreKey)
+    optionalString.preencode(&state, value.mimeType)
   }
 
   func encode(_ state: inout State, _ value: Value) throws {
     try string.encode(&state, value.channelKey)
     try optionalString.encode(&state, value.publicBeeKey)
     try string.encode(&state, value.videoId)
+    try optionalString.encode(&state, value.videoPath)
+    try optionalString.encode(&state, value.blobId)
+    try optionalString.encode(&state, value.blobsCoreKey)
+    try optionalString.encode(&state, value.mimeType)
   }
 
   func decode(_ state: inout State) throws -> Value {
     Value(
       channelKey: try string.decode(&state),
       publicBeeKey: try optionalString.decode(&state),
-      videoId: try string.decode(&state)
+      videoId: try string.decode(&state),
+      videoPath: try optionalString.decode(&state),
+      blobId: try optionalString.decode(&state),
+      blobsCoreKey: try optionalString.decode(&state),
+      mimeType: try optionalString.decode(&state)
     )
   }
 }
@@ -227,6 +257,64 @@ struct NativeBridgeResolvePlaybackResponseCodec: Codec {
     Value(
       videoId: try string.decode(&state),
       url: try string.decode(&state)
+    )
+  }
+}
+
+struct NativeBridgeResolveThumbnailRequestCodec: Codec {
+  typealias Value = NativeBridgeResolveThumbnailRequest
+
+  private let string = Primitive.UTF8()
+  private let optionalString = OptionalCodec(Primitive.UTF8())
+
+  func preencode(_ state: inout State, _ value: Value) {
+    string.preencode(&state, value.channelKey)
+    optionalString.preencode(&state, value.publicBeeKey)
+    string.preencode(&state, value.videoId)
+    optionalString.preencode(&state, value.videoPath)
+  }
+
+  func encode(_ state: inout State, _ value: Value) throws {
+    try string.encode(&state, value.channelKey)
+    try optionalString.encode(&state, value.publicBeeKey)
+    try string.encode(&state, value.videoId)
+    try optionalString.encode(&state, value.videoPath)
+  }
+
+  func decode(_ state: inout State) throws -> Value {
+    Value(
+      channelKey: try string.decode(&state),
+      publicBeeKey: try optionalString.decode(&state),
+      videoId: try string.decode(&state),
+      videoPath: try optionalString.decode(&state)
+    )
+  }
+}
+
+struct NativeBridgeResolveThumbnailResponseCodec: Codec {
+  typealias Value = NativeBridgeResolveThumbnailResponse
+
+  private let string = Primitive.UTF8()
+  private let optionalString = OptionalCodec(Primitive.UTF8())
+  private let bool = Primitive.Bool()
+
+  func preencode(_ state: inout State, _ value: Value) {
+    string.preencode(&state, value.videoId)
+    optionalString.preencode(&state, value.url)
+    bool.preencode(&state, value.exists)
+  }
+
+  func encode(_ state: inout State, _ value: Value) throws {
+    try string.encode(&state, value.videoId)
+    try optionalString.encode(&state, value.url)
+    try bool.encode(&state, value.exists)
+  }
+
+  func decode(_ state: inout State) throws -> Value {
+    Value(
+      videoId: try string.decode(&state),
+      url: try optionalString.decode(&state),
+      exists: try bool.decode(&state)
     )
   }
 }
@@ -529,6 +617,10 @@ private struct NativeVideoCodec: Codec {
     string.preencode(&state, value.accentHex)
     sections.preencode(&state, value.sections.sorted(by: { $0.rawValue < $1.rawValue }))
     optionalString.preencode(&state, value.thumbnailURL?.absoluteString)
+    optionalString.preencode(&state, value.path)
+    optionalString.preencode(&state, value.blobId)
+    optionalString.preencode(&state, value.blobsCoreKey)
+    optionalString.preencode(&state, value.mimeType)
   }
 
   func encode(_ state: inout State, _ value: Value) throws {
@@ -544,6 +636,10 @@ private struct NativeVideoCodec: Codec {
     try string.encode(&state, value.accentHex)
     try sections.encode(&state, value.sections.sorted(by: { $0.rawValue < $1.rawValue }))
     try optionalString.encode(&state, value.thumbnailURL?.absoluteString)
+    try optionalString.encode(&state, value.path)
+    try optionalString.encode(&state, value.blobId)
+    try optionalString.encode(&state, value.blobsCoreKey)
+    try optionalString.encode(&state, value.mimeType)
   }
 
   func decode(_ state: inout State) throws -> Value {
@@ -559,6 +655,10 @@ private struct NativeVideoCodec: Codec {
     let accentHex = try string.decode(&state)
     let sectionValues = try sections.decode(&state)
     let thumbnail = try optionalString.decode(&state)
+    let path = try optionalString.decode(&state)
+    let blobId = try optionalString.decode(&state)
+    let blobsCoreKey = try optionalString.decode(&state)
+    let mimeType = try optionalString.decode(&state)
 
     return Value(
       id: id,
@@ -572,7 +672,11 @@ private struct NativeVideoCodec: Codec {
       tags: tagValues,
       accentHex: accentHex,
       sections: Set(sectionValues),
-      thumbnailURL: thumbnail.flatMap(URL.init(string:))
+      thumbnailURL: thumbnail.flatMap(URL.init(string:)),
+      path: path,
+      blobId: blobId,
+      blobsCoreKey: blobsCoreKey,
+      mimeType: mimeType
     )
   }
 }

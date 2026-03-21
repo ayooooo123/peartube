@@ -20,6 +20,7 @@ final class HostBridgeService {
   private(set) var activePlaybackVideoID: NativeVideo.ID?
   private(set) var resolvedPlaybackURL: URL?
   private(set) var isResolvingPlayback = false
+  private(set) var thumbnailURLs: [NativeVideo.ID: URL] = [:]
 
   @ObservationIgnored private var sidecarProcess: Process?
   @ObservationIgnored private var sidecarInput: Pipe?
@@ -28,6 +29,7 @@ final class HostBridgeService {
   @ObservationIgnored private var rpc: RPC?
   @ObservationIgnored private var rpcDelegate: NativeBridgeRPCDelegate?
   @ObservationIgnored private var sidecarStderrBuffer = ""
+  @ObservationIgnored private var inFlightThumbnailIDs = Set<NativeVideo.ID>()
   @ObservationIgnored private let logLimit = 120
   @ObservationIgnored private(set) var selectedStoragePath: String?
 
@@ -81,6 +83,7 @@ final class HostBridgeService {
       phase = .ready(blobServerPort: response.blobServerPort)
       lastHeartbeat = Date()
       appState.applySnapshot(response.snapshot)
+      primeThumbnailCache(with: response.snapshot)
       appendLog("Shared host ready. Loaded \(response.snapshot.stats.homeCount) home videos across \(response.snapshot.stats.channelCount) channels.")
     } catch {
       let friendlyMessage = Self.friendlyBootstrapError(
@@ -112,6 +115,7 @@ final class HostBridgeService {
         responseCodec: NativeBrowseSnapshotCodec()
       )
       appState.applySnapshot(snapshot)
+      primeThumbnailCache(with: snapshot)
       lastHeartbeat = Date()
       appendLog("Browse snapshot refreshed.")
     } catch {
@@ -148,6 +152,7 @@ final class HostBridgeService {
       )
 
       appState.applySearchResults(query: response.query, videos: response.results)
+      primeThumbnailCache(with: response.results)
       lastHeartbeat = Date()
       appendLog("Global search returned \(response.results.count) results.")
     } catch {
@@ -277,7 +282,11 @@ final class HostBridgeService {
         requestPayload: NativeBridgeResolvePlaybackRequest(
           channelKey: video.channelKey,
           publicBeeKey: video.publicBeeKey,
-          videoId: video.backendVideoID
+          videoId: video.backendVideoID,
+          videoPath: video.path,
+          blobId: video.blobId,
+          blobsCoreKey: video.blobsCoreKey,
+          mimeType: video.mimeType
         ),
         requestCodec: NativeBridgeResolvePlaybackRequestCodec(),
         responseCodec: NativeBridgeResolvePlaybackResponseCodec()
@@ -291,6 +300,68 @@ final class HostBridgeService {
       appendLog("Playback resolution failed: \(error.localizedDescription)")
       return nil
     }
+  }
+
+  func thumbnailURL(for video: NativeVideo) -> URL? {
+    thumbnailURLs[video.id] ?? video.thumbnailURL
+  }
+
+  func ensureThumbnail(for video: NativeVideo) async {
+    if thumbnailURL(for: video) != nil { return }
+    guard isReady else { return }
+    guard !inFlightThumbnailIDs.contains(video.id) else { return }
+
+    inFlightThumbnailIDs.insert(video.id)
+    defer { inFlightThumbnailIDs.remove(video.id) }
+
+    do {
+      let response = try await sendRequest(
+        command: .resolveThumbnail,
+        requestPayload: NativeBridgeResolveThumbnailRequest(
+          channelKey: video.channelKey,
+          publicBeeKey: video.publicBeeKey,
+          videoId: video.backendVideoID,
+          videoPath: video.path
+        ),
+        requestCodec: NativeBridgeResolveThumbnailRequestCodec(),
+        responseCodec: NativeBridgeResolveThumbnailResponseCodec()
+      )
+
+      if response.exists, let urlString = response.url, let url = URL(string: urlString) {
+        thumbnailURLs[video.id] = url
+      }
+    } catch {
+      appendLog("Thumbnail resolution failed for \(video.title): \(error.localizedDescription)")
+    }
+  }
+
+  func diagnosticsReport(appState: AppState? = nil) -> String {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .medium
+
+    var lines = [
+      "PearTube Native Diagnostics",
+      "Status: \(statusTitle)",
+      "Storage: \(selectedStoragePath ?? "Unavailable")",
+      "Last heartbeat: \(lastHeartbeat.map(formatter.string(from:)) ?? "Never")",
+    ]
+
+    if let errorMessage = appState?.lastErrorMessage, !errorMessage.isEmpty {
+      lines.append("App error: \(errorMessage)")
+    }
+
+    lines.append("")
+    lines.append("Recent host log:")
+    lines.append(contentsOf: logLines.suffix(40))
+    return lines.joined(separator: "\n")
+  }
+
+  func copyDiagnosticsToPasteboard(appState: AppState? = nil) {
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString(diagnosticsReport(appState: appState), forType: .string)
+    appendLog("Copied diagnostics report to the clipboard.")
   }
 
   func clearPlayback() {
@@ -405,6 +476,8 @@ final class HostBridgeService {
     sidecarError = nil
     sidecarProcess = nil
     sidecarStderrBuffer = ""
+    inFlightThumbnailIDs.removeAll()
+    thumbnailURLs.removeAll()
     phase = .idle
     lastHeartbeat = nil
     clearPlayback()
@@ -414,6 +487,22 @@ final class HostBridgeService {
     logLines.append(line)
     if logLines.count > logLimit {
       logLines.removeFirst(logLines.count - logLimit)
+    }
+  }
+
+  private func primeThumbnailCache(with snapshot: NativeBrowseSnapshot) {
+    primeThumbnailCache(with: snapshot.sections.home)
+    primeThumbnailCache(with: snapshot.sections.subscriptions)
+    primeThumbnailCache(with: snapshot.sections.library)
+    primeThumbnailCache(with: snapshot.sections.studio)
+    primeThumbnailCache(with: snapshot.sections.diagnostics)
+  }
+
+  private func primeThumbnailCache(with videos: [NativeVideo]) {
+    for video in videos {
+      if let url = video.thumbnailURL {
+        thumbnailURLs[video.id] = url
+      }
     }
   }
 

@@ -13,6 +13,10 @@ struct NativeVideo: Identifiable, Hashable, Codable {
   let accentHex: String
   let sections: Set<AppSection>
   let thumbnailURL: URL?
+  let path: String?
+  let blobId: String?
+  let blobsCoreKey: String?
+  let mimeType: String?
 
   init(
     id: String,
@@ -26,7 +30,11 @@ struct NativeVideo: Identifiable, Hashable, Codable {
     tags: [String],
     accentHex: String,
     sections: Set<AppSection>,
-    thumbnailURL: URL? = nil
+    thumbnailURL: URL? = nil,
+    path: String? = nil,
+    blobId: String? = nil,
+    blobsCoreKey: String? = nil,
+    mimeType: String? = nil
   ) {
     self.id = id
     self.backendVideoID = backendVideoID
@@ -40,6 +48,24 @@ struct NativeVideo: Identifiable, Hashable, Codable {
     self.accentHex = accentHex
     self.sections = sections
     self.thumbnailURL = thumbnailURL
+    self.path = path
+    self.blobId = blobId
+    self.blobsCoreKey = blobsCoreKey
+    self.mimeType = mimeType
+  }
+
+  var playbackReference: String {
+    if let path, path.hasPrefix("/videos/") {
+      return path
+    }
+    return backendVideoID
+  }
+
+  var thumbnailReference: String {
+    if let path, path.hasPrefix("/videos/") {
+      return path
+    }
+    return backendVideoID
   }
 }
 

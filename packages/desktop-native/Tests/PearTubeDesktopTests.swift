@@ -262,6 +262,38 @@ final class PearTubeDesktopTests: XCTestCase {
     XCTAssertEqual(decoded, response)
   }
 
+  func testPreferredStoragePathUsesLegacyPearTubeStoreWhenAvailable() throws {
+    let fileManager = FileManager.default
+    let homeRoot = URL(fileURLWithPath: NSTemporaryDirectory())
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let legacyStore = homeRoot.appendingPathComponent(".peartube", isDirectory: true)
+    let appSupportRoot = homeRoot.appendingPathComponent("Library/Application Support", isDirectory: true)
+
+    try fileManager.createDirectory(at: legacyStore.appendingPathComponent("db", isDirectory: true), withIntermediateDirectories: true)
+    try Data().write(to: legacyStore.appendingPathComponent("CORESTORE"))
+
+    let resolved = HostBridgeService.preferredStoragePath(
+      environment: [:],
+      fileManager: fileManager,
+      homeDirectory: homeRoot,
+      appSupportDirectory: appSupportRoot
+    )
+
+    XCTAssertEqual(resolved, legacyStore.path)
+
+    try? fileManager.removeItem(at: homeRoot)
+  }
+
+  func testFriendlyBootstrapErrorExplainsLegacyStoreLock() {
+    let message = HostBridgeService.friendlyBootstrapError(
+      "File descriptor could not be locked",
+      storagePath: "/Users/jd/.peartube"
+    )
+
+    XCTAssertTrue(message.contains("Close the existing PearTube desktop app"))
+    XCTAssertTrue(message.contains("/Users/jd/.peartube"))
+  }
+
   private func makeVideo(
     id: String,
     backendVideoID: String,

@@ -29,6 +29,17 @@ function getIdentityKeyFilePath(storagePath) {
   return path.join(storagePath, IDENTITY_KEY_FILENAME);
 }
 
+function getLegacyIdentityKeyFilePath(storagePath) {
+  if (!path || !storagePath) return null;
+  return path.join(storagePath, 'db', IDENTITY_KEY_FILENAME);
+}
+
+function getIdentityKeyFileCandidates(storagePath) {
+  const canonicalPath = getIdentityKeyFilePath(storagePath);
+  const legacyPath = getLegacyIdentityKeyFilePath(storagePath);
+  return [canonicalPath, legacyPath].filter(Boolean);
+}
+
 function parseHexKey(value) {
   if (typeof value !== 'string') return null;
   if (!/^[0-9a-fA-F]+$/.test(value) || value.length % 2 !== 0) return null;
@@ -44,11 +55,9 @@ function parseHexKey(value) {
 export async function identityKeyFileExists(storagePath) {
   await initModules();
   if (!fs) return false;
-  const filePath = getIdentityKeyFilePath(storagePath);
-  if (!filePath) return false;
 
   try {
-    return fs.existsSync(filePath);
+    return getIdentityKeyFileCandidates(storagePath).some((filePath) => fs.existsSync(filePath));
   } catch {
     return false;
   }
@@ -57,22 +66,22 @@ export async function identityKeyFileExists(storagePath) {
 export async function readIdentityKeyFile(storagePath) {
   await initModules();
   if (!fs) return null;
-  const filePath = getIdentityKeyFilePath(storagePath);
-  if (!filePath) return null;
 
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (parsed?.version !== IDENTITY_KEY_FILE_VERSION) return null;
+  for (const filePath of getIdentityKeyFileCandidates(storagePath)) {
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed?.version !== IDENTITY_KEY_FILE_VERSION) continue;
 
-    const primaryKey = parseHexKey(parsed.primaryKey);
-    const identityPublicKey = parseHexKey(parsed.identityPublicKey);
-    if (!primaryKey || !identityPublicKey) return null;
+      const primaryKey = parseHexKey(parsed.primaryKey);
+      const identityPublicKey = parseHexKey(parsed.identityPublicKey);
+      if (!primaryKey || !identityPublicKey) continue;
 
-    return { primaryKey, identityPublicKey };
-  } catch {
-    return null;
+      return { primaryKey, identityPublicKey };
+    } catch {}
   }
+
+  return null;
 }
 
 export async function writeIdentityKeyFile(storagePath, { primaryKey, identityPublicKey }) {

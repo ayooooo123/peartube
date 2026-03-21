@@ -7,10 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1ED22FE81E7F498968FDC219 /* ProtocolLineBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */; };
 		37993C50C7C90977E0F1CC33 /* FeedListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77AF744D09EEDA796275141 /* FeedListView.swift */; };
+		45B56D40BE38772109726AA7 /* CompactEncoding in Frameworks */ = {isa = PBXBuildFile; productRef = 9D0006F226472BC8AB5D5918 /* CompactEncoding */; };
 		49C847A5D592CE82E6A7307C /* PearTubeDesktopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */; };
+		4A908E01C3F46D70313ADFAB /* NativeBridgeRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4291941CE32FE46CB154875 /* NativeBridgeRPC.swift */; };
 		8874F56E2BD2B922A4BA5C7B /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7175777FE7EB2ED57D81E6F9 /* AppState.swift */; };
 		AE360874F598E0D1DAA50689 /* AppCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28AE8EA242EEDC984D56DDE8 /* AppCommands.swift */; };
+		B6C6A21DABEA67966D07BBA5 /* BareRPC in Frameworks */ = {isa = PBXBuildFile; productRef = C67321BB6FD07DA684BAFCC8 /* BareRPC */; };
 		C0A331D388D7CA666D654530 /* AppSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 473A62DA158C871632E018CA /* AppSection.swift */; };
 		C664B5BE30943A3931CAC128 /* VideoDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258C43C8FA77D46F45DDAD07 /* VideoDetailView.swift */; };
 		D0A004BABD4119FAA8265AB4 /* NativeVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A710571B74E25FAFCFEFCBB /* NativeVideo.swift */; };
@@ -19,6 +23,7 @@
 		F811BF5721CFF5D378111D39 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6371626F67CB4A3CEE1DB14 /* ContentView.swift */; };
 		F953E672F2AA6BC58967D580 /* HostBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D7848BE612D57A42D5D136 /* HostBridgeService.swift */; };
 		FA411943C07D7FB12845B20D /* PearTubeDesktopApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5F5C579330B5D98478CB80 /* PearTubeDesktopApp.swift */; };
+		FC9CB602EBAE5CC12020924F /* NativeBrowseSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C763BEE0CE4C4C7F4F41A2 /* NativeBrowseSnapshot.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -45,8 +50,23 @@
 		A6371626F67CB4A3CEE1DB14 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A77AF744D09EEDA796275141 /* FeedListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedListView.swift; sourceTree = "<group>"; };
 		AE1F2F95F9DEBD76DB721994 /* PearTubeDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PearTubeDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B6C763BEE0CE4C4C7F4F41A2 /* NativeBrowseSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBrowseSnapshot.swift; sourceTree = "<group>"; };
+		C4291941CE32FE46CB154875 /* NativeBridgeRPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBridgeRPC.swift; sourceTree = "<group>"; };
 		C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PearTubeDesktopTests.swift; sourceTree = "<group>"; };
+		EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolLineBuffer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		BBDCDC0785DCFB98FFCC3F69 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B6C6A21DABEA67966D07BBA5 /* BareRPC in Frameworks */,
+				45B56D40BE38772109726AA7 /* CompactEncoding in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		05AD4381F4E025F8DF7FEAB0 = {
@@ -67,12 +87,22 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		2B4973E3E6C51FB08BC5CA07 /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				C4291941CE32FE46CB154875 /* NativeBridgeRPC.swift */,
+				EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */,
+			);
+			path = Support;
+			sourceTree = "<group>";
+		};
 		50F5FF584C42CDEF23B2EEAE /* Sources */ = {
 			isa = PBXGroup;
 			children = (
 				AD4A42103A574206E398775B /* App */,
 				DADE895B205FB5132BD077DF /* Models */,
 				BA4229CAC76BC6D44F7829E8 /* Services */,
+				2B4973E3E6C51FB08BC5CA07 /* Support */,
 				BA0D11036ABD4D06D21B7CA9 /* Views */,
 			);
 			path = Sources;
@@ -120,6 +150,7 @@
 			isa = PBXGroup;
 			children = (
 				473A62DA158C871632E018CA /* AppSection.swift */,
+				B6C763BEE0CE4C4C7F4F41A2 /* NativeBrowseSnapshot.swift */,
 				2A710571B74E25FAFCFEFCBB /* NativeVideo.swift */,
 			);
 			path = Models;
@@ -151,6 +182,8 @@
 			buildConfigurationList = E395BFDFC383A8FC93AB2F12 /* Build configuration list for PBXNativeTarget "PearTubeDesktop" */;
 			buildPhases = (
 				B7053AF2D6AAAF2DCE781289 /* Sources */,
+				BBDCDC0785DCFB98FFCC3F69 /* Frameworks */,
+				0C8B9D6D30C4B530766EB3BB /* Copy Native Host Resources */,
 			);
 			buildRules = (
 			);
@@ -158,6 +191,8 @@
 			);
 			name = PearTubeDesktop;
 			packageProductDependencies = (
+				C67321BB6FD07DA684BAFCC8 /* BareRPC */,
+				9D0006F226472BC8AB5D5918 /* CompactEncoding */,
 			);
 			productName = PearTubeDesktop;
 			productReference = 5D6BAF2F7A554E305ECEC681 /* PearTubeDesktop.app */;
@@ -191,6 +226,10 @@
 			);
 			mainGroup = 05AD4381F4E025F8DF7FEAB0;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				B4B23DE8877AD53372496999 /* XCRemoteSwiftPackageReference "bare-rpc-swift" */,
+				E771DD3976E0738F522C0AC5 /* XCRemoteSwiftPackageReference "compact-encoding-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 15FD9EBBE7B0FF2282A6538C /* Products */;
 			projectDirPath = "";
@@ -201,6 +240,27 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		0C8B9D6D30C4B530766EB3BB /* Copy Native Host Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Native Host Resources";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nFRAMEWORK_DEST=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$DEST/Generated\"\nif [ -d \"$SRCROOT/Resources/Generated\" ]; then\n  rsync -a \"$SRCROOT/Resources/Generated/\" \"$DEST/Generated/\"\nfi\nif [ -d \"$SRCROOT/Resources/Runtime\" ]; then\n  mkdir -p \"$DEST/Runtime\"\n  rsync -a \"$SRCROOT/Resources/Runtime/\" \"$DEST/Runtime/\"\n  if [ -f \"$DEST/Runtime/bare\" ]; then\n    chmod +x \"$DEST/Runtime/bare\"\n  fi\nfi\nif [ -d \"$SRCROOT/Vendor/BareAddons\" ]; then\n  mkdir -p \"$FRAMEWORK_DEST\"\n  find \"$SRCROOT/Vendor/BareAddons\" -maxdepth 1 -type d -name '*.framework' -exec basename {} \\; | while read -r framework; do\n    rm -rf \"$FRAMEWORK_DEST/$framework\"\n  done\n  rsync -a \"$SRCROOT/Vendor/BareAddons/\" \"$FRAMEWORK_DEST/\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		98A9EB233141225875FE87E6 /* Sources */ = {
@@ -221,8 +281,11 @@
 				F811BF5721CFF5D378111D39 /* ContentView.swift in Sources */,
 				37993C50C7C90977E0F1CC33 /* FeedListView.swift in Sources */,
 				F953E672F2AA6BC58967D580 /* HostBridgeService.swift in Sources */,
+				4A908E01C3F46D70313ADFAB /* NativeBridgeRPC.swift in Sources */,
+				FC9CB602EBAE5CC12020924F /* NativeBrowseSnapshot.swift in Sources */,
 				D0A004BABD4119FAA8265AB4 /* NativeVideo.swift in Sources */,
 				FA411943C07D7FB12845B20D /* PearTubeDesktopApp.swift in Sources */,
+				1ED22FE81E7F498968FDC219 /* ProtocolLineBuffer.swift in Sources */,
 				E6DB0A0138800DD757FEFACA /* SettingsView.swift in Sources */,
 				F6170C1D6F4F8C8514E04782 /* SidebarView.swift in Sources */,
 				C664B5BE30943A3931CAC128 /* VideoDetailView.swift in Sources */,
@@ -312,6 +375,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.desktop.native.tests;
 				PRODUCT_MODULE_NAME = PearTubeDesktopTests;
 				PRODUCT_NAME = PearTubeDesktopTests;
 				SDKROOT = macosx;
@@ -331,6 +395,7 @@
 					"@loader_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.desktop.native.tests;
 				PRODUCT_MODULE_NAME = PearTubeDesktopTests;
 				PRODUCT_NAME = PearTubeDesktopTests;
 				SDKROOT = macosx;
@@ -347,10 +412,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				SDKROOT = macosx;
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -366,10 +428,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				SDKROOT = macosx;
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -474,6 +533,38 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		B4B23DE8877AD53372496999 /* XCRemoteSwiftPackageReference "bare-rpc-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/holepunchto/bare-rpc-swift";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+		E771DD3976E0738F522C0AC5 /* XCRemoteSwiftPackageReference "compact-encoding-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/holepunchto/compact-encoding-swift";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9D0006F226472BC8AB5D5918 /* CompactEncoding */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E771DD3976E0738F522C0AC5 /* XCRemoteSwiftPackageReference "compact-encoding-swift" */;
+			productName = CompactEncoding;
+		};
+		C67321BB6FD07DA684BAFCC8 /* BareRPC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B4B23DE8877AD53372496999 /* XCRemoteSwiftPackageReference "bare-rpc-swift" */;
+			productName = BareRPC;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AF97AF55D8CE964834CDBADD /* Project object */;
 }

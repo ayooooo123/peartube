@@ -17,10 +17,9 @@ struct SettingsView: View {
 
       Section("Host bridge") {
         Text(hostBridge.statusTitle)
-        Button("Reload Preview Host") {
+        Button("Reload Native Host") {
           Task {
-            hostBridge.resetPreviewSession()
-            await hostBridge.bootstrapPreviewSession()
+            await hostBridge.refreshBrowse(into: appState)
           }
         }
       }

@@ -57,8 +57,10 @@
   "dependencies": {
     "bare-ffmpeg": "file:packages/bare-ffmpeg",
     "bare-ipc": "^1.1.1",
+    "bare-runtime": "^1.21.4",
     "bare-worker": "^4.1.0",
     "expo": "~55.0.4",
+    "hrpc": "^4.2.0",
     "react": "^19.2.0",
     "react-native": "0.83.2"
   }

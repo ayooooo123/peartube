@@ -6,7 +6,10 @@ function createEmitter() {
   function add(event, listener) {
     if (!listeners.has(event)) listeners.set(event, new Set())
     listeners.get(event).add(listener)
-    return () => listeners.get(event)?.delete(listener)
+  }
+
+  function remove(event, listener) {
+    listeners.get(event)?.delete(listener)
   }
 
   function emit(event, value) {
@@ -15,38 +18,62 @@ function createEmitter() {
     for (const listener of eventListeners) listener(value)
   }
 
-  return { add, emit }
+  return { add, remove, emit }
 }
 
-function createProcessTransport() {
+export function createProcessTransport() {
   const emitter = createEmitter()
   const input = globalThis.Bare?.stdin ?? process.stdin
   const output = globalThis.Bare?.stdout ?? process.stdout
 
-  input?.on?.('data', (chunk) => emitter.emit('data', chunk))
-  input?.on?.('end', () => emitter.emit('close'))
-  input?.on?.('close', () => emitter.emit('close'))
-  input?.on?.('error', (error) => emitter.emit('error', error))
-
-  return {
+  const transport = {
     on(event, listener) {
-      return emitter.add(event, listener)
+      emitter.add(event, listener)
+      return transport
     },
     once(event, listener) {
-      const remove = emitter.add(event, (value) => {
-        remove()
+      const wrapped = (value) => {
+        emitter.remove(event, wrapped)
         listener(value)
-      })
-      return remove
+      }
+      emitter.add(event, wrapped)
+      return transport
+    },
+    off(event, listener) {
+      emitter.remove(event, listener)
+      return transport
+    },
+    removeListener(event, listener) {
+      emitter.remove(event, listener)
+      return transport
     },
     write(chunk) {
       return output?.write?.(chunk)
     },
+    end(chunk) {
+      if (chunk !== undefined) output?.write?.(chunk)
+      output?.end?.()
+      return transport
+    },
     destroy(error) {
       if (error) emitter.emit('error', error)
+      input?.destroy?.(error)
+      output?.destroy?.(error)
       emitter.emit('close')
+      return transport
     }
   }
+
+  input?.on?.('data', (chunk) => emitter.emit('data', chunk))
+  input?.on?.('end', () => emitter.emit('end'))
+  input?.on?.('end', () => emitter.emit('close'))
+  input?.on?.('close', () => emitter.emit('close'))
+  input?.on?.('error', (error) => emitter.emit('error', error))
+  output?.on?.('drain', () => emitter.emit('drain'))
+  output?.on?.('close', () => emitter.emit('close'))
+  output?.on?.('error', (error) => emitter.emit('error', error))
+
+  return transport
 }
 
 export async function runHostSidecar({ platform = 'desktop', storagePath, entrypoint = 'sidecar-entry', args = [] } = {}) {

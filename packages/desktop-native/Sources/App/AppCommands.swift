@@ -6,10 +6,9 @@ struct PearTubeDesktopCommands: Commands {
 
   var body: some Commands {
     CommandMenu("PearTube Native") {
-      Button("Reload Preview Host") {
+      Button("Reload Native Host") {
         Task {
-          hostBridge.resetPreviewSession()
-          await hostBridge.bootstrapPreviewSession()
+          await hostBridge.refreshBrowse(into: appState)
         }
       }
       .keyboardShortcut("r", modifiers: [.command, .shift])

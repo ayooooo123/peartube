@@ -26,6 +26,10 @@ class FakeHRPC {
   onEventLog(handler) {
     this.handlers.log = handler
   }
+
+  onEventError(handler) {
+    this.handlers.error = handler
+  }
 }
 
 test('createProtocolClient remaps feed update events', async (t) => {
@@ -102,4 +106,37 @@ test('createProtocolClient fails fast on protocol version mismatch', async (t) =
   t.ok(error)
   t.is(error.code, HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH)
   t.is(error.message, 'PROTOCOL_VERSION_MISMATCH')
+})
+
+test('createProtocolClient rejects ready once when host error event arrives', async (t) => {
+  FakeHRPC.instances.length = 0
+  const hostErrors = []
+
+  class PendingHRPC extends FakeHRPC {
+    getStatus() {
+      return new Promise(() => {})
+    }
+  }
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: PendingHRPC
+  })
+
+  client.events.on(PROTOCOL_EVENTS.HOST_ERROR, (payload) => {
+    hostErrors.push(payload)
+  })
+
+  const readyPromise = client.ready().catch((error) => error)
+  FakeHRPC.instances[0].handlers.error({
+    code: 'HOST_BOOT_FAILED',
+    message: 'boom',
+    retryable: true
+  })
+
+  const error = await readyPromise
+
+  t.is(hostErrors.length, 1)
+  t.is(error.code, 'HOST_BOOT_FAILED')
+  t.is(error.message, 'boom')
 })

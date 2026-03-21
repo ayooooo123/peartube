@@ -1,6 +1,6 @@
 import Foundation
 
-enum AppSection: String, CaseIterable, Identifiable, Hashable {
+enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
   case home
   case subscriptions
   case library

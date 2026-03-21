@@ -164,6 +164,11 @@ struct VideoDetailView: View {
             }
             .buttonStyle(.borderedProminent)
 
+            Button("Copy Log") {
+              hostBridge.copyDiagnosticsToPasteboard(appState: appState)
+            }
+            .buttonStyle(.bordered)
+
             if let storagePath = hostBridge.selectedStoragePath {
               Text(storagePath)
                 .font(.system(.caption, design: .monospaced))
@@ -226,6 +231,9 @@ struct VideoDetailView: View {
               player = AVPlayer(url: url)
               player?.play()
               appState.playSelectedPreview()
+              appState.setError(nil)
+            } else {
+              appState.setError("Playback URL could not be resolved for \(video.title).")
             }
           }
         }

@@ -283,7 +283,11 @@ final class PearTubeDesktopTests: XCTestCase {
     let request = NativeBridgeResolvePlaybackRequest(
       channelKey: "channel-a",
       publicBeeKey: "bee-a",
-      videoId: "video-1"
+      videoId: "video-1",
+      videoPath: "/videos/video-1.mp4",
+      blobId: "0:128:0:4096",
+      blobsCoreKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      mimeType: "video/mp4"
     )
 
     let encoded = try NativeBridgePayload.encode(NativeBridgeResolvePlaybackRequestCodec(), value: request)
@@ -308,7 +312,11 @@ final class PearTubeDesktopTests: XCTestCase {
           tags: ["search", "native"],
           accentHex: "#FF7A59",
           sections: [.home],
-          thumbnailURL: URL(string: "https://example.com/thumb.jpg")
+          thumbnailURL: URL(string: "https://example.com/thumb.jpg"),
+          path: "/videos/video-1.mp4",
+          blobId: "0:128:0:4096",
+          blobsCoreKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          mimeType: "video/mp4"
         )
       ]
     )

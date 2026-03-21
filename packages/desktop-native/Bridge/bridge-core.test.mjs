@@ -39,6 +39,10 @@ test('buildBrowseSnapshot groups feed, subscriptions, and library content', asyn
             title: `Video 1 for ${source.channelKey}`,
             description: `Video summary for ${source.channelKey}`,
             duration: 95,
+            path: `/videos/${source.channelKey}-video-1.mp4`,
+            blobId: `0:10:0:${source.channelKey.length}`,
+            blobsCoreKey: `${source.channelKey}`.padEnd(64, '0').slice(0, 64),
+            mimeType: 'video/mp4',
           },
           {
             id: `${source.channelKey}-video-2`,
@@ -64,6 +68,10 @@ test('buildBrowseSnapshot groups feed, subscriptions, and library content', asyn
   assert.equal(homeVideo.channelKey, 'feed-1')
   assert.equal(homeVideo.durationText, '1:35')
   assert.ok(homeVideo.sections.includes('home'))
+  assert.equal(homeVideo.path, '/videos/feed-1-video-1.mp4')
+  assert.equal(homeVideo.blobId, '0:10:0:6')
+  assert.equal(homeVideo.blobsCoreKey, 'feed-1'.padEnd(64, '0'))
+  assert.equal(homeVideo.mimeType, 'video/mp4')
 
   const sharedVideo = snapshot.sections.subscriptions.find((video) => video.channelKey === 'feed-2')
   assert.ok(sharedVideo)
@@ -119,6 +127,10 @@ test('buildSearchResults shapes global search hits into native videos', async ()
           duration: 142,
           thumbnail: 'https://example.com/search-hit.jpg',
           category: 'music',
+          path: '/videos/video-1.mp4',
+          blobId: '0:128:0:4096',
+          blobsCoreKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+          mimeType: 'video/mp4',
         },
       },
     ],
@@ -145,5 +157,9 @@ test('buildSearchResults shapes global search hits into native videos', async ()
     accentHex: pickAccentHex('channel-search'),
     sections: ['home'],
     thumbnailURL: 'https://example.com/search-hit.jpg',
+    path: '/videos/video-1.mp4',
+    blobId: '0:128:0:4096',
+    blobsCoreKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    mimeType: 'video/mp4',
   })
 })

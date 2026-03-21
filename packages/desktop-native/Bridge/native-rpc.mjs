@@ -12,6 +12,7 @@ export const BRIDGE_COMMANDS = Object.freeze({
   subscribeChannel: 9,
   unsubscribeChannel: 10,
   uploadVideo: 11,
+  resolveThumbnail: 12,
 })
 
 export const BRIDGE_EVENTS = Object.freeze({
@@ -107,6 +108,10 @@ const nativeVideoCodec = objectCodec([
   field('accentHex', c.string),
   field('sections', stringArrayCodec, () => []),
   field('thumbnailURL', optionalStringCodec, null),
+  field('path', optionalStringCodec, null),
+  field('blobId', optionalStringCodec, null),
+  field('blobsCoreKey', optionalStringCodec, null),
+  field('mimeType', optionalStringCodec, null),
 ])
 
 const nativeBrowseSectionsCodec = objectCodec([
@@ -160,11 +165,28 @@ export const resolvePlaybackRequestCodec = objectCodec([
   field('channelKey', c.string),
   field('publicBeeKey', optionalStringCodec, null),
   field('videoId', c.string),
+  field('videoPath', optionalStringCodec, null),
+  field('blobId', optionalStringCodec, null),
+  field('blobsCoreKey', optionalStringCodec, null),
+  field('mimeType', optionalStringCodec, null),
 ])
 
 export const resolvePlaybackResponseCodec = objectCodec([
   field('videoId', c.string),
   field('url', c.string),
+])
+
+export const resolveThumbnailRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('publicBeeKey', optionalStringCodec, null),
+  field('videoId', c.string),
+  field('videoPath', optionalStringCodec, null),
+])
+
+export const resolveThumbnailResponseCodec = objectCodec([
+  field('videoId', c.string),
+  field('url', optionalStringCodec, null),
+  field('exists', c.bool, false),
 ])
 
 export const searchRequestCodec = objectCodec([

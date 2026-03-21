@@ -84,6 +84,7 @@ struct FeedListView: View {
 }
 
 private struct VideoRowThumbnail: View {
+  @Environment(HostBridgeService.self) private var hostBridge
   let video: NativeVideo
 
   var body: some View {
@@ -91,25 +92,32 @@ private struct VideoRowThumbnail: View {
       .fill(Color(hex: video.accentHex).gradient)
       .frame(width: 88, height: 52)
       .overlay {
-        if let thumbnailURL = video.thumbnailURL {
+        if let thumbnailURL = hostBridge.thumbnailURL(for: video) {
           AsyncImage(url: thumbnailURL) { phase in
             switch phase {
             case .success(let image):
               image
                 .resizable()
                 .scaledToFill()
+            case .failure:
+              fallbackThumbnail
             default:
-              Image(systemName: "play.fill")
-                .font(.title3)
-                .foregroundStyle(.white)
+              fallbackThumbnail
             }
           }
           .clipShape(RoundedRectangle(cornerRadius: 12))
         } else {
-          Image(systemName: "play.fill")
-            .font(.title3)
-            .foregroundStyle(.white)
+          fallbackThumbnail
         }
       }
+      .task(id: video.id) {
+        await hostBridge.ensureThumbnail(for: video)
+      }
+  }
+
+  private var fallbackThumbnail: some View {
+    Image(systemName: "play.fill")
+      .font(.title3)
+      .foregroundStyle(.white)
   }
 }

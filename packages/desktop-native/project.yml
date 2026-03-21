@@ -59,6 +59,13 @@ targets:
         LSApplicationCategoryType: public.app-category.entertainment
         NSPrincipalClass: NSApplication
         NSHighResolutionCapable: true
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            127.0.0.1:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
     settings:
       base:
         ENABLE_HARDENED_RUNTIME: NO

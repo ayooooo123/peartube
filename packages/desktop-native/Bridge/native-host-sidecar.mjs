@@ -443,10 +443,25 @@ async function handleRequest(state, request, onError) {
 
   if (command === bridgeRPC.BRIDGE_COMMANDS.resolvePlayback) {
     const params = bridgeRPC.decodePayload(bridgeRPC.resolvePlaybackRequestCodec, data)
+    const videoRef = params.videoPath || params.videoId
+
+    await withTimeout(
+      () => state.client?.video.prefetchVideo({
+        channelKey: params.channelKey,
+        videoId: videoRef,
+        publicBeeKey: params.publicBeeKey || undefined,
+      }),
+      { success: false },
+      3000
+    )
+
     const response = await state.client?.video.getVideoUrl({
       channelKey: params.channelKey,
-      videoId: params.videoId,
+      videoId: videoRef,
       publicBeeKey: params.publicBeeKey || undefined,
+      blobId: params.blobId || undefined,
+      blobsCoreKey: params.blobsCoreKey || undefined,
+      mimeType: params.mimeType || undefined,
     })
 
     if (!response?.url) {
@@ -456,6 +471,21 @@ async function handleRequest(state, request, onError) {
     return {
       videoId: params.videoId,
       url: response.url,
+    }
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.resolveThumbnail) {
+    const params = bridgeRPC.decodePayload(bridgeRPC.resolveThumbnailRequestCodec, data)
+    const response = await state.client?.video.getVideoThumbnail({
+      channelKey: params.channelKey,
+      videoId: params.videoPath || params.videoId,
+      publicBeeKey: params.publicBeeKey || undefined,
+    })
+
+    return {
+      videoId: params.videoId,
+      url: response?.dataUrl || response?.url || null,
+      exists: Boolean(response?.exists && (response?.dataUrl || response?.url)),
     }
   }
 
@@ -528,6 +558,8 @@ async function main() {
           payload = bridgeRPC.encodePayload(bridgeRPC.browseSnapshotCodec, result)
         } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.resolvePlayback) {
           payload = bridgeRPC.encodePayload(bridgeRPC.resolvePlaybackResponseCodec, result)
+        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.resolveThumbnail) {
+          payload = bridgeRPC.encodePayload(bridgeRPC.resolveThumbnailResponseCodec, result)
         }
 
         writeBridgeFrame(bridgeRPC.encodeResponseFrame({

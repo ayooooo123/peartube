@@ -70,9 +70,41 @@ final class AppState {
     return videos(for: selectedSection)
   }
 
+  var allVideos: [NativeVideo] {
+    var ordered: [NativeVideo] = []
+    var seen = Set<NativeVideo.ID>()
+
+    for section in AppSection.allCases {
+      for video in sectionCatalog[section] ?? [] where !seen.contains(video.id) {
+        seen.insert(video.id)
+        ordered.append(video)
+      }
+    }
+
+    return ordered
+  }
+
   func videos(for section: AppSection? = nil) -> [NativeVideo] {
     let target = section ?? currentSection
     return sectionCatalog[target] ?? []
+  }
+
+  func videoCount(for section: AppSection) -> Int {
+    sectionCatalog[section]?.count ?? 0
+  }
+
+  func relatedVideos(limit: Int = 6) -> [NativeVideo] {
+    guard let selectedVideo else { return [] }
+
+    let currentContext = isSearchActive ? displayedVideos : allVideos
+    let sameChannel = currentContext.filter {
+      $0.id != selectedVideo.id && $0.channelKey == selectedVideo.channelKey
+    }
+    let remaining = currentContext.filter {
+      $0.id != selectedVideo.id && $0.channelKey != selectedVideo.channelKey
+    }
+
+    return Array((sameChannel + remaining).prefix(limit))
   }
 
   func selectSection(_ section: AppSection?) {

@@ -8,11 +8,13 @@
 
 /* Begin PBXBuildFile section */
 		1ED22FE81E7F498968FDC219 /* ProtocolLineBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */; };
+		300AD503144CF5506F27ED1C /* BridgeRPCChannelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D2D094F14FA54E84FE00005 /* BridgeRPCChannelTests.swift */; };
 		324E8003B7A04475EA06AFA7 /* SectionEmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F06147CA72B56040D4F65FB /* SectionEmptyStateView.swift */; };
 		37993C50C7C90977E0F1CC33 /* FeedListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77AF744D09EEDA796275141 /* FeedListView.swift */; };
 		45B56D40BE38772109726AA7 /* CompactEncoding in Frameworks */ = {isa = PBXBuildFile; productRef = 9D0006F226472BC8AB5D5918 /* CompactEncoding */; };
 		49C847A5D592CE82E6A7307C /* PearTubeDesktopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */; };
 		4A908E01C3F46D70313ADFAB /* NativeBridgeRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4291941CE32FE46CB154875 /* NativeBridgeRPC.swift */; };
+		533E2681ED0B0D4A4B11D11A /* BridgeRPCChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC0C962FF8C1B47F189D8A6 /* BridgeRPCChannel.swift */; };
 		8874F56E2BD2B922A4BA5C7B /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7175777FE7EB2ED57D81E6F9 /* AppState.swift */; };
 		AE360874F598E0D1DAA50689 /* AppCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28AE8EA242EEDC984D56DDE8 /* AppCommands.swift */; };
 		B6C6A21DABEA67966D07BBA5 /* BareRPC in Frameworks */ = {isa = PBXBuildFile; productRef = C67321BB6FD07DA684BAFCC8 /* BareRPC */; };
@@ -39,6 +41,7 @@
 
 /* Begin PBXFileReference section */
 		0F5F5C579330B5D98478CB80 /* PearTubeDesktopApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PearTubeDesktopApp.swift; sourceTree = "<group>"; };
+		1D2D094F14FA54E84FE00005 /* BridgeRPCChannelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeRPCChannelTests.swift; sourceTree = "<group>"; };
 		258C43C8FA77D46F45DDAD07 /* VideoDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDetailView.swift; sourceTree = "<group>"; };
 		28AE8EA242EEDC984D56DDE8 /* AppCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCommands.swift; sourceTree = "<group>"; };
 		2A710571B74E25FAFCFEFCBB /* NativeVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeVideo.swift; sourceTree = "<group>"; };
@@ -53,6 +56,7 @@
 		A77AF744D09EEDA796275141 /* FeedListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedListView.swift; sourceTree = "<group>"; };
 		AE1F2F95F9DEBD76DB721994 /* PearTubeDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PearTubeDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6C763BEE0CE4C4C7F4F41A2 /* NativeBrowseSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBrowseSnapshot.swift; sourceTree = "<group>"; };
+		BAC0C962FF8C1B47F189D8A6 /* BridgeRPCChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeRPCChannel.swift; sourceTree = "<group>"; };
 		C4291941CE32FE46CB154875 /* NativeBridgeRPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBridgeRPC.swift; sourceTree = "<group>"; };
 		C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PearTubeDesktopTests.swift; sourceTree = "<group>"; };
 		EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolLineBuffer.swift; sourceTree = "<group>"; };
@@ -92,6 +96,7 @@
 		2B4973E3E6C51FB08BC5CA07 /* Support */ = {
 			isa = PBXGroup;
 			children = (
+				BAC0C962FF8C1B47F189D8A6 /* BridgeRPCChannel.swift */,
 				C4291941CE32FE46CB154875 /* NativeBridgeRPC.swift */,
 				EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */,
 			);
@@ -113,6 +118,7 @@
 		83142860037B1F9DCC24BB70 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				1D2D094F14FA54E84FE00005 /* BridgeRPCChannelTests.swift */,
 				C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */,
 			);
 			path = Tests;
@@ -270,6 +276,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				300AD503144CF5506F27ED1C /* BridgeRPCChannelTests.swift in Sources */,
 				49C847A5D592CE82E6A7307C /* PearTubeDesktopTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -281,6 +288,7 @@
 				AE360874F598E0D1DAA50689 /* AppCommands.swift in Sources */,
 				C0A331D388D7CA666D654530 /* AppSection.swift in Sources */,
 				8874F56E2BD2B922A4BA5C7B /* AppState.swift in Sources */,
+				533E2681ED0B0D4A4B11D11A /* BridgeRPCChannel.swift in Sources */,
 				F811BF5721CFF5D378111D39 /* ContentView.swift in Sources */,
 				37993C50C7C90977E0F1CC33 /* FeedListView.swift in Sources */,
 				F953E672F2AA6BC58967D580 /* HostBridgeService.swift in Sources */,

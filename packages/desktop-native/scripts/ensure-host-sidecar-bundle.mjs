@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { spawnSync } from 'child_process'
+import { getSidecarAddonRoots } from './sidecar-addon-roots.mjs'
 
 const packageRoot = path.resolve(import.meta.dirname, '..')
 const repoRoot = path.resolve(packageRoot, '..', '..')
@@ -15,6 +16,7 @@ const sourceRoots = [
   path.join(repoRoot, 'packages', 'protocol', 'src'),
   path.join(repoRoot, 'packages', 'backend', 'src'),
   path.join(repoRoot, 'packages', 'spec', 'spec'),
+  ...getSidecarAddonRoots(repoRoot),
 ]
 
 const sourceFiles = [

@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { spawnSync } from 'child_process'
+import { getSidecarAddonRoots } from './sidecar-addon-roots.mjs'
 
 const packageRoot = path.resolve(import.meta.dirname, '..')
 const repoRoot = path.resolve(packageRoot, '..', '..')
@@ -8,6 +9,7 @@ const repoRoot = path.resolve(packageRoot, '..', '..')
 const bundleFile = path.join(packageRoot, 'Resources', 'Generated', 'native-host-sidecar.bundle')
 const frameworkOutputDir = path.join(packageRoot, 'Vendor', 'BareAddons')
 const scriptMtime = fs.statSync(new URL(import.meta.url)).mtimeMs
+const addonSourceRoots = getSidecarAddonRoots(repoRoot)
 
 function getNewestMtimeMs(filePath) {
   try {
@@ -15,6 +17,16 @@ function getNewestMtimeMs(filePath) {
   } catch {
     return 0
   }
+}
+
+function getRootsNewestMtimeMs(rootPaths) {
+  let newest = 0
+
+  for (const rootPath of rootPaths) {
+    newest = Math.max(newest, walkNewestMtimeMs(rootPath))
+  }
+
+  return newest
 }
 
 function walkNewestMtimeMs(dirPath) {
@@ -154,7 +166,7 @@ function ensureFrameworks() {
 }
 
 const forced = process.env.PEARTUBE_FORCE_NATIVE_HOST_BUNDLE === '1'
-const bundleMtime = Math.max(getNewestMtimeMs(bundleFile), scriptMtime)
+const bundleMtime = Math.max(getNewestMtimeMs(bundleFile), scriptMtime, getRootsNewestMtimeMs(addonSourceRoots))
 const frameworksMtime = walkNewestMtimeMs(frameworkOutputDir)
 const missingFrameworks = frameworksMtime === 0
 const staleFrameworks = !missingFrameworks && frameworksMtime < bundleMtime

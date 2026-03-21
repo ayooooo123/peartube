@@ -4,9 +4,13 @@
   "version": "0.1.0",
   "description": "Native macOS shell scaffold for PearTube",
   "scripts": {
-    "generate": "xcodegen generate",
-    "build": "xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO build",
-    "test": "xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO test",
+    "ensure:host-sidecar": "node ./scripts/ensure-host-sidecar-bundle.mjs",
+    "ensure:host-sidecar-frameworks": "node ./scripts/ensure-host-sidecar-frameworks.mjs",
+    "ensure:bare-runtime": "node ./scripts/ensure-bare-runtime-binary.mjs",
+    "generate": "npm run ensure:host-sidecar && npm run ensure:host-sidecar-frameworks && npm run ensure:bare-runtime && xcodegen generate",
+    "build": "npm run generate && xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO build",
+    "test:bridge": "node --test Bridge/*.test.mjs",
+    "test": "npm run generate && npm run test:bridge && xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO test",
     "run": "open ./build/Build/Products/Debug/PearTubeDesktop.app"
   }
 }

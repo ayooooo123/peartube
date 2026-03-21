@@ -1,8 +1,10 @@
+import AVKit
 import SwiftUI
 
 struct VideoDetailView: View {
   @Environment(AppState.self) private var appState
   @Environment(HostBridgeService.self) private var hostBridge
+  @State private var player: AVPlayer?
 
   var body: some View {
     if let video = appState.selectedVideo {
@@ -11,23 +13,28 @@ struct VideoDetailView: View {
           ZStack(alignment: .bottomLeading) {
             RoundedRectangle(cornerRadius: 28)
               .fill(Color(hex: video.accentHex).gradient.opacity(0.9))
-              .frame(height: 320)
-              .overlay(
-                VStack(spacing: 14) {
-                  Image(systemName: appState.isPlayingPreview ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 72))
-                    .foregroundStyle(.white)
-                  Text("AVPlayer Surface Placeholder")
-                    .font(.headline)
-                    .foregroundStyle(.white.opacity(0.95))
+              .overlay {
+                if let player {
+                  VideoPlayer(player: player)
+                    .clipShape(RoundedRectangle(cornerRadius: 28))
+                } else {
+                  VStack(spacing: 14) {
+                    Image(systemName: hostBridge.isResolvingPlayback ? "dot.radiowaves.left.and.right" : "play.circle.fill")
+                      .font(.system(size: 72))
+                      .foregroundStyle(.white)
+                    Text(hostBridge.isResolvingPlayback ? "Resolving Playback URL" : "Ready for AVPlayer")
+                      .font(.headline)
+                      .foregroundStyle(.white.opacity(0.95))
+                  }
                 }
-              )
+              }
+              .frame(height: 320)
 
             VStack(alignment: .leading, spacing: 8) {
               Text(video.title)
                 .font(.system(size: 28, weight: .bold))
                 .foregroundStyle(.white)
-              Text("\(video.channelName) • \(video.duration)")
+              Text("\(video.channelName) • \(video.durationText)")
                 .foregroundStyle(.white.opacity(0.85))
                 .font(.headline)
             }
@@ -35,19 +42,26 @@ struct VideoDetailView: View {
           }
 
           HStack(spacing: 12) {
-            Button(appState.isPlayingPreview ? "Pause Preview" : "Play Preview") {
+            Button(appState.isPlayingPreview ? "Pause" : "Play") {
               if appState.isPlayingPreview {
+                player?.pause()
                 appState.pausePreview()
+                hostBridge.clearPlayback()
               } else {
-                appState.playSelectedPreview()
+                Task {
+                  if let url = await hostBridge.resolvePlayback(for: video) {
+                    player = AVPlayer(url: url)
+                    player?.play()
+                    appState.playSelectedPreview()
+                  }
+                }
               }
             }
             .buttonStyle(.borderedProminent)
 
             Button("Reload Host") {
               Task {
-                hostBridge.resetPreviewSession()
-                await hostBridge.bootstrapPreviewSession()
+                await hostBridge.refreshBrowse(into: appState)
               }
             }
             .buttonStyle(.bordered)
@@ -70,7 +84,7 @@ struct VideoDetailView: View {
               .font(.headline)
             Text(hostBridge.statusTitle)
             if let lastHeartbeat = hostBridge.lastHeartbeat {
-              Text("Preview heartbeat: \(lastHeartbeat.formatted(date: .omitted, time: .standard))")
+              Text("Last host heartbeat: \(lastHeartbeat.formatted(date: .omitted, time: .standard))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
@@ -89,6 +103,14 @@ struct VideoDetailView: View {
           }
         }
         .padding(28)
+      }
+      .onChange(of: appState.selectedVideoID) { _, selectedVideoID in
+        if selectedVideoID != hostBridge.activePlaybackVideoID {
+          player?.pause()
+          player = nil
+          hostBridge.clearPlayback()
+          appState.pausePreview()
+        }
       }
     } else {
       ContentUnavailableView(

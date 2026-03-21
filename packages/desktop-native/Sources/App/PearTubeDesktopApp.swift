@@ -13,7 +13,7 @@ struct PearTubeDesktopApp: App {
         .environment(hostBridge)
         .frame(minWidth: 1100, minHeight: 760)
         .task {
-          await hostBridge.bootstrapPreviewSession()
+          await hostBridge.bootstrap(appState: appState)
         }
     }
     .defaultSize(width: 1440, height: 880)

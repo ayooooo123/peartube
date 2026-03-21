@@ -137,8 +137,12 @@ function getSharedHandler(backend, name) {
   const onName = backend?.[`on${name}`]
   if (typeof onName === 'function') return onName
 
-  const camel = backend?.[toCamelCase(name)]
+  const camelName = toCamelCase(name)
+  const camel = backend?.[camelName]
   if (typeof camel === 'function') return camel
+
+  const apiHandler = backend?.api?.[camelName]
+  if (typeof apiHandler === 'function') return apiHandler
 
   return null
 }

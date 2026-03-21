@@ -13,6 +13,7 @@ import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
 import { logger } from './logger.js'
+import { relocateLegacyLogsDir } from './storage-layout.js'
 import http from 'bare-http1'
 
 const log = logger('Storage')
@@ -136,6 +137,15 @@ export async function initializeStorage(config) {
   if (!storagePath || storagePath === './storage') {
     console.warn('[Storage] WARNING: Using relative/default storage path. Data may not persist!');
     console.warn('[Storage] Consider using --store flag for persistent storage.');
+  }
+
+  try {
+    const relocatedLogsDir = relocateLegacyLogsDir(storagePath, fs, path)
+    if (relocatedLogsDir) {
+      console.log('[Storage] Relocated legacy logs dir to avoid Corestore migration conflict:', relocatedLogsDir)
+    }
+  } catch (error) {
+    console.warn('[Storage] Failed to relocate legacy logs dir before Corestore init:', error?.message)
   }
 
   // Initialize Corestore

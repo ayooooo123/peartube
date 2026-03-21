@@ -9,6 +9,36 @@ function getBlobServerPort(backend) {
   return backend?.ctx?.blobServer?.port || backend?.ctx?.blobServerPort || 0
 }
 
+function getIdentityCount(backend) {
+  return backend?.identityManager?.getIdentities?.().length || 0
+}
+
+function buildSharedSystemHandlers(backend) {
+  return {
+    async GetStatus() {
+      return {
+        status: {
+          ready: true,
+          hasIdentity: getIdentityCount(backend) > 0,
+          blobServerPort: getBlobServerPort(backend)
+        }
+      }
+    },
+    async GetBlobServerPort() {
+      return { port: getBlobServerPort(backend) }
+    },
+    async GetSwarmStatus() {
+      const swarmStatus = backend?.api?.getSwarmStatus?.() || {}
+      const peerCount = swarmStatus.peerCount ?? swarmStatus.swarmConnections ?? 0
+
+      return {
+        connected: peerCount > 0,
+        peerCount
+      }
+    }
+  }
+}
+
 export async function createBackend(opts = {}) {
   const {
     storagePath,
@@ -35,11 +65,13 @@ export async function createBackend(opts = {}) {
     throw new Error('createBackend requires platform to be "mobile" or "desktop"')
   }
 
+  let rpc = null
+
   try {
     const [{ createBackendContext }, { shutdownBackend }, specModule, { registerSharedHandlers }] = await Promise.all([
       import('./orchestrator.js'),
       import('./storage.js'),
-      import('@peartube/spec'),
+      import('../../spec/spec/hrpc/index.js'),
       import('./hrpc-handlers.js')
     ])
 
@@ -49,11 +81,19 @@ export async function createBackend(opts = {}) {
       onStatsUpdate: onVideoStats,
       ...lifecycleOptions
     })
+    backend.sharedHandlers = {
+      ...(backend.sharedHandlers || {}),
+      ...buildSharedSystemHandlers(backend)
+    }
 
-    const rpc = new HRPC(stream)
+    rpc = new HRPC(stream)
     registerSharedHandlers(rpc, backend)
 
-    readyCallback({ blobServerPort: getBlobServerPort(backend), protocolVersion: PROTOCOL_VERSION })
+    const readyPayload = { blobServerPort: getBlobServerPort(backend), protocolVersion: PROTOCOL_VERSION }
+    readyCallback(readyPayload)
+    try {
+      rpc.eventReady?.(readyPayload)
+    } catch {}
 
     let destroyed = false
     const destroy = async () => {
@@ -65,6 +105,13 @@ export async function createBackend(opts = {}) {
     return { rpc, backend, destroy }
   } catch (err) {
     errorCallback(err)
+    try {
+      rpc?.eventError?.({
+        code: err?.code || 'HOST_START_FAILED',
+        message: err?.message || String(err),
+        retryable: false
+      })
+    } catch {}
     throw err
   }
 }

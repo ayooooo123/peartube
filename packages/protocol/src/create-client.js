@@ -1,5 +1,5 @@
-import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from '@peartube/host'
-import DefaultHRPC from '@peartube/spec'
+import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from '../../host/src/index.js'
+import DefaultHRPC from '../../spec/spec/hrpc/index.js'
 
 import { PROTOCOL_EVENT_BINDINGS, PROTOCOL_EVENTS } from './event-map.js'
 
@@ -142,6 +142,16 @@ function normalizeProtocolError(error, fallbackCode = HOST_ERROR_CODES.HOST_STAR
   return createHostError(fallbackCode, message, { cause: error })
 }
 
+function normalizeHostErrorPayload(payload) {
+  if (payload instanceof Error && payload.code) return payload
+
+  return createHostError(
+    payload?.code ?? HOST_ERROR_CODES.HOST_START_FAILED,
+    payload?.message ?? 'Unknown host error',
+    { retryable: Boolean(payload?.retryable) }
+  )
+}
+
 function createMethodCaller(rpc, ready, methodName) {
   return async (request = {}) => {
     await ready()
@@ -241,11 +251,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
       }
 
       if (eventName === PROTOCOL_EVENTS.HOST_ERROR) {
-        emitHostError(payload instanceof Error ? payload : createHostError(
-          payload?.code ?? HOST_ERROR_CODES.HOST_START_FAILED,
-          payload?.message ?? 'Unknown host error',
-          { retryable: Boolean(payload?.retryable) }
-        ))
+        emitHostError(normalizeHostErrorPayload(payload))
         return
       }
 
@@ -257,28 +263,59 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
 
   let readyPromise = null
   const ready = async () => {
-    if (!readyPromise) {
-      readyPromise = (async () => {
-        try {
-          const statusResponse = await rpc.getStatus({})
-          const status = normalizeReadyPayload(statusResponse)
+    if (lastReady) return lastReady
 
-          if (status.protocolVersion !== PROTOCOL_VERSION) {
-            throw createHostError(
-              HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH,
-              HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH
+    if (!readyPromise) {
+      readyPromise = new Promise((resolve, reject) => {
+        let settled = false
+        const cleanup = () => {
+          offReady?.()
+          offError?.()
+        }
+        const settleResolve = (value) => {
+          if (settled) return
+          settled = true
+          cleanup()
+          resolve(value)
+        }
+        const settleReject = (error) => {
+          if (settled) return
+          settled = true
+          cleanup()
+          reject(error)
+        }
+
+        const offReady = events.on(PROTOCOL_EVENTS.HOST_READY, (payload) => {
+          settleResolve(normalizeReadyPayload(payload))
+        })
+        const offError = events.on(PROTOCOL_EVENTS.HOST_ERROR, (payload) => {
+          settleReject(normalizeHostErrorPayload(payload))
+        })
+
+        ;(async () => {
+          try {
+            const statusResponse = await rpc.getStatus({})
+            const status = normalizeReadyPayload(statusResponse)
+
+            if (status.protocolVersion !== PROTOCOL_VERSION) {
+              throw createHostError(
+                HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH,
+                HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH
+              )
+            }
+
+            settleResolve(emitHostReady(status))
+          } catch (error) {
+            settleReject(
+              emitHostError(
+                error?.code === HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH
+                  ? error
+                  : normalizeProtocolError(error)
+              )
             )
           }
-
-          return emitHostReady(status)
-        } catch (error) {
-          throw emitHostError(
-            error?.code === HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH
-              ? error
-              : normalizeProtocolError(error)
-          )
-        }
-      })()
+        })()
+      })
     }
 
     return readyPromise

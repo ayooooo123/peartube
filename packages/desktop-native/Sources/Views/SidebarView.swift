@@ -19,7 +19,7 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 6) {
           Text(hostBridge.statusTitle)
             .font(.headline)
-          Text("This shell is native now; the host bridge is still a preview stub.")
+          Text("This shell is native now and booting the shared PearTube host through a local bridge.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }

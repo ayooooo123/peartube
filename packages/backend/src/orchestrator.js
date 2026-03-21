@@ -140,10 +140,8 @@ export async function createBackendContext(config) {
               const _path = (await import('bare-path')).default
               const lockFile = _path.join(opts.storagePath, 'LOCK')
               const primaryLockFile = _path.join(opts.storagePath, 'primary', 'LOCK')
-              const corestoreFile = _path.join(opts.storagePath, 'CORESTORE')
               try { _fs.unlinkSync(lockFile) } catch {}
               try { _fs.unlinkSync(primaryLockFile) } catch {}
-              try { _fs.unlinkSync(corestoreFile) } catch {}
               const result = await initializeStorage(opts)
               console.log('[Orchestrator] Stale lock recovery succeeded')
               return result

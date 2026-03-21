@@ -9,7 +9,7 @@
     "ensure:bare-runtime": "node ./scripts/ensure-bare-runtime-binary.mjs",
     "generate": "npm run ensure:host-sidecar && npm run ensure:host-sidecar-frameworks && npm run ensure:bare-runtime && xcodegen generate",
     "build": "npm run generate && xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO build",
-    "test:bridge": "node --test Bridge/*.test.mjs",
+    "test:bridge": "npm run ensure:host-sidecar && npm run ensure:host-sidecar-frameworks && npm run ensure:bare-runtime && node --test Bridge/*.test.mjs",
     "test": "npm run generate && npm run test:bridge && xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO test",
     "run": "open ./build/Build/Products/Debug/PearTubeDesktop.app"
   }

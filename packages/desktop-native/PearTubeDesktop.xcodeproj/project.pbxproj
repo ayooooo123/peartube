@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		1ED22FE81E7F498968FDC219 /* ProtocolLineBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */; };
+		324E8003B7A04475EA06AFA7 /* SectionEmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F06147CA72B56040D4F65FB /* SectionEmptyStateView.swift */; };
 		37993C50C7C90977E0F1CC33 /* FeedListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77AF744D09EEDA796275141 /* FeedListView.swift */; };
 		45B56D40BE38772109726AA7 /* CompactEncoding in Frameworks */ = {isa = PBXBuildFile; productRef = 9D0006F226472BC8AB5D5918 /* CompactEncoding */; };
 		49C847A5D592CE82E6A7307C /* PearTubeDesktopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */; };
@@ -43,6 +44,7 @@
 		2A710571B74E25FAFCFEFCBB /* NativeVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeVideo.swift; sourceTree = "<group>"; };
 		40D7848BE612D57A42D5D136 /* HostBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBridgeService.swift; sourceTree = "<group>"; };
 		473A62DA158C871632E018CA /* AppSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSection.swift; sourceTree = "<group>"; };
+		4F06147CA72B56040D4F65FB /* SectionEmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionEmptyStateView.swift; sourceTree = "<group>"; };
 		5D6BAF2F7A554E305ECEC681 /* PearTubeDesktop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PearTubeDesktop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		63719969BBA69B73A7A712EA /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		7175777FE7EB2ED57D81E6F9 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -131,6 +133,7 @@
 			children = (
 				A6371626F67CB4A3CEE1DB14 /* ContentView.swift */,
 				A77AF744D09EEDA796275141 /* FeedListView.swift */,
+				4F06147CA72B56040D4F65FB /* SectionEmptyStateView.swift */,
 				766601D0D17A7572CEC138EC /* SettingsView.swift */,
 				63719969BBA69B73A7A712EA /* SidebarView.swift */,
 				258C43C8FA77D46F45DDAD07 /* VideoDetailView.swift */,
@@ -286,6 +289,7 @@
 				D0A004BABD4119FAA8265AB4 /* NativeVideo.swift in Sources */,
 				FA411943C07D7FB12845B20D /* PearTubeDesktopApp.swift in Sources */,
 				1ED22FE81E7F498968FDC219 /* ProtocolLineBuffer.swift in Sources */,
+				324E8003B7A04475EA06AFA7 /* SectionEmptyStateView.swift in Sources */,
 				E6DB0A0138800DD757FEFACA /* SettingsView.swift in Sources */,
 				F6170C1D6F4F8C8514E04782 /* SidebarView.swift in Sources */,
 				C664B5BE30943A3931CAC128 /* VideoDetailView.swift in Sources */,

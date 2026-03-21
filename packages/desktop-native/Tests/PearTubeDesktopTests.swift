@@ -3,6 +3,14 @@ import XCTest
 
 @MainActor
 final class PearTubeDesktopTests: XCTestCase {
+  func testDefaultAppStateStartsEmptyUntilHostSnapshotArrives() {
+    let appState = AppState()
+
+    XCTAssertTrue(appState.displayedVideos.isEmpty)
+    XCTAssertNil(appState.selectedVideo)
+    XCTAssertEqual(appState.currentSection, .home)
+  }
+
   func testApplyingBrowseSnapshotUpdatesHomeSelection() {
     let appState = AppState()
     let snapshot = NativeBrowseSnapshot(
@@ -37,7 +45,7 @@ final class PearTubeDesktopTests: XCTestCase {
   }
 
   func testSectionSelectionKeepsBrowseContentAvailable() {
-    let appState = AppState()
+    let appState = AppState(catalog: NativeVideo.samples)
 
     appState.selectSection(.subscriptions)
 
@@ -46,8 +54,18 @@ final class PearTubeDesktopTests: XCTestCase {
     XCTAssertNotNil(appState.selectedVideo)
   }
 
-  func testSearchResultsOverrideSectionVideosUntilCleared() {
+  func testSelectingEmptySectionClearsVideoSelectionInsteadOfFallingBack() {
     let appState = AppState()
+
+    appState.selectSection(.diagnostics)
+
+    XCTAssertEqual(appState.currentSection, .diagnostics)
+    XCTAssertTrue(appState.videos().isEmpty)
+    XCTAssertNil(appState.selectedVideo)
+  }
+
+  func testSearchResultsOverrideSectionVideosUntilCleared() {
+    let appState = AppState(catalog: NativeVideo.samples)
     let sectionVideos = appState.videos(for: .home)
     XCTAssertFalse(sectionVideos.isEmpty)
 
@@ -146,6 +164,38 @@ final class PearTubeDesktopTests: XCTestCase {
     XCTAssertEqual(appState.videoCount(for: .studio), 0)
   }
 
+  func testBrowseStateTracksIdentityAndSubscriptionFlags() {
+    let appState = AppState()
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [makeVideo(id: "channel-b:home-1", backendVideoID: "home-1", channelKey: "channel-b", title: "B1", channelName: "Channel B", sections: [.home])],
+        subscriptions: [],
+        library: [],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: ["channel-b"],
+        identityChannelKeys: ["channel-a"],
+        activeIdentityName: "Channel A",
+        activeIdentityChannelKey: "channel-a",
+        activeChannelPublished: true
+      )
+    )
+
+    appState.applySnapshot(snapshot)
+
+    XCTAssertTrue(appState.hasActiveIdentity)
+    XCTAssertEqual(appState.activeIdentityName, "Channel A")
+    XCTAssertTrue(appState.activeChannelPublished)
+    XCTAssertTrue(appState.ownsChannel("channel-a"))
+    XCTAssertFalse(appState.ownsChannel("channel-b"))
+    XCTAssertTrue(appState.isSubscribed(to: "channel-b"))
+    XCTAssertFalse(appState.isSubscribed(to: "channel-c"))
+  }
+
   func testRelatedVideosPreferSameChannelAndExcludeSelection() {
     let appState = AppState()
     let snapshot = NativeBrowseSnapshot(
@@ -206,7 +256,14 @@ final class PearTubeDesktopTests: XCTestCase {
         studio: [],
         diagnostics: []
       ),
-      stats: NativeBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1)
+      stats: NativeBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: ["channel-b"],
+        identityChannelKeys: ["channel-a"],
+        activeIdentityName: "Channel A",
+        activeIdentityChannelKey: "channel-a",
+        activeChannelPublished: true
+      )
     )
 
     let response = NativeBridgeBootstrapResponse(

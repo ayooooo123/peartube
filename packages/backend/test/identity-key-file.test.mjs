@@ -9,7 +9,7 @@ import {
   writeIdentityKeyFile,
 } from '../src/identity-key-file.js'
 
-test('readIdentityKeyFile falls back to legacy db/identity-key path', async (t) => {
+test('readIdentityKeyFile falls back to legacy db/identity-key path before corestore exists', async (t) => {
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-identity-key-legacy-'))
   const legacyDir = path.join(tmpRoot, 'db')
   const payload = {
@@ -29,6 +29,26 @@ test('readIdentityKeyFile falls back to legacy db/identity-key path', async (t) 
     primaryKey: Buffer.from(payload.primaryKey, 'hex'),
     identityPublicKey: Buffer.from(payload.identityPublicKey, 'hex'),
   })
+
+  fs.rmSync(tmpRoot, { recursive: true, force: true })
+})
+
+test('readIdentityKeyFile ignores legacy db/identity-key after canonical corestore exists', async (t) => {
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-identity-key-corestore-'))
+  const legacyDir = path.join(tmpRoot, 'db')
+  const payload = {
+    version: 1,
+    primaryKey: '55'.repeat(32),
+    identityPublicKey: '66'.repeat(32),
+    createdAt: Date.now(),
+  }
+
+  fs.mkdirSync(legacyDir, { recursive: true })
+  fs.writeFileSync(path.join(legacyDir, 'identity-key'), JSON.stringify(payload))
+  fs.writeFileSync(path.join(tmpRoot, 'CORESTORE'), '')
+
+  t.is(await identityKeyFileExists(tmpRoot), false)
+  t.is(await readIdentityKeyFile(tmpRoot), null)
 
   fs.rmSync(tmpRoot, { recursive: true, force: true })
 })

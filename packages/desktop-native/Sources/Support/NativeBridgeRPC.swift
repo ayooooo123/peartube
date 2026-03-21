@@ -8,6 +8,12 @@ enum NativeBridgeCommand: UInt {
   case resolvePlayback = 3
   case shutdown = 4
   case searchVideos = 5
+  case createIdentity = 6
+  case refreshFeed = 7
+  case publishActiveChannel = 8
+  case subscribeChannel = 9
+  case unsubscribeChannel = 10
+  case uploadVideo = 11
 }
 
 enum NativeBridgeEventCommand: UInt {
@@ -46,6 +52,21 @@ struct NativeBridgeSearchRequest: Equatable {
 struct NativeBridgeSearchResponse: Equatable {
   let query: String
   let results: [NativeVideo]
+}
+
+struct NativeBridgeCreateIdentityRequest: Equatable {
+  let name: String
+}
+
+struct NativeBridgeSubscribeRequest: Equatable {
+  let channelKey: String
+}
+
+struct NativeBridgeUploadVideoRequest: Equatable {
+  let filePath: String
+  let title: String
+  let description: String
+  let category: String?
 }
 
 struct NativeBridgeHostReadyEvent: Equatable {
@@ -258,6 +279,72 @@ struct NativeBridgeSearchResponseCodec: Codec {
   }
 }
 
+struct NativeBridgeCreateIdentityRequestCodec: Codec {
+  typealias Value = NativeBridgeCreateIdentityRequest
+
+  private let string = Primitive.UTF8()
+
+  func preencode(_ state: inout State, _ value: Value) {
+    string.preencode(&state, value.name)
+  }
+
+  func encode(_ state: inout State, _ value: Value) throws {
+    try string.encode(&state, value.name)
+  }
+
+  func decode(_ state: inout State) throws -> Value {
+    Value(name: try string.decode(&state))
+  }
+}
+
+struct NativeBridgeSubscribeRequestCodec: Codec {
+  typealias Value = NativeBridgeSubscribeRequest
+
+  private let string = Primitive.UTF8()
+
+  func preencode(_ state: inout State, _ value: Value) {
+    string.preencode(&state, value.channelKey)
+  }
+
+  func encode(_ state: inout State, _ value: Value) throws {
+    try string.encode(&state, value.channelKey)
+  }
+
+  func decode(_ state: inout State) throws -> Value {
+    Value(channelKey: try string.decode(&state))
+  }
+}
+
+struct NativeBridgeUploadVideoRequestCodec: Codec {
+  typealias Value = NativeBridgeUploadVideoRequest
+
+  private let string = Primitive.UTF8()
+  private let optionalString = OptionalCodec(Primitive.UTF8())
+
+  func preencode(_ state: inout State, _ value: Value) {
+    string.preencode(&state, value.filePath)
+    string.preencode(&state, value.title)
+    string.preencode(&state, value.description)
+    optionalString.preencode(&state, value.category)
+  }
+
+  func encode(_ state: inout State, _ value: Value) throws {
+    try string.encode(&state, value.filePath)
+    try string.encode(&state, value.title)
+    try string.encode(&state, value.description)
+    try optionalString.encode(&state, value.category)
+  }
+
+  func decode(_ state: inout State) throws -> Value {
+    Value(
+      filePath: try string.decode(&state),
+      title: try string.decode(&state),
+      description: try string.decode(&state),
+      category: try optionalString.decode(&state)
+    )
+  }
+}
+
 struct NativeBridgeHostReadyEventCodec: Codec {
   typealias Value = NativeBridgeHostReadyEvent
 
@@ -300,24 +387,28 @@ struct NativeBrowseSnapshotCodec: Codec {
   private let generatedAt = Primitive.Float64()
   private let sections = NativeBrowseSectionsCodec()
   private let stats = NativeBrowseStatsCodec()
+  private let stateCodec = NativeBrowseStateCodec()
 
   func preencode(_ state: inout State, _ value: Value) {
     generatedAt.preencode(&state, value.generatedAt)
     sections.preencode(&state, value.sections)
     stats.preencode(&state, value.stats)
+    stateCodec.preencode(&state, value.state)
   }
 
   func encode(_ state: inout State, _ value: Value) throws {
     try generatedAt.encode(&state, value.generatedAt)
     try sections.encode(&state, value.sections)
     try stats.encode(&state, value.stats)
+    try stateCodec.encode(&state, value.state)
   }
 
   func decode(_ state: inout State) throws -> Value {
     Value(
       generatedAt: try generatedAt.decode(&state),
       sections: try sections.decode(&state),
-      stats: try stats.decode(&state)
+      stats: try stats.decode(&state),
+      state: try stateCodec.decode(&state)
     )
   }
 }
@@ -379,6 +470,40 @@ private struct NativeBrowseStatsCodec: Codec {
       subscriptionCount: try count.decode(&state),
       libraryCount: try count.decode(&state),
       channelCount: try count.decode(&state)
+    )
+  }
+}
+
+private struct NativeBrowseStateCodec: Codec {
+  typealias Value = NativeBrowseState
+
+  private let strings = Primitive.Array(Primitive.UTF8())
+  private let optionalString = OptionalCodec(Primitive.UTF8())
+  private let bool = Primitive.Bool()
+
+  func preencode(_ state: inout State, _ value: Value) {
+    strings.preencode(&state, value.subscriptionChannelKeys)
+    strings.preencode(&state, value.identityChannelKeys)
+    optionalString.preencode(&state, value.activeIdentityName)
+    optionalString.preencode(&state, value.activeIdentityChannelKey)
+    bool.preencode(&state, value.activeChannelPublished)
+  }
+
+  func encode(_ state: inout State, _ value: Value) throws {
+    try strings.encode(&state, value.subscriptionChannelKeys)
+    try strings.encode(&state, value.identityChannelKeys)
+    try optionalString.encode(&state, value.activeIdentityName)
+    try optionalString.encode(&state, value.activeIdentityChannelKey)
+    try bool.encode(&state, value.activeChannelPublished)
+  }
+
+  func decode(_ state: inout State) throws -> Value {
+    Value(
+      subscriptionChannelKeys: try strings.decode(&state),
+      identityChannelKeys: try strings.decode(&state),
+      activeIdentityName: try optionalString.decode(&state),
+      activeIdentityChannelKey: try optionalString.decode(&state),
+      activeChannelPublished: try bool.decode(&state)
     )
   }
 }

@@ -6,6 +6,12 @@ export const BRIDGE_COMMANDS = Object.freeze({
   resolvePlayback: 3,
   shutdown: 4,
   searchVideos: 5,
+  createIdentity: 6,
+  refreshFeed: 7,
+  publishActiveChannel: 8,
+  subscribeChannel: 9,
+  unsubscribeChannel: 10,
+  uploadVideo: 11,
 })
 
 export const BRIDGE_EVENTS = Object.freeze({
@@ -118,6 +124,14 @@ const nativeBrowseStatsCodec = objectCodec([
   field('channelCount', c.uint, 0),
 ])
 
+const nativeBrowseStateCodec = objectCodec([
+  field('subscriptionChannelKeys', stringArrayCodec, () => []),
+  field('identityChannelKeys', stringArrayCodec, () => []),
+  field('activeIdentityName', optionalStringCodec, null),
+  field('activeIdentityChannelKey', optionalStringCodec, null),
+  field('activeChannelPublished', c.bool, false),
+])
+
 export const bootstrapRequestCodec = objectCodec([
   field('storagePath', c.string),
 ])
@@ -126,6 +140,13 @@ export const browseSnapshotCodec = objectCodec([
   field('generatedAt', c.float64),
   field('sections', nativeBrowseSectionsCodec),
   field('stats', nativeBrowseStatsCodec),
+  field('state', nativeBrowseStateCodec, () => ({
+    subscriptionChannelKeys: [],
+    identityChannelKeys: [],
+    activeIdentityName: null,
+    activeIdentityChannelKey: null,
+    activeChannelPublished: false,
+  })),
 ])
 
 export const bootstrapResponseCodec = objectCodec([
@@ -154,6 +175,21 @@ export const searchRequestCodec = objectCodec([
 export const searchResponseCodec = objectCodec([
   field('query', c.string),
   field('results', c.array(nativeVideoCodec), () => []),
+])
+
+export const createIdentityRequestCodec = objectCodec([
+  field('name', c.string),
+])
+
+export const subscribeChannelRequestCodec = objectCodec([
+  field('channelKey', c.string),
+])
+
+export const uploadVideoRequestCodec = objectCodec([
+  field('filePath', c.string),
+  field('title', c.string),
+  field('description', c.string, ''),
+  field('category', optionalStringCodec, null),
 ])
 
 export const hostReadyEventCodec = objectCodec([

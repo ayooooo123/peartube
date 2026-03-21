@@ -10,6 +10,7 @@ const bundleFile = path.join(packageRoot, 'Resources', 'Generated', 'native-host
 
 const sourceRoots = [
   path.join(packageRoot, 'Bridge'),
+  path.join(repoRoot, 'packages', 'app', 'backend'),
   path.join(repoRoot, 'packages', 'host', 'src'),
   path.join(repoRoot, 'packages', 'protocol', 'src'),
   path.join(repoRoot, 'packages', 'backend', 'src'),
@@ -18,6 +19,7 @@ const sourceRoots = [
 
 const sourceFiles = [
   path.join(packageRoot, 'package.json'),
+  path.join(repoRoot, 'packages', 'app', 'package.json'),
   path.join(repoRoot, 'packages', 'host', 'package.json'),
   path.join(repoRoot, 'packages', 'protocol', 'package.json'),
   path.join(repoRoot, 'packages', 'backend', 'package.json'),

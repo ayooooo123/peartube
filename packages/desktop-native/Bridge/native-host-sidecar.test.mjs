@@ -9,6 +9,8 @@ import {
   BRIDGE_COMMANDS,
   bootstrapRequestCodec,
   bootstrapResponseCodec,
+  browseSnapshotCodec,
+  createIdentityRequestCodec,
   createRPCFrameParser,
   decodePayload,
   encodePayload,
@@ -115,8 +117,23 @@ test('bundled native host sidecar boots and responds to bootstrap', { timeout: 1
     assert.equal(searchPayload.query, 'native shell')
     assert.ok(Array.isArray(searchPayload.results))
 
-    const shutdownFrame = encodeRequestFrame({
+    const createIdentityFrame = encodeRequestFrame({
       id: 3,
+      command: BRIDGE_COMMANDS.createIdentity,
+      data: encodePayload(createIdentityRequestCodec, { name: 'Native Sidecar Test Channel' }),
+    })
+
+    child.stdin.write(createIdentityFrame)
+
+    const createIdentityResponse = await waitForResponse(child, 3)
+    assert.equal(createIdentityResponse.isError, false)
+
+    const createdSnapshot = decodePayload(browseSnapshotCodec, createIdentityResponse.data)
+    assert.equal(createdSnapshot.state.activeIdentityName, 'Native Sidecar Test Channel')
+    assert.equal(createdSnapshot.state.identityChannelKeys.length > 0, true)
+
+    const shutdownFrame = encodeRequestFrame({
+      id: 4,
       command: BRIDGE_COMMANDS.shutdown,
       data: null,
     })

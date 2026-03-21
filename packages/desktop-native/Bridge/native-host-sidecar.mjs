@@ -186,6 +186,56 @@ function emitBridgeEvent(command, codec, payload, onError) {
   }
 }
 
+async function createNativeSidecarBackend(options = {}) {
+  const [
+    backendSession,
+    mobileHandlersModule,
+    thumbnailModule,
+    pathModule,
+    fsModule,
+  ] = await Promise.all([
+    createBackend(options),
+    import('../../app/backend/mobile-handlers.mjs'),
+    import('../../backend/src/thumbnail.js'),
+    import('bare-path'),
+    import('bare-fs'),
+  ])
+
+  const backend = backendSession?.backend
+  const rpc = backendSession?.rpc
+  const attachMobileHandlers = mobileHandlersModule?.attachMobileHandlers
+
+  if (backend && rpc && typeof attachMobileHandlers === 'function') {
+    const path = pathModule?.default ?? pathModule
+    const fs = fsModule?.default ?? fsModule
+    const generateAndStoreThumbnail = thumbnailModule?.generateAndStoreThumbnail
+    const transcoder = {
+      startTranscode: async () => ({ success: false, error: 'Transcoding is not wired in the native sidecar yet.' }),
+      stopTranscode: () => ({ success: false, error: 'Transcoding is not wired in the native sidecar yet.' }),
+      getStatus: () => ({ status: 'unavailable', progress: 0, bytesWritten: 0, error: 'Transcoding is not wired in the native sidecar yet.' }),
+    }
+
+    attachMobileHandlers(backend, {
+      api: backend.api,
+      identityManager: backend.identityManager,
+      uploadManager: backend.uploadManager,
+      ctx: backend.ctx,
+      initializeIdentityFromMnemonic: backend.initializeIdentityFromMnemonic?.bind?.(backend)
+        ?? backend.initializeIdentityFromMnemonic,
+      rpc,
+      fs,
+      path,
+      generateAndStoreThumbnail,
+      transcoder,
+      storagePath: options.storagePath,
+    })
+
+    console.log('[native-host-sidecar] Attached shared app handler layer')
+  }
+
+  return backendSession
+}
+
 async function ensureHostBooted(state, storagePath, onError) {
   if (state.hostSession && state.client) {
     return state.client.ready()
@@ -198,7 +248,7 @@ async function ensureHostBooted(state, storagePath, onError) {
     entrypoint: 'native-sidecar',
     args: [],
     stream: hostStream,
-    createBackendImpl: createBackend,
+    createBackendImpl: createNativeSidecarBackend,
   })
 
   const client = createProtocolClient({ stream: clientStream })

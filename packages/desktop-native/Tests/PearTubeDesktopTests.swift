@@ -117,6 +117,70 @@ final class PearTubeDesktopTests: XCTestCase {
     XCTAssertEqual(appState.displayedVideos.count, 2)
   }
 
+  func testSectionCountsReflectAppliedSnapshot() {
+    let appState = AppState()
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [
+          makeVideo(id: "channel-a:home-1", backendVideoID: "home-1", channelKey: "channel-a", title: "Home 1", channelName: "Channel A", sections: [.home]),
+          makeVideo(id: "channel-b:home-2", backendVideoID: "home-2", channelKey: "channel-b", title: "Home 2", channelName: "Channel B", sections: [.home]),
+        ],
+        subscriptions: [
+          makeVideo(id: "channel-a:sub-1", backendVideoID: "sub-1", channelKey: "channel-a", title: "Sub 1", channelName: "Channel A", sections: [.subscriptions]),
+        ],
+        library: [
+          makeVideo(id: "channel-c:lib-1", backendVideoID: "lib-1", channelKey: "channel-c", title: "Lib 1", channelName: "Channel C", sections: [.library]),
+        ],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 2, subscriptionCount: 1, libraryCount: 1, channelCount: 3)
+    )
+
+    appState.applySnapshot(snapshot)
+
+    XCTAssertEqual(appState.videoCount(for: .home), 2)
+    XCTAssertEqual(appState.videoCount(for: .subscriptions), 1)
+    XCTAssertEqual(appState.videoCount(for: .library), 1)
+    XCTAssertEqual(appState.videoCount(for: .studio), 0)
+  }
+
+  func testRelatedVideosPreferSameChannelAndExcludeSelection() {
+    let appState = AppState()
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [
+          makeVideo(id: "channel-a:home-1", backendVideoID: "home-1", channelKey: "channel-a", title: "A1", channelName: "Channel A", sections: [.home]),
+          makeVideo(id: "channel-a:home-2", backendVideoID: "home-2", channelKey: "channel-a", title: "A2", channelName: "Channel A", sections: [.home]),
+          makeVideo(id: "channel-b:home-1", backendVideoID: "home-1", channelKey: "channel-b", title: "B1", channelName: "Channel B", sections: [.home]),
+          makeVideo(id: "channel-c:home-1", backendVideoID: "home-1", channelKey: "channel-c", title: "C1", channelName: "Channel C", sections: [.home]),
+        ],
+        subscriptions: [],
+        library: [
+          makeVideo(id: "channel-a:lib-1", backendVideoID: "lib-1", channelKey: "channel-a", title: "A Library", channelName: "Channel A", sections: [.library]),
+        ],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 4, subscriptionCount: 0, libraryCount: 1, channelCount: 3)
+    )
+
+    appState.applySnapshot(snapshot)
+    appState.selectVideo("channel-a:home-1")
+
+    XCTAssertEqual(
+      appState.relatedVideos(limit: 4).map(\.id),
+      [
+        "channel-a:home-2",
+        "channel-a:lib-1",
+        "channel-b:home-1",
+        "channel-c:home-1",
+      ]
+    )
+  }
+
   func testNativeBridgeBootstrapResponseRoundTripsThroughCompactEncoding() throws {
     let snapshot = NativeBrowseSnapshot(
       generatedAt: 42.5,
@@ -196,5 +260,27 @@ final class PearTubeDesktopTests: XCTestCase {
     let decoded = try NativeBridgePayload.decode(NativeBridgeSearchResponseCodec(), from: encoded)
 
     XCTAssertEqual(decoded, response)
+  }
+
+  private func makeVideo(
+    id: String,
+    backendVideoID: String,
+    channelKey: String,
+    title: String,
+    channelName: String,
+    sections: Set<AppSection>
+  ) -> NativeVideo {
+    NativeVideo(
+      id: id,
+      backendVideoID: backendVideoID,
+      channelKey: channelKey,
+      title: title,
+      channelName: channelName,
+      durationText: "1:23",
+      summary: "Summary for \(title)",
+      tags: ["test"],
+      accentHex: "#FF7A59",
+      sections: sections
+    )
   }
 }

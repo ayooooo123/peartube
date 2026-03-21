@@ -10,23 +10,57 @@ struct SidebarView: View {
     List(selection: $appState.selectedSection) {
       Section("Workspace") {
         ForEach(AppSection.allCases) { section in
-          Label(section.title, systemImage: section.systemImage)
+          HStack(spacing: 10) {
+            Label(section.title, systemImage: section.systemImage)
+            Spacer(minLength: 12)
+            Text("\(appState.videoCount(for: section))")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.secondary)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 4)
+              .background(.quaternary.opacity(0.5), in: Capsule())
+          }
             .tag(Optional(section))
         }
       }
 
       Section("Host") {
-        VStack(alignment: .leading, spacing: 6) {
-          Text(hostBridge.statusTitle)
-            .font(.headline)
-          Text("This shell is native now and booting the shared PearTube host through a local bridge.")
+        VStack(alignment: .leading, spacing: 10) {
+          HStack(spacing: 8) {
+            Circle()
+              .fill(hostIndicatorColor)
+              .frame(width: 8, height: 8)
+            Text(hostBridge.statusTitle)
+              .font(.headline)
+          }
+
+          Text("Native macOS shell over the shared Bare host.")
             .font(.caption)
             .foregroundStyle(.secondary)
+
+          if let lastHeartbeat = hostBridge.lastHeartbeat {
+            Text("Heartbeat \(lastHeartbeat.formatted(date: .omitted, time: .shortened))")
+              .font(.caption2)
+              .foregroundStyle(.tertiary)
+          }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
       }
     }
     .listStyle(.sidebar)
     .navigationTitle("PearTube Native")
+  }
+
+  private var hostIndicatorColor: Color {
+    switch hostBridge.phase {
+    case .idle:
+      return .secondary
+    case .booting:
+      return .orange
+    case .ready:
+      return .green
+    case .failed:
+      return .red
+    }
   }
 }

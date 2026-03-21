@@ -171,6 +171,7 @@ export async function buildBrowseSnapshot({
   subscriptions = [],
   identities = [],
   fetchChannelData,
+  activeChannelPublished = false,
 }) {
   if (typeof fetchChannelData !== 'function') {
     throw new TypeError('buildBrowseSnapshot requires fetchChannelData')
@@ -179,9 +180,21 @@ export async function buildBrowseSnapshot({
   const registry = new Map()
   const sectionMap = ensureSectionMap()
 
-  const homeSources = uniqueSources(feedEntries, 'feed')
+  const homeSources = uniqueSources(
+    feedEntries.length > 0
+      ? feedEntries
+      : [...subscriptions, ...identities],
+    feedEntries.length > 0 ? 'feed' : 'fallback'
+  )
   const subscriptionSources = uniqueSources(subscriptions, 'subscription')
   const identitySources = uniqueSources(identities, 'identity')
+  const activeIdentity = identities.find((identity) => identity?.isActive) || null
+  const identityChannelKeys = Array.from(new Set(
+    identities.map((identity) => identity?.channelKey || identity?.driveKey).filter(Boolean)
+  ))
+  const subscriptionChannelKeys = Array.from(new Set(
+    subscriptions.map((entry) => entry?.channelKey || entry?.driveKey).filter(Boolean)
+  ))
 
   await populateSection('home', homeSources, SECTION_CONFIG.home, fetchChannelData, registry, sectionMap)
   await populateSection('subscriptions', subscriptionSources, SECTION_CONFIG.subscriptions, fetchChannelData, registry, sectionMap)
@@ -207,6 +220,13 @@ export async function buildBrowseSnapshot({
         ...subscriptionSources.map((entry) => entry.channelKey),
         ...identitySources.map((entry) => entry.channelKey),
       ]).size,
+    },
+    state: {
+      subscriptionChannelKeys,
+      identityChannelKeys,
+      activeIdentityName: activeIdentity?.name?.trim() || null,
+      activeIdentityChannelKey: activeIdentity?.channelKey || activeIdentity?.driveKey || null,
+      activeChannelPublished: Boolean(activeChannelPublished),
     },
   }
 }

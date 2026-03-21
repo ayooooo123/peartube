@@ -167,6 +167,12 @@ function writeBridgeFrame(frame) {
   output.write(frame)
 }
 
+function listFromResponse(value, key) {
+  if (Array.isArray(value)) return value
+  if (Array.isArray(value?.[key])) return value[key]
+  return []
+}
+
 function emitBridgeEvent(command, codec, payload, onError) {
   try {
     writeBridgeFrame(
@@ -233,19 +239,22 @@ async function loadBrowseSnapshot(state) {
   const client = state.client
   if (!client) throw new Error('Host client is not ready')
 
-  const [feedResult, subscriptionsResult, identitiesResult] = await Promise.all([
+  const [feedResult, subscriptionsResult, identitiesResult, publishResult] = await Promise.all([
     withTimeout(() => client.feed.getPublicFeed({}), { entries: [] }),
     withTimeout(() => client.feed.getSubscriptions({}), { subscriptions: [] }),
     withTimeout(() => client.identity.getIdentities({}), { identities: [] }),
+    withTimeout(() => client.feed.isChannelPublished({}), { published: false }),
   ])
 
   const fetchChannelData = createChannelDataFetcher(client)
+  const identities = listFromResponse(identitiesResult, 'identities')
 
   return buildBrowseSnapshot({
-    feedEntries: feedResult?.entries || [],
-    subscriptions: subscriptionsResult?.subscriptions || [],
-    identities: identitiesResult?.identities || [],
+    feedEntries: listFromResponse(feedResult, 'entries'),
+    subscriptions: listFromResponse(subscriptionsResult, 'subscriptions'),
+    identities,
     fetchChannelData,
+    activeChannelPublished: Boolean(publishResult?.published),
   })
 }
 
@@ -269,7 +278,7 @@ function createChannelDataFetcher(client) {
       }), { videos: [] }),
     ]).then(([channelMeta, videosResult]) => ({
       channelMeta,
-      videos: videosResult?.videos || [],
+      videos: listFromResponse(videosResult, 'videos'),
     }))
 
     channelCache.set(cacheKey, resultPromise)
@@ -282,6 +291,12 @@ async function shutdownBridge(state) {
   state.hostSession = null
   state.client = null
   state.currentStoragePath = null
+}
+
+async function mutateAndReload(state, mutate) {
+  if (!state.client) throw new Error('Host client is not ready')
+  await mutate(state.client)
+  return loadBrowseSnapshot(state)
 }
 
 async function handleRequest(state, request, onError) {
@@ -329,6 +344,51 @@ async function handleRequest(state, request, onError) {
       query: params.query,
       results,
     }
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.createIdentity) {
+    const params = bridgeRPC.decodePayload(bridgeRPC.createIdentityRequestCodec, data)
+    return mutateAndReload(state, async (client) => {
+      await client.identity.createIdentity({ name: params.name })
+    })
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.refreshFeed) {
+    return mutateAndReload(state, async (client) => {
+      await client.feed.refreshFeed({})
+    })
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.publishActiveChannel) {
+    return mutateAndReload(state, async (client) => {
+      await client.feed.submitToFeed({})
+    })
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.subscribeChannel) {
+    const params = bridgeRPC.decodePayload(bridgeRPC.subscribeChannelRequestCodec, data)
+    return mutateAndReload(state, async (client) => {
+      await client.feed.subscribeChannel({ channelKey: params.channelKey })
+    })
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.unsubscribeChannel) {
+    const params = bridgeRPC.decodePayload(bridgeRPC.subscribeChannelRequestCodec, data)
+    return mutateAndReload(state, async (client) => {
+      await client.feed.unsubscribeChannel({ channelKey: params.channelKey })
+    })
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.uploadVideo) {
+    const params = bridgeRPC.decodePayload(bridgeRPC.uploadVideoRequestCodec, data)
+    return mutateAndReload(state, async (client) => {
+      await client.transfer.uploadVideo({
+        filePath: params.filePath,
+        title: params.title,
+        description: params.description || '',
+        category: params.category || '',
+      })
+    })
   }
 
   if (command === bridgeRPC.BRIDGE_COMMANDS.resolvePlayback) {
@@ -407,6 +467,15 @@ async function main() {
           payload = bridgeRPC.encodePayload(bridgeRPC.browseSnapshotCodec, result.snapshot)
         } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.searchVideos) {
           payload = bridgeRPC.encodePayload(bridgeRPC.searchResponseCodec, result)
+        } else if (
+          message.command === bridgeRPC.BRIDGE_COMMANDS.createIdentity ||
+          message.command === bridgeRPC.BRIDGE_COMMANDS.refreshFeed ||
+          message.command === bridgeRPC.BRIDGE_COMMANDS.publishActiveChannel ||
+          message.command === bridgeRPC.BRIDGE_COMMANDS.subscribeChannel ||
+          message.command === bridgeRPC.BRIDGE_COMMANDS.unsubscribeChannel ||
+          message.command === bridgeRPC.BRIDGE_COMMANDS.uploadVideo
+        ) {
+          payload = bridgeRPC.encodePayload(bridgeRPC.browseSnapshotCodec, result)
         } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.resolvePlayback) {
           payload = bridgeRPC.encodePayload(bridgeRPC.resolvePlaybackResponseCodec, result)
         }

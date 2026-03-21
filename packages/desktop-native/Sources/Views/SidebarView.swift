@@ -5,22 +5,30 @@ struct SidebarView: View {
   @Environment(HostBridgeService.self) private var hostBridge
 
   var body: some View {
-    @Bindable var appState = appState
-
-    List(selection: $appState.selectedSection) {
+    List {
       Section("Workspace") {
         ForEach(AppSection.allCases) { section in
-          HStack(spacing: 10) {
-            Label(section.title, systemImage: section.systemImage)
-            Spacer(minLength: 12)
-            Text("\(appState.videoCount(for: section))")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(.secondary)
-              .padding(.horizontal, 8)
-              .padding(.vertical, 4)
-              .background(.quaternary.opacity(0.5), in: Capsule())
+          Button {
+            appState.selectSection(section)
+          } label: {
+            HStack(spacing: 10) {
+              Label(section.title, systemImage: section.systemImage)
+              Spacer(minLength: 12)
+              Text("\(appState.videoCount(for: section))")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(isSelected(section) ? .primary : .secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.quaternary.opacity(isSelected(section) ? 0.9 : 0.5), in: Capsule())
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(rowBackground(for: section))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
           }
-            .tag(Optional(section))
+          .buttonStyle(.plain)
         }
       }
 
@@ -62,5 +70,17 @@ struct SidebarView: View {
     case .failed:
       return .red
     }
+  }
+
+  private func isSelected(_ section: AppSection) -> Bool {
+    appState.currentSection == section
+  }
+
+  private func rowBackground(for section: AppSection) -> some ShapeStyle {
+    if isSelected(section) {
+      return AnyShapeStyle(.quaternary.opacity(0.7))
+    }
+
+    return AnyShapeStyle(.clear)
   }
 }

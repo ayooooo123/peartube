@@ -146,18 +146,69 @@ struct VideoDetailView: View {
           appState.pausePreview()
         }
       }
+    } else if !appState.isSearchActive, appState.currentSection == .diagnostics {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 22) {
+          Text("Diagnostics")
+            .font(.largeTitle.bold())
+
+          Text("Inspect the native host bridge, current storage target, and recent Bare-sidecar logs.")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+
+          HStack(spacing: 12) {
+            Button("Reload Host") {
+              Task {
+                await hostBridge.refreshBrowse(into: appState)
+              }
+            }
+            .buttonStyle(.borderedProminent)
+
+            if let storagePath = hostBridge.selectedStoragePath {
+              Text(storagePath)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            }
+          }
+
+          DetailMetricCard(
+            title: "Host",
+            value: hostBridge.statusTitle,
+            caption: heartbeatCaption
+          )
+
+          VStack(alignment: .leading, spacing: 10) {
+            Label("Recent host log", systemImage: "list.bullet.rectangle")
+              .font(.headline)
+
+            ForEach(Array(hostBridge.logLines.suffix(20).enumerated()), id: \.offset) { _, line in
+              Text(line)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+          }
+          .padding(18)
+          .background(.quaternary.opacity(0.22), in: RoundedRectangle(cornerRadius: 18))
+        }
+        .padding(28)
+      }
     } else {
-      ContentUnavailableView(
-        appState.isSearchActive
-          ? (appState.isLoading ? "Searching the Network" : "No Video Selected")
-          : "Select a Video",
-        systemImage: appState.isSearchActive ? "magnifyingglass" : "play.square.stack",
-        description: Text(
-          appState.isSearchActive
-            ? (appState.lastErrorMessage ?? "Search results will appear here with inline playback and detail.")
-            : "The native shell scaffold is ready for a browse-to-detail-to-play flow."
+      if appState.isSearchActive {
+        ContentUnavailableView(
+          appState.isLoading ? "Searching the Network" : "No Video Selected",
+          systemImage: "magnifyingglass",
+          description: Text(
+            appState.lastErrorMessage ?? "Search results will appear here with inline playback and detail."
+          )
         )
-      )
+      } else {
+        ScrollView {
+          SectionEmptyStateView(section: appState.currentSection, prominence: .detail)
+            .padding(28)
+        }
+      }
     }
   }
 
@@ -181,9 +232,41 @@ struct VideoDetailView: View {
       }
       .buttonStyle(.borderedProminent)
 
-      Button("Reload Host") {
+      if appState.ownsChannel(video.channelKey) {
+        if !appState.activeChannelPublished {
+          Button("Publish Channel") {
+            Task {
+              await hostBridge.publishActiveChannel(into: appState)
+            }
+          }
+          .buttonStyle(.bordered)
+        } else {
+          Text("Published")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(.quaternary.opacity(0.4), in: Capsule())
+        }
+
+        Button("Upload Video") {
+          Task {
+            await hostBridge.uploadVideo(into: appState)
+          }
+        }
+        .buttonStyle(.bordered)
+      } else {
+        Button(appState.isSubscribed(to: video.channelKey) ? "Unsubscribe" : "Subscribe") {
+          Task {
+            await hostBridge.toggleSubscription(for: video, into: appState)
+          }
+        }
+        .buttonStyle(.bordered)
+      }
+
+      Button("Refresh Feed") {
         Task {
-          await hostBridge.refreshBrowse(into: appState)
+          await hostBridge.refreshPublicFeed(into: appState)
         }
       }
       .buttonStyle(.bordered)

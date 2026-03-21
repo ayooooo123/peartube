@@ -31,21 +31,22 @@ struct FeedListView: View {
       .padding(.vertical, 18)
 
       if videos.isEmpty {
-        ContentUnavailableView(
-          appState.isSearchActive
-            ? (appState.isLoading ? "Searching Videos" : "No Search Results")
-            : (appState.isLoading ? "Loading Videos" : "No Videos Yet"),
-          systemImage: appState.isSearchActive
-            ? (appState.isLoading ? "magnifyingglass.circle" : "magnifyingglass")
-            : (appState.isLoading ? "arrow.trianglehead.2.clockwise" : "play.square.stack"),
-          description: Text(
-            appState.lastErrorMessage
-              ?? (appState.isSearchActive
-                ? "Try a different title, topic, or channel phrase."
-                : hostBridge.statusTitle)
+        if appState.isSearchActive {
+          ContentUnavailableView(
+            appState.isLoading ? "Searching Videos" : "No Search Results",
+            systemImage: appState.isLoading ? "magnifyingglass.circle" : "magnifyingglass",
+            description: Text(
+              appState.lastErrorMessage ?? "Try a different title, topic, or channel phrase."
+            )
           )
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+          ScrollView {
+            SectionEmptyStateView(section: appState.currentSection)
+              .padding(20)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
       } else {
         List(videos, selection: $appState.selectedVideoID) { video in
           VStack(alignment: .leading, spacing: 8) {

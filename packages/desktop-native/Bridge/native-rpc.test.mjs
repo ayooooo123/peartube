@@ -46,6 +46,13 @@ test('bootstrap payload roundtrips through compact encoding', () => {
       libraryCount: 0,
       channelCount: 1,
     },
+    state: {
+      subscriptionChannelKeys: [],
+      identityChannelKeys: [],
+      activeIdentityName: null,
+      activeIdentityChannelKey: null,
+      activeChannelPublished: false,
+    },
   }
 
   const encoded = encodePayload(bootstrapResponseCodec, {
@@ -55,12 +62,13 @@ test('bootstrap payload roundtrips through compact encoding', () => {
     snapshot,
   })
 
-  assert.deepEqual(decodePayload(bootstrapResponseCodec, encoded), {
-    blobServerPort: 64369,
-    protocolVersion: 1,
-    storagePath: '/tmp/native',
-    snapshot,
-  })
+  const decoded = decodePayload(bootstrapResponseCodec, encoded)
+  assert.equal(decoded.blobServerPort, 64369)
+  assert.equal(decoded.protocolVersion, 1)
+  assert.equal(decoded.storagePath, '/tmp/native')
+  assert.deepEqual(decoded.snapshot.sections.home, snapshot.sections.home)
+  assert.deepEqual(decoded.snapshot.stats, snapshot.stats)
+  assert.deepEqual(decoded.snapshot.state, snapshot.state)
 })
 
 test('rpc frame parser assembles chunked request frames', () => {

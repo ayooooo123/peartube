@@ -30,11 +30,12 @@ final class AppState {
 
   private var sectionCatalog: [AppSection: [NativeVideo]]
   private var searchResults: [NativeVideo] = []
+  private var browseState: NativeBrowseState = .empty
 
-  init(catalog: [NativeVideo] = NativeVideo.samples) {
+  init(catalog: [NativeVideo] = []) {
     self.sectionCatalog = Self.makeSectionCatalog(from: catalog)
     selectedSection = .home
-    selectedVideoID = Self.makeSectionCatalog(from: catalog)[.home]?.first?.id ?? catalog.first?.id
+    selectedVideoID = Self.makeSectionCatalog(from: catalog)[.home]?.first?.id
   }
 
   var currentSection: AppSection {
@@ -82,6 +83,34 @@ final class AppState {
     }
 
     return ordered
+  }
+
+  var hasActiveIdentity: Bool {
+    browseState.hasActiveIdentity
+  }
+
+  var activeIdentityName: String {
+    browseState.activeIdentityName ?? "PearTube Channel"
+  }
+
+  var activeIdentityChannelKey: String? {
+    browseState.activeIdentityChannelKey
+  }
+
+  var activeChannelPublished: Bool {
+    browseState.activeChannelPublished
+  }
+
+  var identityCount: Int {
+    browseState.identityChannelKeys.count
+  }
+
+  func ownsChannel(_ channelKey: String) -> Bool {
+    browseState.identityChannelKeys.contains(channelKey)
+  }
+
+  func isSubscribed(to channelKey: String) -> Bool {
+    browseState.subscriptionChannelKeys.contains(channelKey)
   }
 
   func videos(for section: AppSection? = nil) -> [NativeVideo] {
@@ -134,6 +163,7 @@ final class AppState {
   }
 
   func applySnapshot(_ snapshot: NativeBrowseSnapshot) {
+    browseState = snapshot.state
     sectionCatalog = [
       .home: snapshot.sections.home,
       .subscriptions: snapshot.sections.subscriptions,
@@ -185,7 +215,7 @@ final class AppState {
   private func syncSelectionToSection() {
     let sectionVideos = videos(for: selectedSection)
     if sectionVideos.isEmpty {
-      selectedVideoID = fallbackVideo()?.id
+      selectedVideoID = nil
       return
     }
 
@@ -216,30 +246,7 @@ final class AppState {
       return
     }
 
-    if isSearchActive {
-      return
-    }
-
-    if !isSearchActive,
-       let selectedVideoID,
-       uniqueVideoLookup[selectedVideoID] != nil {
-      let sectionVideos = videos(for: selectedSection)
-      if selectedSection == nil || sectionVideos.contains(where: { $0.id == selectedVideoID }) {
-        return
-      }
-    }
-
-    selectedVideoID = videos(for: selectedSection).first?.id ?? fallbackVideo()?.id
-  }
-
-  private func fallbackVideo() -> NativeVideo? {
-    for section in AppSection.allCases {
-      if let video = sectionCatalog[section]?.first {
-        return video
-      }
-    }
-
-    return nil
+    selectedVideoID = nil
   }
 
   private static func makeSectionCatalog(from videos: [NativeVideo]) -> [AppSection: [NativeVideo]] {

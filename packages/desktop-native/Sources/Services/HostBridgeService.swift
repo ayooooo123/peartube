@@ -1,3 +1,4 @@
+import AppKit
 @preconcurrency import BareRPC
 import CompactEncoding
 import Foundation
@@ -88,6 +89,7 @@ final class HostBridgeService {
       )
       phase = .failed(friendlyMessage)
       appState.setError(friendlyMessage)
+      appState.selectSection(.diagnostics)
       appendLog("Host bootstrap failed: \(friendlyMessage)")
     }
 
@@ -114,6 +116,7 @@ final class HostBridgeService {
       appendLog("Browse snapshot refreshed.")
     } catch {
       appState.setError(error.localizedDescription)
+      appState.selectSection(.diagnostics)
       appendLog("Browse refresh failed: \(error.localizedDescription)")
     }
 
@@ -149,10 +152,110 @@ final class HostBridgeService {
       appendLog("Global search returned \(response.results.count) results.")
     } catch {
       appState.setError(error.localizedDescription)
+      appState.selectSection(.diagnostics)
       appendLog("Global search failed: \(error.localizedDescription)")
     }
 
     appState.setLoading(false)
+  }
+
+  func createIdentity(into appState: AppState, suggestedName: String? = nil) async {
+    let trimmedSuggestedName = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let identityName = trimmedSuggestedName.isEmpty ? defaultIdentityName() : trimmedSuggestedName
+
+    guard await ensureReady(into: appState) else { return }
+
+    await performSnapshotMutation(
+      into: appState,
+      logMessage: "Creating native identity \(identityName).",
+      command: .createIdentity,
+      requestPayload: NativeBridgeCreateIdentityRequest(name: identityName),
+      requestCodec: NativeBridgeCreateIdentityRequestCodec(),
+      afterApply: { appState in
+        appState.selectSection(.studio)
+      }
+    )
+  }
+
+  func refreshPublicFeed(into appState: AppState) async {
+    guard await ensureReady(into: appState) else { return }
+
+    await performSnapshotMutation(
+      into: appState,
+      logMessage: "Refreshing public feed from native shell.",
+      command: .refreshFeed,
+      afterApply: { appState in
+        appState.selectSection(.home)
+      }
+    )
+  }
+
+  func publishActiveChannel(into appState: AppState) async {
+    guard await ensureReady(into: appState) else { return }
+
+    await performSnapshotMutation(
+      into: appState,
+      logMessage: "Publishing active channel to the public feed.",
+      command: .publishActiveChannel,
+      afterApply: { appState in
+        appState.selectSection(.studio)
+      }
+    )
+  }
+
+  func toggleSubscription(for video: NativeVideo, into appState: AppState) async {
+    guard await ensureReady(into: appState) else { return }
+
+    let isSubscribed = appState.isSubscribed(to: video.channelKey)
+    let command: NativeBridgeCommand = isSubscribed ? .unsubscribeChannel : .subscribeChannel
+    let logMessage = isSubscribed
+      ? "Unsubscribing from \(video.channelName)."
+      : "Subscribing to \(video.channelName)."
+
+    await performSnapshotMutation(
+      into: appState,
+      logMessage: logMessage,
+      command: command,
+      requestPayload: NativeBridgeSubscribeRequest(channelKey: video.channelKey),
+      requestCodec: NativeBridgeSubscribeRequestCodec()
+    )
+  }
+
+  func uploadVideo(into appState: AppState) async {
+    guard await ensureReady(into: appState) else { return }
+
+    if !appState.hasActiveIdentity {
+      appState.setError("Create a channel before uploading a video.")
+      appState.selectSection(.studio)
+      appendLog("Upload blocked because no active identity exists.")
+      return
+    }
+
+    guard let fileURL = chooseVideoURL() else {
+      appendLog("Native upload cancelled.")
+      return
+    }
+
+    let title = fileURL.deletingPathExtension().lastPathComponent
+      .replacingOccurrences(of: "_", with: " ")
+      .replacingOccurrences(of: "-", with: " ")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    await performSnapshotMutation(
+      into: appState,
+      logMessage: "Uploading \(fileURL.lastPathComponent) from native shell.",
+      command: .uploadVideo,
+      requestPayload: NativeBridgeUploadVideoRequest(
+        filePath: fileURL.path,
+        title: title.isEmpty ? "Untitled Upload" : title,
+        description: "",
+        category: nil
+      ),
+      requestCodec: NativeBridgeUploadVideoRequestCodec(),
+      afterApply: { appState in
+        appState.selectSection(.studio)
+      }
+    )
   }
 
   func resolvePlayback(for video: NativeVideo) async -> URL? {
@@ -194,6 +297,98 @@ final class HostBridgeService {
     activePlaybackVideoID = nil
     resolvedPlaybackURL = nil
     isResolvingPlayback = false
+  }
+
+  private func chooseVideoURL() -> URL? {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = false
+    panel.allowsMultipleSelection = false
+    panel.allowedFileTypes = ["mp4", "mov", "m4v", "mkv", "webm"]
+    panel.title = "Choose a video to upload"
+    panel.prompt = "Upload"
+
+    return panel.runModal() == .OK ? panel.urls.first : nil
+  }
+
+  private func defaultIdentityName() -> String {
+    let base = ProcessInfo.processInfo.fullUserName.trimmingCharacters(in: .whitespacesAndNewlines)
+    if base.isEmpty {
+      return "PearTube Channel"
+    }
+    return "\(base)'s Channel"
+  }
+
+  private func ensureReady(into appState: AppState) async -> Bool {
+    if isReady { return true }
+    await bootstrap(appState: appState)
+    return isReady
+  }
+
+  private func performSnapshotMutation(
+    into appState: AppState,
+    logMessage: String,
+    command: NativeBridgeCommand,
+    afterApply: ((AppState) -> Void)? = nil
+  ) async {
+    await performSnapshotMutation(
+      into: appState,
+      logMessage: logMessage,
+      command: command,
+      requestData: nil,
+      afterApply: afterApply
+    )
+  }
+
+  private func performSnapshotMutation<RequestCodec: Codec>(
+    into appState: AppState,
+    logMessage: String,
+    command: NativeBridgeCommand,
+    requestPayload: RequestCodec.Value,
+    requestCodec: RequestCodec,
+    afterApply: ((AppState) -> Void)? = nil
+  ) async {
+    do {
+      let requestData = try NativeBridgePayload.encode(requestCodec, value: requestPayload)
+      await performSnapshotMutation(
+        into: appState,
+        logMessage: logMessage,
+        command: command,
+        requestData: requestData,
+        afterApply: afterApply
+      )
+    } catch {
+      appState.setError(error.localizedDescription)
+      appendLog("Native mutation encoding failed: \(error.localizedDescription)")
+    }
+  }
+
+  private func performSnapshotMutation(
+    into appState: AppState,
+    logMessage: String,
+    command: NativeBridgeCommand,
+    requestData: Data?,
+    afterApply: ((AppState) -> Void)? = nil
+  ) async {
+    appState.setLoading(true)
+    appState.setError(nil)
+    appendLog(logMessage)
+
+    do {
+      let snapshot = try await sendRequest(
+        command: command,
+        requestData: requestData,
+        responseCodec: NativeBrowseSnapshotCodec()
+      )
+      appState.applySnapshot(snapshot)
+      afterApply?(appState)
+      lastHeartbeat = Date()
+      appendLog("Native host mutation completed.")
+    } catch {
+      appState.setError(error.localizedDescription)
+      appendLog("Native host mutation failed: \(error.localizedDescription)")
+    }
+
+    appState.setLoading(false)
   }
 
   func resetBridgeState() {

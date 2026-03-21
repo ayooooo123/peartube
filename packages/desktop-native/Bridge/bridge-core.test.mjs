@@ -55,6 +55,10 @@ test('buildBrowseSnapshot groups feed, subscriptions, and library content', asyn
   assert.equal(snapshot.sections.library.length, 2)
   assert.equal(snapshot.sections.studio.length, 2)
   assert.equal(snapshot.sections.diagnostics.length, 0)
+  assert.deepEqual(snapshot.state.identityChannelKeys, ['own-1'])
+  assert.deepEqual(snapshot.state.subscriptionChannelKeys, ['feed-2', 'sub-1'])
+  assert.equal(snapshot.state.activeIdentityName, null)
+  assert.equal(snapshot.state.activeChannelPublished, false)
 
   const homeVideo = snapshot.sections.home[0]
   assert.equal(homeVideo.channelKey, 'feed-1')
@@ -65,6 +69,40 @@ test('buildBrowseSnapshot groups feed, subscriptions, and library content', asyn
   assert.ok(sharedVideo)
   assert.ok(sharedVideo.sections.includes('home'))
   assert.ok(sharedVideo.sections.includes('subscriptions'))
+})
+
+test('buildBrowseSnapshot falls back to subscriptions and identities when feed is empty', async () => {
+  const snapshot = await buildBrowseSnapshot({
+    feedEntries: [],
+    subscriptions: [
+      { channelKey: 'sub-1', channelName: 'Subscribed' },
+    ],
+    identities: [
+      { driveKey: 'own-1', name: 'Own Channel' },
+    ],
+    async fetchChannelData(source) {
+      return {
+        channelMeta: {
+          name: source.channelName || source.name || `Meta ${source.channelKey}`,
+        },
+        videos: [
+          {
+            id: `${source.channelKey}-video-1`,
+            title: `Video 1 for ${source.channelKey}`,
+            duration: 95,
+          },
+        ],
+      }
+    },
+  })
+
+  assert.equal(snapshot.sections.home.length, 2)
+  assert.deepEqual(
+    snapshot.sections.home.map((video) => video.channelKey),
+    ['sub-1', 'own-1']
+  )
+  assert.deepEqual(snapshot.state.identityChannelKeys, ['own-1'])
+  assert.deepEqual(snapshot.state.subscriptionChannelKeys, ['sub-1'])
 })
 
 test('buildSearchResults shapes global search hits into native videos', async () => {

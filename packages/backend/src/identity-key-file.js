@@ -34,10 +34,26 @@ function getLegacyIdentityKeyFilePath(storagePath) {
   return path.join(storagePath, 'db', IDENTITY_KEY_FILENAME);
 }
 
+function hasCanonicalCorestore(storagePath) {
+  if (!fs || !path || !storagePath) return false;
+
+  try {
+    return fs.existsSync(path.join(storagePath, 'CORESTORE'));
+  } catch {
+    return false;
+  }
+}
+
 function getIdentityKeyFileCandidates(storagePath) {
   const canonicalPath = getIdentityKeyFilePath(storagePath);
-  const legacyPath = getLegacyIdentityKeyFilePath(storagePath);
-  return [canonicalPath, legacyPath].filter(Boolean);
+  const candidates = canonicalPath ? [canonicalPath] : [];
+
+  if (!hasCanonicalCorestore(storagePath)) {
+    const legacyPath = getLegacyIdentityKeyFilePath(storagePath);
+    if (legacyPath) candidates.push(legacyPath);
+  }
+
+  return candidates;
 }
 
 function parseHexKey(value) {

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildBrowseSnapshot, formatDuration, pickAccentHex } from './bridge-core.mjs'
+import { buildBrowseSnapshot, buildSearchResults, formatDuration, pickAccentHex } from './bridge-core.mjs'
 
 test('formatDuration renders human-readable playback lengths', () => {
   assert.equal(formatDuration(0), 'Live')
@@ -65,4 +65,47 @@ test('buildBrowseSnapshot groups feed, subscriptions, and library content', asyn
   assert.ok(sharedVideo)
   assert.ok(sharedVideo.sections.includes('home'))
   assert.ok(sharedVideo.sections.includes('subscriptions'))
+})
+
+test('buildSearchResults shapes global search hits into native videos', async () => {
+  const results = await buildSearchResults({
+    results: [
+      {
+        id: 'video-1',
+        score: 0.98,
+        metadata: {
+          channelKey: 'channel-search',
+          publicBeeKey: 'bee-search',
+          title: 'Search Hit',
+          description: 'A strong semantic match',
+          duration: 142,
+          thumbnail: 'https://example.com/search-hit.jpg',
+          category: 'music',
+        },
+      },
+    ],
+    async fetchChannelData(source) {
+      return {
+        channelMeta: {
+          name: `Channel ${source.channelKey}`,
+        },
+      }
+    },
+  })
+
+  assert.equal(results.length, 1)
+  assert.deepEqual(results[0], {
+    id: 'channel-search:video-1',
+    backendVideoID: 'video-1',
+    channelKey: 'channel-search',
+    publicBeeKey: 'bee-search',
+    title: 'Search Hit',
+    channelName: 'Channel channel-search',
+    durationText: '2:22',
+    summary: 'A strong semantic match',
+    tags: ['search', 'music'],
+    accentHex: pickAccentHex('channel-search'),
+    sections: ['home'],
+    thumbnailURL: 'https://example.com/search-hit.jpg',
+  })
 })

@@ -4,7 +4,7 @@ import { createBackend } from '../../backend/src/backend-entry.js'
 import { createProtocolClient } from '../../protocol/src/create-client.js'
 import { PROTOCOL_EVENTS } from '../../protocol/src/event-map.js'
 
-import { buildBrowseSnapshot } from './bridge-core.mjs'
+import { buildBrowseSnapshot, buildSearchResults } from './bridge-core.mjs'
 import * as bridgeRPC from './native-rpc.mjs'
 
 globalThis.process = bareProcess
@@ -239,36 +239,42 @@ async function loadBrowseSnapshot(state) {
     withTimeout(() => client.identity.getIdentities({}), { identities: [] }),
   ])
 
-  const channelCache = new Map()
+  const fetchChannelData = createChannelDataFetcher(client)
 
   return buildBrowseSnapshot({
     feedEntries: feedResult?.entries || [],
     subscriptions: subscriptionsResult?.subscriptions || [],
     identities: identitiesResult?.identities || [],
-    async fetchChannelData(source) {
-      const cacheKey = `${source.channelKey}:${source.publicBeeKey || ''}`
-      if (channelCache.has(cacheKey)) return channelCache.get(cacheKey)
-
-      const resultPromise = Promise.all([
-        withTimeout(() => client.channel.getChannelMeta({
-          channelKey: source.channelKey,
-          publicBeeKey: source.publicBeeKey || undefined,
-        }), {}),
-        withTimeout(() => client.video.listVideos({
-          channelKey: source.channelKey,
-          publicBeeKey: source.publicBeeKey || undefined,
-          limit: 6,
-          offset: 0,
-        }), { videos: [] }),
-      ]).then(([channelMeta, videosResult]) => ({
-        channelMeta,
-        videos: videosResult?.videos || [],
-      }))
-
-      channelCache.set(cacheKey, resultPromise)
-      return resultPromise
-    },
+    fetchChannelData,
   })
+}
+
+function createChannelDataFetcher(client) {
+  const channelCache = new Map()
+
+  return async function fetchChannelData(source) {
+    const cacheKey = `${source.channelKey}:${source.publicBeeKey || ''}`
+    if (channelCache.has(cacheKey)) return channelCache.get(cacheKey)
+
+    const resultPromise = Promise.all([
+      withTimeout(() => client.channel.getChannelMeta({
+        channelKey: source.channelKey,
+        publicBeeKey: source.publicBeeKey || undefined,
+      }), {}),
+      withTimeout(() => client.video.listVideos({
+        channelKey: source.channelKey,
+        publicBeeKey: source.publicBeeKey || undefined,
+        limit: 6,
+        offset: 0,
+      }), { videos: [] }),
+    ]).then(([channelMeta, videosResult]) => ({
+      channelMeta,
+      videos: videosResult?.videos || [],
+    }))
+
+    channelCache.set(cacheKey, resultPromise)
+    return resultPromise
+  }
 }
 
 async function shutdownBridge(state) {
@@ -301,6 +307,28 @@ async function handleRequest(state, request, onError) {
   if (command === bridgeRPC.BRIDGE_COMMANDS.refreshBrowse) {
     const snapshot = await loadBrowseSnapshot(state)
     return { snapshot }
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.searchVideos) {
+    const params = bridgeRPC.decodePayload(bridgeRPC.searchRequestCodec, data)
+    const rawResponse = await withTimeout(
+      () => state.client?.search.globalSearchVideos({
+        query: params.query,
+        topK: params.topK,
+      }),
+      { results: [] },
+      5000
+    )
+    const fetchChannelData = createChannelDataFetcher(state.client)
+    const results = await buildSearchResults({
+      results: rawResponse?.results || rawResponse || [],
+      fetchChannelData,
+    })
+
+    return {
+      query: params.query,
+      results,
+    }
   }
 
   if (command === bridgeRPC.BRIDGE_COMMANDS.resolvePlayback) {
@@ -377,6 +405,8 @@ async function main() {
           payload = bridgeRPC.encodePayload(bridgeRPC.bootstrapResponseCodec, result)
         } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.refreshBrowse) {
           payload = bridgeRPC.encodePayload(bridgeRPC.browseSnapshotCodec, result.snapshot)
+        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.searchVideos) {
+          payload = bridgeRPC.encodePayload(bridgeRPC.searchResponseCodec, result)
         } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.resolvePlayback) {
           payload = bridgeRPC.encodePayload(bridgeRPC.resolvePlaybackResponseCodec, result)
         }

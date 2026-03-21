@@ -114,9 +114,15 @@ struct VideoDetailView: View {
       }
     } else {
       ContentUnavailableView(
-        "Select a Video",
-        systemImage: "play.square.stack",
-        description: Text("The native shell scaffold is ready for a browse-to-detail-to-play flow.")
+        appState.isSearchActive
+          ? (appState.isLoading ? "Searching the Network" : "No Video Selected")
+          : "Select a Video",
+        systemImage: appState.isSearchActive ? "magnifyingglass" : "play.square.stack",
+        description: Text(
+          appState.isSearchActive
+            ? (appState.lastErrorMessage ?? "Search results will appear here with inline playback and detail.")
+            : "The native shell scaffold is ready for a browse-to-detail-to-play flow."
+        )
       )
     }
   }

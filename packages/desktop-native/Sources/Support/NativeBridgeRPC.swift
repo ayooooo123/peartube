@@ -7,6 +7,7 @@ enum NativeBridgeCommand: UInt {
   case refreshBrowse = 2
   case resolvePlayback = 3
   case shutdown = 4
+  case searchVideos = 5
 }
 
 enum NativeBridgeEventCommand: UInt {
@@ -35,6 +36,16 @@ struct NativeBridgeResolvePlaybackRequest: Equatable {
 struct NativeBridgeResolvePlaybackResponse: Equatable {
   let videoId: String
   let url: String
+}
+
+struct NativeBridgeSearchRequest: Equatable {
+  let query: String
+  let topK: Int
+}
+
+struct NativeBridgeSearchResponse: Equatable {
+  let query: String
+  let results: [NativeVideo]
 }
 
 struct NativeBridgeHostReadyEvent: Equatable {
@@ -195,6 +206,54 @@ struct NativeBridgeResolvePlaybackResponseCodec: Codec {
     Value(
       videoId: try string.decode(&state),
       url: try string.decode(&state)
+    )
+  }
+}
+
+struct NativeBridgeSearchRequestCodec: Codec {
+  typealias Value = NativeBridgeSearchRequest
+
+  private let string = Primitive.UTF8()
+  private let count = NonNegativeIntCodec()
+
+  func preencode(_ state: inout State, _ value: Value) {
+    string.preencode(&state, value.query)
+    count.preencode(&state, value.topK)
+  }
+
+  func encode(_ state: inout State, _ value: Value) throws {
+    try string.encode(&state, value.query)
+    try count.encode(&state, value.topK)
+  }
+
+  func decode(_ state: inout State) throws -> Value {
+    Value(
+      query: try string.decode(&state),
+      topK: try count.decode(&state)
+    )
+  }
+}
+
+struct NativeBridgeSearchResponseCodec: Codec {
+  typealias Value = NativeBridgeSearchResponse
+
+  private let string = Primitive.UTF8()
+  private let videos = Primitive.Array(NativeVideoCodec())
+
+  func preencode(_ state: inout State, _ value: Value) {
+    string.preencode(&state, value.query)
+    videos.preencode(&state, value.results)
+  }
+
+  func encode(_ state: inout State, _ value: Value) throws {
+    try string.encode(&state, value.query)
+    try videos.encode(&state, value.results)
+  }
+
+  func decode(_ state: inout State) throws -> Value {
+    Value(
+      query: try string.decode(&state),
+      results: try videos.decode(&state)
     )
   }
 }

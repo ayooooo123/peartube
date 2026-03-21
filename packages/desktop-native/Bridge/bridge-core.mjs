@@ -82,6 +82,12 @@ function normalizeTags(source, video, section) {
   return Array.from(tags).filter(Boolean)
 }
 
+function normalizeSearchTags(metadata) {
+  const tags = ['search']
+  if (metadata?.category) tags.push(metadata.category)
+  return tags.filter(Boolean)
+}
+
 function normalizeSource(entry, sourceKind) {
   const channelKey = entry?.channelKey || entry?.driveKey
   if (!channelKey) return null
@@ -203,4 +209,60 @@ export async function buildBrowseSnapshot({
       ]).size,
     },
   }
+}
+
+export async function buildSearchResults({
+  results = [],
+  fetchChannelData,
+}) {
+  if (typeof fetchChannelData !== 'function') {
+    throw new TypeError('buildSearchResults requires fetchChannelData')
+  }
+
+  const channelCache = new Map()
+
+  async function resolveChannelMeta(source) {
+    const cacheKey = `${source.channelKey}:${source.publicBeeKey || ''}`
+    if (!channelCache.has(cacheKey)) {
+      channelCache.set(cacheKey, Promise.resolve(fetchChannelData(source)).then((value) => value || {}))
+    }
+    return channelCache.get(cacheKey)
+  }
+
+  const shapedResults = []
+
+  for (const result of results) {
+    const metadata = typeof result?.metadata === 'string'
+      ? JSON.parse(result.metadata)
+      : (result?.metadata || {})
+
+    const channelKey = metadata.channelKey || metadata.driveKey
+    if (!channelKey || !result?.id) continue
+
+    const source = {
+      channelKey,
+      publicBeeKey: metadata.publicBeeKey || null,
+      channelName: metadata.channelName || null,
+      sourceKind: 'search',
+    }
+    const channelData = await resolveChannelMeta(source)
+    const channelMeta = channelData?.channelMeta || {}
+
+    shapedResults.push({
+      id: `${channelKey}:${result.id}`,
+      backendVideoID: result.id,
+      channelKey,
+      publicBeeKey: source.publicBeeKey,
+      title: metadata.title?.trim() || 'Untitled Video',
+      channelName: normalizeChannelName(source, channelMeta, metadata),
+      durationText: formatDuration(metadata.duration),
+      summary: normalizeSummary(channelMeta, metadata),
+      tags: normalizeSearchTags(metadata),
+      accentHex: pickAccentHex(channelKey),
+      sections: ['home'],
+      thumbnailURL: metadata.thumbnail || null,
+    })
+  }
+
+  return shapedResults
 }

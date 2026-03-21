@@ -13,6 +13,8 @@ import {
   encodeRequestFrame,
   encodeResponseFrame,
   hostReadyEventCodec,
+  searchRequestCodec,
+  searchResponseCodec,
 } from './native-rpc.mjs'
 
 test('bootstrap payload roundtrips through compact encoding', () => {
@@ -103,4 +105,41 @@ test('event and response frames decode with stable command ids', () => {
   assert.equal(responseMessage.id, 4)
   assert.equal(responseMessage.isError, false)
   assert.deepEqual(responseMessage.data, Buffer.from([1, 2, 3]))
+})
+
+test('search payloads roundtrip through compact encoding', () => {
+  const request = {
+    query: 'drum machine',
+    topK: 12,
+  }
+
+  const response = {
+    query: 'drum machine',
+    results: [
+      {
+        id: 'channel-a:video-1',
+        backendVideoID: 'video-1',
+        channelKey: 'channel-a',
+        publicBeeKey: 'bee-a',
+        title: 'Drum Machine Breakdown',
+        channelName: 'Channel A',
+        durationText: '4:04',
+        summary: 'Percussion-heavy synth exploration.',
+        tags: ['search', 'music'],
+        accentHex: '#FF7A59',
+        sections: ['home'],
+        thumbnailURL: 'https://example.com/thumb.jpg',
+      },
+    ],
+  }
+
+  assert.equal(BRIDGE_COMMANDS.searchVideos, 5)
+  assert.deepEqual(
+    decodePayload(searchRequestCodec, encodePayload(searchRequestCodec, request)),
+    request
+  )
+  assert.deepEqual(
+    decodePayload(searchResponseCodec, encodePayload(searchResponseCodec, response)),
+    response
+  )
 })

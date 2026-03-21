@@ -13,6 +13,8 @@ import {
   decodePayload,
   encodePayload,
   encodeRequestFrame,
+  searchRequestCodec,
+  searchResponseCodec,
 } from './native-rpc.mjs'
 
 const packageRoot = path.resolve(import.meta.dirname, '..')
@@ -98,8 +100,23 @@ test('bundled native host sidecar boots and responds to bootstrap', { timeout: 1
     assert.equal(payload.protocolVersion, 1)
     assert.ok(Array.isArray(payload.snapshot.sections.home))
 
-    const shutdownFrame = encodeRequestFrame({
+    const searchFrame = encodeRequestFrame({
       id: 2,
+      command: BRIDGE_COMMANDS.searchVideos,
+      data: encodePayload(searchRequestCodec, { query: 'native shell', topK: 5 }),
+    })
+
+    child.stdin.write(searchFrame)
+
+    const searchResponse = await waitForResponse(child, 2)
+    assert.equal(searchResponse.isError, false)
+
+    const searchPayload = decodePayload(searchResponseCodec, searchResponse.data)
+    assert.equal(searchPayload.query, 'native shell')
+    assert.ok(Array.isArray(searchPayload.results))
+
+    const shutdownFrame = encodeRequestFrame({
+      id: 3,
       command: BRIDGE_COMMANDS.shutdown,
       data: null,
     })

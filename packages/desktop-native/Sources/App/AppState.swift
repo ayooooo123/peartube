@@ -6,8 +6,13 @@ import Observation
 final class AppState {
   var isLoading = false
   var lastErrorMessage: String?
+  var searchQuery = ""
   var selectedSection: AppSection? {
-    didSet { syncSelectionToSection() }
+    didSet {
+      if !isSearchActive {
+        syncSelectionToSection()
+      }
+    }
   }
 
   var selectedVideoID: NativeVideo.ID? {
@@ -24,6 +29,7 @@ final class AppState {
   var isPlayingPreview = false
 
   private var sectionCatalog: [AppSection: [NativeVideo]]
+  private var searchResults: [NativeVideo] = []
 
   init(catalog: [NativeVideo] = NativeVideo.samples) {
     self.sectionCatalog = Self.makeSectionCatalog(from: catalog)
@@ -35,8 +41,33 @@ final class AppState {
     selectedSection ?? .home
   }
 
+  var isSearchActive: Bool {
+    !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  var contentTitle: String {
+    isSearchActive ? "Search" : currentSection.title
+  }
+
+  var contentHeadline: String {
+    if isSearchActive {
+      return "Global results for \"\(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines))\"."
+    }
+
+    return currentSection.headline
+  }
+
   var selectedVideo: NativeVideo? {
-    uniqueVideoLookup[selectedVideoID ?? ""]
+    displayedVideos.first(where: { $0.id == selectedVideoID })
+      ?? uniqueVideoLookup[selectedVideoID ?? ""]
+  }
+
+  var displayedVideos: [NativeVideo] {
+    if isSearchActive {
+      return searchResults
+    }
+
+    return videos(for: selectedSection)
   }
 
   func videos(for section: AppSection? = nil) -> [NativeVideo] {
@@ -79,7 +110,29 @@ final class AppState {
       .diagnostics: snapshot.sections.diagnostics,
     ]
     lastErrorMessage = nil
-    syncSelectionAfterCatalogUpdate()
+    syncSelectionForDisplayedVideos()
+  }
+
+  func applySearchResults(query: String, videos: [NativeVideo]) {
+    searchQuery = query
+    searchResults = videos
+    lastErrorMessage = nil
+    syncSelectionForDisplayedVideos()
+  }
+
+  func beginSearch(query: String) {
+    searchQuery = query
+    searchResults = []
+    lastErrorMessage = nil
+    if !isSearchActive {
+      syncSelectionForDisplayedVideos()
+    }
+  }
+
+  func clearSearch() {
+    searchQuery = ""
+    searchResults = []
+    syncSelectionForDisplayedVideos()
   }
 
   func clearPlaybackSelection() {
@@ -116,10 +169,30 @@ final class AppState {
     }
   }
 
-  private func syncSelectionAfterCatalogUpdate() {
-    if let selectedVideoID, uniqueVideoLookup[selectedVideoID] != nil {
-      let currentVideos = videos(for: selectedSection)
-      if selectedSection == nil || currentVideos.contains(where: { $0.id == selectedVideoID }) {
+  private func syncSelectionForDisplayedVideos() {
+    let currentVideos = displayedVideos
+
+    if let selectedVideoID, currentVideos.contains(where: { $0.id == selectedVideoID }) {
+      return
+    }
+
+    if !currentVideos.isEmpty {
+      selectedVideoID = currentVideos.first?.id
+      if playingVideoID == nil {
+        playingVideoID = currentVideos.first?.id
+      }
+      return
+    }
+
+    if isSearchActive {
+      return
+    }
+
+    if !isSearchActive,
+       let selectedVideoID,
+       uniqueVideoLookup[selectedVideoID] != nil {
+      let sectionVideos = videos(for: selectedSection)
+      if selectedSection == nil || sectionVideos.contains(where: { $0.id == selectedVideoID }) {
         return
       }
     }

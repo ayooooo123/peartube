@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
   @Environment(AppState.self) private var appState
   @Environment(HostBridgeService.self) private var hostBridge
+  @State private var searchTask: Task<Void, Never>?
 
   var body: some View {
     NavigationSplitView {
@@ -19,12 +20,42 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 2) {
           Text("PearTube Native Desktop")
             .font(.headline)
-          Text(hostBridge.isReady ? "Shared host seam ready for native integration" : hostBridge.statusTitle)
+          Text(appState.isSearchActive ? "Global search over the shared Bare host" : hostBridge.statusTitle)
             .font(.caption)
             .foregroundStyle(.secondary)
         }
       }
     }
+    .searchable(
+      text: searchText,
+      placement: .toolbar,
+      prompt: "Search all videos"
+    )
+    .onDisappear {
+      searchTask?.cancel()
+    }
+  }
+
+  private var searchText: Binding<String> {
+    Binding(
+      get: { appState.searchQuery },
+      set: { newValue in
+        searchTask?.cancel()
+
+        let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else {
+          appState.clearSearch()
+          return
+        }
+
+        appState.beginSearch(query: newValue)
+        searchTask = Task {
+          try? await Task.sleep(for: .milliseconds(250))
+          guard !Task.isCancelled else { return }
+          await hostBridge.searchVideos(query: newValue, into: appState)
+        }
+      }
+    )
   }
 }
 

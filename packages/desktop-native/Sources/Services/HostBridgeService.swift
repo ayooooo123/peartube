@@ -112,6 +112,41 @@ final class HostBridgeService {
     appState.setLoading(false)
   }
 
+  func searchVideos(query: String, into appState: AppState, topK: Int = 12) async {
+    let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedQuery.isEmpty else {
+      appState.clearSearch()
+      return
+    }
+
+    if !isReady {
+      await bootstrap(appState: appState)
+      guard isReady else { return }
+    }
+
+    appState.setLoading(true)
+    appState.setError(nil)
+    appendLog("Running global search for \(trimmedQuery).")
+
+    do {
+      let response = try await sendRequest(
+        command: .searchVideos,
+        requestPayload: NativeBridgeSearchRequest(query: trimmedQuery, topK: topK),
+        requestCodec: NativeBridgeSearchRequestCodec(),
+        responseCodec: NativeBridgeSearchResponseCodec()
+      )
+
+      appState.applySearchResults(query: response.query, videos: response.results)
+      lastHeartbeat = Date()
+      appendLog("Global search returned \(response.results.count) results.")
+    } catch {
+      appState.setError(error.localizedDescription)
+      appendLog("Global search failed: \(error.localizedDescription)")
+    }
+
+    appState.setLoading(false)
+  }
+
   func resolvePlayback(for video: NativeVideo) async -> URL? {
     guard isReady else { return nil }
 

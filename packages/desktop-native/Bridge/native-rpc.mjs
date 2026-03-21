@@ -5,6 +5,7 @@ export const BRIDGE_COMMANDS = Object.freeze({
   refreshBrowse: 2,
   resolvePlayback: 3,
   shutdown: 4,
+  searchVideos: 5,
 })
 
 export const BRIDGE_EVENTS = Object.freeze({
@@ -143,6 +144,16 @@ export const resolvePlaybackRequestCodec = objectCodec([
 export const resolvePlaybackResponseCodec = objectCodec([
   field('videoId', c.string),
   field('url', c.string),
+])
+
+export const searchRequestCodec = objectCodec([
+  field('query', c.string),
+  field('topK', c.uint, 12),
+])
+
+export const searchResponseCodec = objectCodec([
+  field('query', c.string),
+  field('results', c.array(nativeVideoCodec), () => []),
 ])
 
 export const hostReadyEventCodec = objectCodec([

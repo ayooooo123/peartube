@@ -6,13 +6,24 @@ struct FeedListView: View {
 
   var body: some View {
     @Bindable var appState = appState
-    let videos = appState.videos()
+    let videos = appState.displayedVideos
 
     VStack(alignment: .leading, spacing: 0) {
       VStack(alignment: .leading, spacing: 8) {
-        Text(appState.currentSection.title)
-          .font(.largeTitle.bold())
-        Text(appState.currentSection.headline)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+          Text(appState.contentTitle)
+            .font(.largeTitle.bold())
+
+          if appState.isSearchActive {
+            Text("\(videos.count) results")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.secondary)
+              .padding(.horizontal, 10)
+              .padding(.vertical, 6)
+              .background(.quaternary.opacity(0.45), in: Capsule())
+          }
+        }
+        Text(appState.contentHeadline)
           .font(.subheadline)
           .foregroundStyle(.secondary)
       }
@@ -21,19 +32,25 @@ struct FeedListView: View {
 
       if videos.isEmpty {
         ContentUnavailableView(
-          appState.isLoading ? "Loading Videos" : "No Videos Yet",
-          systemImage: appState.isLoading ? "arrow.trianglehead.2.clockwise" : "play.square.stack",
-          description: Text(appState.lastErrorMessage ?? hostBridge.statusTitle)
+          appState.isSearchActive
+            ? (appState.isLoading ? "Searching Videos" : "No Search Results")
+            : (appState.isLoading ? "Loading Videos" : "No Videos Yet"),
+          systemImage: appState.isSearchActive
+            ? (appState.isLoading ? "magnifyingglass.circle" : "magnifyingglass")
+            : (appState.isLoading ? "arrow.trianglehead.2.clockwise" : "play.square.stack"),
+          description: Text(
+            appState.lastErrorMessage
+              ?? (appState.isSearchActive
+                ? "Try a different title, topic, or channel phrase."
+                : hostBridge.statusTitle)
+          )
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
       } else {
         List(videos, selection: $appState.selectedVideoID) { video in
           VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
-              RoundedRectangle(cornerRadius: 12)
-                .fill(Color(hex: video.accentHex).gradient)
-                .frame(width: 72, height: 46)
-                .overlay(Image(systemName: "play.fill").font(.title3).foregroundStyle(.white))
+              VideoRowThumbnail(video: video)
 
               VStack(alignment: .leading, spacing: 4) {
                 Text(video.title)
@@ -62,5 +79,36 @@ struct FeedListView: View {
       }
     }
     .background(Color(nsColor: .windowBackgroundColor))
+  }
+}
+
+private struct VideoRowThumbnail: View {
+  let video: NativeVideo
+
+  var body: some View {
+    RoundedRectangle(cornerRadius: 12)
+      .fill(Color(hex: video.accentHex).gradient)
+      .frame(width: 88, height: 52)
+      .overlay {
+        if let thumbnailURL = video.thumbnailURL {
+          AsyncImage(url: thumbnailURL) { phase in
+            switch phase {
+            case .success(let image):
+              image
+                .resizable()
+                .scaledToFill()
+            default:
+              Image(systemName: "play.fill")
+                .font(.title3)
+                .foregroundStyle(.white)
+            }
+          }
+          .clipShape(RoundedRectangle(cornerRadius: 12))
+        } else {
+          Image(systemName: "play.fill")
+            .font(.title3)
+            .foregroundStyle(.white)
+        }
+      }
   }
 }

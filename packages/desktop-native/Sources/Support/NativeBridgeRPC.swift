@@ -1,4 +1,3 @@
-import BareRPC
 import CompactEncoding
 import Foundation
 
@@ -93,18 +92,6 @@ struct NativeBridgeHostReadyEvent: Equatable {
 
 struct NativeBridgeHostMessageEvent: Equatable {
   let message: String
-}
-
-final class NativeBridgeRPCDelegate: RPCDelegate {
-  private let onSend: @Sendable (Data) -> Void
-
-  init(onSend: @escaping @Sendable (Data) -> Void) {
-    self.onSend = onSend
-  }
-
-  func rpc(_ rpc: RPC, send data: Data) {
-    onSend(data)
-  }
 }
 
 enum NativeBridgePayload {

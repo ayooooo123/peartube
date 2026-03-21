@@ -26,8 +26,7 @@ final class HostBridgeService {
   @ObservationIgnored private var sidecarInput: Pipe?
   @ObservationIgnored private var sidecarOutput: Pipe?
   @ObservationIgnored private var sidecarError: Pipe?
-  @ObservationIgnored private var rpc: RPC?
-  @ObservationIgnored private var rpcDelegate: NativeBridgeRPCDelegate?
+  @ObservationIgnored private var rpcChannel: BridgeRPCChannel?
   @ObservationIgnored private var sidecarStderrBuffer = ""
   @ObservationIgnored private var inFlightThumbnailIDs = Set<NativeVideo.ID>()
   @ObservationIgnored private let logLimit = 120
@@ -469,8 +468,7 @@ final class HostBridgeService {
     try? sidecarOutput?.fileHandleForReading.close()
     try? sidecarError?.fileHandleForReading.close()
     sidecarProcess?.terminate()
-    rpc = nil
-    rpcDelegate = nil
+    rpcChannel = nil
     sidecarInput = nil
     sidecarOutput = nil
     sidecarError = nil
@@ -507,7 +505,7 @@ final class HostBridgeService {
   }
 
   private func ensureBridgeRunning() async throws {
-    if sidecarProcess != nil, sidecarInput != nil, sidecarOutput != nil, rpc != nil {
+    if sidecarProcess != nil, sidecarInput != nil, sidecarOutput != nil, rpcChannel != nil {
       return
     }
 
@@ -516,21 +514,23 @@ final class HostBridgeService {
     let stdinPipe = Pipe()
     let stdoutPipe = Pipe()
     let stderrPipe = Pipe()
-    let rpcDelegate = NativeBridgeRPCDelegate { [weak self] data in
-      Task { @MainActor [weak self] in
-        self?.sendRPCFrame(data)
+    let rpcChannel = BridgeRPCChannel(
+      onSend: { [weak self] data in
+        Task { @MainActor [weak self] in
+          self?.sendRPCFrame(data)
+        }
+      },
+      onEvent: { [weak self] event in
+        await MainActor.run { [weak self] in
+          self?.handleRPCEvent(event)
+        }
+      },
+      onError: { [weak self] error in
+        Task { @MainActor [weak self] in
+          self?.appendLog("Bare sidecar RPC decode failed: \(error.localizedDescription)")
+        }
       }
-    }
-    let rpc = RPC(delegate: rpcDelegate)
-
-    rpc.onEvent = { [weak self] event in
-      await self?.handleRPCEvent(event)
-    }
-    rpc.onError = { [weak self] error in
-      Task { @MainActor [weak self] in
-        self?.appendLog("Bare sidecar RPC decode failed: \(error.localizedDescription)")
-      }
-    }
+    )
 
     process.executableURL = artifact.runtimeURL
     process.arguments = [artifact.bundleURL.path]
@@ -547,7 +547,7 @@ final class HostBridgeService {
     stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
       let data = handle.availableData
       Task { @MainActor [weak self] in
-        self?.handleSidecarStdoutData(data)
+        await self?.handleSidecarStdoutData(data)
       }
     }
     stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -563,8 +563,7 @@ final class HostBridgeService {
     self.sidecarInput = stdinPipe
     self.sidecarOutput = stdoutPipe
     self.sidecarError = stderrPipe
-    self.rpc = rpc
-    self.rpcDelegate = rpcDelegate
+    self.rpcChannel = rpcChannel
     appendLog("Bare sidecar launched from \(artifact.kind) artifact at \(artifact.bundleURL.path).")
   }
 
@@ -595,9 +594,14 @@ final class HostBridgeService {
     return nil
   }
 
-  private func handleSidecarStdoutData(_ data: Data) {
-    guard !data.isEmpty else { return }
-    rpc?.receive(data)
+  private func handleSidecarStdoutData(_ data: Data) async {
+    guard !data.isEmpty else {
+      sidecarOutput?.fileHandleForReading.readabilityHandler = nil
+      return
+    }
+
+    guard let rpcChannel else { return }
+    await rpcChannel.receive(data)
   }
 
   private func handleSidecarStderrData(_ data: Data) {
@@ -631,8 +635,7 @@ final class HostBridgeService {
       reason = "exit \(process.terminationStatus)"
     }
 
-    rpc = nil
-    rpcDelegate = nil
+    rpcChannel = nil
     sidecarInput = nil
     sidecarOutput = nil
     sidecarError = nil
@@ -656,7 +659,7 @@ final class HostBridgeService {
     }
   }
 
-  private func handleRPCEvent(_ event: IncomingEvent) async {
+  private func handleRPCEvent(_ event: IncomingEvent) {
     lastHeartbeat = Date()
 
     switch NativeBridgeEventCommand(rawValue: event.command) {
@@ -719,12 +722,12 @@ final class HostBridgeService {
   ) async throws -> ResponseCodec.Value {
     try await ensureBridgeRunning()
 
-    guard let rpc else {
+    guard let rpcChannel else {
       throw HostBridgeError.bridgeInputUnavailable
     }
 
     do {
-      let responseData = try await rpc.request(command.rawValue, data: requestData)
+      let responseData = try await rpcChannel.request(command: command.rawValue, data: requestData)
       lastHeartbeat = Date()
       return try NativeBridgePayload.decode(responseCodec, from: responseData)
     } catch let error as RPCRemoteError {

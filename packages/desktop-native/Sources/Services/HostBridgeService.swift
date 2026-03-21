@@ -28,6 +28,7 @@ final class HostBridgeService {
   @ObservationIgnored private var rpcDelegate: NativeBridgeRPCDelegate?
   @ObservationIgnored private var sidecarStderrBuffer = ""
   @ObservationIgnored private let logLimit = 120
+  @ObservationIgnored private(set) var selectedStoragePath: String?
 
   private struct SidecarArtifact {
     let runtimeURL: URL
@@ -62,13 +63,16 @@ final class HostBridgeService {
     appState.setLoading(true)
     phase = .booting
     appState.setError(nil)
+    let storagePath = Self.preferredStoragePath()
+    selectedStoragePath = storagePath
     appendLog("Launching Bare sidecar host.")
+    appendLog("Using storage path \(storagePath).")
 
     do {
       try await ensureBridgeRunning()
       let response = try await sendRequest(
         command: .bootstrap,
-        requestPayload: NativeBridgeBootstrapRequest(storagePath: defaultStoragePath()),
+        requestPayload: NativeBridgeBootstrapRequest(storagePath: storagePath),
         requestCodec: NativeBridgeBootstrapRequestCodec(),
         responseCodec: NativeBridgeBootstrapResponseCodec()
       )
@@ -78,9 +82,13 @@ final class HostBridgeService {
       appState.applySnapshot(response.snapshot)
       appendLog("Shared host ready. Loaded \(response.snapshot.stats.homeCount) home videos across \(response.snapshot.stats.channelCount) channels.")
     } catch {
-      phase = .failed(error.localizedDescription)
-      appState.setError(error.localizedDescription)
-      appendLog("Host bootstrap failed: \(error.localizedDescription)")
+      let friendlyMessage = Self.friendlyBootstrapError(
+        error.localizedDescription,
+        storagePath: storagePath
+      )
+      phase = .failed(friendlyMessage)
+      appState.setError(friendlyMessage)
+      appendLog("Host bootstrap failed: \(friendlyMessage)")
     }
 
     appState.setLoading(false)
@@ -440,19 +448,48 @@ final class HostBridgeService {
     }
   }
 
-  private func defaultStoragePath() -> String {
-    let environment = ProcessInfo.processInfo.environment
+  static func preferredStoragePath(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    fileManager: FileManager = .default,
+    homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
+    appSupportDirectory: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+  ) -> String {
     if let override = environment["PEARTUBE_NATIVE_STORAGE_PATH"], !override.isEmpty {
       return override
     }
 
-    let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-      .first ?? URL(fileURLWithPath: NSHomeDirectory())
+    let legacyStore = homeDirectory.appendingPathComponent(".peartube", isDirectory: true)
+    let legacyMarkers = [
+      legacyStore.appendingPathComponent("identity-key").path,
+      legacyStore.appendingPathComponent("db/identity-key").path,
+      legacyStore.appendingPathComponent("CORESTORE").path,
+      legacyStore.appendingPathComponent("db/IDENTITY").path,
+    ]
 
+    if legacyMarkers.contains(where: { fileManager.fileExists(atPath: $0) }) {
+      return legacyStore.path
+    }
+
+    let appSupport = appSupportDirectory ?? homeDirectory
     return appSupport
       .appendingPathComponent("PearTubeDesktopNative", isDirectory: true)
       .appendingPathComponent("host-storage", isDirectory: true)
       .path
+  }
+
+  static func friendlyBootstrapError(_ message: String, storagePath: String) -> String {
+    let lowercased = message.lowercased()
+    if lowercased.contains("file descriptor could not be locked")
+      || lowercased.contains("corestore")
+      || lowercased.contains("locked") {
+      return "Close the existing PearTube desktop app or Pear worker using \(storagePath), then reopen PearTube Native."
+    }
+
+    return message
+  }
+
+  private func defaultStoragePath() -> String {
+    Self.preferredStoragePath()
   }
 
   private func sidecarArtifact() throws -> SidecarArtifact {

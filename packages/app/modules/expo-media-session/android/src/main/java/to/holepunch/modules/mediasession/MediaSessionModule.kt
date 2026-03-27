@@ -188,47 +188,10 @@ object PipBridge {
             return
         }
 
-        // Disable auto-enter so Android doesn't capture pre-transform state,
-        // then enter PiP manually on next frame after transforms have rendered.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val disableParams = PictureInPictureParams.Builder()
-                .setAutoEnterEnabled(false)
-                .setAspectRatio(getPipAspectRatio())
-                .build()
-            activity.setPictureInPictureParams(disableParams)
-        }
-
-        activity.window.decorView.post {
-            if (activity.isDestroyed || activity.isFinishing) return@post
-            expandSurfaceViewsForPip(activity)
-
-            activity.window.decorView.post {
-                if (activity.isDestroyed || activity.isFinishing) return@post
-                android.util.Log.d("PipBridge", "onUserLeaveHint: entering PiP after transforms rendered")
-
-                markPipTransition()
-                notifyPlayerViews(true)
-                try {
-                    val builder = PictureInPictureParams.Builder()
-                        .setAspectRatio(getPipAspectRatio())
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        builder.setAutoEnterEnabled(true)
-                    }
-
-                    val sourceRect = getVideoSourceRect(activity) ?: getFullscreenSourceRect(activity)
-                    builder.setSourceRectHint(sourceRect)
-
-                    val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
-                    builder.setActions(actions)
-
-                    val result = activity.enterPictureInPictureMode(builder.build())
-                    android.util.Log.d("PipBridge", "onUserLeaveHint: enterPictureInPictureMode returned $result")
-                } catch (e: Exception) {
-                    android.util.Log.e("PipBridge", "onUserLeaveHint: failed", e)
-                }
-            }
-        }
+        // Auto-enter PiP is already configured via updateActivityPipParams.
+        // Just mark the transition for audio focus handling.
+        markPipTransition()
+        android.util.Log.d("PipBridge", "onUserLeaveHint: PiP transition marked, auto-enter handles the rest")
     }
 
     // State saved before PiP so we can restore on exit
@@ -242,7 +205,8 @@ object PipBridge {
      * the SurfaceView to fill the screen. Android PiP captures the entire
      * Activity window, so we must make it look like only the video is showing.
      */
-    private fun expandSurfaceViewsForPip(activity: Activity) {
+    @JvmStatic
+    fun expandSurfaceViewsForPip(activity: Activity) {
         val rootView = activity.window.decorView as? android.view.ViewGroup ?: return
         val videoViews = findVideoViews(rootView)
         if (videoViews.isEmpty()) {
@@ -286,8 +250,11 @@ object PipBridge {
 
             vv.pivotX = 0f
             vv.pivotY = 0f
-            vv.scaleX = screenW / viewW
-            vv.scaleY = screenH / viewH
+            // Scale to fill the entire screen so PiP captures only video.
+            val scaleX = screenW / viewW
+            val scaleY = screenH / viewH
+            vv.scaleX = scaleX
+            vv.scaleY = scaleY
             vv.translationX = -loc[0].toFloat()
             vv.translationY = -loc[1].toFloat()
 
@@ -295,7 +262,7 @@ object PipBridge {
                 vv.setZOrderOnTop(true)
             }
 
-            android.util.Log.d("PipBridge", "expandSurfaceViewsForPip: ${vv.javaClass.simpleName} ${viewW}x${viewH} at ${loc[0]},${loc[1]} → fullscreen ${screenW}x${screenH}")
+            android.util.Log.d("PipBridge", "expandSurfaceViewsForPip: ${vv.javaClass.simpleName} ${viewW}x${viewH} at ${loc[0]},${loc[1]} → scale=${scaleX} fullscreen ${screenW}x${screenH}")
         }
 
         val ancestorSet = mutableSetOf<android.view.View>()
@@ -309,6 +276,25 @@ object PipBridge {
 
         hideNonVideoViews(rootView, ancestorSet)
         rootView.setBackgroundColor(android.graphics.Color.BLACK)
+
+        // Update PiP params with fullscreen sourceRectHint since video is now
+        // scaled to fill the entire screen via scaleX/scaleY transforms.
+        try {
+            val sourceRect = android.graphics.Rect(0, 0, screenW.toInt(), screenH.toInt())
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(getPipAspectRatio())
+                .setSourceRectHint(sourceRect)
+                .setSeamlessResizeEnabled(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                builder.setAutoEnterEnabled(true)
+            }
+            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
+            builder.setActions(actions)
+            activity.setPictureInPictureParams(builder.build())
+            android.util.Log.d("PipBridge", "expandSurfaceViewsForPip: updated PiP params sourceRect=$sourceRect")
+        } catch (e: Exception) {
+            android.util.Log.e("PipBridge", "expandSurfaceViewsForPip: PiP params update failed", e)
+        }
     }
 
     private fun isVideoView(view: android.view.View): Boolean {
@@ -332,7 +318,8 @@ object PipBridge {
         }
     }
 
-    private fun restoreViewsAfterPip(activity: Activity) {
+    @JvmStatic
+    fun restoreViewsAfterPip(activity: Activity) {
         if (!pipViewExpanded) return
         pipViewExpanded = false
 
@@ -384,6 +371,194 @@ object PipBridge {
         val size = android.graphics.Point()
         display.getRealSize(size)
         return android.graphics.Rect(0, 0, size.x, size.y)
+    }
+
+    /**
+     * Hide all non-video views for PiP capture. Does NOT touch SurfaceView transforms.
+     * Called from onPause just before auto-enter PiP captures the window.
+     */
+    @JvmStatic
+    fun hideNonVideoForPip(activity: Activity) {
+        val rootView = activity.window.decorView as? android.view.ViewGroup ?: return
+        val videoViews = findVideoViews(rootView)
+        if (videoViews.isEmpty()) return
+
+        val display = activity.windowManager.defaultDisplay
+        val screenSize = android.graphics.Point()
+        display.getRealSize(screenSize)
+        val screenW = screenSize.x
+        val screenH = screenSize.y
+
+        val ancestorSet = mutableSetOf<android.view.View>()
+        for (vv in videoViews) {
+            var v: android.view.View? = vv
+            while (v != null) {
+                ancestorSet.add(v)
+                v = v.parent as? android.view.View
+            }
+        }
+
+        hiddenViews.clear()
+        unclippedParents.clear()
+        savedDecorBackground = rootView.background
+        pipViewExpanded = true
+        hideNonVideoViews(rootView, ancestorSet)
+        rootView.setBackgroundColor(android.graphics.Color.BLACK)
+
+        // Resize the SurfaceView and all ancestor ViewGroups to fill the screen.
+        // SurfaceView ignores scaleX/scaleY (compositor surface doesn't respond to
+        // View transforms), so we must change actual LayoutParams.
+        for (vv in videoViews) {
+            val loc = IntArray(2)
+            vv.getLocationOnScreen(loc)
+            android.util.Log.d("PipBridge", "hideNonVideoForPip: ${vv.javaClass.simpleName} ${vv.width}x${vv.height} at (${loc[0]},${loc[1]})")
+
+            // Disable clipping on all ancestors
+            var parent = vv.parent
+            while (parent is android.view.ViewGroup) {
+                val vg = parent
+                unclippedParents.add(vg to Pair(vg.clipChildren, vg.clipToPadding))
+                vg.clipChildren = false
+                vg.clipToPadding = false
+                parent = vg.parent
+            }
+
+            // Resize the view to fill the screen width, maintaining video aspect ratio.
+            // Don't stretch to full screen height — that distorts and causes zoom in PiP.
+            val videoAspect = pipAspectRatioWidth.toFloat() / pipAspectRatioHeight.toFloat()
+            val targetW = screenW
+            val targetH = (screenW / videoAspect).toInt()
+            val lp = vv.layoutParams
+            if (lp != null) {
+                lp.width = targetW
+                lp.height = targetH
+                vv.layoutParams = lp
+            }
+            // Translate to origin
+            vv.translationX = -loc[0].toFloat()
+            vv.translationY = -loc[1].toFloat()
+            android.util.Log.d("PipBridge", "hideNonVideoForPip: resized to ${targetW}x${targetH} (aspect=${videoAspect})")
+        }
+
+        // Force layout pass
+        rootView.requestLayout()
+        rootView.invalidate()
+
+        // Update PiP params with sourceRectHint matching the post-translation video position.
+        // The video is now at (0,0) with dimensions targetW x targetH.
+        // This tells Android's auto-enter PiP to crop to just the video area.
+        try {
+            val videoAspect2 = pipAspectRatioWidth.toFloat() / pipAspectRatioHeight.toFloat()
+            val pipTargetH = (screenW / videoAspect2).toInt()
+            val sourceRect = android.graphics.Rect(0, 0, screenW, pipTargetH)
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(getPipAspectRatio())
+                .setSourceRectHint(sourceRect)
+                .setSeamlessResizeEnabled(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                builder.setAutoEnterEnabled(true)
+            }
+            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
+            builder.setActions(actions)
+            activity.setPictureInPictureParams(builder.build())
+            android.util.Log.d("PipBridge", "hideNonVideoForPip: updated PiP params sourceRect=$sourceRect")
+        } catch (e: Exception) {
+            android.util.Log.e("PipBridge", "hideNonVideoForPip: PiP params update failed", e)
+        }
+
+        android.util.Log.d("PipBridge", "hideNonVideoForPip: hidden ${hiddenViews.size} views")
+    }
+
+    /**
+     * Update PiP params with accurate sourceRectHint right before auto-enter captures.
+     * On Android 12+/16, sourceRectHint tells the system which area of the window
+     * contains the video content for PiP cropping.
+     */
+    @JvmStatic
+    fun updatePipSourceRectForCapture(activity: Activity) {
+        // If views are already expanded via scaleX/scaleY, the PiP params were set
+        // with a fullscreen sourceRect in expandSurfaceViewsForPip. Don't override
+        // with untransformed coordinates which would cause a wrong crop.
+        if (pipViewExpanded) return
+
+        try {
+            val rootView = activity.window.decorView
+            val videoViews = findVideoViews(rootView)
+            var sourceRect: android.graphics.Rect? = null
+            for (vv in videoViews) {
+                if (vv.width <= 0 || vv.height <= 0) continue
+                val loc = IntArray(2)
+                vv.getLocationInWindow(loc)
+                sourceRect = android.graphics.Rect(loc[0], loc[1], loc[0] + vv.width, loc[1] + vv.height)
+                break
+            }
+            if (sourceRect == null) return
+
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(getPipAspectRatio())
+                .setSourceRectHint(sourceRect)
+                .setSeamlessResizeEnabled(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                builder.setAutoEnterEnabled(true)
+            }
+            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
+            builder.setActions(actions)
+            activity.setPictureInPictureParams(builder.build())
+            android.util.Log.d("PipBridge", "updatePipSourceRectForCapture: sourceRect=$sourceRect")
+        } catch (e: Exception) {
+            android.util.Log.e("PipBridge", "updatePipSourceRectForCapture failed", e)
+        }
+    }
+
+    fun getLaunchIntoPipSourceRect(activity: Activity): android.graphics.Rect {
+        return getVideoSourceRect(activity) ?: getFullscreenSourceRect(activity)
+    }
+
+    fun normalizeSourceRectHint(rect: android.graphics.Rect): android.graphics.Rect {
+        val ratio = getPipAspectRatio()
+        val rw = ratio.numerator.toFloat()
+        val rh = ratio.denominator.toFloat()
+        val w = rect.width().toFloat()
+        val h = rect.height().toFloat()
+        if (w <= 0 || h <= 0) return rect
+        val targetH = w * rh / rw
+        if (targetH <= h) {
+            val inset = ((h - targetH) / 2).toInt()
+            return android.graphics.Rect(rect.left, rect.top + inset, rect.right, rect.bottom - inset)
+        }
+        val targetW = h * rw / rh
+        val inset = ((w - targetW) / 2).toInt()
+        return android.graphics.Rect(rect.left + inset, rect.top, rect.right - inset, rect.bottom)
+    }
+
+    fun getAspectMatchedFullscreenSourceRect(activity: Activity): android.graphics.Rect {
+        return normalizeSourceRectHint(getFullscreenSourceRect(activity))
+    }
+
+    fun enterPictureInPictureDirect(
+        activity: Activity,
+        sourceRectHint: android.graphics.Rect? = null,
+    ): Boolean {
+        if (!pipEnabled) return false
+        if (activity.isInPictureInPictureMode) return true
+        if (!isPipHostActivity(activity)) return false
+        return try {
+            markPipTransition()
+            val builder = PictureInPictureParams.Builder()
+                .setAspectRatio(getPipAspectRatio())
+                .setSeamlessResizeEnabled(true)
+            builder.setSourceRectHint(sourceRectHint ?: getAspectMatchedFullscreenSourceRect(activity))
+            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
+            builder.setActions(actions)
+            activity.enterPictureInPictureMode(builder.build())
+        } catch (e: Exception) {
+            android.util.Log.e("PipBridge", "enterPictureInPictureDirect failed", e)
+            false
+        }
+    }
+
+    fun notifyPipBoundsChanged(activity: Activity, newConfig: Configuration) {
+        notifyPipModeChanged(activity, true, newConfig)
     }
 
     private fun isPipHostActivity(activity: Activity): Boolean {
@@ -500,6 +675,12 @@ object PipBridge {
      * This bypasses React Native's layout system entirely.
      */
     private fun applySurfaceViewTransforms(activity: Activity, isInPip: Boolean, newConfig: Configuration?) {
+        // Skip SurfaceView transforms on MainActivity — the JS side handles PiP layout
+        // via Reanimated. Native scale transforms on SurfaceView cause shifts because
+        // the compositor surface doesn't respond to View transforms.
+        val isMainActivity = activity.javaClass.name.endsWith(".MainActivity")
+        if (isMainActivity) return
+
         val surfaceViews = findSurfaceViews(activity.window.decorView)
         android.util.Log.d("PipBridge", "applySurfaceViewTransforms: found ${surfaceViews.size} SurfaceViews, isInPip=$isInPip")
 
@@ -1774,5 +1955,30 @@ class MediaSessionModule : Module() {
         private const val REQUEST_PLAY_PAUSE = 1
         private const val REQUEST_REWIND = 2
         private const val REQUEST_FORWARD = 3
+    }
+
+    // Bridge methods called from MediaPlaybackService for native playback state sync
+    internal fun handleNativePlaybackStateChanged(state: Map<String, Any?>) {
+        sendEvent("onPlaybackSnapshotChanged", mapOf(
+            "isPlaying" to (state["isPlaying"] as? Boolean ?: false),
+            "positionMs" to ((state["positionMs"] as? Number)?.toLong() ?: 0L),
+            "durationMs" to ((state["durationMs"] as? Number)?.toLong() ?: 0L),
+            "hostActivity" to (state["hostActivity"] as? String ?: "main"),
+            "isInPipMode" to (state["isInPipMode"] as? Boolean ?: false),
+        ))
+    }
+
+    internal fun handleNativePlaybackCleared() {
+        sendEvent("onPlaybackSnapshotChanged", mapOf(
+            "isPlaying" to false,
+            "positionMs" to 0L,
+            "durationMs" to 0L,
+            "hostActivity" to "none",
+            "isInPipMode" to false,
+        ))
+    }
+
+    internal fun handlePlayerActivityDismissed() {
+        sendEvent("onPlayerActivityDismissed", mapOf<String, Any>())
     }
 }

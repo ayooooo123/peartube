@@ -170,18 +170,31 @@ export function createIdentityManager({ ctx }) {
         encrypt: false,
         writerKeyName
       })
+      const createdAt = Date.now()
       log.info(' Channel created:', channelKeyHex.slice(0, 16))
       if (isEmbeddedBareKitRuntime()) {
         try {
           if (channel.publicBee?.writable) {
-            await channel.publicBee.setMetadata({ name, description: '', avatar: null })
+            await channel.publicBee.setMetadata({
+              name,
+              description: '',
+              avatar: null,
+              createdAt,
+              createdBy: publicKey
+            })
           }
         } catch (err) {
           log.warn(' Embedded identity metadata publish skipped:', err?.message)
         }
       } else {
         log.info(' Updating channel metadata for identity')
-        await channel.updateMetadata({ name, description: '', avatar: null })
+        await channel.updateMetadata({
+          name,
+          description: '',
+          avatar: null,
+          createdAt,
+          createdBy: publicKey
+        })
         log.info(' Channel metadata updated')
         log.info(' Ensuring local blob drive for identity')
         await channel.ensureLocalBlobDrive({ deviceName: name })
@@ -200,7 +213,7 @@ export function createIdentityManager({ ctx }) {
         channelEncryptionKey: encryptionKeyHex,
         channelWriterKeyName: writerKeyName,
         name,
-        createdAt: Date.now(),
+        createdAt,
         // secretKey removed for security - derive from mnemonic when needed
         isActive: false,
         hdDerived

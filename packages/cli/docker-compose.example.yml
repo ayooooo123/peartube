@@ -1,12 +1,26 @@
 services:
   relay:
-    build:
-      context: ../..
-      dockerfile: packages/cli/Dockerfile
     image: ghcr.io/ayooooo123/peartube-relay:latest
+    pull_policy: always
     restart: unless-stopped
+    environment:
+      PEARTUBE_MODE: public
+      PEARTUBE_POLICY: discovery
+      PEARTUBE_STORAGE_PATH: /var/lib/peartube-relay
+      PEARTUBE_STORAGE_MAX_BYTES: 107374182400
+      PEARTUBE_DISCOVERY_ENABLED: "true"
+      PEARTUBE_DISCOVERY_MAX_CHANNELS: 500
+      PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER: 20
+      PEARTUBE_NETWORK_ANNOUNCE: "true"
+      PEARTUBE_NETWORK_BOOTSTRAP: default
+      PEARTUBE_LOG_LEVEL: info
+      # Optional allowlist keys for private or curated public mode:
+      # PEARTUBE_ADMISSION_CHANNELS: chan-key-1,chan-key-2
+      # PEARTUBE_ADMISSION_OWNERS: owner-key-1
+      # Optional retention overrides:
+      # PEARTUBE_RETENTION_PROTECT_PRIVATE: "true"
+      # PEARTUBE_RETENTION_PROTECT_ALLOWLIST: "true"
     volumes:
-      - ./config.example.yml:/etc/peartube-relay/config.yml:ro
       - peartube-relay-data:/var/lib/peartube-relay
 
 volumes:

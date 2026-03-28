@@ -8,10 +8,15 @@ const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 }
 let currentLevel = LEVELS.info
 
 /**
- * @param {boolean} debug
+ * @param {boolean|string} debugOrLevel
  */
-export function setDebugLevel(debug) {
-  currentLevel = debug ? LEVELS.debug : LEVELS.info
+export function setDebugLevel(debugOrLevel) {
+  if (typeof debugOrLevel === 'string' && LEVELS[debugOrLevel]) {
+    currentLevel = LEVELS[debugOrLevel]
+    return
+  }
+
+  currentLevel = debugOrLevel ? LEVELS.debug : LEVELS.info
 }
 
 /**
@@ -41,12 +46,17 @@ function createLogger(component) {
 
 /**
  * Create all component loggers for the CLI.
- * @param {boolean} debug - Enable debug-level logging
- * @returns {{ peer: Logger, cache: Logger, feed: Logger, download: Logger }}
+ * @param {boolean|string} debugOrLevel - Enable debug logging or set a level directly
+ * @returns {{ relay: Logger, runtime: Logger, admission: Logger, status: Logger, mirror: Logger, peer: Logger, cache: Logger, feed: Logger, download: Logger }}
  */
-export function createCliLogger(debug) {
-  setDebugLevel(debug)
+export function createCliLogger(debugOrLevel) {
+  setDebugLevel(debugOrLevel)
   return {
+    relay: createLogger('Relay'),
+    runtime: createLogger('Runtime'),
+    admission: createLogger('Admission'),
+    status: createLogger('Status'),
+    mirror: createLogger('Mirror'),
     peer: createLogger('Peer'),
     cache: createLogger('Cache'),
     feed: createLogger('Feed'),

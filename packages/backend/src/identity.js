@@ -166,7 +166,14 @@ export function createIdentityManager({ ctx }) {
         encrypt: false,
         writerKeyName
       })
-      await channel.updateMetadata({ name, description: '', avatar: null })
+      const createdAt = Date.now()
+      await channel.updateMetadata({
+        name,
+        description: '',
+        avatar: null,
+        createdAt,
+        createdBy: publicKey
+      })
       await channel.ensureLocalBlobDrive({ deviceName: name })
 
       // Create identity record
@@ -181,7 +188,7 @@ export function createIdentityManager({ ctx }) {
         channelEncryptionKey: encryptionKeyHex,
         channelWriterKeyName: writerKeyName,
         name,
-        createdAt: Date.now(),
+        createdAt,
         // secretKey removed for security - derive from mnemonic when needed
         isActive: false,
         hdDerived

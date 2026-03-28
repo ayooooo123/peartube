@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "bin": {
+    "peartube-relay": "bin.js",
     "peartube-peer": "bin.js",
+    "peartube-relay-bare": "bare-bin.js",
     "peartube-peer-bare": "bare-bin.js"
   },
   "scripts": {
@@ -12,16 +14,16 @@
   },
   "imports": {
     "#fs": {
-      "bare": "bare-fs",
-      "default": "node:fs"
+      "bare": "./src/shims/fs.bare.js",
+      "default": "./src/shims/fs.node.js"
     },
     "#path": {
-      "bare": "bare-path",
-      "default": "node:path"
+      "bare": "./src/shims/path.bare.js",
+      "default": "./src/shims/path.node.js"
     }
   },
   "dependencies": {
-    "@peartube/backend": "workspace:*",
+    "@peartube/backend": "file:../backend",
     "b4a": "^1.6.7",
     "compact-encoding": "^2.19.0",
     "graceful-goodbye": "^1.3.3",

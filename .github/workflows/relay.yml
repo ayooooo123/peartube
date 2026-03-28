@@ -1,0 +1,117 @@
+name: Relay
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'packages/cli/**'
+      - 'packages/backend/**'
+      - 'packages/bare-ffmpeg/**'
+      - '.dockerignore'
+      - '.github/workflows/relay.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'packages/cli/**'
+      - 'packages/backend/**'
+      - 'packages/bare-ffmpeg/**'
+      - '.dockerignore'
+      - '.github/workflows/relay.yml'
+  workflow_dispatch:
+
+jobs:
+  relay-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install backend dependencies
+        run: npm install --prefix packages/backend --ignore-scripts
+
+      - name: Install relay dependencies
+        run: npm install --prefix packages/cli --ignore-scripts
+
+      - name: Run relay CLI tests
+        run: npm test --prefix packages/cli
+
+      - name: Run relay owner metadata regression
+        run: node packages/backend/test/public-channel-owner-metadata.test.mjs
+
+  relay-docker-build:
+    needs: relay-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/cli/Dockerfile
+          platforms: linux/amd64
+          push: false
+
+  relay-docker-publish:
+    needs: relay-test
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/peartube-relay
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+            type=sha
+
+      - name: Publish relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/cli/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

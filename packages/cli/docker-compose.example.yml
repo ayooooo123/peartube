@@ -1,0 +1,13 @@
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: packages/cli/Dockerfile
+    image: ghcr.io/ayooooo123/peartube-relay:latest
+    restart: unless-stopped
+    volumes:
+      - ./config.example.yml:/etc/peartube-relay/config.yml:ro
+      - peartube-relay-data:/var/lib/peartube-relay
+
+volumes:
+  peartube-relay-data:

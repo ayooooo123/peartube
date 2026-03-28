@@ -1,0 +1,18 @@
+mode: public
+policy: discovery
+
+storage:
+  path: /var/lib/peartube-relay
+  maxBytes: 107374182400
+
+admission:
+  channels: []
+  owners: []
+
+discovery:
+  enabled: true
+  maxChannels: 500
+  maxChannelsPerOwner: 20
+
+logging:
+  level: info

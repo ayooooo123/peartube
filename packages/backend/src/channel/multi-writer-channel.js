@@ -1252,6 +1252,8 @@ export class MultiWriterChannel extends ReadyResource {
         if ('name' in patch) publicPatch.name = patch.name
         if ('description' in patch) publicPatch.description = patch.description
         if ('avatar' in patch) publicPatch.avatar = patch.avatar
+        if ('createdAt' in patch) publicPatch.createdAt = patch.createdAt
+        if ('createdBy' in patch) publicPatch.createdBy = patch.createdBy
         if ('commentsAutobaseKey' in patch) publicPatch.commentsAutobaseKey = patch.commentsAutobaseKey
 
         if (Object.keys(publicPatch).length > 0) {

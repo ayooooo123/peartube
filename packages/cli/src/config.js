@@ -51,6 +51,16 @@ function splitCommaList(value) {
     .filter(Boolean)
 }
 
+function parseBoolean(value) {
+  if (typeof value === 'boolean') return value
+  if (typeof value !== 'string') return undefined
+
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true
+  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false
+  return undefined
+}
+
 function parseScalar(raw) {
   const value = raw.trim()
 
@@ -182,10 +192,24 @@ function configFromEnv(env = {}) {
   }
   if (env.PEARTUBE_DISCOVERY_ENABLED || env.PEARTUBE_DISCOVERY_MAX_CHANNELS || env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
     config.discovery = {}
-    if (env.PEARTUBE_DISCOVERY_ENABLED) config.discovery.enabled = env.PEARTUBE_DISCOVERY_ENABLED === 'true'
+    if (env.PEARTUBE_DISCOVERY_ENABLED) config.discovery.enabled = parseBoolean(env.PEARTUBE_DISCOVERY_ENABLED)
     if (env.PEARTUBE_DISCOVERY_MAX_CHANNELS) config.discovery.maxChannels = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS)
     if (env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
       config.discovery.maxChannelsPerOwner = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER)
+    }
+  }
+  if (env.PEARTUBE_NETWORK_ANNOUNCE || env.PEARTUBE_NETWORK_BOOTSTRAP) {
+    config.network = {}
+    if (env.PEARTUBE_NETWORK_ANNOUNCE) config.network.announce = parseBoolean(env.PEARTUBE_NETWORK_ANNOUNCE)
+    if (env.PEARTUBE_NETWORK_BOOTSTRAP) config.network.bootstrap = env.PEARTUBE_NETWORK_BOOTSTRAP
+  }
+  if (env.PEARTUBE_RETENTION_PROTECT_PRIVATE || env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST) {
+    config.retention = {}
+    if (env.PEARTUBE_RETENTION_PROTECT_PRIVATE) {
+      config.retention.protectPrivate = parseBoolean(env.PEARTUBE_RETENTION_PROTECT_PRIVATE)
+    }
+    if (env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST) {
+      config.retention.protectAllowlist = parseBoolean(env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST)
     }
   }
   if (env.PEARTUBE_LOG_LEVEL) {

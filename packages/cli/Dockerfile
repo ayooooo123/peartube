@@ -15,10 +15,14 @@ COPY packages/cli ./packages/cli
 RUN npm install --prefix packages/backend --omit=dev --ignore-scripts \
   && npm install --prefix packages/cli --omit=dev --ignore-scripts
 
-RUN mkdir -p /etc/peartube-relay /var/lib/peartube-relay
+RUN mkdir -p /var/lib/peartube-relay
 
-COPY packages/cli/config.example.yml /etc/peartube-relay/config.yml
+ENV PEARTUBE_MODE=public
+ENV PEARTUBE_POLICY=discovery
+ENV PEARTUBE_STORAGE_PATH=/var/lib/peartube-relay
+ENV PEARTUBE_STORAGE_MAX_BYTES=107374182400
+ENV PEARTUBE_LOG_LEVEL=info
 
-VOLUME ["/etc/peartube-relay", "/var/lib/peartube-relay"]
+VOLUME ["/var/lib/peartube-relay"]
 
-ENTRYPOINT ["bare", "/app/packages/cli/bare-bin.js", "run", "--config", "/etc/peartube-relay/config.yml"]
+ENTRYPOINT ["bare", "/app/packages/cli/bare-bin.js", "run"]

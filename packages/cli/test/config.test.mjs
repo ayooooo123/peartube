@@ -76,3 +76,47 @@ test('loadRelayConfig parses yaml-like config files', async (t) => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('loadRelayConfig uses built-in defaults without a config file', async (t) => {
+  const config = await loadRelayConfig({}, { env: {} })
+
+  t.is(config.mode, 'public')
+  t.is(config.policy, 'discovery')
+  t.is(config.storage.path, './peartube-relay')
+  t.is(config.paths.config, undefined)
+})
+
+test('loadRelayConfig supports env-only relay configuration', async (t) => {
+  const config = await loadRelayConfig({}, {
+    env: {
+      PEARTUBE_MODE: 'private',
+      PEARTUBE_STORAGE_PATH: '/var/lib/peartube-relay',
+      PEARTUBE_STORAGE_MAX_BYTES: '2048',
+      PEARTUBE_ADMISSION_CHANNELS: 'chan-a,chan-b',
+      PEARTUBE_ADMISSION_OWNERS: 'owner-a',
+      PEARTUBE_DISCOVERY_ENABLED: 'false',
+      PEARTUBE_DISCOVERY_MAX_CHANNELS: '12',
+      PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER: '3',
+      PEARTUBE_NETWORK_ANNOUNCE: 'false',
+      PEARTUBE_NETWORK_BOOTSTRAP: 'local',
+      PEARTUBE_RETENTION_PROTECT_PRIVATE: 'false',
+      PEARTUBE_RETENTION_PROTECT_ALLOWLIST: 'false',
+      PEARTUBE_LOG_LEVEL: 'debug'
+    }
+  })
+
+  t.is(config.mode, 'private')
+  t.is(config.policy, 'allowlist')
+  t.is(config.storage.path, '/var/lib/peartube-relay')
+  t.is(config.storage.maxBytes, 2048)
+  t.alike(config.admission.channels, ['chan-a', 'chan-b'])
+  t.alike(config.admission.owners, ['owner-a'])
+  t.is(config.discovery.enabled, false)
+  t.is(config.discovery.maxChannels, 12)
+  t.is(config.discovery.maxChannelsPerOwner, 3)
+  t.is(config.network.announce, false)
+  t.is(config.network.bootstrap, 'local')
+  t.is(config.retention.protectPrivate, false)
+  t.is(config.retention.protectAllowlist, false)
+  t.is(config.logging.level, 'debug')
+})

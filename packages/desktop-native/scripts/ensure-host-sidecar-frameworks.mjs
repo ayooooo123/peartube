@@ -117,7 +117,7 @@ function collectLinkedAddonPackages(header) {
   return [...packages.entries()].sort((left, right) => left[1].localeCompare(right[1]))
 }
 
-function getFrameworkTargets() {
+function getFrameworkHosts() {
   if (process.platform === 'darwin') {
     return ['darwin-arm64', 'darwin-x64']
   }
@@ -141,13 +141,13 @@ function ensureFrameworks() {
   fs.mkdirSync(frameworkOutputDir, { recursive: true })
 
   const bareLinkBin = findBareLinkBin()
-  const targets = getFrameworkTargets()
+  const hosts = getFrameworkHosts()
 
   for (const [packageDir, packageName] of addonPackages) {
     const args = []
 
-    for (const target of targets) {
-      args.push('--target', target)
+    for (const host of hosts) {
+      args.push('--host', host)
     }
 
     args.push('--out', frameworkOutputDir, packageDir)

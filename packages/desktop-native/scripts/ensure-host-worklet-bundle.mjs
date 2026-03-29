@@ -124,7 +124,7 @@ function findNodeModulesRoot() {
   throw new Error('Could not locate node_modules for host worklet compilation.')
 }
 
-function getBundleTargets() {
+function getBundleHosts() {
   if (process.platform === 'darwin') {
     return ['darwin-arm64', 'darwin-x64']
   }
@@ -254,8 +254,8 @@ function buildBundleFromTempRoot(tempRoot) {
     '--linked',
   ]
 
-  for (const target of getBundleTargets()) {
-    args.push('--target', target)
+  for (const host of getBundleHosts()) {
+    args.push('--host', host)
   }
 
   args.push(entryFile)

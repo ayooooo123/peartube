@@ -1,6 +1,7 @@
 import XCTest
 @testable import PearTubeDesktop
 
+#if PEARTUBE_ENABLE_EMBEDDED_BAREKIT
 final class BareKitIntegrationTests: XCTestCase {
   private let diagnosticReadIdentityKeyFileCommand: UInt = 255
 
@@ -916,3 +917,10 @@ final class BareKitIntegrationTests: XCTestCase {
     }
   }
 }
+#else
+final class BareKitIntegrationTests: XCTestCase {
+  func testEmbeddedBareKitSupportRequiresExplicitBuildFlag() throws {
+    throw XCTSkip("Embedded BareKit support is not compiled into the default desktop build.")
+  }
+}
+#endif

@@ -18,10 +18,6 @@ settings:
     GENERATE_INFOPLIST_FILE: NO
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: ""
-    FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/BareKit.xcframework/macos-arm64_x86_64"
-    HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework/Headers"
-    OTHER_LDFLAGS: "$(inherited) -framework BareKit"
-    SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/Sources/Support/BareKit-Bridging-Header.h"
 
 packages:
   BareRPC:

@@ -5,6 +5,7 @@ protocol NativeHostSession: AnyObject {
   func terminate()
 }
 
+#if PEARTUBE_ENABLE_EMBEDDED_BAREKIT
 final class EmbeddedBareKitSession: NativeHostSession {
   private let stateLock = NSLock()
   private let ipcQueue = DispatchQueue(label: "com.peartube.desktop.native.barekit-ipc")
@@ -293,3 +294,36 @@ enum EmbeddedBareKitSessionError: LocalizedError {
     }
   }
 }
+#else
+final class EmbeddedBareKitSession: NativeHostSession {
+  init(
+    bundleURL: URL,
+    assetsPath: String?,
+    onData: @escaping @Sendable (Data) -> Void,
+    onLog: @escaping @Sendable (String) -> Void,
+    onClosed: @escaping @Sendable () -> Void
+  ) throws {
+    _ = bundleURL
+    _ = assetsPath
+    _ = onData
+    _ = onLog
+    _ = onClosed
+    throw EmbeddedBareKitSessionError.unavailable
+  }
+
+  func write(_ data: Data) {
+    _ = data
+  }
+
+  func terminate() {}
+}
+
+enum EmbeddedBareKitSessionError: LocalizedError {
+  case unavailable
+  case ipcUnavailable
+
+  var errorDescription: String? {
+    "Embedded BareKit support is not compiled into this desktop build."
+  }
+}
+#endif

@@ -85,7 +85,7 @@ function findBarePackBin() {
   throw new Error('Could not locate bare-pack. Install app dependencies first.')
 }
 
-function getBundleTargets() {
+function getBundleHosts() {
   if (process.platform === 'darwin') {
     return ['darwin-arm64', 'darwin-x64']
   }
@@ -104,8 +104,8 @@ function runBarePack() {
     '--linked',
   ]
 
-  for (const target of getBundleTargets()) {
-    args.push('--target', target)
+  for (const host of getBundleHosts()) {
+    args.push('--host', host)
   }
 
   args.push(entryFile)

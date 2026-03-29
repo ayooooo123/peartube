@@ -13,12 +13,39 @@ export const BRIDGE_COMMANDS = Object.freeze({
   unsubscribeChannel: 10,
   uploadVideo: 11,
   resolveThumbnail: 12,
+  mpvAvailable: 13,
+  mpvCreate: 14,
+  mpvLoadFile: 15,
+  mpvPlay: 16,
+  mpvPause: 17,
+  mpvSeek: 18,
+  mpvGetState: 19,
+  mpvRenderFrame: 20,
+  mpvDestroy: 21,
+  getVideoStats: 22,
+  addComment: 23,
+  listComments: 24,
+  hideComment: 25,
+  removeComment: 26,
+  addReaction: 27,
+  removeReaction: 28,
+  getReactions: 29,
+  getChannelMeta: 30,
+  listChannelVideos: 31,
+  updateChannel: 32,
+  updateChannelAvatar: 33,
+  updateVideoMetadata: 34,
+  deleteVideo: 35,
+  setVideoThumbnailFromFile: 36,
 })
 
 export const BRIDGE_EVENTS = Object.freeze({
   hostReady: 1,
   hostError: 2,
   hostLog: 3,
+  workletReady: 4,
+  feedUpdated: 5,
+  uploadProgress: 6,
 })
 
 class IgnoredRPCFrameError extends Error {}
@@ -94,6 +121,12 @@ function decodeValue(codec, value) {
 const stringArrayCodec = c.array(c.string)
 const optionalStringCodec = optional(c.string)
 const optionalUIntCodec = optional(c.uint)
+const optionalBufferCodec = optional(c.buffer)
+
+export const pushRequestCodec = objectCodec([
+  field('command', c.uint),
+  field('data', optionalBufferCodec, null),
+])
 
 const nativeVideoCodec = objectCodec([
   field('id', c.string),
@@ -112,6 +145,8 @@ const nativeVideoCodec = objectCodec([
   field('blobId', optionalStringCodec, null),
   field('blobsCoreKey', optionalStringCodec, null),
   field('mimeType', optionalStringCodec, null),
+  field('width', optionalUIntCodec, null),
+  field('height', optionalUIntCodec, null),
 ])
 
 const nativeBrowseSectionsCodec = objectCodec([
@@ -176,6 +211,121 @@ export const resolvePlaybackResponseCodec = objectCodec([
   field('url', c.string),
 ])
 
+export const videoStatsRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('videoId', c.string),
+  field('videoPath', optionalStringCodec, null),
+])
+
+export const videoStatsResponseCodec = objectCodec([
+  field('success', c.bool, true),
+  field('status', optionalStringCodec, null),
+  field('progress', c.uint, 0),
+  field('totalBlocks', c.uint, 0),
+  field('downloadedBlocks', c.uint, 0),
+  field('totalBytes', c.uint, 0),
+  field('downloadedBytes', c.uint, 0),
+  field('peerCount', c.uint, 0),
+  field('swarmConnections', c.uint, 0),
+  field('speedMBps', c.string, '0'),
+  field('uploadSpeedMBps', optionalStringCodec, null),
+  field('elapsed', c.uint, 0),
+  field('isComplete', c.bool, false),
+  field('error', optionalStringCodec, null),
+])
+
+export const addCommentRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('videoId', c.string),
+  field('text', c.string),
+  field('parentId', optionalStringCodec, null),
+  field('authorChannelKey', optionalStringCodec, null),
+  field('publicBeeKey', optionalStringCodec, null),
+])
+
+export const addCommentResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('commentId', optionalStringCodec, null),
+  field('queued', c.bool, false),
+  field('error', optionalStringCodec, null),
+])
+
+export const listCommentsRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('videoId', c.string),
+  field('page', c.uint, 0),
+  field('limit', c.uint, 50),
+  field('publicBeeKey', optionalStringCodec, null),
+])
+
+export const commentCodec = objectCodec([
+  field('videoId', c.string),
+  field('commentId', c.string),
+  field('text', c.string),
+  field('authorKeyHex', c.string),
+  field('timestamp', c.uint, 0),
+  field('parentId', optionalStringCodec, null),
+  field('isAdmin', c.bool, false),
+])
+
+export const listCommentsResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('comments', c.array(commentCodec), () => []),
+  field('error', optionalStringCodec, null),
+])
+
+export const commentModerationRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('videoId', c.string),
+  field('commentId', c.string),
+  field('authorChannelKey', optionalStringCodec, null),
+  field('publicBeeKey', optionalStringCodec, null),
+])
+
+export const hideCommentResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('error', optionalStringCodec, null),
+])
+
+export const removeCommentResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('queued', c.bool, false),
+  field('error', optionalStringCodec, null),
+])
+
+export const addReactionRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('videoId', c.string),
+  field('reactionType', c.string),
+  field('authorChannelKey', optionalStringCodec, null),
+  field('publicBeeKey', optionalStringCodec, null),
+])
+
+export const reactionRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('videoId', c.string),
+  field('authorChannelKey', optionalStringCodec, null),
+  field('publicBeeKey', optionalStringCodec, null),
+])
+
+export const reactionMutationResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('queued', c.bool, false),
+  field('error', optionalStringCodec, null),
+])
+
+export const reactionCountCodec = objectCodec([
+  field('reactionType', c.string),
+  field('count', c.uint, 0),
+])
+
+export const getReactionsResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('counts', c.array(reactionCountCodec), () => []),
+  field('userReaction', optionalStringCodec, null),
+  field('error', optionalStringCodec, null),
+])
+
 export const resolveThumbnailRequestCodec = objectCodec([
   field('channelKey', c.string),
   field('publicBeeKey', optionalStringCodec, null),
@@ -214,6 +364,63 @@ export const uploadVideoRequestCodec = objectCodec([
   field('category', optionalStringCodec, null),
 ])
 
+export const getChannelMetaRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('publicBeeKey', optionalStringCodec, null),
+])
+
+export const getChannelMetaResponseCodec = objectCodec([
+  field('channelKey', c.string),
+  field('publicBeeKey', optionalStringCodec, null),
+  field('avatarURL', optionalStringCodec, null),
+  field('name', optionalStringCodec, null),
+  field('description', optionalStringCodec, null),
+  field('videoCount', optionalUIntCodec, null),
+])
+
+export const listChannelVideosRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('publicBeeKey', optionalStringCodec, null),
+])
+
+export const listChannelVideosResponseCodec = objectCodec([
+  field('channelKey', c.string),
+  field('videos', c.array(nativeVideoCodec), () => []),
+])
+
+export const updateChannelRequestCodec = objectCodec([
+  field('name', optionalStringCodec, null),
+  field('description', optionalStringCodec, null),
+])
+
+export const updateChannelAvatarRequestCodec = objectCodec([
+  field('filePath', c.string),
+  field('mimeType', optionalStringCodec, null),
+])
+
+export const updateVideoMetadataRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('videoId', c.string),
+  field('title', optionalStringCodec, null),
+  field('description', optionalStringCodec, null),
+  field('category', optionalStringCodec, null),
+])
+
+export const deleteVideoRequestCodec = objectCodec([
+  field('channelKey', c.string),
+  field('videoId', c.string),
+])
+
+export const setVideoThumbnailFromFileRequestCodec = objectCodec([
+  field('videoId', c.string),
+  field('filePath', c.string),
+])
+
+export const mutationResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('error', optionalStringCodec, null),
+])
+
 export const hostReadyEventCodec = objectCodec([
   field('blobServerPort', optionalUIntCodec, null),
 ])
@@ -224,6 +431,77 @@ export const hostErrorEventCodec = objectCodec([
 
 export const hostLogEventCodec = objectCodec([
   field('message', c.string),
+])
+
+export const workletReadyEventCodec = objectCodec([
+  field('stage', c.string),
+])
+
+export const feedUpdatedEventCodec = objectCodec([
+  field('channelKey', c.string),
+  field('action', c.string),
+])
+
+export const uploadProgressEventCodec = objectCodec([
+  field('videoId', c.string),
+  field('progress', c.uint, 0),
+  field('bytesUploaded', optionalUIntCodec, null),
+  field('totalBytes', optionalUIntCodec, null),
+  field('speed', optionalUIntCodec, null),
+  field('eta', optionalUIntCodec, null),
+])
+
+export const mpvAvailableResponseCodec = objectCodec([
+  field('available', c.bool, false),
+  field('error', optionalStringCodec, null),
+])
+
+export const mpvCreateRequestCodec = objectCodec([
+  field('width', c.uint, 1280),
+  field('height', c.uint, 720),
+])
+
+export const mpvCreateResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('playerId', optionalStringCodec, null),
+  field('frameServerPort', optionalUIntCodec, null),
+  field('error', optionalStringCodec, null),
+])
+
+export const mpvLoadFileRequestCodec = objectCodec([
+  field('playerId', c.string),
+  field('url', c.string),
+])
+
+export const mpvPlayerCommandRequestCodec = objectCodec([
+  field('playerId', c.string),
+])
+
+export const mpvPlayerCommandResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('error', optionalStringCodec, null),
+])
+
+export const mpvSeekRequestCodec = objectCodec([
+  field('playerId', c.string),
+  field('time', c.float64, 0),
+])
+
+export const mpvGetStateResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('currentTime', c.float64, 0),
+  field('duration', c.float64, 0),
+  field('paused', c.bool, true),
+  field('error', optionalStringCodec, null),
+])
+
+export const mpvRenderFrameResponseCodec = objectCodec([
+  field('success', c.bool, false),
+  field('hasFrame', c.bool, false),
+  field('width', c.uint, 0),
+  field('height', c.uint, 0),
+  field('frameData', optionalBufferCodec, null),
+  field('error', optionalStringCodec, null),
 ])
 
 const requestMessageCodec = {

@@ -11,10 +11,25 @@ import {
   encodeEventFrame,
   encodePayload,
   encodeRequestFrame,
+  getChannelMetaRequestCodec,
+  getChannelMetaResponseCodec,
+  feedUpdatedEventCodec,
+  listChannelVideosRequestCodec,
+  listChannelVideosResponseCodec,
+  mpvAvailableResponseCodec,
+  mpvCreateRequestCodec,
+  mpvCreateResponseCodec,
   encodeResponseFrame,
   hostReadyEventCodec,
   searchRequestCodec,
   searchResponseCodec,
+  setVideoThumbnailFromFileRequestCodec,
+  mutationResponseCodec,
+  updateChannelAvatarRequestCodec,
+  updateChannelRequestCodec,
+  updateVideoMetadataRequestCodec,
+  uploadProgressEventCodec,
+  deleteVideoRequestCodec,
 } from './native-rpc.mjs'
 
 test('bootstrap payload roundtrips through compact encoding', () => {
@@ -38,6 +53,8 @@ test('bootstrap payload roundtrips through compact encoding', () => {
         blobId: '0:128:0:4096',
         blobsCoreKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
         mimeType: 'video/mp4',
+        width: 1080,
+        height: 1920,
       }],
       subscriptions: [],
       library: [],
@@ -119,6 +136,28 @@ test('event and response frames decode with stable command ids', () => {
   assert.deepEqual(responseMessage.data, Buffer.from([1, 2, 3]))
 })
 
+test('feed update events roundtrip through compact encoding', () => {
+  const eventFrame = encodeEventFrame({
+    command: BRIDGE_EVENTS.feedUpdated,
+    data: encodePayload(feedUpdatedEventCodec, {
+      channelKey: 'feed',
+      action: 'update',
+    }),
+  })
+
+  const eventMessage = decodeFrame(eventFrame)
+
+  assert.equal(eventMessage.kind, 'event')
+  assert.equal(eventMessage.command, BRIDGE_EVENTS.feedUpdated)
+  assert.deepEqual(
+    decodePayload(feedUpdatedEventCodec, eventMessage.data),
+    {
+      channelKey: 'feed',
+      action: 'update',
+    }
+  )
+})
+
 test('search payloads roundtrip through compact encoding', () => {
   const request = {
     query: 'drum machine',
@@ -145,6 +184,8 @@ test('search payloads roundtrip through compact encoding', () => {
         blobId: '0:128:0:4096',
         blobsCoreKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
         mimeType: 'video/mp4',
+        width: 1080,
+        height: 1920,
       },
     ],
   }
@@ -157,5 +198,182 @@ test('search payloads roundtrip through compact encoding', () => {
   assert.deepEqual(
     decodePayload(searchResponseCodec, encodePayload(searchResponseCodec, response)),
     response
+  )
+})
+
+test('mpv payloads roundtrip through compact encoding', () => {
+  const createRequest = { width: 1280, height: 720 }
+  const createResponse = {
+    success: true,
+    playerId: 'mpv_1',
+    frameServerPort: 48123,
+    error: null,
+  }
+  const availableResponse = {
+    available: true,
+    error: null,
+  }
+
+  assert.equal(BRIDGE_COMMANDS.mpvAvailable, 13)
+  assert.equal(BRIDGE_COMMANDS.mpvCreate, 14)
+  assert.deepEqual(
+    decodePayload(mpvCreateRequestCodec, encodePayload(mpvCreateRequestCodec, createRequest)),
+    createRequest
+  )
+  assert.deepEqual(
+    decodePayload(mpvCreateResponseCodec, encodePayload(mpvCreateResponseCodec, createResponse)),
+    createResponse
+  )
+  assert.deepEqual(
+    decodePayload(mpvAvailableResponseCodec, encodePayload(mpvAvailableResponseCodec, availableResponse)),
+    availableResponse
+  )
+})
+
+test('channel detail payloads roundtrip through compact encoding', () => {
+  const metaRequest = {
+    channelKey: 'channel-a',
+    publicBeeKey: 'bee-a',
+  }
+  const metaResponse = {
+    channelKey: 'channel-a',
+    publicBeeKey: 'bee-a',
+    avatarURL: 'https://example.com/avatar.jpg',
+    name: 'Channel A',
+    description: 'Uploads and creator notes.',
+    videoCount: 12,
+  }
+  const listRequest = {
+    channelKey: 'channel-a',
+    publicBeeKey: null,
+  }
+  const listResponse = {
+    channelKey: 'channel-a',
+    videos: [
+      {
+        id: 'channel-a:video-1',
+        backendVideoID: 'video-1',
+        channelKey: 'channel-a',
+        publicBeeKey: 'bee-a',
+        title: 'Video 1',
+        channelName: 'Channel A',
+        durationText: '1:23',
+        summary: 'Summary',
+        tags: ['studio'],
+        accentHex: '#FF7A59',
+        sections: ['studio'],
+        thumbnailURL: 'https://example.com/thumb.jpg',
+        path: '/videos/video-1.mp4',
+        blobId: '0:128:0:4096',
+        blobsCoreKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        mimeType: 'video/mp4',
+        width: 1080,
+        height: 1920,
+      },
+    ],
+  }
+
+  assert.equal(BRIDGE_COMMANDS.getChannelMeta, 30)
+  assert.equal(BRIDGE_COMMANDS.listChannelVideos, 31)
+  assert.deepEqual(
+    decodePayload(getChannelMetaRequestCodec, encodePayload(getChannelMetaRequestCodec, metaRequest)),
+    metaRequest
+  )
+  assert.deepEqual(
+    decodePayload(getChannelMetaResponseCodec, encodePayload(getChannelMetaResponseCodec, metaResponse)),
+    metaResponse
+  )
+  assert.deepEqual(
+    decodePayload(listChannelVideosRequestCodec, encodePayload(listChannelVideosRequestCodec, listRequest)),
+    listRequest
+  )
+  assert.deepEqual(
+    decodePayload(listChannelVideosResponseCodec, encodePayload(listChannelVideosResponseCodec, listResponse)),
+    listResponse
+  )
+})
+
+test('studio mutation payloads roundtrip through compact encoding', () => {
+  const updateChannelRequest = {
+    name: 'New Channel Name',
+    description: 'Updated channel description.',
+  }
+  const updateChannelAvatarRequest = {
+    filePath: '/tmp/avatar.jpg',
+    mimeType: 'image/jpeg',
+  }
+  const updateVideoMetadataRequest = {
+    channelKey: 'channel-a',
+    videoId: 'video-1',
+    title: 'Updated Title',
+    description: 'Updated description.',
+    category: 'Music',
+  }
+  const deleteVideoRequest = {
+    channelKey: 'channel-a',
+    videoId: 'video-1',
+  }
+  const setVideoThumbnailFromFileRequest = {
+    videoId: 'video-1',
+    filePath: '/tmp/thumb.jpg',
+  }
+  const mutationResponse = {
+    success: true,
+    error: null,
+  }
+
+  assert.equal(BRIDGE_COMMANDS.updateChannel, 32)
+  assert.equal(BRIDGE_COMMANDS.updateChannelAvatar, 33)
+  assert.equal(BRIDGE_COMMANDS.updateVideoMetadata, 34)
+  assert.equal(BRIDGE_COMMANDS.deleteVideo, 35)
+  assert.equal(BRIDGE_COMMANDS.setVideoThumbnailFromFile, 36)
+  assert.deepEqual(
+    decodePayload(updateChannelRequestCodec, encodePayload(updateChannelRequestCodec, updateChannelRequest)),
+    updateChannelRequest
+  )
+  assert.deepEqual(
+    decodePayload(updateChannelAvatarRequestCodec, encodePayload(updateChannelAvatarRequestCodec, updateChannelAvatarRequest)),
+    updateChannelAvatarRequest
+  )
+  assert.deepEqual(
+    decodePayload(updateVideoMetadataRequestCodec, encodePayload(updateVideoMetadataRequestCodec, updateVideoMetadataRequest)),
+    updateVideoMetadataRequest
+  )
+  assert.deepEqual(
+    decodePayload(deleteVideoRequestCodec, encodePayload(deleteVideoRequestCodec, deleteVideoRequest)),
+    deleteVideoRequest
+  )
+  assert.deepEqual(
+    decodePayload(setVideoThumbnailFromFileRequestCodec, encodePayload(setVideoThumbnailFromFileRequestCodec, setVideoThumbnailFromFileRequest)),
+    setVideoThumbnailFromFileRequest
+  )
+  assert.deepEqual(
+    decodePayload(mutationResponseCodec, encodePayload(mutationResponseCodec, mutationResponse)),
+    mutationResponse
+  )
+})
+
+test('upload progress events roundtrip through compact encoding', () => {
+  const payload = {
+    videoId: 'video-1',
+    progress: 42,
+    bytesUploaded: 1024,
+    totalBytes: 2048,
+    speed: 512,
+    eta: 2,
+  }
+  const eventFrame = encodeEventFrame({
+    command: BRIDGE_EVENTS.uploadProgress,
+    data: encodePayload(uploadProgressEventCodec, payload),
+  })
+
+  const eventMessage = decodeFrame(eventFrame)
+
+  assert.equal(BRIDGE_EVENTS.uploadProgress, 6)
+  assert.equal(eventMessage.kind, 'event')
+  assert.equal(eventMessage.command, BRIDGE_EVENTS.uploadProgress)
+  assert.deepEqual(
+    decodePayload(uploadProgressEventCodec, eventMessage.data),
+    payload
   )
 })

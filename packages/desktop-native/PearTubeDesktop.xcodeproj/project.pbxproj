@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1AA02E0DF2E25F050FFBC5D5 /* MpvPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA7E8524B637A3B9AF2DDDF2 /* MpvPlayerView.swift */; };
 		1ED22FE81E7F498968FDC219 /* ProtocolLineBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */; };
 		300AD503144CF5506F27ED1C /* BridgeRPCChannelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D2D094F14FA54E84FE00005 /* BridgeRPCChannelTests.swift */; };
 		324E8003B7A04475EA06AFA7 /* SectionEmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F06147CA72B56040D4F65FB /* SectionEmptyStateView.swift */; };
@@ -15,10 +16,12 @@
 		49C847A5D592CE82E6A7307C /* PearTubeDesktopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */; };
 		4A908E01C3F46D70313ADFAB /* NativeBridgeRPC.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4291941CE32FE46CB154875 /* NativeBridgeRPC.swift */; };
 		533E2681ED0B0D4A4B11D11A /* BridgeRPCChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC0C962FF8C1B47F189D8A6 /* BridgeRPCChannel.swift */; };
+		77C4D5FC2AE24ED24A3ED43B /* EmbeddedBareKitSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B639C8D5D0B0D05333697485 /* EmbeddedBareKitSession.swift */; };
 		8874F56E2BD2B922A4BA5C7B /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7175777FE7EB2ED57D81E6F9 /* AppState.swift */; };
 		AE360874F598E0D1DAA50689 /* AppCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28AE8EA242EEDC984D56DDE8 /* AppCommands.swift */; };
 		B6C6A21DABEA67966D07BBA5 /* BareRPC in Frameworks */ = {isa = PBXBuildFile; productRef = C67321BB6FD07DA684BAFCC8 /* BareRPC */; };
 		C0A331D388D7CA666D654530 /* AppSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 473A62DA158C871632E018CA /* AppSection.swift */; };
+		C5F7BEE3F0C35CF7E4F8A431 /* BareKitIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39CA4A93CD178475C2922D53 /* BareKitIntegrationTests.swift */; };
 		C664B5BE30943A3931CAC128 /* VideoDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 258C43C8FA77D46F45DDAD07 /* VideoDetailView.swift */; };
 		D0A004BABD4119FAA8265AB4 /* NativeVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A710571B74E25FAFCFEFCBB /* NativeVideo.swift */; };
 		E6DB0A0138800DD757FEFACA /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 766601D0D17A7572CEC138EC /* SettingsView.swift */; };
@@ -27,6 +30,7 @@
 		F953E672F2AA6BC58967D580 /* HostBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D7848BE612D57A42D5D136 /* HostBridgeService.swift */; };
 		FA411943C07D7FB12845B20D /* PearTubeDesktopApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5F5C579330B5D98478CB80 /* PearTubeDesktopApp.swift */; };
 		FC9CB602EBAE5CC12020924F /* NativeBrowseSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6C763BEE0CE4C4C7F4F41A2 /* NativeBrowseSnapshot.swift */; };
+		FCC82B1D6923EF553ECA232A /* BareRuntimeSidecarSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54CE923A71830CE6DC046F96 /* BareRuntimeSidecarSession.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -45,9 +49,11 @@
 		258C43C8FA77D46F45DDAD07 /* VideoDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoDetailView.swift; sourceTree = "<group>"; };
 		28AE8EA242EEDC984D56DDE8 /* AppCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppCommands.swift; sourceTree = "<group>"; };
 		2A710571B74E25FAFCFEFCBB /* NativeVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeVideo.swift; sourceTree = "<group>"; };
+		39CA4A93CD178475C2922D53 /* BareKitIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareKitIntegrationTests.swift; sourceTree = "<group>"; };
 		40D7848BE612D57A42D5D136 /* HostBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostBridgeService.swift; sourceTree = "<group>"; };
 		473A62DA158C871632E018CA /* AppSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSection.swift; sourceTree = "<group>"; };
 		4F06147CA72B56040D4F65FB /* SectionEmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionEmptyStateView.swift; sourceTree = "<group>"; };
+		54CE923A71830CE6DC046F96 /* BareRuntimeSidecarSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareRuntimeSidecarSession.swift; sourceTree = "<group>"; };
 		5D6BAF2F7A554E305ECEC681 /* PearTubeDesktop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PearTubeDesktop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		63719969BBA69B73A7A712EA /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		7175777FE7EB2ED57D81E6F9 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -55,11 +61,14 @@
 		A6371626F67CB4A3CEE1DB14 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A77AF744D09EEDA796275141 /* FeedListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedListView.swift; sourceTree = "<group>"; };
 		AE1F2F95F9DEBD76DB721994 /* PearTubeDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PearTubeDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B639C8D5D0B0D05333697485 /* EmbeddedBareKitSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedBareKitSession.swift; sourceTree = "<group>"; };
 		B6C763BEE0CE4C4C7F4F41A2 /* NativeBrowseSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBrowseSnapshot.swift; sourceTree = "<group>"; };
 		BAC0C962FF8C1B47F189D8A6 /* BridgeRPCChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeRPCChannel.swift; sourceTree = "<group>"; };
 		C4291941CE32FE46CB154875 /* NativeBridgeRPC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBridgeRPC.swift; sourceTree = "<group>"; };
 		C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PearTubeDesktopTests.swift; sourceTree = "<group>"; };
 		EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolLineBuffer.swift; sourceTree = "<group>"; };
+		EA7E8524B637A3B9AF2DDDF2 /* MpvPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MpvPlayerView.swift; sourceTree = "<group>"; };
+		FA4598EE4DE0B4ECF4C448EB /* BareKit-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "BareKit-Bridging-Header.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -96,7 +105,10 @@
 		2B4973E3E6C51FB08BC5CA07 /* Support */ = {
 			isa = PBXGroup;
 			children = (
+				FA4598EE4DE0B4ECF4C448EB /* BareKit-Bridging-Header.h */,
+				54CE923A71830CE6DC046F96 /* BareRuntimeSidecarSession.swift */,
 				BAC0C962FF8C1B47F189D8A6 /* BridgeRPCChannel.swift */,
+				B639C8D5D0B0D05333697485 /* EmbeddedBareKitSession.swift */,
 				C4291941CE32FE46CB154875 /* NativeBridgeRPC.swift */,
 				EA251C6320F7033876E0D80F /* ProtocolLineBuffer.swift */,
 			);
@@ -118,6 +130,7 @@
 		83142860037B1F9DCC24BB70 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				39CA4A93CD178475C2922D53 /* BareKitIntegrationTests.swift */,
 				1D2D094F14FA54E84FE00005 /* BridgeRPCChannelTests.swift */,
 				C60EFE4EF810C5FB687BE8F4 /* PearTubeDesktopTests.swift */,
 			);
@@ -139,6 +152,7 @@
 			children = (
 				A6371626F67CB4A3CEE1DB14 /* ContentView.swift */,
 				A77AF744D09EEDA796275141 /* FeedListView.swift */,
+				EA7E8524B637A3B9AF2DDDF2 /* MpvPlayerView.swift */,
 				4F06147CA72B56040D4F65FB /* SectionEmptyStateView.swift */,
 				766601D0D17A7572CEC138EC /* SettingsView.swift */,
 				63719969BBA69B73A7A712EA /* SidebarView.swift */,
@@ -267,7 +281,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nFRAMEWORK_DEST=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$DEST/Generated\"\nif [ -d \"$SRCROOT/Resources/Generated\" ]; then\n  rsync -a \"$SRCROOT/Resources/Generated/\" \"$DEST/Generated/\"\nfi\nif [ -d \"$SRCROOT/Resources/Runtime\" ]; then\n  mkdir -p \"$DEST/Runtime\"\n  rsync -a \"$SRCROOT/Resources/Runtime/\" \"$DEST/Runtime/\"\n  if [ -f \"$DEST/Runtime/bare\" ]; then\n    chmod +x \"$DEST/Runtime/bare\"\n  fi\nfi\nif [ -d \"$SRCROOT/Vendor/BareAddons\" ]; then\n  mkdir -p \"$FRAMEWORK_DEST\"\n  find \"$SRCROOT/Vendor/BareAddons\" -maxdepth 1 -type d -name '*.framework' -exec basename {} \\; | while read -r framework; do\n    rm -rf \"$FRAMEWORK_DEST/$framework\"\n  done\n  rsync -a \"$SRCROOT/Vendor/BareAddons/\" \"$FRAMEWORK_DEST/\"\nfi\n";
+			shellScript = "set -euo pipefail\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nFRAMEWORK_DEST=\"$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH\"\nmkdir -p \"$DEST/Generated\"\nif [ -d \"$SRCROOT/Resources/Generated\" ]; then\n  rsync -a \"$SRCROOT/Resources/Generated/\" \"$DEST/Generated/\"\nfi\nif [ -d \"$SRCROOT/Resources/Runtime\" ]; then\n  mkdir -p \"$DEST/Runtime\"\n  rsync -a \"$SRCROOT/Resources/Runtime/\" \"$DEST/Runtime/\"\n  if [ -f \"$DEST/Runtime/bare\" ]; then\n    chmod +x \"$DEST/Runtime/bare\"\n  fi\nfi\nif [ -d \"$SRCROOT/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework\" ]; then\n  mkdir -p \"$FRAMEWORK_DEST\"\n  rm -rf \"$FRAMEWORK_DEST/BareKit.framework\"\n  rsync -a \"$SRCROOT/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework\" \"$FRAMEWORK_DEST/\"\nfi\nif [ -d \"$SRCROOT/Vendor/BareAddons\" ]; then\n  mkdir -p \"$FRAMEWORK_DEST\"\n  mkdir -p \"$DEST/BareAddons\"\n  find \"$SRCROOT/Vendor/BareAddons\" -maxdepth 1 -type d -name '*.framework' -exec basename {} \\; | while read -r framework; do\n    rm -rf \"$FRAMEWORK_DEST/$framework\"\n    rm -rf \"$DEST/BareAddons/$framework\"\n  done\n  rsync -a \"$SRCROOT/Vendor/BareAddons/\" \"$FRAMEWORK_DEST/\"\n  rsync -a \"$SRCROOT/Vendor/BareAddons/\" \"$DEST/BareAddons/\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -276,6 +290,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C5F7BEE3F0C35CF7E4F8A431 /* BareKitIntegrationTests.swift in Sources */,
 				300AD503144CF5506F27ED1C /* BridgeRPCChannelTests.swift in Sources */,
 				49C847A5D592CE82E6A7307C /* PearTubeDesktopTests.swift in Sources */,
 			);
@@ -288,10 +303,13 @@
 				AE360874F598E0D1DAA50689 /* AppCommands.swift in Sources */,
 				C0A331D388D7CA666D654530 /* AppSection.swift in Sources */,
 				8874F56E2BD2B922A4BA5C7B /* AppState.swift in Sources */,
+				FCC82B1D6923EF553ECA232A /* BareRuntimeSidecarSession.swift in Sources */,
 				533E2681ED0B0D4A4B11D11A /* BridgeRPCChannel.swift in Sources */,
 				F811BF5721CFF5D378111D39 /* ContentView.swift in Sources */,
+				77C4D5FC2AE24ED24A3ED43B /* EmbeddedBareKitSession.swift in Sources */,
 				37993C50C7C90977E0F1CC33 /* FeedListView.swift in Sources */,
 				F953E672F2AA6BC58967D580 /* HostBridgeService.swift in Sources */,
+				1AA02E0DF2E25F050FFBC5D5 /* MpvPlayerView.swift in Sources */,
 				4A908E01C3F46D70313ADFAB /* NativeBridgeRPC.swift in Sources */,
 				FC9CB602EBAE5CC12020924F /* NativeBrowseSnapshot.swift in Sources */,
 				D0A004BABD4119FAA8265AB4 /* NativeVideo.swift in Sources */,
@@ -354,6 +372,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				FRAMEWORK_SEARCH_PATHS = "$(inherited) $(SRCROOT)/Vendor/BareKit.xcframework/macos-arm64_x86_64";
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -363,13 +382,16 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework/Headers";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				OTHER_LDFLAGS = "$(inherited) -framework BareKit";
 				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.desktop.native;
 				PRODUCT_NAME = PearTubeDesktop;
 				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Sources/Support/BareKit-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.10;
 			};
@@ -419,7 +441,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_ENTITLEMENTS = Resources/PearTubeDesktop.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -435,7 +456,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_ENTITLEMENTS = Resources/PearTubeDesktop.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -486,6 +506,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				FRAMEWORK_SEARCH_PATHS = "$(inherited) $(SRCROOT)/Vendor/BareKit.xcframework/macos-arm64_x86_64";
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -501,14 +522,17 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework/Headers";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_LDFLAGS = "$(inherited) -framework BareKit";
 				PRODUCT_BUNDLE_IDENTIFIER = com.peartube.desktop.native;
 				PRODUCT_NAME = PearTubeDesktop;
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Sources/Support/BareKit-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.10;
 			};

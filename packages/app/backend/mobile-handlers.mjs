@@ -108,7 +108,7 @@ export function attachMobileHandlers(B, deps) {
     if (!ch) return { success: false, error: 'No active channel' }; if (!ch.writable) return { success: false, error: 'Channel is read-only' }
     try { await ch.deleteVideo(r.videoId); return { success: true } } catch (e) { return { success: false, error: e?.message } }
   }
-  B.prefetchVideo = async (r) => { await api.prefetchVideo(r.channelKey, r.videoId, r.publicBeeKey); return { success: true } }
+  B.prefetchVideo = async (r) => api.prefetchVideo(r.channelKey, r.videoId, r.publicBeeKey)
   B.getVideoStats = async (r) => ({ stats: { videoId: r.videoId, channelKey: r.channelKey, ...(await api.getVideoStats(r.channelKey, r.videoId) || {}) } })
 
   // --- Subscription handlers ---

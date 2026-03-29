@@ -8,6 +8,8 @@ export function startHost(options: {
   stream: any
   createBackendImpl?: (options: any) => Promise<{ destroy?: () => Promise<void> | void }>
   onLifecycle?: (event: HostLifecycleEvent) => void
+  onFeedUpdate?: () => void
+  onVideoStats?: (...args: any[]) => void
 }): Promise<{
   stream: any
   entrypoint: string

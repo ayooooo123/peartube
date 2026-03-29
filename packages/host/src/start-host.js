@@ -2,6 +2,22 @@ import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from './contracts
 
 function noop() {}
 
+function resolveDebugLogPath() {
+  return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
+}
+
+async function appendDebugLine(line) {
+  const filePath = resolveDebugLogPath()
+  if (!filePath) return
+
+  try {
+    const fsModule = await import('bare-fs')
+    const fs = fsModule?.default ?? fsModule
+    if (typeof fs?.appendFileSync !== 'function') return
+    fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
+  } catch {}
+}
+
 function createLifecycleController() {
   const listeners = new Set()
 
@@ -23,7 +39,9 @@ function validateStartOptions(options) {
     entrypoint,
     args = [],
     stream,
-    createBackendImpl
+    createBackendImpl,
+    onFeedUpdate,
+    onVideoStats
   } = options
 
   if (platform !== 'desktop' && platform !== 'mobile') {
@@ -49,6 +67,14 @@ function validateStartOptions(options) {
   if (createBackendImpl !== undefined && typeof createBackendImpl !== 'function') {
     throw new Error('startHost requires createBackendImpl to be a function when provided')
   }
+
+  if (onFeedUpdate !== undefined && typeof onFeedUpdate !== 'function') {
+    throw new Error('startHost requires onFeedUpdate to be a function when provided')
+  }
+
+  if (onVideoStats !== undefined && typeof onVideoStats !== 'function') {
+    throw new Error('startHost requires onVideoStats to be a function when provided')
+  }
 }
 
 async function loadCreateBackend() {
@@ -72,7 +98,9 @@ export async function startHost(options = {}) {
     entrypoint,
     args = [],
     stream,
-    createBackendImpl
+    createBackendImpl,
+    onFeedUpdate,
+    onVideoStats
   } = options
 
   const lifecycle = createLifecycleController()
@@ -99,14 +127,18 @@ export async function startHost(options = {}) {
   })
 
   const createBackend = createBackendImpl ?? await loadCreateBackend()
+  await appendDebugLine(`[startHost] createBackend loaded platform=${platform} storagePath=${storagePath}`)
 
   try {
+    await appendDebugLine('[startHost] invoking createBackend')
     const backendSession = await createBackend({
       platform,
       storagePath,
       stream,
       entrypoint,
       args,
+      onFeedUpdate,
+      onVideoStats,
       onReady(payload = {}) {
         const readyData = {
           blobServerPort: payload?.blobServerPort ?? null,
@@ -115,6 +147,9 @@ export async function startHost(options = {}) {
 
         settleReady(readyData)
         emitLifecycle({ type: 'host.ready', data: readyData })
+        void appendDebugLine(
+          `[startHost] onReady blobServerPort=${readyData.blobServerPort} protocolVersion=${readyData.protocolVersion}`
+        )
       },
       onError(error) {
         const normalized = normalizeHostError(error)
@@ -125,8 +160,12 @@ export async function startHost(options = {}) {
           message: normalized.message,
           retryable: Boolean(normalized.retryable)
         })
+        void appendDebugLine(
+          `[startHost] onError code=${normalized.code ?? HOST_ERROR_CODES.HOST_START_FAILED} message=${normalized.message}`
+        )
       }
     })
+    await appendDebugLine('[startHost] createBackend resolved')
 
     let terminated = false
 
@@ -149,6 +188,9 @@ export async function startHost(options = {}) {
   } catch (error) {
     const normalized = normalizeHostError(error)
     failReady(normalized)
+    await appendDebugLine(
+      `[startHost] createBackend threw code=${normalized.code ?? HOST_ERROR_CODES.HOST_START_FAILED} message=${normalized.message}`
+    )
     emitLifecycle({
       type: 'host.error',
       code: normalized.code ?? HOST_ERROR_CODES.HOST_START_FAILED,

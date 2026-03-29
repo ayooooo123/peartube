@@ -35,7 +35,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable, Codable {
     case .subscriptions: return "Keep up with subscribed channels without dropping into the web renderer."
     case .library: return "Review the videos and channels tied to this device's identities."
     case .studio: return "Manage your own channel surface and creator workflow from the native shell."
-    case .diagnostics: return "Inspect host status, logs, and storage details while the Bare backend runs."
+    case .diagnostics: return "Inspect host status, logs, and storage details while the embedded Bare backend runs."
     }
   }
 

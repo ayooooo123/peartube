@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "name": "empty",
@@ -507,6 +507,48 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "blobId",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "blobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "mimeType",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "thumbnailBlobId",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "thumbnailBlobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "thumbnailMimeType",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 3
         }
       ]
     },
@@ -579,6 +621,24 @@
           "required": false,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "blobId",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "blobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "mimeType",
+          "required": false,
+          "type": "string",
+          "version": 3
         }
       ]
     },

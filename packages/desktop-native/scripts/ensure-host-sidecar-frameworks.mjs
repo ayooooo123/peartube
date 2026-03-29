@@ -6,7 +6,7 @@ import { getSidecarAddonRoots } from './sidecar-addon-roots.mjs'
 const packageRoot = path.resolve(import.meta.dirname, '..')
 const repoRoot = path.resolve(packageRoot, '..', '..')
 
-const bundleFile = path.join(packageRoot, 'Resources', 'Generated', 'native-host-sidecar.bundle')
+const bundleFile = path.join(packageRoot, 'Resources', 'Generated', 'native-host-worklet.bundle')
 const frameworkOutputDir = path.join(packageRoot, 'Vendor', 'BareAddons')
 const scriptMtime = fs.statSync(new URL(import.meta.url)).mtimeMs
 const addonSourceRoots = getSidecarAddonRoots(repoRoot)
@@ -133,7 +133,7 @@ function ensureFrameworks() {
   if (addonPackages.length === 0) {
     fs.rmSync(frameworkOutputDir, { recursive: true, force: true })
     fs.mkdirSync(frameworkOutputDir, { recursive: true })
-    console.log('[bundle:native-sidecar:addons] No linked addons detected')
+    console.log('[bundle:native-worklet:addons] No linked addons detected')
     return
   }
 
@@ -152,7 +152,7 @@ function ensureFrameworks() {
 
     args.push('--out', frameworkOutputDir, packageDir)
 
-    console.log(`[bundle:native-sidecar:addons] Linking ${packageName}`)
+    console.log(`[bundle:native-worklet:addons] Linking ${packageName}`)
     const result = spawnSync(bareLinkBin, args, {
       cwd: packageRoot,
       stdio: 'inherit',
@@ -173,8 +173,8 @@ const staleFrameworks = !missingFrameworks && frameworksMtime < bundleMtime
 
 if (forced || missingFrameworks || staleFrameworks) {
   const reason = forced ? 'forced rebuild' : missingFrameworks ? 'missing frameworks' : 'stale frameworks'
-  console.log(`[bundle:native-sidecar:addons] Rebuilding (${reason})`)
+  console.log(`[bundle:native-worklet:addons] Rebuilding (${reason})`)
   ensureFrameworks()
 } else {
-  console.log('[bundle:native-sidecar:addons] Linked addon frameworks are up to date')
+  console.log('[bundle:native-worklet:addons] Linked addon frameworks are up to date')
 }

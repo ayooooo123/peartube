@@ -1,5 +1,11 @@
 import Foundation
 
+enum NativeVideoPresentationStyle: Equatable {
+  case landscape
+  case square
+  case portrait
+}
+
 struct NativeVideo: Identifiable, Hashable, Codable {
   let id: String
   let backendVideoID: String
@@ -17,6 +23,8 @@ struct NativeVideo: Identifiable, Hashable, Codable {
   let blobId: String?
   let blobsCoreKey: String?
   let mimeType: String?
+  let width: Int?
+  let height: Int?
 
   init(
     id: String,
@@ -34,7 +42,9 @@ struct NativeVideo: Identifiable, Hashable, Codable {
     path: String? = nil,
     blobId: String? = nil,
     blobsCoreKey: String? = nil,
-    mimeType: String? = nil
+    mimeType: String? = nil,
+    width: Int? = nil,
+    height: Int? = nil
   ) {
     self.id = id
     self.backendVideoID = backendVideoID
@@ -52,6 +62,8 @@ struct NativeVideo: Identifiable, Hashable, Codable {
     self.blobId = blobId
     self.blobsCoreKey = blobsCoreKey
     self.mimeType = mimeType
+    self.width = width
+    self.height = height
   }
 
   var playbackReference: String {
@@ -67,9 +79,79 @@ struct NativeVideo: Identifiable, Hashable, Codable {
     }
     return backendVideoID
   }
+
+  var intrinsicAspectRatio: Double? {
+    guard let width, let height, width > 0, height > 0 else {
+      return nil
+    }
+
+    return Double(width) / Double(height)
+  }
+
+  var presentationStyle: NativeVideoPresentationStyle {
+    guard let intrinsicAspectRatio else {
+      return .landscape
+    }
+
+    if intrinsicAspectRatio < 0.8 {
+      return .portrait
+    }
+
+    if intrinsicAspectRatio < 1.2 {
+      return .square
+    }
+
+    return .landscape
+  }
+
+  var displayAspectRatio: Double {
+    switch presentationStyle {
+    case .portrait:
+      return 9.0 / 16.0
+    case .square:
+      return 1.0
+    case .landscape:
+      return 16.0 / 9.0
+    }
+  }
+
+  var heroAspectRatio: Double {
+    guard let intrinsicAspectRatio else {
+      return 16.0 / 9.0
+    }
+
+    return min(max(intrinsicAspectRatio, 9.0 / 16.0), 16.0 / 9.0)
+  }
 }
 
 extension NativeVideo {
+  func updating(
+    title: String? = nil,
+    summary: String? = nil,
+    thumbnailURL: URL? = nil
+  ) -> NativeVideo {
+    NativeVideo(
+      id: id,
+      backendVideoID: backendVideoID,
+      channelKey: channelKey,
+      publicBeeKey: publicBeeKey,
+      title: title ?? self.title,
+      channelName: channelName,
+      durationText: durationText,
+      summary: summary ?? self.summary,
+      tags: tags,
+      accentHex: accentHex,
+      sections: sections,
+      thumbnailURL: thumbnailURL ?? self.thumbnailURL,
+      path: path,
+      blobId: blobId,
+      blobsCoreKey: blobsCoreKey,
+      mimeType: mimeType,
+      width: width,
+      height: height
+    )
+  }
+
   static let samples: [NativeVideo] = [
     NativeVideo(
       id: "sample-native-shell-walkthrough",

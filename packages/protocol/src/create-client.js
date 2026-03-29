@@ -3,6 +3,22 @@ import DefaultHRPC from '../../spec/spec/hrpc/index.js'
 
 import { PROTOCOL_EVENT_BINDINGS, PROTOCOL_EVENTS } from './event-map.js'
 
+function resolveDebugLogPath() {
+  return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
+}
+
+async function appendDebugLine(line) {
+  const filePath = resolveDebugLogPath()
+  if (!filePath) return
+
+  try {
+    const fsModule = await import('bare-fs')
+    const fs = fsModule?.default ?? fsModule
+    if (typeof fs?.appendFileSync !== 'function') return
+    fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
+  } catch {}
+}
+
 const NAMESPACE_METHODS = Object.freeze({
   identity: {
     createIdentity: 'createIdentity',
@@ -213,6 +229,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
 
   const events = createEmitter()
   const rpc = new (HRPCImpl ?? loadDefaultHRPC())(stream)
+  void appendDebugLine('[createProtocolClient] HRPC client constructed')
 
   let lastReady = null
   const emitHostReady = (payload) => {
@@ -266,6 +283,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     if (lastReady) return lastReady
 
     if (!readyPromise) {
+      void appendDebugLine('[createProtocolClient] ready() creating readyPromise')
       readyPromise = new Promise((resolve, reject) => {
         let settled = false
         const cleanup = () => {
@@ -294,7 +312,9 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
 
         ;(async () => {
           try {
+            await appendDebugLine('[createProtocolClient] getStatus request start')
             const statusResponse = await rpc.getStatus({})
+            await appendDebugLine('[createProtocolClient] getStatus response received')
             const status = normalizeReadyPayload(statusResponse)
 
             if (status.protocolVersion !== PROTOCOL_VERSION) {
@@ -306,6 +326,9 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
 
             settleResolve(emitHostReady(status))
           } catch (error) {
+            await appendDebugLine(
+              `[createProtocolClient] getStatus failed ${error?.code || 'ERR'} ${error?.message || String(error)}`
+            )
             settleReject(
               emitHostError(
                 error?.code === HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH

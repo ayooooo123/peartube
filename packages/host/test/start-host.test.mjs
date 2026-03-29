@@ -75,3 +75,27 @@ test('startHost terminate is idempotent', async (t) => {
 
   t.is(destroyCalls, 1)
 })
+
+test('startHost forwards feed and video callbacks to createBackend', async (t) => {
+  const calls = []
+
+  const session = await startHost({
+    platform: 'desktop',
+    storagePath: '/tmp/peartube-host',
+    entrypoint: 'sidecar-entry',
+    args: [],
+    stream: createFakeStream(),
+    onFeedUpdate: () => calls.push('feed'),
+    onVideoStats: (...args) => calls.push(['stats', ...args]),
+    createBackendImpl: async ({ onReady, onFeedUpdate, onVideoStats }) => {
+      onFeedUpdate?.()
+      onVideoStats?.('channel-key', 'video-id', { peerCount: 3 })
+      onReady({ blobServerPort: 7777, protocolVersion: 1 })
+      return { destroy: async () => {} }
+    }
+  })
+
+  await session.waitUntilReady()
+
+  t.alike(calls, ['feed', ['stats', 'channel-key', 'video-id', { peerCount: 3 }]])
+})

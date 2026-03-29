@@ -10,7 +10,7 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel, loadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel, loadPublicBee, pairDevice as pairChannelDevice, retainSwarmDiscovery, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
@@ -549,14 +549,16 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           try {
             const keyBuf = b4a.from(blobsCoreKey, 'hex')
             const discoveryKey = crypto.discoveryKey(keyBuf)
-            ctx.swarm.join(discoveryKey)
+            retainSwarmDiscovery(ctx, discoveryKey, {
+              label: `blobs:${String(blobsCoreKey).slice(0, 16)}`
+            })
           } catch {}
         }
 
         // Return URL instantly
         return getVideoUrlFromBlob(ctx, blobsCoreKey, blobId, {
           mimeType: mimeType || 'video/mp4',
-          instant: true
+          instant: false
         })
       }
 
@@ -583,14 +585,16 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           try {
             const keyBuf = b4a.from(blobsKeyHex, 'hex')
             const discoveryKey = crypto.discoveryKey(keyBuf)
-            ctx.swarm.join(discoveryKey)
+            retainSwarmDiscovery(ctx, discoveryKey, {
+              label: `blobs:${String(blobsKeyHex).slice(0, 16)}`
+            })
           } catch {}
         }
 
         // Return URL instantly - blob server handles fetching
         return getVideoUrlFromBlob(ctx, blobsKeyHex, meta.blobId, {
           mimeType: meta.mimeType,
-          instant: true  // Zero-wait mode
+          instant: false
         })
       }
 
@@ -612,7 +616,9 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       if (ctx.swarm && blobEntry.blobsKey) {
         try {
           const discoveryKey = crypto.discoveryKey(blobEntry.blobsKey)
-          ctx.swarm.join(discoveryKey)
+          retainSwarmDiscovery(ctx, discoveryKey, {
+            label: `blobs:${blobsKeyHex.slice(0, 16)}`
+          })
         } catch {}
       }
 
@@ -999,11 +1005,31 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       if (!publicFeed) {
         return { entries: [], stats: { totalEntries: 0, hiddenCount: 0, peerCount: 0 } };
       }
-      // Pre-alpha: only return entries with a PublicBee key so UIs never fall back to Autobase.
-      const feed = publicFeed.getFeed().filter(e => typeof e.publicBeeKey === 'string' && e.publicBeeKey.length > 0);
+      const rawFeed = publicFeed.getFeed();
+      const feed = rawFeed
+        .map((entry) => ({
+          channelKey: entry?.channelKey || entry?.driveKey || '',
+          publicBeeKey: entry?.publicBeeKey || null,
+          channelName: entry?.channelName || null,
+          videoCount: entry?.videoCount || 0,
+          peerCount: entry?.peerCount || 0,
+          lastSeen: entry?.lastSeen || entry?.addedAt || 0,
+        }))
+        .filter((entry) => typeof entry.channelKey === 'string' && entry.channelKey.length > 0)
       const stats = publicFeed.getStats();
-      console.log(`[API] Returning ${feed.length} feed entries (${stats.peerCount} peers)`);
-      return { entries: feed, stats };
+      const keyedEntries = feed.filter((e) => typeof e.publicBeeKey === 'string' && e.publicBeeKey.length > 0).length;
+      const unkeyedEntries = feed.length - keyedEntries;
+      console.log(
+        `[API] Returning ${feed.length} feed entries (${stats.peerCount} peers, keyed=${keyedEntries}, fallback=${unkeyedEntries}, raw=${rawFeed.length})`
+      );
+      return {
+        entries: feed,
+        stats: {
+          ...stats,
+          keyedEntries,
+          unkeyedEntries,
+        },
+      };
     },
 
     /**
@@ -1229,7 +1255,9 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
 
           if (ctx.swarm && core.discoveryKey) {
             try {
-              ctx.swarm.join(core.discoveryKey)
+              retainSwarmDiscovery(ctx, core.discoveryKey, {
+                label: `prefetch:${blobMeta.blobsCoreKey.slice(0, 16)}`
+              })
             } catch {}
           }
 
@@ -1313,6 +1341,26 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           const headBlocks = getHeadBlockCount(totalBlocks, totalBytes)
           const tailBlocks = getTailBlockCount(totalBlocks, totalBytes)
           const midBlocks = getMidBlockCount(totalBlocks, totalBytes)
+          let playbackReadyResolved = false
+          let playbackReadyTimeout = null
+          let resolvePlaybackReady = null
+          const playbackReady = new Promise((resolve) => {
+            resolvePlaybackReady = () => {
+              if (playbackReadyResolved) return
+              playbackReadyResolved = true
+              if (playbackReadyTimeout) clearTimeout(playbackReadyTimeout)
+              resolve()
+            }
+          })
+          playbackReadyTimeout = setTimeout(() => {
+            console.log('[API] Playback startup prefetch timed out, continuing with current availability')
+            resolvePlaybackReady?.()
+          }, 5000)
+
+          if (initialAvailable > 0) {
+            resolvePlaybackReady?.()
+          }
+
           let downloadedBlocks = 0
           let downloadedBytesTotal = initialAvailable * bytesPerBlock
           let downloadSpeed = 0
@@ -1341,6 +1389,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               downloadedIndices.add(index)
               downloadedBlocks = downloadedIndices.size
             }
+            resolvePlaybackReady?.()
             const chunkBytes =
               typeof byteLength === 'number' && Number.isFinite(byteLength) && byteLength > 0
                 ? byteLength
@@ -1466,6 +1515,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
                 }, 1500)
                 headRange.done().then(() => {
                   console.log('[API] Head prefetch complete (blobs)')
+                  resolvePlaybackReady?.()
                   if (headTimeout) clearTimeout(headTimeout)
                   startFullDownload()
                 }).catch(err => {
@@ -1528,6 +1578,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               }).catch(() => {})
             }
           }
+
+          await playbackReady
 
           return {
             success: true,

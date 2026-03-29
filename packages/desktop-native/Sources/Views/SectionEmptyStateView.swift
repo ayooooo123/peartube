@@ -79,7 +79,7 @@ struct SectionEmptyStateView: View {
         ? "Use the native Studio flow to upload and publish your channel."
         : "Create a channel to unlock native upload and publishing controls."
     case .diagnostics:
-      return "Inspect host logs and connection health while the Bare sidecar runs."
+      return "Inspect host logs and connection health while the embedded Bare host runs."
     }
   }
 

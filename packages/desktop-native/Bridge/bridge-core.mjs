@@ -120,6 +120,53 @@ function ensureSectionMap() {
   return Object.fromEntries(SECTION_ORDER.map((section) => [section, []]))
 }
 
+function cloneSections(sections = {}) {
+  return Object.fromEntries(
+    SECTION_ORDER.map((section) => [
+      section,
+      Array.isArray(sections?.[section]) ? sections[section].map((video) => ({ ...video })) : [],
+    ])
+  )
+}
+
+function deriveSnapshotStats(sections, state = {}) {
+  const sectionVideos = SECTION_ORDER.flatMap((section) => sections?.[section] || [])
+  const channelCount = new Set([
+    ...sectionVideos.map((video) => video?.channelKey).filter(Boolean),
+    ...(Array.isArray(state.subscriptionChannelKeys) ? state.subscriptionChannelKeys : []),
+    ...(Array.isArray(state.identityChannelKeys) ? state.identityChannelKeys : []),
+  ]).size
+
+  return {
+    homeCount: sections?.home?.length || 0,
+    subscriptionCount: sections?.subscriptions?.length || 0,
+    libraryCount: sections?.library?.length || 0,
+    channelCount,
+  }
+}
+
+function createEmptySnapshotState() {
+  return {
+    subscriptionChannelKeys: [],
+    identityChannelKeys: [],
+    activeIdentityName: null,
+    activeIdentityChannelKey: null,
+    activeChannelPublished: false,
+  }
+}
+
+export function createEmptyBrowseSnapshot() {
+  const sections = ensureSectionMap()
+  const state = createEmptySnapshotState()
+
+  return {
+    generatedAt: Date.now(),
+    sections,
+    stats: deriveSnapshotStats(sections, state),
+    state,
+  }
+}
+
 function ensureVideoRecord(registry, videoKey, payload) {
   const existing = registry.get(videoKey)
   if (existing) return existing
@@ -129,11 +176,47 @@ function ensureVideoRecord(registry, videoKey, payload) {
   return created
 }
 
-async function populateSection(section, sources, config, fetchChannelData, registry, sectionMap) {
+export function mergeVideoMetadata(video = {}, metadata = {}) {
+  const preferMetadataString = (videoValue, metadataValue) => {
+    if (typeof videoValue === 'string' && videoValue.trim().length > 0) return videoValue
+    if (typeof metadataValue === 'string' && metadataValue.trim().length > 0) return metadataValue
+    return videoValue ?? metadataValue ?? null
+  }
+  const preferMetadataDimension = (videoValue, metadataValue) => {
+    if (Number.isFinite(videoValue) && videoValue > 0) return videoValue
+    if (Number.isFinite(metadataValue) && metadataValue > 0) return metadataValue
+    return null
+  }
+
+  return {
+    ...video,
+    title: preferMetadataString(video?.title, metadata?.title),
+    description: preferMetadataString(video?.description, metadata?.description),
+    duration: video?.duration ?? metadata?.duration ?? null,
+    thumbnail: preferMetadataString(video?.thumbnail, metadata?.thumbnail),
+    path: preferMetadataString(video?.path, metadata?.path),
+    blobId: preferMetadataString(video?.blobId, metadata?.blobId),
+    blobsCoreKey: preferMetadataString(video?.blobsCoreKey, metadata?.blobsCoreKey),
+    mimeType: preferMetadataString(video?.mimeType, metadata?.mimeType),
+    channelName: preferMetadataString(video?.channelName, metadata?.channelName),
+    width: preferMetadataDimension(video?.width, metadata?.width),
+    height: preferMetadataDimension(video?.height, metadata?.height),
+  }
+}
+
+async function resolveSectionRecords(section, sources, config, fetchChannelData) {
   if (!config.sourceLimit || !config.videosPerChannel) return
 
-  for (const source of sources.slice(0, config.sourceLimit)) {
-    const result = await fetchChannelData(source)
+  const resolvedSources = await Promise.all(
+    sources.slice(0, config.sourceLimit).map(async (source) => ({
+      source,
+      result: await fetchChannelData(source),
+    }))
+  )
+
+  const records = []
+
+  for (const { source, result } of resolvedSources) {
     const meta = result?.channelMeta || {}
     const videos = Array.isArray(result?.videos) ? result.videos.slice(0, config.videosPerChannel) : []
 
@@ -141,7 +224,8 @@ async function populateSection(section, sources, config, fetchChannelData, regis
       if (!video?.id) continue
 
       const videoKey = `${source.channelKey}:${video.id}`
-      const normalized = ensureVideoRecord(registry, videoKey, {
+      records.push({
+        videoKey,
         id: videoKey,
         backendVideoID: video.id,
         channelKey: source.channelKey,
@@ -157,17 +241,13 @@ async function populateSection(section, sources, config, fetchChannelData, regis
         blobId: video.blobId || null,
         blobsCoreKey: video.blobsCoreKey || null,
         mimeType: video.mimeType || null,
+        width: Number.isFinite(video.width) && video.width > 0 ? video.width : null,
+        height: Number.isFinite(video.height) && video.height > 0 ? video.height : null,
       })
-
-      if (!normalized.sections.includes(section)) {
-        normalized.sections.push(section)
-      }
-
-      if (!sectionMap[section].includes(videoKey)) {
-        sectionMap[section].push(videoKey)
-      }
     }
   }
+
+  return records
 }
 
 export async function buildBrowseSnapshot({
@@ -200,10 +280,31 @@ export async function buildBrowseSnapshot({
     subscriptions.map((entry) => entry?.channelKey || entry?.driveKey).filter(Boolean)
   ))
 
-  await populateSection('home', homeSources, SECTION_CONFIG.home, fetchChannelData, registry, sectionMap)
-  await populateSection('subscriptions', subscriptionSources, SECTION_CONFIG.subscriptions, fetchChannelData, registry, sectionMap)
-  await populateSection('library', identitySources, SECTION_CONFIG.library, fetchChannelData, registry, sectionMap)
-  await populateSection('studio', identitySources, SECTION_CONFIG.studio, fetchChannelData, registry, sectionMap)
+  const resolvedSections = await Promise.all([
+    resolveSectionRecords('home', homeSources, SECTION_CONFIG.home, fetchChannelData),
+    resolveSectionRecords('subscriptions', subscriptionSources, SECTION_CONFIG.subscriptions, fetchChannelData),
+    resolveSectionRecords('library', identitySources, SECTION_CONFIG.library, fetchChannelData),
+    resolveSectionRecords('studio', identitySources, SECTION_CONFIG.studio, fetchChannelData),
+  ])
+
+  for (const [section, records] of [
+    ['home', resolvedSections[0]],
+    ['subscriptions', resolvedSections[1]],
+    ['library', resolvedSections[2]],
+    ['studio', resolvedSections[3]],
+  ]) {
+    for (const record of records) {
+      const normalized = ensureVideoRecord(registry, record.videoKey, record)
+
+      if (!normalized.sections.includes(section)) {
+        normalized.sections.push(section)
+      }
+
+      if (!sectionMap[section].includes(record.videoKey)) {
+        sectionMap[section].push(record.videoKey)
+      }
+    }
+  }
 
   const sections = Object.fromEntries(
     SECTION_ORDER.map((section) => [
@@ -232,6 +333,38 @@ export async function buildBrowseSnapshot({
       activeIdentityChannelKey: activeIdentity?.channelKey || activeIdentity?.driveKey || null,
       activeChannelPublished: Boolean(activeChannelPublished),
     },
+  }
+}
+
+export function buildIdentityMutationSnapshot({
+  previousSnapshot = null,
+  identities = [],
+  activeChannelPublished = false,
+}) {
+  const baseSnapshot = previousSnapshot || createEmptyBrowseSnapshot()
+  const sections = cloneSections(baseSnapshot.sections)
+  const activeIdentity = identities.find((identity) => identity?.isActive) || identities.at(-1) || null
+  const identityChannelKeys = Array.from(new Set(
+    identities.map((identity) => identity?.channelKey || identity?.driveKey).filter(Boolean)
+  ))
+  const subscriptionChannelKeys = Array.from(new Set(
+    Array.isArray(baseSnapshot.state?.subscriptionChannelKeys)
+      ? baseSnapshot.state.subscriptionChannelKeys.filter(Boolean)
+      : []
+  ))
+  const state = {
+    subscriptionChannelKeys,
+    identityChannelKeys,
+    activeIdentityName: activeIdentity?.name?.trim() || null,
+    activeIdentityChannelKey: activeIdentity?.channelKey || activeIdentity?.driveKey || null,
+    activeChannelPublished: Boolean(activeChannelPublished),
+  }
+
+  return {
+    generatedAt: Date.now(),
+    sections,
+    stats: deriveSnapshotStats(sections, state),
+    state,
   }
 }
 
@@ -289,6 +422,8 @@ export async function buildSearchResults({
       blobId: metadata.blobId || null,
       blobsCoreKey: metadata.blobsCoreKey || null,
       mimeType: metadata.mimeType || null,
+      width: Number.isFinite(metadata.width) && metadata.width > 0 ? metadata.width : null,
+      height: Number.isFinite(metadata.height) && metadata.height > 0 ? metadata.height : null,
     })
   }
 

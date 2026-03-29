@@ -25,3 +25,15 @@ test('resolves bare-ffmpeg addon roots for native sidecar packaging', () => {
     assert.equal(fs.statSync(root).isDirectory(), true)
   }
 })
+
+test('resolves bare-mpv addon roots for native sidecar packaging', () => {
+  const roots = getSidecarAddonRoots(repoRoot)
+
+  assert.ok(
+    roots.some((root) =>
+      root.includes(path.join('node_modules', 'bare-mpv')) ||
+      root.endsWith(path.join('packages', 'bare-mpv'))
+    ),
+    `expected bare-mpv to be included in ${roots.join(', ')}`
+  )
+})

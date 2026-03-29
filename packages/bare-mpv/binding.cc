@@ -413,6 +413,34 @@ bare_mpv_render_update(js_env_t *env, js_callback_info_t *info) {
   return result;
 }
 
+// Drain pending libmpv client events so playback state/rendering can advance.
+static js_value_t *
+bare_mpv_process_events(js_env_t *env, js_callback_info_t *info) {
+  int err;
+  size_t argc = 1;
+  js_value_t *argv[1];
+
+  err = js_get_callback_info(env, info, &argc, argv, NULL, NULL);
+  if (err != 0) return NULL;
+
+  bare_mpv_handle_t *handle;
+  size_t len;
+  err = js_get_arraybuffer_info(env, argv[0], (void**)&handle, &len);
+  if (err != 0) return NULL;
+
+  int32_t processed = 0;
+
+  while (handle->mpv) {
+    mpv_event *event = mpv_wait_event(handle->mpv, 0);
+    if (!event || event->event_id == MPV_EVENT_NONE) break;
+    processed++;
+  }
+
+  js_value_t *result;
+  js_create_int32(env, processed, &result);
+  return result;
+}
+
 // Module exports
 static js_value_t *
 bare_mpv_exports(js_env_t *env, js_value_t *exports) {
@@ -435,6 +463,7 @@ bare_mpv_exports(js_env_t *env, js_value_t *exports) {
   EXPORT_FUNCTION(renderFrame, bare_mpv_render_frame);
   EXPORT_FUNCTION(renderFree, bare_mpv_render_free);
   EXPORT_FUNCTION(renderUpdate, bare_mpv_render_update);
+  EXPORT_FUNCTION(processEvents, bare_mpv_process_events);
 
 #undef EXPORT_FUNCTION
 

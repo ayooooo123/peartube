@@ -53,3 +53,37 @@ test('getVideoUrl forwards direct blob playback fields to the backend api', asyn
     'video/mp4',
   ]])
 })
+
+test('prefetchVideo preserves backend playback readiness metadata', async () => {
+  const backend = {}
+  const deps = createDeps({
+    api: {
+      async prefetchVideo(...args) {
+        assert.deepEqual(args, ['channel-key', 'videos/demo.mp4', 'public-bee-key'])
+        return {
+          success: true,
+          cached: false,
+          initialBlocks: 128,
+          peerCount: 2,
+          message: 'Prefetch started',
+        }
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  const result = await backend.prefetchVideo({
+    channelKey: 'channel-key',
+    videoId: 'videos/demo.mp4',
+    publicBeeKey: 'public-bee-key',
+  })
+
+  assert.deepEqual(result, {
+    success: true,
+    cached: false,
+    initialBlocks: 128,
+    peerCount: 2,
+    message: 'Prefetch started',
+  })
+})

@@ -42,11 +42,6 @@ struct PearTubeDesktopCommands: Commands {
         appState.selectSection(.diagnostics)
       }
       .keyboardShortcut("d", modifiers: [.command, .shift])
-
-      Button("Play Selected Preview") {
-        appState.playSelectedPreview()
-      }
-      .keyboardShortcut(.space, modifiers: [])
     }
 
     CommandGroup(replacing: .newItem) {}

@@ -16,10 +16,41 @@ import { SeedingManager } from './seeding.js';
 import { createApi } from './api.js';
 import { createIdentityManager } from './identity.js';
 import { createUploadManager } from './upload.js';
-import { readIdentityKeyFile, writeIdentityKeyFile } from './identity-key-file.js';
+import {
+  readIdentityKeyFile,
+  readPrimaryKeyFile,
+  writeIdentityKeyFile,
+  writePrimaryKeyFile
+} from './identity-key-file.js';
 import { derivePrimaryKey } from './peartube-identity.js';
 import { initFileLogger } from './logger.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
+import {
+  loadBareFsModule,
+  loadBarePathModule,
+  resolveBareFsModuleSync,
+  resolveBarePathModuleSync,
+} from './runtime-modules.js'
+import {
+  isCorestoreLockError,
+  shouldRetryCorestoreSeedFallback
+} from './corestore-error-utils.js'
+
+function resolveDebugLogPath() {
+  return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
+}
+
+async function appendDebugLine(line) {
+  const filePath = resolveDebugLogPath()
+  if (!filePath) return
+
+  try {
+    const fsModule = await import('bare-fs')
+    const fs = fsModule?.default ?? fsModule
+    if (typeof fs?.appendFileSync !== 'function') return
+    fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
+  } catch {}
+}
 
 // Shutdown flag to prevent deferred init from running during cleanup
 let isShuttingDown = false;
@@ -86,6 +117,7 @@ export async function createBackendContext(config) {
     onFeedUpdate,
     onStatsUpdate,
     corestoreWaitForLock = false,
+    disableStandalonePrimaryKeyFile = false,
     ipcLog: _ipcLog
   } = config;
 
@@ -98,29 +130,34 @@ export async function createBackendContext(config) {
 
   console.log('[Orchestrator] ===== INITIALIZING BACKEND =====');
   console.log('[Orchestrator] Storage path:', storagePath);
+  await appendDebugLine(`[orchestrator] createBackendContext start storagePath=${storagePath}`)
   ipcLog('[orchestrator] reading identity key file')
+  const useStandalonePrimaryKeyFile = !disableStandalonePrimaryKeyFile
 
   let primaryKey = null;
   const identityKeyData = await readIdentityKeyFile(storagePath);
+  await appendDebugLine(`[orchestrator] readIdentityKeyFile done present=${Boolean(identityKeyData)}`)
   if (identityKeyData) {
     primaryKey = identityKeyData.primaryKey;
     console.log('[Orchestrator] Identity key file found, using deterministic primaryKey');
+  } else if (useStandalonePrimaryKeyFile) {
+    const storedPrimaryKey = await readPrimaryKeyFile(storagePath);
+    if (storedPrimaryKey) {
+      primaryKey = storedPrimaryKey;
+      console.log('[Orchestrator] Primary key file found, reusing persisted Corestore seed');
+      await appendDebugLine('[orchestrator] readPrimaryKeyFile done present=true')
+    } else {
+      console.log('[Orchestrator] No identity key file, Corestore will use random primaryKey');
+      await appendDebugLine('[orchestrator] readPrimaryKeyFile done present=false')
+    }
   } else {
-    console.log('[Orchestrator] No identity key file, Corestore will use random primaryKey');
-  }
-
-  const isCorestoreSeedMismatch = (err) => {
-    const message = err instanceof Error ? err.message : String(err || '')
-    return message.includes('Another corestore is stored here')
-  }
-
-  const isCorestoreLockError = (err) => {
-    const message = (err instanceof Error ? err.message : String(err || '')).toLowerCase()
-    return message.includes('file descriptor could not be locked') ||
-      (message.includes('corestore') && message.includes('locked'))
+    console.log('[Orchestrator] Standalone primary key file disabled for this host path until an identity exists');
+    await appendDebugLine('[orchestrator] standalone primary-key file disabled for this host path')
   }
 
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const getFsModule = async () => resolveBareFsModuleSync() || await loadBareFsModule()
+  const getPathModule = async () => resolveBarePathModuleSync() || await loadBarePathModule()
 
   const initializeStorageWithRetry = async (opts) => {
     // Mobile callers clean stale locks before reaching here, so we only need
@@ -136,12 +173,16 @@ export async function createBackendContext(config) {
           if (isCorestoreLockError(err)) {
             console.warn('[Orchestrator] All retries exhausted. Attempting stale lock recovery...')
             try {
-              const _fs = (await import('bare-fs')).default
-              const _path = (await import('bare-path')).default
-              const lockFile = _path.join(opts.storagePath, 'LOCK')
-              const primaryLockFile = _path.join(opts.storagePath, 'primary', 'LOCK')
-              try { _fs.unlinkSync(lockFile) } catch {}
-              try { _fs.unlinkSync(primaryLockFile) } catch {}
+              const _fs = await getFsModule()
+              const _path = await getPathModule()
+              const lockFiles = [
+                _path.join(opts.storagePath, 'LOCK'),
+                _path.join(opts.storagePath, 'db', 'LOCK'),
+                _path.join(opts.storagePath, 'primary', 'LOCK')
+              ]
+              for (const lockFile of lockFiles) {
+                try { _fs.unlinkSync(lockFile) } catch {}
+              }
               const result = await initializeStorage(opts)
               console.log('[Orchestrator] Stale lock recovery succeeded')
               return result
@@ -161,6 +202,7 @@ export async function createBackendContext(config) {
 
   let ctx
   ipcLog('[orchestrator] initializeStorage starting')
+  await appendDebugLine('[orchestrator] initializeStorage starting')
   try {
     ctx = await initializeStorageWithRetry({
       storagePath,
@@ -169,8 +211,12 @@ export async function createBackendContext(config) {
       primaryKey,
       corestoreWaitForLock
     });
+    await appendDebugLine('[orchestrator] initializeStorage done')
   } catch (err) {
-    if (!primaryKey || !isCorestoreSeedMismatch(err)) throw err
+    await appendDebugLine(`[orchestrator] initializeStorage error ${err?.message || String(err)}`)
+    if (!primaryKey || !shouldRetryCorestoreSeedFallback(err, { hasIdentityKeyFile: Boolean(identityKeyData) })) {
+      throw err
+    }
 
     console.warn('[Orchestrator] Identity key file primaryKey mismatches existing Corestore seed. Falling back to stored Corestore seed.')
     
@@ -199,6 +245,11 @@ export async function createBackendContext(config) {
           identityPublicKey
         })
         console.log('[Orchestrator] Rewrote identity key file to match existing Corestore seed')
+      } else if (ctx?.store?.primaryKey && useStandalonePrimaryKeyFile) {
+        await writePrimaryKeyFile(storagePath, ctx.store.primaryKey)
+        console.log('[Orchestrator] Rewrote primary key file to match existing Corestore seed')
+      } else if (ctx?.store?.primaryKey) {
+        console.log('[Orchestrator] Skipped standalone primary key persistence for this host path')
       }
     } catch (persistErr) {
       console.warn('[Orchestrator] Failed to persist reconciled identity key file:', persistErr?.message)
@@ -206,10 +257,21 @@ export async function createBackendContext(config) {
   }
 
   ipcLog('[orchestrator] storage initialized, port: ' + ctx.blobServerPort)
+  await appendDebugLine(`[orchestrator] storage initialized port=${ctx.blobServerPort}`)
+
+  if (!identityKeyData && ctx?.store?.primaryKey && useStandalonePrimaryKeyFile) {
+    try {
+      await writePrimaryKeyFile(storagePath, ctx.store.primaryKey)
+      await appendDebugLine('[orchestrator] primary key file written')
+    } catch (persistErr) {
+      console.warn('[Orchestrator] Failed to persist primary key file:', persistErr?.message)
+      await appendDebugLine(`[orchestrator] primary key file write failed ${persistErr?.message || String(persistErr)}`)
+    }
+  }
 
   try {
-    const _fs = (await import('bare-fs')).default
-    const _path = (await import('bare-path')).default
+    const _fs = await getFsModule()
+    const _path = await getPathModule()
     const logsDir = _path.join(storagePath, 'logs')
     _fs.mkdirSync(logsDir, { recursive: true })
     await initFileLogger(_path.join(logsDir, 'peartube.log'))
@@ -218,6 +280,7 @@ export async function createBackendContext(config) {
     console.log('[Orchestrator] File logger setup skipped:', err?.message)
   }
   ipcLog('[orchestrator] managers creating')
+  await appendDebugLine('[orchestrator] managers creating')
 
   // Phase 2: Create managers (synchronous, fast)
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb);
@@ -246,9 +309,11 @@ export async function createBackendContext(config) {
     }
   });
   ipcLog('[orchestrator] seedingManager.init starting')
+  await appendDebugLine('[orchestrator] seedingManager.init starting')
 
   // Phase 5: Initialize seeding manager (fast - just loads config from db)
   await seedingManager.init();
+  await appendDebugLine('[orchestrator] seedingManager.init done')
   ipcLog('[orchestrator] seedingManager.init done')
 
   // Phase 5.5: Load transcode settings (optional)
@@ -276,11 +341,14 @@ export async function createBackendContext(config) {
   }
 
   ipcLog('[orchestrator] loadIdentities starting')
+  await appendDebugLine('[orchestrator] loadIdentities starting')
   await identityManager.loadIdentities();
+  await appendDebugLine('[orchestrator] loadIdentities done')
   ipcLog('[orchestrator] loadIdentities done')
 
   // Phase 6.5: Start public feed discovery immediately so UIs can get updates without waiting
   ipcLog('[orchestrator] publicFeed.start starting')
+  await appendDebugLine('[orchestrator] publicFeed.start starting')
   try {
     await publicFeed.start();
     try {
@@ -291,6 +359,7 @@ export async function createBackendContext(config) {
   } catch (e) {
     console.error('[Orchestrator] Public feed start failed:', e?.message);
   }
+  await appendDebugLine('[orchestrator] publicFeed.start done')
   ipcLog('[orchestrator] publicFeed.start done')
 
   // Phase 7: Create unified API

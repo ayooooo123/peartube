@@ -10,7 +10,10 @@
     "peartube-peer-bare": "bare-bin.js"
   },
   "scripts": {
-    "test": "brittle test/*.test.mjs"
+    "test": "brittle test/*.test.mjs",
+    "build:standalone": "node ./scripts/build-standalone.mjs",
+    "build:standalone:linux-x64": "RELAY_STANDALONE_HOST=linux-x64 node ./scripts/build-standalone.mjs",
+    "build:standalone:linux-arm64": "RELAY_STANDALONE_HOST=linux-arm64 node ./scripts/build-standalone.mjs"
   },
   "imports": {
     "#fs": {
@@ -39,6 +42,7 @@
     "tiny-byte-size": "^1.1.0"
   },
   "devDependencies": {
+    "bare-build": "^0.2.7",
     "brittle": "^3.19.1"
   }
 }

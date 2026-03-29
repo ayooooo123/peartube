@@ -45,6 +45,9 @@ jobs:
       - name: Run relay CLI tests
         run: npm test --prefix packages/cli
 
+      - name: Build relay standalone executable
+        run: npm run build:standalone:linux-x64 --prefix packages/cli
+
       - name: Run relay owner metadata regression
         run: node packages/backend/test/public-channel-owner-metadata.test.mjs
 

@@ -2,6 +2,7 @@
  * Structured ndjson logger for peartube-peer CLI.
  * Outputs one JSON object per line to stdout/stderr.
  */
+import process from '#process'
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 }
 

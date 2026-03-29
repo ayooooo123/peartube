@@ -6,7 +6,7 @@
  */
 
 import { memo } from 'react'
-import { Pressable, Text, View } from 'react-native'
+import { Pressable, Text } from 'react-native'
 import Animated from 'react-native-reanimated'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import { styles } from './styles'
@@ -31,7 +31,7 @@ export const ControlsOverlay = memo(function ControlsOverlay({
   if (!visible) return null
 
   return (
-    <Animated.View style={[styles.controlsOverlayBase, controlsOverlayStyle]}>
+    <Animated.View pointerEvents="box-none" style={[styles.controlsOverlayBase, controlsOverlayStyle]}>
       {/* Seek backward button */}
       <Pressable style={styles.controlButton} onPress={onSeekBackward}>
         <Feather name="rotate-ccw" color="#fff" size={32} />

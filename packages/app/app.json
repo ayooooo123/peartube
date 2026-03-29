@@ -72,6 +72,7 @@
       "./plugins/withAndroidPiP.js",
       "./plugins/withMainActivityPiPCallback.js",
       "./plugins/withAndroidMediaSessionServices.js",
+      "./plugins/withExoplayerKeepResources.js",
       "./plugins/withAndroidAbiSplits.js",
       "expo-font"
     ]

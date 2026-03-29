@@ -5,7 +5,7 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
 import { MpvPlayer, MpvPlayerRef } from '../MpvPlayer'
 import { styles } from './styles'
-import { MpvMobileVideoView } from './MpvMobileVideoView'
+import { PearInlineVideoView } from './PearInlineVideoView'
 
 export interface VideoContainerProps {
   // Video state
@@ -112,7 +112,7 @@ export const VideoContainer = memo(
 
     if (Platform.OS !== 'web') {
       return (
-        <MpvMobileVideoView
+        <PearInlineVideoView
           style={style}
           playerRef={playerRef}
           videoUrl={videoUrl}

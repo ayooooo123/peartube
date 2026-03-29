@@ -12,7 +12,6 @@ type MpvMobileVideoViewProps = {
   seekPosition?: number
   isInPipMode?: boolean
   pipWindowSize?: { width: number; height: number } | null
-  videoAspectRatio?: number | null
   onLoad?: (data: any) => void
   onProgress?: (data: any) => void
   onPlaying?: () => void

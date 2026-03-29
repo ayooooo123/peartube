@@ -74,6 +74,7 @@
       "./plugins/withAndroidMediaSessionServices.js",
       "./plugins/withExoplayerKeepResources.js",
       "./plugins/withAndroidAbiSplits.js",
+      "./plugins/withVectorIconFonts.js",
       "expo-font"
     ]
   }

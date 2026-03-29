@@ -24,7 +24,7 @@ for await (const resource of build(join(packageRoot, 'bare-bin.js'), {
   base: packageRoot,
   hosts: [host],
   standalone: true,
-  out: outputPath,
+  out: outputDir,
   name: 'peartube-relay'
 })) {
   if (resource?.path) {

@@ -30,6 +30,15 @@ test('package.json defines standalone relay build scripts', async (t) => {
   t.is(pkg.devDependencies['bare-build'], '^0.4.6')
 })
 
+test('standalone build script writes the relay executable into the host output directory', async (t) => {
+  const scriptPath = join(__dirname, '..', 'scripts', 'build-standalone.mjs')
+  const content = readFileSync(scriptPath, 'utf8')
+
+  t.ok(content.includes("const outputDir = join(packageRoot, 'dist', 'standalone', host)"), 'standalone outputs are grouped by host directory')
+  t.ok(content.includes("const outputPath = join(outputDir, 'peartube-relay')"), 'standalone build verifies the final executable path')
+  t.ok(content.includes('out: outputDir'), 'bare-build writes into the host directory instead of nesting under the executable path')
+})
+
 test('bin.js exposes relay subcommands', async (t) => {
   const binPath = join(__dirname, '..', 'bin.js')
   const content = readFileSync(binPath, 'utf8')

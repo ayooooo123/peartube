@@ -26,6 +26,7 @@ test('package.json defines standalone relay build scripts', async (t) => {
   t.is(pkg.scripts['build:standalone'], 'node ./scripts/build-standalone.mjs')
   t.is(pkg.scripts['build:standalone:linux-x64'], 'RELAY_STANDALONE_HOST=linux-x64 node ./scripts/build-standalone.mjs')
   t.is(pkg.scripts['build:standalone:linux-arm64'], 'RELAY_STANDALONE_HOST=linux-arm64 node ./scripts/build-standalone.mjs')
+  t.is(pkg.scripts['prepare:docker-artifacts'], 'node ./scripts/prepare-docker-artifacts.mjs')
   t.is(pkg.devDependencies['bare-build'], '^0.4.6')
 })
 
@@ -55,16 +56,27 @@ test('Dockerfile packages the standalone relay executable in a minimal runtime i
   const dockerfilePath = join(__dirname, '..', 'Dockerfile')
   const content = readFileSync(dockerfilePath, 'utf8')
 
+  t.ok(content.includes('FROM busybox:1.36.1 AS artifact'), 'artifact stage selects the prebuilt standalone relay binary')
+  t.ok(content.includes('COPY packages/cli/dist/docker/ /dist/'), 'builder stage only packages prebuilt docker artifacts')
+  t.ok(content.includes('cp /dist/linux-amd64/peartube-relay /peartube-relay'), 'artifact stage maps Docker amd64 to the prepared standalone binary')
+  t.ok(content.includes('cp /dist/linux-arm64/peartube-relay /peartube-relay'), 'artifact stage maps Docker arm64 to the prepared standalone binary')
   t.ok(content.includes('gcr.io/distroless/base-debian12'), 'final image uses a minimal distroless runtime')
-  t.ok(content.includes('COPY packages/spec ./packages/spec'), 'builder stage includes local spec package needed by backend file dependencies')
-  t.ok(content.includes('npm run build:standalone'), 'builder stage produces a standalone relay executable')
-  t.ok(content.includes('COPY --from=builder'), 'final image copies the built artifact from the builder stage')
+  t.absent(content.includes('npm run build:standalone'), 'Docker build no longer runs bare-build inside the image')
+  t.ok(content.includes('COPY --from=artifact'), 'final image copies the packaged artifact from the artifact stage')
   t.ok(content.includes('ENTRYPOINT ["/peartube-relay"]'), 'final image runs the standalone relay executable directly')
 })
 
-test('.dockerignore keeps local relay build dependencies in the Docker context', async (t) => {
-  const dockerignorePath = join(__dirname, '..', '..', '..', '.dockerignore')
-  const content = readFileSync(dockerignorePath, 'utf8')
+test('Dockerfile final stage copies the prepared relay artifact', async (t) => {
+  const dockerfilePath = join(__dirname, '..', 'Dockerfile')
+  const content = readFileSync(dockerfilePath, 'utf8')
 
-  t.absent(content.includes('packages/spec'), 'Docker context must include packages/spec for backend file dependencies')
+  t.ok(content.includes('COPY --from=artifact /peartube-relay /peartube-relay'), 'final image copies the packaged relay executable from the artifact stage')
+})
+
+test('relay workflow prepares standalone artifacts before docker image build', async (t) => {
+  const workflowPath = join(__dirname, '..', '..', '..', '.github', 'workflows', 'relay.yml')
+  const content = readFileSync(workflowPath, 'utf8')
+
+  t.ok(content.includes('npm run build:standalone:linux-x64 --prefix packages/cli'), 'workflow builds linux x64 standalone artifacts before docker packaging')
+  t.ok(content.includes('npm run prepare:docker-artifacts --prefix packages/cli'), 'workflow stages prepared docker artifacts before docker packaging')
 })

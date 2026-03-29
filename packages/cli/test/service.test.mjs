@@ -14,6 +14,9 @@ function createFakeRuntime() {
 
   return {
     async start() {},
+    requestFeedSync() {
+      return 0
+    },
     setCandidateHandler(handler) {
       candidateHandler = handler
     },
@@ -33,6 +36,24 @@ function createFakeRuntime() {
     },
     async close() {}
   }
+}
+
+function createFakeLogger() {
+  const entries = []
+  const levels = ['debug', 'info', 'warn', 'error']
+  const components = ['relay', 'runtime', 'admission', 'status', 'mirror', 'peer', 'cache', 'feed', 'download']
+  const logger = { entries }
+
+  for (const component of components) {
+    logger[component] = {}
+    for (const level of levels) {
+      logger[component][level] = (msg, data = {}) => {
+        entries.push({ component, level, msg, data })
+      }
+    }
+  }
+
+  return logger
 }
 
 test('createRelayService mirrors configured channels on start', async (t) => {
@@ -61,6 +82,7 @@ test('createRelayService mirrors configured channels on start', async (t) => {
           maxChannelsPerOwner: 0
         }
       },
+      logger: createFakeLogger(),
       runtimeFactory: async () => runtime,
       mirrorChannel: async (candidate) => {
         mirrored.push(candidate.channelKey)
@@ -111,6 +133,7 @@ test('createRelayService accepts discovered channels in public discovery mode', 
           maxChannelsPerOwner: 2
         }
       },
+      logger: createFakeLogger(),
       runtimeFactory: async () => runtime,
       mirrorChannel: async () => ({ bytesDownloaded: 4096, videosFound: 2, videosDownloaded: 2 }),
       writeStatusFile: async () => {}
@@ -125,6 +148,62 @@ test('createRelayService accepts discovered channels in public discovery mode', 
     t.is(channel.retentionClass, 'discovery')
     t.is(channel.bytes, 4096)
     t.is(service.getStatus().summary.totalChannels, 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('createRelayService requests feed sync and logs startup summary', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-logs-')
+  const runtime = createFakeRuntime()
+  const logger = createFakeLogger()
+  let feedSyncCalls = 0
+
+  runtime.requestFeedSync = () => {
+    feedSyncCalls += 1
+    return 4
+  }
+
+  runtime.getNetworkStats = () => ({
+    peers: 5,
+    connections: 3,
+    feedPeers: 4,
+    feedConnections: 4,
+    feedEntries: 2
+  })
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: {
+          channels: [],
+          owners: []
+        },
+        discovery: {
+          enabled: true,
+          maxChannels: 5,
+          maxChannelsPerOwner: 2
+        }
+      },
+      logger,
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+
+    t.is(feedSyncCalls, 1)
+    t.ok(logger.entries.some((entry) => entry.component === 'relay' && entry.level === 'info' && entry.msg === 'Relay starting'))
+    t.ok(logger.entries.some((entry) => entry.component === 'relay' && entry.level === 'info' && entry.msg === 'Relay started' && entry.data.feedPeers === 4))
+    t.ok(logger.entries.some((entry) => entry.component === 'feed' && entry.level === 'info' && entry.msg === 'Requested feed sync from peers' && entry.data.peersContacted === 4))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

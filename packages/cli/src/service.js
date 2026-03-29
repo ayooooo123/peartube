@@ -53,9 +53,10 @@ export async function createRelayService({
     })
 
     if (!decision.accepted) {
-      logger.admission.debug('Candidate rejected', {
+      logger.admission.info('Candidate rejected', {
         channelKey: resolved.channelKey,
         ownerKey: resolved.ownerKey || null,
+        source: resolved.source || 'discovered',
         reason: decision.reason
       })
       await persistStatus()
@@ -75,6 +76,14 @@ export async function createRelayService({
     await relayCatalog.upsertChannel(baseRecord)
 
     try {
+      logger.admission.info('Candidate accepted', {
+        channelKey: resolved.channelKey,
+        ownerKey: resolved.ownerKey || null,
+        source: resolved.source || 'discovered',
+        retentionClass: decision.retentionClass,
+        reason: decision.reason
+      })
+
       const mirrorStats = await mirrorChannel(resolved, {
         config,
         runtime,
@@ -91,10 +100,26 @@ export async function createRelayService({
         mirroredAt: Date.now(),
         lastError: null
       })
+
+      logger.mirror.info('Channel mirrored', {
+        channelKey: resolved.channelKey,
+        ownerKey: resolved.ownerKey || null,
+        retentionClass: decision.retentionClass,
+        bytesDownloaded: mirrorStats?.bytesDownloaded || 0,
+        videosFound: mirrorStats?.videosFound || 0,
+        videosDownloaded: mirrorStats?.videosDownloaded || 0
+      })
     } catch (err) {
       await relayCatalog.upsertChannel({
         ...baseRecord,
         lastError: err?.message || String(err)
+      })
+
+      logger.mirror.error('Channel mirror failed', {
+        channelKey: resolved.channelKey,
+        ownerKey: resolved.ownerKey || null,
+        retentionClass: decision.retentionClass,
+        error: err?.message || String(err)
       })
     }
 
@@ -113,12 +138,26 @@ export async function createRelayService({
     runtime,
     catalog: relayCatalog,
     async start() {
+      logger.relay.info('Relay starting', {
+        mode: config.mode,
+        policy: config.policy,
+        storagePath: config.storage.path,
+        maxBytes: config.storage.maxBytes,
+        configuredChannels: config.admission.channels?.length || 0,
+        configuredOwners: config.admission.owners?.length || 0
+      })
+
       runtime.setCandidateHandler?.((candidate) => scheduleCandidate({
         source: 'discovered',
         ...candidate
       }))
 
       await runtime.start?.()
+
+      if (typeof runtime.requestFeedSync === 'function') {
+        const peersContacted = await runtime.requestFeedSync()
+        logger.feed.info('Requested feed sync from peers', { peersContacted })
+      }
 
       for (const channelKey of config.admission.channels || []) {
         await scheduleCandidate({
@@ -127,7 +166,15 @@ export async function createRelayService({
         })
       }
 
-      await persistStatus()
+      const status = await persistStatus()
+      logger.relay.info('Relay started', {
+        peers: status.runtime.peers,
+        connections: status.runtime.connections,
+        feedPeers: status.runtime.feedPeers,
+        feedConnections: status.runtime.feedConnections,
+        feedEntries: status.runtime.feedEntries,
+        mirroredChannels: status.summary.totalChannels
+      })
       return service
     },
     async processCandidate(candidate) {

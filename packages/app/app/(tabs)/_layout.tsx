@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Tabs, Slot } from 'expo-router'
-import { View, Platform } from 'react-native'
+import { View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { DesktopLayout } from '@/components/desktop/DesktopLayout'
@@ -33,7 +33,7 @@ export default function TabLayout() {
           tabBarStyle: { display: 'none' },
           sceneStyle: { backgroundColor: colors.bg },
         }}
-        tabBar={(props) => <PillTabBar {...props} />}
+        tabBar={() => <PillTabBar />}
       >
         <Tabs.Screen name="index" />
         <Tabs.Screen name="subscriptions" />

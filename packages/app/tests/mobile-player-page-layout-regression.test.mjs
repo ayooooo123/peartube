@@ -188,3 +188,39 @@ test('mobile mini-player drag snaps to safe-area corners', () => {
     'mobile mini-player drag release should spring the player to the snapped vertical corner',
   )
 })
+
+test('mobile pill tab bar owns its own route matching and stays disabled on desktop', () => {
+  const layoutSource = readAppFile('app/(tabs)/_layout.tsx')
+  const tabBarSource = readAppFile('components/PillTabBar.tsx')
+
+  assert.match(
+    layoutSource,
+    /tabBar=\{\(\) => <PillTabBar \/>\}/,
+    'tabs layout should mount the pill tab bar through its self-contained router-aware API',
+  )
+  assert.match(
+    tabBarSource,
+    /import \{ usePathname, useRouter \} from 'expo-router'/,
+    'pill tab bar should derive active state and navigation from expo-router paths',
+  )
+  assert.match(
+    tabBarSource,
+    /const \{ isDesktop \} = usePlatform\(\)/,
+    'pill tab bar should check desktop mode directly instead of rendering a mobile control there',
+  )
+  assert.match(
+    tabBarSource,
+    /if \(isDesktop\) \{\s+return null\s+\}/,
+    'pill tab bar should not render on desktop layouts',
+  )
+  assert.match(
+    tabBarSource,
+    /router\.replace\(tab\.path as any\)/,
+    'pill tab bar should navigate by explicit route path so custom route layouts stay in sync',
+  )
+  assert.doesNotMatch(
+    tabBarSource,
+    /interface PillTabBarProps/,
+    'pill tab bar should no longer depend on TabNavigator state props',
+  )
+})

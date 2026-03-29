@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { RelayCatalog } from '../src/catalog.js'
-import { buildRelayStatus } from '../src/status.js'
+import { buildRelayStatus, readRelayStatus, writeRelayStatus } from '../src/status.js'
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -79,7 +79,10 @@ test('buildRelayStatus orders eviction candidates by retention class', async (t)
       catalog,
       runtimeStats: {
         peers: 2,
-        connections: 1
+        connections: 1,
+        feedPeers: 2,
+        feedConnections: 2,
+        feedEntries: 3
       }
     })
 
@@ -87,9 +90,41 @@ test('buildRelayStatus orders eviction candidates by retention class', async (t)
     t.is(status.summary.protectedChannels, 2)
     t.is(status.summary.usedBytes, 7168)
     t.is(status.runtime.peers, 2)
+    t.is(status.runtime.feedPeers, 2)
+    t.is(status.runtime.feedConnections, 2)
+    t.is(status.runtime.feedEntries, 3)
     t.is(status.evictionCandidates[0].channelKey, 'discover-1')
     t.is(status.evictionCandidates[1].channelKey, 'allow-1')
     t.is(status.evictionCandidates[2].channelKey, 'private-1')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('readRelayStatus returns persisted runtime stats when present', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-file-')
+  const statusPath = join(dir, 'relay-status.json')
+
+  try {
+    const status = {
+      runtime: {
+        peers: 7,
+        connections: 5,
+        feedPeers: 4,
+        feedConnections: 4,
+        feedEntries: 12
+      }
+    }
+
+    writeRelayStatus(statusPath, status)
+
+    const loaded = readRelayStatus(statusPath)
+
+    t.is(loaded.runtime.peers, 7)
+    t.is(loaded.runtime.connections, 5)
+    t.is(loaded.runtime.feedPeers, 4)
+    t.is(loaded.runtime.feedConnections, 4)
+    t.is(loaded.runtime.feedEntries, 12)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

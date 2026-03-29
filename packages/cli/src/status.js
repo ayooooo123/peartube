@@ -1,4 +1,4 @@
-import { writeFileSync } from '#fs'
+import { existsSync, readFileSync, writeFileSync } from '#fs'
 import { retentionClassPriority } from './admission.js'
 
 function sortEvictionCandidates(channels) {
@@ -27,7 +27,10 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
     },
     runtime: {
       peers: runtimeStats.peers || 0,
-      connections: runtimeStats.connections || 0
+      connections: runtimeStats.connections || 0,
+      feedPeers: runtimeStats.feedPeers || 0,
+      feedConnections: runtimeStats.feedConnections || 0,
+      feedEntries: runtimeStats.feedEntries || 0
     },
     evictionCandidates: sortEvictionCandidates(channels).map((channel) => ({
       channelKey: channel.channelKey,
@@ -44,6 +47,11 @@ export function writeRelayStatus(statusPath, status) {
   writeFileSync(statusPath, JSON.stringify(status, null, 2))
 }
 
+export function readRelayStatus(statusPath) {
+  if (!statusPath || !existsSync(statusPath)) return null
+  return JSON.parse(readFileSync(statusPath, 'utf8'))
+}
+
 export function formatRelayStatus(status) {
   const lines = [
     `mode: ${status.mode}`,
@@ -53,7 +61,10 @@ export function formatRelayStatus(status) {
     `protected: ${status.summary.protectedChannels}`,
     `evictable: ${status.summary.evictableChannels}`,
     `peers: ${status.runtime.peers}`,
-    `connections: ${status.runtime.connections}`
+    `connections: ${status.runtime.connections}`,
+    `feedPeers: ${status.runtime.feedPeers}`,
+    `feedConnections: ${status.runtime.feedConnections}`,
+    `feedEntries: ${status.runtime.feedEntries}`
   ]
 
   if (status.evictionCandidates.length > 0) {

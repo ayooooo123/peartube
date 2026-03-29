@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { View, Pressable, StyleSheet, Platform, Keyboard, KeyboardEvent } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { usePathname, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
 import Animated, {
   useSharedValue,
@@ -12,6 +13,7 @@ import Animated, {
 } from 'react-native-reanimated'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { setTabBarMetrics } from '@/lib/tabBarHeight'
+import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
 
 let BlurView: any = null
@@ -25,17 +27,18 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
 
 interface TabItem {
   name: string
+  path: string
   icon: keyof typeof Feather.glyphMap
   label: string
   emphasized?: boolean
 }
 
 const TABS: TabItem[] = [
-  { name: 'index', icon: 'home', label: 'Home' },
-  { name: 'subscriptions', icon: 'users', label: 'Subs' },
-  { name: 'studio', icon: 'plus-circle', label: 'Studio', emphasized: true },
-  { name: 'downloads', icon: 'download', label: 'Downloads' },
-  { name: 'settings', icon: 'settings', label: 'Settings' },
+  { name: 'index', path: '/', icon: 'home', label: 'Home' },
+  { name: 'subscriptions', path: '/subscriptions', icon: 'users', label: 'Subs' },
+  { name: 'studio', path: '/studio', icon: 'plus-circle', label: 'Studio', emphasized: true },
+  { name: 'downloads', path: '/downloads', icon: 'download', label: 'Downloads' },
+  { name: 'settings', path: '/settings', icon: 'settings', label: 'Settings' },
 ]
 
 const PILL_HEIGHT = 56
@@ -45,24 +48,39 @@ const PILL_BORDER_RADIUS = 28
 const ICON_SIZE = 22
 const EMPHASIZED_ICON_SIZE = 28
 
-interface PillTabBarProps {
-  state: any
-  descriptors: any
-  navigation: any
+function isTabActive(pathname: string, tabPath: string): boolean {
+  if (tabPath === '/') {
+    return pathname === '/' || pathname === '/index' || pathname === '/(tabs)' || pathname === '/(tabs)/index'
+  }
+
+  return pathname === tabPath || pathname === `/(tabs)${tabPath}`
 }
 
-export function PillTabBar({ state, descriptors, navigation }: PillTabBarProps) {
+export function PillTabBar() {
   const insets = useSafeAreaInsets()
-  const { playerMode, isInPipMode } = useVideoPlayerContext()
+  const pathname = usePathname()
+  const router = useRouter()
+  const { isDesktop } = usePlatform()
+  const { playerMode, isInPipMode, androidSplitPlayerEnabled } = useVideoPlayerContext()
+  const isAndroidWatchPathActive = Platform.OS === 'android' && pathname.startsWith('/video/')
   
   const barVisible = useSharedValue(1)
   const keyboardVisible = useSharedValue(0)
   const bottomPosition = PILL_BOTTOM_OFFSET + Math.max(insets.bottom, 8)
 
   useEffect(() => {
-    const shouldHide = playerMode === 'fullscreen' && !isInPipMode
+    if (isDesktop) {
+      setTabBarMetrics(0, 0)
+    }
+  }, [isDesktop])
+
+  useEffect(() => {
+    const shouldHide =
+      playerMode === 'fullscreen' &&
+      !isInPipMode &&
+      (Platform.OS !== 'android' || androidSplitPlayerEnabled || isAndroidWatchPathActive)
     barVisible.value = withTiming(shouldHide ? 0 : 1, { duration: 200 })
-  }, [playerMode, isInPipMode, barVisible])
+  }, [androidSplitPlayerEnabled, isAndroidWatchPathActive, playerMode, isInPipMode, barVisible])
 
   useEffect(() => {
     const showSub = Keyboard.addListener(
@@ -84,9 +102,10 @@ export function PillTabBar({ state, descriptors, navigation }: PillTabBarProps) 
   }, [keyboardVisible])
 
   useEffect(() => {
+    if (isDesktop) return
     const totalHeight = PILL_HEIGHT + bottomPosition + PILL_BOTTOM_OFFSET
     setTabBarMetrics(totalHeight, insets.bottom)
-  }, [bottomPosition, insets.bottom])
+  }, [bottomPosition, insets.bottom, isDesktop])
 
   const containerStyle = useAnimatedStyle(() => {
     const translateY = interpolate(
@@ -107,7 +126,9 @@ export function PillTabBar({ state, descriptors, navigation }: PillTabBarProps) 
     }
   })
 
-  const currentRoute = state.routes[state.index]?.name
+  if (isDesktop) {
+    return null
+  }
 
   return (
     <Animated.View
@@ -129,8 +150,8 @@ export function PillTabBar({ state, descriptors, navigation }: PillTabBarProps) 
       <View style={styles.topHighlight} />
       
       <View style={styles.tabsContainer}>
-        {TABS.map((tab, index) => {
-          const isActive = currentRoute === tab.name
+        {TABS.map((tab) => {
+          const isActive = isTabActive(pathname, tab.path)
           
           return (
             <TabButton
@@ -138,15 +159,8 @@ export function PillTabBar({ state, descriptors, navigation }: PillTabBarProps) 
               tab={tab}
               isActive={isActive}
               onPress={() => {
-                const event = navigation.emit({
-                  type: 'tabPress',
-                  target: state.routes.find((r: any) => r.name === tab.name)?.key,
-                  canPreventDefault: true,
-                })
-
-                if (!event.defaultPrevented) {
-                  navigation.navigate(tab.name)
-                }
+                if (isActive) return
+                router.replace(tab.path as any)
               }}
             />
           )

@@ -42,7 +42,7 @@
     "tiny-byte-size": "^1.1.0"
   },
   "devDependencies": {
-    "bare-build": "^0.2.7",
+    "bare-build": "^0.4.6",
     "brittle": "^3.19.1"
   }
 }

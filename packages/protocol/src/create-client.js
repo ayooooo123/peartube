@@ -327,15 +327,14 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
             settleResolve(emitHostReady(status))
           } catch (error) {
             await appendDebugLine(
-              `[createProtocolClient] getStatus failed ${error?.code || 'ERR'} ${error?.message || String(error)}`
+              `[createProtocolClient] getStatus failed ${error?.code || 'ERR'} ${error?.message || String(error)}, waiting for eventReady`
             )
-            settleReject(
-              emitHostError(
-                error?.code === HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH
-                  ? error
-                  : normalizeProtocolError(error)
-              )
-            )
+            // Don't reject on getStatus failure — the backend may still be
+            // initializing. Let the eventReady / eventError listeners settle
+            // the promise instead. Only reject immediately for version mismatch.
+            if (error?.code === HOST_ERROR_CODES.PROTOCOL_VERSION_MISMATCH) {
+              settleReject(emitHostError(error))
+            }
           }
         })()
       })

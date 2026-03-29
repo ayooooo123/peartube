@@ -146,14 +146,15 @@ type TransitionMap = {
   }
   loading: {
     CLOSE_VIDEO: 'hidden'
-    MINIMIZE: 'mini'
+    MINIMIZE: 'mini' | 'pip_entering'
     MAXIMIZE: 'fullscreen'
     PIP_ENTERED_ANDROID: 'pip_entering'
     PIP_EXITED_ANDROID: 'fullscreen' | 'mini' | 'loading'
   }
   fullscreen: {
+    LOAD_VIDEO: 'fullscreen'
     CLOSE_VIDEO: 'hidden'
-    MINIMIZE: 'mini'
+    MINIMIZE: 'mini' | 'pip_entering'
     MAXIMIZE: 'fullscreen'
     APP_BACKGROUND: 'fullscreen'
     APP_FOREGROUND: 'fullscreen'
@@ -165,8 +166,9 @@ type TransitionMap = {
     FORCE_RELOAD_PLAYBACK: 'fullscreen'
   }
   mini: {
+    LOAD_VIDEO: 'fullscreen'
     CLOSE_VIDEO: 'hidden'
-    MINIMIZE: 'mini'
+    MINIMIZE: 'mini' | 'pip_entering'
     MAXIMIZE: 'fullscreen'
     APP_BACKGROUND: 'fullscreen' | 'mini'
     APP_FOREGROUND: 'mini' | 'fullscreen'
@@ -177,11 +179,11 @@ type TransitionMap = {
   }
   pip_entering: {
     PIP_ENTERED_ANDROID: 'pip_active' | 'pip_entering'
-    PIP_EXITED_ANDROID: 'pip_exiting'
+    PIP_EXITED_ANDROID: 'fullscreen' | 'mini' | 'loading'
     CLOSE_VIDEO: 'hidden'
   }
   pip_active: {
-    PIP_EXITED_ANDROID: 'pip_exiting'
+    PIP_EXITED_ANDROID: 'fullscreen' | 'mini' | 'loading'
     CLOSE_VIDEO: 'hidden'
   }
   pip_exiting: {
@@ -385,8 +387,12 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
         case 'FORCE_RELOAD_PLAYBACK':
           return invalidTransition(state, event)
         case 'MINIMIZE':
-          if (event.platform === 'android') {
-            return withMode(state, 'fullscreen')
+          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            return {
+              ...state,
+              mode: 'pip_entering',
+              modeBeforePip: 'fullscreen',
+            }
           }
           return withMode(state, 'mini')
         case 'MAXIMIZE':
@@ -418,13 +424,19 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
     case 'fullscreen': {
       switch (event.type) {
         case 'LOAD_VIDEO':
+          // Allow loading a new video while in fullscreen (e.g., tapping related video)
+          return toFullscreenState(state, event.video, event.url, true)
         case 'RESTORE_FROM_LAST_CLOSED':
           return invalidTransition(state, event)
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
         case 'MINIMIZE':
-          if (event.platform === 'android') {
-            return withMode(state, 'fullscreen')
+          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            return {
+              ...state,
+              mode: 'pip_entering',
+              modeBeforePip: 'fullscreen',
+            }
           }
           return withMode(state, 'mini')
         case 'MAXIMIZE':
@@ -463,20 +475,28 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
     case 'mini': {
       switch (event.type) {
         case 'LOAD_VIDEO':
+          // Allow loading a new video from mini mode — transitions to fullscreen.
+          // This happens when user taps a new video while mini player is active.
+          return toFullscreenState(state, event.video, event.url, true)
         case 'RESTORE_FROM_LAST_CLOSED':
         case 'PIP_ENTERED_ANDROID':
           return invalidTransition(state, event)
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
         case 'MINIMIZE':
-          if (event.platform === 'android') {
-            return withMode(state, 'fullscreen')
+          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            return {
+              ...state,
+              mode: 'pip_entering',
+              modeBeforePip: 'mini',
+            }
           }
           return withMode(state, 'mini')
         case 'MAXIMIZE':
           return withMode(state, 'fullscreen')
         case 'APP_BACKGROUND':
           if (ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            // KEEP: split-activity PiP handoff still needs a fullscreen-sized surface on Android.
             return {
               ...state,
               mode: 'fullscreen',
@@ -490,6 +510,7 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
           }
         case 'APP_FOREGROUND':
           if (ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+            // KEEP: split-activity mode has no in-app mini surface to restore to.
             return withMode(state, 'fullscreen')
           }
           return {
@@ -497,22 +518,13 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
             mode: event.wasInPip ? 'fullscreen' : 'mini',
           }
         case 'REMOTE_PLAY':
-          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-            return withMode(state, 'fullscreen')
-          }
           return {
             ...state,
             mode: event.isBackgrounded && event.platform === 'android' ? 'fullscreen' : 'mini',
           }
         case 'REMOTE_PAUSE':
-          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-            return withMode(state, 'fullscreen')
-          }
           return withMode(state, 'mini')
         case 'REMOTE_TOGGLE_PLAY_PAUSE':
-          if (event.platform === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-            return withMode(state, 'fullscreen')
-          }
           return {
             ...state,
             mode:
@@ -521,7 +533,21 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
                 : 'mini',
           }
         case 'PIP_EXITED_ANDROID':
-          return invalidTransition(state, event)
+          // Split-player PiP: PlayerActivity managed PiP outside the React
+          // state machine, so there's no pip_exiting intermediate state.
+          // Transition directly back to the restore mode.
+          if (!event.wasInPip) {
+            return {
+              ...state,
+              mode: 'loading',
+              wasPlayingWhenPipEntered: false,
+            }
+          }
+          return {
+            ...state,
+            mode: event.restoreMode,
+            wasPlayingWhenPipEntered: false,
+          }
         case 'FORCE_RELOAD_PLAYBACK':
           return toFullscreenState(state, event.video, event.url, false)
       }
@@ -549,7 +575,18 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
             ),
           }
         case 'PIP_EXITED_ANDROID':
-          return withMode(state, 'pip_exiting')
+          if (!event.wasInPip) {
+            return {
+              ...state,
+              mode: 'loading',
+              wasPlayingWhenPipEntered: false,
+            }
+          }
+          return {
+            ...state,
+            mode: event.restoreMode,
+            wasPlayingWhenPipEntered: false,
+          }
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
       }
@@ -570,7 +607,18 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
         case 'PIP_ENTERED_ANDROID':
           return invalidTransition(state, event)
         case 'PIP_EXITED_ANDROID':
-          return withMode(state, 'pip_exiting')
+          if (!event.wasInPip) {
+            return {
+              ...state,
+              mode: 'loading',
+              wasPlayingWhenPipEntered: false,
+            }
+          }
+          return {
+            ...state,
+            mode: event.restoreMode,
+            wasPlayingWhenPipEntered: false,
+          }
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
       }

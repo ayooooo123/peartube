@@ -44,6 +44,7 @@ object PipBridge {
     private var moduleInstance: MediaSessionModule? = null
     private var pipEnabled: Boolean = false
     private var suppressNextMainActivityUserLeaveHint: Boolean = false
+    @Volatile private var mainActivityDelegatedPipHandoffUntilUptimeMs: Long = 0
     @Volatile private var lastIsInPip: Boolean = false
     @Volatile private var surfaceViewInsetPx: Float = 0f
 
@@ -106,6 +107,10 @@ object PipBridge {
 
     fun suppressNextMainUserLeaveHint() {
         suppressNextMainActivityUserLeaveHint = true
+    }
+
+    fun markMainActivityDelegatedPipHandoff() {
+        mainActivityDelegatedPipHandoffUntilUptimeMs = SystemClock.uptimeMillis() + 2200
     }
 
     @JvmStatic
@@ -188,182 +193,24 @@ object PipBridge {
             return
         }
 
-        // Auto-enter PiP is already configured via updateActivityPipParams.
-        // Just mark the transition for audio focus handling.
         markPipTransition()
-        android.util.Log.d("PipBridge", "onUserLeaveHint: PiP transition marked, auto-enter handles the rest")
-    }
+        android.util.Log.d("PipBridge", "onUserLeaveHint: PiP transition marked")
 
-    // State saved before PiP so we can restore on exit
-    private val hiddenViews = mutableListOf<android.view.View>()
-    private val unclippedParents = mutableListOf<Pair<android.view.ViewGroup, Pair<Boolean, Boolean>>>()
-    private var savedDecorBackground: android.graphics.drawable.Drawable? = null
-    private var pipViewExpanded = false
-
-    /**
-     * Prepare the Activity for PiP by hiding all non-video UI and expanding
-     * the SurfaceView to fill the screen. Android PiP captures the entire
-     * Activity window, so we must make it look like only the video is showing.
-     */
-    @JvmStatic
-    fun expandSurfaceViewsForPip(activity: Activity) {
-        val rootView = activity.window.decorView as? android.view.ViewGroup ?: return
-        val videoViews = findVideoViews(rootView)
-        if (videoViews.isEmpty()) {
-            android.util.Log.d("PipBridge", "expandSurfaceViewsForPip: no video views found")
-            return
-        }
-
-        val display = activity.windowManager.defaultDisplay
-        val size = android.graphics.Point()
-        display.getRealSize(size)
-        val screenW = size.x.toFloat()
-        val screenH = size.y.toFloat()
-
-        hiddenViews.clear()
-        unclippedParents.clear()
-        savedDecorBackground = rootView.background
-        pipViewExpanded = true
-
-        invokePlayerViewStatic(
-            "setPipExpandedByBridge",
-            arrayOf(Boolean::class.javaPrimitiveType),
-            arrayOf(true)
-        )
-
-        for (vv in videoViews) {
-            val viewW = vv.width.toFloat()
-            val viewH = vv.height.toFloat()
-            if (viewW <= 0 || viewH <= 0) continue
-
-            var parent = vv.parent
-            while (parent is android.view.ViewGroup) {
-                val vg = parent
-                unclippedParents.add(vg to Pair(vg.clipChildren, vg.clipToPadding))
-                vg.clipChildren = false
-                vg.clipToPadding = false
-                parent = vg.parent
-            }
-
-            val loc = IntArray(2)
-            vv.getLocationOnScreen(loc)
-
-            vv.pivotX = 0f
-            vv.pivotY = 0f
-            // Scale to fill the entire screen so PiP captures only video.
-            val scaleX = screenW / viewW
-            val scaleY = screenH / viewH
-            vv.scaleX = scaleX
-            vv.scaleY = scaleY
-            vv.translationX = -loc[0].toFloat()
-            vv.translationY = -loc[1].toFloat()
-
-            if (vv is android.view.SurfaceView) {
-                vv.setZOrderOnTop(true)
-            }
-
-            android.util.Log.d("PipBridge", "expandSurfaceViewsForPip: ${vv.javaClass.simpleName} ${viewW}x${viewH} at ${loc[0]},${loc[1]} → scale=${scaleX} fullscreen ${screenW}x${screenH}")
-        }
-
-        val ancestorSet = mutableSetOf<android.view.View>()
-        for (vv in videoViews) {
-            var v: android.view.View? = vv
-            while (v != null) {
-                ancestorSet.add(v)
-                v = v.parent as? android.view.View
-            }
-        }
-
-        hideNonVideoViews(rootView, ancestorSet)
-        rootView.setBackgroundColor(android.graphics.Color.BLACK)
-
-        // Update PiP params with fullscreen sourceRectHint since video is now
-        // scaled to fill the entire screen via scaleX/scaleY transforms.
+        // With react-native-video, PiP runs in the main activity (no PlayerActivity handoff).
+        // Enter PiP directly here instead of relying on setAutoEnterEnabled which can be lost.
         try {
-            val sourceRect = android.graphics.Rect(0, 0, screenW.toInt(), screenH.toInt())
+            val aspectRatio = getPipAspectRatio()
             val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(getPipAspectRatio())
-                .setSourceRectHint(sourceRect)
-                .setSeamlessResizeEnabled(true)
+                .setAspectRatio(aspectRatio)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setAutoEnterEnabled(true)
+                builder.setSeamlessResizeEnabled(true)
             }
-            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
-            builder.setActions(actions)
-            activity.setPictureInPictureParams(builder.build())
-            android.util.Log.d("PipBridge", "expandSurfaceViewsForPip: updated PiP params sourceRect=$sourceRect")
+            builder.setActions(moduleInstance?.buildPipActions(activity) ?: emptyList())
+            activity.enterPictureInPictureMode(builder.build())
+            android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
         } catch (e: Exception) {
-            android.util.Log.e("PipBridge", "expandSurfaceViewsForPip: PiP params update failed", e)
+            android.util.Log.e("PipBridge", "onUserLeaveHint: enterPictureInPictureMode failed", e)
         }
-    }
-
-    private fun isVideoView(view: android.view.View): Boolean {
-        return view is android.view.SurfaceView || view is android.view.TextureView
-    }
-
-    private fun hideNonVideoViews(group: android.view.ViewGroup, ancestors: Set<android.view.View>) {
-        for (i in 0 until group.childCount) {
-            val child = group.getChildAt(i)
-            if (isVideoView(child)) continue
-            if (child in ancestors) {
-                if (child is android.view.ViewGroup) {
-                    hideNonVideoViews(child, ancestors)
-                }
-            } else {
-                if (child.visibility == android.view.View.VISIBLE) {
-                    hiddenViews.add(child)
-                    child.visibility = android.view.View.INVISIBLE
-                }
-            }
-        }
-    }
-
-    @JvmStatic
-    fun restoreViewsAfterPip(activity: Activity) {
-        if (!pipViewExpanded) return
-        pipViewExpanded = false
-
-        invokePlayerViewStatic(
-            "setPipExpandedByBridge",
-            arrayOf(Boolean::class.javaPrimitiveType),
-            arrayOf(false)
-        )
-
-        android.util.Log.d("PipBridge", "restoreViewsAfterPip: restoring ${hiddenViews.size} hidden views, ${unclippedParents.size} clip states")
-
-        for (v in hiddenViews) {
-            v.visibility = android.view.View.VISIBLE
-        }
-        hiddenViews.clear()
-
-        for ((vg, clips) in unclippedParents) {
-            vg.clipChildren = clips.first
-            vg.clipToPadding = clips.second
-        }
-        unclippedParents.clear()
-
-        val rootView = activity.window.decorView
-        val videoViews = findVideoViews(rootView)
-        for (vv in videoViews) {
-            if (vv is android.view.SurfaceView) {
-                vv.setZOrderOnTop(false)
-                vv.setZOrderMediaOverlay(false)
-            }
-            vv.pivotX = vv.width / 2f
-            vv.pivotY = vv.height / 2f
-            vv.scaleX = 1f
-            vv.scaleY = 1f
-            vv.translationX = 0f
-            vv.translationY = surfaceViewInsetPx
-        }
-
-        val decorView = activity.window.decorView as? android.view.ViewGroup
-        if (savedDecorBackground != null) {
-            decorView?.background = savedDecorBackground
-        } else {
-            decorView?.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        }
-        savedDecorBackground = null
     }
 
     fun getFullscreenSourceRect(activity: Activity): android.graphics.Rect {
@@ -374,113 +221,12 @@ object PipBridge {
     }
 
     /**
-     * Hide all non-video views for PiP capture. Does NOT touch SurfaceView transforms.
-     * Called from onPause just before auto-enter PiP captures the window.
-     */
-    @JvmStatic
-    fun hideNonVideoForPip(activity: Activity) {
-        val rootView = activity.window.decorView as? android.view.ViewGroup ?: return
-        val videoViews = findVideoViews(rootView)
-        if (videoViews.isEmpty()) return
-
-        val display = activity.windowManager.defaultDisplay
-        val screenSize = android.graphics.Point()
-        display.getRealSize(screenSize)
-        val screenW = screenSize.x
-        val screenH = screenSize.y
-
-        val ancestorSet = mutableSetOf<android.view.View>()
-        for (vv in videoViews) {
-            var v: android.view.View? = vv
-            while (v != null) {
-                ancestorSet.add(v)
-                v = v.parent as? android.view.View
-            }
-        }
-
-        hiddenViews.clear()
-        unclippedParents.clear()
-        savedDecorBackground = rootView.background
-        pipViewExpanded = true
-        hideNonVideoViews(rootView, ancestorSet)
-        rootView.setBackgroundColor(android.graphics.Color.BLACK)
-
-        // Resize the SurfaceView and all ancestor ViewGroups to fill the screen.
-        // SurfaceView ignores scaleX/scaleY (compositor surface doesn't respond to
-        // View transforms), so we must change actual LayoutParams.
-        for (vv in videoViews) {
-            val loc = IntArray(2)
-            vv.getLocationOnScreen(loc)
-            android.util.Log.d("PipBridge", "hideNonVideoForPip: ${vv.javaClass.simpleName} ${vv.width}x${vv.height} at (${loc[0]},${loc[1]})")
-
-            // Disable clipping on all ancestors
-            var parent = vv.parent
-            while (parent is android.view.ViewGroup) {
-                val vg = parent
-                unclippedParents.add(vg to Pair(vg.clipChildren, vg.clipToPadding))
-                vg.clipChildren = false
-                vg.clipToPadding = false
-                parent = vg.parent
-            }
-
-            // Resize the view to fill the screen width, maintaining video aspect ratio.
-            // Don't stretch to full screen height — that distorts and causes zoom in PiP.
-            val videoAspect = pipAspectRatioWidth.toFloat() / pipAspectRatioHeight.toFloat()
-            val targetW = screenW
-            val targetH = (screenW / videoAspect).toInt()
-            val lp = vv.layoutParams
-            if (lp != null) {
-                lp.width = targetW
-                lp.height = targetH
-                vv.layoutParams = lp
-            }
-            // Translate to origin
-            vv.translationX = -loc[0].toFloat()
-            vv.translationY = -loc[1].toFloat()
-            android.util.Log.d("PipBridge", "hideNonVideoForPip: resized to ${targetW}x${targetH} (aspect=${videoAspect})")
-        }
-
-        // Force layout pass
-        rootView.requestLayout()
-        rootView.invalidate()
-
-        // Update PiP params with sourceRectHint matching the post-translation video position.
-        // The video is now at (0,0) with dimensions targetW x targetH.
-        // This tells Android's auto-enter PiP to crop to just the video area.
-        try {
-            val videoAspect2 = pipAspectRatioWidth.toFloat() / pipAspectRatioHeight.toFloat()
-            val pipTargetH = (screenW / videoAspect2).toInt()
-            val sourceRect = android.graphics.Rect(0, 0, screenW, pipTargetH)
-            val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(getPipAspectRatio())
-                .setSourceRectHint(sourceRect)
-                .setSeamlessResizeEnabled(true)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setAutoEnterEnabled(true)
-            }
-            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
-            builder.setActions(actions)
-            activity.setPictureInPictureParams(builder.build())
-            android.util.Log.d("PipBridge", "hideNonVideoForPip: updated PiP params sourceRect=$sourceRect")
-        } catch (e: Exception) {
-            android.util.Log.e("PipBridge", "hideNonVideoForPip: PiP params update failed", e)
-        }
-
-        android.util.Log.d("PipBridge", "hideNonVideoForPip: hidden ${hiddenViews.size} views")
-    }
-
-    /**
      * Update PiP params with accurate sourceRectHint right before auto-enter captures.
      * On Android 12+/16, sourceRectHint tells the system which area of the window
      * contains the video content for PiP cropping.
      */
     @JvmStatic
     fun updatePipSourceRectForCapture(activity: Activity) {
-        // If views are already expanded via scaleX/scaleY, the PiP params were set
-        // with a fullscreen sourceRect in expandSurfaceViewsForPip. Don't override
-        // with untransformed coordinates which would cause a wrong crop.
-        if (pipViewExpanded) return
-
         try {
             val rootView = activity.window.decorView
             val videoViews = findVideoViews(rootView)
@@ -563,8 +309,7 @@ object PipBridge {
 
     private fun isPipHostActivity(activity: Activity): Boolean {
         val className = activity.javaClass.name
-        return className == "${activity.packageName}.MainActivity" ||
-            className == "${activity.packageName}.PlayerActivity"
+        return className == "${activity.packageName}.MainActivity"
     }
 
     @JvmStatic
@@ -576,49 +321,57 @@ object PipBridge {
             markPipTransition()
             notifyPlayerViews(isInPip)
 
-            // Also apply transform directly to all SurfaceViews with a small delay
-            // This ensures the transform is applied after Android finishes PiP transition
+            val isMainActivity = activity.javaClass.name.endsWith(".MainActivity")
+
+            // Don't manipulate views on MainActivity during PiP.
+            // Auto-enter captures the correct layout. Any view changes
+            // (hiding, resizing, translating) trigger native relayout
+            // which shifts the video in the PiP window.
+
+            // Apply SurfaceView transforms (skipped for MainActivity)
             val handler = android.os.Handler(android.os.Looper.getMainLooper())
             handler.postDelayed({
                 applySurfaceViewTransforms(activity, isInPip, newConfig)
-            }, 50) // Small delay to let Android settle
+            }, 50)
 
             lastIsInPip = isInPip
 
             if (!isInPip) {
-                restoreViewsAfterPip(activity)
+                // Only restore views if the Activity is actually coming back to
+                // fullscreen (not during PiP mode cycling from config changes).
+                // Check if the window is still PiP-sized — if so, skip restore.
+                val windowMetrics = activity.windowManager.currentWindowMetrics
+                val windowBounds = windowMetrics.bounds
+                val display = activity.windowManager.defaultDisplay
+                val screenSize = android.graphics.Point()
+                display.getRealSize(screenSize)
+                val stillPipSized = windowBounds.width() < screenSize.x * 0.8f
+                if (stillPipSized) {
+                    android.util.Log.d("PipBridge", "notifyPipModeChanged: skipping restore — window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y})")
+                    lastIsInPip = true  // Pretend we're still in PiP
+                } else {
+                    // Only run the dismissal-pause logic for real PiP exits
+                    run {
+                        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                        fun isAppProcessVisible(): Boolean {
+                            val info = ActivityManager.RunningAppProcessInfo()
+                            ActivityManager.getMyMemoryState(info)
+                            return info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+                                info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+                        }
 
-                val handler = android.os.Handler(android.os.Looper.getMainLooper())
-                // NOTE: When returning from PiP by tapping the window, Android can
-                // report no window focus for a short period even though focus will
-                // be restored moments later. If we pause immediately, we cause the
-                // "return from PiP" path to incorrectly stop playback.
-                //
-                // Approach: retry the focus check a few times; only treat this as
-                // dismissal if focus never comes back.
-                fun isAppProcessVisible(): Boolean {
-                    val info = ActivityManager.RunningAppProcessInfo()
-                    ActivityManager.getMyMemoryState(info)
-                    return info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
-                        info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
-                }
-
-                fun maybePauseAfterDismissal(attempt: Int) {
-                    if (activity.isDestroyed || activity.isFinishing) return
-
-                    // During PiP exit transitions, window focus can be false even while the app
-                    // is coming back to foreground. Use process visibility instead of window focus
-                    // to avoid false-positive "dismissed" detection (which would pause + stutter).
-                    if (isAppProcessVisible()) return
-
-                    if (attempt >= 8) {
-                        notifyPipDismissed()
-                        return
+                        fun maybePauseAfterDismissal(attempt: Int) {
+                            if (activity.isDestroyed || activity.isFinishing) return
+                            if (isAppProcessVisible()) return
+                            if (attempt >= 8) {
+                                notifyPipDismissed()
+                                return
+                            }
+                            handler.postDelayed({ maybePauseAfterDismissal(attempt + 1) }, 250)
+                        }
+                        handler.postDelayed({ maybePauseAfterDismissal(0) }, 350)
                     }
-                    handler.postDelayed({ maybePauseAfterDismissal(attempt + 1) }, 250)
                 }
-
-                handler.postDelayed({ maybePauseAfterDismissal(0) }, 350)
             }
         }
 
@@ -629,7 +382,8 @@ object PipBridge {
             notifyPlayerPipWindowSize(pipWidthPx, pipHeightPx)
         }
 
-        // Still send event to JS for state management and PiP window resize updates.
+        // Send PiP event to JS for state management.
+        // The overlay renders a simplified video-only view during PiP.
         moduleInstance?.sendPipEvent(activity, isInPip, newConfig)
     }
 
@@ -793,26 +547,6 @@ object PipBridge {
 
 }
 
-object PlayerLaunchBridge {
-    private var moduleInstance: MediaSessionModule? = null
-
-    fun register(module: MediaSessionModule) {
-        moduleInstance = module
-    }
-
-    fun unregister(module: MediaSessionModule) {
-        if (moduleInstance === module) {
-            moduleInstance = null
-        }
-    }
-
-    fun onPlayerActivityReady(activity: Activity) {
-        if (activity.javaClass.name != "${activity.packageName}.PlayerActivity") return
-        moduleInstance?.emitPlayerLaunchPayloadFromIntent(activity.intent)
-        moduleInstance?.emitPendingPlayerLaunchPayloadIfAny()
-    }
-}
-
 class MediaSessionModule : Module() {
     private var mediaSession: MediaSessionCompat? = null
     private var audioManager: AudioManager? = null
@@ -828,8 +562,7 @@ class MediaSessionModule : Module() {
     private var isAutoPipEnabled: Boolean = false
     private var pipAspectRatioWidth: Int = 16
     private var pipAspectRatioHeight: Int = 9
-    private var lastPlayerLaunchEmitToken: String? = null
-    private var lastPlayerLaunchEmitAtMs: Long = 0L
+
 
     override fun definition() = ModuleDefinition {
         Name("MediaSession")
@@ -838,8 +571,7 @@ class MediaSessionModule : Module() {
             "onRemoteCommand",
             "onAudioInterruption",
             "onAudioRouteChange",
-            "onPictureInPictureChanged",
-            "onPlayerLaunchPayload"
+            "onPictureInPictureChanged"
         )
 
         AsyncFunction("setActive") { active: Boolean, promise: Promise ->
@@ -1033,47 +765,14 @@ class MediaSessionModule : Module() {
             promise.resolve(null)
         }
 
-        AsyncFunction("openPlayerActivity") { payload: Map<String, Any?>, promise: Promise ->
-            CoroutineScope(Dispatchers.Main).launch {
-                try {
-                    val opened = openPlayerActivity(payload)
-                    promise.resolve(opened)
-                } catch (e: Exception) {
-                    promise.reject("PLAYER_ACTIVITY_ERROR", e.message ?: "Failed to open player activity", e)
-                }
-            }
-        }
-
-        AsyncFunction("consumePendingPlayerLaunchPayload") { promise: Promise ->
-            val payload = pendingPlayerLaunchPayload
-            pendingPlayerLaunchPayload = null
-            promise.resolve(payload)
-        }
-
-        AsyncFunction("clearPendingPlayerLaunchPayload") { promise: Promise ->
-            pendingPlayerLaunchPayload = null
-            lastPlayerLaunchEmitToken = null
-            lastPlayerLaunchEmitAtMs = 0L
-            promise.resolve(null)
-        }
-
-        AsyncFunction("isInPlayerActivity") { promise: Promise ->
-            val activity = appContext.currentActivity
-            val inPlayerActivity = activity?.javaClass?.name == "com.peartube.app.PlayerActivity"
-            promise.resolve(inPlayerActivity)
-        }
-
         OnCreate {
             PipBridge.register(this@MediaSessionModule)
-            PlayerLaunchBridge.register(this@MediaSessionModule)
             PipServiceBridge.register(this@MediaSessionModule)
             MediaSessionRegistry.setCallback(mediaSessionCallback)
-            emitPendingPlayerLaunchPayloadIfAny()
         }
 
         OnDestroy {
             PipBridge.unregister(this@MediaSessionModule)
-            PlayerLaunchBridge.unregister(this@MediaSessionModule)
             PipServiceBridge.unregister(this@MediaSessionModule)
             cleanup()
         }
@@ -1101,151 +800,7 @@ class MediaSessionModule : Module() {
         }
     }
 
-    private fun openPlayerActivity(payload: Map<String, Any?>): Boolean {
-        val activity = appContext.currentActivity ?: return false
-        val playerActivityClassName = "${activity.packageName}.PlayerActivity"
-        val alreadyInPlayerActivity = activity.javaClass.name == playerActivityClassName
 
-        pendingPlayerLaunchPayload = payload
-
-        if (alreadyInPlayerActivity) {
-            emitPlayerLaunchPayload(payload)
-            return true
-        }
-
-        if (activity.javaClass.name == "${activity.packageName}.MainActivity") {
-            PipBridge.suppressNextMainUserLeaveHint()
-        }
-
-        val intent = Intent().apply {
-            setClassName(activity.packageName, playerActivityClassName)
-            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
-            putPayloadExtras(this, payload)
-        }
-
-        val resolvedActivity = intent.resolveActivity(activity.packageManager)
-        if (resolvedActivity == null) {
-            throw IllegalStateException(
-                "Unable to resolve PlayerActivity ($playerActivityClassName) for package ${activity.packageName}",
-            )
-        }
-
-        activity.startActivity(intent)
-        activity.overridePendingTransition(0, 0)
-        return true
-    }
-
-    internal fun emitPendingPlayerLaunchPayloadIfAny() {
-        val payload = pendingPlayerLaunchPayload ?: return
-        emitPlayerLaunchPayload(payload)
-    }
-
-    internal fun emitPlayerLaunchPayloadFromIntent(intent: Intent?) {
-        val payload = extractPayloadFromIntent(intent) ?: return
-        emitPlayerLaunchPayload(payload)
-    }
-
-    private fun emitPlayerLaunchPayload(payload: Map<String, Any?>) {
-        pendingPlayerLaunchPayload = payload
-
-        val sessionId = payload["sessionId"] as? String
-        val sourceUrl = payload["sourceUrl"] as? String
-        val videoId = payload["videoId"] as? String
-        val startPositionMs = (payload["startPositionMs"] as? Number)?.toLong() ?: 0L
-        val token = when {
-            !sessionId.isNullOrBlank() -> sessionId
-            !sourceUrl.isNullOrBlank() -> "${videoId ?: "video"}|$sourceUrl|$startPositionMs"
-            else -> null
-        }
-
-        val now = SystemClock.uptimeMillis()
-        if (
-            token != null &&
-            token == lastPlayerLaunchEmitToken &&
-            now - lastPlayerLaunchEmitAtMs < 500
-        ) {
-            return
-        }
-
-        if (token != null) {
-            lastPlayerLaunchEmitToken = token
-            lastPlayerLaunchEmitAtMs = now
-        }
-
-        sendEvent("onPlayerLaunchPayload", payload)
-    }
-
-    private fun putPayloadExtras(intent: Intent, payload: Map<String, Any?>) {
-        val sessionId = payload["sessionId"] as? String
-        val videoId = payload["videoId"] as? String
-        val sourceUrl = payload["sourceUrl"] as? String
-        val startPositionMs = (payload["startPositionMs"] as? Number)?.toLong()
-        val shouldAutoplay = payload["shouldAutoplay"] as? Boolean
-        val title = payload["title"] as? String
-        val description = payload["description"] as? String
-        val path = payload["path"] as? String
-        val size = (payload["size"] as? Number)?.toLong()
-        val uploadedAt = (payload["uploadedAt"] as? Number)?.toLong()
-        val channelKey = payload["channelKey"] as? String
-        val mimeType = payload["mimeType"] as? String
-        val duration = (payload["duration"] as? Number)?.toDouble()
-        val thumbnail = payload["thumbnail"] as? String
-        val requestPipOnLaunch = payload["requestPipOnLaunch"] as? Boolean
-
-        if (!sessionId.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_SESSION_ID, sessionId)
-        if (!videoId.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_VIDEO_ID, videoId)
-        if (!sourceUrl.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_SOURCE_URL, sourceUrl)
-        if (startPositionMs != null) intent.putExtra(EXTRA_PLAYER_START_POSITION_MS, startPositionMs)
-        if (shouldAutoplay != null) intent.putExtra(EXTRA_PLAYER_SHOULD_AUTOPLAY, shouldAutoplay)
-        if (!title.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_TITLE, title)
-        if (!description.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_DESCRIPTION, description)
-        if (!path.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_PATH, path)
-        if (size != null) intent.putExtra(EXTRA_PLAYER_SIZE, size)
-        if (uploadedAt != null) intent.putExtra(EXTRA_PLAYER_UPLOADED_AT, uploadedAt)
-        if (!channelKey.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_CHANNEL_KEY, channelKey)
-        if (!mimeType.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_MIME_TYPE, mimeType)
-        if (duration != null) intent.putExtra(EXTRA_PLAYER_DURATION, duration)
-        if (!thumbnail.isNullOrBlank()) intent.putExtra(EXTRA_PLAYER_THUMBNAIL, thumbnail)
-        if (requestPipOnLaunch != null) intent.putExtra(EXTRA_PLAYER_REQUEST_PIP_ON_LAUNCH, requestPipOnLaunch)
-    }
-
-    private fun extractPayloadFromIntent(intent: Intent?): Map<String, Any?>? {
-        if (intent == null) return null
-        val extras = intent.extras ?: return null
-        if (!extras.containsKey(EXTRA_PLAYER_SOURCE_URL)) return null
-
-        val payload = mutableMapOf<String, Any?>()
-        extras.getString(EXTRA_PLAYER_SESSION_ID)?.let { payload["sessionId"] = it }
-        extras.getString(EXTRA_PLAYER_VIDEO_ID)?.let { payload["videoId"] = it }
-        extras.getString(EXTRA_PLAYER_SOURCE_URL)?.let { payload["sourceUrl"] = it }
-        if (extras.containsKey(EXTRA_PLAYER_START_POSITION_MS)) {
-            payload["startPositionMs"] = extras.getLong(EXTRA_PLAYER_START_POSITION_MS)
-        }
-        if (extras.containsKey(EXTRA_PLAYER_SHOULD_AUTOPLAY)) {
-            payload["shouldAutoplay"] = extras.getBoolean(EXTRA_PLAYER_SHOULD_AUTOPLAY)
-        }
-        extras.getString(EXTRA_PLAYER_TITLE)?.let { payload["title"] = it }
-        extras.getString(EXTRA_PLAYER_DESCRIPTION)?.let { payload["description"] = it }
-        extras.getString(EXTRA_PLAYER_PATH)?.let { payload["path"] = it }
-        if (extras.containsKey(EXTRA_PLAYER_SIZE)) {
-            payload["size"] = extras.getLong(EXTRA_PLAYER_SIZE)
-        }
-        if (extras.containsKey(EXTRA_PLAYER_UPLOADED_AT)) {
-            payload["uploadedAt"] = extras.getLong(EXTRA_PLAYER_UPLOADED_AT)
-        }
-        extras.getString(EXTRA_PLAYER_CHANNEL_KEY)?.let { payload["channelKey"] = it }
-        extras.getString(EXTRA_PLAYER_MIME_TYPE)?.let { payload["mimeType"] = it }
-        if (extras.containsKey(EXTRA_PLAYER_DURATION)) {
-            payload["duration"] = extras.getDouble(EXTRA_PLAYER_DURATION)
-        }
-        extras.getString(EXTRA_PLAYER_THUMBNAIL)?.let { payload["thumbnail"] = it }
-        if (extras.containsKey(EXTRA_PLAYER_REQUEST_PIP_ON_LAUNCH)) {
-            payload["requestPipOnLaunch"] = extras.getBoolean(EXTRA_PLAYER_REQUEST_PIP_ON_LAUNCH)
-        }
-        return payload
-    }
 
     private fun getSafeInsetTopPx(activity: Activity): Int {
         val decorView = activity.window?.decorView ?: return 0
@@ -1334,11 +889,9 @@ class MediaSessionModule : Module() {
 
         if (isSessionActive && lastIsPlaying != isPlaying) {
             lastIsPlaying = isPlaying
-            if (isPlaying) {
-                requestAudioFocus()
-            } else {
-                abandonAudioFocus()
-            }
+            // Audio focus is managed by react-native-video's ExoPlayer directly.
+            // Our MediaSession should NOT compete for audio focus — doing so prevents
+            // ExoPlayer from starting playback (it stays in ready-but-not-playing state).
         }
 
         val playStateChanged = currentIsPlaying != isPlaying
@@ -1651,9 +1204,7 @@ class MediaSessionModule : Module() {
 
         val activity = appContext.currentActivity ?: return
         val className = activity.javaClass.name
-        val isPipHostActivity =
-            className == "${activity.packageName}.MainActivity" ||
-                className == "${activity.packageName}.PlayerActivity"
+        val isPipHostActivity = className == "${activity.packageName}.MainActivity"
 
         try {
             val aspectRatio = PipBridge.getPipAspectRatio()
@@ -1661,15 +1212,14 @@ class MediaSessionModule : Module() {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
 
-            // Use fullscreen rect — expandSurfaceViewsForPip already moved the
-            // surface to cover the whole screen before PiP activates.
+            // Use video source rect if available, otherwise fullscreen rect.
             val sourceRect = getVideoSourceRect(activity) ?: PipBridge.getFullscreenSourceRect(activity)
             builder.setSourceRectHint(sourceRect)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 // See enterPiP(): prefer seamless resize for video playback.
                 builder.setSeamlessResizeEnabled(true)
-                // This is the key - auto-enter PiP when going to background
+                // Auto-enter PiP when going to background
                 builder.setAutoEnterEnabled(enabled && isPipHostActivity)
             }
 
@@ -1699,13 +1249,40 @@ class MediaSessionModule : Module() {
         var bestRect: android.graphics.Rect? = null
         var bestArea = 0
         for (v in videoViews) {
-            val rect = android.graphics.Rect()
-            if (v.getGlobalVisibleRect(rect) && rect.width() > 0 && rect.height() > 0) {
-                val area = rect.width() * rect.height()
-                if (area > bestArea) {
-                    bestArea = area
-                    bestRect = rect
-                }
+            if (v.width <= 0 || v.height <= 0) continue
+            val loc = IntArray(2)
+            v.getLocationOnScreen(loc)
+            // Calculate actual video content bounds within the SurfaceView.
+            // Media3 PlayerView letterboxes (RESIZE_MODE_FIT): video is centered
+            // within the surface with aspect-ratio-preserving fit.
+            val surfW = v.width.toFloat()
+            val surfH = v.height.toFloat()
+            val pipRatio = PipBridge.getPipAspectRatio()
+            val vidAspect = pipRatio.numerator.toFloat() / pipRatio.denominator.toFloat()
+            val fitW: Float
+            val fitH: Float
+            if (surfW / surfH > vidAspect) {
+                // Surface is wider than video — pillarboxed
+                fitH = surfH
+                fitW = surfH * vidAspect
+            } else {
+                // Surface is taller than video — letterboxed
+                fitW = surfW
+                fitH = surfW / vidAspect
+            }
+            val offsetX = ((surfW - fitW) / 2).toInt()
+            val offsetY = ((surfH - fitH) / 2).toInt()
+            val rect = android.graphics.Rect(
+                loc[0] + offsetX,
+                loc[1] + offsetY,
+                loc[0] + offsetX + fitW.toInt(),
+                loc[1] + offsetY + fitH.toInt()
+            )
+            android.util.Log.d("MediaSession", "getVideoSourceRect: ${v.javaClass.simpleName} surface=${v.width}x${v.height} at (${loc[0]},${loc[1]}) videoContent=$rect aspect=$vidAspect")
+            val area = rect.width() * rect.height()
+            if (area > bestArea) {
+                bestArea = area
+                bestRect = rect
             }
         }
         return bestRect
@@ -1924,24 +1501,6 @@ class MediaSessionModule : Module() {
     }
 
     companion object {
-        private var pendingPlayerLaunchPayload: Map<String, Any?>? = null
-
-        private const val EXTRA_PLAYER_SESSION_ID = "pt.sessionId"
-        private const val EXTRA_PLAYER_VIDEO_ID = "pt.videoId"
-        private const val EXTRA_PLAYER_SOURCE_URL = "pt.sourceUrl"
-        private const val EXTRA_PLAYER_START_POSITION_MS = "pt.startPositionMs"
-        private const val EXTRA_PLAYER_SHOULD_AUTOPLAY = "pt.shouldAutoplay"
-        private const val EXTRA_PLAYER_TITLE = "pt.title"
-        private const val EXTRA_PLAYER_DESCRIPTION = "pt.description"
-        private const val EXTRA_PLAYER_PATH = "pt.path"
-        private const val EXTRA_PLAYER_SIZE = "pt.size"
-        private const val EXTRA_PLAYER_UPLOADED_AT = "pt.uploadedAt"
-        private const val EXTRA_PLAYER_CHANNEL_KEY = "pt.channelKey"
-        private const val EXTRA_PLAYER_MIME_TYPE = "pt.mimeType"
-        private const val EXTRA_PLAYER_DURATION = "pt.duration"
-        private const val EXTRA_PLAYER_THUMBNAIL = "pt.thumbnail"
-        private const val EXTRA_PLAYER_REQUEST_PIP_ON_LAUNCH = "pt.requestPipOnLaunch"
-
         const val ACTION_PIP_PLAY = "to.holepunch.mediasession.PIP_PLAY"
         const val ACTION_PIP_PAUSE = "to.holepunch.mediasession.PIP_PAUSE"
         const val ACTION_PIP_REWIND = "to.holepunch.mediasession.PIP_REWIND"
@@ -1955,30 +1514,5 @@ class MediaSessionModule : Module() {
         private const val REQUEST_PLAY_PAUSE = 1
         private const val REQUEST_REWIND = 2
         private const val REQUEST_FORWARD = 3
-    }
-
-    // Bridge methods called from MediaPlaybackService for native playback state sync
-    internal fun handleNativePlaybackStateChanged(state: Map<String, Any?>) {
-        sendEvent("onPlaybackSnapshotChanged", mapOf(
-            "isPlaying" to (state["isPlaying"] as? Boolean ?: false),
-            "positionMs" to ((state["positionMs"] as? Number)?.toLong() ?: 0L),
-            "durationMs" to ((state["durationMs"] as? Number)?.toLong() ?: 0L),
-            "hostActivity" to (state["hostActivity"] as? String ?: "main"),
-            "isInPipMode" to (state["isInPipMode"] as? Boolean ?: false),
-        ))
-    }
-
-    internal fun handleNativePlaybackCleared() {
-        sendEvent("onPlaybackSnapshotChanged", mapOf(
-            "isPlaying" to false,
-            "positionMs" to 0L,
-            "durationMs" to 0L,
-            "hostActivity" to "none",
-            "isInPipMode" to false,
-        ))
-    }
-
-    internal fun handlePlayerActivityDismissed() {
-        sendEvent("onPlayerActivityDismissed", mapOf<String, Any>())
     }
 }

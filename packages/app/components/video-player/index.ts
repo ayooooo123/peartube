@@ -36,6 +36,7 @@ export { DesktopMiniPlayer } from './DesktopMiniPlayer'
 export { LoadingOverlay } from './LoadingOverlay'
 export { SeekFeedback } from './SeekFeedback'
 export { VideoContainer } from './VideoContainer'
+export { PearInlineVideoView, getPearInlinePlayerId } from './PearInlineVideoView'
 export { MpvMobileVideoView } from './MpvMobileVideoView'
 
 // Hooks

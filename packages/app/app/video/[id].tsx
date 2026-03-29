@@ -13,9 +13,9 @@ import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { formatBytes as formatSize, formatTimeAgo, formatViews } from '@/lib/formatters'
+import { getPlayerPageVideoHeight } from '@/lib/video-layout'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
 import { MpvPlayer } from '@/components/MpvPlayer'
-import { MpvVideoView } from '@/components/video-player/MpvVideoView'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
@@ -251,7 +251,7 @@ export default function VideoPlayerScreen() {
   const insets = useSafeAreaInsets()
   const { isPear } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
-  const videoHeight = Math.round(screenWidth * 9 / 16)
+  const videoHeight = getPlayerPageVideoHeight(screenWidth)
   const { rpc, identity } = useApp()
   const isFocused = useIsFocused()
 
@@ -583,24 +583,7 @@ export default function VideoPlayerScreen() {
               )
             ) : (
               <View style={{ width: screenWidth, height: videoHeight }}>
-                {isFocused && !isInPipMode && (
-                  <MpvVideoView
-                    key={`${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
-                    playerRef={playerRef as any}
-                    source={{ uri: videoUrl || '' }}
-                    style={{ width: screenWidth, height: videoHeight }}
-                    resizeMode="contain"
-                    paused={!isPlaying}
-                    rate={playbackRate}
-                    seek={undefined}
-                    onProgress={onProgress}
-                    onPlaying={onPlaying}
-                    onPaused={onPaused}
-                    onBuffering={onBuffering}
-                    onEnded={onEnded}
-                    onError={onError}
-                  />
-                )}
+                {/* Video is rendered by VideoPlayerOverlay — this is just a spacer */}
                 <P2PStatsOverlay
                   stats={localStats || videoStats}
                   showDetails={showStats}

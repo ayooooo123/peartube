@@ -14,6 +14,7 @@ import { SocialProvider } from '@/lib/SocialContext'
 import { DownloadsProvider } from '@/lib/DownloadsContext'
 import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { colors } from '@/lib/colors'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
 export { useApp } from '@/lib/AppContext'
@@ -444,27 +445,29 @@ export default function RootLayout() {
 
   return (
     <ErrorBoundary onRetry={retryBackend}>
-      <GluestackUIProvider mode="dark">
-        <PlatformProvider>
-          <AppContext.Provider value={contextValue}>
-            <DownloadsProvider>
-              <VideoPlayerProvider>
-                <SocialProvider>
-                  <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', width: '100%' }}>
-                    <Stack
-                      screenOptions={{
-                        headerShown: false,
-                        contentStyle: { backgroundColor: colors.bg },
-                      }}
-                    />
-                  </div>
-                  <VideoPlayerOverlay />
-                </SocialProvider>
-              </VideoPlayerProvider>
-            </DownloadsProvider>
-          </AppContext.Provider>
-        </PlatformProvider>
-      </GluestackUIProvider>
+      <SafeAreaProvider>
+        <GluestackUIProvider mode="dark">
+          <PlatformProvider>
+            <AppContext.Provider value={contextValue}>
+              <DownloadsProvider>
+                <VideoPlayerProvider>
+                  <SocialProvider>
+                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: '100vh', width: '100%' }}>
+                      <Stack
+                        screenOptions={{
+                          headerShown: false,
+                          contentStyle: { backgroundColor: colors.bg },
+                        }}
+                      />
+                    </div>
+                    <VideoPlayerOverlay />
+                  </SocialProvider>
+                </VideoPlayerProvider>
+              </DownloadsProvider>
+            </AppContext.Provider>
+          </PlatformProvider>
+        </GluestackUIProvider>
+      </SafeAreaProvider>
     </ErrorBoundary>
   )
 }

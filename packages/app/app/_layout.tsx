@@ -15,6 +15,7 @@ import { VideoPlayerOverlay } from '@/components/VideoPlayerOverlay'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { SocialProvider } from '@/lib/SocialContext'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
 import * as ScreenOrientation from 'expo-screen-orientation'
 import { colors } from '@/lib/colors'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
@@ -1018,28 +1019,30 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
   return (
     <ErrorBoundary onRetry={retryBackend}>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <GluestackUIProvider mode="dark">
-          <PlatformProvider>
-            <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
-            <AppContext.Provider value={contextValue}>
-              <DownloadsProvider>
-                <VideoPlayerProvider>
-                  <SocialProvider>
-                    <View style={{ flex: 1 }}>
-                      <Stack
-                        screenOptions={{
-                          headerShown: false,
-                          contentStyle: { backgroundColor: colors.bg },
-                        }}
-                      />
-                    </View>
-                    <VideoPlayerOverlay />
-                  </SocialProvider>
-                </VideoPlayerProvider>
-              </DownloadsProvider>
-            </AppContext.Provider>
-          </PlatformProvider>
-        </GluestackUIProvider>
+        <SafeAreaProvider>
+          <GluestackUIProvider mode="dark">
+            <PlatformProvider>
+              <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+              <AppContext.Provider value={contextValue}>
+                <DownloadsProvider>
+                  <VideoPlayerProvider>
+                    <SocialProvider>
+                      <View style={{ flex: 1 }}>
+                        <Stack
+                          screenOptions={{
+                            headerShown: false,
+                            contentStyle: { backgroundColor: colors.bg },
+                          }}
+                        />
+                      </View>
+                      <VideoPlayerOverlay />
+                    </SocialProvider>
+                  </VideoPlayerProvider>
+                </DownloadsProvider>
+              </AppContext.Provider>
+            </PlatformProvider>
+          </GluestackUIProvider>
+        </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>
   )

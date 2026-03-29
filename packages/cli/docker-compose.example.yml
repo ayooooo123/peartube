@@ -3,6 +3,8 @@ services:
     image: ghcr.io/ayooooo123/peartube-relay:latest
     pull_policy: always
     restart: unless-stopped
+    # Shell-less runtime image. Inspect with:
+    # docker exec <container> /peartube-relay status --json
     environment:
       PEARTUBE_MODE: public
       PEARTUBE_POLICY: discovery

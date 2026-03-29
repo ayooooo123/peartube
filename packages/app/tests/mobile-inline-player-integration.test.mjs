@@ -84,3 +84,18 @@ test('Android single-host playback no longer depends on expo-pear-player', () =>
   assert.doesNotMatch(packageSource, /"expo-pear-player"/)
   assert.doesNotMatch(mediaSessionBuildGradle, /project\(':expo-pear-player'\)/)
 })
+
+test('Expo Android plugins keep PiP on MainActivity and preserve ExoPlayer resources', () => {
+  const appConfig = readAppFile('app.json')
+  const pipPlugin = readAppFile('plugins/withAndroidPiP.js')
+  const callbackPlugin = readAppFile('plugins/withMainActivityPiPCallback.js')
+  const keepPlugin = readAppFile('plugins/withExoplayerKeepResources.js')
+  const keepXmlPath = path.join(appRoot, 'android/app/src/main/res/raw/keep.xml')
+
+  assert.match(appConfig, /withExoplayerKeepResources\.js/)
+  assert.doesNotMatch(pipPlugin, /PlayerActivity/)
+  assert.match(pipPlugin, /android:supportsPictureInPicture/)
+  assert.doesNotMatch(callbackPlugin, /onConfigurationChanged/)
+  assert.match(keepPlugin, /keep\.xml/)
+  assert.equal(fs.existsSync(keepXmlPath), true)
+})

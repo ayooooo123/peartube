@@ -72,57 +72,10 @@ function showCastAlert(message: string) {
   Alert.alert('Chromecast', message)
 }
 
-const ANDROID_ICON_GLYPHS: Record<string, string> = {
-  cast: 'TV',
-  play: '>',
-  pause: '||',
-  x: 'X',
-  'x-circle': 'X',
-  'chevron-up': '^',
-  'chevron-down': 'v',
-  'rotate-ccw': '<',
-  'rotate-cw': '>',
-  check: 'OK',
-  download: 'D',
-  minus: '-',
-  plus: '+',
-  maximize: '[]',
-  minimize: '_',
-  'more-horizontal': '...',
-  'share-2': 'S',
-  'thumbs-up': '+',
-  'thumbs-down': '-',
-  'corner-up-left': '<',
-  'trash-2': 'X',
-  tv: 'TV',
-}
-
-function resolveAndroidGlyph(name?: string) {
-  if (!name) return '?'
-  return ANDROID_ICON_GLYPHS[name] || ANDROID_ICON_GLYPHS[name.toLowerCase()] || '?'
-}
-
-function Feather(props: React.ComponentProps<typeof ExpoFeather>) {
-  if (Platform.OS !== 'android') return <ExpoFeather {...props} />
-  const glyph = resolveAndroidGlyph(typeof props.name === 'string' ? props.name : undefined)
-  const size = typeof props.size === 'number' ? props.size : 16
-  return (
-    <Text style={{ color: props.color || '#fff', fontSize: Math.max(12, Math.round(size * 0.85)), fontWeight: '700' }}>
-      {glyph}
-    </Text>
-  )
-}
-
-function Ionicons(props: React.ComponentProps<typeof ExpoIonicons>) {
-  if (Platform.OS !== 'android') return <ExpoIonicons {...props} />
-  const glyph = resolveAndroidGlyph(typeof props.name === 'string' ? props.name : undefined)
-  const size = typeof props.size === 'number' ? props.size : 16
-  return (
-    <Text style={{ color: props.color || '#fff', fontSize: Math.max(12, Math.round(size * 0.85)), fontWeight: '700' }}>
-      {glyph}
-    </Text>
-  )
-}
+// Use the real @expo/vector-icons components on all platforms.
+// The font files are linked into Android assets by the withVectorIconFonts plugin.
+const Feather = ExpoFeather
+const Ionicons = ExpoIonicons
 
 const CHANNEL_META_CACHE_TTL_MS = 5 * 60 * 1000
 const channelMetaNameCache = new Map<string, { name: string | null; expiresAt: number }>()

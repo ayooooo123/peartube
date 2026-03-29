@@ -13,7 +13,8 @@
     "test": "brittle test/*.test.mjs",
     "build:standalone": "node ./scripts/build-standalone.mjs",
     "build:standalone:linux-x64": "RELAY_STANDALONE_HOST=linux-x64 node ./scripts/build-standalone.mjs",
-    "build:standalone:linux-arm64": "RELAY_STANDALONE_HOST=linux-arm64 node ./scripts/build-standalone.mjs"
+    "build:standalone:linux-arm64": "RELAY_STANDALONE_HOST=linux-arm64 node ./scripts/build-standalone.mjs",
+    "prepare:docker-artifacts": "node ./scripts/prepare-docker-artifacts.mjs"
   },
   "imports": {
     "#fs": {

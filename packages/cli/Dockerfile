@@ -1,28 +1,17 @@
-FROM node:22-bookworm-slim AS builder
-
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-COPY packages/bare-ffmpeg ./packages/bare-ffmpeg
-COPY packages/backend ./packages/backend
-COPY packages/cli ./packages/cli
-COPY packages/spec ./packages/spec
-
-RUN npm install --prefix packages/backend --omit=dev --ignore-scripts \
-  && npm install --prefix packages/cli --ignore-scripts
+FROM busybox:1.36.1 AS artifact
 
 ARG TARGETARCH
 
+WORKDIR /dist
+
+COPY packages/cli/dist/docker/ /dist/
+
 RUN case "${TARGETARCH}" in \
-    amd64) export RELAY_STANDALONE_HOST=linux-x64 ;; \
-    arm64) export RELAY_STANDALONE_HOST=linux-arm64 ;; \
+    amd64) cp /dist/linux-amd64/peartube-relay /peartube-relay ;; \
+    arm64) cp /dist/linux-arm64/peartube-relay /peartube-relay ;; \
     *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
   esac \
-  && npm run build:standalone --prefix packages/cli \
-  && install -Dm755 "packages/cli/dist/standalone/${RELAY_STANDALONE_HOST}/peartube-relay" /out/peartube-relay
+  && chmod 755 /peartube-relay
 
 FROM gcr.io/distroless/base-debian12
 
@@ -34,7 +23,7 @@ ENV PEARTUBE_LOG_LEVEL=info
 
 WORKDIR /var/lib/peartube-relay
 
-COPY --from=builder /out/peartube-relay /peartube-relay
+COPY --from=artifact /peartube-relay /peartube-relay
 
 VOLUME ["/var/lib/peartube-relay"]
 

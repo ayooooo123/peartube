@@ -48,6 +48,12 @@ jobs:
       - name: Build relay standalone executable
         run: npm run build:standalone:linux-x64 --prefix packages/cli
 
+      - name: Build relay standalone executable (arm64)
+        run: npm run build:standalone:linux-arm64 --prefix packages/cli
+
+      - name: Prepare relay docker artifacts
+        run: npm run prepare:docker-artifacts --prefix packages/cli
+
       - name: Run relay owner metadata regression
         run: node packages/backend/test/public-channel-owner-metadata.test.mjs
 
@@ -58,6 +64,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Install backend dependencies
+        run: npm install --prefix packages/backend --ignore-scripts
+
+      - name: Install relay dependencies
+        run: npm install --prefix packages/cli --ignore-scripts
+
+      - name: Build relay standalone executable
+        run: npm run build:standalone:linux-x64 --prefix packages/cli
+
+      - name: Prepare relay docker artifacts
+        run: npm run prepare:docker-artifacts --prefix packages/cli
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -84,6 +107,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Install backend dependencies
+        run: npm install --prefix packages/backend --ignore-scripts
+
+      - name: Install relay dependencies
+        run: npm install --prefix packages/cli --ignore-scripts
+
+      - name: Build relay standalone executable (x64)
+        run: npm run build:standalone:linux-x64 --prefix packages/cli
+
+      - name: Build relay standalone executable (arm64)
+        run: npm run build:standalone:linux-arm64 --prefix packages/cli
+
+      - name: Prepare relay docker artifacts
+        run: npm run prepare:docker-artifacts --prefix packages/cli
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

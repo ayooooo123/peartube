@@ -3,7 +3,7 @@ import { existsSync, writeFileSync } from '#fs'
 import { DEFAULT_RELAY_CONFIG, RELAY_COMMAND, RELAY_COMPAT_COMMAND } from './src/constants.js'
 import { loadRelayConfig, renderExampleConfig } from './src/config.js'
 import { RelayCatalog } from './src/catalog.js'
-import { buildRelayStatus, formatRelayStatus } from './src/status.js'
+import { buildRelayStatus, formatRelayStatus, readRelayStatus } from './src/status.js'
 
 function printHelp() {
   process.stdout.write([
@@ -147,8 +147,10 @@ async function validateCommand(flags) {
 
 async function statusCommand(flags) {
   const config = await loadRelayConfig(flags)
-  const catalog = await RelayCatalog.open({ storagePath: config.storage.path, catalogPath: config.paths.catalog })
-  const status = buildRelayStatus({ config, catalog })
+  const status = readRelayStatus(config.paths.status) || buildRelayStatus({
+    config,
+    catalog: await RelayCatalog.open({ storagePath: config.storage.path, catalogPath: config.paths.catalog })
+  })
 
   if (flags.json) {
     process.stdout.write(JSON.stringify(status, null, 2) + '\n')

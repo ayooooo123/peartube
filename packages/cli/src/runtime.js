@@ -44,8 +44,24 @@ export async function createRelayRuntime({ config, logger }) {
       candidateHandler = handler
     },
     async start() {
+      logger.runtime?.info('Initializing relay runtime', {
+        storagePath: config.storage.path,
+        mode: config.mode,
+        policy: config.policy
+      })
       await publicFeed.start()
+      logger.runtime?.info('Relay runtime started', this.getNetworkStats())
       emitFeedEntries()
+    },
+    requestFeedSync() {
+      try {
+        return publicFeed.requestFeedsFromPeers?.() || 0
+      } catch (err) {
+        logger.feed?.warn('Initial feed sync request failed', {
+          error: err?.message || String(err)
+        })
+        return 0
+      }
     },
     async resolveCandidate(candidate) {
       const resolved = {
@@ -96,9 +112,13 @@ export async function createRelayRuntime({ config, logger }) {
       return resolved
     },
     getNetworkStats() {
+      const feedStats = publicFeed.getStats?.() || {}
       return {
         peers: ctx.swarm?.peers?.size || 0,
-        connections: ctx.swarm?.connections?.size || 0
+        connections: ctx.swarm?.connections?.size || 0,
+        feedPeers: feedStats.peerCount || 0,
+        feedConnections: publicFeed.feedConnections?.size || 0,
+        feedEntries: feedStats.totalEntries || 0
       }
     },
     async close() {

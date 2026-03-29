@@ -9,7 +9,9 @@ export async function createRelayService({
   mirrorChannel,
   writeStatusFile = writeRelayStatus,
   logger = createCliLogger(config?.logging?.level || 'info'),
-  catalog = null
+  catalog = null,
+  setIntervalFn = setInterval,
+  clearIntervalFn = clearInterval
 }) {
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
@@ -24,6 +26,7 @@ export async function createRelayService({
   let closed = false
   let currentStatus = null
   let queue = Promise.resolve()
+  let heartbeatTimer = null
 
   async function persistStatus() {
     currentStatus = buildRelayStatus({
@@ -175,6 +178,25 @@ export async function createRelayService({
         feedEntries: status.runtime.feedEntries,
         mirroredChannels: status.summary.totalChannels
       })
+
+      heartbeatTimer = setIntervalFn(async () => {
+        try {
+          const heartbeatStatus = await persistStatus()
+          logger.status.info('Relay heartbeat', {
+            peers: heartbeatStatus.runtime.peers,
+            connections: heartbeatStatus.runtime.connections,
+            feedPeers: heartbeatStatus.runtime.feedPeers,
+            feedConnections: heartbeatStatus.runtime.feedConnections,
+            feedEntries: heartbeatStatus.runtime.feedEntries,
+            mirroredChannels: heartbeatStatus.summary.totalChannels
+          })
+        } catch (err) {
+          logger.status.error('Relay heartbeat failed', {
+            error: err?.message || String(err)
+          })
+        }
+      }, 30_000)
+
       return service
     },
     async processCandidate(candidate) {
@@ -189,6 +211,10 @@ export async function createRelayService({
     },
     async close() {
       closed = true
+      if (heartbeatTimer) {
+        clearIntervalFn(heartbeatTimer)
+        heartbeatTimer = null
+      }
       await queue.catch(() => {})
       await runtime.close?.()
       await persistStatus()

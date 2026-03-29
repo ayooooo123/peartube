@@ -230,7 +230,14 @@ ns.register({
     { name: 'channelName', type: 'string', required: false },
     { name: 'createdAt', type: 'uint', required: false },
     { name: 'views', type: 'uint', required: false },
-    { name: 'category', type: 'string', required: false }
+    { name: 'category', type: 'string', required: false },
+    { name: 'blobId', type: 'string', required: false },
+    { name: 'blobsCoreKey', type: 'string', required: false },
+    { name: 'mimeType', type: 'string', required: false },
+    { name: 'thumbnailBlobId', type: 'string', required: false },
+    { name: 'thumbnailBlobsCoreKey', type: 'string', required: false },
+    { name: 'thumbnailMimeType', type: 'string', required: false },
+    { name: 'publicBeeKey', type: 'string', required: false }
   ]
 })
 
@@ -256,7 +263,10 @@ ns.register({
   fields: [
     { name: 'channelKey', type: 'string', required: true },
     { name: 'videoId', type: 'string', required: true },
-    { name: 'publicBeeKey', type: 'string', required: false }
+    { name: 'publicBeeKey', type: 'string', required: false },
+    { name: 'blobId', type: 'string', required: false },
+    { name: 'blobsCoreKey', type: 'string', required: false },
+    { name: 'mimeType', type: 'string', required: false }
   ]
 })
 

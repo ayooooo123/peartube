@@ -1,0 +1,147 @@
+name: PearTubeDesktop
+options:
+  bundleIdPrefix: com.peartube
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    PRODUCT_NAME: PearTubeDesktop
+    PRODUCT_BUNDLE_IDENTIFIER: com.peartube.desktop.native
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    GENERATE_INFOPLIST_FILE: NO
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/BareKit.xcframework/macos-arm64_x86_64"
+    HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework/Headers"
+    OTHER_LDFLAGS: "$(inherited) -framework BareKit"
+    SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/Sources/Support/BareKit-Bridging-Header.h"
+
+packages:
+  BareRPC:
+    url: https://github.com/holepunchto/bare-rpc-swift
+    branch: main
+  CompactEncoding:
+    url: https://github.com/holepunchto/compact-encoding-swift
+    branch: main
+
+targets:
+  PearTubeDesktop:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - Sources
+    resources:
+      - Resources
+    entitlements:
+      path: Resources/PearTubeDesktop.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.security.files.user-selected.read-write: true
+    dependencies:
+      - package: BareRPC
+        product: BareRPC
+      - package: CompactEncoding
+        product: CompactEncoding
+    info:
+      path: Resources/Info.plist
+      properties:
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleDisplayName: PearTube Native
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.entertainment
+        NSPrincipalClass: NSApplication
+        NSHighResolutionCapable: true
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            127.0.0.1:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
+    settings:
+      base:
+        ENABLE_HARDENED_RUNTIME: NO
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks"
+        SWIFT_STRICT_CONCURRENCY: complete
+    postBuildScripts:
+      - name: Copy Native Host Resources
+        script: |
+          set -euo pipefail
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          FRAMEWORK_DEST="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$DEST/Generated"
+          if [ -d "$SRCROOT/Resources/Generated" ]; then
+            rsync -a "$SRCROOT/Resources/Generated/" "$DEST/Generated/"
+          fi
+          if [ -d "$SRCROOT/Resources/Runtime" ]; then
+            mkdir -p "$DEST/Runtime"
+            rsync -a "$SRCROOT/Resources/Runtime/" "$DEST/Runtime/"
+            if [ -f "$DEST/Runtime/bare" ]; then
+              chmod +x "$DEST/Runtime/bare"
+            fi
+          fi
+          if [ -d "$SRCROOT/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework" ]; then
+            mkdir -p "$FRAMEWORK_DEST"
+            rm -rf "$FRAMEWORK_DEST/BareKit.framework"
+            rsync -a "$SRCROOT/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework" "$FRAMEWORK_DEST/"
+          fi
+          if [ -d "$SRCROOT/Vendor/BareAddons" ]; then
+            mkdir -p "$FRAMEWORK_DEST"
+            mkdir -p "$DEST/BareAddons"
+            find "$SRCROOT/Vendor/BareAddons" -maxdepth 1 -type d -name '*.framework' -exec basename {} \; | while read -r framework; do
+              rm -rf "$FRAMEWORK_DEST/$framework"
+              rm -rf "$DEST/BareAddons/$framework"
+            done
+            rsync -a "$SRCROOT/Vendor/BareAddons/" "$FRAMEWORK_DEST/"
+            rsync -a "$SRCROOT/Vendor/BareAddons/" "$DEST/BareAddons/"
+          fi
+
+  PearTubeDesktopTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - Tests
+    dependencies:
+      - target: PearTubeDesktop
+    info:
+      path: Resources/Tests-Info.plist
+      properties:
+        CFBundleName: PearTubeDesktopTests
+        CFBundleIdentifier: com.peartube.desktop.native.tests
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+    settings:
+      base:
+        PRODUCT_NAME: PearTubeDesktopTests
+        PRODUCT_MODULE_NAME: PearTubeDesktopTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.peartube.desktop.native.tests
+
+schemes:
+  PearTubeDesktop:
+    build:
+      targets:
+        PearTubeDesktop: all
+        PearTubeDesktopTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - PearTubeDesktopTests
+    archive:
+      config: Release

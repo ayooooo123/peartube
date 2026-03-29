@@ -143,10 +143,16 @@ export class PublicChannelBee extends ReadyResource {
       lt: 'videos0' // '0' comes after '/' in ASCII
     })
 
-    for await (const node of stream) {
-      if (node.value) {
-        videos.push(node.value)
+    try {
+      for await (const node of stream) {
+        if (node.value) {
+          videos.push(node.value)
+        }
       }
+    } catch (error) {
+      try { stream.destroy?.(error) } catch {}
+      console.warn('[PublicBee] listVideos stream failed:', error?.message || error)
+      return videos
     }
 
     // Sort by upload time, newest first

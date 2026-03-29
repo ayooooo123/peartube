@@ -20,6 +20,10 @@ import { PublicChannelBee } from './public-channel-bee.js'
 const BeeDiffStream = BeeDiffStreamImport?.default || BeeDiffStreamImport
 const CURRENT_SCHEMA_VERSION = 1
 
+function isEmbeddedBareKitRuntime() {
+  return globalThis?.process?.env?.PEARTUBE_NATIVE_EMBEDDED_BAREKIT === '1'
+}
+
 /**
  * MultiWriterChannel
  *
@@ -98,6 +102,12 @@ export class MultiWriterChannel extends ReadyResource {
     this._pendingConnections = new Set()
     /** @type {boolean} Whether base is ready for replication */
     this._baseReady = false
+    /**
+     * Brand-new channels must not immediately replicate on arbitrary pre-existing swarm
+     * connections. Wait until the channel has joined its own discovery topic in setupPairing().
+     * @type {boolean}
+     */
+    this._allowConnectionReplication = Boolean(opts.key)
 
     // Set up early connection handler immediately if swarm is available
     // This ensures we capture ALL connections, even those that arrive
@@ -199,7 +209,7 @@ export class MultiWriterChannel extends ReadyResource {
       if (this._replicatedConns.has(conn)) return
       if (!conn || conn.destroyed) return
 
-      if (this._baseReady && this.base) {
+      if (this._baseReady && this.base && this._allowConnectionReplication) {
         // Base is ready, replicate immediately
         this._replicatedConns.add(conn)
         try {
@@ -233,7 +243,7 @@ export class MultiWriterChannel extends ReadyResource {
    * @private
    */
   _processPendingConnections() {
-    if (!this._baseReady || !this.base || this._pendingConnections.size === 0) return
+    if (!this._baseReady || !this.base || !this._allowConnectionReplication || this._pendingConnections.size === 0) return
 
     console.log('[Channel] Processing', this._pendingConnections.size, 'pending connections for:', this.keyHex?.slice(0, 16))
 
@@ -463,6 +473,14 @@ export class MultiWriterChannel extends ReadyResource {
         // Fully deterministic view updates. Side effects allowed only via `host.*` (Autobase system).
         for (const node of nodes) {
           const value = node.value
+          console.log(
+            '[Channel] apply callback: node type:',
+            value?.type || '(null)',
+            'author:',
+            node?.from?.key ? b4a.toString(node.from.key, 'hex').slice(0, 16) : '(none)',
+            'index:',
+            node?.index ?? '(none)'
+          )
           if (!value) continue // ack/no-op
           await this._applyOp(value, view, host, node)
         }
@@ -504,7 +522,7 @@ export class MultiWriterChannel extends ReadyResource {
     this._processPendingConnections()
 
     // Also replicate on any existing swarm connections we haven't handled yet
-    if (this.swarm && this.swarm.connections?.size > 0) {
+    if (this._allowConnectionReplication && this.swarm && this.swarm.connections?.size > 0) {
       console.log('[Channel] _open: setting up replication on', this.swarm.connections.size, 'existing connections BEFORE update')
       for (const conn of this.swarm.connections) {
         if (!this._replicatedConns.has(conn)) {
@@ -519,30 +537,24 @@ export class MultiWriterChannel extends ReadyResource {
       }
     }
 
-    // Force apply any pending operations to the view
-    console.log('[Channel] _open: calling base.update() to apply pending ops...')
-    const updateStart = Date.now()
-    await this._safeUpdate()
-    console.log('[Channel] _open: base.update() took', Date.now() - updateStart, 'ms')
+    const isFreshChannelBootstrap = !bootstrapKey
+    if (isFreshChannelBootstrap) {
+      console.log('[Channel] _open: skipping initial base.update() for fresh channel bootstrap')
+    } else {
+      // Existing channels may already have pending ops from local storage or peers.
+      console.log('[Channel] _open: calling base.update() to apply pending ops...')
+      const updateStart = Date.now()
+      await this._safeUpdate()
+      console.log('[Channel] _open: base.update() took', Date.now() - updateStart, 'ms')
+    }
 
     // Ensure the local writer exists in the deterministic view as early as possible.
-    // This prevents spurious "unauthorized writer" warnings for the very first ops on a new channel.
-    if (this.writable && this.localWriterKeyHex) {
-      try {
-        const existingWriter = await this.view.get(prefixedKey('writers', this.localWriterKeyHex)).catch(() => null)
-        if (!existingWriter?.value) {
-          await this.appendOp({
-            type: 'upsert-writer',
-            schemaVersion: CURRENT_SCHEMA_VERSION,
-            keyHex: this.localWriterKeyHex,
-            role: 'owner',
-            deviceName: '',
-            addedAt: Date.now(),
-          })
-        }
-      } catch (err) {
-        console.log('[Channel] _open: ensure local writer failed (non-fatal):', err?.message)
-      }
+    // Do not eagerly seed writer metadata during channel open. On embedded Bare/RocksDB,
+    // the first bootstrap upsert can trip storage reads before the channel is fully settled.
+    // Owner/bootstrap authority is handled lazily by later ops.
+    const bootstrapLocalWriterKeyHex = this.localWriterKeyHex
+    if (this.writable && bootstrapLocalWriterKeyHex) {
+      console.log('[Channel] _open: deferring local writer metadata bootstrap')
     }
 
     // Debug Autobase internals
@@ -560,7 +572,7 @@ export class MultiWriterChannel extends ReadyResource {
     // Initialize per-device Hyperblobs for video storage
     // Each device needs its own writable blobs core (Hypercore is single-writer)
     // The blobs core key is stored in video metadata so other devices can fetch
-    const localWriterKey = this.localWriterKeyHex || 'default'
+    const localWriterKey = bootstrapLocalWriterKeyHex || 'default'
     const blobsCoreName = `peartube-blobs-${this.keyHex?.slice(0, 16)}-${localWriterKey.slice(0, 16)}`
     console.log('[Channel] _open: initializing Hyperblobs with core:', blobsCoreName)
     this._blobsCore = this.store.get({ name: blobsCoreName })
@@ -611,7 +623,11 @@ export class MultiWriterChannel extends ReadyResource {
       // Store the public bee key in Autobase metadata so paired devices know about it
       // and so it can be retrieved for publishing to the public feed.
       // If there was a bogus key in metadata, overwrite it with the actual key we opened.
-      if ((!isValidPublicBeeKey(existingPublicBeeKey) || !existingPublicBeeKey) && this.publicBee.keyHex) {
+      if (
+        !isEmbeddedBareKitRuntime() &&
+        (!isValidPublicBeeKey(existingPublicBeeKey) || !existingPublicBeeKey) &&
+        this.publicBee.keyHex
+      ) {
         await this.updateMetadata({
           ...(existingMeta || {}),
           publicBeeKey: this.publicBee.keyHex
@@ -630,7 +646,9 @@ export class MultiWriterChannel extends ReadyResource {
     this.watchLogger = new WatchEventLogger(this)
 
     // Initialize CommentsAutobase (separate Autobase for open comment participation)
-    await this._initCommentsAutobase()
+    if (!isEmbeddedBareKitRuntime()) {
+      await this._initCommentsAutobase()
+    }
   }
 
   /**
@@ -857,8 +875,14 @@ export class MultiWriterChannel extends ReadyResource {
     const authorWriter = authorKeyHex
       ? await view.get(prefixedKey('writers', authorKeyHex)).catch(() => null)
       : null
+    const bootstrapOwnerAuthor = Boolean(
+      authorKeyHex &&
+      this.keyHex &&
+      authorKeyHex === this.keyHex &&
+      !authorWriter?.value
+    )
     const authorRole = authorWriter?.value?.role || null
-    const authorIsOwner = authorRole === 'owner'
+    const authorIsOwner = authorRole === 'owner' || bootstrapOwnerAuthor
     const authorIsModerator = authorRole === 'moderator'
     const authorIsPrivileged = authorIsOwner || authorIsModerator
 
@@ -987,6 +1011,7 @@ export class MultiWriterChannel extends ReadyResource {
 
       case 'add-writer': {
         const keyHex = op.keyHex
+        console.log('[Channel] _applyOp add-writer:', keyHex?.slice(0, 16), 'author:', authorKeyHex?.slice(0, 16), 'authorIsOwner:', authorIsOwner)
         // Writer membership changes are privileged. Allow bootstrap where the first writer
         // adds themselves as owner.
         const isBootstrapSelfOwner = Boolean(
@@ -1002,7 +1027,9 @@ export class MultiWriterChannel extends ReadyResource {
           // Membership change must go through Autobase system (deterministic, replicated).
           const role = isBootstrapSelfOwner ? 'owner' : (op.role || 'device')
           const indexer = role === 'owner' || role === 'moderator'
+          console.log('[Channel] _applyOp add-writer: host.addWriter start', keyHex.slice(0, 16), 'indexer:', indexer)
           await host.addWriter(fromHex(keyHex), { indexer })
+          console.log('[Channel] _applyOp add-writer: host.addWriter done', keyHex.slice(0, 16))
         }
         await view.put(prefixedKey('writers', keyHex), {
           keyHex,
@@ -1016,6 +1043,7 @@ export class MultiWriterChannel extends ReadyResource {
 
       case 'upsert-writer': {
         const keyHex = op.keyHex
+        console.log('[Channel] _applyOp upsert-writer:', keyHex?.slice(0, 16), 'author:', authorKeyHex?.slice(0, 16), 'authorIsOwner:', authorIsOwner)
         // Allow a device to update its own record (deviceName/blobDriveKey), but do not allow
         // role escalation without an owner.
         const isSelf = Boolean(authorKeyHex && keyHex === authorKeyHex)
@@ -1023,12 +1051,13 @@ export class MultiWriterChannel extends ReadyResource {
 
         const existing = await view.get(prefixedKey('writers', keyHex)).catch(() => null)
         const prev = existing?.value || null
+        const shouldBootstrapOwnerRole = Boolean(isSelf && bootstrapOwnerAuthor && !prev)
 
         if (op.role && op.role !== (prev?.role || 'device') && !authorIsOwner) return
 
         await view.put(prefixedKey('writers', keyHex), {
           keyHex,
-          role: op.role || prev?.role || 'device',
+          role: op.role || prev?.role || (shouldBootstrapOwnerRole ? 'owner' : 'device'),
           deviceName: op.deviceName ?? prev?.deviceName ?? '',
           addedAt: prev?.addedAt || op.addedAt || 0,
           blobDriveKey: op.blobDriveKey ?? prev?.blobDriveKey ?? null
@@ -1721,6 +1750,9 @@ export class MultiWriterChannel extends ReadyResource {
           console.log('[Channel] Swarm join flush warning:', err?.message)
         })
     }
+
+    this._allowConnectionReplication = true
+    this._processPendingConnections()
 
     // CRITICAL: Wire up Autobase replication on peer connections
     // Autobase requires explicit base.replicate(conn) calls

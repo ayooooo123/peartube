@@ -1,0 +1,23 @@
+{
+  "name": "@peartube/host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared host bootstrap layer for PearTube",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": "./src/index.js",
+    "./start-host": "./src/start-host.js",
+    "./sidecar-entry": "./src/sidecar-entry.js"
+  },
+  "scripts": {
+    "test": "brittle test/*.test.mjs"
+  },
+  "dependencies": {
+    "@peartube/backend": "file:../backend"
+  },
+  "devDependencies": {
+    "brittle": "^3.19.1"
+  }
+}

@@ -85,6 +85,14 @@ test('Android single-host playback no longer depends on expo-pear-player', () =>
   assert.doesNotMatch(mediaSessionBuildGradle, /project\(':expo-pear-player'\)/)
 })
 
+test('stale split-player experiment directories are absent from the app package', () => {
+  const pearPlayerModuleRoot = path.join(appRoot, 'modules/expo-pear-player')
+  const androidPlaybackRoot = path.join(appRoot, 'lib/android-playback')
+
+  assert.equal(fs.existsSync(pearPlayerModuleRoot), false)
+  assert.equal(fs.existsSync(androidPlaybackRoot), false)
+})
+
 test('Expo Android plugins keep PiP on MainActivity and preserve ExoPlayer resources', () => {
   const appConfig = readAppFile('app.json')
   const pipPlugin = readAppFile('plugins/withAndroidPiP.js')

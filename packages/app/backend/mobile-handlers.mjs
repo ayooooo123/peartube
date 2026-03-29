@@ -66,10 +66,39 @@ export function attachMobileHandlers(B, deps) {
     let raw = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch { return { videos: [] } }
     return { videos: (raw || []).map((v) => {
       const id = v?.id ? String(v.id) : ''; if (!id) return null
-      return { id, title: v?.title ? String(v.title) : 'Untitled', description: v?.description ? String(v.description) : null, path: v?.path ? String(v.path) : null, duration: Number(v?.duration || 0) || 0, thumbnail: v?.thumbnail ? String(v.thumbnail) : null, channelKey: v?.channelKey || ck, channelName: v?.channelName ? String(v.channelName) : '', createdAt: Number(v?.createdAt || v?.uploadedAt || Date.now()) || 0, views: Number(v?.views || 0) || 0, category: v?.category ? String(v.category) : null }
+      return {
+        id,
+        title: v?.title ? String(v.title) : 'Untitled',
+        description: v?.description ? String(v.description) : null,
+        path: v?.path ? String(v.path) : null,
+        duration: Number(v?.duration || 0) || 0,
+        thumbnail: v?.thumbnail ? String(v.thumbnail) : null,
+        channelKey: v?.channelKey || ck,
+        channelName: v?.channelName ? String(v.channelName) : '',
+        createdAt: Number(v?.createdAt || v?.uploadedAt || Date.now()) || 0,
+        views: Number(v?.views || 0) || 0,
+        category: v?.category ? String(v.category) : null,
+        blobId: v?.blobId ? String(v.blobId) : null,
+        blobsCoreKey: v?.blobsCoreKey ? String(v.blobsCoreKey) : null,
+        mimeType: v?.mimeType ? String(v.mimeType) : null,
+        thumbnailBlobId: v?.thumbnailBlobId ? String(v.thumbnailBlobId) : null,
+        thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey ? String(v.thumbnailBlobsCoreKey) : null,
+        thumbnailMimeType: v?.thumbnailMimeType ? String(v.thumbnailMimeType) : null,
+        publicBeeKey: v?.publicBeeKey ? String(v.publicBeeKey) : (r?.publicBeeKey ? String(r.publicBeeKey) : null),
+      }
     }).filter(Boolean) }
   }
-  B.getVideoUrl = async (r) => { const res = await api.getVideoUrl(r.channelKey, r.videoId, r.publicBeeKey); return { url: res.url } }
+  B.getVideoUrl = async (r) => {
+    const res = await api.getVideoUrl(
+      r.channelKey,
+      r.videoId,
+      r.publicBeeKey,
+      r.blobId,
+      r.blobsCoreKey,
+      r.mimeType
+    )
+    return { url: res.url }
+  }
   B.getVideoData = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoMetadata = async (r) => ({ video: (await api.getVideoData(r.channelKey, r.videoId)) || { id: r.videoId, title: 'Unknown' } })
   B.getVideoThumbnail = async (r) => { const res = await api.getVideoThumbnail(r.channelKey, r.videoId); return { url: res.url || null, exists: res.exists || false, dataUrl: null } }
@@ -79,7 +108,7 @@ export function attachMobileHandlers(B, deps) {
     if (!ch) return { success: false, error: 'No active channel' }; if (!ch.writable) return { success: false, error: 'Channel is read-only' }
     try { await ch.deleteVideo(r.videoId); return { success: true } } catch (e) { return { success: false, error: e?.message } }
   }
-  B.prefetchVideo = async (r) => { await api.prefetchVideo(r.channelKey, r.videoId, r.publicBeeKey); return { success: true } }
+  B.prefetchVideo = async (r) => api.prefetchVideo(r.channelKey, r.videoId, r.publicBeeKey)
   B.getVideoStats = async (r) => ({ stats: { videoId: r.videoId, channelKey: r.channelKey, ...(await api.getVideoStats(r.channelKey, r.videoId) || {}) } })
 
   // --- Subscription handlers ---

@@ -1,0 +1,22 @@
+export const PROTOCOL_VERSION = 1
+
+export const HOST_ERROR_CODES = Object.freeze({
+  HOST_START_FAILED: 'HOST_START_FAILED',
+  STORAGE_INIT_FAILED: 'STORAGE_INIT_FAILED',
+  PERMISSION_DENIED: 'PERMISSION_DENIED',
+  TRANSPORT_DISCONNECTED: 'TRANSPORT_DISCONNECTED',
+  PROTOCOL_VERSION_MISMATCH: 'PROTOCOL_VERSION_MISMATCH',
+  CAPABILITY_UNAVAILABLE: 'CAPABILITY_UNAVAILABLE',
+  OFFLINE_UNAVAILABLE: 'OFFLINE_UNAVAILABLE',
+  REPLICATION_TIMEOUT: 'REPLICATION_TIMEOUT',
+  PLAYBACK_URL_UNAVAILABLE: 'PLAYBACK_URL_UNAVAILABLE',
+  PLAYER_LOAD_FAILED: 'PLAYER_LOAD_FAILED'
+})
+
+export function createHostError(code, message, { cause, retryable = false } = {}) {
+  const error = new Error(message)
+  error.code = code
+  error.retryable = retryable
+  if (cause !== undefined) error.cause = cause
+  return error
+}

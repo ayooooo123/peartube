@@ -14,6 +14,12 @@ class MpvPlayer {
     this._initialized = false
   }
 
+  _processEvents() {
+    if (!this._handle) return 0
+    if (typeof binding.processEvents !== 'function') return 0
+    return binding.processEvents(this._handle)
+  }
+
   /**
    * Initialize the mpv player
    * @returns {number} Status code (0 = success)
@@ -31,28 +37,36 @@ class MpvPlayer {
    */
   loadFile(url) {
     if (!this._initialized) this.initialize()
-    return binding.command(this._handle, ['loadfile', url])
+    const status = binding.command(this._handle, ['loadfile', url])
+    this._processEvents()
+    return status
   }
 
   /**
    * Start/resume playback
    */
   play() {
-    return binding.setProperty(this._handle, 'pause', false)
+    const status = binding.setProperty(this._handle, 'pause', false)
+    this._processEvents()
+    return status
   }
 
   /**
    * Pause playback
    */
   pause() {
-    return binding.setProperty(this._handle, 'pause', true)
+    const status = binding.setProperty(this._handle, 'pause', true)
+    this._processEvents()
+    return status
   }
 
   /**
    * Stop playback
    */
   stop() {
-    return binding.command(this._handle, ['stop'])
+    const status = binding.command(this._handle, ['stop'])
+    this._processEvents()
+    return status
   }
 
   /**
@@ -60,7 +74,9 @@ class MpvPlayer {
    * @param {number} seconds - Position in seconds
    */
   seek(seconds) {
-    return binding.command(this._handle, ['seek', String(seconds), 'absolute'])
+    const status = binding.command(this._handle, ['seek', String(seconds), 'absolute'])
+    this._processEvents()
+    return status
   }
 
   /**
@@ -68,13 +84,16 @@ class MpvPlayer {
    * @param {number} seconds - Offset in seconds (positive = forward, negative = backward)
    */
   seekRelative(seconds) {
-    return binding.command(this._handle, ['seek', String(seconds), 'relative'])
+    const status = binding.command(this._handle, ['seek', String(seconds), 'relative'])
+    this._processEvents()
+    return status
   }
 
   /**
    * Get current playback position in seconds
    */
   get currentTime() {
+    this._processEvents()
     const val = binding.getProperty(this._handle, 'time-pos')
     return typeof val === 'number' ? val : 0
   }
@@ -83,6 +102,7 @@ class MpvPlayer {
    * Get video duration in seconds
    */
   get duration() {
+    this._processEvents()
     const val = binding.getProperty(this._handle, 'duration')
     return typeof val === 'number' ? val : 0
   }
@@ -91,6 +111,7 @@ class MpvPlayer {
    * Check if playback is paused
    */
   get paused() {
+    this._processEvents()
     return binding.getProperty(this._handle, 'pause') === true
   }
 
@@ -98,6 +119,7 @@ class MpvPlayer {
    * Get/set volume (0-100)
    */
   get volume() {
+    this._processEvents()
     const val = binding.getProperty(this._handle, 'volume')
     return typeof val === 'number' ? val : 100
   }
@@ -110,6 +132,7 @@ class MpvPlayer {
    * Get/set mute state
    */
   get muted() {
+    this._processEvents()
     return binding.getProperty(this._handle, 'mute') === true
   }
 
@@ -121,6 +144,7 @@ class MpvPlayer {
    * Get video width
    */
   get videoWidth() {
+    this._processEvents()
     const val = binding.getProperty(this._handle, 'width')
     return typeof val === 'number' ? val : 0
   }
@@ -129,6 +153,7 @@ class MpvPlayer {
    * Get video height
    */
   get videoHeight() {
+    this._processEvents()
     const val = binding.getProperty(this._handle, 'height')
     return typeof val === 'number' ? val : 0
   }
@@ -137,6 +162,7 @@ class MpvPlayer {
    * Check if video has ended
    */
   get ended() {
+    this._processEvents()
     return binding.getProperty(this._handle, 'eof-reached') === true
   }
 
@@ -161,6 +187,7 @@ class MpvPlayer {
    */
   needsRender() {
     if (!this._renderCtx) return false
+    this._processEvents()
     return binding.renderUpdate(this._renderCtx)
   }
 
@@ -170,6 +197,7 @@ class MpvPlayer {
    */
   renderFrame() {
     if (!this._renderCtx) return null
+    this._processEvents()
     return binding.renderFrame(this._renderCtx)
   }
 
@@ -205,7 +233,9 @@ class MpvPlayer {
    * @param {*} value - Property value
    */
   setProperty(name, value) {
-    return binding.setProperty(this._handle, name, value)
+    const status = binding.setProperty(this._handle, name, value)
+    this._processEvents()
+    return status
   }
 
   /**
@@ -214,6 +244,7 @@ class MpvPlayer {
    * @returns {*} Property value
    */
   getProperty(name) {
+    this._processEvents()
     return binding.getProperty(this._handle, name)
   }
 
@@ -222,7 +253,9 @@ class MpvPlayer {
    * @param {string[]} args - Command arguments
    */
   command(args) {
-    return binding.command(this._handle, args)
+    const status = binding.command(this._handle, args)
+    this._processEvents()
+    return status
   }
 }
 

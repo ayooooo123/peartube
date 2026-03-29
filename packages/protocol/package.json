@@ -1,0 +1,23 @@
+{
+  "name": "@peartube/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared protocol client layer for PearTube",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": "./src/index.js",
+    "./events": "./src/event-map.js"
+  },
+  "scripts": {
+    "test": "brittle test/*.test.mjs"
+  },
+  "dependencies": {
+    "@peartube/host": "file:../host",
+    "@peartube/spec": "file:../spec"
+  },
+  "devDependencies": {
+    "brittle": "^3.19.1"
+  }
+}

@@ -22,6 +22,8 @@ function loadSharedBackendModules() {
   return sharedBackendModulesPromise
 }
 
+// Keep shared handler registration centralized even as client packages group the
+// same methods into higher-level namespaces like system/feed/video/shell.
 export const SHARED_HANDLER_NAMES = [
   'AddComment',
   'AddReaction',
@@ -135,8 +137,12 @@ function getSharedHandler(backend, name) {
   const onName = backend?.[`on${name}`]
   if (typeof onName === 'function') return onName
 
-  const camel = backend?.[toCamelCase(name)]
+  const camelName = toCamelCase(name)
+  const camel = backend?.[camelName]
   if (typeof camel === 'function') return camel
+
+  const apiHandler = backend?.api?.[camelName]
+  if (typeof apiHandler === 'function') return apiHandler
 
   return null
 }

@@ -24,6 +24,12 @@ apps/mobile/android/app/build/
 packages/app/Frameworks/
 packages/app/ios/Pods/
 packages/app/ios/build/
+packages/desktop-native/build/
+packages/desktop-native/Resources/Generated/
+packages/desktop-native/Resources/Runtime/
+packages/desktop-native/Vendor/BareAddons/
+packages/desktop-native/Vendor/BareKit.xcframework/
+packages/desktop-native/PearTubeDesktop.xcodeproj/project.xcworkspace/xcshareddata/
 
 # Storage (P2P data)
 storage/

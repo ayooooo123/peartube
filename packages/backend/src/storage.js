@@ -7,23 +7,78 @@
 import Corestore from 'corestore';
 import Hyperbee from 'hyperbee';
 import BlobServer from 'hypercore-blob-server';
-import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
 import { logger } from './logger.js'
-import http from 'bare-http1'
+import { relocateLegacyLogsDir } from './storage-layout.js'
+import { cleanupFailedCorestoreOpen } from './corestore-cleanup.js'
+import {
+  loadBareOrNodeFsModule,
+  loadBareOrNodeHttpModule,
+  loadBareOrNodePathModule,
+  loadHyperswarmModule,
+  resolveBareOrNodeFsModuleSync,
+  resolveBareOrNodePathModuleSync,
+} from './runtime-modules.js'
+
+function resolveDebugLogPath() {
+  return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
+}
+
+function isEmbeddedBareKitStoragePath() {
+  return globalThis?.process?.env?.PEARTUBE_NATIVE_EMBEDDED_BAREKIT === '1'
+}
+
+function describeDebugError(error) {
+  if (!error) return 'unknown'
+  if (typeof error === 'string') return error
+  if (typeof error === 'number') return `number:${error}`
+
+  const details = {
+    type: typeof error,
+    constructor: error?.constructor?.name ?? null,
+    code: error?.code ?? null,
+    errno: error?.errno ?? null,
+    message: error?.message ?? null
+  }
+
+  if (error?.stack) details.stack = error.stack
+
+  try {
+    const extra = {}
+    for (const key of Object.getOwnPropertyNames(error)) {
+      if (key in details || key === 'stack') continue
+      extra[key] = error[key]
+    }
+    if (Object.keys(extra).length > 0) details.extra = extra
+  } catch {}
+
+  try {
+    return JSON.stringify(details)
+  } catch {
+    return String(error)
+  }
+}
+
+async function appendDebugLine(line) {
+  const filePath = resolveDebugLogPath()
+  if (!filePath) return
+
+  try {
+    const fsModule = await import('bare-fs')
+    const fs = fsModule?.default ?? fsModule
+    if (typeof fs?.appendFileSync !== 'function') return
+    fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
+  } catch {}
+}
 
 const log = logger('Storage')
 
 // Network stats for debugging connection issues
-let HyperswarmStats = null;
-try {
-  HyperswarmStats = (await import('hyperswarm-stats')).default;
-  } catch (e) {
-  log.debug('hyperswarm-stats not available')
-}
+let HyperswarmStats = null
+let optionalStorageDepsReady = null
 
 // Global network stats instance (set after swarm is created)
 let networkStats = null;
@@ -32,6 +87,7 @@ let networkStats = null;
 let globalSwarm = null;
 let globalBlobServer = null;
 let globalChannels = null;
+let globalPeerPoolDiscovery = null;
 
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
@@ -48,33 +104,148 @@ function generateSessionToken() {
 }
 
 // Wakeup for fast content announcements to peers
-let Wakeup = null;
-try {
-  Wakeup = (await import('protomux-wakeup')).default;
-} catch (e) {
-  log.debug('protomux-wakeup not available, content announcements may be slower')
-}
+let Wakeup = null
 
 let fs = null;
 let path = null;
+let Hyperswarm = null;
+let http = null;
+
+async function initOptionalStorageDeps() {
+  if (optionalStorageDepsReady) return optionalStorageDepsReady
+
+  optionalStorageDepsReady = (async () => {
+    console.log('[Storage] initOptionalStorageDeps start')
+    await appendDebugLine('[storage] initOptionalStorageDeps start')
+    if (!HyperswarmStats) {
+      try {
+        console.log('[Storage] Loading hyperswarm-stats')
+        HyperswarmStats = (await import('hyperswarm-stats')).default
+        console.log('[Storage] Loaded hyperswarm-stats')
+        await appendDebugLine('[storage] hyperswarm-stats loaded')
+      } catch {
+        log.debug('hyperswarm-stats not available')
+        await appendDebugLine('[storage] hyperswarm-stats unavailable')
+      }
+    }
+
+    if (!Wakeup) {
+      try {
+        console.log('[Storage] Loading protomux-wakeup')
+        Wakeup = (await import('protomux-wakeup')).default
+        console.log('[Storage] Loaded protomux-wakeup')
+        await appendDebugLine('[storage] protomux-wakeup loaded')
+      } catch {
+        log.debug('protomux-wakeup not available, content announcements may be slower')
+        await appendDebugLine('[storage] protomux-wakeup unavailable')
+      }
+    }
+    console.log('[Storage] initOptionalStorageDeps complete')
+    await appendDebugLine('[storage] initOptionalStorageDeps complete')
+  })()
+
+  return optionalStorageDepsReady
+}
 
 async function initStorageModules() {
-  if (fs && path) return;
-  try { fs = (await import('bare-fs')).default || (await import('bare-fs')); } catch {}
+  await initOptionalStorageDeps()
+  if (fs && path && Hyperswarm && http) return;
+  fs = resolveBareOrNodeFsModuleSync()
+  path = resolveBareOrNodePathModuleSync()
   if (!fs) {
+    try { fs = await loadBareOrNodeFsModule(); } catch {}
+  }
+  if (!path) {
+    try { path = await loadBareOrNodePathModule(); } catch {}
+  }
+  if (!Hyperswarm) {
+    try { Hyperswarm = await loadHyperswarmModule(); } catch {}
+  }
+  if (!http) {
+    try { http = await loadBareOrNodeHttpModule(); } catch {}
+  }
+}
+
+async function migrateLegacyCorestoreLayout(storagePath) {
+  if (!fs || !path) return
+
+  const corestoreFile = path.join(storagePath, 'CORESTORE')
+
+  try {
+    if (typeof fs.existsSync === 'function' && fs.existsSync(corestoreFile)) {
+      await appendDebugLine('[storage] embedded migration skipped (CORESTORE exists)')
+      return
+    }
+  } catch {}
+
+  if (!fs.promises?.readdir || !fs.promises?.rename || !fs.promises?.mkdir) {
+    await appendDebugLine('[storage] embedded migration skipped (fs.promises unavailable)')
+    return
+  }
+
+  let files = []
+  try {
+    files = await fs.promises.readdir(storagePath)
+  } catch {
+    await appendDebugLine('[storage] embedded migration skipped (readdir failed)')
+    return
+  }
+
+  const notRocks = new Set([
+    'CORESTORE',
+    'primary-key',
+    'cores',
+    'app-preferences',
+    'cache',
+    'preferences.json',
+    'db',
+    'clone',
+    'core',
+    'notifications'
+  ])
+
+  let moved = 0
+  for (const entry of files) {
+    if (notRocks.has(entry)) continue
+
     try {
-      const nodeFsName = 'node:' + 'fs';
-      const mod = await import(nodeFsName);
-      fs = mod.default || mod;
+      await fs.promises.mkdir(path.join(storagePath, 'db'), { recursive: true })
+    } catch {}
+
+    try {
+      await fs.promises.rename(
+        path.join(storagePath, entry),
+        path.join(storagePath, 'db', entry)
+      )
+      moved++
     } catch {}
   }
-  try { path = (await import('bare-path')).default || (await import('bare-path')); } catch {}
-  if (!path) {
-    try {
-      const nodePathName = 'node:' + 'path';
-      const mod = await import(nodePathName);
-      path = mod.default || mod;
-    } catch {}
+
+  await appendDebugLine(`[storage] embedded migration moved=${moved}`)
+}
+
+async function createCorestoreInstance(storagePath, options = {}) {
+  if (isEmbeddedBareKitStoragePath()) {
+    await appendDebugLine('[storage] embedded BareKit using plain Corestore(storagePath, options)')
+  }
+
+  return new Corestore(storagePath, options)
+}
+
+async function openDeterministicNamedCore(store, name) {
+  if (!isEmbeddedBareKitStoragePath()) {
+    return store.get({ name })
+  }
+
+  try {
+    const keyPair = await store.createKeyPair(name)
+    await appendDebugLine(`[storage] embedded named core "${name}" opening via explicit keyPair`)
+    return store.get({ keyPair })
+  } catch (error) {
+    await appendDebugLine(
+      `[storage] embedded named core "${name}" keyPair open fallback ${describeDebugError(error)}`
+    )
+    return store.get({ name })
   }
 }
 
@@ -104,6 +275,39 @@ function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
   return store;
 }
 
+function getSwarmDiscoveryHandles(ctx) {
+  if (!ctx?._swarmDiscoveryHandles) ctx._swarmDiscoveryHandles = new Map()
+  return ctx._swarmDiscoveryHandles
+}
+
+export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
+  if (!ctx?.swarm || !discoveryKey) return null
+
+  const handles = getSwarmDiscoveryHandles(ctx)
+  const discoveryKeyHex = b4a.toString(discoveryKey, 'hex')
+  const existing = handles.get(discoveryKeyHex)
+  if (existing) return existing
+
+  const handle = ctx.swarm.join(discoveryKey, { server: true, client: true })
+  handles.set(discoveryKeyHex, handle)
+
+  try {
+    const flushed = handle?.flushed?.()
+    if (flushed && typeof flushed.then === 'function') {
+      const label = options.label || discoveryKeyHex.slice(0, 16)
+      flushed
+        .then(() => {
+          console.log(`[Storage] Swarm discovery flushed for ${label}`)
+        })
+        .catch((err) => {
+          console.log(`[Storage] Swarm discovery flush failed for ${label} (non-fatal):`, err?.message)
+        })
+    }
+  } catch {}
+
+  return handle
+}
+
 /**
  * Initialize core storage components.
  *
@@ -117,7 +321,9 @@ function wrapStoreWithTimeout(store, defaultTimeout = 30000) {
  * @returns {Promise<import('./types.js').StorageContext>}
  */
 export async function initializeStorage(config) {
+  await appendDebugLine('[storage] initializeStorage entry')
   await initStorageModules();
+  await appendDebugLine('[storage] initStorageModules complete')
 
   const {
     storagePath,
@@ -138,52 +344,161 @@ export async function initializeStorage(config) {
     console.warn('[Storage] Consider using --store flag for persistent storage.');
   }
 
+  if (isEmbeddedBareKitStoragePath()) {
+    await appendDebugLine('[storage] relocateLegacyLogsDir skipped for embedded BareKit storage')
+  } else {
+    try {
+      await appendDebugLine('[storage] relocateLegacyLogsDir start')
+      const relocatedLogsDir = relocateLegacyLogsDir(storagePath, fs, path)
+      await appendDebugLine(`[storage] relocateLegacyLogsDir done moved=${relocatedLogsDir || 'none'}`)
+      if (relocatedLogsDir) {
+        console.log('[Storage] Relocated legacy logs dir to avoid Corestore migration conflict:', relocatedLogsDir)
+      }
+    } catch (error) {
+      await appendDebugLine(`[storage] relocateLegacyLogsDir failed ${describeDebugError(error)}`)
+      console.warn('[Storage] Failed to relocate legacy logs dir before Corestore init:', error?.message)
+    }
+  }
+
   // Initialize Corestore
   console.log('[Storage] Creating Corestore...');
+  await appendDebugLine('[storage] creating corestore')
   console.log('[Storage] Corestore primaryKey:', primaryKey ? 'provided (deterministic)' : 'not provided (random)');
   console.log('[Storage] Corestore lock wait:', corestoreWaitForLock ? 'enabled' : 'disabled');
-  const store = primaryKey
-    ? new Corestore(storagePath, { primaryKey, unsafe: true, wait: corestoreWaitForLock })
-    : new Corestore(storagePath, { wait: corestoreWaitForLock });
+  const corestoreOptions = primaryKey
+    ? { primaryKey, unsafe: true, wait: corestoreWaitForLock }
+    : { wait: corestoreWaitForLock }
+  let store = await createCorestoreInstance(storagePath, corestoreOptions)
 
   console.log('[Storage] Waiting for Corestore ready...');
-  await store.ready();
+  await appendDebugLine('[storage] awaiting corestore ready')
+  try {
+    await store.ready();
+  } catch (error) {
+    await appendDebugLine(`[storage] corestore ready failed ${describeDebugError(error)}`)
+    await cleanupFailedCorestoreOpen(store, 'corestore ready cleanup', {
+      appendDebugLine,
+      describeError: describeDebugError
+    })
+    throw error
+  }
   console.log('[Storage] Corestore ready, opened:', store.opened, 'closed:', store.closed);
+  await appendDebugLine(`[storage] corestore ready opened=${store.opened} closed=${store.closed}`)
+  if (b4a.isBuffer(store.primaryKey)) {
+    const primaryKeyHex = b4a.toString(store.primaryKey, 'hex')
+    console.log('[Storage] Corestore primaryKey after ready:', `${primaryKeyHex.slice(0, 16)}...`)
+    await appendDebugLine(`[storage] corestore primaryKey after ready ${primaryKeyHex}`)
+  }
 
   // Wrap store with timeout for P2P operations to prevent indefinite hangs
   const blobStore = wrapStoreWithTimeout(store, defaultTimeout);
 
-  // Initialize blob server for video streaming
+  // Initialize blob server for video streaming only after metadata cores are open.
   let blobServer = null;
   let blobServerPort = 0;
   let blobServerHost = blobServerHostOverride || '127.0.0.1';
   let blobServerBindHost = blobServerBindHostOverride || blobServerHost;
 
+  let metaCore = null
+  let metaDb = null
+
+  async function cleanupFailedMetadataStartup(label, originalError) {
+    await appendDebugLine(`[storage] metadata init cleanup start ${label}`)
+
+    try {
+      await metaDb?.close?.()
+      await appendDebugLine(`[storage] metadata init cleanup metaDb ok ${label}`)
+    } catch (error) {
+      await appendDebugLine(
+        `[storage] metadata init cleanup metaDb failed ${label} ${describeDebugError(error)}`
+      )
+    }
+
+    try {
+      await metaCore?.close?.()
+      await appendDebugLine(`[storage] metadata init cleanup metaCore ok ${label}`)
+    } catch (error) {
+      await appendDebugLine(
+        `[storage] metadata init cleanup metaCore failed ${label} ${describeDebugError(error)}`
+      )
+    }
+
+    try {
+      await blobServer?.close?.()
+      if (globalBlobServer === blobServer) globalBlobServer = null
+      await appendDebugLine(`[storage] metadata init cleanup blobServer ok ${label}`)
+    } catch (error) {
+      await appendDebugLine(
+        `[storage] metadata init cleanup blobServer failed ${label} ${describeDebugError(error)}`
+      )
+    }
+
+    await cleanupFailedCorestoreOpen(store, `metadata init cleanup ${label}`, {
+      appendDebugLine,
+      describeError: describeDebugError
+    })
+
+    throw originalError
+  }
+
+  // Initialize metadata database
+  await appendDebugLine('[storage] metaCore get start')
+  console.log('[Storage] metaCore get start')
+  metaCore = await openDeterministicNamedCore(store, 'peartube-meta');
+  await appendDebugLine('[storage] metaCore get returned')
+  console.log('[Storage] metaCore get returned')
+  try {
+    await appendDebugLine('[storage] metaCore ready start')
+    console.log('[Storage] metaCore ready start')
+    await metaCore.ready()
+    await appendDebugLine('[storage] metaCore ready ok')
+    console.log('[Storage] metaCore ready ok')
+  } catch (error) {
+    await appendDebugLine(`[storage] metaCore ready failed ${describeDebugError(error)}`)
+    console.error('[Storage] metaCore ready failed:', describeDebugError(error))
+    await cleanupFailedMetadataStartup('metaCore.ready', error)
+  }
+
+  await appendDebugLine('[storage] metaDb construct start')
+  console.log('[Storage] metaDb construct start')
+  metaDb = new Hyperbee(metaCore, {
+    keyEncoding: 'utf-8',
+    valueEncoding: 'json'
+  });
+  await appendDebugLine('[storage] metaDb construct ok')
+  console.log('[Storage] metaDb construct ok')
+  try {
+    await appendDebugLine('[storage] metaDb ready start')
+    console.log('[Storage] metaDb ready start')
+    await metaDb.ready();
+    await appendDebugLine('[storage] metaDb ready')
+    console.log('[Storage] metaDb ready')
+  } catch (error) {
+    await appendDebugLine(`[storage] metaDb ready failed ${describeDebugError(error)}`)
+    console.error('[Storage] metaDb ready failed:', describeDebugError(error))
+    await cleanupFailedMetadataStartup('metaDb.ready', error)
+  }
+
   try {
     const desiredPort = blobServerPortOverride || 0;
 
     blobServer = new BlobServer(blobStore, {
-      port: desiredPort || 0, // Use fixed if provided
+      port: desiredPort || 0,
       host: blobServerBindHost
     });
 
     console.log('[Storage] Starting blob server listen...');
+    await appendDebugLine('[storage] blob server listen start')
     await blobServer.listen();
     blobServerPort = blobServer.port;
-    globalBlobServer = blobServer;  // Set global reference for suspend/resume
+    globalBlobServer = blobServer;
     console.log('[Storage] Blob server listening on port:', blobServerPort);
+    await appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
   } catch (err) {
     console.error('[Storage] Failed to initialize blob server:', err.message);
+    await appendDebugLine(`[storage] blob server init failed ${err?.message || String(err)}`)
     // Continue without blob server - will need alternative video streaming
   }
-
-  // Initialize metadata database
-  const metaCore = store.get({ name: 'peartube-meta' });
-  const metaDb = new Hyperbee(metaCore, {
-    keyEncoding: 'utf-8',
-    valueEncoding: 'json'
-  });
-  await metaDb.ready();
 
   // Initialize Hyperswarm for P2P networking
   let keyPair = null;
@@ -222,8 +537,10 @@ export async function initializeStorage(config) {
   }
 
   console.log('[Storage] Creating Hyperswarm...');
+  await appendDebugLine('[storage] creating hyperswarm')
   const swarm = new Hyperswarm({ keyPair });
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
+  await appendDebugLine('[storage] hyperswarm created')
 
   // Set global references for suspend/resume and stats
   globalSwarm = swarm;
@@ -243,18 +560,24 @@ export async function initializeStorage(config) {
   const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from('peartube-network', 'utf-8'));
   try {
     const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
+    globalPeerPoolDiscovery = poolDiscovery;
     console.log('[Storage] Joined peartube-network topic for peer pool building');
     // Don't await flushed() - it can hang on mobile
     poolDiscovery.flushed().then(() => {
       console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
+      void appendDebugLine(
+        `[storage] peer-pool discovery flushed connections=${swarm.connections?.size || 0} bootstrapped=${swarm.dht?.bootstrapped}`
+      )
     }).catch(() => {});
   } catch (e) {
     console.log('[Storage] Failed to join peer pool topic:', e?.message);
+    globalPeerPoolDiscovery = null;
   }
 
   // Start listening - DON'T block on it since it may hang on mobile
   // The listen() call starts the server but we don't need to wait for it
   console.log('[Storage] Starting swarm.listen() (non-blocking)...');
+  await appendDebugLine('[storage] swarm.listen start')
   const listenPromise = swarm.listen()
 
   // Track listen state for debugging
@@ -264,9 +587,13 @@ export async function initializeStorage(config) {
       .then(() => {
         swarm._peartubeListenResolved = true
         console.log('[Storage] listen() resolved, dht.firewalled:', swarm.dht?.firewalled, 'dht.bootstrapped:', swarm.dht?.bootstrapped)
+        void appendDebugLine(
+          `[storage] swarm.listen resolved firewalled=${swarm.dht?.firewalled} bootstrapped=${swarm.dht?.bootstrapped}`
+        )
       })
       .catch((e) => {
         console.log('[Storage] listen() failed:', e?.message)
+        void appendDebugLine(`[storage] swarm.listen failed ${e?.message || String(e)}`)
       })
   }
 
@@ -275,6 +602,9 @@ export async function initializeStorage(config) {
     const dht = swarm.dht
     if (dht) {
       console.log('[Storage] DHT state: bootstrapped=', dht.bootstrapped, 'firewalled=', dht.firewalled, 'ephemeral=', dht.ephemeral, 'online=', dht.online)
+      void appendDebugLine(
+        `[storage] dht state bootstrapped=${dht.bootstrapped} firewalled=${dht.firewalled} ephemeral=${dht.ephemeral} online=${dht.online}`
+      )
     }
   }
 
@@ -291,6 +621,7 @@ export async function initializeStorage(config) {
   swarm.on('peer', (peer) => {
     const peerKey = peer?.publicKey ? b4a.toString(peer.publicKey, 'hex').slice(0, 16) : 'unknown'
     console.log('[Storage] PEER DISCOVERED:', peerKey, 'total peers:', swarm.peers?.size || 0)
+    void appendDebugLine(`[storage] peer discovered ${peerKey} totalPeers=${swarm.peers?.size || 0}`)
   })
 
   const channels = new Map();
@@ -301,6 +632,7 @@ export async function initializeStorage(config) {
       if (!conn || conn.destroyed) return
       const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
       console.log('[Storage] Peer connected:', remoteKey);
+      void appendDebugLine(`[storage] peer connected ${remoteKey}`)
 
       // Register stream with wakeup protocol for content announcements
       if (wakeup) {
@@ -379,6 +711,7 @@ export async function initializeStorage(config) {
 
   return {
     store,
+    metaCore,
     metaDb,
     swarm,
     blobServer,
@@ -387,7 +720,8 @@ export async function initializeStorage(config) {
     blobServerBindHost,
     blobSessionToken, // Session token for URL authentication
     channels,
-    wakeup
+    wakeup,
+    peerPoolDiscovery: globalPeerPoolDiscovery
   };
 }
 
@@ -662,7 +996,9 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
 
   // Join swarm for discovery
   if (ctx.swarm && bee.discoveryKey) {
-    ctx.swarm.join(bee.discoveryKey)
+    retainSwarmDiscovery(ctx, bee.discoveryKey, {
+      label: `publicBee:${publicBeeKeyHex.slice(0, 16)}`
+    })
     console.log('[Storage] loadPublicBee: joined swarm for:', publicBeeKeyHex.slice(0, 16))
   }
 
@@ -681,19 +1017,20 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
 export async function createChannel(ctx, options = {}) {
   if (!ctx.channels) ctx.channels = new Map()
 
-  // Root fix: use an explicit Autobase keyPair for new channels.
-  // This makes new-channel creation reliable and fast on mobile/Bare.
   const suffix = b4a.toString(crypto.randomBytes(16), 'hex')
   const writerKeyName = typeof options.writerKeyName === 'string' && options.writerKeyName
     ? options.writerKeyName
     : `peartube-channel-writer:${suffix}`
-  const keyPair = typeof ctx.store.createKeyPair === 'function'
-    ? await ctx.store.createKeyPair(writerKeyName)
-    : null
+
+  const { channelKeyHex: derivedChannelKeyHex, encryptionKeyHex: derivedEncryptionKeyHex } =
+    await deriveDeterministicChannelSeed(ctx.store, {
+      writerKeyName,
+      encrypt: Boolean(options.encrypt)
+    })
 
   const ch = new MultiWriterChannel(ctx.store, {
-    key: null,
-    keyPair,
+    key: derivedChannelKeyHex ? b4a.from(derivedChannelKeyHex, 'hex') : null,
+    encryptionKey: derivedEncryptionKeyHex ? b4a.from(derivedEncryptionKeyHex, 'hex') : null,
     encrypt: Boolean(options.encrypt),
     swarm: ctx.swarm // Pass swarm for early replication setup
   })
@@ -705,7 +1042,9 @@ export async function createChannel(ctx, options = {}) {
   }
 
   const channelKeyHex = ch.keyHex
-  const encryptionKeyHex = ch.encryptionKey ? b4a.toString(ch.encryptionKey, 'hex') : null
+  const encryptionKeyHex = ch.encryptionKey
+    ? b4a.toString(ch.encryptionKey, 'hex')
+    : derivedEncryptionKeyHex
 
   ctx.channels.set(channelKeyHex, ch)
 
@@ -743,6 +1082,33 @@ export async function createChannel(ctx, options = {}) {
   }
 
   return { channel: ch, channelKeyHex, encryptionKeyHex, writerKeyName }
+}
+
+export async function deriveDeterministicChannelSeed(store, { writerKeyName, encrypt = false } = {}) {
+  if (typeof writerKeyName !== 'string' || !writerKeyName) {
+    return { channelKeyHex: null, encryptionKeyHex: null }
+  }
+  if (typeof store?.get !== 'function') {
+    return { channelKeyHex: null, encryptionKeyHex: null }
+  }
+
+  const deriveSession = typeof store.session === 'function' ? store.session() : store
+  let bootstrapCore = null
+
+  try {
+    await deriveSession.ready?.()
+    bootstrapCore = deriveSession.get({ name: writerKeyName })
+    await bootstrapCore.ready()
+    return {
+      channelKeyHex: bootstrapCore.key ? b4a.toString(bootstrapCore.key, 'hex') : null,
+      encryptionKeyHex: encrypt && bootstrapCore.encryptionKey ? b4a.toString(bootstrapCore.encryptionKey, 'hex') : null
+    }
+  } finally {
+    try { await bootstrapCore?.close?.() } catch {}
+    if (deriveSession !== store) {
+      try { await deriveSession.close?.() } catch {}
+    }
+  }
 }
 
 /**
@@ -849,7 +1215,11 @@ export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
   const blobsCore = ctx.store.get(keyBuffer)
   blobsCore.ready().then(() => {
     if (ctx.swarm && blobsCore.discoveryKey) {
-      try { ctx.swarm.join(blobsCore.discoveryKey) } catch {}
+      try {
+        retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
+          label: `blobs:${blobsCoreKeyHex.slice(0, 16)}`
+        })
+      } catch {}
     }
     // Trigger update in background to find peers
     blobsCore.update().catch(() => {})
@@ -907,7 +1277,9 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
   // Join swarm for the blobs core discovery key
   if (ctx.swarm && blobsCore.discoveryKey) {
     try {
-      ctx.swarm.join(blobsCore.discoveryKey)
+      retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
+        label: `blobs:${blobsCoreKeyHex.slice(0, 16)}`
+      })
     } catch (err) {
       console.log('[Storage] Swarm join error (non-fatal):', err?.message)
     }
@@ -971,6 +1343,32 @@ export async function shutdownBackend(ctx) {
   ctx._isShutdown = true
   ctx.isShuttingDown = true
 
+  async function runShutdownStep(label, fn, timeoutMs = 5000) {
+    let timeoutId = null
+    let timedOut = false
+
+    try {
+      await Promise.race([
+        Promise.resolve().then(fn),
+        new Promise((resolve) => {
+          timeoutId = setTimeout(() => {
+            timedOut = true
+            resolve()
+          }, timeoutMs)
+        })
+      ])
+    } catch (err) {
+      console.log(`[Backend] Shutdown: ${label} failed (non-fatal):`, err?.message)
+      return
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+
+    if (timedOut) {
+      console.log(`[Backend] Shutdown: ${label} timed out after ${timeoutMs}ms (continuing)`)
+    }
+  }
+
   const shutdownBody = async () => {
     if (ctx.publicFeed) {
       console.log('[Backend] Shutdown: persisting public feed cache...')
@@ -1017,58 +1415,69 @@ export async function shutdownBackend(ctx) {
 
     if (ctx.publicFeed) {
       console.log('[Backend] Shutdown: stopping publicFeed...')
-      try {
+      await runShutdownStep('publicFeed stop', async () => {
         await ctx.publicFeed.stop()
-      } catch (err) {
-        console.log('[Backend] Shutdown: publicFeed stop failed (non-fatal):', err?.message)
+      }, 2000)
+    }
+
+    if (ctx._swarmDiscoveryHandles) {
+      const discoveryCount = ctx._swarmDiscoveryHandles.size
+      console.log(`[Backend] Shutdown: destroying ${discoveryCount} retained swarm discoveries...`)
+      for (const handle of ctx._swarmDiscoveryHandles.values()) {
+        try {
+          handle?.destroy?.()
+        } catch {}
       }
+      ctx._swarmDiscoveryHandles.clear()
     }
 
     if (ctx.blobServer) {
       console.log('[Backend] Shutdown: closing blobServer...')
-      try {
+      await runShutdownStep('blobServer close', async () => {
         await ctx.blobServer.close()
-      } catch (err) {
-        console.log('[Backend] Shutdown: blobServer close failed (non-fatal):', err?.message)
-      }
+      }, 2000)
     }
 
     if (ctx.swarm) {
       console.log('[Backend] Shutdown: destroying swarm...')
-      try {
+      await runShutdownStep('swarm destroy', async () => {
         await ctx.swarm.destroy()
-      } catch (err) {
-        console.log('[Backend] Shutdown: swarm destroy failed (non-fatal):', err?.message)
-      }
+      }, 2000)
     }
 
     if (ctx.metaDb) {
       console.log('[Backend] Shutdown: closing metaDb...')
-      try {
+      await runShutdownStep('metaDb close', async () => {
         await ctx.metaDb.close()
-      } catch (err) {
-        console.log('[Backend] Shutdown: metaDb close failed (non-fatal):', err?.message)
-      }
+      }, 2000)
+    }
+
+    if (ctx.metaCore) {
+      console.log('[Backend] Shutdown: closing metaCore...')
+      await runShutdownStep('metaCore close', async () => {
+        await ctx.metaCore.close()
+      }, 2000)
     }
 
     if (ctx.store) {
-      console.log('[Backend] Shutdown: closing store...')
-      try {
-        await ctx.store.close()
-      } catch (err) {
-        console.log('[Backend] Shutdown: store close failed (non-fatal):', err?.message)
+      const storeDb = ctx.store?.storage?.db
+      if (storeDb && typeof storeDb.flush === 'function') {
+        console.log('[Backend] Shutdown: flushing store db...')
+        try {
+          await storeDb.flush()
+        } catch (err) {
+          console.log('[Backend] Shutdown: store db flush failed (non-fatal):', err?.message)
+        }
       }
+
+      console.log('[Backend] Shutdown: closing store...')
+      await runShutdownStep('store close', async () => {
+        await ctx.store.close()
+      }, 5000)
     }
   }
 
-  const timeout = (ms) => new Promise((resolve) => {
-    setTimeout(() => {
-      console.log('[Backend] Shutdown timed out after 5s')
-      resolve()
-    }, ms)
-  })
-
-  await Promise.race([shutdownBody(), timeout(5000)])
+  await shutdownBody()
   console.log('[Backend] Shutdown complete')
 }
 

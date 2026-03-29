@@ -7,9 +7,8 @@
 
 import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
-import { createChannel, loadChannel } from './storage.js'
+import { createChannel, deriveDeterministicChannelSeed, loadChannel } from './storage.js'
 import { logger } from './logger.js'
-import { MultiWriterChannel } from './channel/multi-writer-channel.js'
 import {
   generateMnemonic as generatePearTubeMnemonic,
   validateMnemonic as validatePearTubeMnemonic,
@@ -26,6 +25,10 @@ async function getIdentityKey () {
 }
 
 const log = logger('Identity')
+
+function isEmbeddedBareKitRuntime() {
+  return globalThis?.process?.env?.PEARTUBE_NATIVE_EMBEDDED_BAREKIT === '1'
+}
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -162,12 +165,28 @@ export function createIdentityManager({ ctx }) {
 
       // Create the channel's multi-writer metadata log (Autobase)
       const writerKeyName = `peartube-channel-writer:${publicKey}`
+      log.info(' Creating channel for identity writer:', writerKeyName.slice(0, 32))
       const { channel, channelKeyHex, encryptionKeyHex } = await createChannel(ctx, {
         encrypt: false,
         writerKeyName
       })
-      await channel.updateMetadata({ name, description: '', avatar: null })
-      await channel.ensureLocalBlobDrive({ deviceName: name })
+      log.info(' Channel created:', channelKeyHex.slice(0, 16))
+      if (isEmbeddedBareKitRuntime()) {
+        try {
+          if (channel.publicBee?.writable) {
+            await channel.publicBee.setMetadata({ name, description: '', avatar: null })
+          }
+        } catch (err) {
+          log.warn(' Embedded identity metadata publish skipped:', err?.message)
+        }
+      } else {
+        log.info(' Updating channel metadata for identity')
+        await channel.updateMetadata({ name, description: '', avatar: null })
+        log.info(' Channel metadata updated')
+        log.info(' Ensuring local blob drive for identity')
+        await channel.ensureLocalBlobDrive({ deviceName: name })
+        log.info(' Local blob drive ready')
+      }
 
       // Create identity record
       // SECURITY: Do NOT persist secretKey - it can be re-derived from mnemonic if needed.
@@ -188,13 +207,17 @@ export function createIdentityManager({ ctx }) {
       };
 
       identities.push(identity);
+      log.info(' Identity appended to in-memory list')
       await this.saveIdentities();
+      log.info(' Identities persisted')
       // Channel is cached in ctx.channels by createChannel()
 
       // Set as active if first identity
       if (identities.length === 1) {
         activeIdentity = publicKey;
+        log.info(' Setting active identity')
         await ctx.metaDb.put('activeIdentity', publicKey);
+        log.info(' Active identity persisted')
         identity.isActive = true;
       }
 
@@ -279,19 +302,13 @@ export function createIdentityManager({ ctx }) {
       }
 
       const writerKeyName = `peartube-channel-writer:${publicKey}`
-      const writerKeyPair = typeof ctx.store.createKeyPair === 'function'
-        ? await ctx.store.createKeyPair(writerKeyName)
-        : null
-      const tempChannel = new MultiWriterChannel(ctx.store, {
-        key: null,
-        keyPair: writerKeyPair || undefined,
-        encrypt: false,
-        swarm: ctx.swarm
+      const { channelKeyHex, encryptionKeyHex } = await deriveDeterministicChannelSeed(ctx.store, {
+        writerKeyName,
+        encrypt: false
       })
-      await tempChannel.ready()
-      const channelKeyHex = tempChannel.keyHex
-      const encryptionKeyHex = tempChannel.encryptionKey ? b4a.toString(tempChannel.encryptionKey, 'hex') : null
-      try { await tempChannel.close() } catch {}
+      if (!channelKeyHex) {
+        throw new Error('Failed to derive deterministic channel key for recovery')
+      }
 
       await loadChannel(ctx, channelKeyHex, {
         writerKeyName,

@@ -21,6 +21,10 @@
     "build:android:apk:armv7": "npm run build:android:apk:armv7 --prefix packages/app",
     "build:android:apk:x86_64": "npm run build:android:apk:x86_64 --prefix packages/app",
     "build:android:aab": "npm run build:android:aab --prefix packages/app",
+    "desktop:native:generate": "npm run generate --prefix packages/desktop-native",
+    "desktop:native:build": "npm run build --prefix packages/desktop-native",
+    "desktop:native:test": "npm run test --prefix packages/desktop-native",
+    "desktop:native:run": "npm run run --prefix packages/desktop-native",
     "build:eas:ios": "npm run build:eas:ios --prefix packages/app",
     "build:eas:android": "npm run build:eas:android --prefix packages/app",
     "build:eas:all": "npm run build:eas:all --prefix packages/app",
@@ -53,8 +57,10 @@
   "dependencies": {
     "bare-ffmpeg": "file:packages/bare-ffmpeg",
     "bare-ipc": "^1.1.1",
+    "bare-runtime": "^1.21.4",
     "bare-worker": "^4.1.0",
     "expo": "~55.0.4",
+    "hrpc": "^4.2.0",
     "react": "^19.2.0",
     "react-native": "0.83.2"
   }

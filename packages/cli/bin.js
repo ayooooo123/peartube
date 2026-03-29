@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, writeFileSync } from '#fs'
+import process from '#process'
 import { DEFAULT_RELAY_CONFIG, RELAY_COMMAND, RELAY_COMPAT_COMMAND } from './src/constants.js'
 import { loadRelayConfig, renderExampleConfig } from './src/config.js'
 import { RelayCatalog } from './src/catalog.js'

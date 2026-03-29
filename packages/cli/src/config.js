@@ -1,5 +1,6 @@
 import { readFileSync } from '#fs'
 import { join } from '#path'
+import process from '#process'
 import {
   DEFAULT_RELAY_CONFIG,
   RELAY_CATALOG_FILENAME,
@@ -247,7 +248,7 @@ function configFromCli(cli = {}) {
   return config
 }
 
-export function resolveRelayConfig(input = {}, { env = process.env } = {}) {
+export function resolveRelayConfig(input = {}, { env = process.env || {} } = {}) {
   const requestedMode = input.mode
   const requestedPolicy = input.policy
   let config = deepMerge(clone(DEFAULT_RELAY_CONFIG), configFromEnv(env))
@@ -314,7 +315,7 @@ export function resolveRelayConfig(input = {}, { env = process.env } = {}) {
   return config
 }
 
-export async function loadRelayConfig(cli = {}, { env = process.env } = {}) {
+export async function loadRelayConfig(cli = {}, { env = process.env || {} } = {}) {
   const configPath = cli.config || env.PEARTUBE_CONFIG || null
   const fileConfig = configPath ? readConfigFile(configPath) : {}
   const envConfig = configFromEnv(env)

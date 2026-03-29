@@ -61,7 +61,7 @@ import {
   ChannelInfo,
   ActionButton,
   Scrubber,
-  MpvMobileVideoView,
+  PearInlineVideoView,
 } from './video-player'
 
 function showCastAlert(message: string) {
@@ -721,7 +721,13 @@ export function VideoPlayerOverlay() {
    const isAutoPipEnabledShared = useSharedValue(false)
   const isFullscreenShared = useSharedValue(playerMode === 'fullscreen')
   const splitPanTranslationY = useSharedValue(0)
-  const overlayInVlcViewShared = useSharedValue(Platform.OS !== 'web')
+  // Controls whether overlay elements (progress bar, time display, buttons) use
+  // bottom-relative positioning (true) or top-computed positioning from
+  // videoWrapperHeightShared (false). On mobile the container is already pushed
+  // below the notch, so bottom-relative is correct and simpler. The false
+  // branch adds insetTop again which would double-offset on Android.
+  // TODO: unify positioning branches and remove this flag entirely.
+  const useBottomRelativeOverlayShared = useSharedValue(Platform.OS !== 'web')
     const screenWidthShared = useSharedValue(screenWidth)
     const screenHeightShared = useSharedValue(screenHeight)
     // Raw activity window size from useWindowDimensions(). This changes during
@@ -1505,7 +1511,7 @@ export function VideoPlayerOverlay() {
   // Controls overlay positioning - always fill the container
   const controlsOverlayStyle = useAnimatedStyle(() => {
     'worklet'
-    if (overlayInVlcViewShared.value || isLandscapeFullscreenShared.value || isInPipModeShared.value || animProgress.value < 0.95) {
+    if (useBottomRelativeOverlayShared.value || isLandscapeFullscreenShared.value || isInPipModeShared.value || animProgress.value < 0.95) {
       return {
         position: 'absolute',
         top: 0,
@@ -1514,7 +1520,7 @@ export function VideoPlayerOverlay() {
         bottom: 0,
       }
     }
-    const wrapperHeight = overlayInVlcViewShared.value
+    const wrapperHeight = useBottomRelativeOverlayShared.value
       ? videoHeightShared.value
       : (videoWrapperHeightShared.value > 0
         ? videoWrapperHeightShared.value
@@ -1544,7 +1550,7 @@ export function VideoPlayerOverlay() {
        }
      }
 
-    if (overlayInVlcViewShared.value) {
+    if (useBottomRelativeOverlayShared.value) {
       const opacity = interpolate(
         animProgress.value,
         [0.5, 1],
@@ -1563,7 +1569,7 @@ export function VideoPlayerOverlay() {
       }
     }
 
-    const cutoutInset = overlayInVlcViewShared.value
+    const cutoutInset = useBottomRelativeOverlayShared.value
       ? 0
       : Platform.OS === 'ios'
         && !isInPipModeShared.value
@@ -1571,7 +1577,7 @@ export function VideoPlayerOverlay() {
         && animProgress.value >= 0.95
           ? insetTopShared.value
           : 0
-    const baseHeight = (overlayInVlcViewShared.value
+    const baseHeight = (useBottomRelativeOverlayShared.value
       ? videoHeightShared.value
       : (videoWrapperHeightShared.value > 0
         ? videoWrapperHeightShared.value
@@ -1629,7 +1635,7 @@ export function VideoPlayerOverlay() {
        }
      }
 
-    if (overlayInVlcViewShared.value) {
+    if (useBottomRelativeOverlayShared.value) {
       const opacity = isFullscreenShared.value ? 1 : 0
       return {
         position: 'absolute',
@@ -1644,7 +1650,7 @@ export function VideoPlayerOverlay() {
       }
     }
 
-    const cutoutInset = overlayInVlcViewShared.value
+    const cutoutInset = useBottomRelativeOverlayShared.value
       ? 0
       : Platform.OS === 'ios'
         && !isInPipModeShared.value
@@ -1652,7 +1658,7 @@ export function VideoPlayerOverlay() {
         && animProgress.value >= 0.95
           ? insetTopShared.value
           : 0
-    const baseHeight = (overlayInVlcViewShared.value
+    const baseHeight = (useBottomRelativeOverlayShared.value
       ? videoHeightShared.value
       : (videoWrapperHeightShared.value > 0
         ? videoWrapperHeightShared.value
@@ -1691,7 +1697,7 @@ export function VideoPlayerOverlay() {
 
   const minimizeButtonStyle = useAnimatedStyle(() => {
     'worklet'
-    if (overlayInVlcViewShared.value) {
+    if (useBottomRelativeOverlayShared.value) {
       return {
         top: 12,
       }
@@ -1703,7 +1709,7 @@ export function VideoPlayerOverlay() {
 
   const speedButtonStyle = useAnimatedStyle(() => {
     'worklet'
-    if (overlayInVlcViewShared.value) {
+    if (useBottomRelativeOverlayShared.value) {
       return {
         top: 12,
       }
@@ -1721,13 +1727,13 @@ export function VideoPlayerOverlay() {
        }
      }
 
-    if (overlayInVlcViewShared.value) {
+    if (useBottomRelativeOverlayShared.value) {
       return {
         bottom: 24,
       }
     }
 
-    const cutoutInset = overlayInVlcViewShared.value
+    const cutoutInset = useBottomRelativeOverlayShared.value
       ? 0
       : Platform.OS === 'ios'
         && !isInPipModeShared.value
@@ -1735,7 +1741,7 @@ export function VideoPlayerOverlay() {
         && animProgress.value >= 0.95
           ? insetTopShared.value
           : 0
-     const baseHeight = (overlayInVlcViewShared.value
+     const baseHeight = (useBottomRelativeOverlayShared.value
        ? videoHeightShared.value
        : (videoWrapperHeightShared.value > 0
          ? videoWrapperHeightShared.value
@@ -1759,7 +1765,7 @@ export function VideoPlayerOverlay() {
       }
     }
 
-    if (overlayInVlcViewShared.value) {
+    if (useBottomRelativeOverlayShared.value) {
       const opacity = interpolate(
         animProgress.value,
         [0.5, 1],
@@ -1775,7 +1781,7 @@ export function VideoPlayerOverlay() {
       }
     }
 
-     const cutoutInset = overlayInVlcViewShared.value
+     const cutoutInset = useBottomRelativeOverlayShared.value
        ? 0
        : Platform.OS === 'ios'
          && !isInPipModeShared.value
@@ -1783,7 +1789,7 @@ export function VideoPlayerOverlay() {
          && animProgress.value >= 0.95
            ? insetTopShared.value
            : 0
-     const baseHeight = (overlayInVlcViewShared.value
+     const baseHeight = (useBottomRelativeOverlayShared.value
        ? videoHeightShared.value
        : (videoWrapperHeightShared.value > 0
          ? videoWrapperHeightShared.value
@@ -1998,1161 +2004,3 @@ export function VideoPlayerOverlay() {
         cancelled = true
       }
     } else if (Platform.OS === 'ios') {
-      setIosPipEnabled(shouldAutoPip)
-    }
-  }, [playerMode, currentVideo, isCasting, isPlaying, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, androidSplitPlayerEnabled])
-
-  // PiP entry is handled natively via onUserLeaveHint in MainActivity
-  // Same activity shrinks, same player continues (single-player architecture)
-
-  // Downloads context for browser-style download manager
-  const { addDownload } = useDownloads()
-  const currentDownloadStatus = useCurrentDownloadStatus(
-    currentVideo?.id || currentVideo?.path,
-    currentVideo?.channelKey || currentVideo?.channel?.key
-  )
-  const isDownloading = currentDownloadStatus === 'downloading' || currentDownloadStatus === 'queued'
-  const isDownloaded = currentDownloadStatus === 'complete'
-
-  // Handle video download - adds to downloads queue
-  const handleDownload = useCallback(async () => {
-    if (!currentVideo || isDownloading) return
-
-    // Ensure RPC is ready
-    if (!rpc) {
-      Alert.alert('Download Failed', 'Backend not ready yet. Please try again in a moment.')
-      return
-    }
-
-    // Get channel key from the video
-    const channelKey = currentVideo.channelKey || currentVideo.channel?.key
-    if (!channelKey) {
-      Alert.alert('Download Failed', 'Could not determine channel for this video')
-      return
-    }
-
-    // Add to downloads queue - DownloadsContext handles the rest
-    await addDownload({
-      ...currentVideo,
-      channelKey,
-    }, rpc)
-  }, [currentVideo, isDownloading, addDownload])
-
-  // Always register cleanup hooks (even when no video) to avoid changing hook order
-  useEffect(() => {
-    return () => {
-      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current)
-    }
-  }, [])
-
-  // Debug: log player state
-  useEffect(() => {
-    if (__DEV__) {
-      console.log('[VideoPlayerOverlay] State:', {
-        hasCurrentVideo: !!currentVideo,
-        videoId: currentVideo?.id,
-        playerMode,
-        videoUrl: videoUrl?.substring(0, 50),
-        isPear,
-        isDesktop,
-      })
-    }
-  }, [currentVideo, playerMode, videoUrl, isPear, isDesktop])
-
-  if (!currentVideo) {
-    return null
-  }
-
-  if (disableMiniLayoutOnAndroidSplit && playerMode === 'mini' && !isInPipMode) {
-    return null
-  }
-
-  const channelName =
-    channelMetaName ||
-    currentVideo.channel?.name ||
-    `Channel ${currentVideo.channelKey?.slice(0, 8) || 'Unknown'}`
-  const channelInitial = channelName.charAt(0).toUpperCase()
-
-  // Calculate mini player position based on corner
-  const getMiniPlayerPosition = () => {
-    const baseX = miniPlayerCorner.includes('right') ? screenWidth - DESKTOP_MINI_WIDTH - DESKTOP_MINI_PADDING - sidebarWidth : DESKTOP_MINI_PADDING
-    const baseY = miniPlayerCorner.includes('bottom') ? screenHeight - DESKTOP_MINI_HEIGHT - DESKTOP_MINI_CONTROLS_HEIGHT - DESKTOP_MINI_PADDING - 108 : DESKTOP_MINI_PADDING + 108
-    
-    if (isDraggingMiniPlayer) {
-      return {
-        x: baseX + miniPlayerDragOffset.x,
-        y: baseY + miniPlayerDragOffset.y,
-      }
-    }
-    return { x: baseX, y: baseY }
-  }
-
-  // Handle mini player drag start
-  const handleMiniPlayerDragStart = (e: React.MouseEvent) => {
-    e.preventDefault()
-    setIsDraggingMiniPlayer(true)
-    const pos = getMiniPlayerPosition()
-    miniPlayerDragStartRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      cornerX: pos.x,
-      cornerY: pos.y,
-    }
-    
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const deltaX = moveEvent.clientX - miniPlayerDragStartRef.current.x
-      const deltaY = moveEvent.clientY - miniPlayerDragStartRef.current.y
-      setMiniPlayerDragOffset({ x: deltaX, y: deltaY })
-    }
-    
-    const handleMouseUp = (upEvent: MouseEvent) => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      
-      const finalX = miniPlayerDragStartRef.current.cornerX + (upEvent.clientX - miniPlayerDragStartRef.current.x)
-      const finalY = miniPlayerDragStartRef.current.cornerY + (upEvent.clientY - miniPlayerDragStartRef.current.y)
-      
-      const centerX = finalX + DESKTOP_MINI_WIDTH / 2
-      const centerY = finalY + (DESKTOP_MINI_HEIGHT + DESKTOP_MINI_CONTROLS_HEIGHT) / 2
-      const screenCenterX = (screenWidth - sidebarWidth) / 2 + sidebarWidth
-      const screenCenterY = screenHeight / 2
-      
-      const isRight = centerX > screenCenterX
-      const isBottom = centerY > screenCenterY
-      
-      const newCorner = `${isBottom ? 'bottom' : 'top'}-${isRight ? 'right' : 'left'}` as typeof miniPlayerCorner
-      setMiniPlayerCorner(newCorner)
-      setMiniPlayerDragOffset({ x: 0, y: 0 })
-      setIsDraggingMiniPlayer(false)
-    }
-    
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-  }
-
-  // Desktop mini player mode
-  if (isDesktop && Platform.OS === 'web' && playerMode === 'mini') {
-    const miniPos = getMiniPlayerPosition()
-    
-    return (
-      <div
-        style={{
-          position: 'fixed',
-          left: miniPos.x,
-          top: miniPos.y,
-          width: DESKTOP_MINI_WIDTH,
-          zIndex: 9999,
-          borderRadius: 12,
-          overflow: 'hidden',
-          backgroundColor: colors.bg,
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3)',
-          border: `1px solid ${colors.border}`,
-          cursor: isDraggingMiniPlayer ? 'grabbing' : 'default',
-          userSelect: 'none',
-          transition: isDraggingMiniPlayer ? 'none' : 'left 0.2s ease, top 0.2s ease',
-        }}
-      >
-        {/* Drag handle - top bar */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 32,
-            cursor: isDraggingMiniPlayer ? 'grabbing' : 'grab',
-            zIndex: 10,
-          }}
-          onMouseDown={handleMiniPlayerDragStart}
-        />
-        
-        {/* Video container */}
-        <div
-          style={{
-            width: DESKTOP_MINI_WIDTH,
-            height: DESKTOP_MINI_HEIGHT,
-            backgroundColor: '#000',
-            position: 'relative',
-          }}
-        >
-          {isCasting ? (
-            <div style={{ ...desktopStyles.castPlaceholder, height: DESKTOP_MINI_HEIGHT }}>
-              <Feather name="cast" color={colors.primary} size={24} />
-              <span style={{ fontSize: 12, color: colors.textMuted }}>Casting...</span>
-            </div>
-          ) : videoUrl ? (
-            <MpvPlayer
-              key={`mpv-mini:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-              ref={playerRef}
-              url={videoUrl}
-              autoPlay
-              onCanPlay={onPlaying}
-              onPaused={onPaused}
-              onPlaying={onPlaying}
-              onEnded={onEnded}
-              onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-              onProgress={(data) => onProgress?.({
-                currentTime: data.currentTime * 1000,
-                duration: data.duration * 1000,
-              } as any)}
-              style={{ width: '100%', height: '100%' }}
-            />
-          ) : (
-            <div style={{ ...desktopStyles.placeholder, height: DESKTOP_MINI_HEIGHT }}>
-              <span style={{ fontSize: 32, color: colors.primary, fontWeight: '600' }}>
-                {currentVideo.title.charAt(0).toUpperCase()}
-              </span>
-            </div>
-          )}
-          
-          {/* Hover overlay with play/pause */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: 'rgba(0, 0, 0, 0.3)',
-              opacity: 0,
-              transition: 'opacity 0.15s ease',
-            }}
-            className="mini-player-overlay"
-            onClick={handlePlayPause}
-          >
-            <div
-              style={{
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-                backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-              }}
-            >
-              {effectiveIsPlaying ? (
-                <Ionicons name="pause" color="#fff" size={24} />
-              ) : (
-                <Ionicons name="play" color="#fff" size={24} />
-              )}
-            </div>
-          </div>
-          
-          {/* Progress bar at bottom of video */}
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 0,
-              left: 0,
-              right: 0,
-              height: 3,
-              backgroundColor: 'rgba(255, 255, 255, 0.2)',
-            }}
-          >
-            <div
-              style={{
-                height: '100%',
-                width: `${effectiveProgress * 100}%`,
-                backgroundColor: colors.primary,
-                transition: 'width 0.1s linear',
-              }}
-            />
-          </div>
-        </div>
-        
-        {/* Controls bar */}
-        <div
-          style={{
-            height: DESKTOP_MINI_CONTROLS_HEIGHT,
-            padding: '8px 12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            backgroundColor: colors.bgSecondary,
-          }}
-        >
-          {/* Title and channel */}
-            <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={maximizeFromMini}>
-            <div
-              style={{
-                fontSize: 13,
-                fontWeight: '500',
-                color: colors.text,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {currentVideo.title}
-            </div>
-            <div
-              style={{
-                fontSize: 11,
-                color: colors.textMuted,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {channelName}
-            </div>
-          </div>
-          
-          {/* Control buttons */}
-          <button
-            onClick={handlePlayPause}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 16,
-              border: 'none',
-              backgroundColor: 'transparent',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'background-color 0.15s ease',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = colors.bgHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-          >
-            {effectiveIsPlaying ? (
-              <Ionicons name="pause" color={colors.text} size={18} />
-            ) : (
-              <Ionicons name="play" color={colors.text} size={18} />
-            )}
-          </button>
-          
-          <button
-                  onClick={maximizeFromMini}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 16,
-              border: 'none',
-              backgroundColor: 'transparent',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'background-color 0.15s ease',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = colors.bgHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-            title="Expand"
-          >
-            <Feather name="chevron-up" color={colors.text} size={18} />
-          </button>
-          
-          <button
-            onClick={closeVideo}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 16,
-              border: 'none',
-              backgroundColor: 'transparent',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              transition: 'background-color 0.15s ease',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = colors.bgHover)}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-            title="Close"
-          >
-            <Feather name="x" color={colors.text} size={18} />
-          </button>
-        </div>
-        
-        {/* CSS for hover effect on video overlay */}
-        <style>{`
-          .mini-player-overlay:hover {
-            opacity: 1 !important;
-          }
-        `}</style>
-      </div>
-    )
-  }
-
-  // Desktop: YouTube-style layout (fullscreen overlay)
-  if (isDesktop && Platform.OS === 'web') {
-    return (
-      <div style={{ ...desktopStyles.overlay, left: sidebarWidth, transition: 'left 0.2s ease' }}>
-        <div style={desktopStyles.container}>
-          {/* Main content area */}
-          <div style={desktopStyles.mainColumn}>
-            {/* Video player */}
-            <div style={{ ...desktopStyles.videoWrapper, width: desktopVideoWidth, height: desktopVideoHeight }}>
-              {isCasting ? (
-                <div style={desktopStyles.castPlaceholder}>
-                  <Feather name="cast" color={colors.primary} size={40} />
-                  <div style={desktopStyles.castTextBlock}>
-                    <span style={desktopStyles.castTitle}>Casting to {castDeviceName}</span>
-                    <span style={desktopStyles.castSubtitle}>{currentVideo.title}</span>
-                  </div>
-                </div>
-              ) : videoUrl ? (
-                <MpvPlayer
-                  key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-                  ref={playerRef}
-                  url={videoUrl}
-                  autoPlay
-                  onCanPlay={onPlaying}
-                  onPaused={onPaused}
-                  onPlaying={onPlaying}
-                  onEnded={onEnded}
-                  onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-                  onProgress={(data) => onProgress?.({
-                    currentTime: data.currentTime * 1000,
-                    duration: data.duration * 1000,
-                  } as any)}
-                  style={{ width: '100%', height: '100%', borderRadius: 12 }}
-                />
-              ) : (
-                <div style={desktopStyles.placeholder}>
-                  <span style={desktopStyles.placeholderText}>{currentVideo.title.charAt(0).toUpperCase()}</span>
-                </div>
-              )}
-              {showLoadingOverlay && (
-                <div style={desktopStyles.loadingOverlay}>
-                  <ActivityIndicator color="white" size="large" />
-                  <Text style={{ color: '#fff', marginTop: 12 }}>{loadingLabel}</Text>
-                </div>
-              )}
-            </div>
-
-            {/* Desktop playback controls */}
-            <div style={desktopStyles.playerControls}>
-              <button onClick={handlePlayPause} style={desktopStyles.controlButton} aria-label={effectiveIsPlaying ? 'Pause' : 'Play'}>
-                <Feather name={effectiveIsPlaying ? 'pause' : 'play'} color={colors.text} size={16} />
-              </button>
-              <div style={desktopStyles.seekRow}>
-                <input
-                  type="range"
-                  min={0}
-                  max={effectiveDuration || 0}
-                  step={0.1}
-                  value={isSeeking ? seekPosition : effectiveCurrentTime}
-                  disabled={effectiveDuration <= 0}
-                  onMouseDown={handleDesktopSeekStart}
-                  onTouchStart={handleDesktopSeekStart}
-                  onChange={handleDesktopSeekChange}
-                  onMouseUp={handleDesktopSeekEnd}
-                  onTouchEnd={handleDesktopSeekEnd}
-                  style={desktopStyles.seekInput}
-                />
-                <span style={desktopStyles.timeLabel}>
-                  {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
-                </span>
-              </div>
-            </div>
-
-            {/* Video info */}
-            <div style={desktopStyles.videoInfo}>
-              <h1 style={desktopStyles.title}>{currentVideo.title}</h1>
-              {isCasting && (
-                <div style={desktopStyles.castBanner}>
-                  <Feather name="cast" color={colors.primary} size={14} />
-                  <span style={desktopStyles.castBannerText}>Casting to {castDeviceName}</span>
-                  <button
-                    onClick={handleCastDisconnect}
-                    style={desktopStyles.castDisconnectButton}
-                    aria-label="Disconnect casting"
-                  >
-                    Disconnect
-                  </button>
-                </div>
-              )}
-
-              {/* P2P Stats Bar - matching mobile design */}
-              <div style={desktopStyles.p2pStatsBar}>
-                {/* Main stats row */}
-                <div style={desktopStyles.p2pStatsRow}>
-                  <div style={desktopStyles.p2pStatItem}>
-                    <div style={{
-                      ...desktopStyles.statusDot,
-                      backgroundColor: videoStats?.isComplete ? '#4ade80' : videoStats?.status === 'downloading' ? '#fbbf24' : '#6b7280'
-                    }} />
-                    <span style={{
-                      ...desktopStyles.statusLabel,
-                      color: videoStats?.isComplete ? '#4ade80' : videoStats?.status === 'downloading' ? '#fbbf24' : '#6b7280'
-                    }}>
-                      {videoStats?.isComplete ? 'Cached' : videoStats?.status === 'downloading' ? 'Downloading' : 'Connecting'}
-                    </span>
-                  </div>
-                  <span style={desktopStyles.p2pStatText}>{videoStats?.peerCount ?? 0} peers</span>
-                  <span style={desktopStyles.p2pStatSpeed}>↓ {Number(videoStats?.speedMBps ?? 0).toFixed(2)} MB/s</span>
-                  <span style={desktopStyles.p2pStatSpeedUp}>↑ {Number(videoStats?.uploadSpeedMBps ?? 0).toFixed(2)} MB/s</span>
-                </div>
-                {/* Details row */}
-                <div style={desktopStyles.p2pStatsRowSecondary}>
-                  <span style={desktopStyles.p2pStatDetail}>
-                    {formatSize(videoStats?.downloadedBytes || 0)} / {formatSize(videoStats?.totalBytes || 0)}
-                  </span>
-                  <span style={desktopStyles.p2pStatDetail}>
-                    {videoStats?.downloadedBlocks || 0} / {videoStats?.totalBlocks || 0} blocks
-                  </span>
-                  <span style={{
-                    ...desktopStyles.p2pStatProgress,
-                    color: videoStats?.isComplete ? '#4ade80' : colors.text
-                  }}>
-                    {videoStats?.progress ?? 0}%
-                  </span>
-                </div>
-              </div>
-
-              <div style={desktopStyles.meta}>
-                <span>{formatTimeAgo(currentVideo.uploadedAt)}</span>
-                <span style={desktopStyles.dot}>•</span>
-                <span>{formatSize(currentVideo.size)}</span>
-              </div>
-
-              {/* Channel info */}
-              <div style={desktopStyles.channelRow}>
-                <div style={desktopStyles.avatar}>
-                  <span style={desktopStyles.avatarText}>{channelInitial}</span>
-                </div>
-                <div style={desktopStyles.channelInfo}>
-                  <span style={desktopStyles.channelName}>{channelName}</span>
-                  <span style={desktopStyles.channelKey}>{currentVideo.channelKey?.slice(0, 16)}...</span>
-                </div>
-              </div>
-
-              {/* Action buttons - Like, Dislike, Download */}
-              <div style={desktopStyles.actions}>
-                <button
-                  onClick={() => toggleReaction('like')}
-                  style={{
-                    ...desktopStyles.reactionButton,
-                    backgroundColor: userReaction === 'like' ? colors.primary : colors.bgSecondary,
-                  }}
-                >
-                  <span style={{ color: userReaction === 'like' ? '#fff' : colors.text }}>
-                    Like ({reactionCounts.like || 0})
-                  </span>
-                </button>
-                <button
-                  onClick={() => toggleReaction('dislike')}
-                  style={{
-                    ...desktopStyles.reactionButton,
-                    backgroundColor: userReaction === 'dislike' ? colors.textSecondary : colors.bgSecondary,
-                  }}
-                >
-                  <span style={{ color: userReaction === 'dislike' ? '#fff' : colors.text }}>
-                    Dislike ({reactionCounts.dislike || 0})
-                  </span>
-                </button>
-                <button
-                  onClick={isDownloaded ? undefined : handleDownload}
-                  disabled={isDownloaded || isDownloading}
-                  style={{
-                    ...desktopStyles.actionButton,
-                    opacity: isDownloaded ? 0.7 : 1,
-                    cursor: isDownloaded ? 'default' : 'pointer',
-                  }}
-                >
-                  <Feather name={isDownloaded ? 'check' : 'download'} color={isDownloaded ? colors.primary : colors.text} size={18} />
-                  <span style={desktopStyles.actionLabel}>
-                    {isDownloaded ? 'Downloaded' : isDownloading ? 'Downloading...' : 'Download'}
-                  </span>
-                </button>
-              </div>
-
-              {/* Description */}
-              {currentVideo.description && (
-                <div style={desktopStyles.description}>
-                  <p style={desktopStyles.descriptionText}>{currentVideo.description}</p>
-                </div>
-              )}
-
-              {/* Comments Section */}
-              <div style={desktopStyles.commentsSection}>
-                <div style={desktopStyles.commentsHeader}>
-                  <h3 style={desktopStyles.commentsTitle}>
-                    {displayComments.length > 0 ? `${displayComments.length} Comment${displayComments.length !== 1 ? 's' : ''}` : 'Comments'}
-                  </h3>
-                  <button onClick={refreshComments} disabled={refreshingComments} style={desktopStyles.refreshButton}>
-                    <Feather name="rotate-ccw" color={colors.primary} size={14} />
-                    <span>{refreshingComments ? 'Refreshing...' : 'Refresh'}</span>
-                  </button>
-                </div>
-
-                {/* Comment composer */}
-                <div style={desktopStyles.commentComposer}>
-                  <input
-                    type="text"
-                    value={commentText}
-                    onChange={(e) => setCommentText(e.target.value)}
-                    placeholder="Add a comment..."
-                    style={desktopStyles.commentInput}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && commentText.trim()) postComment() }}
-                  />
-                  <button
-                    onClick={postComment}
-                    disabled={postingComment || !commentText.trim()}
-                    style={{ ...desktopStyles.postButton, opacity: (postingComment || !commentText.trim()) ? 0.5 : 1 }}
-                  >
-                    {postingComment ? 'Posting...' : 'Post'}
-                  </button>
-                </div>
-
-                {/* Comments list */}
-                <div style={desktopStyles.commentsList}>
-                  {commentsLoading && displayComments.length === 0 ? (
-                    <div style={{ padding: 20, textAlign: 'center' as const }}>
-                      <ActivityIndicator color={colors.primary} />
-                    </div>
-                  ) : displayComments.length === 0 ? (
-                    <p style={desktopStyles.noComments}>No comments yet. Be the first to comment!</p>
-                  ) : (
-                    organizedComments.map((c: any) => (
-                      <div key={c.commentId} style={desktopStyles.commentItem}>
-                        <div style={desktopStyles.commentHeader}>
-                          <span style={desktopStyles.commentAuthor}>
-                            {(c.authorKeyHex || '').slice(0, 12)}…
-                          </span>
-                          <span style={desktopStyles.commentTime}>
-                            {formatTimeAgo(c.timestamp || Date.now())}
-                          </span>
-                          {c.isAdmin && <span style={desktopStyles.adminBadge}>Admin</span>}
-                        </div>
-                        <p style={desktopStyles.commentText}>{c.content}</p>
-                        {c.replies?.length > 0 && (
-                          <div style={desktopStyles.replies}>
-                            {c.replies.map((r: any) => (
-                              <div key={r.commentId} style={desktopStyles.replyItem}>
-                                <span style={desktopStyles.commentAuthor}>{(r.authorKeyHex || '').slice(0, 12)}…</span>
-                                <p style={desktopStyles.commentText}>{r.content}</p>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Minimize button */}
-          <button onClick={minimizePlayer} style={desktopStyles.minimizeButton} aria-label="Minimize">
-            <Feather name="minus" color={colors.text} size={24} />
-          </button>
-          
-          {/* Close button */}
-          <button onClick={closeVideo} style={desktopStyles.closeButton} aria-label="Close">
-            <Feather name="x" color={colors.text} size={24} />
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  const overlayContent = (
-    <>
-      {showLoadingOverlay && !isInPipMode && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator color="white" size="large" />
-          <Text style={styles.loadingText}>{loadingLabel}</Text>
-        </View>
-      )}
-
-      {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
-        <Animated.View pointerEvents="box-none" style={[styles.controlsOverlayBase, controlsOverlayStyle]}>
-          <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('left')}>
-            <Feather name="rotate-ccw" color="#fff" size={32} />
-            <Text style={styles.controlButtonText}>10s</Text>
-          </Pressable>
-
-          <Pressable style={styles.controlButtonLarge} onPress={handlePlayPause}>
-            {effectiveIsPlaying ? (
-              <Ionicons name="pause" color="#fff" size={48} />
-            ) : (
-              <Ionicons name="play" color="#fff" size={48} />
-            )}
-          </Pressable>
-
-          <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('right')}>
-            <Feather name="rotate-cw" color="#fff" size={32} />
-            <Text style={styles.controlButtonText}>10s</Text>
-          </Pressable>
-        </Animated.View>
-      )}
-
-      {seekFeedback && (
-        <View style={[
-          styles.seekFeedback,
-          seekFeedback === 'left' ? styles.seekFeedbackLeft : styles.seekFeedbackRight
-        ]}>
-          {seekFeedback === 'left' ? (
-            <Feather name="rotate-ccw" color="#fff" size={32} />
-          ) : (
-            <Feather name="rotate-cw" color="#fff" size={32} />
-          )}
-          <Text style={styles.seekFeedbackText}>10s</Text>
-        </View>
-      )}
-
-      {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
-        <Animated.View style={[styles.minimizeButton, fullscreenButtonsOpacityStyle, minimizeButtonStyle]}>
-          <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
-            <Feather name="chevron-down" color="#fff" size={28} />
-          </Pressable>
-        </Animated.View>
-      )}
-
-      {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
-        <Animated.View style={[styles.speedButton, fullscreenButtonsOpacityStyle, speedButtonStyle]}>
-          <Pressable onPress={cyclePlaybackSpeed} style={styles.speedButtonInner}>
-            <Text style={styles.speedButtonText}>{playbackRate}x</Text>
-          </Pressable>
-        </Animated.View>
-      )}
-
-      {playerMode === 'fullscreen' && showControls && !isInPipMode && (
-        <Animated.View style={[styles.castButton, fullscreenButtonsOpacityStyle, castButtonStyle]}>
-          <Pressable onPress={handleCastPress} style={styles.castButtonInner}>
-            <Feather name="cast" color={cast.isConnected ? colors.primary : "#fff"} size={22} />
-          </Pressable>
-        </Animated.View>
-      )}
-
-      {playerMode === 'fullscreen' && showControls && !isInPipMode && (
-        <Animated.View style={fullscreenButtonStyle}>
-          <Pressable onPress={toggleLandscapeFullscreen} style={styles.fullscreenButtonInner}>
-            {isLandscapeFullscreen ? (
-              <Feather name="minimize" color="#fff" size={22} />
-            ) : (
-              <Feather name="maximize" color="#fff" size={22} />
-            )}
-          </Pressable>
-        </Animated.View>
-      )}
-
-      {!isInPipMode && Platform.OS !== 'web' && (
-        <Scrubber
-          containerStyle={progressBarStyle}
-          duration={effectiveDuration}
-          currentTime={effectiveCurrentTime}
-          progress={effectiveProgress}
-          pendingSeekTime={scrubPendingTime}
-          disabled={effectiveDuration <= 0}
-          externalGesture={panGesture}
-          onSeekCommit={handleScrubCommit}
-        />
-      )}
-
-      {!isInPipMode && Platform.OS === 'web' && (
-        <Animated.View style={progressBarStyle} pointerEvents="none">
-          <View style={styles.thinProgressBg}>
-            <View style={[styles.thinProgressFill, { width: `${effectiveProgress * 100}%` }]} />
-          </View>
-        </Animated.View>
-      )}
-
-      {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
-        <Animated.View style={timeDisplayStyle}>
-          <Text style={styles.timeText}>
-            {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
-          </Text>
-        </Animated.View>
-      )}
-
-      {showLegacyMiniUi && (
-        <Animated.View style={[styles.miniPipProgressBar, miniInfoStyle]} pointerEvents="none">
-          <View style={[styles.miniPipProgressFill, { width: `${effectiveProgress * 100}%` }]} />
-        </Animated.View>
-      )}
-    </>
-  )
-
-  // Mobile: Single render path - landscape uses View wrapper, portrait uses Animated.View.
-  // The shared inline video view stays mounted across orientation changes for smooth transitions.
-  const renderVideoPlayer = () => {
-    if (isCasting) {
-      return (
-        <View style={styles.castPlaceholder}>
-          <Feather name="cast" size={40} color={colors.primary} />
-          <Text style={styles.castPlaceholderTitle}>Casting to {castDeviceName}</Text>
-          <Text style={styles.castPlaceholderSubtitle} numberOfLines={1}>
-            {currentVideo.title}
-          </Text>
-        </View>
-      )
-    }
-
-    return (
-      <>
-        {Platform.OS !== 'web' && videoUrl && (
-          <MpvMobileVideoView
-            style={StyleSheet.absoluteFill}
-            playerRef={playerRef}
-            videoUrl={videoUrl}
-            playbackSession={playbackSession}
-            currentVideoKey={`${currentVideo?.channelKey || ''}:${currentVideo?.id || ''}`}
-            isPlaying={isPlaying}
-            playbackRate={playbackRate}
-            seekPosition={playerSeekPosition}
-            isInPipMode={isInPipMode}
-            pipWindowSize={pipWindowSize}
-            pipEnabled={iosPipEnabled}
-            onLoad={handleVideoLoad}
-            onPictureInPictureChanged={handlePipStatusChanged}
-            onProgress={onProgress}
-            onPlaying={onPlaying}
-            onPaused={onPaused}
-            onBuffering={onBuffering}
-            onEnded={onEnded}
-            onError={onError}
-            onVideoStateChange={onVideoStateChange}
-          />
-        )}
-        {Platform.OS === 'web' && isPear && videoUrl && (
-          <MpvPlayer
-            key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-            ref={playerRef}
-            url={videoUrl}
-            autoPlay
-            onCanPlay={onPlaying}
-            onPaused={onPaused}
-            onPlaying={onPlaying}
-            onEnded={onEnded}
-            onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-            onProgress={(data) => onProgress?.({
-              currentTime: data.currentTime * 1000,
-              duration: data.duration * 1000,
-            } as any)}
-            style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
-          />
-        )}
-        {!videoUrl && (
-          <View style={styles.videoPlaceholder}>
-            <Text style={styles.placeholderText}>
-              {currentVideo.title.charAt(0).toUpperCase()}
-            </Text>
-          </View>
-        )}
-      </>
-    )
-  }
-
-  const content = (
-    <Animated.View style={[styles.container, containerStyle]}>
-        <GestureDetector gesture={composedGesture}>
-          <Animated.View
-            ref={videoWrapperRef}
-            style={[styles.videoWrapper, videoStyle]}
-            onLayout={(event) => {
-              const { height: h } = event.nativeEvent.layout
-              if (h > 0 && h !== videoWrapperHeightShared.value) {
-                videoWrapperHeightShared.value = h
-              }
-            }}
-          >
-            {Platform.OS === 'web' ? (
-              <Pressable
-                style={styles.videoBackground}
-                onPress={handleVideoTap}
-              >
-                <Animated.View style={videoPlayerStyle}>
-                  {renderVideoPlayer()}
-                </Animated.View>
-
-                {overlayContent}
-              </Pressable>
-            ) : (
-              <>
-                <Animated.View style={videoPlayerStyle}>
-                  {renderVideoPlayer()}
-                </Animated.View>
-                {!isInPipMode && (
-                  <Pressable
-                    style={StyleSheet.absoluteFill}
-                    onPress={handleVideoTap}
-                    testID="video-tap-overlay"
-                  />
-                )}
-                {overlayContent}
-              </>
-            )}
-        </Animated.View>
-        </GestureDetector>
-
-        {showLegacyMiniUi && showControls && (
-          <>
-            <View style={styles.miniPipTopRow} pointerEvents="box-none">
-              <Pressable
-                style={styles.miniPipSmallButton}
-                onPress={closeFromMini}
-                testID="mini-player-close"
-              >
-                <Feather name="x" size={18} color="#fff" />
-              </Pressable>
-              <Pressable
-                style={styles.miniPipSmallButton}
-                onPress={() => setTimeout(maximizeFromMini, 0)}
-                testID="mini-player-maximize"
-              >
-                <Feather name="chevron-up" size={18} color="#fff" />
-              </Pressable>
-            </View>
-            <Pressable
-              style={styles.miniPipPlayPauseButton}
-              onPress={handlePlayPause}
-              testID="mini-player-play-pause"
-            >
-              <Feather name={isPlaying ? 'pause' : 'play'} size={22} color="#fff" />
-            </Pressable>
-          </>
-        )}
-
-        {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
-          <Animated.View
-            style={[styles.fullscreenContent, fullscreenContentStyle]}
-          >
-          <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            {/* P2P Stats - show on native and Pear desktop */}
-            {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={videoStats} />}
-
-            {/* Video Info */}
-            <View style={styles.videoInfo}>
-              <Text style={styles.videoTitle}>{currentVideo.title}</Text>
-              {isCasting && (
-                <View style={styles.castBanner}>
-                  <Feather name="cast" color={colors.primary} size={14} />
-                  <Text style={styles.castBannerText}>Casting to {castDeviceName}</Text>
-                  <Pressable onPress={handleCastDisconnect} style={styles.castBannerAction}>
-                    <Text style={styles.castBannerActionText}>Disconnect</Text>
-                  </Pressable>
-                </View>
-              )}
-              <Text style={styles.videoMeta}>
-                {formatTimeAgo(currentVideo.uploadedAt)} · {formatSize(currentVideo.size)}
-              </Text>
-            </View>
-
-            {/* Action Buttons */}
-            <View style={styles.actions}>
-              <ActionButton
-                icon={({ color, size }: { color: string; size: number }) => <Feather name="thumbs-up" color={color} size={size} />}
-                label={`Like${reactionCounts.like ? ` (${reactionCounts.like})` : ''}`}
-                active={userReaction === 'like'}
-                onPress={() => toggleReaction('like')}
-              />
-              <ActionButton
-                icon={({ color, size }: { color: string; size: number }) => <Feather name="thumbs-down" color={color} size={size} />}
-                label={`Dislike${reactionCounts.dislike ? ` (${reactionCounts.dislike})` : ''}`}
-                active={userReaction === 'dislike'}
-                onPress={() => toggleReaction('dislike')}
-              />
-              <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="share-2" color={color} size={size} />} label="Share" />
-              {cast.available && (
-                <ActionButton
-                  icon={({ color, size }: { color: string; size: number }) => <Feather name="cast" color={color} size={size} />}
-                  label={cast.isConnected ? "Casting" : "Cast"}
-                  active={cast.isConnected}
-                  onPress={handleCastPress}
-                  loading={isConnectingCast}
-                />
-              )}
-              <ActionButton
-                icon={({ color, size }: { color: string; size: number }) => isDownloaded ? <Feather name="check" color={color} size={size} /> : <Feather name="download" color={color} size={size} />}
-                label={isDownloaded ? "Saved" : "Download"}
-                onPress={isDownloaded ? undefined : handleDownload}
-                loading={isDownloading}
-              />
-              <ActionButton icon={({ color, size }: { color: string; size: number }) => <Feather name="more-horizontal" color={color} size={size} />} label="More" />
-            </View>
-
-            {/* Channel Info */}
-            <ChannelInfo channelName={channelName} channelInitial={channelInitial} />
-
-            {/* Divider */}
-            <View style={styles.divider} />
-
-            {/* Description */}
-            {currentVideo.description && (
-              <View style={styles.description}>
-                <Text style={styles.descriptionText}>{currentVideo.description}</Text>
-              </View>
-            )}
-
-            {/* Comments */}
-            <View style={styles.commentsSection}>
-              <View style={styles.commentsHeader}>
-                <Text style={styles.commentsTitle}>
-                  {displayComments.length > 0 ? `${displayComments.length} Comment${displayComments.length !== 1 ? 's' : ''}` : 'Comments'}
-                </Text>
-                <Pressable
-                  onPress={refreshComments}
-                  disabled={refreshingComments}
-                  style={[styles.refreshButton, refreshingComments && { opacity: 0.5 }]}
-                >
-                  {refreshingComments ? (
-                    <ActivityIndicator size="small" color={colors.primary} />
-                  ) : (
-                    <Feather name="rotate-ccw" color={colors.primary} size={16} />
-                  )}
-                  <Text style={styles.refreshButtonText}>Refresh</Text>
-                </Pressable>
-              </View>
-
-              {replyToComment && (
-                <View style={styles.replyIndicator}>
-                  <Text style={styles.replyIndicatorText}>
-                    Replying to {(replyToComment.authorKeyHex || '').slice(0, 8)}…
-                  </Text>
-                  <Pressable onPress={() => { setReplyToComment(null); setCommentText('') }} style={styles.cancelReplyButton}>
-                    <Feather name="x" color={colors.textMuted} size={16} />
-                  </Pressable>
-                </View>
-              )}
-
-              <View style={styles.commentComposer}>
-                <TextInput
-                  value={commentText}
-                  onChangeText={setCommentText}
-                  placeholder={replyToComment ? 'Write a reply…' : 'Add a comment…'}
-                  placeholderTextColor={colors.textMuted}
-                  style={styles.commentInput}
-                  multiline
-                />
-                <Pressable
-                  onPress={postComment}
-                  disabled={postingComment || !commentText.trim()}
-                  style={[styles.commentButton, (postingComment || !commentText.trim()) && { opacity: 0.5 }]}
-                >
-                  <Text style={styles.commentButtonText}>{postingComment ? 'Posting…' : 'Post'}</Text>
-                </Pressable>
-              </View>
-
-              {commentsLoading && displayComments.length === 0 ? (
-                <View style={{ paddingVertical: 12 }}>
-                  <ActivityIndicator color={colors.primary} />
-                </View>
-              ) : displayComments.length === 0 ? (
-                <Text style={styles.commentsEmpty}>No comments yet. Be the first to comment!</Text>
-              ) : (
-                <View style={{ gap: 12, paddingBottom: 24 }}>
-                  {organizedComments.map((c: any) => (
-                    <View key={c.commentId}>
-                      <View style={styles.commentItem}>
-                        <View style={styles.commentHeader}>
-                          <Text style={styles.commentAuthor}>
-                            {(c.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(c.timestamp || Date.now())}
-                          </Text>
-                          {c.isAdmin && (
-                            <Text style={styles.adminBadge}>Admin</Text>
-                          )}
-                          {c.pendingState && (
-                            <Text style={styles.pendingBadge}>
-                              {c.pendingState === 'failed' ? 'Failed' : 'Pending'}
-                            </Text>
-                          )}
-                          <View style={styles.commentActions}>
-                            <Pressable onPress={() => setReplyToComment(c)} style={styles.commentActionButton}>
-                              <Feather name="corner-up-left" color={colors.textMuted} size={14} />
-                            </Pressable>
-                            {(isOwnComment(c) || c.pendingState) && (
-                              <Pressable
-                                onPress={() => deleteComment(c.commentId)}
-                                disabled={deletingCommentId === c.commentId}
-                                style={styles.commentActionButton}
-                              >
-                                {deletingCommentId === c.commentId ? (
-                                  <ActivityIndicator size="small" color={colors.textMuted} />
-                                ) : (
-                                  <Feather name="trash-2" color="#f87171" size={14} />
-                                )}
-                              </Pressable>
-                            )}
-                          </View>
-                        </View>
-                        <Text style={c.pendingState ? styles.commentTextPending : styles.commentText}>{c.text}</Text>
-                      </View>
-
-                      {c.replies && c.replies.length > 0 && (
-                        <View style={styles.repliesContainer}>
-                          {c.replies.map((reply: any) => (
-                            <View key={reply.commentId} style={styles.replyItem}>
-                              <View style={styles.commentHeader}>
-                                <Text style={styles.commentAuthor}>
-                                  {(reply.authorKeyHex || '').slice(0, 12)}… · {formatTimeAgo(reply.timestamp || Date.now())}
-                                </Text>
-                                {reply.isAdmin && (
-                                  <Text style={styles.adminBadge}>Admin</Text>
-                                )}
-                                {reply.pendingState && (
-                                  <Text style={styles.pendingBadge}>
-                                    {reply.pendingState === 'failed' ? 'Failed' : 'Pending'}
-                                  </Text>
-                                )}
-                                {(isOwnComment(reply) || reply.pendingState) && (
-                                  <Pressable
-                                    onPress={() => deleteComment(reply.commentId)}
-                                    disabled={deletingCommentId === reply.commentId}
-                                    style={styles.commentActionButton}
-                                  >
-                                    {deletingCommentId === reply.commentId ? (
-                                      <ActivityIndicator size="small" color={colors.textMuted} />
-                                    ) : (
-                                      <Feather name="trash-2" color="#f87171" size={14} />
-                                    )}
-                                  </Pressable>
-                                )}
-                              </View>
-                              <Text style={reply.pendingState ? styles.commentTextPending : styles.commentText}>{reply.text}</Text>
-                            </View>
-                          ))}
-                        </View>
-                      )}
-                    </View>
-                  ))}
-
-                  {hasMoreComments && (
-                    <Pressable
-                      onPress={loadMoreComments}
-                      disabled={loadingMoreComments}
-                      style={styles.loadMoreButton}
-                    >
-                      {loadingMoreComments ? (
-                        <ActivityIndicator size="small" color={colors.primary} />
-                      ) : (
-                        <Text style={styles.loadMoreText}>Load more comments</Text>
-                      )}
-                    </Pressable>
-                  )}
-                </View>
-              )}
-            </View>
-          </ScrollView>
-        </Animated.View>
-        )}
-    </Animated.View>
-  )
-
-  return (
-    <>
-      {content}
-      <DevicePickerModal
-        visible={showCastPicker}
-        onClose={handleCloseCastPicker}
-        devices={cast.devices}
-        connectedDevice={cast.connectedDevice}
-        isDiscovering={cast.isDiscovering}
-        onDeviceSelect={handleCastDeviceSelect}
-        onDisconnect={handleCastDisconnect}
-        onAddManualDevice={cast.addManualDevice}
-        onRefresh={cast.startDiscovery}
-      />
-    </>
-  )
-}

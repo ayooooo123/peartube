@@ -61,7 +61,6 @@ interface VideoPlayerContextType {
   // Unified PiP gating - single source of truth for whether PiP should be enabled
   shouldEnablePip: boolean
   androidSplitPlayerEnabled: boolean
-
   videoAspectRatio: number | null
 
   // Playback position
@@ -1337,11 +1336,6 @@ useEffect(() => {
         return
       }
 
-      const videoId = currentVideo.id || currentVideo.path || ''
-      const sessionId = `${Date.now()}-${videoId || 'video'}`
-      const startPositionMs = Math.max(0, Math.floor(currentTimeRef.current * 1000))
-      const wasPlaying = isPlayingRef.current
-
       queuedPlaybackStartRef.current = null
       playbackStartInFlightRef.current = false
       playbackStartCooldownUntilRef.current = 0
@@ -1351,41 +1345,56 @@ useEffect(() => {
         playbackStartDrainTimerRef.current = null
       }
 
-      MediaSession.openPlayerActivity({
-        sessionId,
-        videoId,
-        sourceUrl: currentUrl,
-        startPositionMs,
-        shouldAutoplay: wasPlaying,
-        title: currentVideo.title,
-        description: currentVideo.description,
-        path: currentVideo.path,
-        size: currentVideo.size,
-        uploadedAt: currentVideo.uploadedAt,
-        channelKey: currentVideo.channelKey,
-        mimeType: currentVideo.mimeType,
-        duration: currentVideo.duration,
-        thumbnail: currentVideo.thumbnail,
-        requestPipOnLaunch: true,
-      })
-        .then((opened) => {
-          if (!opened) {
-            pendingAndroidMinimizeCloseRef.current = false
-            console.log('[VideoPlayerContext] Android minimize handoff failed to open PlayerActivity')
-            MediaSession.enterPictureInPicture().catch((err) => {
-              console.log('[VideoPlayerContext] Android minimize fallback PiP failed:', err)
-            })
-            return
-          }
-          pendingAndroidMinimizeCloseRef.current = true
+      if (ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+        const videoId = currentVideo.id || currentVideo.path || ''
+        const sessionId = `${Date.now()}-${videoId || 'video'}`
+        const startPositionMs = Math.max(0, Math.floor(currentTimeRef.current * 1000))
+        const wasPlaying = isPlayingRef.current
+
+        MediaSession.openPlayerActivity({
+          sessionId,
+          videoId,
+          sourceUrl: currentUrl,
+          startPositionMs,
+          shouldAutoplay: wasPlaying,
+          title: currentVideo.title,
+          description: currentVideo.description,
+          path: currentVideo.path,
+          size: currentVideo.size,
+          uploadedAt: currentVideo.uploadedAt,
+          channelKey: currentVideo.channelKey,
+          mimeType: currentVideo.mimeType,
+          duration: currentVideo.duration,
+          thumbnail: currentVideo.thumbnail,
+          requestPipOnLaunch: true,
         })
-        .catch((err) => {
-          pendingAndroidMinimizeCloseRef.current = false
-          console.log('[VideoPlayerContext] Android minimize handoff failed:', err)
-          MediaSession.enterPictureInPicture().catch((fallbackErr) => {
-            console.log('[VideoPlayerContext] Android minimize error fallback PiP failed:', fallbackErr)
+          .then((opened) => {
+            if (!opened) {
+              pendingAndroidMinimizeCloseRef.current = false
+              console.log('[VideoPlayerContext] Android minimize handoff failed to open PlayerActivity')
+              MediaSession.enterPictureInPicture().catch((err) => {
+                console.log('[VideoPlayerContext] Android minimize fallback PiP failed:', err)
+              })
+              return
+            }
+            pendingAndroidMinimizeCloseRef.current = true
           })
-        })
+          .catch((err) => {
+            pendingAndroidMinimizeCloseRef.current = false
+            console.log('[VideoPlayerContext] Android minimize handoff failed:', err)
+            MediaSession.enterPictureInPicture().catch((fallbackErr) => {
+              console.log('[VideoPlayerContext] Android minimize error fallback PiP failed:', fallbackErr)
+            })
+          })
+        return
+      }
+
+      console.log('[VideoPlayerContext] Minimizing to in-app mini player')
+      dispatch({
+        type: 'MINIMIZE',
+        source: 'minimizePlayer',
+        platform: 'android',
+      })
       return
     }
 
@@ -1393,7 +1402,7 @@ useEffect(() => {
     dispatch({
       type: 'MINIMIZE',
       source: 'minimizePlayer',
-      platform: Platform.OS === 'web' ? 'web' : 'ios',
+      platform: Platform.OS === 'web' ? 'web' : Platform.OS === 'android' ? 'android' : 'ios',
     })
   }, [dispatch])
 
@@ -1624,7 +1633,13 @@ useEffect(() => {
   }, [])
 
   const onVideoStateChange = useCallback((data: { type?: string; mVideoWidth?: number; mVideoHeight?: number }) => {
-    if (data.type === 'onNewVideoLayout' && data.mVideoWidth && data.mVideoHeight && data.mVideoWidth > 0 && data.mVideoHeight > 0) {
+    if (
+      (data.type === 'onNewVideoLayout' || data.type === 'video-size') &&
+      data.mVideoWidth &&
+      data.mVideoHeight &&
+      data.mVideoWidth > 0 &&
+      data.mVideoHeight > 0
+    ) {
       const aspectRatio = data.mVideoWidth / data.mVideoHeight
       console.log('[VideoPlayerContext] Video dimensions:', data.mVideoWidth, 'x', data.mVideoHeight, '- aspect ratio:', aspectRatio.toFixed(3))
       setVideoAspectRatio(aspectRatio)

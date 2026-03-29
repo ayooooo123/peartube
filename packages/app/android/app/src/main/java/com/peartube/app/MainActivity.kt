@@ -61,20 +61,6 @@ class MainActivity : ReactActivity() {
       super.invokeDefaultOnBackPressed()
   }
 
-  override fun onPause() {
-      if (PipBridge.isPipEnabled() && !isInPictureInPictureMode) {
-          PipBridge.expandSurfaceViewsForPip(this)
-      }
-      super.onPause()
-  }
-
-  override fun onResume() {
-      super.onResume()
-      if (!isInPictureInPictureMode) {
-          PipBridge.restoreViewsAfterPip(this)
-      }
-  }
-
   override fun onUserLeaveHint() {
       super.onUserLeaveHint()
       PipBridge.onUserLeaveHint(this)
@@ -83,12 +69,5 @@ class MainActivity : ReactActivity() {
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
       super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
       PipBridge.notifyPipModeChanged(this, isInPictureInPictureMode, newConfig)
-  }
-
-  override fun onConfigurationChanged(newConfig: Configuration) {
-      super.onConfigurationChanged(newConfig)
-      if (isInPictureInPictureMode) {
-          PipBridge.notifyPipModeChanged(this, true, newConfig)
-      }
   }
 }

@@ -1,0 +1,41 @@
+diff --git a/node_modules/react-native-video/android/build.gradle b/node_modules/react-native-video/android/build.gradle
+index 748b799..3a06286 100644
+--- a/node_modules/react-native-video/android/build.gradle
++++ b/node_modules/react-native-video/android/build.gradle
+@@ -232,6 +232,7 @@ dependencies {
+
+     implementation "androidx.core:core-ktx:$androidxCore_version"
+     implementation "androidx.activity:activity-ktx:$androidxActivity_version"
++    implementation "io.github.anilbeesetti:nextlib-media3ext:1.8.0-0.9.0"
+
+     // For media playback using ExoPlayer
+     if (media3_buildFromSource) {
+@@ -316,4 +317,4 @@ dependencies {
+         // Common functionality used across multiple media libraries
+         implementation "androidx.media3:media3-common:$media3_version"
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/ReactExoplayerView.java b/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/ReactExoplayerView.java
+index e16ac96..306b5ce 100644
+--- a/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/ReactExoplayerView.java
++++ b/node_modules/react-native-video/android/src/main/java/com/brentvatne/exoplayer/ReactExoplayerView.java
+@@ -140,6 +140,7 @@ import com.google.ads.interactivemedia.v3.api.AdEvent;
+ import com.google.ads.interactivemedia.v3.api.ImaSdkFactory;
+ import com.google.ads.interactivemedia.v3.api.ImaSdkSettings;
+ import com.google.common.collect.ImmutableList;
++import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory;
+
+ import java.net.CookieHandler;
+ import java.net.CookieManager;
+@@ -731,8 +732,8 @@ public class ReactExoplayerView extends FrameLayout implements
+         }
+
+         DefaultRenderersFactory renderersFactory =
+-                new DefaultRenderersFactory(getContext())
+-                        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
++                new NextRenderersFactory(getContext())
++                        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+                         .setEnableDecoderFallback(true)
+                         .forceEnableMediaCodecAsynchronousQueueing();

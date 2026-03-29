@@ -206,6 +206,7 @@ test('createRelayService requests feed sync and logs startup summary', async (t)
     t.ok(logger.entries.some((entry) => entry.component === 'relay' && entry.level === 'info' && entry.msg === 'Relay starting'))
     t.ok(logger.entries.some((entry) => entry.component === 'relay' && entry.level === 'info' && entry.msg === 'Relay started' && entry.data.feedPeers === 4))
     t.ok(logger.entries.some((entry) => entry.component === 'feed' && entry.level === 'info' && entry.msg === 'Requested feed sync from peers' && entry.data.peersContacted === 4))
+    await service.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

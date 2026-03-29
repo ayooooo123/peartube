@@ -35,7 +35,7 @@ const HLS_MAX_SEGMENTS = 12
 
 // Chromecast supported codecs
 const CHROMECAST_VIDEO_CODECS = ['h264', 'avc1', 'vp8', 'vp9', 'av1']
-const CHROMECAST_AUDIO_CODECS = ['aac', 'mp3', 'opus', 'flac', 'vorbis']
+const CHROMECAST_AUDIO_CODECS = ['aac']
 const CHROMECAST_CONTAINERS = ['mp4', 'mov', 'webm', 'mkv', 'matroska']
 const H264_UNSUPPORTED_PROFILES = [
   'high 10',
@@ -1209,11 +1209,10 @@ function checkTranscodeNeeded(result) {
     }
   }
 
-  // Check audio channels - Chromecast Default Media Receiver doesn't handle 5.1+ in HLS/MPEGTS well
-  // Force stereo downmix for surround sound (>2 channels)
+  // Surround (5.1+) AAC must be downmixed to stereo for Chromecast HLS/MPEGTS
   if (result.audioChannels > 2 && !result.needsAudioTranscode) {
     result.needsAudioTranscode = true
-    reasons.push(`Audio has ${result.audioChannels} channels (surround), needs stereo downmix for Chromecast`)
+    reasons.push(`Surround audio (${result.audioChannels}ch) needs stereo downmix for Chromecast`)
   }
 
   // Check container - MKV needs remux even if codecs are compatible

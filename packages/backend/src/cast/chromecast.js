@@ -432,6 +432,9 @@ export class ChromecastDevice extends EventEmitter {
       } catch {}
 
       const contentType = options.contentType || 'video/mp4'
+      const requestedStartTime = Number.isFinite(options?.time)
+        ? Math.max(0, Number(options.time))
+        : 0
       try {
         const parsed = new URL(mediaUrl)
         console.log('[Chromecast] LOAD', {
@@ -470,7 +473,7 @@ export class ChromecastDevice extends EventEmitter {
         type: 'LOAD',
         requestId: this._nextRequestId(),
         autoplay: true,
-        currentTime: isHlsContent ? 0 : (streamType === 'LIVE' ? 0 : (options.time || 0)),
+        currentTime: requestedStartTime,
         media: mediaPayload
       }
 
@@ -492,6 +495,7 @@ export class ChromecastDevice extends EventEmitter {
         contentId: mediaUrl,
         contentType,
         streamType,
+        time: requestedStartTime,
         media: mediaPayload,
         startedAt: Date.now(),
       }
@@ -568,7 +572,7 @@ export class ChromecastDevice extends EventEmitter {
                   type: 'LOAD',
                   requestId: this._nextRequestId(),
                   autoplay: true,
-                  currentTime: 0,
+                  currentTime: Number.isFinite(retry.time) ? Math.max(0, Number(retry.time)) : 0,
                   media: retry.media || {
                     contentId: retry.contentId,
                     streamType: retry.streamType || 'BUFFERED',
@@ -602,7 +606,7 @@ export class ChromecastDevice extends EventEmitter {
                   type: 'LOAD',
                   requestId: this._nextRequestId(),
                   autoplay: true,
-                  currentTime: 0,
+                  currentTime: Number.isFinite(retry.time) ? Math.max(0, Number(retry.time)) : 0,
                   media: retry.media || {
                     contentId: retry.contentId,
                     streamType: retry.streamType || 'BUFFERED',
@@ -660,7 +664,7 @@ export class ChromecastDevice extends EventEmitter {
                   type: 'LOAD',
                   requestId: this._nextRequestId(),
                   autoplay: true,
-                  currentTime: 0,
+                  currentTime: Number.isFinite(retry.time) ? Math.max(0, Number(retry.time)) : 0,
                   media: retry.media || {
                     contentId: retry.contentId,
                     streamType: retry.streamType || 'BUFFERED',

@@ -853,7 +853,9 @@ async function loadCastContext() {
 
   B.castSeek = async (r) => {
     if (!castContext?.isConnected()) return { success: false, error: 'Not connected' }
-    try { await castContext.seek(r.time); return { success: true } } catch (err) { return { success: false, error: err?.message } }
+    const seekTime = Number.isFinite(r?.time) ? Math.max(0, Number(r.time)) : NaN
+    if (!Number.isFinite(seekTime)) return { success: false, error: 'Invalid seek time' }
+    try { await castContext.seek(seekTime); return { success: true } } catch (err) { return { success: false, error: err?.message } }
   }
 
   B.castSetVolume = async (r) => {
@@ -931,6 +933,14 @@ async function loadCastContext() {
 
         try {
           probeResult = await transcoder.probeMedia(requestedUrl, r.title)
+          console.log('[CastDiag] probeMedia', {
+            videoCodec: probeResult?.videoCodec,
+            audioCodec: probeResult?.audioCodec,
+            container: probeResult?.container,
+            needsVideoTranscode: probeResult?.needsVideoTranscode,
+            needsAudioTranscode: probeResult?.needsAudioTranscode,
+            needsRemux: probeResult?.needsRemux,
+          })
         } catch (probeErr) {
           console.warn('[Backend] Cast play: probe failed:', probeErr?.message)
         }
@@ -990,6 +1000,7 @@ async function loadCastContext() {
       const probedDuration = Number(probeResult?.duration || 0)
       const requestedDuration = Number(r.duration || 0)
       const castDuration = requestedDuration > 0 ? requestedDuration : (probedDuration > 0 ? probedDuration : 0)
+      const requestedStartTime = Number.isFinite(r?.time) ? Math.max(0, Number(r.time)) : 0
       const isHlsCast = contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl'
       const hasKnownDuration = castDuration > 0
       const streamType = isHlsCast
@@ -1025,7 +1036,7 @@ async function loadCastContext() {
       try {
         await castContext.play({
           url, contentType, title: r.title, thumbnail: r.thumbnail,
-          time: r.time, volume: normalizeCastVolume(r.volume),
+          time: requestedStartTime, volume: normalizeCastVolume(r.volume),
           duration: loadDuration, streamType,
           startTimeoutMs: 30000,
         })
@@ -1071,6 +1082,32 @@ async function loadCastContext() {
       }
 
       castLoadCompletedAt = Date.now()
+
+      if (requestedStartTime > 0) {
+        const initialSeekAttempts = 4
+        const initialSeekDelayMs = 700
+        let seekSucceeded = false
+        for (let attempt = 1; attempt <= initialSeekAttempts; attempt += 1) {
+          try {
+            await castContext.seek(requestedStartTime)
+            seekSucceeded = true
+            break
+          } catch (seekErr) {
+            if (attempt === initialSeekAttempts) {
+              console.warn('[CastDiag] Initial cast seek failed after', initialSeekAttempts, 'attempts:', seekErr?.message || seekErr)
+              // Emit user-facing error so the UI can inform the user
+              try {
+                rpc?.eventCastPlaybackState?.({
+                  state: 'error',
+                  error: `Failed to seek to ${Math.floor(requestedStartTime)}s after ${initialSeekAttempts} attempts. Playback will start from the beginning.`,
+                })
+              } catch {}
+              break
+            }
+            await new Promise(resolve => setTimeout(resolve, initialSeekDelayMs))
+          }
+        }
+      }
 
       if (activeCastTranscodeId && (contentType === 'application/x-mpegURL' || contentType === 'application/vnd.apple.mpegurl')) {
         castSessionsWithLoadSent.add(activeCastTranscodeId)

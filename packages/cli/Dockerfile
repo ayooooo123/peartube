@@ -9,6 +9,7 @@ WORKDIR /app
 COPY packages/bare-ffmpeg ./packages/bare-ffmpeg
 COPY packages/backend ./packages/backend
 COPY packages/cli ./packages/cli
+COPY packages/spec ./packages/spec
 
 RUN npm install --prefix packages/backend --omit=dev --ignore-scripts \
   && npm install --prefix packages/cli --ignore-scripts

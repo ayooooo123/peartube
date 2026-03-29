@@ -56,7 +56,15 @@ test('Dockerfile packages the standalone relay executable in a minimal runtime i
   const content = readFileSync(dockerfilePath, 'utf8')
 
   t.ok(content.includes('gcr.io/distroless/base-debian12'), 'final image uses a minimal distroless runtime')
+  t.ok(content.includes('COPY packages/spec ./packages/spec'), 'builder stage includes local spec package needed by backend file dependencies')
   t.ok(content.includes('npm run build:standalone'), 'builder stage produces a standalone relay executable')
   t.ok(content.includes('COPY --from=builder'), 'final image copies the built artifact from the builder stage')
   t.ok(content.includes('ENTRYPOINT ["/peartube-relay"]'), 'final image runs the standalone relay executable directly')
+})
+
+test('.dockerignore keeps local relay build dependencies in the Docker context', async (t) => {
+  const dockerignorePath = join(__dirname, '..', '..', '..', '.dockerignore')
+  const content = readFileSync(dockerignorePath, 'utf8')
+
+  t.absent(content.includes('packages/spec'), 'Docker context must include packages/spec for backend file dependencies')
 })

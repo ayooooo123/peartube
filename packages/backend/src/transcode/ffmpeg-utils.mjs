@@ -8,6 +8,7 @@
  * - safeBufferCopy() - Defensive buffer copying to prevent shared memory issues
  * - safeBoundsCheck() - Validate array/buffer access bounds
  */
+import { getVideoToolboxDecodeSettings } from './videotoolbox-settings.mjs'
 
 /**
  * Safely destroy a bare-ffmpeg native object.
@@ -234,11 +235,24 @@ const HW_ENCODERS = new Set([
 export function selectDecoderForId(ff, codecId, tag = 'ffmpeg-utils') {
   if (!ff) return null
 
+  const vtSettings = getVideoToolboxDecodeSettings()
+  const vtEnabled = vtSettings.videoToolboxDecodeEnabled
+
+  const VT_DECODERS = new Set([
+    'h264_videotoolbox',
+    'hevc_videotoolbox',
+  ])
+
   let candidates = []
   if (codecId === ff.constants.codecs.H264) {
     candidates = ['h264_mediacodec', 'h264_videotoolbox', 'h264']
   } else if (codecId === ff.constants.codecs.HEVC) {
     candidates = ['hevc_mediacodec', 'hevc_videotoolbox', 'hevc']
+  }
+
+  // Filter out VideoToolbox decoders when VT decode is disabled (default on Pear)
+  if (!vtEnabled) {
+    candidates = candidates.filter(name => !VT_DECODERS.has(name))
   }
 
   for (const name of candidates) {

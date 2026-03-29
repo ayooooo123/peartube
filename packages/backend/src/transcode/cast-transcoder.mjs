@@ -6,6 +6,7 @@ import { TempFileReader } from './temp-file-reader.mjs'
 import { getHttpFileSize } from './http-file-size.mjs'
 import { MemorySegmentStore } from './segment-store.mjs'
 import { FMP4Segmenter } from './fmp4-segmenter.mjs'
+import { getVideoToolboxDecodeSettings } from './videotoolbox-settings.mjs'
 
 const sessions = new Map()
 let castServer = null
@@ -130,9 +131,17 @@ function ensureFfmpegLoaded() {
 function selectDecoderForId(codecId) {
   if (!ffmpeg) return null
 
+  const vtSettings = getVideoToolboxDecodeSettings()
+  const vtEnabled = vtSettings.videoToolboxDecodeEnabled
+
   const hwDecoders = new Set([
     'h264_mediacodec',
     'hevc_mediacodec',
+    'h264_videotoolbox',
+    'hevc_videotoolbox'
+  ])
+
+  const vtDecoders = new Set([
     'h264_videotoolbox',
     'hevc_videotoolbox'
   ])
@@ -142,6 +151,11 @@ function selectDecoderForId(codecId) {
     candidates = ['h264_mediacodec', 'h264_videotoolbox', 'h264']
   } else if (codecId === ffmpeg.constants.codecs.HEVC) {
     candidates = ['hevc_mediacodec', 'hevc_videotoolbox', 'hevc']
+  }
+
+  // Filter out VideoToolbox decoders when VT decode is disabled (default on Pear)
+  if (!vtEnabled) {
+    candidates = candidates.filter(name => !vtDecoders.has(name))
   }
 
   for (const name of candidates) {
@@ -715,12 +729,14 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
   let audioDecoder = null
   let audioEncoder = null
   let resampler = null
+  let audioFifo = null
 
   let packet = null
   let videoFrame = null
   let scaledFrame = null
   let audioFrame = null
   let resampledFrame = null
+  let encoderFrame = null
   let outputPacket = null
   let reader = null
   let segmenter = null
@@ -840,6 +856,15 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
           audioEncoder.channelLayout,
           audioEncoder.sampleFormat,
         )
+
+        // AudioFIFO buffers resampled audio so the AAC encoder always receives
+        // exactly 1024-sample frames, regardless of input frame size (e.g. E-AC3
+        // produces 1536-sample frames which AAC-LC cannot accept directly).
+        audioFifo = new ffmpeg.AudioFIFO(
+          ffmpeg.constants.sampleFormats.FLTP,
+          2, // stereo
+          1024,
+        )
       }
     }
 
@@ -881,6 +906,12 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
           while (videoDecoder.receiveFrame(videoFrame)) {
             let frameToEncode = videoFrame
             if (scaler) {
+              // Re-allocate scaledFrame each iteration to prevent use-after-free
+              safeUnref(scaledFrame)
+              scaledFrame.width = videoStream.codecParameters.width
+              scaledFrame.height = videoStream.codecParameters.height
+              scaledFrame.format = yuv420
+              scaledFrame.alloc()
               scaler.scale(videoFrame, scaledFrame)
               scaledFrame.pts = videoFrame.pts
               scaledFrame.timeBase = videoFrame.timeBase
@@ -918,11 +949,26 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
             resampledFrame.nbSamples = samplesConverted
             resampledFrame.pts = audioFrame.pts
             resampledFrame.timeBase = audioFrame.timeBase
-            if (audioEncoder.sendFrame(resampledFrame)) {
-              while (audioEncoder.receivePacket(outputPacket)) {
-                outputPacket.streamIndex = outAudioStream.index
-                outputFormat.writeFrame(outputPacket)
-                safeUnref(outputPacket)
+
+            // Write resampled audio into FIFO, then drain in 1024-sample chunks
+            audioFifo.write(resampledFrame)
+            while (audioFifo.size >= 1024) {
+              safeUnref(encoderFrame)
+              encoderFrame = new ffmpeg.Frame()
+              encoderFrame.format = ffmpeg.constants.sampleFormats.FLTP
+              encoderFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO
+              encoderFrame.sampleRate = outputRate
+              encoderFrame.nbSamples = 1024
+              encoderFrame.alloc()
+              audioFifo.read(encoderFrame, 1024)
+              encoderFrame.pts = audioFrame.pts
+              encoderFrame.timeBase = audioFrame.timeBase
+              if (audioEncoder.sendFrame(encoderFrame)) {
+                while (audioEncoder.receivePacket(outputPacket)) {
+                  outputPacket.streamIndex = outAudioStream.index
+                  outputFormat.writeFrame(outputPacket)
+                  safeUnref(outputPacket)
+                }
               }
             }
             safeUnref(audioFrame)
@@ -964,12 +1010,14 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
     }
   } finally {
     const cleanup = () => {
+      safeDestroy(encoderFrame)
       safeDestroy(resampledFrame)
       safeDestroy(audioFrame)
       safeDestroy(scaledFrame)
       safeDestroy(videoFrame)
       safeDestroy(outputPacket)
       safeDestroy(packet)
+      if (audioFifo) { try { audioFifo.destroy() } catch {} audioFifo = null }
       safeDestroy(resampler)
       safeDestroy(audioEncoder)
       safeDestroy(audioDecoder)

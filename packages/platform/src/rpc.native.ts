@@ -118,7 +118,7 @@ let _initPromise: Promise<void> | null = null;
 let _isInitialized = false;
 let _startupState: 'idle' | 'initializing' | 'starting-worklet' | 'ready' | 'error' = 'idle';
 let _isTerminating = false;
-const BACKEND_WORKLET_ID = 'peartube-backend-core'
+const BACKEND_WORKLET_ID = '/peartube-backend-core.bundle'
 const SHUTDOWN_TIMEOUT_MS = 4000
 
 type BareWorkletCtor = new (name?: string) => {

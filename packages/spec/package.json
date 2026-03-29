@@ -11,7 +11,7 @@
     "gen:schema": "node schema.cjs"
   },
   "dependencies": {
-    "hrpc": "^4.2.0",
-    "hyperschema": "^1.17.1"
+    "hrpc": "^4.3.0",
+    "hyperschema": "^1.20.1"
   }
 }

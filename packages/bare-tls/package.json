@@ -45,13 +45,13 @@
     "bare": ">=1.7.0"
   },
   "dependencies": {
-    "bare-net": "^2.0.1",
-    "bare-stream": "^2.6.4"
+    "bare-net": "^2.3.1",
+    "bare-stream": "^2.11.0"
   },
   "devDependencies": {
-    "bare-events": "^2.6.0",
-    "bare-fs": "^4.0.2",
-    "bare-make": "^1.6.3",
+    "bare-events": "^2.8.2",
+    "bare-fs": "^4.5.6",
+    "bare-make": "^1.7.2",
     "brittle": "^3.1.1",
     "cmake-bare": "^1.1.6",
     "cmake-fetch": "^1.0.0",

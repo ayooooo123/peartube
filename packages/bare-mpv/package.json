@@ -12,7 +12,7 @@
     "test": "bare test.js"
   },
   "devDependencies": {
-    "bare-make": "^1.6.3",
+    "bare-make": "^1.7.2",
     "cmake-bare": "^1.7.6",
     "cmake-meson": "^1.1.0",
     "cmake-ports": "^1.5.10"

@@ -210,10 +210,9 @@ export const Scrubber = memo(function Scrubber({
   }, [disabled, duration, onSeekCommit])
 
   // ── Gestures ─────────────────────────────────────────────────────────
-  // Separate Tap and Pan gestures for robust Android behavior.
   const gesture = useMemo(() => {
-    let startProgress = 0
     let startY = 0
+    let dragOffset = 0
 
     let tap = Gesture.Tap()
       .maxDistance(8)
@@ -257,13 +256,14 @@ export const Scrubber = memo(function Scrubber({
         const handleCenterX = renderedProgress * tw
         const handleHitRadiusPx = Math.max(HANDLE_SIZE_ACTIVE / 2, 12)
         const touchedHandle = Math.abs(evt.x - handleCenterX) <= handleHitRadiusPx
-
         if (touchedHandle) {
-          startProgress = lockActiveSV.value ? lockProgress : renderedProgress
-          uiProgressSV.value = startProgress
+          // Preserve where inside the handle/track the finger landed so the
+          // handle doesn't jump when drag starts.
+          dragOffset = touchProgress - (lockActiveSV.value ? lockProgress : renderedProgress)
+          uiProgressSV.value = lockActiveSV.value ? lockProgress : renderedProgress
         } else {
-          startProgress = clamp(touchProgress, 0, 1)
-          uiProgressSV.value = startProgress
+          dragOffset = 0
+          uiProgressSV.value = clamp(touchProgress, 0, 1)
         }
 
         lockActiveSV.value = false
@@ -295,7 +295,16 @@ export const Scrubber = memo(function Scrubber({
 
         const verticalDistance = Math.abs(evt.y - startY)
         const scale = getFineScrubScale(verticalDistance)
-        uiProgressSV.value = clamp(startProgress + (evt.translationX * scale) / tw, 0, 1)
+        const fingerProgress = getProgressFromTouch(evt.x, tw)
+        if (fingerProgress < 0) return
+
+        // In fine-scrub mode, reduce movement relative to the initial drag offset.
+        if (scale < 1) {
+          const renderedProgress = clamp(uiProgressSV.value, 0, 1)
+          uiProgressSV.value = clamp(renderedProgress + ((evt.changeX ?? 0) * scale) / tw, 0, 1)
+        } else {
+          uiProgressSV.value = clamp(fingerProgress - dragOffset, 0, 1)
+        }
 
         const atBoundary = uiProgressSV.value <= 0.0 || uiProgressSV.value >= 1.0
         if (atBoundary && !wasAtBoundarySV.value) {

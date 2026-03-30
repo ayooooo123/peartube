@@ -2615,7 +2615,7 @@ export function VideoPlayerOverlay() {
           disabled={effectiveDuration <= 0}
           externalGesture={panGesture}
           onSeekCommit={handleScrubCommit}
-          visible={(playerMode === 'fullscreen' || isLandscapeFullscreen) ? showControls : true}
+          visible={playerMode === 'mini' ? false : (playerMode === 'fullscreen' || isLandscapeFullscreen) ? showControls : true}
         />
       )}
 
@@ -2650,11 +2650,7 @@ export function VideoPlayerOverlay() {
         </Animated.View>
       )}
 
-      {showLegacyMiniUi && (
-        <Animated.View style={[styles.miniPipProgressBar, miniInfoStyle]} pointerEvents="none">
-          <View style={[styles.miniPipProgressFill, { width: `${effectiveProgress * 100}%` }]} />
-        </Animated.View>
-      )}
+      {/* Mini player progress bar removed — clean mini player without scrubber */}
     </>
   )
 

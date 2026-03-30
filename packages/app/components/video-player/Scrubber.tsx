@@ -16,7 +16,7 @@ import { styles } from './styles'
 import { formatDuration } from './formatters'
 
 // ── Dimensions (spec §1, §3) ────────────────────────────────────────────
-const TRACK_PADDING = 16
+const TRACK_PADDING = 24
 const TRACK_HEIGHT_REST = 4
 const TRACK_HEIGHT_TOUCH = 6
 const TRACK_HEIGHT_SCRUB = 8

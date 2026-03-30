@@ -1524,23 +1524,29 @@ useEffect(() => {
     }
     const timeS = data.currentTime / 1000
     const durationS = data.duration > 0 ? data.duration / 1000 : 0
-    
-    currentTimeRef.current = timeS
+
     if (durationS > 0) {
       durationRef.current = durationS
     }
-    
+
+    const now = Date.now()
+    const pending = seekConfirmRef.current
+    const waitingForSeekCatchup = pending && Math.abs(timeS - pending.targetSeconds) >= 0.75 && (now - pending.startedAt) <= 1500
+
+    // While waiting for a seek to land, ignore stale progress updates so the UI
+    // doesn't briefly jump back to the old position before the player catches up.
+    if (!waitingForSeekCatchup) {
+      currentTimeRef.current = timeS
+    }
+
     if (data.currentTime > 0) {
       if (Platform.OS === 'ios') {
         iosIgnorePausedUntilRef.current = 0
       }
       setIsLoading((prev) => (prev ? false : prev))
     }
-    
-    const now = Date.now()
 
     // Confirm any pending seek once progress is close to the target.
-    const pending = seekConfirmRef.current
     if (pending) {
       const closeEnough = Math.abs(timeS - pending.targetSeconds) < 0.75
       const tooOld = now - pending.startedAt > 1500
@@ -1556,7 +1562,7 @@ useEffect(() => {
     const shouldUpdateUI = now - lastUIUpdateRef.current >= UI_UPDATE_INTERVAL
     if (shouldUpdateUI) {
       lastUIUpdateRef.current = now
-      setCurrentTime(timeS)
+      setCurrentTime(waitingForSeekCatchup && pending ? pending.targetSeconds : timeS)
       if (durationS > 0) {
         setDuration(durationS)
       }
@@ -1622,10 +1628,17 @@ useEffect(() => {
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
     console.log('[VideoPlayerContext] Player buffering:', data?.isBuffering)
-    // Only show loading when actually buffering, hide when buffering stops
-    if (data?.isBuffering !== undefined) {
-      setIsLoading(data.isBuffering)
+    if (data?.isBuffering === undefined) return
+
+    // During an active seek, native players often emit a brief buffering event.
+    // Don't show the "connecting P2P" loading overlay for that — it feels like
+    // a network reload instead of a seek.
+    if (seekConfirmRef.current) {
+      if (!data.isBuffering) setIsLoading(false)
+      return
     }
+
+    setIsLoading(data.isBuffering)
   }, [])
 
   const onEnded = useCallback(() => {

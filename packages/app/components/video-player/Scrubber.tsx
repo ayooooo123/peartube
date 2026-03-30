@@ -247,11 +247,21 @@ export const Scrubber = memo(function Scrubber({
         startY = evt.y
         isInteractingSV.value = true
 
-        // Pan gesture drags the CURRENT indicator position.
-        // Tap gesture already owns "place the playhead at touch X".
+        // Hybrid behavior:
+        // - touch near current handle => grab existing indicator and drag from there
+        // - touch elsewhere on track => jump indicator to touch point, then drag from there
+        const touchProgress = getProgressFromTouch(evt.x, tw)
         const currentProgress = lockActiveSV.value ? lockProgressSV.value : uiProgressSV.value
-        startProgress = clamp(currentProgress, 0, 1)
-        uiProgressSV.value = startProgress
+        const handleThreshold = (HANDLE_SIZE_REST / 2) / tw + 0.01
+
+        if (Math.abs(touchProgress - currentProgress) <= handleThreshold) {
+          startProgress = clamp(currentProgress, 0, 1)
+          uiProgressSV.value = startProgress
+        } else {
+          startProgress = clamp(touchProgress, 0, 1)
+          uiProgressSV.value = startProgress
+        }
+
         lockActiveSV.value = false
         isTouchingSV.value = withSpring(1, TRACK_SPRING)
 

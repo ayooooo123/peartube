@@ -337,6 +337,32 @@ export const styles = StyleSheet.create({
     marginTop: -1,
     alignSelf: 'center',
   } as any,
+  // ── ControlsPanel: Unified bottom controls ─────────────────────────────
+  controlsPanel: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    overflow: 'hidden',
+    zIndex: 15,
+  },
+  controlsPanelTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  controlsPanelButtonGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  controlsPanelButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   // Legacy thin progress bar styles kept for web fallback
   thinProgressBg: {
     height: 3,

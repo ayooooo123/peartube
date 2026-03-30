@@ -1490,14 +1490,14 @@ export function VideoPlayerOverlay() {
    // Progress bar style - positions at bottom, adjusts for landscape
   const progressBarStyle = useAnimatedStyle(() => {
     'worklet'
-    // Landscape fullscreen: lifted 36px, full width (Scrubber handles its own 16px padding)
+    // Landscape fullscreen: near bottom
     if (isLandscapeFullscreenShared.value) {
       return {
         position: 'absolute',
-        bottom: 36,
+        bottom: 12,
         left: 0,
         right: 0,
-        height: 48,
+        height: 32,
         justifyContent: 'center',
         zIndex: 15,
         opacity: 1,
@@ -1514,10 +1514,10 @@ export function VideoPlayerOverlay() {
       )
       return {
         position: 'absolute',
-        bottom: isFullscreenShared.value ? 36 : 0,
+        bottom: isFullscreenShared.value ? 12 : 0,
         left: 0,
         right: 0,
-        height: 48,
+        height: 32,
         justifyContent: 'center',
         zIndex: 15,
         opacity: isFullscreenShared.value ? 1 : opacity,
@@ -1538,22 +1538,22 @@ export function VideoPlayerOverlay() {
         ? videoWrapperHeightShared.value
         : videoHeightShared.value)) + cutoutInset
 
-    // Fullscreen portrait: lifted 36px from video bottom
+    // Fullscreen portrait: near video bottom
     if (isFullscreenShared.value) {
       return {
         position: 'absolute',
-        top: baseHeight - 48 - 36,
+        top: baseHeight - 32 - 12,
         bottom: undefined,
         left: 0,
         right: 0,
-        height: 48,
+        height: 32,
         justifyContent: 'center',
         zIndex: 15,
         opacity: 1,
       }
     }
 
-    // Portrait non-fullscreen: flush at video bottom (no 36px lift)
+    // Portrait non-fullscreen: flush at video bottom
     const opacity = interpolate(
       animProgress.value,
       [0.5, 1],
@@ -1563,11 +1563,11 @@ export function VideoPlayerOverlay() {
 
     return {
       position: 'absolute',
-      top: baseHeight - 48,
+      top: baseHeight - 32,
       bottom: undefined,
       left: 0,
       right: 0,
-      height: 48,
+      height: 32,
       justifyContent: 'center',
       zIndex: 15,
       opacity,
@@ -1580,9 +1580,9 @@ export function VideoPlayerOverlay() {
     if (isLandscapeFullscreenShared.value) {
       return {
         position: 'absolute',
-        bottom: 12,
-        left: 16,
-        right: 16,
+        bottom: 44,
+        left: 24,
+        right: 24,
         zIndex: 10,
         opacity: 1,
       }
@@ -1592,9 +1592,9 @@ export function VideoPlayerOverlay() {
       const opacity = isFullscreenShared.value ? 1 : 0
       return {
         position: 'absolute',
-        bottom: 12,
-        left: 16,
-        right: 16,
+        bottom: 44,
+        left: 24,
+        right: 24,
         zIndex: 10,
         opacity,
       }
@@ -1617,10 +1617,10 @@ export function VideoPlayerOverlay() {
     if (isFullscreenShared.value) {
       return {
         position: 'absolute',
-        top: baseHeight - 36 - 12,
+        top: baseHeight - 32 - 12 - 24,
         bottom: undefined,
-        left: 16,
-        right: 16,
+        left: 24,
+        right: 24,
         zIndex: 10,
         opacity: 1,
       }
@@ -1628,7 +1628,7 @@ export function VideoPlayerOverlay() {
 
     return {
       position: 'absolute',
-      top: baseHeight - 36 - 12,
+      top: baseHeight - 32 - 12 - 24,
       bottom: undefined,
       left: 16,
       right: 16,
@@ -2607,7 +2607,7 @@ export function VideoPlayerOverlay() {
           disabled={effectiveDuration <= 0}
           externalGesture={panGesture}
           onSeekCommit={handleScrubCommit}
-          visible={playerMode === 'mini' ? false : (playerMode === 'fullscreen' || isLandscapeFullscreen) ? showControls : true}
+          visible={playerMode === 'mini' ? false : showControls}
         />
       )}
 

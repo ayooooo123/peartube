@@ -23,7 +23,7 @@ const TRACK_HEIGHT_SCRUB = 8
 const HANDLE_SIZE_REST = 12
 const HANDLE_SIZE_ACTIVE = 18
 const TRACK_WRAPPER_HEIGHT = TRACK_HEIGHT_SCRUB
-const TOUCH_TARGET_HEIGHT = 48
+const TOUCH_TARGET_HEIGHT = 32
 
 // ── Animation configs (spec §8) ─────────────────────────────────────────
 const TRACK_SPRING = { damping: 15, stiffness: 350, mass: 0.8 }
@@ -175,7 +175,7 @@ export const Scrubber = memo(function Scrubber({
 
     let g = Gesture.Pan()
       .minDistance(0)
-      .hitSlop({ top: 20, bottom: 20, left: 0, right: 0 })
+      .hitSlop({ top: 12, bottom: 12, left: 0, right: 0 })
       .shouldCancelWhenOutside(false)
       .onBegin((evt) => {
         'worklet'

@@ -50,10 +50,9 @@ function getTrackGeometry(touching: number, scrubbing: number) {
 
 function getProgressFromTouch(touchX: number, trackWidth: number): number {
   'worklet'
-  // touchX is relative to the outer container (which has TRACK_PADDING).
-  // Subtract padding to get position within the track, then divide by track width.
+  // touchX is relative to the track wrapper itself.
   if (trackWidth <= 0) return -1 // -1 signals unmeasured — caller must check
-  return clamp((touchX - TRACK_PADDING) / trackWidth, 0, 1)
+  return clamp(touchX / trackWidth, 0, 1)
 }
 
 function getFineScrubScale(verticalDistance: number): number {
@@ -253,9 +252,9 @@ export const Scrubber = memo(function Scrubber({
         // - touch on the visible handle => grab existing indicator and drag from there
         // - touch elsewhere on track => jump indicator there, then drag from there
         const touchProgress = getProgressFromTouch(evt.x, tw)
-        const renderedProgress = uiProgressSV.value
-        const currentProgress = lockActiveSV.value ? lockProgressSV.value : clamp(externalProgressSV.value, 0, 1)
-        const handleCenterX = TRACK_PADDING + clamp(renderedProgress, 0, 1) * tw
+        const renderedProgress = clamp(uiProgressSV.value, 0, 1)
+        const lockProgress = clamp(lockProgressSV.value, 0, 1)
+        const handleCenterX = renderedProgress * tw
         const handleHitRadiusPx = Math.max(HANDLE_SIZE_ACTIVE / 2, 12)
         const touchedHandle = Math.abs(evt.x - handleCenterX) <= handleHitRadiusPx
 
@@ -451,36 +450,36 @@ export const Scrubber = memo(function Scrubber({
 
   return (
     <Animated.View style={containerStyle}>
-      <GestureDetector gesture={gesture}>
-        <View
-          style={{
-            height: TOUCH_TARGET_HEIGHT,
-            paddingHorizontal: TRACK_PADDING,
-            justifyContent: 'center',
-          }}
-          accessibilityRole="adjustable"
-          accessibilityLabel="Video progress"
-          accessibilityValue={{
-            min: 0,
-            max: Math.round(duration),
-            now: Math.round(currentTime),
-          }}
-          accessibilityActions={[
-            { name: 'increment', label: 'Seek forward 10 seconds' },
-            { name: 'decrement', label: 'Seek backward 10 seconds' },
-          ]}
-          onAccessibilityAction={(event) => {
-            if (disabled || duration <= 0) return
-            const step = 10
-            let newTime = currentTime
-            if (event.nativeEvent.actionName === 'increment') {
-              newTime = Math.min(duration, currentTime + step)
-            } else if (event.nativeEvent.actionName === 'decrement') {
-              newTime = Math.max(0, currentTime - step)
-            }
-            onSeekCommit(newTime)
-          }}
-        >
+      <View
+        style={{
+          height: TOUCH_TARGET_HEIGHT,
+          paddingHorizontal: TRACK_PADDING,
+          justifyContent: 'center',
+        }}
+        accessibilityRole="adjustable"
+        accessibilityLabel="Video progress"
+        accessibilityValue={{
+          min: 0,
+          max: Math.round(duration),
+          now: Math.round(currentTime),
+        }}
+        accessibilityActions={[
+          { name: 'increment', label: 'Seek forward 10 seconds' },
+          { name: 'decrement', label: 'Seek backward 10 seconds' },
+        ]}
+        onAccessibilityAction={(event) => {
+          if (disabled || duration <= 0) return
+          const step = 10
+          let newTime = currentTime
+          if (event.nativeEvent.actionName === 'increment') {
+            newTime = Math.min(duration, currentTime + step)
+          } else if (event.nativeEvent.actionName === 'decrement') {
+            newTime = Math.max(0, currentTime - step)
+          }
+          onSeekCommit(newTime)
+        }}
+      >
+        <GestureDetector gesture={gesture}>
           {/* Track wrapper — contains all layers */}
           <View style={styles.scrubberTrackWrapper} onLayout={handleTrackLayout}>
             {/* Preview tooltip — above track */}
@@ -528,8 +527,8 @@ export const Scrubber = memo(function Scrubber({
               pointerEvents="none"
             />
           </View>
-        </View>
-      </GestureDetector>
+        </GestureDetector>
+      </View>
     </Animated.View>
   )
 })

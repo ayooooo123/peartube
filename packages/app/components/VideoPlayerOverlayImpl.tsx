@@ -237,10 +237,31 @@ export function VideoPlayerOverlay() {
       }
     } else if (wasInPipRef.current) {
       wasInPipRef.current = false
-      autoPipEnabledRef.current = false  // Reset overlay pattern on PiP exit
       showControlsTemporarily()
+
+      // Re-arm Android auto-PiP immediately after exit when the same video is
+      // still active. Relying on the later effect to re-run is brittle and can
+      // leave PipBridge disabled for all subsequent app exits.
+      if (
+        Platform.OS === 'android' &&
+        pipSupported !== false &&
+        currentVideo !== null &&
+        !isCasting &&
+        (playerMode === 'fullscreen' || playerMode === 'mini')
+      ) {
+        autoPipEnabledRef.current = true
+        MediaSession.setAutoPictureInPicture(true)
+          .then(() => {
+            console.log('[VideoPlayerOverlay] Re-armed Auto-PiP after exit')
+          })
+          .catch((err) => {
+            console.error('[VideoPlayerOverlay] Failed to re-arm Auto-PiP after exit:', err)
+          })
+      } else {
+        autoPipEnabledRef.current = false
+      }
     }
-  }, [isInPipMode])
+  }, [isInPipMode, currentVideo, isCasting, playerMode, pipSupported, showControlsTemporarily])
 
   // On Android in fullscreen, ALWAYS use real screen dimensions for layout.
   // Why: Android PiP (especially Android 12+ seamless mode) shrinks the Activity

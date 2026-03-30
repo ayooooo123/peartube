@@ -157,38 +157,17 @@ export const Scrubber = memo(function Scrubber({
     onSeekCommit(timeSeconds)
   }, [disabled, duration, onSeekCommit])
 
-  // ── Gestures ────────────────────────────────────────────────────────
-  // Tap gesture: tap anywhere on the track → seek to that point
-  const tapGesture = useMemo(() => {
-    return Gesture.Tap()
-      .hitSlop({ top: 20, bottom: 20, left: 0, right: 0 })
-      .onEnd((evt) => {
-        'worklet'
-        if (disabled) return
-        const tw = trackWidthSV.value
-        const d = durationSV.value
-        if (tw <= 0 || d <= 0) return
-
-        const p = getProgressFromTouch(evt.x, tw)
-        uiProgressSV.value = p
-
-        // Lock + commit
-        lockActiveSV.value = true
-        lockProgressSV.value = p
-        const timeSeconds = p * d
-        runOnJS(handleCommit)(timeSeconds)
-      })
-  }, [disabled, trackWidthSV, durationSV, uiProgressSV, lockActiveSV, lockProgressSV, handleCommit])
-
-  // Pan gesture: drag from CURRENT handle position
-  const panGesture = useMemo(() => {
-    let startProgress = 0
+  // ── Gesture ─────────────────────────────────────────────────────────
+  // Single pan gesture handles both tap-to-seek and drag-to-scrub.
+  // onBegin: jump thumb to touch point immediately (like YouTube).
+  // onUpdate: drag from that point. If no drag occurs, onFinalize commits the tap.
+  const gesture = useMemo(() => {
+    let touchProgress = 0
     let startY = 0
-    let didActivate = false
+    let didDrag = false
 
     let g = Gesture.Pan()
-      .activateAfterLongPress(0)
-      .minDistance(4) // small threshold to distinguish tap from drag
+      .minDistance(0)
       .hitSlop({ top: 20, bottom: 20, left: 0, right: 0 })
       .shouldCancelWhenOutside(false)
       .onBegin((evt) => {
@@ -198,22 +177,21 @@ export const Scrubber = memo(function Scrubber({
         const d = durationSV.value
         if (tw <= 0 || d <= 0) return
 
-        didActivate = false
-
-        // Enter touch state — gate external progress immediately
-        isInteractingSV.value = true
-        lockActiveSV.value = false
+        didDrag = false
         startY = evt.y
 
-        // Remember CURRENT playback position as drag start (don't jump)
-        startProgress = uiProgressSV.value
+        // Gate external progress, jump thumb to touch point
+        isInteractingSV.value = true
+        lockActiveSV.value = false
+        touchProgress = getProgressFromTouch(evt.x, tw)
+        uiProgressSV.value = touchProgress
 
         isTouchingSV.value = withSpring(1, TRACK_SPRING)
       })
       .onStart(() => {
         'worklet'
         if (!isInteractingSV.value) return
-        didActivate = true
+        didDrag = true
 
         showPreviewSV.value = true
         isScrubbingSV.value = withSpring(1, HANDLE_SPRING)
@@ -231,37 +209,37 @@ export const Scrubber = memo(function Scrubber({
         if (tw <= 0) return
 
         const verticalDistance = Math.abs(evt.y - startY)
-        const fineScrubScale = getFineScrubScale(verticalDistance)
-        const nextProgress = clamp(startProgress + (evt.translationX * fineScrubScale) / tw, 0, 1)
-        uiProgressSV.value = nextProgress
+        const scale = getFineScrubScale(verticalDistance)
+        const next = clamp(touchProgress + (evt.translationX * scale) / tw, 0, 1)
+        uiProgressSV.value = next
       })
       .onEnd(() => {
         'worklet'
-        if (!isInteractingSV.value || !didActivate) return
+        if (!isInteractingSV.value) return
+        // Commit whether it was a drag or will fall through to onFinalize
         const d = durationSV.value
-        const timeSeconds = clamp(uiProgressSV.value, 0, 1) * d
-
-        // Lock locally to avoid snap-back before parent state updates
+        const p = clamp(uiProgressSV.value, 0, 1)
         lockActiveSV.value = true
-        lockProgressSV.value = clamp(uiProgressSV.value, 0, 1)
-        uiProgressSV.value = lockProgressSV.value
+        lockProgressSV.value = p
+        uiProgressSV.value = p
 
-        showPreviewSV.value = false
-        previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
-        runOnJS(setPreviewSeconds)(null)
-        runOnJS(handleCommit)(timeSeconds)
+        if (didDrag) {
+          showPreviewSV.value = false
+          previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
+          runOnJS(setPreviewSeconds)(null)
+        }
+        runOnJS(handleCommit)(p * d)
       })
       .onFinalize(() => {
         'worklet'
-        // Animate everything back to rest
         isTouchingSV.value = withSpring(0, TRACK_SPRING)
         isScrubbingSV.value = withTiming(0, HANDLE_EXIT)
         isInteractingSV.value = false
         showPreviewSV.value = false
         previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
-        startProgress = 0
+        touchProgress = 0
         startY = 0
-        didActivate = false
+        didDrag = false
         runOnJS(setPreviewSeconds)(null)
       })
 
@@ -270,9 +248,6 @@ export const Scrubber = memo(function Scrubber({
     }
     return g
   }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, externalGesture, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
-
-  // Pan takes priority over tap (exclusive means first match wins)
-  const gesture = useMemo(() => Gesture.Exclusive(panGesture, tapGesture), [panGesture, tapGesture])
 
   // ── Animated styles ──────────────────────────────────────────────────
 

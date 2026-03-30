@@ -2594,13 +2594,7 @@ export function VideoPlayerOverlay() {
         </Animated.View>
       )}
 
-      {playerMode === 'fullscreen' && showControls && !isInPipMode && (
-        <Animated.View style={[styles.castButton, fullscreenButtonsOpacityStyle, castButtonStyle]}>
-          <Pressable onPress={handleCastPress} style={styles.castButtonInner}>
-            <Feather name="cast" color={cast.isConnected ? colors.primary : '#fff'} size={22} />
-          </Pressable>
-        </Animated.View>
-      )}
+      {/* Cast button moved into time display row below */}
 
       {!isInPipMode && Platform.OS !== 'web' && (
         <Scrubber
@@ -2637,13 +2631,18 @@ export function VideoPlayerOverlay() {
                 {formatDuration(effectiveDuration)}
               </Text>
             </Text>
-            <Pressable onPress={toggleLandscapeFullscreen} style={styles.timeDisplayAction}>
-              <Feather
-                name={isLandscapeFullscreen ? 'minimize' : 'maximize'}
-                color="#efeff1"
-                size={20}
-              />
-            </Pressable>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Pressable onPress={handleCastPress} style={styles.timeDisplayAction}>
+                <Feather name="cast" color={cast.isConnected ? colors.primary : '#efeff1'} size={18} />
+              </Pressable>
+              <Pressable onPress={toggleLandscapeFullscreen} style={styles.timeDisplayAction}>
+                <Feather
+                  name={isLandscapeFullscreen ? 'minimize' : 'maximize'}
+                  color="#efeff1"
+                  size={20}
+                />
+              </Pressable>
+            </View>
           </View>
         </Animated.View>
       )}

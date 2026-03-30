@@ -13,7 +13,8 @@ import Animated, {
   withTiming,
   withRepeat,
 } from 'react-native-reanimated'
-import * as Haptics from 'expo-haptics'
+let Haptics: any = null
+try { Haptics = require('expo-haptics') } catch {}
 import { styles } from './styles'
 import { formatDuration } from './formatters'
 
@@ -64,18 +65,15 @@ function getFineScrubScale(verticalDistance: number): number {
 
 // ── Haptic helpers (called from UI thread via runOnJS) ──────────────────
 function triggerLightHaptic() {
-  if (Platform.OS === 'web') return
-  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Light) } catch {}
 }
 
 function triggerMediumHaptic() {
-  if (Platform.OS === 'web') return
-  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Medium) } catch {}
 }
 
 function triggerHeavyHaptic() {
-  if (Platform.OS === 'web') return
-  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy)
+  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Heavy) } catch {}
 }
 
 type Props = {

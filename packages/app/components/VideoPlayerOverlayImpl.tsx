@@ -2754,11 +2754,18 @@ export function VideoPlayerOverlay() {
               <Animated.View style={videoPlayerStyle}>
                 {renderVideoPlayer()}
               </Animated.View>
-              {!isInPipMode && (
+              {!isInPipMode && !showControls && (
                 <Pressable
                   style={StyleSheet.absoluteFill}
                   onPress={handleVideoTap}
                   testID="video-tap-overlay"
+                />
+              )}
+              {!isInPipMode && showControls && (
+                <Pressable
+                  style={[StyleSheet.absoluteFill, { bottom: '15%' }]}
+                  onPress={handleVideoTap}
+                  testID="video-tap-overlay-upper"
                 />
               )}
               {overlayContent}

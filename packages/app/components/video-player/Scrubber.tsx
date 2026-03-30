@@ -224,9 +224,9 @@ export const Scrubber = memo(function Scrubber({
       .shouldCancelWhenOutside(false)
       .onBegin((evt) => {
         'worklet'
-        if (disabled) return
         const tw = trackWidthSV.value
         const d = durationSV.value
+        if (disabled) return
         if (tw <= 0 || d <= 0) return
 
         const p = getProgressFromTouch(evt.x, tw)

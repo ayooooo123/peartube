@@ -45,15 +45,12 @@ function getTrackGeometry(touching: number, scrubbing: number) {
   }
 }
 
-function getProgressFromTouch(touchX: number, containerWidth: number): number {
+function getProgressFromTouch(touchX: number, trackWidth: number): number {
   'worklet'
   // touchX is relative to the outer container (which has TRACK_PADDING).
-  // Map the padded region [TRACK_PADDING .. containerWidth - TRACK_PADDING] → [0..1]
-  const trackStart = TRACK_PADDING
-  const trackEnd = containerWidth - TRACK_PADDING
-  const trackWidth = trackEnd - trackStart
+  // Subtract padding to get position within the track, then divide by track width.
   if (trackWidth <= 0) return 0
-  return clamp((touchX - trackStart) / trackWidth, 0, 1)
+  return clamp((touchX - TRACK_PADDING) / trackWidth, 0, 1)
 }
 
 function getFineScrubScale(verticalDistance: number): number {
@@ -93,7 +90,6 @@ export const Scrubber = memo(function Scrubber({
   const [previewSeconds, setPreviewSeconds] = useState<number | null>(null)
 
   // ── Layout measurement ───────────────────────────────────────────────
-  const containerWidthSV = useSharedValue(0)
   const trackWidthSV = useSharedValue(0)
   const tooltipWidthSV = useSharedValue(0)
   const durationSV = useSharedValue(duration)
@@ -182,9 +178,9 @@ export const Scrubber = memo(function Scrubber({
       .onBegin((evt) => {
         'worklet'
         if (disabled) return
-        const cw = containerWidthSV.value
+        const tw = trackWidthSV.value
         const d = durationSV.value
-        if (cw <= 0 || d <= 0) return
+        if (tw <= 0 || d <= 0) return
 
         didDrag = false
         startY = evt.y
@@ -192,7 +188,7 @@ export const Scrubber = memo(function Scrubber({
         // Gate external progress, jump thumb to touch point
         isInteractingSV.value = true
         lockActiveSV.value = false
-        startProgress = getProgressFromTouch(evt.x, cw)
+        startProgress = getProgressFromTouch(evt.x, tw)
         uiProgressSV.value = startProgress
 
         isTouchingSV.value = withSpring(1, TRACK_SPRING)
@@ -256,7 +252,7 @@ export const Scrubber = memo(function Scrubber({
       g = g.blocksExternalGesture(externalGesture)
     }
     return g
-  }, [disabled, containerWidthSV, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
+  }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
 
   // ── Animated styles ──────────────────────────────────────────────────
 
@@ -343,10 +339,6 @@ export const Scrubber = memo(function Scrubber({
     }
   }, [])
 
-  const handleContainerLayout = useCallback((e: LayoutChangeEvent) => {
-    containerWidthSV.value = e.nativeEvent.layout.width
-  }, [containerWidthSV])
-
   const handleTrackLayout = useCallback((e: LayoutChangeEvent) => {
     trackWidthSV.value = e.nativeEvent.layout.width
   }, [trackWidthSV])
@@ -370,7 +362,6 @@ export const Scrubber = memo(function Scrubber({
     <Animated.View style={[containerStyle, visibilityStyle]}>
       <GestureDetector gesture={gesture}>
         <View
-          onLayout={handleContainerLayout}
           style={{
             height: TOUCH_TARGET_HEIGHT,
             paddingHorizontal: TRACK_PADDING,

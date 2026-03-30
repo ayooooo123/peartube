@@ -1916,7 +1916,7 @@ export function VideoPlayerOverlay() {
     } else if (Platform.OS === 'ios') {
       setIosPipEnabled(shouldAutoPip)
     }
-  }, [playerMode, currentVideo, isCasting, isPlaying, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, androidSplitPlayerEnabled])
+  }, [playerMode, currentVideo, isCasting, isPlaying, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, androidSplitPlayerEnabled, isLandscapeFullscreen])
 
   // After Android PiP exit, explicitly re-arm auto-PiP only once we are
   // definitely back in fullscreen with an active video. This avoids brittle

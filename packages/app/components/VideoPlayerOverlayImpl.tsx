@@ -2547,21 +2547,19 @@ export function VideoPlayerOverlay() {
       {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
         <Animated.View pointerEvents="box-none" style={[styles.controlsOverlayBase, controlsOverlayStyle]}>
           <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('left')}>
-            <Feather name="rotate-ccw" color="#fff" size={32} />
-            <Text style={styles.controlButtonText}>10s</Text>
+            <Feather name="rotate-ccw" color="#fff" size={22} />
           </Pressable>
 
           <Pressable style={styles.controlButtonLarge} onPress={handlePlayPause}>
             {effectiveIsPlaying ? (
-              <Ionicons name="pause" color="#fff" size={48} />
+              <Ionicons name="pause" color="#fff" size={32} />
             ) : (
-              <Ionicons name="play" color="#fff" size={48} />
+              <Ionicons name="play" color="#fff" size={32} />
             )}
           </Pressable>
 
           <Pressable style={styles.controlButton} onPress={() => handleDoubleTapSeek('right')}>
-            <Feather name="rotate-cw" color="#fff" size={32} />
-            <Text style={styles.controlButtonText}>10s</Text>
+            <Feather name="rotate-cw" color="#fff" size={22} />
           </Pressable>
         </Animated.View>
       )}

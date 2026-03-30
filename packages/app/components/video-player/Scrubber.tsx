@@ -182,6 +182,7 @@ export const Scrubber = memo(function Scrubber({
     let startProgress = 0
     let startY = 0
     let didDrag = false
+    let didCommit = false
 
     let g = Gesture.Pan()
       .minDistance(0)
@@ -235,6 +236,7 @@ export const Scrubber = memo(function Scrubber({
       .onEnd(() => {
         'worklet'
         if (!isInteractingSV.value) return
+        didCommit = true
         const d = durationSV.value
         const p = clamp(uiProgressSV.value, 0, 1)
         lockActiveSV.value = true
@@ -250,6 +252,16 @@ export const Scrubber = memo(function Scrubber({
       })
       .onFinalize(() => {
         'worklet'
+        // If onEnd didn't fire (gesture cancelled), commit from here
+        if (!didCommit && isInteractingSV.value) {
+          const d = durationSV.value
+          const p = clamp(uiProgressSV.value, 0, 1)
+          lockActiveSV.value = true
+          lockProgressSV.value = p
+          uiProgressSV.value = p
+          runOnJS(handleCommit)(p * d)
+        }
+
         isTouchingSV.value = withSpring(0, TRACK_SPRING)
         isScrubbingSV.value = withTiming(0, HANDLE_EXIT)
         isInteractingSV.value = false
@@ -257,6 +269,7 @@ export const Scrubber = memo(function Scrubber({
         previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
         startY = 0
         didDrag = false
+        didCommit = false
         runOnJS(setPreviewSeconds)(null)
       })
 

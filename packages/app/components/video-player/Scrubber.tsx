@@ -65,15 +65,15 @@ function getFineScrubScale(verticalDistance: number): number {
 
 // ── Haptic helpers (called from UI thread via runOnJS) ──────────────────
 function triggerLightHaptic() {
-  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Light) } catch {}
+  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Light)?.catch?.(() => {}) } catch {}
 }
 
 function triggerMediumHaptic() {
-  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Medium) } catch {}
+  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Medium)?.catch?.(() => {}) } catch {}
 }
 
 function triggerHeavyHaptic() {
-  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Heavy) } catch {}
+  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Heavy)?.catch?.(() => {}) } catch {}
 }
 
 type Props = {

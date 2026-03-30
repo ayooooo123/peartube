@@ -187,11 +187,26 @@ export const Scrubber = memo(function Scrubber({
         didDrag = false
         startY = evt.y
 
-        // Gate external progress, jump thumb to touch point
+        // Gate external progress
         isInteractingSV.value = true
         lockActiveSV.value = false
-        touchProgress = getProgressFromTouch(evt.x, cw)
-        uiProgressSV.value = touchProgress
+
+        // If the touch lands near the current handle, grab it in place
+        // instead of jumping (avoids the backwards-shift feel).
+        const tapProgress = getProgressFromTouch(evt.x, cw)
+        const currentProgress = uiProgressSV.value
+        const tw = trackWidthSV.value
+        const handleHalfPx = HANDLE_SIZE_REST / 2
+        const nearThreshold = tw > 0 ? handleHalfPx / tw : 0.03
+
+        if (Math.abs(tapProgress - currentProgress) < nearThreshold + 0.015) {
+          // Grabbed the handle — drag from current position
+          touchProgress = currentProgress
+        } else {
+          // Tapped elsewhere — jump there
+          touchProgress = tapProgress
+          uiProgressSV.value = tapProgress
+        }
 
         isTouchingSV.value = withSpring(1, TRACK_SPRING)
       })

@@ -122,7 +122,8 @@ export const Scrubber = memo(function Scrubber({
 
   useEffect(() => {
     if (pendingSeekTime === null || pendingSeekTime === undefined || duration <= 0) {
-      lockActiveSV.value = false
+      // Don't clear the lock here — let the animated reaction below clear
+      // it once external progress catches up. This prevents snap-back.
       return
     }
     const p = clamp(pendingSeekTime / duration, 0, 1)
@@ -132,11 +133,22 @@ export const Scrubber = memo(function Scrubber({
   }, [pendingSeekTime, duration, lockActiveSV, lockProgressSV, uiProgressSV])
 
   // Sync UI progress from external progress when not interacting/locked.
+  // Also clears the lock once external progress catches up to the seek target.
   useAnimatedReaction(
     () => externalProgressSV.value,
     (p) => {
       if (isInteractingSV.value) return
-      if (lockActiveSV.value) return
+      if (lockActiveSV.value) {
+        // Check if external progress has caught up to the lock target
+        const diff = Math.abs(p - lockProgressSV.value)
+        if (diff < 0.005) {
+          // Close enough — clear lock and sync
+          lockActiveSV.value = false
+          uiProgressSV.value = clamp(p, 0, 1)
+        }
+        // Otherwise keep the lock — don't let stale progress snap back
+        return
+      }
       uiProgressSV.value = withTiming(clamp(p, 0, 1), { duration: 140 })
     },
     []

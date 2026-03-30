@@ -208,40 +208,49 @@ export const Scrubber = memo(function Scrubber({
     onSeekCommit(timeSeconds)
   }, [disabled, duration, onSeekCommit])
 
-  // ── Gesture ─────────────────────────────────────────────────────────
-  // Single pan gesture: touch to jump, drag to scrub.
-  // Dragging uses translationX / trackWidth so the handle moves at
-  // exactly the same speed as the finger (1:1 mapping).
+  // ── Gestures ─────────────────────────────────────────────────────────
+  // Separate Tap and Pan gestures for robust Android behavior.
   const gesture = useMemo(() => {
     let startProgress = 0
     let startY = 0
-    let didDrag = false
-    let didCommit = false
 
-    let g = Gesture.Pan()
-      .minDistance(0)
+    let tap = Gesture.Tap()
+      .maxDistance(8)
+      .hitSlop({ top: 12, bottom: 12, left: 0, right: 0 })
+      .onStart((evt) => {
+        'worklet'
+        const tw = trackWidthSV.value
+        const d = durationSV.value
+        if (disabled || tw <= 0 || d <= 0) return
+
+        const p = getProgressFromTouch(evt.x, tw)
+        if (p < 0) return
+
+        lockActiveSV.value = true
+        lockProgressSV.value = p
+        uiProgressSV.value = p
+        runOnJS(triggerLightHaptic)()
+        runOnJS(handleCommit)(p * d)
+      })
+
+    let pan = Gesture.Pan()
+      .minDistance(4)
       .hitSlop({ top: 12, bottom: 12, left: 0, right: 0 })
       .shouldCancelWhenOutside(false)
       .onBegin((evt) => {
         'worklet'
         const tw = trackWidthSV.value
         const d = durationSV.value
-        if (disabled) return
-        if (tw <= 0 || d <= 0) return
+        if (disabled || tw <= 0 || d <= 0) return
 
         const p = getProgressFromTouch(evt.x, tw)
-        if (p < 0) return // track not measured yet
+        if (p < 0) return
 
-        didDrag = false
-        didCommit = false
         startY = evt.y
-
-        // Gate external progress, jump thumb to touch point
         isInteractingSV.value = true
         lockActiveSV.value = false
         startProgress = p
         uiProgressSV.value = startProgress
-
         isTouchingSV.value = withSpring(1, TRACK_SPRING)
 
         runOnJS(triggerLightHaptic)()
@@ -250,7 +259,6 @@ export const Scrubber = memo(function Scrubber({
       .onStart(() => {
         'worklet'
         if (!isInteractingSV.value) return
-        didDrag = true
         wasAtBoundarySV.value = false
 
         runOnJS(triggerMediumHaptic)()
@@ -269,63 +277,47 @@ export const Scrubber = memo(function Scrubber({
         const tw = trackWidthSV.value
         if (tw <= 0) return
 
-        // translationX / trackWidth gives 1:1 finger-to-handle movement
         const verticalDistance = Math.abs(evt.y - startY)
         const scale = getFineScrubScale(verticalDistance)
         uiProgressSV.value = clamp(startProgress + (evt.translationX * scale) / tw, 0, 1)
 
-        // Heavy haptic at boundaries
         const atBoundary = uiProgressSV.value <= 0.0 || uiProgressSV.value >= 1.0
         if (atBoundary && !wasAtBoundarySV.value) {
           runOnJS(triggerHeavyHaptic)()
         }
         wasAtBoundarySV.value = atBoundary
       })
-      .onEnd((evt) => {
+      .onEnd(() => {
         'worklet'
         if (!isInteractingSV.value) return
-        didCommit = true
         runOnJS(triggerLightHaptic)()
         const d = durationSV.value
         const p = clamp(uiProgressSV.value, 0, 1)
         lockActiveSV.value = true
         lockProgressSV.value = p
         uiProgressSV.value = p
-
-        if (didDrag) {
-          showPreviewSV.value = false
-          previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
-          runOnJS(setPreviewSeconds)(null)
-        }
+        showPreviewSV.value = false
+        previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
+        runOnJS(setPreviewSeconds)(null)
         runOnJS(handleCommit)(p * d)
       })
       .onFinalize(() => {
         'worklet'
-        // If onEnd didn't fire (gesture cancelled), commit from here
-        if (!didCommit && isInteractingSV.value) {
-          const d = durationSV.value
-          const p = clamp(uiProgressSV.value, 0, 1)
-          lockActiveSV.value = true
-          lockProgressSV.value = p
-          uiProgressSV.value = p
-          runOnJS(handleCommit)(p * d)
-        }
-
         isTouchingSV.value = withSpring(0, TRACK_SPRING)
         isScrubbingSV.value = withTiming(0, HANDLE_EXIT)
         isInteractingSV.value = false
         showPreviewSV.value = false
         previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
         startY = 0
-        didDrag = false
-        didCommit = false
         runOnJS(setPreviewSeconds)(null)
       })
 
     if (externalGesture) {
-      g = g.blocksExternalGesture(externalGesture)
+      tap = tap.blocksExternalGesture(externalGesture)
+      pan = pan.blocksExternalGesture(externalGesture)
     }
-    return g
+
+    return Gesture.Exclusive(pan, tap)
   }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, wasAtBoundarySV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
 
   // ── Animated styles ──────────────────────────────────────────────────

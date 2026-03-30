@@ -7,8 +7,31 @@ import { loadRelayConfig, renderExampleConfig } from './src/config.js'
 import { RelayCatalog } from './src/catalog.js'
 import { buildRelayStatus, formatRelayStatus, readRelayStatus } from './src/status.js'
 
+function writeLine(message, preferredStream = 'stdout') {
+  const text = typeof message === 'string' ? message : String(message)
+  const streams = preferredStream === 'stderr'
+    ? [process?.stderr, process?.stdout]
+    : [process?.stdout, process?.stderr]
+
+  for (const stream of streams) {
+    if (stream && typeof stream.write === 'function') {
+      stream.write(text)
+      return
+    }
+  }
+
+  if (preferredStream === 'stderr' && typeof console?.error === 'function') {
+    console.error(text.replace(/\n$/, ''))
+    return
+  }
+
+  if (typeof console?.log === 'function') {
+    console.log(text.replace(/\n$/, ''))
+  }
+}
+
 function printHelp() {
-  process.stdout.write([
+  writeLine([
     `${RELAY_COMMAND} <command> [options]`,
     '',
     'Commands:',
@@ -47,7 +70,7 @@ async function runCommand(flags) {
 async function validateCommand(flags) {
   const config = await loadRelayConfig(flags)
   const output = JSON.stringify(config, null, 2)
-  process.stdout.write(output + '\n')
+  writeLine(output + '\n')
 }
 
 async function statusCommand(flags) {
@@ -58,11 +81,11 @@ async function statusCommand(flags) {
   })
 
   if (flags.json) {
-    process.stdout.write(JSON.stringify(status, null, 2) + '\n')
+    writeLine(JSON.stringify(status, null, 2) + '\n')
     return
   }
 
-  process.stdout.write(formatRelayStatus(status) + '\n')
+  writeLine(formatRelayStatus(status) + '\n')
 }
 
 async function initCommand(flags) {
@@ -72,7 +95,7 @@ async function initCommand(flags) {
   }
 
   writeFileSync(target, renderExampleConfig(DEFAULT_RELAY_CONFIG))
-  process.stdout.write(`Wrote ${target}\n`)
+  writeLine(`Wrote ${target}\n`)
 }
 
 async function main() {
@@ -106,6 +129,10 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write((err?.stack || err?.message || String(err)) + '\n')
+  writeLine((err?.stack || err?.message || String(err)) + '\n', 'stderr')
+  if ('exitCode' in process) {
+    process.exitCode = 1
+    return
+  }
   process.exit(1)
 })

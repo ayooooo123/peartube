@@ -1457,17 +1457,26 @@ useEffect(() => {
     const dur = durationRef.current
     if (dur <= 0) return
     const clampedTime = Math.max(0, Math.min(time, dur))
-    if (Platform.OS === 'web') {
-      try {
-        playerRef.current?.seek?.(clampedTime)
-      } catch {}
-      currentTimeRef.current = clampedTime
-      setCurrentTime(clampedTime)
-      return
+
+    // Prefer imperative seek on all platforms when the player ref is ready.
+    // The ratio-based seekPosition pipeline is kept only as a fallback for
+    // cases where the native player isn't mounted/ready yet.
+    let didImperativeSeek = false
+    try {
+      if (typeof playerRef.current?.seek === 'function') {
+        playerRef.current.seek(clampedTime)
+        didImperativeSeek = true
+      }
+    } catch {}
+
+    if (!didImperativeSeek) {
+      const seekValue = clampedTime / dur
+      console.log('[VideoPlayerContext] Fallback seekTo via seekPosition:', clampedTime, 'seconds, seek prop:', seekValue)
+      setSeekPosition(seekValue)
+    } else {
+      setSeekPosition(undefined)
     }
-    const seekValue = clampedTime / dur
-    console.log('[VideoPlayerContext] Seeking to:', clampedTime, 'seconds, seek prop:', seekValue)
-    setSeekPosition(seekValue)
+
     currentTimeRef.current = clampedTime
     setCurrentTime(clampedTime)
     startSeekConfirm(clampedTime)
@@ -1477,17 +1486,23 @@ useEffect(() => {
     const dur = durationRef.current
     if (dur <= 0) return
     const newTime = Math.max(0, Math.min(currentTimeRef.current + delta, dur))
-    if (Platform.OS === 'web') {
-      try {
-        playerRef.current?.seek?.(newTime)
-      } catch {}
-      currentTimeRef.current = newTime
-      setCurrentTime(newTime)
-      return
+
+    let didImperativeSeek = false
+    try {
+      if (typeof playerRef.current?.seek === 'function') {
+        playerRef.current.seek(newTime)
+        didImperativeSeek = true
+      }
+    } catch {}
+
+    if (!didImperativeSeek) {
+      const seekValue = newTime / dur
+      console.log('[VideoPlayerContext] Fallback seekBy via seekPosition:', delta, 'to:', newTime, 'seek prop:', seekValue)
+      setSeekPosition(seekValue)
+    } else {
+      setSeekPosition(undefined)
     }
-    const seekValue = newTime / dur
-    console.log('[VideoPlayerContext] Seeking by:', delta, 'to:', newTime, 'seek prop:', seekValue)
-    setSeekPosition(seekValue)
+
     currentTimeRef.current = newTime
     setCurrentTime(newTime)
     startSeekConfirm(newTime)

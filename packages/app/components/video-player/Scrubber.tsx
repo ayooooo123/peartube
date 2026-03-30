@@ -165,11 +165,10 @@ export const Scrubber = memo(function Scrubber({
   }, [disabled, duration, onSeekCommit])
 
   // ── Gesture ─────────────────────────────────────────────────────────
-  // Single pan gesture handles both tap-to-seek and drag-to-scrub.
-  // onBegin: jump thumb to touch point immediately (like YouTube).
-  // onUpdate: drag from that point. If no drag occurs, onFinalize commits the tap.
+  // Single pan gesture: touch to jump, drag to scrub.
+  // Uses absolute finger position (evt.absoluteX mapped through container)
+  // instead of translationX to avoid drift from the initial touch point.
   const gesture = useMemo(() => {
-    let touchProgress = 0
     let startY = 0
     let didDrag = false
 
@@ -187,26 +186,10 @@ export const Scrubber = memo(function Scrubber({
         didDrag = false
         startY = evt.y
 
-        // Gate external progress
+        // Gate external progress, jump thumb to touch point
         isInteractingSV.value = true
         lockActiveSV.value = false
-
-        // If the touch lands near the current handle, grab it in place
-        // instead of jumping (avoids the backwards-shift feel).
-        const tapProgress = getProgressFromTouch(evt.x, cw)
-        const currentProgress = uiProgressSV.value
-        const tw = trackWidthSV.value
-        const handleHalfPx = HANDLE_SIZE_REST / 2
-        const nearThreshold = tw > 0 ? handleHalfPx / tw : 0.03
-
-        if (Math.abs(tapProgress - currentProgress) < nearThreshold + 0.015) {
-          // Grabbed the handle — drag from current position
-          touchProgress = currentProgress
-        } else {
-          // Tapped elsewhere — jump there
-          touchProgress = tapProgress
-          uiProgressSV.value = tapProgress
-        }
+        uiProgressSV.value = getProgressFromTouch(evt.x, cw)
 
         isTouchingSV.value = withSpring(1, TRACK_SPRING)
       })
@@ -227,18 +210,29 @@ export const Scrubber = memo(function Scrubber({
       .onUpdate((evt) => {
         'worklet'
         if (!isInteractingSV.value) return
-        const tw = trackWidthSV.value
-        if (tw <= 0) return
+        const cw = containerWidthSV.value
+        if (cw <= 0) return
 
+        // evt.x = initial touch X (constant), translationX = cumulative drag distance
+        // Absolute finger position = evt.x + evt.translationX
+        const absX = evt.x + evt.translationX
         const verticalDistance = Math.abs(evt.y - startY)
         const scale = getFineScrubScale(verticalDistance)
-        const next = clamp(touchProgress + (evt.translationX * scale) / tw, 0, 1)
-        uiProgressSV.value = next
+
+        if (scale < 1) {
+          // Fine scrub mode: scale down movement relative to initial touch
+          const tw = trackWidthSV.value
+          if (tw <= 0) return
+          const initialP = getProgressFromTouch(evt.x, cw)
+          uiProgressSV.value = clamp(initialP + (evt.translationX * scale) / tw, 0, 1)
+        } else {
+          // Normal: map absolute finger position directly to progress
+          uiProgressSV.value = getProgressFromTouch(absX, cw)
+        }
       })
       .onEnd(() => {
         'worklet'
         if (!isInteractingSV.value) return
-        // Commit whether it was a drag or will fall through to onFinalize
         const d = durationSV.value
         const p = clamp(uiProgressSV.value, 0, 1)
         lockActiveSV.value = true
@@ -259,7 +253,6 @@ export const Scrubber = memo(function Scrubber({
         isInteractingSV.value = false
         showPreviewSV.value = false
         previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
-        touchProgress = 0
         startY = 0
         didDrag = false
         runOnJS(setPreviewSeconds)(null)

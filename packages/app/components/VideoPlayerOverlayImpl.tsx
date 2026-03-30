@@ -1490,19 +1490,21 @@ export function VideoPlayerOverlay() {
    // Progress bar style - positions at bottom, adjusts for landscape
   const progressBarStyle = useAnimatedStyle(() => {
     'worklet'
+    // Landscape fullscreen: lifted 36px, full width (Scrubber handles its own 16px padding)
     if (isLandscapeFullscreenShared.value) {
       return {
         position: 'absolute',
-        bottom: 16,
-         left: 16,
-         right: 16,
-         height: 32,
-         justifyContent: 'flex-end',
-         zIndex: 15,
-         opacity: 1,
-       }
-     }
+        bottom: 36,
+        left: 0,
+        right: 0,
+        height: 48,
+        justifyContent: 'center',
+        zIndex: 15,
+        opacity: 1,
+      }
+    }
 
+    // Bottom-relative overlay (e.g. fullscreen portrait with bottom-relative positioning)
     if (useBottomRelativeOverlayShared.value) {
       const opacity = interpolate(
         animProgress.value,
@@ -1512,11 +1514,11 @@ export function VideoPlayerOverlay() {
       )
       return {
         position: 'absolute',
-        bottom: 0,
+        bottom: isFullscreenShared.value ? 36 : 0,
         left: 0,
         right: 0,
-        height: 32,
-        justifyContent: 'flex-end',
+        height: 48,
+        justifyContent: 'center',
         zIndex: 15,
         opacity: isFullscreenShared.value ? 1 : opacity,
       }
@@ -1536,36 +1538,37 @@ export function VideoPlayerOverlay() {
         ? videoWrapperHeightShared.value
         : videoHeightShared.value)) + cutoutInset
 
+    // Fullscreen portrait: lifted 36px from video bottom
     if (isFullscreenShared.value) {
       return {
         position: 'absolute',
-        top: baseHeight - 32,
+        top: baseHeight - 48 - 36,
         bottom: undefined,
         left: 0,
         right: 0,
-        height: 32,
-        justifyContent: 'flex-end',
+        height: 48,
+        justifyContent: 'center',
         zIndex: 15,
         opacity: 1,
       }
     }
 
-      // In portrait, use fullscreenContentStyle opacity
-      const opacity = interpolate(
-        animProgress.value,
-        [0.5, 1],
-        [0, 1],
-        Extrapolation.CLAMP
-      )
+    // Portrait non-fullscreen: flush at video bottom (no 36px lift)
+    const opacity = interpolate(
+      animProgress.value,
+      [0.5, 1],
+      [0, 1],
+      Extrapolation.CLAMP
+    )
 
     return {
       position: 'absolute',
-      top: baseHeight - 32,
+      top: baseHeight - 48,
       bottom: undefined,
       left: 0,
       right: 0,
-      height: 32,
-      justifyContent: 'flex-end',
+      height: 48,
+      justifyContent: 'center',
       zIndex: 15,
       opacity,
     }
@@ -1577,27 +1580,21 @@ export function VideoPlayerOverlay() {
     if (isLandscapeFullscreenShared.value) {
       return {
         position: 'absolute',
-        bottom: 56,
-         left: 16,
-         backgroundColor: 'rgba(0,0,0,0.6)',
-         paddingHorizontal: 8,
-         paddingVertical: 4,
-         borderRadius: 4,
-         zIndex: 10,
-         opacity: 1,
-       }
-     }
+        bottom: 12,
+        left: 16,
+        right: 16,
+        zIndex: 10,
+        opacity: 1,
+      }
+    }
 
     if (useBottomRelativeOverlayShared.value) {
       const opacity = isFullscreenShared.value ? 1 : 0
       return {
         position: 'absolute',
-        bottom: 24,
-        left: 12,
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 4,
+        bottom: 12,
+        left: 16,
+        right: 16,
         zIndex: 10,
         opacity,
       }
@@ -1620,13 +1617,10 @@ export function VideoPlayerOverlay() {
     if (isFullscreenShared.value) {
       return {
         position: 'absolute',
-        top: baseHeight - 56,
+        top: baseHeight - 36 - 12,
         bottom: undefined,
-        left: 12,
-        backgroundColor: 'rgba(0,0,0,0.6)',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 4,
+        left: 16,
+        right: 16,
         zIndex: 10,
         opacity: 1,
       }
@@ -1634,13 +1628,10 @@ export function VideoPlayerOverlay() {
 
     return {
       position: 'absolute',
-      top: baseHeight - 56,
+      top: baseHeight - 36 - 12,
       bottom: undefined,
-      left: 12,
-      backgroundColor: 'rgba(0,0,0,0.6)',
-      paddingHorizontal: 8,
-      paddingVertical: 4,
-      borderRadius: 4,
+      left: 16,
+      right: 16,
       zIndex: 10,
       opacity: 0,
     }
@@ -1704,77 +1695,6 @@ export function VideoPlayerOverlay() {
        top: baseHeight - actionButtonOffset,
      }
     }, [])
-
-   // Fullscreen button style
-  const fullscreenButtonStyle = useAnimatedStyle(() => {
-    'worklet'
-    if (isLandscapeFullscreenShared.value) {
-      return {
-        position: 'absolute',
-        bottom: 64,
-        right: 16,
-        zIndex: 10,
-        opacity: 1,
-      }
-    }
-
-    if (useBottomRelativeOverlayShared.value) {
-      const opacity = interpolate(
-        animProgress.value,
-        [0.5, 1],
-        [0, 1],
-        Extrapolation.CLAMP
-      )
-      return {
-        position: 'absolute',
-        bottom: 24,
-        right: 12,
-        zIndex: 10,
-        opacity: isFullscreenShared.value ? 1 : opacity,
-      }
-    }
-
-     const cutoutInset = useBottomRelativeOverlayShared.value
-       ? 0
-       : Platform.OS === 'ios'
-         && !isInPipModeShared.value
-         && !isLandscapeFullscreenShared.value
-         && animProgress.value >= 0.95
-           ? insetTopShared.value
-           : 0
-     const baseHeight = (useBottomRelativeOverlayShared.value
-       ? videoHeightShared.value
-       : (videoWrapperHeightShared.value > 0
-         ? videoWrapperHeightShared.value
-         : videoHeightShared.value)) + cutoutInset
-
-     if (isFullscreenShared.value) {
-      return {
-        position: 'absolute',
-        top: baseHeight - actionButtonOffset,
-        bottom: undefined,
-        right: 12,
-          zIndex: 10,
-          opacity: 1,
-        }
-      }
-
-      const opacity = interpolate(
-        animProgress.value,
-        [0.5, 1],
-        [0, 1],
-        Extrapolation.CLAMP
-      )
-
-     return {
-       position: 'absolute',
-       top: baseHeight - actionButtonOffset,
-       bottom: undefined,
-       right: 12,
-       zIndex: 10,
-       opacity,
-     }
-   }, [])
 
   // Note: videoAreaStyle wrapper removed - fullscreenContent now uses absolute positioning
   // with top: videoHeight to position content below video, avoiding flex layout issues
@@ -2684,24 +2604,13 @@ export function VideoPlayerOverlay() {
         </Animated.View>
       )}
 
-      {playerMode === 'fullscreen' && showControls && !isInPipMode && (
-        <Animated.View style={fullscreenButtonStyle}>
-          <Pressable onPress={toggleLandscapeFullscreen} style={styles.fullscreenButtonInner}>
-            {isLandscapeFullscreen ? (
-              <Feather name="minimize" color="#fff" size={22} />
-            ) : (
-              <Feather name="maximize" color="#fff" size={22} />
-            )}
-          </Pressable>
-        </Animated.View>
-      )}
-
       {!isInPipMode && Platform.OS !== 'web' && (
         <Scrubber
           containerStyle={progressBarStyle}
           duration={effectiveDuration}
           currentTime={effectiveCurrentTime}
           progress={effectiveProgress}
+          bufferProgress={videoStats?.progress != null ? videoStats.progress / 100 : 0}
           pendingSeekTime={scrubPendingTime}
           disabled={effectiveDuration <= 0}
           externalGesture={panGesture}
@@ -2719,9 +2628,24 @@ export function VideoPlayerOverlay() {
 
       {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
         <Animated.View style={timeDisplayStyle}>
-          <Text style={styles.timeText}>
-            {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)} / {formatDuration(effectiveDuration)}
-          </Text>
+          <View style={styles.timeDisplayRow}>
+            <Text style={styles.timeText}>
+              <Text style={styles.timeTextCurrent}>
+                {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)}
+              </Text>
+              <Text style={styles.timeTextMuted}>
+                {' / '}
+                {formatDuration(effectiveDuration)}
+              </Text>
+            </Text>
+            <Pressable onPress={toggleLandscapeFullscreen} style={styles.timeDisplayAction}>
+              <Feather
+                name={isLandscapeFullscreen ? 'minimize' : 'maximize'}
+                color="#efeff1"
+                size={20}
+              />
+            </Pressable>
+          </View>
         </Animated.View>
       )}
 

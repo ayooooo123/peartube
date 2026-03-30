@@ -91,3 +91,4 @@ logfile
 # Agent state
 .sisyphus/
 .tmp-device-crashes/
+.evidence/

@@ -310,3 +310,50 @@ Push / follow-up notes:
 - Coordinate a push freeze first. `git push --force --mirror` rewrites every branch and tag in the public remote.
 - After the force-push, collaborators should reclone or hard-reset their own clean clones. Do not use the user's current dirty checkout as the place to resync.
 - If the exposure is truly sensitive, GitHub pull-request refs and caches may still need separate cleanup/support follow-up even after the rewritten refs are gone.
+
+---
+
+# Task: sanitize .evidence directory from public repo
+
+## User request
+Remove `.evidence` like the earlier local-artifact directories: ignore it locally, stop tracking it, and purge it from public history.
+
+## Observed facts
+- `.evidence/` is currently present in the working tree.
+- It is tracked in the current repo tip.
+- It also appears in remote branch/tag history.
+- Current branch setup has already been simplified to `main` only on both local and remote, which makes the rewrite smaller.
+
+## Constraints
+- Preserve current uncommitted work in the main checkout.
+- Use the same safe pattern as before: temp clean clone for tip cleanup, isolated mirror clone for rewrite, verify, then push.
+
+## Claude Proposal
+
+### Claude Code
+Safest plan:
+- Add `.evidence/` to `.gitignore` in the real repo so future local files stay untracked.
+- Do not run history rewrite in the dirty checkout.
+- Create a throwaway clean clone from the committed repo state, add the ignore rule there, and run `git rm -r --cached --ignore-unmatch -- .evidence` to produce a tip cleanup commit.
+- Create a separate mirror clone from `origin`, push that cleanup commit into `main`, then run `git filter-repo --force --path .evidence --invert-paths` in the mirror clone.
+- Re-attach `origin` if filter-repo strips it, then push rewritten refs. If GitHub rejects hidden refs, push heads and tags separately.
+- Verify from a fresh mirror clone of the remote that `.evidence` is absent from visible branches/tags and current `main`.
+
+## Codex Review
+
+### Codex
+
+Gaps to fix in the plan:
+- Do not do any part of the cleanup in the current dirty checkout, including `git stash`, `git reset --hard`, or a temporary `git rm --cached` there. Those steps either create another local ref that still contains the sensitive blobs or make recovery of unrelated WIP harder than necessary.
+- The scope is understated. This repo is not effectively `main`-only right now: local refs still show multiple `origin/dependabot/...` branches and several tags, so a `--mirror` rewrite still has wider blast radius than the note implies.
+- A mirror rewrite is necessary but not sufficient for GitHub. `git push --force --mirror` will not clean up GitHub hidden refs such as `refs/pull/*`, and local `git filter-repo` verification does not prove those server-side refs or PR caches are gone.
+- If the plan injects the `.gitignore` and `git rm --cached` cleanup commit only onto `main`, that is fine for the durable branch, but it should say so explicitly instead of implying every surviving ref will inherit the ignore rule.
+
+Improved plan:
+1. Keep the existing checkout untouched end-to-end. Prepare the `.gitignore` addition and `git rm -r --cached --ignore-unmatch -- .evidence` commit in a throwaway clean clone created from the repo's committed `main` or `HEAD`, not from the dirty working tree state.
+2. Feed that cleanup commit into an isolated mirror clone before running `git filter-repo`, so the rewritten `main` tip both drops `.evidence` from history and carries the ignore rule going forward.
+3. Correct the rewrite scope in the write-up: visible remote branches and tags still exist, so the push-freeze warning should cover all rewritten refs, not just `main`.
+4. Call out GitHub hidden refs as a separate post-rewrite concern. After the force-push, treat local verification as "public heads and tags look clean," not "GitHub is fully purged." If `.evidence` ever appeared in PRs, plan for a GitHub Support follow-up to clear hidden PR refs and caches.
+5. Leave the old dirty checkout alone afterward. Use a fresh clone from the sanitized remote for future work, and migrate any WIP deliberately rather than resyncing the existing checkout with destructive commands.
+
+This keeps focus on preserving the user's dirty repo while making the GitHub-side limitations explicit, which is the main gap in the current sanitization plan.

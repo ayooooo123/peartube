@@ -1849,7 +1849,10 @@ export function VideoPlayerOverlay() {
     if (Platform.OS === 'web') return
     if (Platform.OS === 'android' && pipSupported === false) return
     const shouldAutoPip = Platform.OS === 'android'
-      ? currentVideo !== null && !isCasting && isPlaying
+      // Prime Android auto-PiP as soon as there's an active video in a playable mode.
+      // Waiting for `isPlaying` misses the first-open -> immediate-home case because
+      // the native onPlaying event may not have fired yet.
+      ? currentVideo !== null && !isCasting && (playerMode === 'fullscreen' || playerMode === 'mini')
       : (playerMode === 'fullscreen' || (playerMode === 'mini' && !disableMiniLayoutOnAndroidSplit)) &&
         currentVideo !== null &&
         !isCasting

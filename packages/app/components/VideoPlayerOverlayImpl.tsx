@@ -2763,7 +2763,9 @@ export function VideoPlayerOverlay() {
               )}
               {!isInPipMode && showControls && (
                 <Pressable
-                  style={[StyleSheet.absoluteFill, { bottom: '15%' }]}
+                  // Leave the entire bottom controls region completely clear so
+                  // scrubber/timestamps/buttons never compete with the tap overlay.
+                  style={[StyleSheet.absoluteFill, { bottom: 140 }]}
                   onPress={handleVideoTap}
                   testID="video-tap-overlay-upper"
                 />

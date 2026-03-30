@@ -217,8 +217,9 @@ export const Scrubber = memo(function Scrubber({
     let tap = Gesture.Tap()
       .maxDistance(8)
       .hitSlop({ top: 12, bottom: 12, left: 0, right: 0 })
-      .onStart((evt) => {
+      .onEnd((evt, success) => {
         'worklet'
+        if (!success) return
         const tw = trackWidthSV.value
         const d = durationSV.value
         if (disabled || tw <= 0 || d <= 0) return

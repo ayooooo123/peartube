@@ -13,7 +13,7 @@ RUN case "${TARGETARCH}" in \
   esac \
   && chmod 755 /peartube-relay
 
-FROM gcr.io/distroless/base-debian12
+FROM gcr.io/distroless/cc-debian12
 
 ENV PEARTUBE_MODE=public
 ENV PEARTUBE_POLICY=discovery

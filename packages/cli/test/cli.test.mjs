@@ -69,7 +69,7 @@ test('Dockerfile packages the standalone relay executable in a minimal runtime i
   t.ok(content.includes('COPY packages/cli/dist/docker/ /dist/'), 'builder stage only packages prebuilt docker artifacts')
   t.ok(content.includes('cp /dist/linux-amd64/peartube-relay /peartube-relay'), 'artifact stage maps Docker amd64 to the prepared standalone binary')
   t.ok(content.includes('cp /dist/linux-arm64/peartube-relay /peartube-relay'), 'artifact stage maps Docker arm64 to the prepared standalone binary')
-  t.ok(content.includes('gcr.io/distroless/base-debian12'), 'final image uses a minimal distroless runtime')
+  t.ok(content.includes('gcr.io/distroless/cc-debian12'), 'final image uses the distroless C runtime needed by the standalone relay binary')
   t.absent(content.includes('npm run build:standalone'), 'Docker build no longer runs bare-build inside the image')
   t.ok(content.includes('COPY --from=artifact'), 'final image copies the packaged artifact from the artifact stage')
   t.ok(content.includes('ENTRYPOINT ["/peartube-relay"]'), 'final image runs the standalone relay executable directly')

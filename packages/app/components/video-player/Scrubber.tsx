@@ -248,13 +248,15 @@ export const Scrubber = memo(function Scrubber({
         isInteractingSV.value = true
 
         // Hybrid behavior:
-        // - touch near current handle => grab existing indicator and drag from there
-        // - touch elsewhere on track => jump indicator to touch point, then drag from there
+        // - touch on the visible handle => grab existing indicator and drag from there
+        // - touch elsewhere on track => jump indicator there, then drag from there
         const touchProgress = getProgressFromTouch(evt.x, tw)
         const currentProgress = lockActiveSV.value ? lockProgressSV.value : uiProgressSV.value
-        const handleThreshold = (HANDLE_SIZE_REST / 2) / tw + 0.01
+        const handleCenterX = TRACK_PADDING + clamp(currentProgress, 0, 1) * tw
+        const handleHitRadiusPx = Math.max(HANDLE_SIZE_ACTIVE / 2, 12)
+        const touchedHandle = Math.abs(evt.x - handleCenterX) <= handleHitRadiusPx
 
-        if (Math.abs(touchProgress - currentProgress) <= handleThreshold) {
+        if (touchedHandle) {
           startProgress = clamp(currentProgress, 0, 1)
           uiProgressSV.value = startProgress
         } else {

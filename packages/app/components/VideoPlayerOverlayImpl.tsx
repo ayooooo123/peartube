@@ -667,8 +667,29 @@ export function VideoPlayerOverlay() {
       if (AppState.currentState === 'active') {
         maximizePlayer()
       }
+
+      // Android: explicitly re-arm auto-PiP after exit once the activity/player
+      // have settled back into fullscreen. This makes subsequent home presses
+      // re-enter PiP reliably without needing an in-app minimize/maximize cycle.
+      if (
+        Platform.OS === 'android' &&
+        pipSupported !== false &&
+        currentVideo !== null &&
+        !isCasting
+      ) {
+        setTimeout(() => {
+          autoPipEnabledRef.current = true
+          MediaSession.setAutoPictureInPicture(true)
+            .then(() => {
+              console.log('[VideoPlayerOverlay] Re-armed Auto-PiP after PiP status exit')
+            })
+            .catch((err) => {
+              console.error('[VideoPlayerOverlay] Failed to re-arm Auto-PiP after PiP status exit:', err)
+            })
+        }, 300)
+      }
     }
-  }, [setIsInPipMode, setPipWindowSize, maximizePlayer])
+  }, [setIsInPipMode, setPipWindowSize, maximizePlayer, pipSupported, currentVideo, isCasting])
 
   // Handle video load - set PiP aspect ratio to match actual video dimensions
   const handleVideoLoad = useCallback((info: { duration?: number; videoSize?: { width: number; height: number } }) => {

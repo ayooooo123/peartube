@@ -1,23 +1,67 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { Text, View } from 'react-native'
+import { type LayoutChangeEvent, Text, View } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import Animated, {
   clamp,
+  Easing,
   interpolate,
   runOnJS,
   useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
-  withDelay,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated'
 import { styles } from './styles'
 import { formatDuration } from './formatters'
 
+// ── Dimensions (spec §1, §3) ────────────────────────────────────────────
+const TRACK_PADDING = 16
+const TRACK_HEIGHT_REST = 4
+const TRACK_HEIGHT_TOUCH = 6
+const TRACK_HEIGHT_SCRUB = 8
+const HANDLE_SIZE_REST = 12
+const HANDLE_SIZE_ACTIVE = 18
+const TRACK_WRAPPER_HEIGHT = TRACK_HEIGHT_SCRUB
+const TOUCH_TARGET_HEIGHT = 48
+
+// ── Animation configs (spec §8) ─────────────────────────────────────────
+const TRACK_SPRING = { damping: 15, stiffness: 350, mass: 0.8 }
+const HANDLE_SPRING = { damping: 20, stiffness: 400, mass: 0.6, overshootClamping: true }
+const HANDLE_EXIT = { duration: 200, easing: Easing.out(Easing.cubic) }
+const PREVIEW_SPRING = { damping: 18, stiffness: 300, mass: 0.7 }
+const PREVIEW_EXIT = { duration: 100, easing: Easing.in(Easing.cubic) }
+const BUFFER_TIMING = { duration: 300, easing: Easing.out(Easing.quad) }
+
+// ── Worklet helpers ──────────────────────────────────────────────────────
+function getTrackGeometry(touching: number, scrubbing: number) {
+  'worklet'
+  const touchHeight = interpolate(touching, [0, 1], [TRACK_HEIGHT_REST, TRACK_HEIGHT_TOUCH])
+  const height = interpolate(scrubbing, [0, 1], [touchHeight, TRACK_HEIGHT_SCRUB])
+  return {
+    borderRadius: height / 2,
+    height,
+    top: (TRACK_WRAPPER_HEIGHT - height) / 2,
+  }
+}
+
+function getProgressFromTouch(touchX: number, trackWidth: number): number {
+  'worklet'
+  return clamp((touchX - TRACK_PADDING) / trackWidth, 0, 1)
+}
+
+function getFineScrubScale(verticalDistance: number): number {
+  'worklet'
+  if (verticalDistance > 80) return 0.25
+  if (verticalDistance > 40) return 0.5
+  return 1
+}
+
 type Props = {
   duration: number
   currentTime: number
   progress: number
+  bufferProgress?: number // 0-1 float, download progress
   pendingSeekTime?: number | null
   disabled?: boolean
   containerStyle?: any
@@ -29,6 +73,7 @@ export const Scrubber = memo(function Scrubber({
   duration,
   currentTime,
   progress,
+  bufferProgress = 0,
   pendingSeekTime,
   disabled,
   containerStyle,
@@ -37,61 +82,63 @@ export const Scrubber = memo(function Scrubber({
 }: Props) {
   const [previewSeconds, setPreviewSeconds] = useState<number | null>(null)
 
+  // ── Layout measurement ───────────────────────────────────────────────
   const trackWidthSV = useSharedValue(0)
+  const tooltipWidthSV = useSharedValue(0)
   const durationSV = useSharedValue(duration)
-  const currentTimeSV = useSharedValue(currentTime)
 
+  // ── External progress ────────────────────────────────────────────────
   const externalProgressSV = useSharedValue(progress)
-  const isScrubbingSV = useSharedValue(false)
-  const activationSV = useSharedValue(0)
+  const bufferProgressSV = useSharedValue(bufferProgress)
 
-  // When committing a seek, keep the bar locked to the target until the parent
-  // clears pendingSeekTime (once playback progress catches up).
+  // ── Interaction state ────────────────────────────────────────────────
+  // Three-state model: rest → touch → scrub
+  const isTouchingSV = useSharedValue(0) // 0→1 on finger down
+  const isScrubbingSV = useSharedValue(0) // 0→1 when the pan gesture activates
+  const isInteractingSV = useSharedValue(false) // gates external progress for entire interaction
+  const showPreviewSV = useSharedValue(false)
+  const previewVisibilitySV = useSharedValue(0)
+
+  // Lock-and-commit: keeps bar at seek target until parent confirms
   const lockActiveSV = useSharedValue(false)
   const lockProgressSV = useSharedValue(0)
 
-  // The progress value that drives the UI (0..1). During scrubbing this tracks finger.
+  // The progress value driving the UI (0..1). During interaction this tracks finger.
   const uiProgressSV = useSharedValue(0)
 
+  // ── Sync props to shared values ──────────────────────────────────────
+  useEffect(() => { durationSV.value = duration }, [duration, durationSV])
+  useEffect(() => { externalProgressSV.value = progress }, [progress, externalProgressSV])
   useEffect(() => {
-    durationSV.value = duration
-  }, [duration, durationSV])
-
-  useEffect(() => {
-    currentTimeSV.value = currentTime
-  }, [currentTime, currentTimeSV])
-
-  useEffect(() => {
-    externalProgressSV.value = progress
-  }, [progress, externalProgressSV])
+    bufferProgressSV.value = withTiming(bufferProgress, BUFFER_TIMING)
+  }, [bufferProgress, bufferProgressSV])
 
   useEffect(() => {
     if (pendingSeekTime === null || pendingSeekTime === undefined || duration <= 0) {
       lockActiveSV.value = false
       return
     }
-
     const p = clamp(pendingSeekTime / duration, 0, 1)
     lockActiveSV.value = true
     lockProgressSV.value = p
     uiProgressSV.value = p
   }, [pendingSeekTime, duration, lockActiveSV, lockProgressSV, uiProgressSV])
 
-  // Sync UI progress from external progress when not scrubbing/locked.
+  // Sync UI progress from external progress when not interacting/locked.
   useAnimatedReaction(
     () => externalProgressSV.value,
     (p) => {
-      if (isScrubbingSV.value) return
+      if (isInteractingSV.value) return
       if (lockActiveSV.value) return
       uiProgressSV.value = withTiming(clamp(p, 0, 1), { duration: 140 })
     },
     []
   )
 
-  // Emit a coarse preview time to JS only when the displayed second changes.
+  // Emit coarse preview time to JS only when the displayed second changes.
   useAnimatedReaction(
     () => {
-      if (!isScrubbingSV.value) return -1
+      if (!showPreviewSV.value) return -1
       const d = durationSV.value
       if (d <= 0) return -1
       return Math.round(uiProgressSV.value * d)
@@ -103,126 +150,252 @@ export const Scrubber = memo(function Scrubber({
     []
   )
 
-  const updateWidth = useCallback((w: number) => {
-    trackWidthSV.value = w
-  }, [trackWidthSV])
-
   const handleCommit = useCallback((timeSeconds: number) => {
     if (disabled || duration <= 0) return
     onSeekCommit(timeSeconds)
   }, [disabled, duration, onSeekCommit])
 
+  // ── Pan gesture ──────────────────────────────────────────────────────
   const panGesture = useMemo(() => {
+    let startProgress = 0
+    let startY = 0
+
     let g = Gesture.Pan()
-      // Make the scrubber very forgiving: any touch on the track should start.
-      // This fixes the "takes a few clicks" feel caused by Tap+Pan both failing
-      // when the finger drifts slightly vertically.
+      .activateAfterLongPress(0)
       .minDistance(0)
-      .hitSlop({ top: 14, bottom: 14, left: 8, right: 8 })
-      .onStart((evt) => {
+      .hitSlop({ top: 20, bottom: 20, left: 0, right: 0 })
+      .shouldCancelWhenOutside(false)
+      .onBegin((evt) => {
         'worklet'
         if (disabled) return
-        const w = trackWidthSV.value
+        const tw = trackWidthSV.value
         const d = durationSV.value
-        if (w <= 0 || d <= 0) return
+        if (tw <= 0 || d <= 0) return
 
+        // Enter touch state — gate external progress immediately
+        isInteractingSV.value = true
         lockActiveSV.value = false
-        isScrubbingSV.value = true
-        activationSV.value = withTiming(1, { duration: 120 })
+        showPreviewSV.value = false
+        previewVisibilitySV.value = 0
+        startY = evt.y
 
-        // Jump the thumb immediately to the touch point.
-        uiProgressSV.value = clamp(evt.x / w, 0, 1)
+        isTouchingSV.value = withSpring(1, TRACK_SPRING)
+
+        // Jump thumb to touch point
+        const p = getProgressFromTouch(evt.x, tw)
+        startProgress = p
+        uiProgressSV.value = p
+      })
+      .onStart(() => {
+        'worklet'
+        if (!isInteractingSV.value) return
+        const d = durationSV.value
+
+        showPreviewSV.value = true
+        isScrubbingSV.value = withSpring(1, HANDLE_SPRING)
+        previewVisibilitySV.value = withSpring(1, PREVIEW_SPRING)
+
+        if (d > 0) {
+          runOnJS(setPreviewSeconds)(Math.round(uiProgressSV.value * d))
+        }
       })
       .onUpdate((evt) => {
         'worklet'
-        if (!isScrubbingSV.value) return
-        const w = trackWidthSV.value
-        const d = durationSV.value
-        if (w <= 0 || d <= 0) return
-        uiProgressSV.value = clamp(evt.x / w, 0, 1)
+        if (!isInteractingSV.value) return
+        const tw = trackWidthSV.value
+        if (tw <= 0) return
+
+        const verticalDistance = Math.abs(evt.y - startY)
+        const fineScrubScale = getFineScrubScale(verticalDistance)
+        const nextProgress = clamp(startProgress + (evt.translationX * fineScrubScale) / tw, 0, 1)
+        uiProgressSV.value = nextProgress
       })
       .onEnd(() => {
         'worklet'
-        if (!isScrubbingSV.value) return
+        if (!isInteractingSV.value) return
         const d = durationSV.value
         const timeSeconds = clamp(uiProgressSV.value, 0, 1) * d
 
-        // Lock locally immediately to avoid snapping back before parent state updates.
+        // Lock locally to avoid snap-back before parent state updates
         lockActiveSV.value = true
         lockProgressSV.value = clamp(uiProgressSV.value, 0, 1)
         uiProgressSV.value = lockProgressSV.value
 
-        isScrubbingSV.value = false
-        activationSV.value = withTiming(0, { duration: 220 })
+        showPreviewSV.value = false
+        previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
         runOnJS(setPreviewSeconds)(null)
         runOnJS(handleCommit)(timeSeconds)
       })
       .onFinalize(() => {
         'worklet'
-        isScrubbingSV.value = false
+        // Animate everything back to rest
+        isTouchingSV.value = withSpring(0, TRACK_SPRING)
+        isScrubbingSV.value = withTiming(0, HANDLE_EXIT)
+        isInteractingSV.value = false
+        showPreviewSV.value = false
+        previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
+        startProgress = 0
+        startY = 0
+        runOnJS(setPreviewSeconds)(null)
       })
 
     if (externalGesture) {
       g = g.blocksExternalGesture(externalGesture)
     }
     return g
-  }, [disabled, trackWidthSV, durationSV, uiProgressSV, activationSV, lockActiveSV, lockProgressSV, isScrubbingSV, externalGesture, handleCommit])
+  }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, externalGesture, handleCommit])
 
-  const gesture = panGesture
+  // ── Animated styles ──────────────────────────────────────────────────
 
+  // Track background (all three layers share height + borderRadius)
   const trackAnimatedStyle = useAnimatedStyle(() => {
     'worklet'
-    const h = interpolate(activationSV.value, [0, 1], [3, 6])
-    return { height: h }
-  }, [])
-
-  const fillAnimatedStyle = useAnimatedStyle(() => {
-    'worklet'
-    const h = interpolate(activationSV.value, [0, 1], [3, 6])
-    const p = lockActiveSV.value ? lockProgressSV.value : uiProgressSV.value
+    const geometry = getTrackGeometry(isTouchingSV.value, isScrubbingSV.value)
     return {
-      height: h,
-      width: `${clamp(p, 0, 1) * 100}%`,
+      top: geometry.top,
+      height: geometry.height,
+      borderRadius: geometry.borderRadius,
     }
   }, [])
 
+  // Buffer fill layer
+  const bufferFillStyle = useAnimatedStyle(() => {
+    'worklet'
+    const geometry = getTrackGeometry(isTouchingSV.value, isScrubbingSV.value)
+    const w = trackWidthSV.value
+    const bufW = clamp(bufferProgressSV.value, 0, 1) * w
+    return {
+      top: geometry.top,
+      height: geometry.height,
+      borderRadius: geometry.borderRadius,
+      width: bufW,
+    }
+  }, [])
+
+  // Played fill layer
+  const fillAnimatedStyle = useAnimatedStyle(() => {
+    'worklet'
+    const geometry = getTrackGeometry(isTouchingSV.value, isScrubbingSV.value)
+    const p = lockActiveSV.value ? lockProgressSV.value : uiProgressSV.value
+    const w = trackWidthSV.value
+    const fillW = clamp(p, 0, 1) * w
+    return {
+      top: geometry.top,
+      height: geometry.height,
+      borderRadius: geometry.borderRadius,
+      width: fillW,
+    }
+  }, [])
+
+  // Handle — always visible, grows on scrub, positioned with translateX
   const handleAnimatedStyle = useAnimatedStyle(() => {
     'worklet'
     const p = lockActiveSV.value ? lockProgressSV.value : uiProgressSV.value
+    const size = interpolate(isScrubbingSV.value, [0, 1], [HANDLE_SIZE_REST, HANDLE_SIZE_ACTIVE])
+    const tw = trackWidthSV.value
+    const handleCenterX = clamp(p, 0, 1) * tw
+    const tx = handleCenterX - size / 2
     return {
-      opacity: activationSV.value,
-      transform: [{ scale: interpolate(activationSV.value, [0, 1], [0.85, 1]) }],
-      left: `${clamp(p, 0, 1) * 100}%`,
+      width: size,
+      height: size,
+      borderRadius: size / 2,
+      top: TRACK_WRAPPER_HEIGHT / 2 - size / 2,
+      transform: [{ translateX: tx }],
+      // Glow ring on scrub
+      borderWidth: interpolate(isScrubbingSV.value, [0, 1], [0, 2]),
+      borderColor: 'rgba(145, 71, 255, 0.50)',
+      shadowOpacity: interpolate(isScrubbingSV.value, [0, 1], [0.4, 0.5]),
+      shadowRadius: interpolate(isScrubbingSV.value, [0, 1], [3, 5]),
+      elevation: interpolate(isScrubbingSV.value, [0, 1], [4, 6]),
     }
   }, [])
 
+  // Preview tooltip — appears during scrub, positioned with translateX
   const previewAnimatedStyle = useAnimatedStyle(() => {
     'worklet'
+    const geometry = getTrackGeometry(isTouchingSV.value, isScrubbingSV.value)
     const p = lockActiveSV.value ? lockProgressSV.value : uiProgressSV.value
+    const tw = trackWidthSV.value
+    const handleCenterX = clamp(p, 0, 1) * tw
+    const tooltipWidth = tooltipWidthSV.value
+    const maxTooltipOffset = Math.max(0, tw - tooltipWidth)
+    const tx = clamp(handleCenterX - tooltipWidth / 2, 0, maxTooltipOffset)
     return {
-      opacity: activationSV.value,
-      left: `${clamp(p, 0, 1) * 100}%`,
+      bottom: TRACK_WRAPPER_HEIGHT - geometry.top + 12,
+      opacity: previewVisibilitySV.value,
+      transform: [
+        { translateX: tx },
+        { scale: interpolate(previewVisibilitySV.value, [0, 1], [0.8, 1]) },
+      ],
     }
   }, [])
 
+  const handleTrackLayout = useCallback((e: LayoutChangeEvent) => {
+    trackWidthSV.value = e.nativeEvent.layout.width
+  }, [trackWidthSV])
+
+  const handleTooltipLayout = useCallback((e: LayoutChangeEvent) => {
+    tooltipWidthSV.value = e.nativeEvent.layout.width
+  }, [tooltipWidthSV])
+
   return (
-    <Animated.View
-      style={containerStyle}
-      onLayout={(e) => updateWidth(e.nativeEvent.layout.width)}
-    >
-      <GestureDetector gesture={gesture}>
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          {previewSeconds !== null && (
-            <Animated.View style={[styles.seekTimePreview, previewAnimatedStyle]} pointerEvents="none">
-              <Text style={styles.seekTimeText}>{formatDuration(previewSeconds)}</Text>
-            </Animated.View>
-          )}
+    <Animated.View style={containerStyle}>
+      <GestureDetector gesture={panGesture}>
+        <View
+          style={{
+            height: TOUCH_TARGET_HEIGHT,
+            paddingHorizontal: TRACK_PADDING,
+            justifyContent: 'center',
+          }}
+          accessibilityRole="adjustable"
+          accessibilityLabel="Video progress"
+          accessibilityValue={{
+            min: 0,
+            max: Math.round(duration),
+            now: Math.round(currentTime),
+          }}
+        >
+          {/* Track wrapper — contains all layers */}
+          <View style={styles.scrubberTrackWrapper} onLayout={handleTrackLayout}>
+            {/* Preview tooltip — above track */}
+            {previewSeconds !== null && (
+              <Animated.View
+                style={[styles.scrubberTooltip, previewAnimatedStyle]}
+                pointerEvents="none"
+              >
+                <View style={styles.scrubberTooltipBubble} onLayout={handleTooltipLayout}>
+                  <Text style={styles.scrubberTooltipText}>
+                    {formatDuration(previewSeconds)}
+                  </Text>
+                </View>
+                <View style={styles.scrubberTooltipArrow} />
+              </Animated.View>
+            )}
 
-          <Animated.View style={[styles.thinProgressBg, trackAnimatedStyle]} pointerEvents="none">
-            <Animated.View style={[styles.thinProgressFill, fillAnimatedStyle]} />
-          </Animated.View>
+            {/* Layer 1: Background */}
+            <Animated.View
+              style={[styles.scrubberTrackBg, trackAnimatedStyle]}
+              pointerEvents="none"
+            />
 
-          <Animated.View style={[styles.scrubberHandle, handleAnimatedStyle]} pointerEvents="none" />
+            {/* Layer 2: Buffer fill */}
+            <Animated.View
+              style={[styles.scrubberBufferFill, bufferFillStyle]}
+              pointerEvents="none"
+            />
+
+            {/* Layer 3: Played fill */}
+            <Animated.View
+              style={[styles.scrubberPlayedFill, fillAnimatedStyle]}
+              pointerEvents="none"
+            />
+
+            {/* Handle */}
+            <Animated.View
+              style={[styles.scrubberHandleNew, handleAnimatedStyle]}
+              pointerEvents="none"
+            />
+          </View>
         </View>
       </GestureDetector>
     </Animated.View>

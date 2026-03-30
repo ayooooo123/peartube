@@ -253,88 +253,123 @@ export const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // YouTube-style thin progress bar (always visible, seekable)
-  thinProgressContainer: {
+  // ── Scrubber: Track layers (spec §1, §9) ──────────────────────────────
+  scrubberTrackWrapper: {
+    position: 'relative',
+    height: 8,
+  },
+  scrubberTrackBg: {
     position: 'absolute',
-    bottom: 0,
     left: 0,
     right: 0,
-    height: 32, // Larger touch target
-    justifyContent: 'flex-end',
-    zIndex: 15,
-    elevation: 15,
+    top: 0,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
   },
-  thinProgressContainerLandscape: {
+  scrubberBufferFill: {
     position: 'absolute',
-    bottom: 0,
-    left: 16,
-    right: 16,
-    height: 32,
-    justifyContent: 'flex-end',
-    zIndex: 15,
+    left: 0,
+    top: 0,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(145, 71, 255, 0.35)',
   },
+  scrubberPlayedFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#9147ff',
+  },
+  // ── Scrubber: Handle (spec §3) ───────────────────────────────────────
+  scrubberHandleNew: {
+    position: 'absolute',
+    left: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.40,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  // ── Scrubber: Tooltip (spec §4) ──────────────────────────────────────
+  scrubberTooltip: {
+    position: 'absolute',
+    left: 0,
+    alignItems: 'center',
+  },
+  scrubberTooltipBubble: {
+    backgroundColor: '#1f1f23',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(48, 48, 53, 0.8)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.50,
+    shadowRadius: 6,
+    elevation: 8,
+  } as any,
+  scrubberTooltipText: {
+    color: '#efeff1',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    fontVariant: ['tabular-nums'] as any,
+    textAlign: 'center',
+    minWidth: 40,
+  } as any,
+  scrubberTooltipArrow: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderLeftColor: 'transparent',
+    borderRightWidth: 6,
+    borderRightColor: 'transparent',
+    borderTopWidth: 6,
+    borderTopColor: '#1f1f23',
+    marginTop: -1,
+    alignSelf: 'center',
+  } as any,
+  // Legacy thin progress bar styles kept for web fallback
   thinProgressBg: {
     height: 3,
     backgroundColor: 'rgba(255,255,255,0.3)',
-  },
-  thinProgressBgActive: {
-    height: 6,
   },
   thinProgressFill: {
     height: '100%',
     backgroundColor: colors.primary,
   },
-  thinProgressFillActive: {
-    backgroundColor: colors.primary,
+  timeDisplayRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  // Scrubber handle when seeking
-  scrubberHandle: {
-    position: 'absolute',
-    bottom: 0,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: colors.primary,
-    marginLeft: -8,
-    marginBottom: -5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 4,
-  },
-  // Time preview bubble
-  seekTimePreview: {
-    position: 'absolute',
-    bottom: 20,
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 4,
-    marginLeft: -30, // Center the bubble
-  },
-  seekTimeText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-    minWidth: 40,
-  },
-  // Time display (shown with controls)
-  timeDisplay: {
-    position: 'absolute',
-    bottom: 24,
-    left: 12,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-    zIndex: 10,
-    elevation: 10,
-  },
-  timeDisplayLandscape: {
-    bottom: 16,
-    left: 16,
+  timeTextCurrent: {
+    color: '#efeff1',
+    fontSize: 12,
+    fontWeight: '500',
+    fontVariant: ['tabular-nums'] as any,
+  } as any,
+  timeTextMuted: {
+    color: '#7a7a85',
+    fontSize: 12,
+    fontWeight: '500',
+    fontVariant: ['tabular-nums'] as any,
+  } as any,
+  timeDisplayAction: {
+    minWidth: 36,
+    minHeight: 36,
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    opacity: 0.8,
   },
   // Fullscreen progress bar (shown with controls)
   fullscreenProgressContainer: {
@@ -373,9 +408,6 @@ export const styles = StyleSheet.create({
     marginLeft: -7,
   },
   timeText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '500',
     minWidth: 40,
   },
   // Mini player styles

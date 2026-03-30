@@ -61,6 +61,7 @@ import {
   ChannelInfo,
   ActionButton,
   Scrubber,
+  ControlsPanel,
   PearInlineVideoView,
 } from './video-player'
 
@@ -1487,24 +1488,34 @@ export function VideoPlayerOverlay() {
     }
   }, [])
 
-   // Progress bar style - positions at bottom, adjusts for landscape
-  const progressBarStyle = useAnimatedStyle(() => {
+   // Controls panel style - positions the unified bottom panel
+  const controlsPanelStyle = useAnimatedStyle(() => {
     'worklet'
-    // Landscape fullscreen: lifted 36px, full width (Scrubber handles its own 16px padding)
     if (isLandscapeFullscreenShared.value) {
       return {
         position: 'absolute',
-        bottom: 36,
-        left: 0,
-        right: 0,
-        height: 48,
-        justifyContent: 'center',
-        zIndex: 15,
-        opacity: 1,
+        bottom: 16,
+        left: 24,
+        right: 24,
       }
     }
 
-    // Bottom-relative overlay (e.g. fullscreen portrait with bottom-relative positioning)
+    return {
+      position: 'absolute',
+      bottom: 24,
+      left: 24,
+      right: 24,
+    }
+  }, [])
+
+  // Progress bar style for web thin fallback and non-fullscreen Scrubber
+  const progressBarStyle = useAnimatedStyle(() => {
+    'worklet'
+    if (isLandscapeFullscreenShared.value || isFullscreenShared.value) {
+      // In fullscreen, the ControlsPanel handles the scrubber
+      return { display: 'none' }
+    }
+
     if (useBottomRelativeOverlayShared.value) {
       const opacity = interpolate(
         animProgress.value,
@@ -1514,46 +1525,25 @@ export function VideoPlayerOverlay() {
       )
       return {
         position: 'absolute',
-        bottom: isFullscreenShared.value ? 36 : 0,
+        bottom: 0,
         left: 0,
         right: 0,
         height: 48,
         justifyContent: 'center',
         zIndex: 15,
-        opacity: isFullscreenShared.value ? 1 : opacity,
+        opacity,
       }
     }
 
-    const cutoutInset = useBottomRelativeOverlayShared.value
-      ? 0
-      : Platform.OS === 'ios'
-        && !isInPipModeShared.value
-        && !isLandscapeFullscreenShared.value
-        && animProgress.value >= 0.95
-          ? insetTopShared.value
-          : 0
-    const baseHeight = (useBottomRelativeOverlayShared.value
-      ? videoHeightShared.value
-      : (videoWrapperHeightShared.value > 0
-        ? videoWrapperHeightShared.value
-        : videoHeightShared.value)) + cutoutInset
+    const cutoutInset = Platform.OS === 'ios'
+      && !isInPipModeShared.value
+      && animProgress.value >= 0.95
+        ? insetTopShared.value
+        : 0
+    const baseHeight = (videoWrapperHeightShared.value > 0
+      ? videoWrapperHeightShared.value
+      : videoHeightShared.value) + cutoutInset
 
-    // Fullscreen portrait: lifted 36px from video bottom
-    if (isFullscreenShared.value) {
-      return {
-        position: 'absolute',
-        top: baseHeight - 48 - 36,
-        bottom: undefined,
-        left: 0,
-        right: 0,
-        height: 48,
-        justifyContent: 'center',
-        zIndex: 15,
-        opacity: 1,
-      }
-    }
-
-    // Portrait non-fullscreen: flush at video bottom (no 36px lift)
     const opacity = interpolate(
       animProgress.value,
       [0.5, 1],
@@ -1574,68 +1564,7 @@ export function VideoPlayerOverlay() {
     }
   }, [])
 
-   // Time display style - positions above progress bar
-  const timeDisplayStyle = useAnimatedStyle(() => {
-    'worklet'
-    if (isLandscapeFullscreenShared.value) {
-      return {
-        position: 'absolute',
-        bottom: 12,
-        left: 16,
-        right: 16,
-        zIndex: 10,
-        opacity: 1,
-      }
-    }
-
-    if (useBottomRelativeOverlayShared.value) {
-      const opacity = isFullscreenShared.value ? 1 : 0
-      return {
-        position: 'absolute',
-        bottom: 12,
-        left: 16,
-        right: 16,
-        zIndex: 10,
-        opacity,
-      }
-    }
-
-    const cutoutInset = useBottomRelativeOverlayShared.value
-      ? 0
-      : Platform.OS === 'ios'
-        && !isInPipModeShared.value
-        && !isLandscapeFullscreenShared.value
-        && animProgress.value >= 0.95
-          ? insetTopShared.value
-          : 0
-    const baseHeight = (useBottomRelativeOverlayShared.value
-      ? videoHeightShared.value
-      : (videoWrapperHeightShared.value > 0
-        ? videoWrapperHeightShared.value
-        : videoHeightShared.value)) + cutoutInset
-
-    if (isFullscreenShared.value) {
-      return {
-        position: 'absolute',
-        top: baseHeight - 36 - 12,
-        bottom: undefined,
-        left: 16,
-        right: 16,
-        zIndex: 10,
-        opacity: 1,
-      }
-    }
-
-    return {
-      position: 'absolute',
-      top: baseHeight - 36 - 12,
-      bottom: undefined,
-      left: 16,
-      right: 16,
-      zIndex: 10,
-      opacity: 0,
-    }
-  }, [])
+   // timeDisplayStyle removed — subsumed by ControlsPanel
 
   const actionButtonOffset = 84
 
@@ -1651,17 +1580,7 @@ export function VideoPlayerOverlay() {
     }
   }, [])
 
-  const speedButtonStyle = useAnimatedStyle(() => {
-    'worklet'
-    if (useBottomRelativeOverlayShared.value) {
-      return {
-        top: 12,
-      }
-    }
-    return {
-      top: insetTopShared.value + 12,
-    }
-  }, [])
+  // speedButtonStyle removed — speed button now inside ControlsPanel
 
   const castButtonStyle = useAnimatedStyle(() => {
     'worklet'
@@ -2588,14 +2507,6 @@ export function VideoPlayerOverlay() {
         </Animated.View>
       )}
 
-      {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
-        <Animated.View style={[styles.speedButton, fullscreenButtonsOpacityStyle, speedButtonStyle]}>
-          <Pressable onPress={cyclePlaybackSpeed} style={styles.speedButtonInner}>
-            <Text style={styles.speedButtonText}>{playbackRate}x</Text>
-          </Pressable>
-        </Animated.View>
-      )}
-
       {playerMode === 'fullscreen' && showControls && !isInPipMode && (
         <Animated.View style={[styles.castButton, fullscreenButtonsOpacityStyle, castButtonStyle]}>
           <Pressable onPress={handleCastPress} style={styles.castButtonInner}>
@@ -2604,7 +2515,30 @@ export function VideoPlayerOverlay() {
         </Animated.View>
       )}
 
-      {!isInPipMode && Platform.OS !== 'web' && (
+      {/* Unified bottom controls panel (fullscreen + landscape) */}
+      {(playerMode === 'fullscreen' || isLandscapeFullscreen) && !isInPipMode && Platform.OS !== 'web' && (
+        <ControlsPanel
+          visible={showControls}
+          containerStyle={controlsPanelStyle}
+          duration={effectiveDuration}
+          currentTime={effectiveCurrentTime}
+          progress={effectiveProgress}
+          bufferProgress={videoStats?.progress != null ? videoStats.progress / 100 : 0}
+          pendingSeekTime={scrubPendingTime}
+          scrubberDisabled={effectiveDuration <= 0}
+          externalGesture={panGesture}
+          onSeekCommit={handleScrubCommit}
+          isSeeking={isSeeking}
+          seekPosition={seekPosition}
+          playbackRate={playbackRate}
+          onCycleSpeed={cyclePlaybackSpeed}
+          isLandscape={isLandscapeFullscreen}
+          onToggleLandscape={toggleLandscapeFullscreen}
+        />
+      )}
+
+      {/* Non-fullscreen scrubber (portrait non-fullscreen, hidden in mini/PiP) */}
+      {!isInPipMode && Platform.OS !== 'web' && playerMode !== 'fullscreen' && !isLandscapeFullscreen && (
         <Scrubber
           containerStyle={progressBarStyle}
           duration={effectiveDuration}
@@ -2615,37 +2549,15 @@ export function VideoPlayerOverlay() {
           disabled={effectiveDuration <= 0}
           externalGesture={panGesture}
           onSeekCommit={handleScrubCommit}
-          visible={playerMode === 'mini' ? false : (playerMode === 'fullscreen' || isLandscapeFullscreen) ? showControls : true}
+          visible={playerMode !== 'mini'}
         />
       )}
 
+      {/* Web thin progress bar fallback */}
       {!isInPipMode && Platform.OS === 'web' && (
         <Animated.View style={progressBarStyle} pointerEvents="none">
           <View style={styles.thinProgressBg}>
             <View style={[styles.thinProgressFill, { width: `${effectiveProgress * 100}%` }]} />
-          </View>
-        </Animated.View>
-      )}
-
-      {(playerMode === 'fullscreen' || isLandscapeFullscreen) && showControls && !isInPipMode && (
-        <Animated.View style={timeDisplayStyle}>
-          <View style={styles.timeDisplayRow}>
-            <Text style={styles.timeText}>
-              <Text style={styles.timeTextCurrent}>
-                {formatDuration(isSeeking ? seekPosition : effectiveCurrentTime)}
-              </Text>
-              <Text style={styles.timeTextMuted}>
-                {' / '}
-                {formatDuration(effectiveDuration)}
-              </Text>
-            </Text>
-            <Pressable onPress={toggleLandscapeFullscreen} style={styles.timeDisplayAction}>
-              <Feather
-                name={isLandscapeFullscreen ? 'minimize' : 'maximize'}
-                color="#efeff1"
-                size={20}
-              />
-            </Pressable>
           </View>
         </Animated.View>
       )}

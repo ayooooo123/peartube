@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, writeFileSync } from '#fs'
 import process from '#process'
+import { normalizeCliArgv, parseArgv } from './src/argv.js'
 import { DEFAULT_RELAY_CONFIG, RELAY_COMMAND, RELAY_COMPAT_COMMAND } from './src/constants.js'
 import { loadRelayConfig, renderExampleConfig } from './src/config.js'
 import { RelayCatalog } from './src/catalog.js'
@@ -29,103 +30,6 @@ function printHelp() {
     '  --json',
     ''
   ].join('\n'))
-}
-
-function pushFlag(target, key, value) {
-  if (target[key] === undefined) {
-    target[key] = value
-    return
-  }
-
-  if (Array.isArray(target[key])) {
-    target[key].push(value)
-    return
-  }
-
-  target[key] = [target[key], value]
-}
-
-function parseArgv(argv) {
-  const args = [...argv]
-  let command = 'run'
-
-  if (args[0] && !args[0].startsWith('-')) {
-    command = args.shift()
-  }
-
-  const flags = {}
-
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]
-
-    if (arg === '--help' || arg === '-h') {
-      flags.help = true
-      continue
-    }
-
-    if (arg === '--debug' || arg === '-d') {
-      flags.debug = true
-      continue
-    }
-
-    if (arg === '--json') {
-      flags.json = true
-      continue
-    }
-
-    const next = args[i + 1]
-    const consumeValue = () => {
-      if (next === undefined) {
-        throw new Error(`Missing value for ${arg}`)
-      }
-      i += 1
-      return next
-    }
-
-    if (arg === '--config' || arg === '-c') {
-      flags.config = consumeValue()
-      continue
-    }
-
-    if (arg === '--mode') {
-      flags.mode = consumeValue()
-      continue
-    }
-
-    if (arg === '--policy') {
-      flags.policy = consumeValue()
-      continue
-    }
-
-    if (arg === '--storage' || arg === '-s') {
-      flags.storage = consumeValue()
-      continue
-    }
-
-    if (arg === '--max-bytes') {
-      flags.maxBytes = consumeValue()
-      continue
-    }
-
-    if (arg === '--max-storage' || arg === '-m') {
-      flags.maxStorage = consumeValue()
-      continue
-    }
-
-    if (arg === '--channel') {
-      pushFlag(flags, 'channel', consumeValue())
-      continue
-    }
-
-    if (arg === '--owner') {
-      pushFlag(flags, 'owner', consumeValue())
-      continue
-    }
-
-    throw new Error(`Unknown argument ${arg}`)
-  }
-
-  return { command, flags }
 }
 
 async function runCommand(flags) {
@@ -172,7 +76,7 @@ async function initCommand(flags) {
 }
 
 async function main() {
-  const { command, flags } = parseArgv(process.argv.slice(2))
+  const { command, flags } = parseArgv(normalizeCliArgv(process.argv))
 
   if (flags.help) {
     printHelp()

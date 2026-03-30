@@ -2,6 +2,7 @@ import test from 'brittle'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { normalizeCliArgv, parseArgv } from '../src/argv.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -17,6 +18,33 @@ test('package.json exports peartube-relay and compatibility aliases', async (t) 
     bare: './src/shims/process.bare.js',
     default: './src/shims/process.node.js'
   })
+})
+
+test('argv normalization supports both node-style and standalone bare-style argv', async (t) => {
+  t.alike(
+    normalizeCliArgv(['/usr/local/bin/node', '/app/packages/cli/bin.js', 'status', '--json']),
+    ['status', '--json']
+  )
+
+  t.alike(
+    normalizeCliArgv(['/peartube-relay', 'status', '--json']),
+    ['status', '--json']
+  )
+
+  t.alike(
+    normalizeCliArgv(['status', '--json']),
+    ['status', '--json']
+  )
+})
+
+test('parseArgv keeps standalone bare commands instead of defaulting to run', async (t) => {
+  const parsed = parseArgv(normalizeCliArgv(['/peartube-relay', '--help']))
+  t.is(parsed.command, 'run')
+  t.is(parsed.flags.help, true)
+
+  const statusParsed = parseArgv(normalizeCliArgv(['/peartube-relay', 'status', '--json']))
+  t.is(statusParsed.command, 'status')
+  t.is(statusParsed.flags.json, true)
 })
 
 test('package.json defines standalone relay build scripts', async (t) => {

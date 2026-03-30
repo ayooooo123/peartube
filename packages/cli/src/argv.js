@@ -1,0 +1,118 @@
+function looksLikePath(value) {
+  return typeof value === 'string' && (value.startsWith('/') || value.startsWith('./') || value.startsWith('../') || /^[A-Za-z]:[\\/]/.test(value))
+}
+
+function looksLikeNodeExecutable(value) {
+  return typeof value === 'string' && /(^|[/\\])node(?:\.exe)?$/i.test(value)
+}
+
+export function normalizeCliArgv(argv = []) {
+  if (!Array.isArray(argv) || argv.length === 0) return []
+
+  if (argv.length >= 2 && looksLikeNodeExecutable(argv[0]) && looksLikePath(argv[1])) {
+    return argv.slice(2)
+  }
+
+  if (looksLikePath(argv[0])) {
+    return argv.slice(1)
+  }
+
+  return [...argv]
+}
+
+function pushFlag(target, key, value) {
+  if (target[key] === undefined) {
+    target[key] = value
+    return
+  }
+
+  if (Array.isArray(target[key])) {
+    target[key].push(value)
+    return
+  }
+
+  target[key] = [target[key], value]
+}
+
+export function parseArgv(argv = []) {
+  const args = [...argv]
+  let command = 'run'
+
+  if (args[0] && !args[0].startsWith('-')) {
+    command = args.shift()
+  }
+
+  const flags = {}
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+
+    if (arg === '--help' || arg === '-h') {
+      flags.help = true
+      continue
+    }
+
+    if (arg === '--debug' || arg === '-d') {
+      flags.debug = true
+      continue
+    }
+
+    if (arg === '--json') {
+      flags.json = true
+      continue
+    }
+
+    const next = args[i + 1]
+    const consumeValue = () => {
+      if (next === undefined) {
+        throw new Error(`Missing value for ${arg}`)
+      }
+      i += 1
+      return next
+    }
+
+    if (arg === '--config' || arg === '-c') {
+      flags.config = consumeValue()
+      continue
+    }
+
+    if (arg === '--mode') {
+      flags.mode = consumeValue()
+      continue
+    }
+
+    if (arg === '--policy') {
+      flags.policy = consumeValue()
+      continue
+    }
+
+    if (arg === '--storage' || arg === '-s') {
+      flags.storage = consumeValue()
+      continue
+    }
+
+    if (arg === '--max-bytes') {
+      flags.maxBytes = consumeValue()
+      continue
+    }
+
+    if (arg === '--max-storage' || arg === '-m') {
+      flags.maxStorage = consumeValue()
+      continue
+    }
+
+    if (arg === '--channel') {
+      pushFlag(flags, 'channel', consumeValue())
+      continue
+    }
+
+    if (arg === '--owner') {
+      pushFlag(flags, 'owner', consumeValue())
+      continue
+    }
+
+    throw new Error(`Unknown argument ${arg}`)
+  }
+
+  return { command, flags }
+}

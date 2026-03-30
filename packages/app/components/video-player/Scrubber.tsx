@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { type LayoutChangeEvent, Text, View } from 'react-native'
+import { type LayoutChangeEvent, Platform, Text, View } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import Animated, {
   clamp,
@@ -11,19 +11,21 @@ import Animated, {
   useSharedValue,
   withSpring,
   withTiming,
+  withRepeat,
 } from 'react-native-reanimated'
+import * as Haptics from 'expo-haptics'
 import { styles } from './styles'
 import { formatDuration } from './formatters'
 
 // ── Dimensions (spec §1, §3) ────────────────────────────────────────────
-const TRACK_PADDING = 24
+const TRACK_PADDING = 16
 const TRACK_HEIGHT_REST = 4
 const TRACK_HEIGHT_TOUCH = 6
 const TRACK_HEIGHT_SCRUB = 8
-const HANDLE_SIZE_REST = 12
+const HANDLE_SIZE_REST = 14
 const HANDLE_SIZE_ACTIVE = 18
 const TRACK_WRAPPER_HEIGHT = TRACK_HEIGHT_SCRUB
-const TOUCH_TARGET_HEIGHT = 32
+const TOUCH_TARGET_HEIGHT = 48
 
 // ── Animation configs (spec §8) ─────────────────────────────────────────
 const TRACK_SPRING = { damping: 15, stiffness: 350, mass: 0.8 }
@@ -60,6 +62,22 @@ function getFineScrubScale(verticalDistance: number): number {
   return 1
 }
 
+// ── Haptic helpers (called from UI thread via runOnJS) ──────────────────
+function triggerLightHaptic() {
+  if (Platform.OS === 'web') return
+  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+}
+
+function triggerMediumHaptic() {
+  if (Platform.OS === 'web') return
+  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
+}
+
+function triggerHeavyHaptic() {
+  if (Platform.OS === 'web') return
+  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy)
+}
+
 type Props = {
   duration: number
   currentTime: number
@@ -67,7 +85,6 @@ type Props = {
   bufferProgress?: number // 0-1 float, download progress
   pendingSeekTime?: number | null
   disabled?: boolean
-  visible?: boolean // controls show/hide sync with player controls
   containerStyle?: any
   externalGesture?: Parameters<ReturnType<(typeof Gesture)['Pan']>['blocksExternalGesture']>[0]
   onScrubStart?: () => void
@@ -81,7 +98,6 @@ export const Scrubber = memo(function Scrubber({
   bufferProgress = 0,
   pendingSeekTime,
   disabled,
-  visible = true,
   containerStyle,
   externalGesture,
   onScrubStart,
@@ -105,6 +121,12 @@ export const Scrubber = memo(function Scrubber({
   const isInteractingSV = useSharedValue(false) // gates external progress for entire interaction
   const showPreviewSV = useSharedValue(false)
   const previewVisibilitySV = useSharedValue(0)
+  // Track whether we were at a boundary last update (for heavy haptic)
+  const wasAtBoundarySV = useSharedValue(false)
+
+  // Buffer shimmer opacity (starts hidden, only visible when buffer is growing)
+  const bufferShimmerOpacity = useSharedValue(0)
+  const prevBufferProgressSV = useSharedValue(bufferProgress)
 
   // Lock-and-commit: keeps bar at seek target until parent confirms
   const lockActiveSV = useSharedValue(false)
@@ -118,7 +140,21 @@ export const Scrubber = memo(function Scrubber({
   useEffect(() => { externalProgressSV.value = progress }, [progress, externalProgressSV])
   useEffect(() => {
     bufferProgressSV.value = withTiming(bufferProgress, BUFFER_TIMING)
-  }, [bufferProgress, bufferProgressSV])
+    // Detect buffer growth for shimmer
+    if (bufferProgress > prevBufferProgressSV.value && bufferProgress < 1.0) {
+      // Buffer is growing — start shimmer (pulse between 0.25 and 0.45 per spec)
+      bufferShimmerOpacity.value = 0.25
+      bufferShimmerOpacity.value = withRepeat(
+        withTiming(0.45, { duration: 800, easing: Easing.inOut(Easing.ease) }),
+        -1, // infinite
+        true // reverse
+      )
+    } else if (bufferProgress >= 1.0) {
+      // Fully buffered — stop shimmer (fade to invisible)
+      bufferShimmerOpacity.value = withTiming(0, { duration: 300 })
+    }
+    prevBufferProgressSV.value = bufferProgress
+  }, [bufferProgress, bufferProgressSV, bufferShimmerOpacity, prevBufferProgressSV])
 
   useEffect(() => {
     if (pendingSeekTime === null || pendingSeekTime === undefined || duration <= 0) {
@@ -210,13 +246,16 @@ export const Scrubber = memo(function Scrubber({
 
         isTouchingSV.value = withSpring(1, TRACK_SPRING)
 
+        runOnJS(triggerLightHaptic)()
         if (onScrubStart) runOnJS(onScrubStart)()
       })
       .onStart(() => {
         'worklet'
         if (!isInteractingSV.value) return
         didDrag = true
+        wasAtBoundarySV.value = false
 
+        runOnJS(triggerMediumHaptic)()
         showPreviewSV.value = true
         isScrubbingSV.value = withSpring(1, HANDLE_SPRING)
         previewVisibilitySV.value = withSpring(1, PREVIEW_SPRING)
@@ -236,11 +275,19 @@ export const Scrubber = memo(function Scrubber({
         const verticalDistance = Math.abs(evt.y - startY)
         const scale = getFineScrubScale(verticalDistance)
         uiProgressSV.value = clamp(startProgress + (evt.translationX * scale) / tw, 0, 1)
+
+        // Heavy haptic at boundaries
+        const atBoundary = uiProgressSV.value <= 0.0 || uiProgressSV.value >= 1.0
+        if (atBoundary && !wasAtBoundarySV.value) {
+          runOnJS(triggerHeavyHaptic)()
+        }
+        wasAtBoundarySV.value = atBoundary
       })
-      .onEnd(() => {
+      .onEnd((evt) => {
         'worklet'
         if (!isInteractingSV.value) return
         didCommit = true
+        runOnJS(triggerLightHaptic)()
         const d = durationSV.value
         const p = clamp(uiProgressSV.value, 0, 1)
         lockActiveSV.value = true
@@ -281,7 +328,7 @@ export const Scrubber = memo(function Scrubber({
       g = g.blocksExternalGesture(externalGesture)
     }
     return g
-  }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
+  }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, wasAtBoundarySV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
 
   // ── Animated styles ──────────────────────────────────────────────────
 
@@ -307,6 +354,25 @@ export const Scrubber = memo(function Scrubber({
       height: geometry.height,
       borderRadius: geometry.borderRadius,
       width: bufW,
+    }
+  }, [])
+  // Buffer shimmer leading edge style
+  const bufferShimmerStyle = useAnimatedStyle(() => {
+    'worklet'
+    const geometry = getTrackGeometry(isTouchingSV.value, isScrubbingSV.value)
+    const w = trackWidthSV.value
+    const bufW = clamp(bufferProgressSV.value, 0, 1) * w
+    // Position a small shimmer element at the leading edge of the buffer
+    const shimmerWidth = 8
+    return {
+      position: 'absolute' as const,
+      top: geometry.top,
+      height: geometry.height,
+      borderRadius: geometry.borderRadius,
+      width: shimmerWidth,
+      left: Math.max(0, bufW - shimmerWidth),
+      backgroundColor: `rgba(145, 71, 255, 1)`,
+      opacity: bufferShimmerOpacity.value,
     }
   }, [])
 
@@ -376,19 +442,8 @@ export const Scrubber = memo(function Scrubber({
     tooltipWidthSV.value = e.nativeEvent.layout.width
   }, [tooltipWidthSV])
 
-  // Visibility animation — syncs with controls show/hide
-  const visibilitySV = useSharedValue(visible ? 1 : 0)
-  useEffect(() => {
-    visibilitySV.value = withTiming(visible ? 1 : 0, { duration: 200 })
-  }, [visible, visibilitySV])
-
-  const visibilityStyle = useAnimatedStyle(() => ({
-    opacity: visibilitySV.value,
-    pointerEvents: visibilitySV.value > 0.1 ? 'auto' as const : 'none' as const,
-  }), [])
-
   return (
-    <Animated.View style={[containerStyle, visibilityStyle]}>
+    <Animated.View style={containerStyle}>
       <GestureDetector gesture={gesture}>
         <View
           style={{
@@ -402,6 +457,21 @@ export const Scrubber = memo(function Scrubber({
             min: 0,
             max: Math.round(duration),
             now: Math.round(currentTime),
+          }}
+          accessibilityActions={[
+            { name: 'increment', label: 'Seek forward 10 seconds' },
+            { name: 'decrement', label: 'Seek backward 10 seconds' },
+          ]}
+          onAccessibilityAction={(event) => {
+            if (disabled || duration <= 0) return
+            const step = 10
+            let newTime = currentTime
+            if (event.nativeEvent.actionName === 'increment') {
+              newTime = Math.min(duration, currentTime + step)
+            } else if (event.nativeEvent.actionName === 'decrement') {
+              newTime = Math.max(0, currentTime - step)
+            }
+            onSeekCommit(newTime)
           }}
         >
           {/* Track wrapper — contains all layers */}
@@ -430,6 +500,12 @@ export const Scrubber = memo(function Scrubber({
             {/* Layer 2: Buffer fill */}
             <Animated.View
               style={[styles.scrubberBufferFill, bufferFillStyle]}
+              pointerEvents="none"
+            />
+
+            {/* Buffer shimmer leading edge */}
+            <Animated.View
+              style={bufferShimmerStyle}
               pointerEvents="none"
             />
 

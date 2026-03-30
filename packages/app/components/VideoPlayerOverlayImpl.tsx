@@ -2600,7 +2600,7 @@ export function VideoPlayerOverlay() {
 
       {/* Cast button moved into time display row below */}
 
-      {!isInPipMode && Platform.OS !== 'web' && (
+      {!isInPipMode && Platform.OS !== 'web' && playerMode !== 'mini' && playerMode !== 'hidden' && showControls && (
         <Scrubber
           containerStyle={progressBarStyle}
           duration={effectiveDuration}
@@ -2612,7 +2612,6 @@ export function VideoPlayerOverlay() {
           externalGesture={panGesture}
           onScrubStart={handleScrubStart}
           onSeekCommit={handleScrubCommit}
-          visible={playerMode === 'mini' ? false : showControls}
         />
       )}
 

@@ -259,7 +259,7 @@ export const Scrubber = memo(function Scrubber({
         const touchedHandle = Math.abs(evt.x - handleCenterX) <= handleHitRadiusPx
 
         if (touchedHandle) {
-          startProgress = clamp(currentProgress, 0, 1)
+          startProgress = lockActiveSV.value ? lockProgress : renderedProgress
           uiProgressSV.value = startProgress
         } else {
           startProgress = clamp(touchProgress, 0, 1)

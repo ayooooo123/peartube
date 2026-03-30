@@ -1748,6 +1748,15 @@ export function VideoPlayerOverlay() {
     setTimeout(() => setSeekFeedback(null), 500)
   }, [isCasting, effectiveCurrentTime, effectiveDuration, cast, seekBy])
 
+  const handleScrubStart = useCallback(() => {
+    // Pause the auto-hide timer while scrubbing
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current)
+      controlsTimeoutRef.current = null
+    }
+    setShowControls(true)
+  }, [])
+
   const handleScrubCommit = useCallback((timeSeconds: number) => {
     if (effectiveDuration <= 0) return
     const clamped = Math.max(0, Math.min(timeSeconds, effectiveDuration))
@@ -1758,7 +1767,9 @@ export function VideoPlayerOverlay() {
     } else {
       seekTo(clamped)
     }
-  }, [effectiveDuration, isCasting, cast, seekTo])
+    // Restart auto-hide timer after scrub ends
+    showControlsTemporarily()
+  }, [effectiveDuration, isCasting, cast, seekTo, showControlsTemporarily])
 
 
   // Cycle through playback speeds
@@ -2600,6 +2611,7 @@ export function VideoPlayerOverlay() {
           pendingSeekTime={scrubPendingTime}
           disabled={effectiveDuration <= 0}
           externalGesture={panGesture}
+          onScrubStart={handleScrubStart}
           onSeekCommit={handleScrubCommit}
           visible={playerMode === 'mini' ? false : showControls}
         />

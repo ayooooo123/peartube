@@ -73,6 +73,7 @@ type Props = {
   visible?: boolean // controls show/hide sync with player controls
   containerStyle?: any
   externalGesture?: Parameters<ReturnType<(typeof Gesture)['Pan']>['blocksExternalGesture']>[0]
+  onScrubStart?: () => void
   onSeekCommit: (timeSeconds: number) => void
 }
 
@@ -86,6 +87,7 @@ export const Scrubber = memo(function Scrubber({
   visible = true,
   containerStyle,
   externalGesture,
+  onScrubStart,
   onSeekCommit,
 }: Props) {
   const [previewSeconds, setPreviewSeconds] = useState<number | null>(null)
@@ -192,6 +194,8 @@ export const Scrubber = memo(function Scrubber({
         uiProgressSV.value = getProgressFromTouch(evt.x, cw)
 
         isTouchingSV.value = withSpring(1, TRACK_SPRING)
+
+        if (onScrubStart) runOnJS(onScrubStart)()
       })
       .onStart(() => {
         'worklet'
@@ -262,7 +266,7 @@ export const Scrubber = memo(function Scrubber({
       g = g.blocksExternalGesture(externalGesture)
     }
     return g
-  }, [disabled, containerWidthSV, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, externalGesture, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
+  }, [disabled, containerWidthSV, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
 
   // ── Animated styles ──────────────────────────────────────────────────
 

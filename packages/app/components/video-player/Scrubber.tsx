@@ -243,14 +243,15 @@ export const Scrubber = memo(function Scrubber({
         const d = durationSV.value
         if (disabled || tw <= 0 || d <= 0) return
 
-        const p = getProgressFromTouch(evt.x, tw)
-        if (p < 0) return
-
         startY = evt.y
         isInteractingSV.value = true
-        lockActiveSV.value = false
-        startProgress = p
+
+        // Pan gesture drags the CURRENT indicator position.
+        // Tap gesture already owns "place the playhead at touch X".
+        const currentProgress = lockActiveSV.value ? lockProgressSV.value : uiProgressSV.value
+        startProgress = clamp(currentProgress, 0, 1)
         uiProgressSV.value = startProgress
+        lockActiveSV.value = false
         isTouchingSV.value = withSpring(1, TRACK_SPRING)
 
         runOnJS(triggerLightHaptic)()

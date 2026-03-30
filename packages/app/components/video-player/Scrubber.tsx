@@ -130,8 +130,10 @@ export const Scrubber = memo(function Scrubber({
   const lockActiveSV = useSharedValue(false)
   const lockProgressSV = useSharedValue(0)
 
-  // The progress value driving the UI (0..1). During interaction this tracks finger.
-  const uiProgressSV = useSharedValue(0)
+  // The progress value driving the UI (0..1). Seed from external progress
+  // immediately on mount so grabbing the handle can't start from 0 before the
+  // first animated reaction runs.
+  const uiProgressSV = useSharedValue(clamp(progress, 0, 1))
 
   // ── Sync props to shared values ──────────────────────────────────────
   useEffect(() => { durationSV.value = duration }, [duration, durationSV])
@@ -251,8 +253,9 @@ export const Scrubber = memo(function Scrubber({
         // - touch on the visible handle => grab existing indicator and drag from there
         // - touch elsewhere on track => jump indicator there, then drag from there
         const touchProgress = getProgressFromTouch(evt.x, tw)
-        const currentProgress = lockActiveSV.value ? lockProgressSV.value : uiProgressSV.value
-        const handleCenterX = TRACK_PADDING + clamp(currentProgress, 0, 1) * tw
+        const renderedProgress = uiProgressSV.value
+        const currentProgress = lockActiveSV.value ? lockProgressSV.value : clamp(externalProgressSV.value, 0, 1)
+        const handleCenterX = TRACK_PADDING + clamp(renderedProgress, 0, 1) * tw
         const handleHitRadiusPx = Math.max(HANDLE_SIZE_ACTIVE / 2, 12)
         const touchedHandle = Math.abs(evt.x - handleCenterX) <= handleHitRadiusPx
 

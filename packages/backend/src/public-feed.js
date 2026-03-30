@@ -13,11 +13,9 @@
  * - On publish: send SUBMIT_CHANNEL to all peers, they re-gossip
  */
 
-import crypto from 'hypercore-crypto';
-import b4a from 'b4a';
 import Protomux from 'protomux';
 import c from 'compact-encoding';
-import { FEED_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
+import { PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 
 const log = logger('PublicFeed')
@@ -34,16 +32,6 @@ export class PublicFeedManager {
   constructor(swarm, metaDb) {
     this.swarm = swarm;
     this.metaDb = metaDb;
-    // Generate deterministic topic from string
-    this.feedTopic = crypto.data(b4a.from(FEED_TOPIC_STRING, 'utf-8'));
-    /**
-     * Keep a strong reference to the discovery handle returned by `swarm.join()`.
-     *
-     * On some runtimes (notably mobile/Bare), if the returned handle is not retained,
-     * GC can collect it and discovery can effectively stop, leading to 0 peers / 0 feed.
-     * @type {any | null}
-     */
-    this._feedDiscovery = null;
     /** @type {boolean} */
     this.started = false;
     /** @type {Map<string, PublicFeedEntry>} */
@@ -56,8 +44,14 @@ export class PublicFeedManager {
     this.peerChannels = new Map();
     /** @type {Set<any>} Active feed connections */
     this.feedConnections = new Set();
+    /** @type {Set<any>} Connections already wired for the feed protocol */
+    this.wiredConnections = new Set();
     /** @type {(() => void) | null} */
     this.onFeedUpdate = null;
+    /** @type {((conn: any) => void) | null} */
+    this.onFeedConnectionOpen = null;
+    /** @type {((event: { type: string, added: number, received: number }) => void) | null} */
+    this.onFeedSync = null;
 
     // Persist discovered feed entries so UIs don't come up empty on restart.
     /** @type {any | null} */
@@ -67,7 +61,7 @@ export class PublicFeedManager {
     /** @type {number} */
     this._persistMaxEntries = 500
 
-    log.info('Initialized', { topic: b4a.toString(this.feedTopic, 'hex') })
+    log.info('Initialized')
   }
 
   /**
@@ -79,8 +73,23 @@ export class PublicFeedManager {
   }
 
   /**
-   * Start the public feed manager - join the topic
-   * NOTE: Connection handling is done via handleConnection() called from main swarm handler
+   * Set callback for when a feed protocol channel opens
+   * @param {(conn: any) => void} callback
+   */
+  setOnFeedConnectionOpen(callback) {
+    this.onFeedConnectionOpen = callback;
+  }
+
+  /**
+   * Set callback for when a feed sync message is received
+   * @param {(event: { type: string, added: number, received: number }) => void} callback
+   */
+  setOnFeedSync(callback) {
+    this.onFeedSync = callback;
+  }
+
+  /**
+   * Start the public feed manager - restore cache and wire current connections
    */
   async start() {
     if (this.started) return;
@@ -164,42 +173,7 @@ export class PublicFeedManager {
       try { this.onFeedUpdate?.(); } catch {}
     }
 
-    // Join the public feed topic for discovery
-    const topicHex = b4a.toString(this.feedTopic, 'hex');
-    console.log('[PublicFeed] Joining feed topic:', topicHex.slice(0, 16));
-    console.log('[PublicFeed] FULL TOPIC HEX:', topicHex); // Full topic for debugging cross-platform issues
-    console.log('[PublicFeed] Swarm connections before join:', this.swarm.connections?.size || 0);
-    console.log('[PublicFeed] Swarm listening:', this.swarm.listening, 'destroyed:', this.swarm.destroyed);
-    
-    // IMPORTANT: retain the discovery handle so the join stays active.
-    // (See note in constructor about GC on some runtimes.)
-    const discovery = this.swarm.join(this.feedTopic, { server: true, client: true });
-    this._feedDiscovery = discovery;
-
-    // IMPORTANT: do not await discovery.flushed() here.
-    // Hyperswarm treats flushed() as a heavyweight "fully announced" barrier; on mobile/Bare
-    // it can be slow or hang, and there's no need to block backend readiness on it.
-    // We'll log completion best-effort in the background instead.
-    try {
-      const flushed = discovery.flushed?.();
-      if (flushed && typeof flushed.then === 'function') {
-        flushed
-          .then(() => {
-            console.log('[PublicFeed] Feed topic join flushed');
-          })
-          .catch((err) => {
-            console.log('[PublicFeed] Feed topic join flush failed (non-fatal):', err?.message);
-          });
-      }
-    } catch (err) {
-      console.log('[PublicFeed] Feed topic join flush setup failed (non-fatal):', err?.message);
-    }
-
-    console.log('[PublicFeed] Swarm connections after join:', this.swarm.connections?.size || 0);
-    console.log('[PublicFeed] Swarm peers map size:', this.swarm.peers?.size || 0);
-
-    // Also set up feed protocol on any EXISTING connections
-    // (connections that came in before start() was called)
+    // Set up feed protocol on any existing connections.
     const existingConns = this.swarm.connections?.size || 0;
     console.log('[PublicFeed] Setting up feed protocol on', existingConns, 'existing connections');
     for (const conn of this.swarm.connections) {
@@ -213,11 +187,10 @@ export class PublicFeedManager {
    * Not currently used by the app, but helpful for tests / future lifecycle hooks.
    */
   stop() {
-    try {
-      this._feedDiscovery?.destroy?.();
-    } catch {}
-    this._feedDiscovery = null;
     this.started = false;
+    this.wiredConnections.clear();
+    this.peerChannels.clear();
+    this.feedConnections.clear();
     try {
       if (this._persistTimer) clearTimeout(this._persistTimer)
     } catch {}
@@ -267,38 +240,45 @@ export class PublicFeedManager {
    * @param {any} info - Connection info
    */
   handleConnection(conn, info) {
-    if (this.peerChannels.has(conn)) {
-      console.log('[PublicFeed] handleConnection: already have channel for this connection');
+    if (!conn || this.wiredConnections.has(conn)) {
+      console.log('[PublicFeed] handleConnection: already wired for this connection');
       return;
     }
 
     console.log('[PublicFeed] handleConnection: setting up feed protocol on new connection');
-    this.setupFeedProtocol(conn);
-  }
+    this.wiredConnections.add(conn);
 
-  setupFeedProtocol(conn) {
-    console.log('[PublicFeed] setupFeedProtocol: getting Protomux from connection');
-    // Get or create Protomux instance for this connection
     let mux;
     try {
       mux = Protomux.from(conn);
     } catch (err) {
+      this.wiredConnections.delete(conn);
       console.log('[PublicFeed] Protomux.from failed (non-fatal):', err?.message);
       return;
     }
 
+    mux.pair({ protocol: PROTOCOL_NAME }, () => {
+      this.createFeedChannel(mux, conn);
+    });
+
+    this.setupFeedProtocol(conn, mux);
+  }
+
+  setupFeedProtocol(conn, mux) {
     console.log('[PublicFeed] setupFeedProtocol: creating feed channel from our side');
     this.createFeedChannel(mux, conn);
 
     // Clean up on connection close
     conn.on('close', () => {
       console.log('[PublicFeed] Connection closed');
+      this.wiredConnections.delete(conn);
       this.peerChannels.delete(conn);
       this.feedConnections.delete(conn);
     });
 
     conn.on('error', (err) => {
       console.error('[PublicFeed] Connection error:', err.message);
+      this.wiredConnections.delete(conn);
       this.peerChannels.delete(conn);
       this.feedConnections.delete(conn);
     });
@@ -337,6 +317,9 @@ export class PublicFeedManager {
       onopen: () => {
         console.log('[PublicFeed] Feed channel opened! Total feed connections:', this.feedConnections.size + 1);
         this.feedConnections.add(conn);
+        try {
+          this.onFeedConnectionOpen?.(conn);
+        } catch {}
         // Immediately send our feed when channel opens
         try {
           this.sendHaveFeed(conn);
@@ -428,6 +411,9 @@ export class PublicFeedManager {
             added++;
           }
         }
+        try {
+          this.onFeedSync?.({ type: 'HAVE_FEED', added, received: msg.entries.length });
+        } catch {}
       }
       // Fallback to legacy keys array
       else if (msg.keys && Array.isArray(msg.keys)) {
@@ -437,6 +423,9 @@ export class PublicFeedManager {
             added++;
           }
         }
+        try {
+          this.onFeedSync?.({ type: 'HAVE_FEED', added, received: msg.keys.length });
+        } catch {}
       }
 
     log.debug('Merged feed entries', { added, total: this.entries.size })
@@ -470,6 +459,9 @@ export class PublicFeedManager {
           added++;
         }
       }
+      try {
+        this.onFeedSync?.({ type: 'FEED_RESPONSE', added, received: msg.keys.length });
+      } catch {}
       if (added > 0) {
         this.onFeedUpdate?.();
         this._schedulePersistDiscovered()

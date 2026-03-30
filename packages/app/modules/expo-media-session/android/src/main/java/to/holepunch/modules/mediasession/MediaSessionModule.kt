@@ -348,7 +348,6 @@ object PipBridge {
                 val stillPipSized = windowBounds.width() < screenSize.x * 0.8f
                 if (stillPipSized) {
                     android.util.Log.d("PipBridge", "notifyPipModeChanged: skipping restore — window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y})")
-                    lastIsInPip = true  // Pretend we're still in PiP
                 } else {
                     // Only run the dismissal-pause logic for real PiP exits
                     run {

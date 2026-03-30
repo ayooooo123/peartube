@@ -7,6 +7,7 @@
  */
 
 import { startHost } from '../../host/src/start-host.js'
+import { attachLazyCastHandlers } from './lazy-cast-handlers.mjs'
 
 let HRPC = null
 let createBackendContext = null
@@ -23,6 +24,8 @@ let http1 = null
 let transcoder = null
 let castTranscoder = null
 let fsNativeExtensions = null
+let transcoderPromise = null
+let castTranscoderPromise = null
 
 async function loadBackendModules() {
   const [
@@ -34,9 +37,7 @@ async function loadBackendModules() {
     fsMod,
     b4aMod,
     http1Mod,
-    fsNativeExtensionsMod,
-    transcoderMod,
-    castTranscoderMod
+    fsNativeExtensionsMod
   ] = await Promise.all([
     import('@peartube/spec'),
     import('@peartube/backend/orchestrator'),
@@ -46,9 +47,7 @@ async function loadBackendModules() {
     import('bare-fs'),
     import('b4a'),
     import('bare-http1'),
-    import('fs-native-extensions'),
-    import('./transcoder.mjs'),
-    import('@peartube/backend/transcode/cast-transcoder')
+    import('fs-native-extensions')
   ])
 
   HRPC = specMod?.default ?? specMod
@@ -64,8 +63,6 @@ async function loadBackendModules() {
   b4a = b4aMod?.default ?? b4aMod
   http1 = http1Mod?.default ?? http1Mod
   fsNativeExtensions = fsNativeExtensionsMod?.default ?? fsNativeExtensionsMod
-  transcoder = transcoderMod
-  castTranscoder = castTranscoderMod
 
   const checks = {
     HRPC,
@@ -80,8 +77,6 @@ async function loadBackendModules() {
     fs,
     b4a,
     http1,
-    transcoder,
-    castTranscoder,
     fsNativeExtensions
   }
 
@@ -92,6 +87,40 @@ async function loadBackendModules() {
   if (missing.length) {
     throw new Error(`Missing required backend modules: ${missing.join(', ')}`)
   }
+}
+
+async function ensureTranscoderModule() {
+  if (transcoder) return transcoder
+  if (!transcoderPromise) {
+    transcoderPromise = import('./transcoder.mjs')
+      .then((module) => {
+        transcoder = module
+        return module
+      })
+      .catch((error) => {
+        transcoderPromise = null
+        throw error
+      })
+  }
+
+  return transcoderPromise
+}
+
+async function ensureCastTranscoderModule() {
+  if (castTranscoder) return castTranscoder
+  if (!castTranscoderPromise) {
+    castTranscoderPromise = import('@peartube/backend/transcode/cast-transcoder')
+      .then((module) => {
+        castTranscoder = module
+        return module
+      })
+      .catch((error) => {
+        castTranscoderPromise = null
+        throw error
+      })
+  }
+
+  return castTranscoderPromise
 }
 
 function formatError(error) {
@@ -473,6 +502,29 @@ export async function createMobileRuntimeBackend(options = {}) {
     throw new Error('Failed to initialize HRPC transport')
   }
 
+  const lazyTranscoder = {
+    async startTranscode(...args) {
+      const module = await ensureTranscoderModule()
+      return module.startTranscode(...args)
+    },
+    async stopTranscode(...args) {
+      const module = await ensureTranscoderModule()
+      return module.stopTranscode(...args)
+    },
+    async getStatus(...args) {
+      const module = await ensureTranscoderModule()
+      return module.getStatus(...args)
+    },
+    async probeMedia(...args) {
+      const module = await ensureTranscoderModule()
+      return module.probeMedia(...args)
+    },
+    async loadBareFfmpeg(...args) {
+      const module = await ensureTranscoderModule()
+      return module.loadBareFfmpeg(...args)
+    }
+  }
+
   const { attachMobileHandlers } = await import('./mobile-handlers.mjs')
   attachMobileHandlers(backend, {
     api,
@@ -484,27 +536,51 @@ export async function createMobileRuntimeBackend(options = {}) {
     fs,
     path,
     generateAndStoreThumbnail,
-    transcoder,
+    transcoder: lazyTranscoder,
     storagePath
   })
 
-  const { attachCastHandlers } = await import('./mobile-cast.mjs')
-  const castCleanup = attachCastHandlers(backend, {
-    rpc,
-    ctx,
-    api,
-    setCastActive,
-    isCastActive,
-    prefetchVideoForCast,
-    http1,
-    path,
-    fs,
-    transcoder,
-    castTranscoder,
-    storagePath
-  })
+  let castCleanup = { enterHeadlessMode: null, closeCastProxyServer: null }
+  let castHandlersReadyPromise = null
+  const ensureCastHandlersAttached = async () => {
+    if (!castHandlersReadyPromise) {
+      castHandlersReadyPromise = (async () => {
+        const [
+          { attachCastHandlers },
+          transcoderModule,
+          castTranscoderModule,
+        ] = await Promise.all([
+          import('./mobile-cast.mjs'),
+          ensureTranscoderModule(),
+          ensureCastTranscoderModule(),
+        ])
 
-  closeCastProxyServer = castCleanup.closeCastProxyServer || (() => {})
+        castCleanup = attachCastHandlers(backend, {
+          rpc,
+          ctx,
+          api,
+          setCastActive,
+          isCastActive,
+          prefetchVideoForCast,
+          http1,
+          path,
+          fs,
+          transcoder: transcoderModule,
+          castTranscoder: castTranscoderModule,
+          storagePath
+        })
+
+        closeCastProxyServer = castCleanup.closeCastProxyServer || (() => {})
+      })().catch((error) => {
+        castHandlersReadyPromise = null
+        throw error
+      })
+    }
+
+    return castHandlersReadyPromise
+  }
+
+  attachLazyCastHandlers(backend, ensureCastHandlersAttached)
 
   const { registerSharedHandlers } = await import('@peartube/backend/hrpc-handlers')
   registerSharedHandlers(rpc, backend)
@@ -615,7 +691,7 @@ export async function createMobileRuntimeBackend(options = {}) {
   }
 
   if (typeof process !== 'undefined' && process?.env?.PEARTUBE_PRELOAD_FFMPEG === '1') {
-    transcoder.loadBareFfmpeg().catch(() => {})
+    lazyTranscoder.loadBareFfmpeg().catch(() => {})
   }
 
   return {
@@ -631,7 +707,7 @@ export async function createMobileRuntimeBackend(options = {}) {
       fs,
       path,
       generateAndStoreThumbnail,
-      transcoder,
+      transcoder: lazyTranscoder,
       storagePath
     },
     destroy

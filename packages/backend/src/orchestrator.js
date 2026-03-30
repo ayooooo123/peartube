@@ -35,6 +35,7 @@ import {
   isCorestoreLockError,
   shouldRetryCorestoreSeedFallback
 } from './corestore-error-utils.js'
+import { createStartupGate } from './startup-gates.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -285,6 +286,7 @@ export async function createBackendContext(config) {
   // Phase 2: Create managers (synchronous, fast)
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb);
   ctx.publicFeed = publicFeed
+  const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb);
   const identityManager = createIdentityManager({ ctx });
@@ -294,6 +296,12 @@ export async function createBackendContext(config) {
   if (onFeedUpdate) {
     publicFeed.setOnFeedUpdate(onFeedUpdate);
   }
+  publicFeed.setOnFeedConnectionOpen(() => {
+    startupGate.noteFeedChannelOpen()
+  })
+  publicFeed.setOnFeedSync(() => {
+    startupGate.noteFeedSync()
+  })
 
   if (onStatsUpdate) {
     videoStats.setOnStatsUpdate(onStatsUpdate);
@@ -302,6 +310,7 @@ export async function createBackendContext(config) {
   // Phase 4: Wire up swarm connection handling
   ctx.swarm.on('connection', (conn, info) => {
     console.log('[Orchestrator] Swarm connection received, passing to publicFeed.handleConnection');
+    startupGate.noteSwarmPeer()
     try {
       publicFeed.handleConnection(conn, info);
     } catch (err) {
@@ -351,11 +360,6 @@ export async function createBackendContext(config) {
   await appendDebugLine('[orchestrator] publicFeed.start starting')
   try {
     await publicFeed.start();
-    try {
-      publicFeed.requestFeedsFromPeers();
-    } catch (e) {
-      console.log('[Orchestrator] Initial feed request failed:', e?.message);
-    }
   } catch (e) {
     console.error('[Orchestrator] Public feed start failed:', e?.message);
   }
@@ -397,6 +401,18 @@ export async function createBackendContext(config) {
     // Early return if shutdown was initiated during deferred init setup
     if (isShuttingDown) {
       console.log('[Orchestrator] Deferred init aborted: shutdown in progress')
+      return
+    }
+
+    if (ctx.swarm?.connections?.size) {
+      startupGate.noteSwarmPeer()
+    }
+
+    try {
+      await startupGate.waitUntilOpen()
+      console.log('[Orchestrator] Startup gate opened, beginning deferred warm-up')
+    } catch (e) {
+      console.log('[Orchestrator] Startup gate wait failed:', e?.message)
       return
     }
     

@@ -636,7 +636,9 @@ export function VideoPlayerOverlay() {
 
   const handlePipStatusChanged = useCallback((event: { isInPictureInPicture: boolean; width: number; height: number }) => {
     console.log('[VideoPlayerOverlay] PiP status changed:', event.isInPictureInPicture, event.width, event.height)
-    setIsInPipMode(event.isInPictureInPicture)
+    if (Platform.OS !== 'android') {
+      setIsInPipMode(event.isInPictureInPicture)
+    }
     if (event.isInPictureInPicture && event.width > 0 && event.height > 0) {
       setPipWindowSize({ width: event.width, height: event.height })
     } else if (!event.isInPictureInPicture) {

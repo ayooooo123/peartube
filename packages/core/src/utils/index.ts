@@ -73,10 +73,9 @@ export const CMD = {
 export const RPC = CMD;
 
 /**
- * Hardcoded hyperswarm topic for public feed discovery
- * All peers join this topic to exchange channel listings
+ * Hardcoded hyperswarm topic for shared PearTube discovery
  */
-export const PUBLIC_FEED_TOPIC = 'peartube-public-feed-v1';
+export const NETWORK_DISCOVERY_TOPIC = 'peartube-network';
 
 /**
  * Protocol name for Protomux feed exchange

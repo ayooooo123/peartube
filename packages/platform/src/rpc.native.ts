@@ -7,6 +7,11 @@
 
 import { createPlatformRpcBridge } from './rpc.shared';
 import { createNativeRunner } from './runner.native';
+import {
+  createBundleCachePaths,
+  normalizeBundleFilePath,
+  shouldReusePersistedBundleCache,
+} from './native-bundle-cache.js';
 import type { VideoStats } from './types';
 
 declare function require(moduleName: string): any;
@@ -15,6 +20,7 @@ declare const Buffer: any;
 // Types for external dependencies (provided at runtime)
 declare const Worklet: new () => {
   start(name: string, source: string, args?: string[]): void;
+  start(path: string, args?: string[]): void;
   terminate(): void;
   IPC: any;
 };
@@ -123,6 +129,7 @@ const SHUTDOWN_TIMEOUT_MS = 4000
 
 type BareWorkletCtor = new (name?: string) => {
   start(name: string, source: string, args?: string[]): void;
+  start(path: string, args?: string[]): void;
   terminate(): void;
   IPC: any;
 };
@@ -130,11 +137,13 @@ type BareWorkletCtor = new (name?: string) => {
 const nativeRuntimeConfig: {
   WorkletCtor: BareWorkletCtor | null;
   backendSource: string;
+  backendPath: string;
   storagePath: string;
   workerArgs: string[];
 } = {
   WorkletCtor: null,
   backendSource: '',
+  backendPath: '',
   storagePath: '',
   workerArgs: [],
 };
@@ -147,10 +156,10 @@ const mainRunner = createNativeRunner({
     return nativeRuntimeConfig.WorkletCtor;
   },
   get backendSource() {
-    if (!nativeRuntimeConfig.backendSource) {
-      throw new Error('Native backend source is not configured');
-    }
     return nativeRuntimeConfig.backendSource;
+  },
+  get backendPath() {
+    return nativeRuntimeConfig.backendPath;
   },
   workletId: BACKEND_WORKLET_ID,
   resolveLaunchArgs(options) {
@@ -310,6 +319,138 @@ function normalizeFsModule(mod: any): any {
   return mod?.default ?? mod;
 }
 
+async function readOptionalTextAsync(FSLegacy: any, uri: string, encoding: string): Promise<string | null> {
+  if (typeof FSLegacy?.readAsStringAsync !== 'function') return null;
+
+  try {
+    const value = await FSLegacy.readAsStringAsync(uri, { encoding });
+    return typeof value === 'string' ? value.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeOptionalTextAsync(FSLegacy: any, uri: string, contents: string, encoding: string): Promise<boolean> {
+  if (typeof FSLegacy?.writeAsStringAsync !== 'function') return false;
+
+  try {
+    await FSLegacy.writeAsStringAsync(uri, contents, { encoding });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveBundleLaunchFiles(
+  FSLegacy: any,
+  storageUri: string,
+  encoding: string,
+  config: {
+    backendSource?: string;
+    downloaderWorkerSource?: string;
+    backendVersionKey?: string;
+    loadBackendSource?: () => Promise<string>;
+    loadDownloaderWorkerSource?: () => Promise<string | null | undefined>;
+  }
+): Promise<{
+  backendPath: string;
+  backendSource: string;
+  downloaderWorkerPath: string;
+}> {
+  const {
+    backendBundleUri,
+    downloaderWorkerUri,
+    versionMarkerUri,
+  } = createBundleCachePaths(storageUri);
+
+  const getInfoAsync = FSLegacy?.getInfoAsync;
+  const needsDownloaderWorker = Boolean(
+    config.downloaderWorkerSource || config.loadDownloaderWorkerSource
+  );
+
+  let backendInfo = { exists: false };
+  let downloaderInfo = { exists: false };
+  let cachedVersionKey: string | null = null;
+
+  if (typeof getInfoAsync === 'function') {
+    const [backendResult, downloaderResult] = await Promise.all([
+      getInfoAsync(backendBundleUri),
+      getInfoAsync(downloaderWorkerUri),
+    ]);
+
+    backendInfo = backendResult ?? backendInfo;
+    downloaderInfo = downloaderResult ?? downloaderInfo;
+    cachedVersionKey = await readOptionalTextAsync(FSLegacy, versionMarkerUri, encoding);
+  }
+
+  const expectedVersionKey = config.backendVersionKey ?? '';
+  if (shouldReusePersistedBundleCache({
+    expectedVersionKey,
+    cachedVersionKey,
+    backendBundleExists: backendInfo.exists === true,
+    downloaderWorkerExists: downloaderInfo.exists === true,
+    needsDownloaderWorker,
+  })) {
+    return {
+      backendPath: normalizeBundleFilePath(backendBundleUri),
+      backendSource: '',
+      downloaderWorkerPath: needsDownloaderWorker
+        ? normalizeBundleFilePath(downloaderWorkerUri)
+        : '',
+    };
+  }
+
+  let backendSource = typeof config.backendSource === 'string' ? config.backendSource : '';
+  if (!backendSource && typeof config.loadBackendSource === 'function') {
+    const loaded = await config.loadBackendSource();
+    backendSource = typeof loaded === 'string' ? loaded : '';
+  }
+
+  if (!backendSource) {
+    throw new Error('Native backend source is not configured');
+  }
+
+  const backendPath = await writeOptionalTextAsync(FSLegacy, backendBundleUri, backendSource, encoding)
+    ? normalizeBundleFilePath(backendBundleUri)
+    : '';
+
+  let downloaderWorkerPath = '';
+  if (needsDownloaderWorker) {
+    let downloaderWorkerSource =
+      typeof config.downloaderWorkerSource === 'string'
+        ? config.downloaderWorkerSource
+        : '';
+
+    if (!downloaderWorkerSource && typeof config.loadDownloaderWorkerSource === 'function') {
+      const loaded = await config.loadDownloaderWorkerSource();
+      downloaderWorkerSource = typeof loaded === 'string' ? loaded : '';
+    }
+
+    if (downloaderWorkerSource) {
+      const wroteWorker = await writeOptionalTextAsync(
+        FSLegacy,
+        downloaderWorkerUri,
+        downloaderWorkerSource,
+        encoding
+      );
+
+      if (wroteWorker) {
+        downloaderWorkerPath = normalizeBundleFilePath(downloaderWorkerUri);
+      }
+    }
+  }
+
+  if (backendPath && expectedVersionKey) {
+    await writeOptionalTextAsync(FSLegacy, versionMarkerUri, expectedVersionKey, encoding);
+  }
+
+  return {
+    backendPath,
+    backendSource,
+    downloaderWorkerPath,
+  };
+}
+
 /**
  * Check if a headless cast session is active
  * Asynchronously checks if the cast flag file exists using expo-file-system
@@ -344,12 +485,16 @@ export const events = mainBridge.events;
 /**
  * Initialize platform RPC for mobile
  *
- * @param config.backendSource - Backend bundle source code
- * @param config.storagePath - Optional storage path (defaults to documentDirectory)
+ * `backendSource` remains supported for hot reload and test harnesses, but the
+ * preferred path is to persist the generated bundle and start the worklet from
+ * that file on subsequent launches.
  */
 export async function initPlatformRPC(config: {
-  backendSource: string;
+  backendSource?: string;
   downloaderWorkerSource?: string;
+  backendVersionKey?: string;
+  loadBackendSource?: () => Promise<string>;
+  loadDownloaderWorkerSource?: () => Promise<string | null | undefined>;
   storagePath?: string;
 }): Promise<void> {
   if (_isInitialized && mainBridge.isInitialized()) {
@@ -380,7 +525,8 @@ export async function initPlatformRPC(config: {
     }
 
     nativeRuntimeConfig.WorkletCtor = WorkletClass;
-    nativeRuntimeConfig.backendSource = config.backendSource;
+    nativeRuntimeConfig.backendSource = '';
+    nativeRuntimeConfig.backendPath = '';
     nativeRuntimeConfig.storagePath = storagePath;
     nativeRuntimeConfig.workerArgs = [];
 
@@ -420,26 +566,25 @@ export async function initPlatformRPC(config: {
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
 
-    const storageDirUri = storageUri.endsWith('/') ? storageUri : `${storageUri}/`;
-    const downloaderWorkerUri = `${storageDirUri}downloader-worker.bundle.js`;
-    const downloaderWorkerPath = downloaderWorkerUri.startsWith('file://')
-      ? downloaderWorkerUri.slice(7)
-      : downloaderWorkerUri;
+    const {
+      backendPath,
+      backendSource,
+      downloaderWorkerPath,
+    } = await resolveBundleLaunchFiles(FSLegacy, storageUri, encoding, config);
 
-    let workerArgPath = '';
-    if (config.downloaderWorkerSource) {
-      try {
-        await FSLegacy.writeAsStringAsync(downloaderWorkerUri, config.downloaderWorkerSource, { encoding });
-        console.log('[Platform RPC] Downloader worker written:', downloaderWorkerPath);
-        workerArgPath = downloaderWorkerPath;
-      } catch (err: any) {
-        console.warn('[Platform RPC] Downloader worker write failed, continuing without worker:', err?.message || err);
-      }
+    nativeRuntimeConfig.backendPath = backendPath;
+    nativeRuntimeConfig.backendSource = backendPath ? '' : backendSource;
+    nativeRuntimeConfig.workerArgs = downloaderWorkerPath ? [downloaderWorkerPath] : [];
+
+    if (backendPath) {
+      console.log('[Platform RPC] Backend worklet will launch from file:', backendPath);
     } else {
-      console.warn('[Platform RPC] Downloader worker source missing, continuing without worker');
+      console.warn('[Platform RPC] Backend bundle file cache unavailable, falling back to source launch');
     }
 
-    nativeRuntimeConfig.workerArgs = workerArgPath ? [workerArgPath] : [];
+    if (downloaderWorkerPath) {
+      console.log('[Platform RPC] Downloader worker ready:', downloaderWorkerPath);
+    }
 
     if (mainBridge.isInitialized()) {
       console.log('[Platform RPC] Terminating stale shared bridge before reinit');

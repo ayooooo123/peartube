@@ -15,6 +15,7 @@ import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
+import { NETWORK_TOPIC_STRING } from './types.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -2052,7 +2053,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
      * @returns {Object}
      */
     getSwarmStatus() {
-      const topicHex = publicFeed ? b4a.toString(publicFeed.feedTopic, 'hex') : 'not initialized';
+      const topicHex = b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex')
       return {
         swarmConnections: ctx.swarm?.connections?.size || 0,
         swarmPeers: ctx.swarm?.peers?.size || 0,

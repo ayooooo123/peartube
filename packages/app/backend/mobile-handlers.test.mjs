@@ -87,3 +87,47 @@ test('prefetchVideo preserves backend playback readiness metadata', async () => 
     message: 'Prefetch started',
   })
 })
+
+test('transcodeStop and transcodeStatus await async transcoder adapters', async () => {
+  const backend = {}
+  const events = []
+  const deps = createDeps({
+    rpc: {
+      eventTranscodeProgress(payload) {
+        events.push(payload)
+      },
+    },
+    transcoder: {
+      async startTranscode() {
+        return { success: true, sessionId: 'session-1', transcodeUrl: 'http://127.0.0.1/transcode/1' }
+      },
+      async stopTranscode(sessionId) {
+        return { success: sessionId === 'session-1', error: '' }
+      },
+      async getStatus(sessionId) {
+        return { status: sessionId === 'session-1' ? 'ready' : 'error', progress: 88, bytesWritten: 4096, error: '' }
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  const startResult = await backend.transcodeStart({ sourceUrl: 'hyper://video', title: 'Demo' })
+  const stopResult = await backend.transcodeStop({ sessionId: 'session-1' })
+  const statusResult = await backend.transcodeStatus({ sessionId: 'session-1' })
+
+  assert.deepEqual(startResult, {
+    success: true,
+    sessionId: 'session-1',
+    transcodeUrl: 'http://127.0.0.1/transcode/1',
+    error: '',
+  })
+  assert.deepEqual(stopResult, { success: true, error: '' })
+  assert.deepEqual(statusResult, {
+    status: 'ready',
+    progress: 88,
+    bytesWritten: 4096,
+    error: '',
+  })
+  assert.deepEqual(events, [])
+})

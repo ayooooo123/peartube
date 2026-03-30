@@ -42,7 +42,7 @@ export * as transcode from './transcode/index.js';
 export { MultiWriterChannel, ChannelPairer } from './channel/index.js';
 
 // Types and constants
-export { FEED_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
+export { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 
 // Logger - structured logging with automatic secret redaction
 export { logger, setLogLevel, LogLevel } from './logger.js';

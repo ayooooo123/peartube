@@ -11,6 +11,7 @@ import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
+import { loadPublicBeeFromCache } from './public-bee-loader.js'
 import { logger } from './logger.js'
 import { relocateLegacyLogsDir } from './storage-layout.js'
 import { cleanupFailedCorestoreOpen } from './corestore-cleanup.js'
@@ -22,6 +23,7 @@ import {
   resolveBareOrNodeFsModuleSync,
   resolveBareOrNodePathModuleSync,
 } from './runtime-modules.js'
+import { NETWORK_TOPIC_STRING } from './types.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -557,7 +559,7 @@ export async function initializeStorage(config) {
 
   // Join the PearTube network topic for peer pool building
   // More connected peers = better relay options for symmetric NAT holepunching
-  const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from('peartube-network', 'utf-8'));
+  const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'));
   try {
     const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
     globalPeerPoolDiscovery = poolDiscovery;
@@ -947,6 +949,11 @@ function getPublicBeeCache(ctx) {
   return ctx._publicBeeCache
 }
 
+function getPublicBeeInflight(ctx) {
+  if (!ctx._publicBeeInflight) ctx._publicBeeInflight = new Map()
+  return ctx._publicBeeInflight
+}
+
 /**
  * Load a public channel Hyperbee for viewing.
  * This is the simple, auto-replicating layer for public feed viewers.
@@ -962,49 +969,53 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
   }
 
   const publicBeeCache = getPublicBeeCache(ctx)
+  const publicBeeInflight = getPublicBeeInflight(ctx)
 
-  // Check cache first
-  if (publicBeeCache.has(publicBeeKeyHex)) {
-    const cached = publicBeeCache.get(publicBeeKeyHex)
-    if (isPublicBeeUsable(cached)) {
-      log.debug('loadPublicBee returning cached', { publicBeeKey: publicBeeKeyHex.slice(0, 16) })
-      return cached
+  return loadPublicBeeFromCache({
+    cache: publicBeeCache,
+    inflight: publicBeeInflight,
+    key: publicBeeKeyHex,
+    isUsable: (bee) => {
+      if (isPublicBeeUsable(bee)) {
+        log.debug('loadPublicBee returning cached', { publicBeeKey: publicBeeKeyHex.slice(0, 16) })
+        return true
+      }
+
+      console.log('[Storage] loadPublicBee: evicting stale cached entry:', publicBeeKeyHex.slice(0, 16))
+      return false
+    },
+    closeStale: async (bee) => {
+      try { await bee?.close?.() } catch {}
+    },
+    loadFresh: async () => {
+      console.log('[Storage] loadPublicBee: loading:', publicBeeKeyHex.slice(0, 16))
+
+      const bee = new PublicChannelBee(ctx.store, {
+        key: publicBeeKeyHex
+      })
+
+      try {
+        await Promise.race([
+          bee.ready(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('PublicBee ready timeout')), 10000))
+        ])
+      } catch (err) {
+        console.error('[Storage] loadPublicBee failed:', err.message)
+        try { await bee.close() } catch {}
+        throw err
+      }
+
+      if (ctx.swarm && bee.discoveryKey) {
+        retainSwarmDiscovery(ctx, bee.discoveryKey, {
+          label: `publicBee:${publicBeeKeyHex.slice(0, 16)}`
+        })
+        console.log('[Storage] loadPublicBee: joined swarm for:', publicBeeKeyHex.slice(0, 16))
+      }
+
+      console.log('[Storage] loadPublicBee: ready:', publicBeeKeyHex.slice(0, 16), 'length:', bee.core?.length)
+      return bee
     }
-
-    console.log('[Storage] loadPublicBee: evicting stale cached entry:', publicBeeKeyHex.slice(0, 16))
-    publicBeeCache.delete(publicBeeKeyHex)
-    try { await cached?.close?.() } catch {}
-  }
-
-  console.log('[Storage] loadPublicBee: loading:', publicBeeKeyHex.slice(0, 16))
-
-  const bee = new PublicChannelBee(ctx.store, {
-    key: publicBeeKeyHex
   })
-
-  // Add timeout to prevent hanging
-  try {
-    await Promise.race([
-      bee.ready(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('PublicBee ready timeout')), 10000))
-    ])
-  } catch (err) {
-    console.error('[Storage] loadPublicBee failed:', err.message)
-    try { await bee.close() } catch {}
-    throw err
-  }
-
-  // Join swarm for discovery
-  if (ctx.swarm && bee.discoveryKey) {
-    retainSwarmDiscovery(ctx, bee.discoveryKey, {
-      label: `publicBee:${publicBeeKeyHex.slice(0, 16)}`
-    })
-    console.log('[Storage] loadPublicBee: joined swarm for:', publicBeeKeyHex.slice(0, 16))
-  }
-
-  publicBeeCache.set(publicBeeKeyHex, bee)
-  console.log('[Storage] loadPublicBee: ready:', publicBeeKeyHex.slice(0, 16), 'length:', bee.core?.length)
-  return bee
 }
 
 /**

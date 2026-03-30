@@ -155,7 +155,7 @@ test('createRelayService accepts discovered channels in public discovery mode', 
   }
 })
 
-test('createRelayService requests feed sync and logs startup summary', async (t) => {
+test('createRelayService starts without forcing an eager feed sync', async (t) => {
   const dir = makeTempDir('peartube-relay-service-logs-')
   const runtime = createFakeRuntime()
   const logger = createFakeLogger()
@@ -202,10 +202,10 @@ test('createRelayService requests feed sync and logs startup summary', async (t)
 
     await service.start()
 
-    t.is(feedSyncCalls, 1)
+    t.is(feedSyncCalls, 0)
     t.ok(logger.entries.some((entry) => entry.component === 'relay' && entry.level === 'info' && entry.msg === 'Relay starting'))
     t.ok(logger.entries.some((entry) => entry.component === 'relay' && entry.level === 'info' && entry.msg === 'Relay started' && entry.data.feedPeers === 4))
-    t.ok(logger.entries.some((entry) => entry.component === 'feed' && entry.level === 'info' && entry.msg === 'Requested feed sync from peers' && entry.data.peersContacted === 4))
+    t.absent(logger.entries.some((entry) => entry.component === 'feed' && entry.level === 'info' && entry.msg === 'Requested feed sync from peers'))
     await service.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

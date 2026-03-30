@@ -15,6 +15,11 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import {
+  getFeedVideoHydrationMode,
+  getFeedVideoLoadEntries,
+  getMissingChannelMetaRequests,
+} from '@/lib/feed-hydration'
 
 // Public feed types
 interface FeedEntry {
@@ -71,6 +76,9 @@ export default function HomeScreen() {
   const [peerCount, setPeerCount] = useState(0)
   const [lastFeedRefresh, setLastFeedRefresh] = useState<number | null>(null)
   const [swarmStatus, setSwarmStatus] = useState<{ peers: number; feedConnections?: number; channels?: number } | null>(null)
+  const channelMetaRef = useRef(channelMeta)
+  channelMetaRef.current = channelMeta
+  const inflightChannelMetaLoads = useRef<Set<string>>(new Set())
 
   // Channel viewing state
   const [viewingChannel, setViewingChannel] = useState<string | null>(null)
@@ -135,14 +143,20 @@ export default function HomeScreen() {
   // Effects that depend on loadPublicFeed/refreshFeed are declared below those callbacks.
 
   const loadChannelMeta = useCallback(async (driveKey: string, publicBeeKey?: string) => {
-    if (!rpc) return
+    if (!rpc || channelMetaRef.current[driveKey] || inflightChannelMetaLoads.current.has(driveKey)) return
+    inflightChannelMetaLoads.current.add(driveKey)
     try {
       const result = await rpc.getChannelMeta({ channelKey: driveKey, publicBeeKey: publicBeeKey || undefined })
       if (result) {
-        setChannelMeta(prev => ({ ...prev, [driveKey]: result }))
+        setChannelMeta(prev => {
+          if (prev[driveKey]) return prev
+          return { ...prev, [driveKey]: result }
+        })
       }
     } catch (err) {
       console.error('[Home] Failed to load channel meta:', err)
+    } finally {
+      inflightChannelMetaLoads.current.delete(driveKey)
     }
   }, [rpc])
 
@@ -158,12 +172,8 @@ export default function HomeScreen() {
 
       if (result?.entries) {
         setFeedEntries(result.entries)
-        for (const entry of result.entries) {
-          const key = entry.channelKey || entry.driveKey
-          if (key && !channelMeta[key]) {
-            // Pass publicBeeKey for fast viewer access via auto-replicating Hyperbee
-            loadChannelMeta(key, entry.publicBeeKey)
-          }
+        for (const request of getMissingChannelMetaRequests(result.entries, channelMetaRef.current, 15)) {
+          loadChannelMeta(request.channelKey, request.publicBeeKey)
         }
       }
       if (result?.stats) {
@@ -186,7 +196,7 @@ export default function HomeScreen() {
     } finally {
       setFeedLoading(false)
     }
-  }, [rpc, channelMeta, loadChannelMeta])
+  }, [rpc, loadChannelMeta])
 
   const refreshFeed = useCallback(async () => {
     if (!rpc) return
@@ -257,34 +267,38 @@ export default function HomeScreen() {
 
   // Load videos from all discovered channels
   const loadFeedVideos = useCallback(async () => {
-    if (!rpc || feedEntries.length === 0) return
+    const hydrationMode = getFeedVideoHydrationMode({ feedEntries, swarmStatus })
+    if (!rpc || hydrationMode === 'off') return
 
     setLoadingFeedVideos(true)
 
-    // Fetch videos from channels IN PARALLEL with per-channel timeout.
-    // Note: For newly discovered channels, `listVideos` may return [] until replication catches up.
-    // We do a few bounded retries to improve UX without blocking indefinitely.
+    // Network mode is willing to join/retry against peers.
+    // Local-only mode only checks already-cached content to avoid boot-time network thrash.
     const PER_CHANNEL_TIMEOUT = 8000
     const LIST_ATTEMPT_TIMEOUT = 2500
     const LIST_ATTEMPTS = 3
     const LIST_RETRY_DELAY_MS = 1000
 
-    const channelPromises = feedEntries.slice(0, 15).map(async (entry) => {
+    const channelPromises = getFeedVideoLoadEntries(feedEntries, 15).map(async (entry) => {
       const channelKey = entry.channelKey || entry.driveKey
       const publicBeeKey = entry.publicBeeKey || undefined
       if (!channelKey) return []
 
       try {
-        // Join + list with combined timeout
-        await withTimeout(rpc.joinChannel({ channelKey }), PER_CHANNEL_TIMEOUT, { success: false })
+        if (hydrationMode === 'network') {
+          await withTimeout(rpc.joinChannel({ channelKey }), PER_CHANNEL_TIMEOUT, { success: false })
+        }
 
         let videos: any[] = []
-        for (let attempt = 0; attempt < LIST_ATTEMPTS; attempt++) {
+        const attempts = hydrationMode === 'network' ? LIST_ATTEMPTS : 1
+        const attemptTimeout = hydrationMode === 'network' ? LIST_ATTEMPT_TIMEOUT : 1200
+
+        for (let attempt = 0; attempt < attempts; attempt++) {
           // Pass publicBeeKey for fast viewer access via auto-replicating Hyperbee
-          const result = await withTimeout(rpc.listVideos({ channelKey, publicBeeKey }), LIST_ATTEMPT_TIMEOUT, { videos: [] } as any)
+          const result = await withTimeout(rpc.listVideos({ channelKey, publicBeeKey }), attemptTimeout, { videos: [] } as any)
           videos = (result as any)?.videos || []
           if (Array.isArray(videos) && videos.length > 0) break
-          if (attempt < LIST_ATTEMPTS - 1) {
+          if (hydrationMode === 'network' && attempt < attempts - 1) {
             await new Promise((resolve) => setTimeout(resolve, LIST_RETRY_DELAY_MS))
           }
         }
@@ -293,7 +307,7 @@ export default function HomeScreen() {
           ...v,
           channelKey,
           publicBeeKey: publicBeeKey || undefined,  // Include for video playback
-          channel: { name: channelMeta[channelKey]?.name || 'Unknown' }
+          channel: { name: channelMetaRef.current[channelKey]?.name || 'Unknown' }
         }))
       } catch (err: any) {
         // Continue with other channels - this is expected for channels that haven't synced yet
@@ -315,14 +329,14 @@ export default function HomeScreen() {
 
     // Fetch thumbnails for feed videos
     fetchThumbnailsForVideos(sorted)
-  }, [rpc, feedEntries, channelMeta, fetchThumbnailsForVideos])
+  }, [rpc, feedEntries, swarmStatus, fetchThumbnailsForVideos])
 
   // Load feed videos when feed entries change
   useEffect(() => {
-    if (feedEntries.length > 0) {
+    if (getFeedVideoHydrationMode({ feedEntries, swarmStatus }) !== 'off') {
       loadFeedVideos()
     }
-  }, [feedEntries, loadFeedVideos])
+  }, [feedEntries, swarmStatus, loadFeedVideos])
 
   // View a channel's videos
   const viewChannel = useCallback(async (driveKey: string) => {
@@ -528,6 +542,9 @@ export default function HomeScreen() {
     const cacheKey = `${v.channelKey}:${v.id}`
     return {
       ...v,
+      channel: {
+        name: channelMeta[v.channelKey]?.name || v.channel?.name || 'Unknown'
+      },
       thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
     }
   })

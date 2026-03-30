@@ -1,16 +1,19 @@
-import { createProtocolClient, PROTOCOL_EVENTS } from '@peartube/protocol'
+import { createProtocolClient, PROTOCOL_EVENTS } from '../../protocol/src/index.js'
 
 import type { PlatformLifecycleEvent, PlatformRunner } from './rpc.shared'
+import { launchNativeWorklet } from './native-worklet-launch.js'
 
 type WorkletInstance = {
   start(id: string, source: string, args?: string[]): void
+  start(path: string, args?: string[]): void
   terminate(): void
   IPC: any
 }
 
 type NativeRunnerDependencies = {
   WorkletCtor: new () => WorkletInstance
-  backendSource: string
+  backendSource?: string
+  backendPath?: string
   workletId?: string
   shutdownTimeoutMs?: number
   resolveLaunchArgs?(options: {
@@ -108,11 +111,12 @@ export function createNativeRunner(dependencies: NativeRunnerDependencies): Plat
         ? dependencies.resolveLaunchArgs(options)
         : [options.storagePath, options.entrypoint, ...(options.args ?? [])]
 
-      worklet.start(
-        dependencies.workletId ?? options.entrypoint,
-        dependencies.backendSource,
-        launchArgs
-      )
+      launchNativeWorklet(worklet, {
+        backendPath: dependencies.backendPath ?? '',
+        backendSource: dependencies.backendSource ?? '',
+        workletId: dependencies.workletId ?? options.entrypoint,
+        launchArgs,
+      })
 
       let terminated = false
 

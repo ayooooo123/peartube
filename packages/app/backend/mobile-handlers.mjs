@@ -261,8 +261,8 @@ export function attachMobileHandlers(B, deps) {
       return { success: res.success, sessionId: res.sessionId || '', transcodeUrl: res.transcodeUrl || '', error: res.error || '' }
     } catch (err) { return { success: false, error: err?.message } }
   }
-  B.transcodeStop = async (r) => { try { const res = transcoder.stopTranscode(r.sessionId); return { success: res.success, error: res.error || '' } } catch (err) { return { success: false, error: err?.message } } }
-  B.transcodeStatus = async (r) => { try { const s = transcoder.getStatus(r.sessionId); return { status: s.status || '', progress: s.progress || 0, bytesWritten: s.bytesWritten || 0, error: s.error || '' } } catch (err) { return { status: 'error', progress: 0, bytesWritten: 0, error: err?.message } } }
+  B.transcodeStop = async (r) => { try { const res = await transcoder.stopTranscode(r.sessionId); return { success: res.success, error: res.error || '' } } catch (err) { return { success: false, error: err?.message } } }
+  B.transcodeStatus = async (r) => { try { const s = await transcoder.getStatus(r.sessionId); return { status: s.status || '', progress: s.progress || 0, bytesWritten: s.bytesWritten || 0, error: s.error || '' } } catch (err) { return { status: 'error', progress: 0, bytesWritten: 0, error: err?.message } } }
 
   // --- Search (globalSearchVideos is in SHARED_HANDLER_NAMES) ---
   B.globalSearchVideos = async (r) => {

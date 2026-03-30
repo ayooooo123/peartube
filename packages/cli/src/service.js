@@ -157,11 +157,6 @@ export async function createRelayService({
 
       await runtime.start?.()
 
-      if (typeof runtime.requestFeedSync === 'function') {
-        const peersContacted = await runtime.requestFeedSync()
-        logger.feed.info('Requested feed sync from peers', { peersContacted })
-      }
-
       for (const channelKey of config.admission.channels || []) {
         await scheduleCandidate({
           channelKey,

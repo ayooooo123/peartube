@@ -2615,6 +2615,7 @@ export function VideoPlayerOverlay() {
           disabled={effectiveDuration <= 0}
           externalGesture={panGesture}
           onSeekCommit={handleScrubCommit}
+          visible={(playerMode === 'fullscreen' || isLandscapeFullscreen) ? showControls : true}
         />
       )}
 

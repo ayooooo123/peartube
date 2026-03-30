@@ -1553,14 +1553,9 @@ export function VideoPlayerOverlay() {
       }
     }
 
-    // Portrait non-fullscreen: flush at video bottom
-    const opacity = interpolate(
-      animProgress.value,
-      [0.5, 1],
-      [0, 1],
-      Extrapolation.CLAMP
-    )
-
+    // Portrait non-fullscreen: flush at video bottom.
+    // No opacity animation here — the Scrubber's own `visible` prop
+    // (driven by showControls) is the sole visibility controller.
     return {
       position: 'absolute',
       top: baseHeight - 32,
@@ -1570,7 +1565,6 @@ export function VideoPlayerOverlay() {
       height: 32,
       justifyContent: 'center',
       zIndex: 15,
-      opacity,
     }
   }, [])
 

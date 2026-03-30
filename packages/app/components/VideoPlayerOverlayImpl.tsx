@@ -992,7 +992,6 @@ export function VideoPlayerOverlay() {
       }
     } else if (playerMode === 'mini') {
       animProgress.value = withTiming(0, { duration: 250 })
-      showControlsTemporarily()
     } else if (playerMode === 'hidden') {
       animProgress.value = withTiming(0, { duration: 150 })
     }

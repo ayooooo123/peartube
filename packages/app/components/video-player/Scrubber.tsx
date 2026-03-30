@@ -49,7 +49,7 @@ function getProgressFromTouch(touchX: number, trackWidth: number): number {
   'worklet'
   // touchX is relative to the outer container (which has TRACK_PADDING).
   // Subtract padding to get position within the track, then divide by track width.
-  if (trackWidth <= 0) return 0
+  if (trackWidth <= 0) return -1 // -1 signals unmeasured — caller must check
   return clamp((touchX - TRACK_PADDING) / trackWidth, 0, 1)
 }
 
@@ -195,13 +195,17 @@ export const Scrubber = memo(function Scrubber({
         const d = durationSV.value
         if (tw <= 0 || d <= 0) return
 
+        const p = getProgressFromTouch(evt.x, tw)
+        if (p < 0) return // track not measured yet
+
         didDrag = false
+        didCommit = false
         startY = evt.y
 
         // Gate external progress, jump thumb to touch point
         isInteractingSV.value = true
         lockActiveSV.value = false
-        startProgress = getProgressFromTouch(evt.x, tw)
+        startProgress = p
         uiProgressSV.value = startProgress
 
         isTouchingSV.value = withSpring(1, TRACK_SPRING)

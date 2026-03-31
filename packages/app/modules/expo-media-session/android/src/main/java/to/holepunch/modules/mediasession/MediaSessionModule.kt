@@ -1223,8 +1223,11 @@ class MediaSessionModule : Module() {
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
 
-            // Use video source rect if available, otherwise fullscreen rect.
-            val sourceRect = getVideoSourceRect(activity) ?: PipBridge.getFullscreenSourceRect(activity)
+            // SIMPLIFIED FOR RELIABILITY: on MainActivity, use a stable fullscreen
+            // source rect instead of the transformed mini-player rect. The mini-player
+            // overlay can move/scale independently, and feeding those transient bounds
+            // into Android PiP has caused silent PiP entry failures.
+            val sourceRect = PipBridge.getFullscreenSourceRect(activity)
             builder.setSourceRectHint(sourceRect)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

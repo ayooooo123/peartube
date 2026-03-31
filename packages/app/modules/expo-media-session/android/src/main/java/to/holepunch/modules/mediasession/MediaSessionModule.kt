@@ -881,7 +881,9 @@ class MediaSessionModule : Module() {
     private val mediaSessionCallback = object : MediaSessionCompat.Callback() {
         override fun onPlay() {
             android.util.Log.d("MediaSession", "onPlay callback")
-            updatePipPlayState(true)
+            // JS/react-native-video owns desired playback state. Do not optimistically
+            // flip MediaSession/PiP actions here before the player state is actually
+            // reconciled back through setPlaybackState().
             sendEvent("onRemoteCommand", mapOf("command" to "play"))
         }
 
@@ -900,7 +902,6 @@ class MediaSessionModule : Module() {
                 return
             }
 
-            updatePipPlayState(false)
             sendEvent("onRemoteCommand", mapOf("command" to "pause"))
         }
 
@@ -915,7 +916,6 @@ class MediaSessionModule : Module() {
                 return
             }
 
-            updatePipPlayState(false)
             sendEvent("onRemoteCommand", mapOf("command" to "stop"))
         }
 
@@ -1398,19 +1398,16 @@ class MediaSessionModule : Module() {
 
     internal fun handlePipPlay() {
         android.util.Log.d("MediaSession", "handlePipPlay")
-        updatePipPlayState(true)
         sendEvent("onRemoteCommand", mapOf("command" to "play"))
     }
 
     internal fun handlePipPause() {
         android.util.Log.d("MediaSession", "handlePipPause")
-        updatePipPlayState(false)
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }
 
     internal fun handlePipStop() {
         android.util.Log.d("MediaSession", "handlePipStop")
-        updatePipPlayState(false)
         sendEvent("onRemoteCommand", mapOf("command" to "stop", "reason" to "pip-dismissed"))
     }
 

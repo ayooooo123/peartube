@@ -246,8 +246,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   // State is only updated at throttled intervals for UI components
   useEffect(() => {
     isPlayingRef.current = isPlaying
-    _playbackActiveEmitter.set(currentVideo !== null && (isPlaying || isInPipMode))
-  }, [isPlaying, currentVideo, isInPipMode])
+    // Keep the backend/network warm for the lifetime of an open local video
+    // session, not just while transport is actively playing. PiP/background
+    // transitions can transiently flip isPlaying/isInPipMode false and cause
+    // mistaken suspendNetwork() calls, which then surface as reconnect overlays
+    // when returning to the video.
+    _playbackActiveEmitter.set(currentVideo !== null)
+  }, [isPlaying, currentVideo])
   useEffect(() => { playbackRateRef.current = playbackRate }, [playbackRate])
   useEffect(() => { playerModeRef.current = playerMode }, [playerMode])
   useEffect(() => { pipWindowSizeRef.current = pipWindowSize }, [pipWindowSize])

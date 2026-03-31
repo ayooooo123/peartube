@@ -1,92 +1,111 @@
-# Task: Remove black bars above/below mini-player video without cropping
+# Task: Background-mode sometimes disables PiP and triggers P2P reconnect overlay
 
 ## Symptom
-User reports black bars above and below the video in the player. Wants the video to fit the player perfectly without cutting any video off.
+User reports that background mode sometimes causes PiP to get disabled. When this happens and the video is reopened from background, the "connecting to P2P" overlay appears on top of the video. That overlay normally does not appear when PiP/background behavior is healthy.
 
-## Current likely cause
-`VideoPlayerOverlayImpl.tsx` currently uses:
-- `videoHeight = getPlayerPageVideoHeight(screenWidth)` for the fullscreen page frame
-- `effectiveAR = videoAspectRatio || 16/9` for mini-player sizing
+## Strong hint
+This likely means the app is sometimes suspending networking / backend state when it should not, or failing to recognize that active local playback / PiP should keep the playback path warm.
 
-On Android mini mode, the video wrapper is kept at a fullscreen-sized baseline for PiP reliability, but that baseline height may still come from the 16:9 page frame instead of the actual video aspect ratio. That would create letterboxing when the actual video AR differs from the page frame.
+## Suspect files
+- `packages/app/app/_layout.tsx`
+  - network suspend/resume AppState handling
+  - logs like `[App] Resuming network from foreground` and `[App] Skipping network suspend - local playback is active`
+- `packages/app/lib/VideoPlayerContext.tsx`
+  - background / foreground handling
+  - PiP flags and app-state handling
+- `packages/app/components/VideoPlayerOverlayImpl.tsx`
+  - PiP enable/disable interactions if any still affect app-state timing
 
 ## Goal
-- no bars above/below in mini player
-- no cropping
-- keep Android PiP stable
+Find root cause first. Avoid blind fixes.
 
-## Most likely fix
-For Android mini mode, base the native-wrapper baseline height on the actual video aspect ratio (`screenWidth / effectiveAR`) rather than the fullscreen page frame height. That should keep the wrapper aspect ratio aligned with the visible mini-player bounds while preserving a stable fullscreen-width baseline for PiP.
-
-## Files
-- `packages/app/components/VideoPlayerOverlayImpl.tsx`
-- possibly `VideoContainer.tsx` / `PearInlineVideoView.tsx` if resizeMode assumptions matter
+## Need to determine
+1. Under what exact condition does network suspend still happen while playback/PiP should keep it alive?
+2. Is the app confusing background-with-active-playback vs true inactive background?
+3. Is PiP disablement actually secondary to a backend/network suspend/resume cycle?
 
 ## Discussion
 
 ## Claude Proposal
 
-### Root cause
+### Root cause: `playbackActiveEmitter` has a race-window where it reads `false` during the background transition
 
-Two independent height calculations diverge when the video AR ≠ 16:9:
+The emitter lives in `packages/app/lib/video-player/VideoControlContext.tsx`:
 
-| Value | Source | Depends on actual AR? |
-|---|---|---|
-| `videoHeight` (`videoHeightShared`) | `getPlayerPageVideoHeight(screenWidth)` → `screenWidth * 9/16` | **No** — always 16:9 |
-| `dynMiniHeight` (`miniPipDynHeightShared`) | `computeMiniSize(screenWidth, effectiveAR, …)` → `w / effectiveAR` | **Yes** |
-
-In the Android mini-mode branch (line ~1630), the wrapper is kept at `fullH = videoHeightShared` (16:9) and a scale transform shrinks it to the mini-player clip size:
-
-```js
-const scaleY = fullH > 0 ? miniPipDynHeightShared.value / fullH : 1
-// wrapper: { width: fullW, height: fullH } with transform [{ scaleX }, { scaleY }]
+```ts
+export const playbackActiveEmitter = {
+  isActive: false,
+  set(active: boolean) { this.isActive = active },
+}
 ```
 
-If the video is 4:3, `fullH` (16:9) is *shorter* than what the AR needs. VLC `resizeMode=contain` letterboxes inside the 16:9 wrapper. The clip box (`dynMiniHeight`) is computed from the real AR, so the letterbox bars are visible.
+It is updated from a React `useEffect` in `VideoPlayerContext.tsx:247-250`:
 
-If the video is 21:9, `fullH` is *taller* than needed, and VLC pillarboxes — the top/bottom bars appear again.
-
-### Proposed fix (minimal, single-variable)
-
-Replace the 16:9-locked `videoHeight` with an AR-aware height for the Android mini-mode baseline, while keeping the fullscreen page frame unchanged.
-
-**In `VideoPlayerOverlayImpl.tsx`, inside the `videoWrapperStyle` worklet** (~line 1623):
-
-```js
-// BEFORE:
-const fullH = videoHeightShared.value + cutoutInset
-
-// AFTER:
-const arAwareH = aspectRatioShared.value > 0
-  ? Math.round(screenWidthShared.value / aspectRatioShared.value)
-  : videoHeightShared.value
-const fullH = (Platform.OS === 'android' && isMiniPlayerModeShared.value)
-  ? arAwareH
-  : videoHeightShared.value + cutoutInset
+```ts
+useEffect(() => {
+  isPlayingRef.current = isPlaying
+  _playbackActiveEmitter.set(currentVideo !== null && (isPlaying || isInPipMode))
+}, [isPlaying, currentVideo, isInPipMode])
 ```
 
-This changes **only** the Android mini-mode path. Fullscreen, iOS, and PiP branches continue to use the 16:9 page frame height.
+The condition is: `currentVideo !== null && (isPlaying || isInPipMode)`.
 
-### Why this is safe for PiP
+### Why this is too narrow — three failure windows
 
-- The baseline wrapper stays at `screenWidth` wide (unchanged).
-- `fullH` only changes in the `isMiniPlayerModeShared` branch, which is **exited** before PiP entry (PiP always transitions from fullscreen, never from mini).
-- `frozenVideoHeightShared` (used by the PiP branch at line 1601) is unaffected — it still freezes the 16:9 fullscreen height.
-- The scale transform ratio (`miniHeight / fullH`) now divides two values that share the same AR, producing a pure size scale with no letterbox.
+**1. `isPlaying` goes false before the background handler checks it**
 
-### What about `frozenVideoHeightShared`?
+When the app backgrounds on Android, the OS may briefly pause audio focus or the native player may fire a `pause` event during the PiP entry transition. `VideoPlayerContext` handles `case 'pause'` by calling `setIsPlaying(false)` (line 632). This triggers the `useEffect`, which sets `playbackActiveEmitter.isActive = false`. If the grace-timer check in `_layout.tsx:703` fires during this window, it sees `isActive === false` and proceeds to call `suspendNetwork()`.
 
-No change needed. It's only read in the `isPipLayoutActiveShared` branch (line 1601), which is mutually exclusive with the mini-player branch. PiP always operates from a fullscreen baseline.
+The code already defends against *spurious pauses during PiP exit* (lines 271-278, `pipExitExpectedPlayingRef`), but there is no equivalent guard for the *PiP entry* path. A brief native pause during PiP entry is enough to flip the emitter off.
 
-### Risk assessment
+**2. `isInPipMode` is set asynchronously — gap between background and PiP**
 
-| Concern | Risk |
-|---|---|
-| Android PiP black screen | **None** — PiP branch untouched, `frozenVideoHeightShared` unchanged |
-| Fullscreen layout shift | **None** — `fullH` change is gated on `isMiniPlayerModeShared` |
-| iOS mini-player | **None** — iOS doesn't enter the Android mini branch |
-| Scale correctness | **Improved** — scaleY now maps between same-AR rectangles |
+`isInPipMode` (React state) is only set to `true` when the native PiP callback reaches JS. On Android, the sequence is:
 
-### Optional follow-up (not in this PR)
+1. `AppState` → `background` (immediate)
+2. `_layout.tsx` `handleAppStateChange` fires, checks `playbackActiveEmitter.isActive`
+3. Native PiP animation starts
+4. Native PiP callback fires → JS sets `isInPipMode = true` → effect updates emitter
 
-The fullscreen page frame itself could also be made AR-aware (`videoHeight = screenWidth / effectiveAR` clamped to screen height), which would eliminate letterboxing in fullscreen too. But that touches the PiP-frozen values and the fullscreen→PiP transition path, so it's a separate, higher-risk change.
+Between steps 2 and 4, `isInPipMode` is still `false`. If `isPlaying` is also momentarily false (window #1), the emitter reads `false` and the 8-second grace timer begins. If the pause lasts >8s or the timer was already running from a prior `inactive` event, `suspendNetwork()` fires.
+
+**3. Background audio playback without PiP**
+
+On iOS, background audio continues playing without PiP (e.g., user switches apps while listening to a video). If PiP fails or is not enabled, `isInPipMode` stays `false`. The emitter then depends entirely on `isPlaying`. A momentary buffering stall or audio-session interruption that flips `isPlaying = false` will drop the guard, and the 8-second timer will suspend the network — killing the stream and causing the "connecting to P2P" overlay on return.
+
+### Why network suspend causes the overlay on re-open
+
+`suspendNetwork()` tears down the Hyperswarm connections. When the user returns to foreground, `_layout.tsx:744` calls `resumeNetwork()`, but re-establishing the P2P swarm takes time. During this reconnection window, the UI shows the "connecting to P2P" overlay because the backend reports no active peers/connections.
+
+If PiP was active, the PiP window also becomes useless (no data flowing), so Android may dismiss it or the app effectively disables it.
+
+### Proposed fix
+
+**The emitter condition should be: `currentVideo !== null`** (video session is open), not `currentVideo !== null && (isPlaying || isInPipMode)`.
+
+Rationale: if a video is loaded, the user expects it to remain connected and resumable. Transient play/pause state and the async PiP flag should not be the signal that governs network lifecycle. The network should stay alive for the entire duration of an open video session.
+
+Concretely:
+
+```ts
+// VideoPlayerContext.tsx — line 249
+_playbackActiveEmitter.set(currentVideo !== null)
+```
+
+This eliminates all three race windows. The network will only be suspended when the video is fully closed (`currentVideo === null`), which is a clean, unambiguous signal.
+
+The 8-second grace timer in `_layout.tsx` already provides the safety net for cases where the user closes a video and immediately backgrounds — the timer will still fire and suspend if appropriate.
+
+### Alternative (more conservative)
+
+If full-session keepalive is too broad (e.g., concern about keeping network alive for a paused-and-forgotten video), add a `videoSessionActive` flag that is `true` from `loadAndPlayVideo` to `closeVideo`, independent of play/pause state:
+
+```ts
+_playbackActiveEmitter.set(currentVideo !== null && (isPlaying || isInPipMode || isBackgroundedRef.current))
+```
+
+This adds `isBackgroundedRef.current` so that any open video prevents suspend while backgrounded, but allows suspend if the user returns to foreground and pauses. However, this still has the gap where `isBackgroundedRef` is set *inside* `VideoPlayerContext`'s handler, which may fire after `_layout.tsx`'s handler (React effect ordering). The simpler `currentVideo !== null` is more robust.
+
+### Secondary: the 8-second grace timer can stack
+
+In `_layout.tsx:699`, the grace timer is set inside `maybeSuspendWithGrace`, but `clearCastSuspendGraceTimer` only clears `castSuspendGraceTimerRef`. If the app rapidly cycles `inactive` → `active` → `background` (common on Android during PiP transitions), a new `maybeSuspendWithGrace` call can start while the previous grace timer is still pending. The `suspendInFlightRef` guard prevents re-entry into `maybeSuspendWithGrace`, but the *already-scheduled* timer callback from the first call will still fire and check `playbackActiveEmitter.isActive` at an arbitrary future time. This is a secondary contributor — the timer may fire after PiP is settled but during a transient pause.

@@ -799,9 +799,18 @@ export function VideoPlayerOverlay() {
         maximizePlayer()
       }
 
-      // Android: request a ref-driven auto-PiP re-arm after exit.
-      if (Platform.OS === 'android') {
-        pipExitNeedsRearmRef.current = true
+      // Android: directly re-arm auto-PiP after exit.
+      // Cannot rely on the main auto-PiP effect for this because after PiP exit
+      // the deps often settle to the same values as before PiP entry, so the
+      // effect doesn't re-fire. Calling setAutoPictureInPicture directly here
+      // ensures the native PipBridge is re-enabled for the next app exit.
+      if (Platform.OS === 'android' && currentVideo !== null && !isCasting) {
+        MediaSession.setAutoPictureInPicture(true)
+          .then(() => {
+            autoPipEnabledRef.current = true
+            console.log('[VideoPlayerOverlay] Re-armed Auto-PiP directly after PiP exit')
+          })
+          .catch(() => {})
       }
     }
   }, [setIsInPipMode, setPipWindowSize, maximizePlayer, pipSupported, currentVideo, isCasting])

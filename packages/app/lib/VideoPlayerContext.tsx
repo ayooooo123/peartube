@@ -432,22 +432,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       }
       if (pipExitShouldResumeRef.current) {
         pipExitShouldResumeRef.current = false
-        setIsPlaying(true)
         reassertNativePlayAfterPipExit('mode-fullscreen-transition')
-      }
-    }
-
-    if (nextMode === 'pip_active') {
-      const shouldKeepPlaying = state.wasPlayingWhenPipEntered || isPlayingRef.current
-      if (shouldKeepPlaying) {
-        setIsPlaying(true)
       }
     }
 
     if (previousMode === 'pip_active' && nextMode !== 'pip_active') {
       const shouldResume = pipExitShouldResumeRef.current || state.wasPlayingWhenPipEntered
       if (shouldResume) {
-        setIsPlaying(true)
         reassertNativePlayAfterPipExit('pip-active-exit-transition')
       }
     }
@@ -831,14 +822,7 @@ useEffect(() => {
           return
         }
 
-        if (event.isInPictureInPicture) {
-          const wasPlaying = isPlayingRef.current || wasPlayingWhenBackgroundedRef.current
-          if (wasPlaying) {
-            setTimeout(() => {
-              setIsPlaying(true)
-            }, 150)
-          }
-        } else if (wasInPip) {
+        if (!event.isInPictureInPicture && wasInPip) {
           const shouldResume = event.isPlaying ?? wasPlayingWhenPipEnteredRef.current
           pipExitShouldResumeRef.current = shouldResume
           pipExitExpectedPlayingRef.current = Boolean(shouldResume)
@@ -1625,7 +1609,6 @@ useEffect(() => {
       iosIgnorePausedUntilRef.current = 0
     }
     setIsLoading(false)
-    setIsPlaying(true)
     tryApplyPendingSeek()
     if (Platform.OS !== 'web') {
       MediaSession.setPlaybackState({
@@ -1652,7 +1635,6 @@ useEffect(() => {
       pipExitExpectedPlayingRef.current = false
     }
     console.log('[VideoPlayerContext] Player paused')
-    setIsPlaying(false)
     if (Platform.OS !== 'web') {
       MediaSession.setPlaybackState({
         isPlaying: false,

@@ -479,8 +479,16 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
           // This happens when user taps a new video while mini player is active.
           return toFullscreenState(state, event.video, event.url, true)
         case 'RESTORE_FROM_LAST_CLOSED':
-        case 'PIP_ENTERED_ANDROID':
           return invalidTransition(state, event)
+        case 'PIP_ENTERED_ANDROID':
+          return {
+            ...state,
+            mode: 'pip_entering',
+            wasPlayingWhenPipEntered: Boolean(
+              event.isPlaying ?? state.wasPlayingWhenBackgrounded,
+            ),
+            modeBeforePip: 'mini',
+          }
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
         case 'MINIMIZE':

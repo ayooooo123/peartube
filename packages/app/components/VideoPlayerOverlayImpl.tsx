@@ -1387,6 +1387,36 @@ export function VideoPlayerOverlay() {
       'worklet'
       if (!success) return
       if (!isMiniPlayerModeShared.value) return
+
+      const nextMode = miniPlayerSizeModeShared.value === 'compact' ? 'expanded' : 'compact'
+      miniPlayerSizeModeShared.value = nextMode
+
+      const { width: mw, height: mh } = computeMiniSize(screenWidthShared.value, aspectRatioShared.value, nextMode)
+      const bounds = computeMiniBounds(
+        screenWidthShared.value,
+        screenHeightShared.value,
+        insetTopShared.value,
+        insetRightShared.value,
+        insetBottomShared.value,
+        insetLeftShared.value,
+        miniPlayerBottomShared.value,
+        mw,
+        mh,
+      )
+      const anchors = getCornerAnchors(bounds)
+      let target = anchors[3]
+      for (let i = 0; i < anchors.length; i++) {
+        if (anchors[i].corner === currentDockCornerShared.value) {
+          target = anchors[i]
+          break
+        }
+      }
+
+      miniPipX.value = withSpring(target.x, SPRING_CONFIG_MINI_SNAP)
+      miniPipY.value = withSpring(target.y, SPRING_CONFIG_MINI_SNAP)
+      miniPipDynWidthShared.value = withSpring(mw, SPRING_CONFIG_MINI_SNAP)
+      miniPipDynHeightShared.value = withSpring(mh, SPRING_CONFIG_MINI_SNAP)
+
       runOnJS(toggleMiniPlayerSizeMode)()
     }), [toggleMiniPlayerSizeMode])
 

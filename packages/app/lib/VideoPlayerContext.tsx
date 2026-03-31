@@ -1665,6 +1665,14 @@ useEffect(() => {
       return
     }
 
+    // During PiP transitions, the video surface can emit transient buffering
+    // events as it resizes. Suppress the loading overlay during PiP enter/exit
+    // so users don't see "connecting to P2P" flash on every PiP cycle.
+    if (isInPipModeRef.current || pipTransitionInFlightRef.current || pipExitExpectedPlayingRef.current) {
+      if (!data.isBuffering) setIsLoading(false)
+      return
+    }
+
     setIsLoading(data.isBuffering)
   }, [])
 

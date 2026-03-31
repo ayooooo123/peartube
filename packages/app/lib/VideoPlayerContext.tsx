@@ -602,8 +602,8 @@ useEffect(() => {
       switch (event.command) {
         case 'play':
           console.log('[VideoPlayerContext] Setting isPlaying = true')
-          if (isBackgroundedRef.current) {
-            if (Platform.OS === 'ios' && currentVideoRef.current) {
+          if (isBackgroundedRef.current || isInPipModeRef.current) {
+            if (currentVideoRef.current) {
               setIsPlaying(true)
               try { playerRef.current?.play?.() } catch {}
             } else {
@@ -626,7 +626,7 @@ useEffect(() => {
             return
           }
           setIsPlaying(false)
-          if (isBackgroundedRef.current && Platform.OS === 'ios') {
+          if (isBackgroundedRef.current || isInPipModeRef.current) {
             try { playerRef.current?.pause?.() } catch {}
           }
           break
@@ -662,7 +662,10 @@ useEffect(() => {
           console.log('[VideoPlayerContext] Toggling play/pause')
           if (isPlayingRef.current) {
             setIsPlaying(false)
-          } else if (isBackgroundedRef.current && Platform.OS === 'ios' && currentVideoRef.current) {
+            if (isBackgroundedRef.current || isInPipModeRef.current) {
+              try { playerRef.current?.pause?.() } catch {}
+            }
+          } else if (isBackgroundedRef.current && currentVideoRef.current) {
             setIsPlaying(true)
             try { playerRef.current?.play?.() } catch {}
           } else {

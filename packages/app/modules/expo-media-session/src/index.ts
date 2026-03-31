@@ -36,6 +36,9 @@ export interface RemoteCommandEvent {
   interval?: number
   // Android only: native transport path already applied the command to the shared player
   handledByNative?: boolean
+  // Optional native source/reason metadata for distinguishing true close/stop
+  // events (e.g. PiP dismissal) from generic transport noise.
+  reason?: string
 }
 
 export interface AudioInterruptionEvent {

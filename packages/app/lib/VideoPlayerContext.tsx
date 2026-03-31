@@ -639,7 +639,17 @@ useEffect(() => {
             try { playerRef.current?.pause?.() } catch {}
           }
           break
-        case 'stop':
+        case 'stop': {
+          const isPipDismissed = event.reason === 'pip-dismissed'
+
+          // True PiP dismissal should close the session explicitly.
+          if (isPipDismissed) {
+            console.log('[VideoPlayerContext] PiP dismissed — closing session')
+            remotePlayWhileBackgroundedRef.current = false
+            closeSession('pip-close')
+            break
+          }
+
           // On Android, backgrounding and PiP transitions can emit transient
           // remote stop commands. Ignore them whenever the app is backgrounded,
           // in PiP, transitioning PiP, or still in the PiP exit resume window.
@@ -656,6 +666,7 @@ useEffect(() => {
           remotePlayWhileBackgroundedRef.current = false
           closeSession('remote-stop')
           break
+        }
         case 'togglePlayPause':
           console.log('[VideoPlayerContext] Toggling play/pause')
           if (isPlayingRef.current) {

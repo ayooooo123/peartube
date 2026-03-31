@@ -1411,7 +1411,7 @@ class MediaSessionModule : Module() {
     internal fun handlePipStop() {
         android.util.Log.d("MediaSession", "handlePipStop")
         updatePipPlayState(false)
-        sendEvent("onRemoteCommand", mapOf("command" to "stop"))
+        sendEvent("onRemoteCommand", mapOf("command" to "stop", "reason" to "pip-dismissed"))
     }
 
     internal fun handlePipRewind() {

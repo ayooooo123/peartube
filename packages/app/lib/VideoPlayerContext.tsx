@@ -473,16 +473,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         }
         console.log('[VideoPlayerContext] Going to background, wasPlaying:', isPlayingRef.current, 'playerMode:', playerModeRef.current)
 
-        // On Android with react-native-video, PiP works directly from mini mode —
-        // the Activity window IS the PiP content and onUserLeaveHint enters PiP
-        // before this code runs. Do NOT maximize here; dispatching MAXIMIZE causes
-        // a state change that brings the activity back to the foreground and
-        // immediately cancels the PiP that just entered.
-        //
-        // On iOS, the AVSampleBufferDisplayLayer may need fullscreen dimensions
-        // for canStartPictureInPictureAutomaticallyFromInline.
-        if (Platform.OS === 'ios' && playerModeRef.current === 'mini' && isPlayingRef.current) {
-          console.log('[VideoPlayerContext] Maximizing from mini for PiP (iOS only)')
+        // Reliability-first PiP handoff: when backgrounding from in-app mini
+        // mode, restore fullscreen first so Android PiP enters from the stable
+        // fullscreen player surface instead of the transformed mini-player.
+        // This is less elegant than direct mini->PiP continuity, but repeated
+        // testing shows mini-mode PiP entry is the unstable path.
+        if (playerModeRef.current === 'mini' && isPlayingRef.current) {
+          console.log('[VideoPlayerContext] Maximizing from mini for PiP handoff')
           maximizedForPipRef.current = true
           dispatch({ type: 'MAXIMIZE', source: 'maximizePlayer' })
         }
@@ -507,10 +504,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
            }
          }
 
-         // Re-apply auto-PiP params every time we return to foreground with an active
-         // video. The system can clear autoEnterEnabled during PiP exit/dismiss, so we
-         // must reapply it to keep subsequent PiP entries working.
-         if (Platform.OS === 'android' && currentVideoRef.current) {
+         // Re-apply auto-PiP params on foreground return with an active video.
+         // The system can clear autoEnterEnabled during PiP exit/dismiss.
+         // Use a ref guard to avoid triggering re-renders or effect loops.
+         if (Platform.OS === 'android' && currentVideoRef.current && !isInPipModeRef.current) {
+           // Fire-and-forget — don't chain .then() that could setState
            MediaSession.setAutoPictureInPicture(true).catch(() => {})
          }
 

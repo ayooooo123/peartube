@@ -626,13 +626,13 @@ useEffect(() => {
           }
           break
         case 'stop':
-          // On Android, backgrounding can transiently emit a remote stop from the
-          // media session/service BEFORE MainActivity.onUserLeaveHint enters PiP.
-          // Ignore it during background/PiP handoff so playback isn't torn down.
+          // On Android, backgrounding and PiP transitions can emit transient
+          // remote stop commands. Ignore them whenever the app is backgrounded,
+          // in PiP, transitioning PiP, or still in the PiP exit resume window.
           if (
             Platform.OS === 'android' &&
             currentVideoRef.current &&
-            (isBackgroundedRef.current || pipTransitionInFlightRef.current || pipExitExpectedPlayingRef.current)
+            (isBackgroundedRef.current || isInPipModeRef.current || pipTransitionInFlightRef.current || pipExitExpectedPlayingRef.current)
           ) {
             console.log('[VideoPlayerContext] Ignoring remote stop during Android background/PiP handoff')
             break

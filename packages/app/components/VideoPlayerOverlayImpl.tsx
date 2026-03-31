@@ -2201,6 +2201,25 @@ export function VideoPlayerOverlay() {
     }
   }, [playerMode, currentVideo, isCasting, isPlaying, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, androidSplitPlayerEnabled, isLandscapeFullscreen])
 
+  // Android: explicitly refresh native auto-PiP params whenever the player
+  // enters an in-app playable mode (mini/fullscreen). This directly targets the
+  // repro where minimizing in-app causes later app-exit PiP attempts to fail.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    if (pipSupported === false) return
+    if (isInPipMode) return
+
+    const shouldEnable = currentVideo !== null && !isCasting && (playerMode === 'fullscreen' || playerMode === 'mini')
+    MediaSession.setAutoPictureInPicture(shouldEnable)
+      .then(() => {
+        autoPipEnabledRef.current = shouldEnable
+        console.log('[VideoPlayerOverlay] Refreshed Auto-PiP for mode change:', playerMode, shouldEnable)
+      })
+      .catch((err) => {
+        console.error('[VideoPlayerOverlay] Failed to refresh Auto-PiP for mode change:', err)
+      })
+  }, [playerMode, currentVideo, isCasting, isInPipMode, pipSupported])
+
   // PiP entry is handled natively via onUserLeaveHint in MainActivity
   // Same activity shrinks, same player continues (single-player architecture)
 

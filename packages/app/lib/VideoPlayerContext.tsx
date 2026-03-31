@@ -290,6 +290,22 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const mediaSessionActiveRef = useRef(false)
+  const syncMediaSessionPlaybackState = useCallback((nextIsPlaying: boolean) => {
+    if (Platform.OS === 'web') return
+    if (!mediaSessionActiveRef.current) return
+    MediaSession.setPlaybackState({
+      isPlaying: nextIsPlaying,
+      position: currentTimeRef.current,
+      duration: durationRef.current,
+      rate: playbackRateRef.current,
+    }).catch(() => {})
+  }, [])
+
+  const setDesiredPlaying = useCallback((nextIsPlaying: boolean) => {
+    setIsPlaying(nextIsPlaying)
+    syncMediaSessionPlaybackState(nextIsPlaying)
+  }, [syncMediaSessionPlaybackState])
+
   const setMediaSessionActive = useCallback((active: boolean) => {
     if (Platform.OS === 'web') return
     if (mediaSessionActiveRef.current === active) return
@@ -321,9 +337,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     if (lastClosedTimeRef.current !== null) {
       pendingSeekSecondsRef.current = lastClosedTimeRef.current
     }
-    setIsPlaying(true)
+    setDesiredPlaying(true)
     return true
-  }, [dispatch])
+  }, [dispatch, setDesiredPlaying])
 
   const forceReloadPlayback = useCallback((reason: string) => {
     const video = currentVideoRef.current
@@ -340,9 +356,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     })
     setIsLoading(true)
     pendingSeekSecondsRef.current = currentTimeRef.current
-    setIsPlaying(true)
+    setDesiredPlaying(true)
     return true
-  }, [dispatch])
+  }, [dispatch, setDesiredPlaying])
 
   const tryApplyPendingSeek = useCallback(() => {
     const pending = pendingSeekSecondsRef.current
@@ -593,10 +609,10 @@ useEffect(() => {
           setSeekPosition(seekValue)
           setTimeout(() => {
             setSeekPosition(undefined)
-            setIsPlaying(true)
+            setDesiredPlaying(true)
           }, 100)
         } else {
-          setIsPlaying(true)
+          setDesiredPlaying(true)
         }
       }
       switch (event.command) {
@@ -604,7 +620,7 @@ useEffect(() => {
           console.log('[VideoPlayerContext] Setting isPlaying = true')
           if (isBackgroundedRef.current || isInPipModeRef.current) {
             if (currentVideoRef.current) {
-              setIsPlaying(true)
+              setDesiredPlaying(true)
               try { playerRef.current?.play?.() } catch {}
             } else {
               remotePlayWhileBackgroundedRef.current = true
@@ -625,7 +641,7 @@ useEffect(() => {
             reassertNativePlayAfterPipExit('remote-pause-during-pip-exit')
             return
           }
-          setIsPlaying(false)
+          setDesiredPlaying(false)
           if (isBackgroundedRef.current || isInPipModeRef.current) {
             try { playerRef.current?.pause?.() } catch {}
           }
@@ -661,12 +677,12 @@ useEffect(() => {
         case 'togglePlayPause':
           console.log('[VideoPlayerContext] Toggling play/pause')
           if (isPlayingRef.current) {
-            setIsPlaying(false)
+            setDesiredPlaying(false)
             if (isBackgroundedRef.current || isInPipModeRef.current) {
               try { playerRef.current?.pause?.() } catch {}
             }
           } else if (isBackgroundedRef.current && currentVideoRef.current) {
-            setIsPlaying(true)
+            setDesiredPlaying(true)
             try { playerRef.current?.play?.() } catch {}
           } else {
             resumeFromRemote()
@@ -714,16 +730,16 @@ useEffect(() => {
           appState: 'inactive',
           isPlaying: isPlayingRef.current,
         })
-        setIsPlaying(false)
+        setDesiredPlaying(false)
       } else if (event.type === 'ended' && event.shouldResume) {
         if (wasPlayingWhenBackgroundedRef.current) {
-          setIsPlaying(true)
+          setDesiredPlaying(true)
         }
       }
     })
 
     return () => subscription.remove()
-  }, [dispatch, isPrimaryController])
+  }, [dispatch, isPrimaryController, setDesiredPlaying])
 
   // Route change listener (headphone unplug) - mobile only
   useEffect(() => {
@@ -732,12 +748,12 @@ useEffect(() => {
 
     const subscription = MediaSession.addAudioRouteChangeListener((event: MediaSession.AudioRouteChangeEvent) => {
       if (event.reason === 'oldDeviceUnavailable') {
-        setIsPlaying(false)
+        setDesiredPlaying(false)
       }
     })
 
     return () => subscription.remove()
-  }, [isPrimaryController])
+  }, [isPrimaryController, setDesiredPlaying])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
@@ -842,7 +858,7 @@ useEffect(() => {
                 ? { width: event.width, height: event.height }
                 : undefined,
           })
-          setIsPlaying(shouldResume)
+          setDesiredPlaying(shouldResume)
 
           if (shouldResume && !ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
             // Proactively reassert play during the first few frames after PiP exit.
@@ -946,7 +962,7 @@ useEffect(() => {
     currentVideoRef.current = video
     videoUrlRef.current = url
     dispatch({ type: 'LOAD_VIDEO', source: 'loadAndPlayVideo', video, url })
-    setIsPlaying(true)
+    setDesiredPlaying(true)
     setVideoStats(null)
     const cachedStats = _videoStatsEventEmitter.getLatest(video.channelKey, video.path || video.id)
     if (cachedStats) {
@@ -960,7 +976,7 @@ useEffect(() => {
       iosIgnorePausedUntilRef.current = Date.now() + 1500
     }
     _videoLoadEventEmitter.emit(video)
-  }, [dispatch])
+  }, [dispatch, setDesiredPlaying])
 
   const drainQueuedPlaybackStart = useCallback(() => {
     if (playbackStartInFlightRef.current) return
@@ -1238,8 +1254,8 @@ useEffect(() => {
         playerRef.current?.pause?.()
       } catch {}
     }
-    setIsPlaying(false)
-  }, [])
+    setDesiredPlaying(false)
+  }, [setDesiredPlaying])
 
   const resumeVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Resuming video')
@@ -1252,17 +1268,17 @@ useEffect(() => {
 
       setTimeout(() => {
         setSeekPosition(undefined)
-        setIsPlaying(true)
+        setDesiredPlaying(true)
       }, 100)
     } else {
-      setIsPlaying(true)
+      setDesiredPlaying(true)
       if (Platform.OS === 'web') {
         try {
           playerRef.current?.play?.()
         } catch {}
       }
     }
-  }, [])
+  }, [setDesiredPlaying])
 
   const closeSession = useCallback((reason: 'user' | 'remote-stop' | 'android-minimize-close' | 'pip-close' = 'user') => {
     console.log('[VideoPlayerContext] Closing session:', reason)
@@ -1306,7 +1322,7 @@ useEffect(() => {
     currentVideoRef.current = null
     videoUrlRef.current = null
 
-    setIsPlaying(false)
+    setDesiredPlaying(false)
     dispatch({
       type: 'CLOSE_VIDEO',
       source:
@@ -1327,7 +1343,7 @@ useEffect(() => {
       setMediaSessionActive(false)
     }
     mediaSessionActiveRef.current = false
-  }, [dispatch, setMediaSessionActive])
+  }, [dispatch, setDesiredPlaying, setMediaSessionActive])
 
   const closeVideo = useCallback(() => {
     closeSession('user')
@@ -1428,13 +1444,13 @@ useEffect(() => {
       source: 'minimizePlayer',
       platform: Platform.OS === 'web' ? 'web' : Platform.OS === 'android' ? 'android' : 'ios',
     })
-  }, [dispatch])
+  }, [dispatch, setDesiredPlaying])
 
   // Maximize from mini player
   const maximizePlayer = useCallback(() => {
     console.log('[VideoPlayerContext] Maximizing player')
     dispatch({ type: 'MAXIMIZE', source: 'maximizePlayer' })
-  }, [dispatch])
+  }, [dispatch, setDesiredPlaying])
 
   const setIsInPipMode = useCallback((value: boolean) => {
     if (Platform.OS !== 'android') {
@@ -1465,7 +1481,7 @@ useEffect(() => {
       restoreMode: ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY ? 'fullscreen' : modeBeforePipRef.current,
       dimensions: pipWindowSizeRef.current ?? undefined,
     })
-  }, [dispatch])
+  }, [dispatch, setDesiredPlaying])
 
   const startSeekConfirm = useCallback((targetSeconds: number) => {
     seekConfirmRef.current = { targetSeconds, startedAt: Date.now() }
@@ -1673,7 +1689,7 @@ useEffect(() => {
 
   const onEnded = useCallback(() => {
     console.log('[VideoPlayerContext] Player ended')
-    setIsPlaying(false)
+    setDesiredPlaying(false)
     if (Platform.OS !== 'web') {
       MediaSession.setPlaybackState({
         isPlaying: false,
@@ -1682,7 +1698,7 @@ useEffect(() => {
         rate: playbackRateRef.current,
       }).catch(() => {})
     }
-  }, [])
+  }, [setDesiredPlaying])
 
   const onError = useCallback((error: any) => {
     const currentUrl = videoUrlRef.current

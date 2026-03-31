@@ -196,25 +196,28 @@ object PipBridge {
         markPipTransition()
         android.util.Log.d("PipBridge", "onUserLeaveHint: PiP transition marked")
 
-        // With react-native-video, PiP runs in the main activity (no PlayerActivity handoff).
-        // Build fresh PiP params with autoEnterEnabled=true RIGHT BEFORE entering PiP.
-        // This ensures stale params from JS-side state transitions can't prevent PiP entry.
         try {
             val aspectRatio = getPipAspectRatio()
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
+            builder.setActions(moduleInstance?.buildPipActions(activity) ?: emptyList())
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setSeamlessResizeEnabled(true)
                 builder.setAutoEnterEnabled(true)
+                // On Android 12+, just ensure params are fresh with autoEnterEnabled=true.
+                // The system handles PiP entry automatically via setAutoEnterEnabled.
+                // Calling enterPictureInPictureMode manually can cause the system to
+                // silently reject PiP on repeated cycles.
+                activity.setPictureInPictureParams(builder.build())
+                android.util.Log.d("PipBridge", "onUserLeaveHint: refreshed autoEnter params (API 31+)")
+            } else {
+                // On API 26-30, must enter PiP manually.
+                activity.enterPictureInPictureMode(builder.build())
+                android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly (API <31)")
             }
-            builder.setActions(moduleInstance?.buildPipActions(activity) ?: emptyList())
-
-            // Apply params first so the system sees autoEnterEnabled=true
-            activity.setPictureInPictureParams(builder.build())
-            activity.enterPictureInPictureMode(builder.build())
-            android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly (freshly armed)")
         } catch (e: Exception) {
-            android.util.Log.e("PipBridge", "onUserLeaveHint: enterPictureInPictureMode failed", e)
+            android.util.Log.e("PipBridge", "onUserLeaveHint: PiP failed", e)
         }
     }
 

@@ -197,17 +197,22 @@ object PipBridge {
         android.util.Log.d("PipBridge", "onUserLeaveHint: PiP transition marked")
 
         // With react-native-video, PiP runs in the main activity (no PlayerActivity handoff).
-        // Enter PiP directly here instead of relying on setAutoEnterEnabled which can be lost.
+        // Build fresh PiP params with autoEnterEnabled=true RIGHT BEFORE entering PiP.
+        // This ensures stale params from JS-side state transitions can't prevent PiP entry.
         try {
             val aspectRatio = getPipAspectRatio()
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setSeamlessResizeEnabled(true)
+                builder.setAutoEnterEnabled(true)
             }
             builder.setActions(moduleInstance?.buildPipActions(activity) ?: emptyList())
+
+            // Apply params first so the system sees autoEnterEnabled=true
+            activity.setPictureInPictureParams(builder.build())
             activity.enterPictureInPictureMode(builder.build())
-            android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
+            android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly (freshly armed)")
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "onUserLeaveHint: enterPictureInPictureMode failed", e)
         }

@@ -2156,8 +2156,10 @@ export function VideoPlayerOverlay() {
   }, [playerMode, isInPipMode, isLandscapeFullscreen])
 
   // Single unified Android auto-PiP effect.
-  // Fires on any relevant state change and directly calls setAutoPictureInPicture.
-  // No competing effects, no cancellation races, no ref-driven re-arm chains.
+  // On Android: enable PiP whenever there's an active video, regardless of playerMode.
+  // Only disable when the video is actually gone (currentVideo === null) or casting.
+  // This prevents transitional playerMode values during PiP exit from accidentally
+  // calling setAutoPictureInPicture(false) and breaking subsequent PiP entries.
   useEffect(() => {
     if (Platform.OS === 'web') return
     if (isInPipMode) return
@@ -2165,13 +2167,10 @@ export function VideoPlayerOverlay() {
     if (Platform.OS === 'android') {
       if (pipSupported === false) return
 
-      const shouldEnable =
-        currentVideo !== null &&
-        !isCasting &&
-        (playerMode === 'fullscreen' || playerMode === 'mini')
-
-      // Clear any pending PiP exit re-arm since we're handling it here
-      if (shouldEnable) pipExitNeedsRearmRef.current = false
+      // Keep PiP enabled as long as there's an active video.
+      // Don't gate on playerMode — transitional states during PiP exit can
+      // cause false disables that break subsequent PiP entries.
+      const shouldEnable = currentVideo !== null && !isCasting
 
       autoPipEnabledRef.current = shouldEnable
       console.log('[VideoPlayerOverlay] Auto-PiP effect:', playerMode, 'enabling:', shouldEnable)

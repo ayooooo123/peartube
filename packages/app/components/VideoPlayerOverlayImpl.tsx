@@ -1616,23 +1616,27 @@ export function VideoPlayerOverlay() {
     const fullW = screenWidthShared.value
     const fullH = videoHeightShared.value + cutoutInset
 
-    const miniScale = fullW > 0
-      ? miniPipDynWidthShared.value / fullW
-      : 1
-
-    const scale = interpolate(
+    // IMPORTANT: interpolate directly to the same mini dimensions as the outer
+    // container. Scaling from fullscreen height causes aspect mismatch when the
+    // mini player uses dynamic aspect-ratio-correct height.
+    const width = interpolate(
       animProgress.value,
       [0, 1],
-      [miniScale, 1],
+      [miniPipDynWidthShared.value, fullW],
+      Extrapolation.CLAMP
+    )
+    const height = interpolate(
+      animProgress.value,
+      [0, 1],
+      [miniPipDynHeightShared.value, fullH],
       Extrapolation.CLAMP
     )
 
     return {
-      width: fullW,
-      height: fullH,
+      width,
+      height,
       flex: undefined,
-      transformOrigin: 'left top',
-      transform: [{ scale }],
+      transform: [],
     }
   }, [])
 

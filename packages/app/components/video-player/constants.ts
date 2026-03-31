@@ -47,11 +47,13 @@ export const SPRING_CONFIG_TIGHT = {
   mass: 0.8,
 }
 
-// Snap spring for mini corner docking (stiffer with slight natural overshoot)
+// Snap spring for mini corner docking.
+// Tuned to feel more weighted/smooth like YouTube's mini player while still
+// preserving decisive corner snaps and diagonal fling support.
 export const SPRING_CONFIG_MINI_SNAP = {
-  damping: 30,
-  stiffness: 340,
-  mass: 0.9,
+  damping: 44,
+  stiffness: 520,
+  mass: 0.95,
   restDisplacementThreshold: 0.5,
   restSpeedThreshold: 4,
   overshootClamping: false,
@@ -65,9 +67,9 @@ export const SNAP_FLING_HORIZON = 0.22  // seconds — projection for fling (≥
 export const SNAP_HYSTERESIS_PX = 24    // center-distance for slow-release stickiness
 
 // Mini player visual tuning
-export const MINI_DRAG_SCALE = 0.985
-export const MINI_SHADOW_DOCKED = { opacity: 0.18, radius: 14, offsetY: 4, elevation: 10 }
-export const MINI_SHADOW_DRAGGING = { opacity: 0.22, radius: 18, offsetY: 6, elevation: 14 }
+export const MINI_DRAG_SCALE = 0.988
+export const MINI_SHADOW_DOCKED = { opacity: 0.16, radius: 12, offsetY: 4, elevation: 9 }
+export const MINI_SHADOW_DRAGGING = { opacity: 0.24, radius: 18, offsetY: 6, elevation: 14 }
 export const MINI_DRAG_OVERSHOOT_X = 24
 export const MINI_DRAG_OVERSHOOT_TOP = 16
 export const MINI_DRAG_OVERSHOOT_BOTTOM = 16

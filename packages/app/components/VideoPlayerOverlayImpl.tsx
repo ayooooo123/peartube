@@ -1373,7 +1373,32 @@ export function VideoPlayerOverlay() {
       splitPanTranslationY.value = 0
   }), [disableMiniLayoutOnAndroidSplit, minimizePlayer, maximizePlayer])
 
-  const composedGesture = panGesture
+  const miniSingleTapGesture = useMemo(() => Gesture.Tap()
+    .maxDuration(250)
+    .maxDistance(12)
+    .onEnd((_evt, success) => {
+      'worklet'
+      if (!success) return
+      if (!isMiniPlayerModeShared.value) return
+      runOnJS(handleVideoTap)()
+    }), [handleVideoTap])
+
+  const miniDoubleTapGesture = useMemo(() => Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDelay(240)
+    .maxDuration(250)
+    .maxDistance(16)
+    .onEnd((_evt, success) => {
+      'worklet'
+      if (!success) return
+      if (!isMiniPlayerModeShared.value) return
+      runOnJS(maximizeFromMini)()
+    }), [maximizeFromMini])
+
+  const composedGesture = useMemo(
+    () => Gesture.Race(panGesture, Gesture.Exclusive(miniDoubleTapGesture, miniSingleTapGesture)),
+    [panGesture, miniDoubleTapGesture, miniSingleTapGesture]
+  )
 
    // Animated styles for the container
    const containerStyle = useAnimatedStyle(() => {
@@ -3014,14 +3039,14 @@ export function VideoPlayerOverlay() {
               <Animated.View style={videoPlayerStyle}>
                 {renderVideoPlayer()}
               </Animated.View>
-              {!isInPipMode && !showControls && (
+              {!isInPipMode && playerMode !== 'mini' && !showControls && (
                 <Pressable
                   style={StyleSheet.absoluteFill}
                   onPress={handleVideoTap}
                   testID="video-tap-overlay"
                 />
               )}
-              {!isInPipMode && showControls && (
+              {!isInPipMode && playerMode !== 'mini' && showControls && (
                 <Pressable
                   // Leave the entire bottom controls region completely clear so
                   // scrubber/timestamps/buttons never compete with the tap overlay.

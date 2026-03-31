@@ -353,10 +353,17 @@ Hidden at rest:
 
 The mini player should look almost content-only when idle.
 
-### 9.2 On tap (idle mini player)
+### 9.2 Tap and double-tap behavior
 
-Tap on mini player:
+Single tap on mini player:
+- reveal mini-player controls / close affordance if hidden
+- should not maximize by default
+
+Double tap on mini player:
 - maximize to fullscreen
+- thresholds:
+  - max delay between taps: `240ms`
+  - max movement per tap: `16px`
 
 Long-press is reserved; do not add a long-press menu in v1.
 

@@ -1001,10 +1001,16 @@ export function VideoPlayerOverlay() {
     realScreenWidthShared.value = screenMetrics.width
    realScreenHeightShared.value = screenMetrics.height
    videoHeightShared.value = videoHeight
-   miniPipDynWidthShared.value = dynMiniWidth
-   miniPipDynHeightShared.value = dynMiniHeight
    aspectRatioShared.value = effectiveAR
-   miniPlayerSizeModeShared.value = miniPlayerSizeMode
+
+   // IMPORTANT: while in mini mode, miniPipDynWidth/Height and sizeMode are
+   // animation/stateful values managed by gestures/effects. Don't overwrite them
+   // synchronously during render or compact->expanded toggles will flash and revert.
+   if (playerMode !== 'mini') {
+     miniPipDynWidthShared.value = dynMiniWidth
+     miniPipDynHeightShared.value = dynMiniHeight
+     miniPlayerSizeModeShared.value = miniPlayerSizeMode
+   }
    insetLeftShared.value = insets.left
    insetRightShared.value = insets.right
    insetTopShared.value = stableInsetTopRef.current
@@ -1048,6 +1054,7 @@ export function VideoPlayerOverlay() {
     miniPipY.value = withSpring(nextPos.y, SPRING_CONFIG_MINI_SNAP)
     miniPipDynWidthShared.value = withSpring(nextPos.width, SPRING_CONFIG_MINI_SNAP)
     miniPipDynHeightShared.value = withSpring(nextPos.height, SPRING_CONFIG_MINI_SNAP)
+    miniPlayerSizeModeShared.value = miniPlayerSizeMode
     currentDockCornerShared.value = miniPlayerCorner
   }, [playerMode, screenWidth, screenHeight, miniPlayerBottom, dynMiniWidth, dynMiniHeight, miniPlayerCorner, miniPlayerSizeMode, insets.top, insets.right, insets.bottom, insets.left, isDraggingMiniPlayer, effectiveAR])
 

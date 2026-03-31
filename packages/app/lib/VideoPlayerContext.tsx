@@ -773,6 +773,14 @@ useEffect(() => {
         pipExitShouldResumeRef.current = expectedPlaying
         pipExitResumeUntilRef.current = expectedPlaying ? (Date.now() + 2000) : 0
         pipTransitionInFlightRef.current = true
+
+        // Re-arm auto-PiP IMMEDIATELY on PiP exit detection — before the
+        // debounced setTimeout handler. This ensures setAutoPictureInPicture(true)
+        // is called even if rapid PiP cycles cause the debounced handler to be
+        // swallowed or the setTimeout guard to early-return.
+        if (currentVideoRef.current) {
+          MediaSession.setAutoPictureInPicture(true).catch(() => {})
+        }
       }
 
       // Only debounce if BOTH boolean AND dimensions are identical

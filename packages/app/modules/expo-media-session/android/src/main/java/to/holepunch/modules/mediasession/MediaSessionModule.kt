@@ -160,8 +160,8 @@ object PipBridge {
 
     /**
      * Called from MainActivity.onUserLeaveHint().
-     * On Android 12+, PiP auto-enters via setAutoEnterEnabled(true) in setPictureInPictureParams.
-     * On older versions (API 26-30), we manually call enterPictureInPictureMode here.
+     * Keep this self-contained and deterministic across repeated PiP cycles:
+     * always build fresh PiP params, apply them to the activity, then enter PiP.
      */
     fun onUserLeaveHint(activity: Activity) {
         android.util.Log.d("PipBridge", "onUserLeaveHint: pipEnabled=$pipEnabled")
@@ -205,17 +205,12 @@ object PipBridge {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setSeamlessResizeEnabled(true)
                 builder.setAutoEnterEnabled(true)
-                // On Android 12+, just ensure params are fresh with autoEnterEnabled=true.
-                // The system handles PiP entry automatically via setAutoEnterEnabled.
-                // Calling enterPictureInPictureMode manually can cause the system to
-                // silently reject PiP on repeated cycles.
-                activity.setPictureInPictureParams(builder.build())
-                android.util.Log.d("PipBridge", "onUserLeaveHint: refreshed autoEnter params (API 31+)")
-            } else {
-                // On API 26-30, must enter PiP manually.
-                activity.enterPictureInPictureMode(builder.build())
-                android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly (API <31)")
             }
+
+            val params = builder.build()
+            activity.setPictureInPictureParams(params)
+            activity.enterPictureInPictureMode(params)
+            android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "onUserLeaveHint: PiP failed", e)
         }

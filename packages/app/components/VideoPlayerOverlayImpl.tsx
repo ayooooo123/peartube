@@ -1071,7 +1071,7 @@ export function VideoPlayerOverlay() {
     miniPipDynWidthShared.value = nextPos.width
     miniPipDynHeightShared.value = nextPos.height
     currentDockCornerShared.value = miniPlayerCorner
-  }, [playerMode, screenWidth, screenHeight, miniPlayerBottom, dynMiniWidth, dynMiniHeight, miniPlayerCorner, insets.top, insets.right, insets.bottom, insets.left, isDraggingMiniPlayer, effectiveAR])
+  }, [playerMode, screenWidth, screenHeight, miniPlayerBottom, dynMiniWidth, dynMiniHeight, miniPlayerCorner, miniPlayerSizeMode, insets.top, insets.right, insets.bottom, insets.left, isDraggingMiniPlayer, effectiveAR])
 
   // When exiting landscape fullscreen, keep rendering the fullscreen container until window dimensions AND insets settle.
   // The tricky part: StatusBar visibility + safe area insets can lag behind the orientation lock by a few frames.

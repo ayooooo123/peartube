@@ -1066,10 +1066,10 @@ export function VideoPlayerOverlay() {
       aspectRatio: effectiveAR,
       sizeMode: miniPlayerSizeMode,
     })
-    miniPipX.value = withSpring(nextPos.x, SPRING_CONFIG_TIGHT)
-    miniPipY.value = withSpring(nextPos.y, SPRING_CONFIG_TIGHT)
-    miniPipDynWidthShared.value = nextPos.width
-    miniPipDynHeightShared.value = nextPos.height
+    miniPipX.value = withSpring(nextPos.x, SPRING_CONFIG_MINI_SNAP)
+    miniPipY.value = withSpring(nextPos.y, SPRING_CONFIG_MINI_SNAP)
+    miniPipDynWidthShared.value = withSpring(nextPos.width, SPRING_CONFIG_MINI_SNAP)
+    miniPipDynHeightShared.value = withSpring(nextPos.height, SPRING_CONFIG_MINI_SNAP)
     currentDockCornerShared.value = miniPlayerCorner
   }, [playerMode, screenWidth, screenHeight, miniPlayerBottom, dynMiniWidth, dynMiniHeight, miniPlayerCorner, miniPlayerSizeMode, insets.top, insets.right, insets.bottom, insets.left, isDraggingMiniPlayer, effectiveAR])
 

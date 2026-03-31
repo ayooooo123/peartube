@@ -2146,79 +2146,43 @@ export function VideoPlayerOverlay() {
     MediaSession.setSurfaceViewInset(0).catch(() => {})
   }, [playerMode, isInPipMode, isLandscapeFullscreen])
 
+  // Single unified Android auto-PiP effect.
+  // Fires on any relevant state change and directly calls setAutoPictureInPicture.
+  // No competing effects, no cancellation races, no ref-driven re-arm chains.
   useEffect(() => {
     if (Platform.OS === 'web') return
-    if (Platform.OS === 'android' && pipSupported === false) return
-    const shouldAutoPip = Platform.OS === 'android'
-      // Prime Android auto-PiP as soon as there's an active video in a playable mode.
-      // Waiting for `isPlaying` misses the first-open -> immediate-home case because
-      // the native onPlaying event may not have fired yet.
-      ? currentVideo !== null && !isCasting && (playerMode === 'fullscreen' || playerMode === 'mini')
-      : (playerMode === 'fullscreen' || (playerMode === 'mini' && !disableMiniLayoutOnAndroidSplit)) &&
+    if (isInPipMode) return
+
+    if (Platform.OS === 'android') {
+      if (pipSupported === false) return
+
+      const shouldEnable =
+        currentVideo !== null &&
+        !isCasting &&
+        (playerMode === 'fullscreen' || playerMode === 'mini')
+
+      // Clear any pending PiP exit re-arm since we're handling it here
+      if (shouldEnable) pipExitNeedsRearmRef.current = false
+
+      autoPipEnabledRef.current = shouldEnable
+      console.log('[VideoPlayerOverlay] Auto-PiP effect:', playerMode, 'enabling:', shouldEnable)
+
+      MediaSession.setAutoPictureInPicture(shouldEnable)
+        .then(() => {
+          console.log('[VideoPlayerOverlay] Auto-PiP set:', shouldEnable)
+        })
+        .catch((err) => {
+          console.error('[VideoPlayerOverlay] Auto-PiP failed:', err)
+        })
+    } else if (Platform.OS === 'ios') {
+      const shouldEnable =
+        (playerMode === 'fullscreen' || (playerMode === 'mini' && !disableMiniLayoutOnAndroidSplit)) &&
         currentVideo !== null &&
         !isCasting
-
-    // If a PiP exit requested re-arm, fold that into the main effect instead of
-    // using a second state-driven effect. This avoids overlapping re-arm loops.
-    const shouldRearmAfterExit = Platform.OS === 'android'
-      && pipExitNeedsRearmRef.current
-      && !isInPipMode
-      && currentVideo !== null
-      && !isCasting
-      && playerMode === 'fullscreen'
-
-    const finalShouldAutoPip = shouldAutoPip || shouldRearmAfterExit
-    autoPipEnabledRef.current = finalShouldAutoPip
-    if (isInPipMode) return
-    console.log('[VideoPlayerOverlay] Auto-PiP effect, playerMode:', playerMode, 'hasVideo:', !!currentVideo, 'enabling:', finalShouldAutoPip)
-    if (Platform.OS === 'android') {
-      let cancelled = false
-      const applyAutoPip = async () => {
-        try {
-          let enabled = finalShouldAutoPip
-          if (androidSplitPlayerEnabled) {
-            const inPlayerActivity = await MediaSession.isInPlayerActivity()
-            if (cancelled) return
-            enabled = enabled && inPlayerActivity
-          }
-          await MediaSession.setAutoPictureInPicture(enabled)
-          if (!cancelled) {
-            if (shouldRearmAfterExit) pipExitNeedsRearmRef.current = false
-            console.log('[VideoPlayerOverlay] Auto-PiP set:', enabled)
-          }
-        } catch (err) {
-          if (!cancelled) {
-            console.error('[VideoPlayerOverlay] Auto-PiP failed:', err)
-          }
-        }
-      }
-      applyAutoPip()
-      return () => {
-        cancelled = true
-      }
-    } else if (Platform.OS === 'ios') {
-      setIosPipEnabled(finalShouldAutoPip)
+      autoPipEnabledRef.current = shouldEnable
+      setIosPipEnabled(shouldEnable)
     }
-  }, [playerMode, currentVideo, isCasting, isPlaying, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, androidSplitPlayerEnabled, isLandscapeFullscreen])
-
-  // Android: explicitly refresh native auto-PiP params whenever the player
-  // enters an in-app playable mode (mini/fullscreen). This directly targets the
-  // repro where minimizing in-app causes later app-exit PiP attempts to fail.
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    if (pipSupported === false) return
-    if (isInPipMode) return
-
-    const shouldEnable = currentVideo !== null && !isCasting && (playerMode === 'fullscreen' || playerMode === 'mini')
-    MediaSession.setAutoPictureInPicture(shouldEnable)
-      .then(() => {
-        autoPipEnabledRef.current = shouldEnable
-        console.log('[VideoPlayerOverlay] Refreshed Auto-PiP for mode change:', playerMode, shouldEnable)
-      })
-      .catch((err) => {
-        console.error('[VideoPlayerOverlay] Failed to refresh Auto-PiP for mode change:', err)
-      })
-  }, [playerMode, currentVideo, isCasting, isInPipMode, pipSupported])
+  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, isLandscapeFullscreen])
 
   // PiP entry is handled natively via onUserLeaveHint in MainActivity
   // Same activity shrinks, same player continues (single-player architecture)

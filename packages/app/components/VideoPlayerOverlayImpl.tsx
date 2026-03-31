@@ -36,14 +36,27 @@ import { DevicePickerModal } from '@/components/cast'
 // Import modular video-player components
 import {
   // Constants
-  MINI_PIP_WIDTH,
-  MINI_PIP_HEIGHT,
   MINI_PIP_MARGIN,
   MINI_PIP_CORNER_RADIUS,
+  MINI_PIP_WIDTH_FRACTION,
+  MINI_PIP_WIDTH_MIN,
+  MINI_PIP_WIDTH_MAX,
   TAB_BAR_HEIGHT,
 
   SPRING_CONFIG_BOUNCY,
   SPRING_CONFIG_TIGHT,
+  SPRING_CONFIG_MINI_SNAP,
+  SNAP_LOW_SPEED,
+  SNAP_FLING_SPEED,
+  SNAP_TOSS_HORIZON,
+  SNAP_FLING_HORIZON,
+  SNAP_HYSTERESIS_PX,
+  MINI_DRAG_SCALE,
+  MINI_SHADOW_DOCKED,
+  MINI_SHADOW_DRAGGING,
+  MINI_DRAG_OVERSHOOT_X,
+  MINI_DRAG_OVERSHOOT_TOP,
+  MINI_DRAG_OVERSHOOT_BOTTOM,
   DESKTOP_MINI_WIDTH,
   DESKTOP_MINI_HEIGHT,
   DESKTOP_MINI_PADDING,
@@ -82,30 +95,159 @@ const channelMetaNameCache = new Map<string, { name: string | null; expiresAt: n
 const ZERO_EDGE_INSETS = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 })
 type MiniPlayerCorner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
 
+// ── Responsive mini-player geometry worklets ──────────────────────────
+
+interface MiniBounds {
+  leftBound: number
+  rightBound: number
+  topBound: number
+  bottomBound: number
+}
+
+interface Anchor { x: number; y: number; corner: MiniPlayerCorner }
+
+function computeMiniSize(screenWidth: number, aspectRatio: number) {
+  'worklet'
+  const ar = aspectRatio > 0 ? aspectRatio : 16 / 9
+  const w = Math.max(MINI_PIP_WIDTH_MIN, Math.min(MINI_PIP_WIDTH_MAX, Math.round(screenWidth * MINI_PIP_WIDTH_FRACTION)))
+  const h = Math.round(w / ar)
+  return { width: w, height: h }
+}
+
+function computeMiniBounds(
+  screenWidth: number,
+  screenHeight: number,
+  insetTop: number,
+  insetRight: number,
+  insetBottom: number,
+  insetLeft: number,
+  bottomChrome: number,
+  miniWidth: number,
+  miniHeight: number,
+): MiniBounds {
+  'worklet'
+  const margin = MINI_PIP_MARGIN
+  const bottomMargin = Math.max(insetBottom + margin, bottomChrome + margin)
+  return {
+    leftBound: insetLeft + margin,
+    rightBound: screenWidth - insetRight - margin - miniWidth,
+    topBound: insetTop + margin,
+    bottomBound: screenHeight - bottomMargin - miniHeight,
+  }
+}
+
+function getCornerAnchors(bounds: MiniBounds): [Anchor, Anchor, Anchor, Anchor] {
+  'worklet'
+  return [
+    { x: bounds.leftBound,  y: bounds.topBound,    corner: 'top-left' },
+    { x: bounds.rightBound, y: bounds.topBound,    corner: 'top-right' },
+    { x: bounds.leftBound,  y: bounds.bottomBound, corner: 'bottom-left' },
+    { x: bounds.rightBound, y: bounds.bottomBound, corner: 'bottom-right' },
+  ]
+}
+
+function resolveSnapTarget(
+  releaseX: number,
+  releaseY: number,
+  vx: number,
+  vy: number,
+  anchors: readonly Anchor[],
+  miniWidth: number,
+  miniHeight: number,
+  currentCorner: MiniPlayerCorner,
+  bounds: MiniBounds,
+): Anchor {
+  'worklet'
+  const speed = Math.sqrt(vx * vx + vy * vy)
+
+  // Projection horizon by velocity regime
+  let horizon = 0
+  if (speed >= SNAP_FLING_SPEED) {
+    horizon = SNAP_FLING_HORIZON
+  } else if (speed >= SNAP_LOW_SPEED) {
+    horizon = SNAP_TOSS_HORIZON
+  }
+
+  // Project release point, clamp to legal bounds
+  let targetX = releaseX + vx * horizon
+  let targetY = releaseY + vy * horizon
+  targetX = Math.max(bounds.leftBound, Math.min(bounds.rightBound, targetX))
+  targetY = Math.max(bounds.topBound, Math.min(bounds.bottomBound, targetY))
+
+  // Target card center
+  const tcx = targetX + miniWidth / 2
+  const tcy = targetY + miniHeight / 2
+
+  // Score each anchor by squared Euclidean center distance
+  let bestAnchor = anchors[0]
+  let bestScore = Infinity
+  let currentAnchorScore = Infinity
+
+  for (let i = 0; i < anchors.length; i++) {
+    const acx = anchors[i].x + miniWidth / 2
+    const acy = anchors[i].y + miniHeight / 2
+    const score = (acx - tcx) * (acx - tcx) + (acy - tcy) * (acy - tcy)
+    if (score < bestScore) {
+      bestScore = score
+      bestAnchor = anchors[i]
+    }
+    if (anchors[i].corner === currentCorner) {
+      currentAnchorScore = score
+    }
+  }
+
+  // Hysteresis: on slow release, prefer current corner if it's close enough
+  if (speed < SNAP_LOW_SPEED && currentAnchorScore < Infinity) {
+    const bestDist = Math.sqrt(bestScore)
+    const currentDist = Math.sqrt(currentAnchorScore)
+    if (currentDist - bestDist < SNAP_HYSTERESIS_PX) {
+      for (let i = 0; i < anchors.length; i++) {
+        if (anchors[i].corner === currentCorner) return anchors[i]
+      }
+    }
+  }
+
+  return bestAnchor
+}
+
+// ── JS-side snap position helper ──────────────────────────────────────
+
 function getMobileMiniPlayerSnapPosition({
   corner,
   screenWidth,
   screenHeight,
-  miniWidth,
   topInset,
+  rightInset,
+  bottomInset,
+  leftInset,
   bottomOffset,
+  aspectRatio,
 }: {
   corner: MiniPlayerCorner
   screenWidth: number
   screenHeight: number
-  miniWidth: number
   topInset: number
+  rightInset: number
+  bottomInset: number
+  leftInset: number
   bottomOffset: number
+  aspectRatio: number
 }) {
-  const leftX = MINI_PIP_MARGIN
-  const rightX = screenWidth - miniWidth - MINI_PIP_MARGIN
-  const topY = topInset + MINI_PIP_MARGIN
-  const bottomY = screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - bottomOffset
-
-  return {
-    x: corner.includes('right') ? rightX : leftX,
-    y: corner.includes('bottom') ? bottomY : topY,
-  }
+  const { width: miniWidth, height: miniHeight } = computeMiniSize(screenWidth, aspectRatio)
+  const bounds = computeMiniBounds(
+    screenWidth,
+    screenHeight,
+    topInset,
+    rightInset,
+    bottomInset,
+    leftInset,
+    bottomOffset,
+    miniWidth,
+    miniHeight,
+  )
+  const anchors = getCornerAnchors(bounds)
+  const anchor = anchors.find(a => a.corner === corner) ?? anchors[3] // default BR
+  return { x: anchor.x, y: anchor.y, width: miniWidth, height: miniHeight }
 }
 
 export function VideoPlayerOverlay() {
@@ -345,7 +487,7 @@ export function VideoPlayerOverlay() {
   const desktopVideoHeight = effectiveAR < 1
     ? Math.min(desktopVideoHeightRaw, Math.round(screenHeight * 0.8))
     : desktopVideoHeightRaw
-  const dynMiniWidth = Math.min(Math.round(MINI_PIP_HEIGHT * effectiveAR), MINI_PIP_WIDTH)
+  const { width: dynMiniWidth, height: dynMiniHeight } = computeMiniSize(screenWidth, effectiveAR)
 
   useEffect(() => {
     if (!currentVideo || playerMode === 'hidden') return
@@ -726,6 +868,8 @@ export function VideoPlayerOverlay() {
     const videoHeightShared = useSharedValue(videoHeight)
     const miniPipDynWidthShared = useSharedValue(dynMiniWidth)
     const videoWrapperHeightShared = useSharedValue(videoHeight)
+   const insetLeftShared = useSharedValue(insets.left)
+   const insetRightShared = useSharedValue(insets.right)
    const insetTopShared = useSharedValue(insets.top)
    const insetBottomShared = useSharedValue(insets.bottom)
     // Stable inset refs — Android PiP enter/exit can transiently report insetTop=0.
@@ -794,9 +938,12 @@ export function VideoPlayerOverlay() {
     corner: miniPlayerCorner,
     screenWidth,
     screenHeight,
-    miniWidth: dynMiniWidth,
     topInset: stableInsetTopRef.current,
+    rightInset: insets.right,
+    bottomInset: stableInsetBottomRef.current,
+    leftInset: insets.left,
     bottomOffset: miniPlayerBottom,
+    aspectRatio: effectiveAR,
   })
 
   // Mini player position: keep the selected corner across minimize/restore cycles on native.
@@ -806,6 +953,12 @@ export function VideoPlayerOverlay() {
   const isMiniPlayerDraggingShared = useSharedValue(false)
   const miniDragStartXShared = useSharedValue(initialMiniPlayerPosition.x)
   const miniDragStartYShared = useSharedValue(initialMiniPlayerPosition.y)
+  // UI-thread mirror of miniPlayerCorner for snap hysteresis (JS state can't be read in worklet)
+  const currentDockCornerShared = useSharedValue<MiniPlayerCorner>(miniPlayerCorner)
+  // Aspect ratio on UI thread for computeMiniSize in gesture worklets
+  const aspectRatioShared = useSharedValue(effectiveAR)
+  // Dynamic mini height shared value for animated style interpolations
+  const miniPipDynHeightShared = useSharedValue(dynMiniHeight)
 
   // Track whether gesture started in fullscreen (1) or mini (0) mode
   // Using number instead of string to avoid potential worklet string comparison issues
@@ -860,8 +1013,13 @@ export function VideoPlayerOverlay() {
    realScreenHeightShared.value = screenMetrics.height
    videoHeightShared.value = videoHeight
    miniPipDynWidthShared.value = dynMiniWidth
+   miniPipDynHeightShared.value = dynMiniHeight
+   aspectRatioShared.value = effectiveAR
+   insetLeftShared.value = insets.left
+   insetRightShared.value = insets.right
    insetTopShared.value = stableInsetTopRef.current
    insetBottomShared.value = stableInsetBottomRef.current
+   currentDockCornerShared.value = miniPlayerCorner
    // Only update frozen values when NOT in PiP (or PiP-like transition) —
    // they hold pre-PiP fullscreen values. Use isPipLayoutActive (not isInPipMode)
    // so values freeze as soon as window dimensions start shrinking.
@@ -884,17 +1042,23 @@ export function VideoPlayerOverlay() {
 
   useEffect(() => {
     if (playerMode !== 'mini' || isDraggingMiniPlayer) return
-    const nextMiniPlayerPosition = getMobileMiniPlayerSnapPosition({
+    const nextPos = getMobileMiniPlayerSnapPosition({
       corner: miniPlayerCorner,
       screenWidth,
       screenHeight,
-      miniWidth: dynMiniWidth,
       topInset: Math.max(stableInsetTopRef.current, insets.top),
+      rightInset: insets.right,
+      bottomInset: Math.max(stableInsetBottomRef.current, insets.bottom),
+      leftInset: insets.left,
       bottomOffset: miniPlayerBottom,
+      aspectRatio: effectiveAR,
     })
-    miniPipX.value = withSpring(nextMiniPlayerPosition.x, SPRING_CONFIG_TIGHT)
-    miniPipY.value = withSpring(nextMiniPlayerPosition.y, SPRING_CONFIG_TIGHT)
-  }, [playerMode, screenWidth, screenHeight, miniPlayerBottom, dynMiniWidth, miniPlayerCorner, insets.top, isDraggingMiniPlayer])
+    miniPipX.value = withSpring(nextPos.x, SPRING_CONFIG_TIGHT)
+    miniPipY.value = withSpring(nextPos.y, SPRING_CONFIG_TIGHT)
+    miniPipDynWidthShared.value = nextPos.width
+    miniPipDynHeightShared.value = nextPos.height
+    currentDockCornerShared.value = miniPlayerCorner
+  }, [playerMode, screenWidth, screenHeight, miniPlayerBottom, dynMiniWidth, dynMiniHeight, miniPlayerCorner, insets.top, insets.right, insets.bottom, insets.left, isDraggingMiniPlayer, effectiveAR])
 
   // When exiting landscape fullscreen, keep rendering the fullscreen container until window dimensions AND insets settle.
   // The tricky part: StatusBar visibility + safe area insets can lag behind the orientation lock by a few frames.
@@ -1065,6 +1229,8 @@ export function VideoPlayerOverlay() {
       if (isMiniPlayerModeShared.value && Platform.OS !== 'web' && !disableMiniLayoutOnAndroidSplit) {
         isGestureActive.value = true
         isMiniPlayerDraggingShared.value = true
+        cancelAnimation(miniPipX)
+        cancelAnimation(miniPipY)
         miniDragStartXShared.value = miniPipX.value
         miniDragStartYShared.value = miniPipY.value
         runOnJS(setIsDraggingMiniPlayer)(true)
@@ -1092,13 +1258,22 @@ export function VideoPlayerOverlay() {
     .onUpdate((event) => {
       'worklet'
       if (isMiniPlayerDraggingShared.value) {
-        const minX = MINI_PIP_MARGIN
-        const maxX = screenWidthShared.value - miniPipDynWidthShared.value - MINI_PIP_MARGIN
-        const minY = insetTopShared.value + MINI_PIP_MARGIN
-        const maxY = screenHeightShared.value - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottomShared.value
-
-        miniPipX.value = Math.max(minX, Math.min(maxX, miniDragStartXShared.value + event.translationX))
-        miniPipY.value = Math.max(minY, Math.min(maxY, miniDragStartYShared.value + event.translationY))
+        const { width: mw, height: mh } = computeMiniSize(screenWidthShared.value, aspectRatioShared.value)
+        const bounds = computeMiniBounds(
+          screenWidthShared.value,
+          screenHeightShared.value,
+          insetTopShared.value,
+          insetRightShared.value,
+          insetBottomShared.value,
+          insetLeftShared.value,
+          miniPlayerBottomShared.value,
+          mw,
+          mh,
+        )
+        miniPipX.value = Math.max(bounds.leftBound - MINI_DRAG_OVERSHOOT_X, Math.min(bounds.rightBound + MINI_DRAG_OVERSHOOT_X,
+          miniDragStartXShared.value + event.translationX))
+        miniPipY.value = Math.max(bounds.topBound - MINI_DRAG_OVERSHOOT_TOP, Math.min(bounds.bottomBound + MINI_DRAG_OVERSHOOT_BOTTOM,
+          miniDragStartYShared.value + event.translationY))
         return
       }
       if (disableMiniLayoutOnAndroidSplit) {
@@ -1110,7 +1285,7 @@ export function VideoPlayerOverlay() {
       if (isLandscapeFullscreenShared.value) return
       if (isPipLayoutActiveShared.value) return
 
-      const totalDistance = screenHeightShared.value - miniPlayerBottomShared.value - insetTopShared.value - MINI_PIP_HEIGHT
+      const totalDistance = screenHeightShared.value - miniPlayerBottomShared.value - insetTopShared.value - miniPipDynHeightShared.value
       const dragProgress = -event.translationY / totalDistance
       animProgress.value = Math.max(0, Math.min(1, 1 + dragProgress))
     })
@@ -1120,19 +1295,31 @@ export function VideoPlayerOverlay() {
         isMiniPlayerDraggingShared.value = false
         isGestureActive.value = false
 
-        const leftX = MINI_PIP_MARGIN
-        const rightX = screenWidthShared.value - miniPipDynWidthShared.value - MINI_PIP_MARGIN
-        const topY = insetTopShared.value + MINI_PIP_MARGIN
-        const bottomY = screenHeightShared.value - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - miniPlayerBottomShared.value
-        const isRight = miniPipX.value + miniPipDynWidthShared.value / 2 > screenWidthShared.value / 2
-        const isBottom = miniPipY.value > (topY + bottomY) / 2
-        const targetX = isRight ? rightX : leftX
-        const targetY = isBottom ? bottomY : topY
-        const newCorner = `${isBottom ? 'bottom' : 'top'}-${isRight ? 'right' : 'left'}` as MiniPlayerCorner
+        const { width: mw, height: mh } = computeMiniSize(screenWidthShared.value, aspectRatioShared.value)
+        const bounds = computeMiniBounds(
+          screenWidthShared.value,
+          screenHeightShared.value,
+          insetTopShared.value,
+          insetRightShared.value,
+          insetBottomShared.value,
+          insetLeftShared.value,
+          miniPlayerBottomShared.value,
+          mw,
+          mh,
+        )
+        const anchors = getCornerAnchors(bounds)
+        const snap = resolveSnapTarget(
+          miniPipX.value, miniPipY.value,
+          event.velocityX, event.velocityY,
+          anchors, mw, mh,
+          currentDockCornerShared.value,
+          bounds,
+        )
 
-        miniPipX.value = withSpring(targetX, SPRING_CONFIG_TIGHT)
-        miniPipY.value = withSpring(targetY, SPRING_CONFIG_TIGHT)
-        runOnJS(setMiniPlayerCorner)(newCorner)
+        miniPipX.value = withSpring(snap.x, { ...SPRING_CONFIG_MINI_SNAP, velocity: event.velocityX })
+        miniPipY.value = withSpring(snap.y, { ...SPRING_CONFIG_MINI_SNAP, velocity: event.velocityY })
+        currentDockCornerShared.value = snap.corner
+        runOnJS(setMiniPlayerCorner)(snap.corner)
         runOnJS(setIsDraggingMiniPlayer)(false)
         return
       }
@@ -1261,7 +1448,7 @@ export function VideoPlayerOverlay() {
     const height = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PIP_HEIGHT, fullscreenHeightShared],
+      [miniPipDynHeightShared.value, fullscreenHeightShared],
       Extrapolation.CLAMP
     )
 
@@ -1287,6 +1474,24 @@ export function VideoPlayerOverlay() {
     )
 
     const isMini = animProgress.value < 0.5
+    const isDragging = isMiniPlayerDraggingShared.value
+
+    // Shadow tuning: stronger when dragging, softer when docked, zero in fullscreen
+    const shadowOp = isMini
+      ? (isDragging ? MINI_SHADOW_DRAGGING.opacity : MINI_SHADOW_DOCKED.opacity)
+      : 0
+    const shadowRad = isMini
+      ? (isDragging ? MINI_SHADOW_DRAGGING.radius : MINI_SHADOW_DOCKED.radius)
+      : 0
+    const shadowOY = isMini
+      ? (isDragging ? MINI_SHADOW_DRAGGING.offsetY : MINI_SHADOW_DOCKED.offsetY)
+      : 0
+    const elev = isMini
+      ? (isDragging ? MINI_SHADOW_DRAGGING.elevation : MINI_SHADOW_DOCKED.elevation)
+      : 0
+
+    // Subtle scale-down while dragging
+    const scale = isMini && isDragging ? MINI_DRAG_SCALE : 1
 
     return {
       position: 'absolute',
@@ -1298,10 +1503,11 @@ export function VideoPlayerOverlay() {
       borderRadius,
       overflow: 'hidden',
       shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: isMini ? 0.4 : 0,
-      shadowRadius: 8,
-      elevation: (Platform.OS !== 'android' && isMini) ? 10 : 0,
+      shadowOffset: { width: 0, height: shadowOY },
+      shadowOpacity: shadowOp,
+      shadowRadius: shadowRad,
+      elevation: Platform.OS === 'android' ? elev : 0,
+      transform: [{ scale }],
     }
   }, [])
 
@@ -1350,7 +1556,7 @@ export function VideoPlayerOverlay() {
     const fullH = videoHeightShared.value + cutoutInset
 
     const miniScale = fullW > 0
-      ? MINI_PIP_WIDTH / fullW
+      ? miniPipDynWidthShared.value / fullW
       : 1
 
     const scale = interpolate(
@@ -1407,7 +1613,7 @@ export function VideoPlayerOverlay() {
     const top = interpolate(
       animProgress.value,
       [0, 1],
-      [MINI_PIP_HEIGHT, videoHeightShared.value + cutoutInset],
+      [miniPipDynHeightShared.value, videoHeightShared.value + cutoutInset],
       Extrapolation.CLAMP
     )
 

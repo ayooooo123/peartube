@@ -5,11 +5,16 @@
  * animation configurations, and thresholds.
  */
 
-// Mini PiP dimensions (mobile)
+// Mini PiP dimensions (mobile) — legacy fixed values kept for styles.ts mini info strip
 export const MINI_PIP_WIDTH = 240
 export const MINI_PIP_HEIGHT = 135
 export const MINI_PIP_MARGIN = 12
-export const MINI_PIP_CORNER_RADIUS = 8
+export const MINI_PIP_CORNER_RADIUS = 16
+
+// Responsive mini size — actual values computed at runtime via computeMiniSize()
+export const MINI_PIP_WIDTH_FRACTION = 0.36
+export const MINI_PIP_WIDTH_MIN = 168
+export const MINI_PIP_WIDTH_MAX = 220
 
 // Tab bar
 export const TAB_BAR_HEIGHT = 42
@@ -41,6 +46,31 @@ export const SPRING_CONFIG_TIGHT = {
   stiffness: 200,
   mass: 0.8,
 }
+
+// Snap spring for mini corner docking (stiffer with slight natural overshoot)
+export const SPRING_CONFIG_MINI_SNAP = {
+  damping: 30,
+  stiffness: 340,
+  mass: 0.9,
+  restDisplacementThreshold: 0.5,
+  restSpeedThreshold: 4,
+  overshootClamping: false,
+}
+
+// Snap algorithm velocity thresholds
+export const SNAP_LOW_SPEED = 500       // px/s — below this, nearest corner from release point
+export const SNAP_FLING_SPEED = 1400    // px/s — above this, longer projection horizon
+export const SNAP_TOSS_HORIZON = 0.18   // seconds — projection for toss (500–1400 px/s)
+export const SNAP_FLING_HORIZON = 0.22  // seconds — projection for fling (≥1400 px/s)
+export const SNAP_HYSTERESIS_PX = 24    // center-distance for slow-release stickiness
+
+// Mini player visual tuning
+export const MINI_DRAG_SCALE = 0.985
+export const MINI_SHADOW_DOCKED = { opacity: 0.18, radius: 14, offsetY: 4, elevation: 10 }
+export const MINI_SHADOW_DRAGGING = { opacity: 0.22, radius: 18, offsetY: 6, elevation: 14 }
+export const MINI_DRAG_OVERSHOOT_X = 24
+export const MINI_DRAG_OVERSHOOT_TOP = 16
+export const MINI_DRAG_OVERSHOOT_BOTTOM = 16
 
 // Desktop mini player dimensions
 export const DESKTOP_MINI_WIDTH = 320

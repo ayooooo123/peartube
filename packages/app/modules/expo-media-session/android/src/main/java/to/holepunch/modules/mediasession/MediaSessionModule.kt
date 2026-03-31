@@ -1205,6 +1205,11 @@ class MediaSessionModule : Module() {
         val className = activity.javaClass.name
         val isPipHostActivity = className == "${activity.packageName}.MainActivity"
 
+        // CRITICAL: never set autoEnterEnabled=false while already in PiP.
+        // Android interprets that as "PiP is no longer wanted" and immediately
+        // exits PiP, which causes the "3rd PiP attempt fails" bug.
+        val effectiveEnabled = if (activity.isInPictureInPictureMode) true else enabled
+
         try {
             val aspectRatio = PipBridge.getPipAspectRatio()
 
@@ -1219,13 +1224,13 @@ class MediaSessionModule : Module() {
                 // See enterPiP(): prefer seamless resize for video playback.
                 builder.setSeamlessResizeEnabled(true)
                 // Auto-enter PiP when going to background
-                builder.setAutoEnterEnabled(enabled && isPipHostActivity)
+                builder.setAutoEnterEnabled(effectiveEnabled && isPipHostActivity)
             }
 
             builder.setActions(buildPipActions(activity))
 
             activity.setPictureInPictureParams(builder.build())
-            android.util.Log.d("MediaSession", "updateActivityPipParams: enabled=$enabled, aspectRatio=$aspectRatio sourceRect=$sourceRect")
+            android.util.Log.d("MediaSession", "updateActivityPipParams: enabled=$effectiveEnabled (requested=$enabled, inPip=${activity.isInPictureInPictureMode}), aspectRatio=$aspectRatio sourceRect=$sourceRect")
         } catch (e: Exception) {
             android.util.Log.e("MediaSession", "updateActivityPipParams: failed", e)
         }

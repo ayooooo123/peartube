@@ -1212,10 +1212,12 @@ class MediaSessionModule : Module() {
         val className = activity.javaClass.name
         val isPipHostActivity = className == "${activity.packageName}.MainActivity"
 
-        // CRITICAL: never set autoEnterEnabled=false while already in PiP.
-        // Android interprets that as "PiP is no longer wanted" and immediately
-        // exits PiP, which causes the "3rd PiP attempt fails" bug.
-        val effectiveEnabled = if (activity.isInPictureInPictureMode) true else enabled
+        // CRITICAL: never set autoEnterEnabled=false while PiP is enabled at the
+        // bridge level. On Android 12+ with seamless PiP, isInPictureInPictureMode
+        // can lag behind the actual PiP state, so checking it is not reliable.
+        // Only allow autoEnterEnabled=false when pipEnabled is explicitly false
+        // (meaning the video was actually closed / PiP should be fully disabled).
+        val effectiveEnabled = if (PipBridge.isPipEnabled()) true else enabled
 
         try {
             val aspectRatio = PipBridge.getPipAspectRatio()

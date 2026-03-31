@@ -1,205 +1,118 @@
-# Task: Mini player compact/expanded size toggle on double tap
+# Task: Diagnose Maximum update depth exceeded during video playback / PiP flow
 
-## Clarification from user
-Double tapping the mini player should NOT maximize to fullscreen.
-It should toggle the mini player between:
-- compact mini player
-- larger mini player
+## Symptom
+User reports phone getting hot while playing a video. Logs show repeated foreground/background handling and then React error:
 
-This should mirror native PiP behavior where the floating player can be small or larger while still remaining a floating player.
+```
+LOG  [VideoPlayerOverlay] Auto-PiP set: true
+LOG  [VideoPlayerOverlay] PiP layout: { ... playerMode: "fullscreen", windowHeight: 108, windowWidth: 254 ... }
+LOG  [App] Resuming network from foreground
+LOG  [VideoPlayerContext] Coming to foreground, wasPlaying: true wasInPiP: true pipInFlight: false
+LOG  [App] Skipping network suspend - local playback is active (state: background)
+LOG  [VideoPlayerContext] Going to background, wasPlaying: true playerMode: fullscreen
+... repeats ...
+LOG  [VideoPlayerOverlay] PiP status changed: false 0 0
+LOG  [VideoPlayerContext] PiP exit resume confirmed via progress
+LOG  [VideoPlayerOverlay] Re-armed Auto-PiP after PiP exit (state-driven)
+ERROR  Maximum update depth exceeded. This can happen when a component calls setState inside useEffect, but useEffect either doesn't have a dependency array, or one of the dependencies changes on every render.
+```
 
-## Desired behavior
-- single tap: show/hide mini controls (or no-op if that's already the current behavior)
-- double tap: toggle mini size mode compact <-> expanded
-- maximize back to fullscreen should remain on explicit maximize button only
-- preserve current dock corner while resizing
-- animate smoothly between compact and expanded rects
-- snapping/fling logic should use the current active size
+## Key suspects
+1. `packages/app/components/VideoPlayerOverlayImpl.tsx`
+   - PiP effects around `isInPipMode`, `pipExitRearmNonce`, `showControlsTemporarily`, `handlePipStatusChanged`
+   - mini-player size effect / other setState-in-useEffect loops
+2. `packages/app/lib/VideoPlayerContext.tsx`
+   - AppState listener causing background/foreground loops
+   - PiP listener / foreground restore / seek nudge
+3. `packages/app/app/_layout.tsx`
+   - app state / suspend/resume network loop
 
-## Existing implementation
-- current mini size is responsive but single-size only
-- `miniPlayerCorner` persists current corner
-- mini geometry is computed via `computeMiniSize(screenWidth, aspectRatio)`
-- double tap currently calls `maximizeFromMini()`
-
-## Proposed implementation direction
-- add `miniPlayerSizeMode: 'compact' | 'expanded'` state/ref
-- create `computeMiniSize(screenWidth, aspectRatio, sizeMode)`
-- compact:
-  - current-ish size, maybe slightly bigger than now
-- expanded:
-  - larger PiP-like size, still clearly floating over content
-- on size toggle:
-  - recompute width/height
-  - recompute legal bounds
-  - preserve current corner anchor
-  - animate x/y/width/height to new anchored rect
-- update snap algorithm to use current size mode dimensions
+## Goal
+Find the actual source of the React 'Maximum update depth exceeded' loop. Not just a guess — trace which useEffect/setState cycle could cause repeated rerenders.
 
 ## Discussion
 
-## Codex Proposal
-
-### 1. Introduce an explicit mini size mode and mirror it on the UI thread
-Add a new state/ref alongside `miniPlayerCorner`:
-- `const [miniPlayerSizeMode, setMiniPlayerSizeMode] = useState<'compact' | 'expanded'>('compact')`
-- `const miniPlayerSizeModeShared = useSharedValue<'compact' | 'expanded'>(miniPlayerSizeMode)`
-
-Keep `miniPlayerCorner` as the stable docking identity. The key change is that corner and size mode become orthogonal state:
-- `miniPlayerCorner` answers which anchor to use
-- `miniPlayerSizeMode` answers which width/height to use
-
-That separation lets double tap resize the mini player without changing fullscreen/mini mode and without reusing maximize semantics.
-
-### 2. Thread size mode through `computeMiniSize` and every caller that derives bounds
-The current implementation in `packages/app/components/VideoPlayerOverlayImpl.tsx` has a single-size worklet helper:
-- `computeMiniSize(screenWidth, aspectRatio)`
-- `getMobileMiniPlayerSnapPosition(...)` calls it
-- mini drag update/end worklets call it
-- the render path derives `dynMiniWidth/dynMiniHeight` from it
-
-Change the signature to:
-- `computeMiniSize(screenWidth, aspectRatio, sizeMode)`
-
-Implementation shape:
-- keep current compact behavior as the default baseline so existing layout stays stable
-- add expanded sizing with a larger width fraction and/or larger max width, but preserve aspect ratio exactly
-- return `{ width, height }` exactly as today so downstream math is unchanged
-
-Concretely, I would avoid sprinkling `if (sizeMode === ...)` everywhere and instead define per-mode sizing constants, e.g.:
-- compact: current `MINI_PIP_WIDTH_FRACTION`, `MINI_PIP_WIDTH_MIN`, `MINI_PIP_WIDTH_MAX`
-- expanded: new larger fraction/max pair, still capped so it remains obviously floating
-
-Then update all size/bounds callsites to pass the active mode:
-- `const { width: dynMiniWidth, height: dynMiniHeight } = computeMiniSize(screenWidth, effectiveAR, miniPlayerSizeMode)`
-- `getMobileMiniPlayerSnapPosition({ ..., aspectRatio, sizeMode })`
-- pan gesture `.onUpdate` and `.onEnd` worklets: `computeMiniSize(screenWidthShared.value, aspectRatioShared.value, miniPlayerSizeModeShared.value)`
-
-This is the most important plumbing step because snap targets, legal drag bounds, and mini->fullscreen interpolation already depend on mini width/height. If one caller keeps using the old size, the player will visually resize but still drag/snap against stale geometry.
-
-### 3. Preserve the current corner by anchoring resize from `miniPlayerCorner`, not from raw `x/y`
-The existing code already has the right primitive for this:
-- `miniPlayerCorner` in JS
-- `currentDockCornerShared` in the worklet
-- `getMobileMiniPlayerSnapPosition({ corner, ... })`
-
-Use those to recompute the resized rect from the same corner whenever size mode changes.
-
-Recommended toggle flow:
-1. Double tap while `playerMode === 'mini'`
-2. Flip `miniPlayerSizeMode`
-3. Recompute `{ x, y, width, height }` via `getMobileMiniPlayerSnapPosition({ corner: miniPlayerCorner, ..., sizeMode: nextMode })`
-4. Animate `miniPipX`, `miniPipY`, `miniPipDynWidthShared`, and `miniPipDynHeightShared` to the new anchored rect
-5. Leave `miniPlayerCorner` unchanged
-
-Why this matters:
-- if you only animate width/height and leave `miniPipX/Y` untouched, a bottom-right docked mini player will appear to grow inward from the wrong origin
-- recomputing from the stored corner ensures top-left stays top-left, bottom-right stays bottom-right, etc.
-
-This also fits the current `useEffect` at ~1043, which already repositions mini mode from `miniPlayerCorner` on layout changes. That effect should simply also depend on `miniPlayerSizeMode` and pass it into `getMobileMiniPlayerSnapPosition(...)`.
-
-### 4. Replace double-tap maximize with a dedicated size toggle callback
-Right now:
-- `maximizeFromMini()` just calls `maximizePlayer()`
-- `miniDoubleTapGesture` calls `runOnJS(maximizeFromMini)()`
-
-Replace that path with something like `toggleMiniPlayerSizeMode()`.
-
-Implementation detail:
-- do the state flip on JS
-- immediately update `miniPlayerSizeModeShared.value` during render, the same way other shared layout inputs are mirrored now
-- if currently in mini mode and not dragging, animate to the new snapped rect for the same corner
-
-Pseudo-flow:
-- `const toggleMiniPlayerSizeMode = useCallback(() => { ... }, [...])`
-- `miniDoubleTapGesture.onEnd(... runOnJS(toggleMiniPlayerSizeMode)())`
-
-Do not route this through `maximizePlayer()` or `animProgress`, because the player is not changing modes. It remains `playerMode === 'mini'`; only the mini endpoint geometry changes.
-
-### 5. Keep snap/fling behavior unchanged by feeding it the active dimensions, not by changing the algorithm
-The current snap/fling behavior is already clean:
-- drag update clamps against `computeMiniBounds(...)`
-- drag end computes anchors from bounds
-- `resolveSnapTarget(...)` projects velocity and applies hysteresis toward `currentDockCornerShared`
-
-This logic should not be rewritten. It should only receive the correct dimensions for the active size mode.
-
-Specifically, on drag update/end:
-- compute `mw/mh` from `computeMiniSize(..., miniPlayerSizeModeShared.value)`
-- compute `bounds` from those dimensions
-- compute anchors from those bounds
-- keep using `currentDockCornerShared` for hysteresis
-
-That preserves existing toss/fling feel while making the legal rectangle bigger/smaller with the selected mini size.
-
-Important subtlety: when toggling size mode while already docked, also update `currentDockCornerShared.value = miniPlayerCorner`. That keeps slow-release hysteresis aligned with the preserved anchor after the resize.
-
-### 6. Suggested implementation shape for the resize animation
-For the actual compact/expanded toggle in mini mode:
-- animate `miniPipX` and `miniPipY` with `SPRING_CONFIG_TIGHT` or `SPRING_CONFIG_MINI_SNAP`
-- animate `miniPipDynWidthShared` and `miniPipDynHeightShared` with the same spring family
-- do not touch `animProgress` unless transitioning between fullscreen and mini
-
-That reuses the existing animated container path, because `containerStyle` already interpolates from:
-- `miniPipDynWidthShared.value`
-- `miniPipDynHeightShared.value`
-- `miniPipX.value`
-- `miniPipY.value`
-
-So the resize can stay entirely inside the current geometry model.
-
-### 7. Minimal code touch points
-Most likely files/areas to update:
-- `packages/app/components/VideoPlayerOverlayImpl.tsx`
-  - add `miniPlayerSizeMode` + shared mirror
-  - extend `computeMiniSize`
-  - extend `getMobileMiniPlayerSnapPosition`
-  - update `dynMiniWidth/dynMiniHeight` derivation
-  - update mini layout reposition effect
-  - swap double tap from `maximizeFromMini` to `toggleMiniPlayerSizeMode`
-  - pass size mode through drag update/end worklets
-- `packages/app/components/video-player/constants.ts`
-  - add compact/expanded sizing constants instead of a single width profile
-
-### 8. Proposed non-goals / guardrails
-To reduce regressions, I would explicitly avoid:
-- changing the existing snap scoring in `resolveSnapTarget(...)`
-- changing fullscreen drag-to-minimize logic
-- changing maximize button behavior (`maximizeFromMini` should still exist for the explicit button)
-- storing freeform `x/y` as the source of truth for resize anchoring
-
-The safest model is: `corner + sizeMode -> size -> bounds -> anchored x/y`.
-That keeps the current phase-2 drag/snap behavior intact while making double tap a pure compact/expanded mini resize.
-
 ## Claude Proposal
+The most likely React-side loop is not `_layout.tsx`'s network suspend/resume logic itself, but the Android PiP exit path in `packages/app/components/VideoPlayerOverlayImpl.tsx`, where PiP-exit callbacks feed state that immediately re-triggers PiP re-arm effects.
 
-Use two clearly distinct floating sizes so the interaction feels intentionally PiP-like rather than "small vs almost the same small." The compact size should be the default resting state for passive watching, while the expanded size should feel like a quick readability boost for subtitles, faces, or detail-heavy scenes without ever implying fullscreen.
+Most suspicious cycle:
 
-Recommended size formulas:
-- compact width: clamp(screenWidth * 0.32, 220px, 300px)
-- compact height: derive from aspect ratio, with the same min/max constraints applied via width-first sizing
-- expanded width: clamp(compactWidth * 1.35, 300px, min(420px, screenWidth * 0.5))
-- expanded height: derive from aspect ratio from expanded width
-- preserve a consistent outer margin from screen edges in both modes so the player still reads as "docked" to its current corner
+1. `handlePipStatusChanged` in `VideoPlayerOverlayImpl.tsx` (`~810-829`) runs on every native `onPictureInPictureChanged` event from `PearInlineVideoView`.
+   - On PiP exit (`event.isInPictureInPicture === false`) it does three things that matter:
+     - `setPipWindowSize(null)`
+     - `maximizePlayer()`
+     - `setPipExitRearmNonce((n) => n + 1)` on Android
+   - `setPipExitRearmNonce` is the dangerous one because it always produces a new state value, so repeated false-exit callbacks can force unbounded rerenders.
 
-This gives roughly a 35% step up in perceived size, which is large enough to feel satisfying on double tap but still conservative enough to avoid covering too much feed/UI. If current mini player size is already near the compact recommendation, keep it close; the more important UX point is that expanded should be visibly larger, not just marginally resized.
+2. That nonce drives the dedicated PiP re-arm effect in `VideoPlayerOverlayImpl.tsx` (`~2176-2192`):
+   - Dependencies: `[pipExitRearmNonce, isInPipMode, pipSupported, currentVideo, isCasting, playerMode]`
+   - Once the player is back in fullscreen, the effect calls `MediaSession.setAutoPictureInPicture(true)` and logs `Re-armed Auto-PiP after PiP exit (state-driven)`.
+   - This matches the last log line immediately before the React maximum-depth error.
 
-How the size toggle should feel:
-- double tap should instantly communicate "resize in place," not "open"
-- animate width, height, and anchored position together over about 180-220ms with a smooth ease-out
-- keep the same dock corner fixed during the animation so the player appears to grow or shrink outward from that corner
-- do not crossfade to another state or trigger fullscreen affordances during the gesture
-- if controls are visible, keep them visible through the resize so the interaction feels continuous
-- ignore accidental triple-tap weirdness by making repeated double taps simply alternate modes cleanly
+3. There is a second overlapping PiP-exit effect earlier in the same file (`~379-414`):
+   - Dependencies: `[isInPipMode, currentVideo, isCasting, playerMode, pipSupported, showControlsTemporarily]`
+   - When `isInPipMode` flips false after previously being true, it calls `showControlsTemporarily()` (which does `setShowControls(true)` and later `setShowControls(false)`) and also calls `MediaSession.setAutoPictureInPicture(true)` again on Android.
+   - So the same PiP exit is being handled twice by effects that both perform state/native side effects.
 
-Behaviorally, expanded mode should not be sticky in a way that surprises the user: if the app already persists mini-player corner, it is reasonable to persist size mode for the session, but defaulting back to compact on fresh open is safer unless product explicitly wants last-used memory.
+Why this is the most likely root cause:
+- The repeated foreground/background logs from `VideoPlayerContext.tsx` (`APP_BACKGROUND` / `APP_FOREGROUND` handler around `~452-551`) and `_layout.tsx` (`handleAppStateChange` around `~667-774`) explain the noisy lifecycle churn during PiP transitions, but those handlers are event-driven and mostly write refs or one-off state. They do not contain an obvious self-sustaining React dependency loop.
+- By contrast, the overlay PiP exit path has an actual feedback mechanism:
+  - native PiP exit callback -> `setPipExitRearmNonce` / `maximizePlayer`
+  - rerender -> PiP re-arm effect(s) run -> native `setAutoPictureInPicture(true)`
+  - player/view lifecycle shifts again during exit/foreground restore -> another PiP status callback can arrive
+  - callback increments nonce again, repeating the cycle
+- Because the nonce increments monotonically, React cannot bail out on same-value state; every repeated exit callback guarantees another render.
 
-Visual polish considerations:
-- slightly increase shadow/elevation in expanded mode so the larger surface still feels floating above the app, not embedded in it
-- keep border radius identical or nearly identical across both sizes; changing radius too much can make the component feel like a different object
-- ensure overlay controls scale comfortably with the larger size, especially hit targets for close/maximize
-- subtitle and caption safe area should be checked in expanded mode so text is not too close to rounded corners or controls
-- preserve drag affordance immediately after resizing; users often resize and then reposition in one flow
-- if resize occurs near screen edges, legal bounds should be recomputed before the animation completes so the player never appears to clip off-screen
+Supporting context from `VideoPlayerContext.tsx`:
+- The Android PiP listener (`~742-867`) also updates PiP-related state on exit: `setPipWindowSize(null)`, `dispatch({ type: 'PIP_EXITED_ANDROID', ... })`, and `setIsPlaying(shouldResume)`.
+- The AppState foreground handler (`~485-545`) may run in the same exit window and can also call `setPipWindowSize(null)` plus foreground restore logic.
+- This means PiP exit is currently handled in multiple places at once, but the only inspected code path that can force an always-new React state update on every repeated exit signal is `setPipExitRearmNonce((n) => n + 1)` in the overlay callback.
 
-Net recommendation: define compact as the everyday default around one-third of screen width, define expanded as approximately 1.35x compact capped at about half the screen width, and make double tap perform a fast anchored resize with no fullscreen implication.
+Conclusion: the maximum update depth error is most likely rooted in duplicate Android PiP-exit handling inside `VideoPlayerOverlayImpl.tsx`, especially the `handlePipStatusChanged` -> `pipExitRearmNonce` -> re-arm `useEffect` chain, with the earlier PiP-exit effect (`isInPipMode` dependency) adding a second overlapping re-arm path.
+
+## Codex Review
+
+I inspected the three suspect files with a narrow focus on two failure modes: a useEffect that sets state which then retriggers the same effect through its dependency list, and listener/effect churn that repeatedly re-subscribes native events.
+
+Bottom line: I do not see a strong "classic" self-sustaining useEffect loop in these files where an effect writes the exact dependency that causes itself to run again forever. Most setState calls inside effects are convergent:
+
+- VideoPlayerOverlayImpl.tsx:602 updates local seekPosition from effectiveCurrentTime, but the effect depends on effectiveCurrentTime/isSeeking, not on seekPosition.
+- VideoPlayerOverlayImpl.tsx:610 clears scrubPendingTime, but once it sets null the effect exits on the next render.
+- VideoPlayerOverlayImpl.tsx:1079 clears pendingLandscapeExit/isLandscapeFullscreen after the layout stabilizes; that also converges.
+- VideoPlayerOverlayImpl.tsx:2130 sets iosPipEnabled, but iosPipEnabled is not in that dependency list.
+- VideoPlayerContext.tsx:384 reacts to state.mode / wasPlayingWhenPipEntered and writes unrelated local state such as isPlaying, pipWindowSize, etc.; those setters do not feed back into that effect's dependencies.
+
+I also do not see obvious event-listener registration churn in the inspected files:
+
+- VideoPlayerContext AppState listener at 452 is mounted from an effect whose deps are stable (dispatch, forceReloadPlayback, isPrimaryController, restoreLastClosedVideo). It should only re-register when primary-controller status changes, not on every render.
+- VideoPlayerContext PiP listener at 742 is likewise gated by isPrimaryController and otherwise stable.
+- Root _layout AppState listener at 776 is tied to a memoized handleAppStateChange callback, so it is not obviously churning every render either.
+- VideoPlayerOverlayImpl itself does not register the PiP/AppState listeners; it mainly reacts to callback props and context state.
+
+What does stand out instead is duplicated PiP-exit handling across layers, combined with foreground/background oscillation:
+
+1. RootLayout resumes network on every AppState active transition (_layout.tsx:740-766).
+2. VideoPlayerContext separately handles the same AppState transition and may dispatch APP_FOREGROUND, clear PiP window state, issue a seek nudge, and restore playback (VideoPlayerContext.tsx:485-545).
+3. VideoPlayerContext also handles native PiP events and on PiP exit dispatches PIP_EXITED_ANDROID, sets isPlaying, clears pipWindowSize, and reasserts play several times (VideoPlayerContext.tsx:742-867).
+4. VideoPlayerOverlay handles PiP exit too: handlePipStatusChanged clears pipWindowSize, may call maximizePlayer(), and bumps pipExitRearmNonce (VideoPlayerOverlayImpl.tsx:810-829). Then two separate re-arm paths call MediaSession.setAutoPictureInPicture(true):
+   - immediate re-arm in the isInPipMode effect (379-414)
+   - state-driven re-arm in the pipExitRearmNonce effect (2176-2192)
+
+That means a single PiP exit can fan out into several state transitions in quick succession:
+- AppState active
+- PiP listener exit handling in context
+- overlay PiP callback exit handling
+- maximizePlayer -> playerMode change
+- auto-PiP re-arm effect(s)
+- foreground seek nudge / isPlaying restoration
+
+This looks much more like a native-event feedback storm than a pure React dependency-cycle bug. The repeated logs in the symptom match that pattern: foreground/background keeps bouncing, and each bounce triggers more PiP/player-mode state work.
+
+My current diagnosis is:
+
+- Primary issue: overlapping PiP/AppState exit handlers are probably causing repeated mode/state transitions during the PiP exit tail.
+- Not the primary issue: a direct useEffect self-loop from "set state -> dependency changes -> same effect reruns forever" does not appear to be present in these three files.
+- Not clearly the primary issue: listener registration churn is not obvious in these three files.
+- Secondary suspicion worth keeping in mind: handlePipStatusChanged is recreated with unnecessary dependencies (pipSupported/currentVideo/isCasting even though unused in the callback body). If PearInlineVideoView internally subscribes native PiP listeners in an effect keyed on that callback prop, callback identity churn could amplify native event churn. That is not proven from these files alone, but it is the only credible listener-churn angle I found.
+
+If I had to name the most suspicious concrete site in the inspected code, it is the duplicated Android PiP exit work split between VideoPlayerContext.tsx:742-867 and VideoPlayerOverlayImpl.tsx:379-414 plus 810-829 plus 2176-2192, not a single runaway useEffect.

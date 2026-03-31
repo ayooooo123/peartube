@@ -388,30 +388,9 @@ export function VideoPlayerOverlay() {
     } else if (wasInPipRef.current) {
       wasInPipRef.current = false
       showControlsTemporarily()
-
-      // Re-arm Android auto-PiP immediately after exit when the same video is
-      // still active. Relying on the later effect to re-run is brittle and can
-      // leave PipBridge disabled for all subsequent app exits.
-      if (
-        Platform.OS === 'android' &&
-        pipSupported !== false &&
-        currentVideo !== null &&
-        !isCasting &&
-        (playerMode === 'fullscreen' || playerMode === 'mini')
-      ) {
-        autoPipEnabledRef.current = true
-        MediaSession.setAutoPictureInPicture(true)
-          .then(() => {
-            console.log('[VideoPlayerOverlay] Re-armed Auto-PiP after exit')
-          })
-          .catch((err) => {
-            console.error('[VideoPlayerOverlay] Failed to re-arm Auto-PiP after exit:', err)
-          })
-      } else {
-        autoPipEnabledRef.current = false
-      }
+      // PiP re-arm is handled by the main auto-PiP effect using a ref flag.
     }
-  }, [isInPipMode, currentVideo, isCasting, playerMode, pipSupported, showControlsTemporarily])
+  }, [isInPipMode, showControlsTemporarily])
 
   // On Android in fullscreen, ALWAYS use real screen dimensions for layout.
   // Why: Android PiP (especially Android 12+ seamless mode) shrinks the Activity
@@ -526,7 +505,7 @@ export function VideoPlayerOverlay() {
   const scrubPendingSinceRef = useRef(0)
   const videoWrapperRef = useRef<View>(null)
   const [pipSupported, setPipSupported] = useState<boolean | null>(null)
-  const [pipExitRearmNonce, setPipExitRearmNonce] = useState(0)
+  const pipExitNeedsRearmRef = useRef(false)
 
   // State for showing custom controls overlay
   const [showControls, setShowControls] = useState(false)
@@ -820,10 +799,9 @@ export function VideoPlayerOverlay() {
         maximizePlayer()
       }
 
-      // Android: request a state-driven auto-PiP re-arm after exit.
-      // The effect below will re-arm only once we're concretely back in fullscreen.
+      // Android: request a ref-driven auto-PiP re-arm after exit.
       if (Platform.OS === 'android') {
-        setPipExitRearmNonce((n) => n + 1)
+        pipExitNeedsRearmRef.current = true
       }
     }
   }, [setIsInPipMode, setPipWindowSize, maximizePlayer, pipSupported, currentVideo, isCasting])
@@ -2138,14 +2116,25 @@ export function VideoPlayerOverlay() {
       : (playerMode === 'fullscreen' || (playerMode === 'mini' && !disableMiniLayoutOnAndroidSplit)) &&
         currentVideo !== null &&
         !isCasting
-    autoPipEnabledRef.current = shouldAutoPip
+
+    // If a PiP exit requested re-arm, fold that into the main effect instead of
+    // using a second state-driven effect. This avoids overlapping re-arm loops.
+    const shouldRearmAfterExit = Platform.OS === 'android'
+      && pipExitNeedsRearmRef.current
+      && !isInPipMode
+      && currentVideo !== null
+      && !isCasting
+      && playerMode === 'fullscreen'
+
+    const finalShouldAutoPip = shouldAutoPip || shouldRearmAfterExit
+    autoPipEnabledRef.current = finalShouldAutoPip
     if (isInPipMode) return
-    console.log('[VideoPlayerOverlay] Auto-PiP effect, playerMode:', playerMode, 'hasVideo:', !!currentVideo, 'enabling:', shouldAutoPip)
+    console.log('[VideoPlayerOverlay] Auto-PiP effect, playerMode:', playerMode, 'hasVideo:', !!currentVideo, 'enabling:', finalShouldAutoPip)
     if (Platform.OS === 'android') {
       let cancelled = false
       const applyAutoPip = async () => {
         try {
-          let enabled = shouldAutoPip
+          let enabled = finalShouldAutoPip
           if (androidSplitPlayerEnabled) {
             const inPlayerActivity = await MediaSession.isInPlayerActivity()
             if (cancelled) return
@@ -2153,6 +2142,7 @@ export function VideoPlayerOverlay() {
           }
           await MediaSession.setAutoPictureInPicture(enabled)
           if (!cancelled) {
+            if (shouldRearmAfterExit) pipExitNeedsRearmRef.current = false
             console.log('[VideoPlayerOverlay] Auto-PiP set:', enabled)
           }
         } catch (err) {
@@ -2166,30 +2156,9 @@ export function VideoPlayerOverlay() {
         cancelled = true
       }
     } else if (Platform.OS === 'ios') {
-      setIosPipEnabled(shouldAutoPip)
+      setIosPipEnabled(finalShouldAutoPip)
     }
   }, [playerMode, currentVideo, isCasting, isPlaying, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, androidSplitPlayerEnabled, isLandscapeFullscreen])
-
-  // After Android PiP exit, explicitly re-arm auto-PiP only once we are
-  // definitely back in fullscreen with an active video. This avoids brittle
-  // timing hacks and ensures subsequent home presses enter PiP again.
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    if (pipExitRearmNonce === 0) return
-    if (isInPipMode) return
-    if (pipSupported === false) return
-    if (currentVideo === null || isCasting) return
-    if (playerMode !== 'fullscreen') return
-
-    autoPipEnabledRef.current = true
-    MediaSession.setAutoPictureInPicture(true)
-      .then(() => {
-        console.log('[VideoPlayerOverlay] Re-armed Auto-PiP after PiP exit (state-driven)')
-      })
-      .catch((err) => {
-        console.error('[VideoPlayerOverlay] Failed to re-arm Auto-PiP after PiP exit:', err)
-      })
-  }, [pipExitRearmNonce, isInPipMode, pipSupported, currentVideo, isCasting, playerMode])
 
   // PiP entry is handled natively via onUserLeaveHint in MainActivity
   // Same activity shrinks, same player continues (single-player architecture)

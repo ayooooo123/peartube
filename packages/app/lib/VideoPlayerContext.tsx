@@ -653,31 +653,8 @@ useEffect(() => {
           }
 
           console.log('[VideoPlayerContext] Stopping playback')
-          closingVideoRef.current = true
-          pipExitShouldResumeRef.current = false
-          pipExitExpectedPlayingRef.current = false
-          pipExitResumeUntilRef.current = 0
           remotePlayWhileBackgroundedRef.current = false
-          try {
-            playerRef.current?.stop?.()
-            playerRef.current?.pause?.()
-          } catch {}
-          setIsPlaying(false)
-          lastClosedVideoRef.current = null
-          lastClosedUrlRef.current = null
-          lastClosedTimeRef.current = null
-          currentVideoRef.current = null
-          videoUrlRef.current = null
-          dispatch({ type: 'CLOSE_VIDEO', source: 'closeVideo' })
-          setVideoStats(null)
-          setCurrentTime(0)
-          setDuration(0)
-          if (Platform.OS !== 'web') {
-            MediaSession.clearNowPlaying().catch(() => {})
-            MediaSession.clearPendingPlayerLaunchPayload().catch(() => {})
-            setMediaSessionActive(false)
-          }
-          mediaSessionActiveRef.current = false
+          closeSession('remote-stop')
           break
         case 'togglePlayPause':
           console.log('[VideoPlayerContext] Toggling play/pause')
@@ -717,7 +694,7 @@ useEffect(() => {
     })
 
     return () => subscription.remove()
-  }, [dispatch, isPrimaryController, restoreLastClosedVideo, reassertNativePlayAfterPipExit, setMediaSessionActive])
+  }, [closeSession, dispatch, isPrimaryController, restoreLastClosedVideo, reassertNativePlayAfterPipExit])
 
   // Audio interruption listener (iOS only) - Android relies on remote commands from AudioFocus
   useEffect(() => {
@@ -814,13 +791,7 @@ useEffect(() => {
       // Update state immediately - RAF doesn't fire in PiP/background mode
       if (event.isInPictureInPicture) {
         if (pendingAndroidMinimizeCloseRef.current) {
-          pendingAndroidMinimizeCloseRef.current = false
-          try {
-            playerRef.current?.stop?.()
-            playerRef.current?.pause?.()
-          } catch {}
-          setIsPlaying(false)
-          dispatch({ type: 'CLOSE_VIDEO', source: 'closeVideo' })
+          closeSession('android-minimize-close')
         }
         dispatch({
           type: 'PIP_ENTERED_ANDROID',
@@ -893,7 +864,7 @@ useEffect(() => {
     return () => {
       subscription.remove()
     }
-  }, [dispatch, isPrimaryController, reassertNativePlayAfterPipExit])
+  }, [closeSession, dispatch, isPrimaryController, reassertNativePlayAfterPipExit])
 
   // Subscribe to video stats events from backend
   useEffect(() => {
@@ -1295,8 +1266,8 @@ useEffect(() => {
     }
   }, [])
 
-  const closeVideo = useCallback(() => {
-    console.log('[VideoPlayerContext] Closing video')
+  const closeSession = useCallback((reason: 'user' | 'remote-stop' | 'android-minimize-close' | 'pip-close' = 'user') => {
+    console.log('[VideoPlayerContext] Closing session:', reason)
 
     closingVideoRef.current = true
     pendingAndroidMinimizeCloseRef.current = false
@@ -1338,7 +1309,17 @@ useEffect(() => {
     videoUrlRef.current = null
 
     setIsPlaying(false)
-    dispatch({ type: 'CLOSE_VIDEO', source: 'closeVideo' })
+    dispatch({
+      type: 'CLOSE_VIDEO',
+      source:
+        reason === 'remote-stop'
+          ? 'remoteStopClose'
+          : reason === 'android-minimize-close'
+            ? 'androidMinimizeClose'
+            : reason === 'pip-close'
+              ? 'pipClose'
+              : 'closeVideo',
+    })
     setVideoStats(null)
     setCurrentTime(0)
     setDuration(0)
@@ -1349,6 +1330,10 @@ useEffect(() => {
     }
     mediaSessionActiveRef.current = false
   }, [dispatch, setMediaSessionActive])
+
+  const closeVideo = useCallback(() => {
+    closeSession('user')
+  }, [closeSession])
 
   const suppressForegroundRestoreOnce = useCallback(() => {
     suppressForegroundRestoreRef.current = true

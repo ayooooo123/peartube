@@ -1602,8 +1602,8 @@ export function VideoPlayerOverlay() {
           flex: undefined,
           transform: [],
         }
-        }
-      // iOS: use explicit dimensions — never flex:1 (Reanimated won't clear it on branch switch)
+      }
+      // iOS PiP: use explicit dimensions — never flex:1 (Reanimated won't clear it on branch switch)
       return {
         width: screenWidthShared.value,
         height: videoHeightShared.value,
@@ -1616,8 +1616,6 @@ export function VideoPlayerOverlay() {
     const effectiveInsetTop = Platform.OS !== 'web' && !isLandscapeFullscreenShared.value
       ? Math.max(frozenInsetTopShared.value, insetTopShared.value)
       : 0
-    // Android already shifts/covers the SurfaceView natively. Doing it again in JS
-    // makes the fullscreen player slot taller than the watch page spacer.
     const cutoutInset = Platform.OS === 'ios' && !isInPipModeShared.value && !isLandscapeFullscreenShared.value
       ? effectiveInsetTop * cutoutFactor
       : 0
@@ -1625,9 +1623,24 @@ export function VideoPlayerOverlay() {
     const fullW = screenWidthShared.value
     const fullH = videoHeightShared.value + cutoutInset
 
-    // IMPORTANT: interpolate directly to the same mini dimensions as the outer
-    // container. Scaling from fullscreen height causes aspect mismatch when the
-    // mini player uses dynamic aspect-ratio-correct height.
+    // Android mini-mode PiP reliability: keep the native player layer at a
+    // fullscreen-sized layout baseline, and only visually shrink it via transform
+    // inside the clipped mini wrapper. This preserves a stable TextureView/VLC
+    // surface for native PiP entry.
+    if (Platform.OS === 'android' && isMiniPlayerModeShared.value) {
+      const scaleX = fullW > 0 ? miniPipDynWidthShared.value / fullW : 1
+      const scaleY = fullH > 0 ? miniPipDynHeightShared.value / fullH : 1
+      return {
+        width: fullW,
+        height: fullH,
+        flex: undefined,
+        transformOrigin: 'left top',
+        transform: [{ scaleX }, { scaleY }],
+      }
+    }
+
+    // Non-Android-mini: interpolate directly to the same mini dimensions as the
+    // outer container so the wrapper and video stay aligned.
     const width = interpolate(
       animProgress.value,
       [0, 1],

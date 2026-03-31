@@ -67,33 +67,10 @@ object PipBridge {
 
     private fun markPipTransition() {
         pipTransitionUntilUptimeMs = SystemClock.uptimeMillis() + 2200
-        notifyPlayerViewTransitionUntil(pipTransitionUntilUptimeMs)
     }
 
     fun isInPipTransition(): Boolean {
         return SystemClock.uptimeMillis() <= pipTransitionUntilUptimeMs
-    }
-
-    private fun notifyPlayerViewTransitionUntil(untilUptimeMs: Long) {
-        invokePlayerViewStatic(
-            "setAllPipTransitionUntilUptimeMs",
-            arrayOf(Long::class.javaPrimitiveType),
-            arrayOf(untilUptimeMs)
-        )
-    }
-
-    fun invokePlayerViewStatic(methodName: String, paramTypes: Array<Class<*>?>, args: Array<Any?>) {
-        val classes = listOf("to.holepunch.peartube.mpv.MpvView")
-        for (className in classes) {
-            try {
-                val viewClass = Class.forName(className)
-                val method = viewClass.getMethod(methodName, *paramTypes)
-                method.invoke(null, *args)
-                return
-            } catch (_: Exception) {
-                continue
-            }
-        }
     }
 
     fun setPipEnabled(enabled: Boolean) {
@@ -325,7 +302,6 @@ object PipBridge {
         val didStateChange = isInPip != lastIsInPip
         if (didStateChange) {
             markPipTransition()
-            notifyPlayerViews(isInPip)
 
             val isMainActivity = activity.javaClass.name.endsWith(".MainActivity")
 
@@ -382,13 +358,6 @@ object PipBridge {
             }
         }
 
-        if (isInPip && newConfig != null) {
-            val density = activity.resources.displayMetrics.density
-            val pipWidthPx = (newConfig.screenWidthDp * density).roundToInt()
-            val pipHeightPx = (newConfig.screenHeightDp * density).roundToInt()
-            notifyPlayerPipWindowSize(pipWidthPx, pipHeightPx)
-        }
-
         // Send PiP event to JS for state management.
         // The overlay renders a simplified video-only view during PiP.
         moduleInstance?.sendPipEvent(activity, isInPip, newConfig)
@@ -397,23 +366,6 @@ object PipBridge {
     fun notifyPipDismissed() {
         android.util.Log.d("PipBridge", "notifyPipDismissed: stopping playback")
         moduleInstance?.handlePipStop()
-    }
-
-    private fun notifyPlayerViews(isInPip: Boolean) {
-        invokePlayerViewStatic(
-            "setAllPipMode",
-            arrayOf(Boolean::class.javaPrimitiveType),
-            arrayOf(isInPip)
-        )
-    }
-
-    private fun notifyPlayerPipWindowSize(widthPx: Int, heightPx: Int) {
-        if (widthPx <= 0 || heightPx <= 0) return
-        invokePlayerViewStatic(
-            "setAllPipWindowSize",
-            arrayOf(Int::class.javaPrimitiveType, Int::class.javaPrimitiveType),
-            arrayOf(widthPx, heightPx)
-        )
     }
 
     fun setSurfaceViewInset(topInsetPx: Float) {
@@ -930,7 +882,6 @@ class MediaSessionModule : Module() {
         override fun onPlay() {
             android.util.Log.d("MediaSession", "onPlay callback")
             updatePipPlayState(true)
-            notifyPlayerPlaybackPaused(false)
             sendEvent("onRemoteCommand", mapOf("command" to "play"))
         }
 
@@ -950,7 +901,6 @@ class MediaSessionModule : Module() {
             }
 
             updatePipPlayState(false)
-            notifyPlayerPlaybackPaused(true)
             sendEvent("onRemoteCommand", mapOf("command" to "pause"))
         }
 
@@ -966,7 +916,6 @@ class MediaSessionModule : Module() {
             }
 
             updatePipPlayState(false)
-            notifyPlayerPlaybackPaused(true)
             sendEvent("onRemoteCommand", mapOf("command" to "stop"))
         }
 
@@ -1450,21 +1399,18 @@ class MediaSessionModule : Module() {
     internal fun handlePipPlay() {
         android.util.Log.d("MediaSession", "handlePipPlay")
         updatePipPlayState(true)
-        notifyPlayerPlaybackPaused(false)
         sendEvent("onRemoteCommand", mapOf("command" to "play"))
     }
 
     internal fun handlePipPause() {
         android.util.Log.d("MediaSession", "handlePipPause")
         updatePipPlayState(false)
-        notifyPlayerPlaybackPaused(true)
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }
 
     internal fun handlePipStop() {
         android.util.Log.d("MediaSession", "handlePipStop")
         updatePipPlayState(false)
-        notifyPlayerPlaybackPaused(true)
         sendEvent("onRemoteCommand", mapOf("command" to "stop"))
     }
 
@@ -1507,14 +1453,6 @@ class MediaSessionModule : Module() {
         } catch (e: Exception) {
             android.util.Log.w("MediaSession", "Failed to stop media browser service: ${e.message}")
         }
-    }
-
-    private fun notifyPlayerPlaybackPaused(paused: Boolean) {
-        PipBridge.invokePlayerViewStatic(
-            "setAllPlaybackPaused",
-            arrayOf(Boolean::class.javaPrimitiveType),
-            arrayOf(paused)
-        )
     }
 
     companion object {

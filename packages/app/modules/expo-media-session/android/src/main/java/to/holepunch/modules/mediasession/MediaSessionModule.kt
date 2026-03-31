@@ -207,7 +207,6 @@ object PipBridge {
             builder.setActions(moduleInstance?.buildPipActions(activity) ?: emptyList())
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setSeamlessResizeEnabled(true)
                 builder.setAutoEnterEnabled(true)
             }
 
@@ -1235,9 +1234,9 @@ class MediaSessionModule : Module() {
             builder.setSourceRectHint(sourceRect)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // See enterPiP(): prefer seamless resize for video playback.
-                builder.setSeamlessResizeEnabled(true)
-                // Auto-enter PiP when going to background
+                // Favor reliability over fancy transition behavior. Mini-player PiP
+                // entry has been unstable with transformed layouts, so keep params
+                // simple and only arm auto-enter.
                 builder.setAutoEnterEnabled(effectiveEnabled && isPipHostActivity)
             }
 

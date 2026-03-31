@@ -337,9 +337,10 @@ object PipBridge {
             lastIsInPip = isInPip
 
             if (!isInPip) {
-                // Only restore views if the Activity is actually coming back to
-                // fullscreen (not during PiP mode cycling from config changes).
-                // Check if the window is still PiP-sized — if so, skip restore.
+                // Check window size for logging, but ALWAYS proceed with restore.
+                // Skipping restore when the window is still PiP-sized left the app
+                // in a half-PiP state where JS never got the exit event and couldn't
+                // re-arm auto-PiP for subsequent cycles.
                 val windowMetrics = activity.windowManager.currentWindowMetrics
                 val windowBounds = windowMetrics.bounds
                 val display = activity.windowManager.defaultDisplay
@@ -347,8 +348,9 @@ object PipBridge {
                 display.getRealSize(screenSize)
                 val stillPipSized = windowBounds.width() < screenSize.x * 0.8f
                 if (stillPipSized) {
-                    android.util.Log.d("PipBridge", "notifyPipModeChanged: skipping restore — window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y})")
-                } else {
+                    android.util.Log.d("PipBridge", "notifyPipModeChanged: window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y}), proceeding with restore anyway")
+                }
+                run {
                     // Only run the dismissal-pause logic for real PiP exits
                     run {
                         val handler = android.os.Handler(android.os.Looper.getMainLooper())

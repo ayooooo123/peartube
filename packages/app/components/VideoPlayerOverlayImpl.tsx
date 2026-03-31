@@ -1413,7 +1413,11 @@ export function VideoPlayerOverlay() {
     }), [toggleMiniPlayerSizeMode])
 
   const composedGesture = useMemo(
-    () => Gesture.Race(panGesture, Gesture.Exclusive(miniDoubleTapGesture, miniSingleTapGesture)),
+    // Priority order:
+    // 1. pan if movement occurs
+    // 2. double tap for compact/expanded toggle
+    // 3. single tap for mini controls
+    () => Gesture.Exclusive(panGesture, miniDoubleTapGesture, miniSingleTapGesture),
     [panGesture, miniDoubleTapGesture, miniSingleTapGesture]
   )
 

@@ -72,10 +72,10 @@ Rule: JS owns semantic mode; Reanimated owns per-frame geometry and gesture reso
 Use responsive mini size derived from viewport width.
 
 Compact mini width:
-- `miniWidth = clamp(round(screenWidth * 0.46), 200, 280)`
+- `miniWidth = clamp(round(screenWidth * 0.50), 220, 360)`
 
 Expanded mini width:
-- `expandedMiniWidth = clamp(round(screenWidth * 0.62), 260, 360)`
+- `expandedMiniWidth = clamp(round(screenWidth * 0.92), 320, 520)`
 
 Mini height:
 - `miniHeight = round(activeMiniWidth / aspectRatio)`

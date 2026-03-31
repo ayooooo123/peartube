@@ -11,7 +11,7 @@ Decision: implement the mini player as one persistent player surface with rect-d
 3. Slow drag-and-drop should feel precise and calm.
 4. Fast flicks, including diagonal flicks, should express corner intent and land predictably.
 5. Docked mini player should feel stable and exact in all four corners.
-6. Dismiss should require deliberate downward intent and should rarely happen by accident.
+6. Primary close model should be the explicit X button. Gesture dismissal is optional future work, not required for the target experience.
 7. PiP enter/exit should preserve the user’s sense of where the player “lives” in-app.
 8. All transitions must be interruptible and state-driven, not timing-hack driven.
 
@@ -315,29 +315,23 @@ If dismiss is not committed:
 - restDisplacementThreshold `0.5`
 - restSpeedThreshold `4`
 
-## 8. Dismiss behavior
+## 8. Close behavior
 
-Dismiss should be a deliberate bottom-edge action, not a generic throw.
+Phase-1 recommendation: use the explicit X button as the only close affordance.
 
-### 8.1 Rule
+Why:
+- avoids accidental dismissals during diagonal flings
+- keeps the motion system focused on move/snap/maximize
+- matches the user's preference for a simpler, more predictable mini player
+- reduces gesture competition while mini-player drag polish is still being tuned
 
-Dismiss is only available in mini mode.
+Implementation guidance:
+- keep the close button always visible in mini mode
+- close button remains the sole dismissal path in v1
+- do not implement swipe-to-dismiss in phase 1 or phase 2 unless later user testing shows a strong need
 
-Commit dismiss if either condition is true:
-1. `releaseY > bottomBound + 56`
-2. `vy > 1100` and `releaseY >= bottomBound - 32`
-
-Do not dismiss from pure horizontal movement.
-
-### 8.2 Trajectory
-
-On dismiss commit:
-- animate `y` with `withTiming` to `screenHeight + miniHeight + 24`
-- duration `180ms`
-- easing: `Easing.out(Easing.cubic)`
-- keep `x` fixed, unless it is out of legal horizontal bounds, in which case ease to nearest legal bound during same timing
-- keep scale at `1.0`
-- start opacity fade only in last `20%` of off-screen travel
+Future option (not recommended by default):
+- a downward dismiss gesture can be prototyped behind a feature flag, but should not be part of the baseline redesign spec
 
 ## 9. Control layout and visual polish
 

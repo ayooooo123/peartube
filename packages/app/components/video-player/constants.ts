@@ -12,9 +12,9 @@ export const MINI_PIP_MARGIN = 12
 export const MINI_PIP_CORNER_RADIUS = 16
 
 // Responsive mini size — actual values computed at runtime via computeMiniSize()
-export const MINI_PIP_WIDTH_FRACTION = 0.36
-export const MINI_PIP_WIDTH_MIN = 168
-export const MINI_PIP_WIDTH_MAX = 220
+export const MINI_PIP_WIDTH_FRACTION = 0.40
+export const MINI_PIP_WIDTH_MIN = 184
+export const MINI_PIP_WIDTH_MAX = 240
 
 // Tab bar
 export const TAB_BAR_HEIGHT = 42

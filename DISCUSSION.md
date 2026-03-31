@@ -1,99 +1,121 @@
-# Task: Remove dead old-player PiP bridge logic from Android MediaSessionModule
-
-## What we verified
-- `packages/app/react-native.config.js` explicitly disables `react-native-mpv` on Android:
-  - comment: Android playback now uses react-native-video/Media3
-  - `android: null`
-- `packages/app` has no runtime references to NitroVLC anymore
-- `MediaSessionModule.kt` still contains legacy reflection hooks aimed at old native player views:
-  - `invokePlayerViewStatic(...)`
-  - `notifyPlayerViewTransitionUntil(...)`
-  - `notifyPlayerViews(...)`
-  - `notifyPlayerPipWindowSize(...)`
-- The only class currently targeted is `to.holepunch.peartube.mpv.MpvView`
-- Since `react-native-mpv` is unlinked on Android, this path is dead for the actual app
+# Task: Light cleanup after Android PiP stabilization + add regression checklist
 
 ## Goal
-Simplify Android PiP bridge by removing dead old-player reflection logic that no longer applies to the current react-native-video stack.
+Do a minimal, low-risk cleanup pass now that Android PiP is working.
 
 ## Constraints
-- Keep actual PiP behavior intact
-- Do not break current fullscreen PiP reliability
-- Keep changes localized to MediaSessionModule.kt if possible
-- Prefer deletion over adding new abstractions
+- No behavior changes unless obviously dead/comment-only cleanup
+- Do not destabilize working PiP
+- Keep cleanup small and focused
 
-## Candidate cleanup
-- Remove `invokePlayerViewStatic(...)`
-- Remove or inline away:
-  - `notifyPlayerViewTransitionUntil(...)`
-  - `notifyPlayerViews(...)`
-  - `notifyPlayerPipWindowSize(...)`
-- In `markPipTransition()`, only update the transition timestamp
-- In `notifyPipModeChanged(...)`, stop calling old-player hooks
+## Desired outcomes
+1. Remove or tighten any obviously stale/misleading comments left over from earlier failed PiP theories
+2. Add a short regression checklist note in the repo for future PiP changes
+3. Avoid touching working logic unless the change is purely clarifying
+
+## Candidate cleanup areas
+- `packages/app/components/VideoPlayerOverlayImpl.tsx`
+  - comments around Android PiP assumptions / mini-mode handling
+- `packages/app/lib/VideoPlayerContext.tsx`
+  - comments around backgrounding from mini mode
+- `packages/app/modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt`
+  - comments now that dead old-player reflection hooks were removed
+- Add a small doc/checklist file, e.g. `docs/android-pip-regression-checklist.md`
+
+## Suggested checklist content
+- test repeated fullscreen PiP entry cycles
+- test mini-player active then leave app
+- test exit PiP back to app and retry immediately
+- confirm native rebuild required after Kotlin changes
+- avoid reintroducing old-player-specific bridge assumptions
+- keep Android PiP entry path native and simple
 
 ## Discussion
 
 ## Claude Proposal
 
-### Summary
+### Safe comment/doc-only cleanup edits
 
-Six functions in `PipBridge` and one in `MediaSessionModule` exist solely to call static methods on `to.holepunch.peartube.mpv.MpvView` via reflection. That class is no longer linked on Android (`react-native-mpv` has `android: null` in `react-native.config.js`), so every reflection call silently catches `ClassNotFoundException` and does nothing. Additionally, the `SurfaceView`-specific transform/inset logic (`applySurfaceViewTransforms`, `findSurfaceViews`, `setSurfaceViewInset`) targeted the old MPV SurfaceView renderer — react-native-video uses its own internal view management.
+After inspecting the three candidate files, here are the low-risk edits organized by confidence:
 
-### Safe to delete (PipBridge)
+#### 1. `MediaSessionModule.kt` — PipBridge (comments only)
 
-| Function | Lines | Reason |
-|----------|-------|--------|
-| `invokePlayerViewStatic(...)` | 85–97 | Core reflection dispatcher — only target class `MpvView` is unlinked |
-| `notifyPlayerViewTransitionUntil(...)` | 77–83 | Sole caller of `invokePlayerViewStatic("setAllPipTransitionUntilUptimeMs")` |
-| `notifyPlayerViews(...)` | 402–408 | Sole caller of `invokePlayerViewStatic("setAllPipMode")` |
-| `notifyPlayerPipWindowSize(...)` | 410–417 | Sole caller of `invokePlayerViewStatic("setAllPipWindowSize")` |
-| `applySurfaceViewTransforms(...)` | 438–492 | Scales/translates SurfaceViews for PiP. Already early-returns for MainActivity. react-native-video manages its own surfaces. |
-| `findSurfaceViews(...)` | 511–522 | Only used by `applySurfaceViewTransforms` and `setSurfaceViewInset` |
-| `setSurfaceViewInset(...)` | 419–432 | Translates SurfaceViews by inset. Dead now that player is react-native-video. |
-| `surfaceViewInsetPx` field | 49 | Only used by the above dead functions |
+| Line(s) | Current | Proposed | Rationale |
+|----------|---------|----------|-----------|
+| 41 | `Simplified PiP bridge for MainActivity callbacks.` | `PiP bridge: wires Activity lifecycle (onUserLeaveHint, onPictureInPictureModeChanged) to the JS PiP state machine via MediaSessionModule.` | The old doc is from a time before the bridge stabilized; "simplified" is misleading given its current scope. |
+| 313 | `// Apply SurfaceView transforms (skipped for MainActivity)` | `// Legacy SurfaceView transforms — no-ops for MainActivity (early return inside). NitroVLC uses TextureView; this path only fires for non-MainActivity activities (none currently exist).` | Adds context that this code is effectively dead but harmless. Avoids a future contributor adding SurfaceView logic thinking it's active. |
+| 462 | `/** Legacy: find SurfaceViews only ... */` | `/** Legacy: finds SurfaceViews only. NitroVLC switched to TextureView — this is only referenced by applySurfaceViewTransforms and setSurfaceViewInset, both effectively no-ops for the current player. Safe to remove in a future cleanup pass. */` | Documents the dead-code status without removing it. |
 
-### Safe to delete (MediaSessionModule)
+#### 2. `VideoPlayerOverlayImpl.tsx` — stale/misleading comments
 
-| Function | Lines | Reason |
-|----------|-------|--------|
-| `notifyPlayerPlaybackPaused(...)` | 1512–1518 | Calls `invokePlayerViewStatic("setAllPlaybackPaused")` — same dead reflection path |
-| `setSurfaceViewInset` AsyncFunction | 758–773 | Expo module binding for the dead `PipBridge.setSurfaceViewInset` |
+| Line(s) | Current | Proposed | Rationale |
+|----------|---------|----------|-----------|
+| 850 | `// TODO: unify positioning branches and remove this flag entirely.` | `// TODO(low-pri): unify positioning branches and remove this flag entirely. Currently harmless — mobile always uses bottom-relative, web uses top-computed.` | Softens urgency, adds context so nobody treats it as a blocker. |
+| 2165–2168 | `// The inline Android watch player now uses the shared Media3 PlayerView host. // Translating its underlying SurfaceView down clips ...` | `// Legacy SurfaceView inset — always sends 0. NitroVLC uses TextureView and handles its own layout. This call is a no-op on the native side for MainActivity but kept for defensive compat.` | The current comment references "Media3 PlayerView host" which is not what the app uses anymore. |
 
-### Callers to update (not delete)
+#### 3. `VideoPlayerContext.tsx` — comment tightening
 
-1. **`markPipTransition()`** (line 68–71): Remove the `notifyPlayerViewTransitionUntil(...)` call. Keep the timestamp assignment — `isInPipTransition()` still reads it for audio-focus churn suppression.
+| Area | Current | Proposed | Rationale |
+|------|---------|----------|-----------|
+| Lines 476–480 (mini→fullscreen PiP handoff) | `// Reliability-first PiP handoff: when backgrounding from in-app mini // mode, restore fullscreen first so Android PiP enters from the stable // full-screen layout. // This is less elegant than direct mini->PiP continuity, but repeated // testing shows mini-mode PiP entry is the unstable path.` | `// PiP handoff: restore fullscreen before PiP entry when backgrounding from mini mode. // Direct mini→PiP is unreliable (TextureView resize kills SurfaceTexture). // See MEMORY.md: "Android PiP — TextureView LayoutParams must NOT change".` | Tighter, links to the root cause instead of vague "less elegant". |
+| Line 907 | `// Some layers identify a video by id while others may still use legacy path formats.` | Remove or replace with: `// Normalize video identifier: backends use drive key, UI uses display path.` | "legacy path formats" implies something is broken; actually it's just two valid ID schemes. |
 
-2. **`notifyPipModeChanged()`** (line 322–395):
-   - Remove `notifyPlayerViews(isInPip)` call (line 328)
-   - Remove `applySurfaceViewTransforms(...)` call and its surrounding `handler.postDelayed` (lines 338–341)
-   - Remove `notifyPlayerPipWindowSize(...)` call and its surrounding block (lines 386–390)
-   - Keep everything else: `markPipTransition()`, `lastIsInPip` tracking, dismissal-pause logic, `sendPipEvent()`
+### Edits NOT recommended (too risky or ambiguous)
 
-3. **MediaSession callback sites calling `notifyPlayerPlaybackPaused()`** (~lines 933, 953, 969, 1453, 1460, 1467): Delete these calls. They're no-ops. The JS side already receives play/pause via `onRemoteCommand` events.
+| Code | Why skip |
+|------|----------|
+| Remove `applySurfaceViewTransforms` + `findSurfaceViews` + `setSurfaceViewInset` entirely | Called on every PiP state change. Removing changes the call graph. Low risk but not zero — defer to a dedicated cleanup PR with a native rebuild + device test. |
+| Remove `surfaceViewInsetPx` field from PipBridge | Same — wired to a JS-exposed `AsyncFunction`. Removal requires coordinated TS + Kotlin change. |
+| Tighten `notifyPipModeChanged` dismissal-pause logic (nested `run {}` blocks) | Functional, tested, messy but not misleading. Refactoring risks timing changes in the dismissal detection polling loop. |
 
-### JS-side cleanup
+### Regression checklist doc outline
 
-4. **`VideoPlayerOverlayImpl.tsx:2168`**: Remove the `MediaSession.setSurfaceViewInset(0)` call and the surrounding `useEffect` (lines 2163–2169). The comment already says "keep the inline surface flush" — it's doing nothing since the native function is dead.
+Proposed file: `docs/android-pip-regression-checklist.md`
 
-5. **`expo-media-session/src/index.ts:235–243`**: Remove the `setSurfaceViewInset` export. Optionally keep as a no-op stub if you prefer a non-breaking API, but since it's only called from one place (above), full deletion is cleaner.
+```markdown
+# Android PiP Regression Checklist
 
-6. **Test file** `tests/mobile-player-page-layout-regression.test.mjs:77`: Remove or update the regex that asserts `setSurfaceViewInset` is called.
+Run after ANY change to PiP-related code (Kotlin bridge, VideoPlayerContext,
+VideoPlayerOverlayImpl PiP branches, or NitroVLC surface management).
 
-### Do NOT delete
+## Prerequisites
+- Physical Android device (emulator PiP behavior differs)
+- Android 12+ preferred (seamless PiP / setAutoEnterEnabled)
+- Fresh native build (`npm run android`) after Kotlin changes
 
-- `findVideoViews(...)` (lines 497–508) — still used by `updatePipSourceRectForCapture` and `getVideoSourceRect` for PiP source rect calculation. These find SurfaceView **and** TextureView, which react-native-video does use.
-- `getSafeInsetTopPx(...)` (lines 524–533) — still used by `setSurfaceViewInset` AsyncFunction, but if that's deleted, this becomes an orphan too. Check for other callers before removing.
-- Any PiP lifecycle logic (`markPipTransition`, `isInPipTransition`, `notifyPipModeChanged`, `enterPictureInPictureDirect`, etc.) — these are live and critical.
+## Core scenarios
 
-### Risk assessment
+### 1. Fullscreen → PiP → return (×3 cycles)
+- [ ] Enter fullscreen, press Home → PiP window appears
+- [ ] Tap PiP to return → fullscreen resumes, controls work
+- [ ] Repeat 2 more times without restarting — no black screen, no stuck state
 
-**Low risk.** Every deleted function either (a) calls `invokePlayerViewStatic` which silently fails at runtime already, or (b) manipulates SurfaceViews that don't exist in the current player stack. The app is already running without these doing anything. The only behavioral change is removing a few dozen silent exception catches per PiP cycle.
+### 2. Mini-player → background → PiP
+- [ ] Play video, minimize to mini-player
+- [ ] Press Home → app should auto-maximize then enter PiP
+- [ ] Return to app → fullscreen resumes correctly
 
-### Suggested order
+### 3. PiP dismiss (swipe away)
+- [ ] Enter PiP, swipe the PiP window off-screen
+- [ ] Playback stops, no orphaned audio
+- [ ] Re-open app → player is in correct state (hidden or last mode)
 
-1. Delete the 6 dead `PipBridge` functions + field
-2. Delete `notifyPlayerPlaybackPaused` from `MediaSessionModule`
-3. Update `markPipTransition` and `notifyPipModeChanged` callers
-4. Delete `setSurfaceViewInset` AsyncFunction binding
-5. JS-side cleanup (`VideoPlayerOverlayImpl`, `index.ts`, test)
-6. Build + manual PiP test (enter/exit/dismiss/re-enter)
+### 4. PiP with controls
+- [ ] Play/pause button in PiP window works
+- [ ] Rewind/forward buttons in PiP window work
+- [ ] Play state syncs back to app on PiP exit
+
+### 5. Rotation + PiP
+- [ ] Enter landscape fullscreen, press Home → PiP enters
+- [ ] Return to app → landscape fullscreen restored (not portrait)
+
+### 6. Quick PiP toggle (stress test)
+- [ ] Rapidly Home → return → Home → return (4+ times)
+- [ ] No crash, no black screen, no frozen UI
+
+## Known constraints
+- TextureView LayoutParams must NOT change during PiP (causes black screen)
+- `applySurfaceViewTransforms` is legacy/no-op for NitroVLC
+- `setSurfaceViewInset` always sends 0 — kept for defensive compat
+- PiP transition window (2200ms) suppresses audio focus loss / MediaSession pause
+```

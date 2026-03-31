@@ -476,8 +476,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         // Reliability-first PiP handoff: when backgrounding from in-app mini
         // mode, restore fullscreen first so Android PiP enters from the stable
         // fullscreen player surface instead of the transformed mini-player.
-        // This is less elegant than direct mini->PiP continuity, but repeated
-        // testing shows mini-mode PiP entry is the unstable path.
+        // This intentionally favors reliability over perfect mini->PiP continuity.
         if (playerModeRef.current === 'mini' && isPlayingRef.current) {
           console.log('[VideoPlayerContext] Maximizing from mini for PiP handoff')
           maximizedForPipRef.current = true

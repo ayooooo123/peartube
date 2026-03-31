@@ -473,12 +473,16 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         }
         console.log('[VideoPlayerContext] Going to background, wasPlaying:', isPlayingRef.current, 'playerMode:', playerModeRef.current)
 
-        // Expand mini player to fullscreen before PiP activates.
-        // PiP needs the native video surface at fullscreen dimensions — on Android
-        // the Activity window IS the PiP content, on iOS the AVSampleBufferDisplayLayer
-        // must be large enough for canStartPictureInPictureAutomaticallyFromInline.
-        if (playerModeRef.current === 'mini' && isPlayingRef.current) {
-          console.log('[VideoPlayerContext] Maximizing from mini for PiP')
+        // On Android with react-native-video, PiP works directly from mini mode —
+        // the Activity window IS the PiP content and onUserLeaveHint enters PiP
+        // before this code runs. Do NOT maximize here; dispatching MAXIMIZE causes
+        // a state change that brings the activity back to the foreground and
+        // immediately cancels the PiP that just entered.
+        //
+        // On iOS, the AVSampleBufferDisplayLayer may need fullscreen dimensions
+        // for canStartPictureInPictureAutomaticallyFromInline.
+        if (Platform.OS === 'ios' && playerModeRef.current === 'mini' && isPlayingRef.current) {
+          console.log('[VideoPlayerContext] Maximizing from mini for PiP (iOS only)')
           maximizedForPipRef.current = true
           dispatch({ type: 'MAXIMIZE', source: 'maximizePlayer' })
         }

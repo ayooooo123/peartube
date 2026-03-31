@@ -38,9 +38,12 @@ import {
   // Constants
   MINI_PIP_MARGIN,
   MINI_PIP_CORNER_RADIUS,
-  MINI_PIP_WIDTH_FRACTION,
-  MINI_PIP_WIDTH_MIN,
-  MINI_PIP_WIDTH_MAX,
+  MINI_PIP_COMPACT_WIDTH_FRACTION,
+  MINI_PIP_COMPACT_WIDTH_MIN,
+  MINI_PIP_COMPACT_WIDTH_MAX,
+  MINI_PIP_EXPANDED_WIDTH_FRACTION,
+  MINI_PIP_EXPANDED_WIDTH_MIN,
+  MINI_PIP_EXPANDED_WIDTH_MAX,
   TAB_BAR_HEIGHT,
 
   SPRING_CONFIG_BOUNCY,
@@ -106,10 +109,13 @@ interface MiniBounds {
 
 interface Anchor { x: number; y: number; corner: MiniPlayerCorner }
 
-function computeMiniSize(screenWidth: number, aspectRatio: number) {
+function computeMiniSize(screenWidth: number, aspectRatio: number, sizeMode: 'compact' | 'expanded' = 'compact') {
   'worklet'
   const ar = aspectRatio > 0 ? aspectRatio : 16 / 9
-  const w = Math.max(MINI_PIP_WIDTH_MIN, Math.min(MINI_PIP_WIDTH_MAX, Math.round(screenWidth * MINI_PIP_WIDTH_FRACTION)))
+  const fraction = sizeMode === 'expanded' ? MINI_PIP_EXPANDED_WIDTH_FRACTION : MINI_PIP_COMPACT_WIDTH_FRACTION
+  const minW = sizeMode === 'expanded' ? MINI_PIP_EXPANDED_WIDTH_MIN : MINI_PIP_COMPACT_WIDTH_MIN
+  const maxW = sizeMode === 'expanded' ? MINI_PIP_EXPANDED_WIDTH_MAX : MINI_PIP_COMPACT_WIDTH_MAX
+  const w = Math.max(minW, Math.min(maxW, Math.round(screenWidth * fraction)))
   const h = Math.round(w / ar)
   return { width: w, height: h }
 }
@@ -222,6 +228,7 @@ function getMobileMiniPlayerSnapPosition({
   leftInset,
   bottomOffset,
   aspectRatio,
+  sizeMode,
 }: {
   corner: MiniPlayerCorner
   screenWidth: number
@@ -232,8 +239,9 @@ function getMobileMiniPlayerSnapPosition({
   leftInset: number
   bottomOffset: number
   aspectRatio: number
+  sizeMode: 'compact' | 'expanded'
 }) {
-  const { width: miniWidth, height: miniHeight } = computeMiniSize(screenWidth, aspectRatio)
+  const { width: miniWidth, height: miniHeight } = computeMiniSize(screenWidth, aspectRatio, sizeMode)
   const bounds = computeMiniBounds(
     screenWidth,
     screenHeight,
@@ -487,7 +495,7 @@ export function VideoPlayerOverlay() {
   const desktopVideoHeight = effectiveAR < 1
     ? Math.min(desktopVideoHeightRaw, Math.round(screenHeight * 0.8))
     : desktopVideoHeightRaw
-  const { width: dynMiniWidth, height: dynMiniHeight } = computeMiniSize(screenWidth, effectiveAR)
+  const { width: dynMiniWidth, height: dynMiniHeight } = computeMiniSize(screenWidth, effectiveAR, miniPlayerSizeMode)
 
   useEffect(() => {
     if (!currentVideo || playerMode === 'hidden') return
@@ -530,6 +538,7 @@ export function VideoPlayerOverlay() {
 
   // Mini player corner/drag state
   const [miniPlayerCorner, setMiniPlayerCorner] = useState<MiniPlayerCorner>('bottom-right')
+  const [miniPlayerSizeMode, setMiniPlayerSizeMode] = useState<'compact' | 'expanded'>('compact')
   const [isDraggingMiniPlayer, setIsDraggingMiniPlayer] = useState(false)
   const [miniPlayerDragOffset, setMiniPlayerDragOffset] = useState({ x: 0, y: 0 })
   const miniPlayerDragStartRef = useRef({ x: 0, y: 0, cornerX: 0, cornerY: 0 })
@@ -940,10 +949,11 @@ export function VideoPlayerOverlay() {
     screenHeight,
     topInset: stableInsetTopRef.current,
     rightInset: insets.right,
-    bottomInset: stableInsetBottomRef.current,
+    bottomInset: insets.bottom,
     leftInset: insets.left,
     bottomOffset: miniPlayerBottom,
     aspectRatio: effectiveAR,
+    sizeMode: miniPlayerSizeMode,
   })
 
   // Mini player position: keep the selected corner across minimize/restore cycles on native.
@@ -955,8 +965,9 @@ export function VideoPlayerOverlay() {
   const miniDragStartYShared = useSharedValue(initialMiniPlayerPosition.y)
   // UI-thread mirror of miniPlayerCorner for snap hysteresis (JS state can't be read in worklet)
   const currentDockCornerShared = useSharedValue<MiniPlayerCorner>(miniPlayerCorner)
-  // Aspect ratio on UI thread for computeMiniSize in gesture worklets
+  // Aspect ratio + size mode on UI thread for computeMiniSize in gesture worklets
   const aspectRatioShared = useSharedValue(effectiveAR)
+  const miniPlayerSizeModeShared = useSharedValue<'compact' | 'expanded'>(miniPlayerSizeMode)
   // Dynamic mini height shared value for animated style interpolations
   const miniPipDynHeightShared = useSharedValue(dynMiniHeight)
 
@@ -1015,6 +1026,7 @@ export function VideoPlayerOverlay() {
    miniPipDynWidthShared.value = dynMiniWidth
    miniPipDynHeightShared.value = dynMiniHeight
    aspectRatioShared.value = effectiveAR
+   miniPlayerSizeModeShared.value = miniPlayerSizeMode
    insetLeftShared.value = insets.left
    insetRightShared.value = insets.right
    insetTopShared.value = stableInsetTopRef.current
@@ -1048,10 +1060,11 @@ export function VideoPlayerOverlay() {
       screenHeight,
       topInset: Math.max(stableInsetTopRef.current, insets.top),
       rightInset: insets.right,
-      bottomInset: Math.max(stableInsetBottomRef.current, insets.bottom),
+      bottomInset: insets.bottom,
       leftInset: insets.left,
       bottomOffset: miniPlayerBottom,
       aspectRatio: effectiveAR,
+      sizeMode: miniPlayerSizeMode,
     })
     miniPipX.value = withSpring(nextPos.x, SPRING_CONFIG_TIGHT)
     miniPipY.value = withSpring(nextPos.y, SPRING_CONFIG_TIGHT)
@@ -1195,6 +1208,10 @@ export function VideoPlayerOverlay() {
     maximizePlayer()
   }, [maximizePlayer])
 
+  const toggleMiniPlayerSizeMode = useCallback(() => {
+    setMiniPlayerSizeMode((prev) => (prev === 'compact' ? 'expanded' : 'compact'))
+  }, [])
+
   const closeFromMini = useCallback(() => {
     setShowControls(false)
     if (controlsTimeoutRef.current) {
@@ -1258,7 +1275,7 @@ export function VideoPlayerOverlay() {
     .onUpdate((event) => {
       'worklet'
       if (isMiniPlayerDraggingShared.value) {
-        const { width: mw, height: mh } = computeMiniSize(screenWidthShared.value, aspectRatioShared.value)
+        const { width: mw, height: mh } = computeMiniSize(screenWidthShared.value, aspectRatioShared.value, miniPlayerSizeModeShared.value)
         const bounds = computeMiniBounds(
           screenWidthShared.value,
           screenHeightShared.value,
@@ -1295,7 +1312,7 @@ export function VideoPlayerOverlay() {
         isMiniPlayerDraggingShared.value = false
         isGestureActive.value = false
 
-        const { width: mw, height: mh } = computeMiniSize(screenWidthShared.value, aspectRatioShared.value)
+        const { width: mw, height: mh } = computeMiniSize(screenWidthShared.value, aspectRatioShared.value, miniPlayerSizeModeShared.value)
         const bounds = computeMiniBounds(
           screenWidthShared.value,
           screenHeightShared.value,
@@ -1392,8 +1409,8 @@ export function VideoPlayerOverlay() {
       'worklet'
       if (!success) return
       if (!isMiniPlayerModeShared.value) return
-      runOnJS(maximizeFromMini)()
-    }), [maximizeFromMini])
+      runOnJS(toggleMiniPlayerSizeMode)()
+    }), [toggleMiniPlayerSizeMode])
 
   const composedGesture = useMemo(
     () => Gesture.Race(panGesture, Gesture.Exclusive(miniDoubleTapGesture, miniSingleTapGesture)),

@@ -71,11 +71,14 @@ Rule: JS owns semantic mode; Reanimated owns per-frame geometry and gesture reso
 
 Use responsive mini size derived from viewport width.
 
-Phone mini width:
-- `miniWidth = clamp(round(screenWidth * 0.36), 168, 220)`
+Compact mini width:
+- `miniWidth = clamp(round(screenWidth * 0.46), 200, 280)`
+
+Expanded mini width:
+- `expandedMiniWidth = clamp(round(screenWidth * 0.62), 260, 360)`
 
 Mini height:
-- `miniHeight = round(miniWidth / aspectRatio)`
+- `miniHeight = round(activeMiniWidth / aspectRatio)`
 - `aspectRatio = currentVideoAspectRatio || 16 / 9`
 
 Notes:
@@ -360,7 +363,9 @@ Single tap on mini player:
 - should not maximize by default
 
 Double tap on mini player:
-- maximize to fullscreen
+- toggle compact <-> expanded mini-player size
+- preserve current dock corner
+- should not enter fullscreen
 - thresholds:
   - max delay between taps: `240ms`
   - max movement per tap: `16px`

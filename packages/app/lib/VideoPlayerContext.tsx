@@ -516,7 +516,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         const skipLifecycleDispatchForSplitAndroid =
           Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY
         const skipAppForegroundDispatchForPip = Platform.OS === 'android' && wasInPip
-        if (!skipLifecycleDispatchForSplitAndroid && !skipAppForegroundDispatchForPip) {
+        // Also skip the foreground dispatch if we have an active video still playing.
+        // When PiP silently fails (wasInPip=false but video is still playing),
+        // dispatching APP_FOREGROUND can transition playerMode to 'hidden' which
+        // tears down the video unnecessarily.
+        const skipForActivePlayback = Platform.OS === 'android' && !wasInPip && currentVideoRef.current && wasPlayingWhenBackgroundedRef.current
+        if (!skipLifecycleDispatchForSplitAndroid && !skipAppForegroundDispatchForPip && !skipForActivePlayback) {
           dispatch({
             type: 'APP_FOREGROUND',
             source: 'appStateForegroundHiddenRestore',

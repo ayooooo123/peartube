@@ -507,6 +507,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
            }
          }
 
+         // Re-apply auto-PiP params every time we return to foreground with an active
+         // video. The system can clear autoEnterEnabled during PiP exit/dismiss, so we
+         // must reapply it to keep subsequent PiP entries working.
+         if (Platform.OS === 'android' && currentVideoRef.current) {
+           MediaSession.setAutoPictureInPicture(true).catch(() => {})
+         }
+
         const now = Date.now()
         const suppressOnce = suppressForegroundRestoreRef.current
         suppressForegroundRestoreRef.current = false

@@ -503,9 +503,12 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
               wasPlayingWhenBackgrounded: event.isPlaying,
             }
           }
+          // SIMPLIFIED: in the single-activity Android PiP architecture, PiP can
+          // enter directly from mini mode. Do not silently coerce mini -> fullscreen
+          // on background; that adds hidden state transitions and can desync PiP.
           return {
             ...state,
-            mode: event.isPlaying ? 'fullscreen' : 'mini',
+            mode: 'mini',
             wasPlayingWhenBackgrounded: event.isPlaying,
           }
         case 'APP_FOREGROUND':

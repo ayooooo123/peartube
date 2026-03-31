@@ -1624,15 +1624,17 @@ export function VideoPlayerOverlay() {
     const fullH = videoHeightShared.value + cutoutInset
 
     // Android mini-mode PiP reliability: keep the native player layer at a
-    // fullscreen-sized layout baseline, and only visually shrink it via transform
-    // inside the clipped mini wrapper. This preserves a stable TextureView/VLC
-    // surface for native PiP entry.
+    // fullscreen-width baseline, but make the baseline height match the ACTUAL
+    // video aspect ratio instead of the generic player-page frame. Otherwise the
+    // scaled mini wrapper carries fullscreen letterboxing into the mini player.
     if (Platform.OS === 'android' && isMiniPlayerModeShared.value) {
+      const videoAr = aspectRatioShared.value > 0 ? aspectRatioShared.value : 16 / 9
+      const baselineH = fullW / videoAr
       const scaleX = fullW > 0 ? miniPipDynWidthShared.value / fullW : 1
-      const scaleY = fullH > 0 ? miniPipDynHeightShared.value / fullH : 1
+      const scaleY = baselineH > 0 ? miniPipDynHeightShared.value / baselineH : 1
       return {
         width: fullW,
-        height: fullH,
+        height: baselineH,
         flex: undefined,
         transformOrigin: 'left top',
         transform: [{ scaleX }, { scaleY }],

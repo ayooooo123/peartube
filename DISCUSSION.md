@@ -1,121 +1,92 @@
-# Task: Light cleanup after Android PiP stabilization + add regression checklist
+# Task: Remove black bars above/below mini-player video without cropping
+
+## Symptom
+User reports black bars above and below the video in the player. Wants the video to fit the player perfectly without cutting any video off.
+
+## Current likely cause
+`VideoPlayerOverlayImpl.tsx` currently uses:
+- `videoHeight = getPlayerPageVideoHeight(screenWidth)` for the fullscreen page frame
+- `effectiveAR = videoAspectRatio || 16/9` for mini-player sizing
+
+On Android mini mode, the video wrapper is kept at a fullscreen-sized baseline for PiP reliability, but that baseline height may still come from the 16:9 page frame instead of the actual video aspect ratio. That would create letterboxing when the actual video AR differs from the page frame.
 
 ## Goal
-Do a minimal, low-risk cleanup pass now that Android PiP is working.
+- no bars above/below in mini player
+- no cropping
+- keep Android PiP stable
 
-## Constraints
-- No behavior changes unless obviously dead/comment-only cleanup
-- Do not destabilize working PiP
-- Keep cleanup small and focused
+## Most likely fix
+For Android mini mode, base the native-wrapper baseline height on the actual video aspect ratio (`screenWidth / effectiveAR`) rather than the fullscreen page frame height. That should keep the wrapper aspect ratio aligned with the visible mini-player bounds while preserving a stable fullscreen-width baseline for PiP.
 
-## Desired outcomes
-1. Remove or tighten any obviously stale/misleading comments left over from earlier failed PiP theories
-2. Add a short regression checklist note in the repo for future PiP changes
-3. Avoid touching working logic unless the change is purely clarifying
-
-## Candidate cleanup areas
+## Files
 - `packages/app/components/VideoPlayerOverlayImpl.tsx`
-  - comments around Android PiP assumptions / mini-mode handling
-- `packages/app/lib/VideoPlayerContext.tsx`
-  - comments around backgrounding from mini mode
-- `packages/app/modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt`
-  - comments now that dead old-player reflection hooks were removed
-- Add a small doc/checklist file, e.g. `docs/android-pip-regression-checklist.md`
-
-## Suggested checklist content
-- test repeated fullscreen PiP entry cycles
-- test mini-player active then leave app
-- test exit PiP back to app and retry immediately
-- confirm native rebuild required after Kotlin changes
-- avoid reintroducing old-player-specific bridge assumptions
-- keep Android PiP entry path native and simple
+- possibly `VideoContainer.tsx` / `PearInlineVideoView.tsx` if resizeMode assumptions matter
 
 ## Discussion
 
 ## Claude Proposal
 
-### Safe comment/doc-only cleanup edits
+### Root cause
 
-After inspecting the three candidate files, here are the low-risk edits organized by confidence:
+Two independent height calculations diverge when the video AR ≠ 16:9:
 
-#### 1. `MediaSessionModule.kt` — PipBridge (comments only)
+| Value | Source | Depends on actual AR? |
+|---|---|---|
+| `videoHeight` (`videoHeightShared`) | `getPlayerPageVideoHeight(screenWidth)` → `screenWidth * 9/16` | **No** — always 16:9 |
+| `dynMiniHeight` (`miniPipDynHeightShared`) | `computeMiniSize(screenWidth, effectiveAR, …)` → `w / effectiveAR` | **Yes** |
 
-| Line(s) | Current | Proposed | Rationale |
-|----------|---------|----------|-----------|
-| 41 | `Simplified PiP bridge for MainActivity callbacks.` | `PiP bridge: wires Activity lifecycle (onUserLeaveHint, onPictureInPictureModeChanged) to the JS PiP state machine via MediaSessionModule.` | The old doc is from a time before the bridge stabilized; "simplified" is misleading given its current scope. |
-| 313 | `// Apply SurfaceView transforms (skipped for MainActivity)` | `// Legacy SurfaceView transforms — no-ops for MainActivity (early return inside). NitroVLC uses TextureView; this path only fires for non-MainActivity activities (none currently exist).` | Adds context that this code is effectively dead but harmless. Avoids a future contributor adding SurfaceView logic thinking it's active. |
-| 462 | `/** Legacy: find SurfaceViews only ... */` | `/** Legacy: finds SurfaceViews only. NitroVLC switched to TextureView — this is only referenced by applySurfaceViewTransforms and setSurfaceViewInset, both effectively no-ops for the current player. Safe to remove in a future cleanup pass. */` | Documents the dead-code status without removing it. |
+In the Android mini-mode branch (line ~1630), the wrapper is kept at `fullH = videoHeightShared` (16:9) and a scale transform shrinks it to the mini-player clip size:
 
-#### 2. `VideoPlayerOverlayImpl.tsx` — stale/misleading comments
-
-| Line(s) | Current | Proposed | Rationale |
-|----------|---------|----------|-----------|
-| 850 | `// TODO: unify positioning branches and remove this flag entirely.` | `// TODO(low-pri): unify positioning branches and remove this flag entirely. Currently harmless — mobile always uses bottom-relative, web uses top-computed.` | Softens urgency, adds context so nobody treats it as a blocker. |
-| 2165–2168 | `// The inline Android watch player now uses the shared Media3 PlayerView host. // Translating its underlying SurfaceView down clips ...` | `// Legacy SurfaceView inset — always sends 0. NitroVLC uses TextureView and handles its own layout. This call is a no-op on the native side for MainActivity but kept for defensive compat.` | The current comment references "Media3 PlayerView host" which is not what the app uses anymore. |
-
-#### 3. `VideoPlayerContext.tsx` — comment tightening
-
-| Area | Current | Proposed | Rationale |
-|------|---------|----------|-----------|
-| Lines 476–480 (mini→fullscreen PiP handoff) | `// Reliability-first PiP handoff: when backgrounding from in-app mini // mode, restore fullscreen first so Android PiP enters from the stable // full-screen layout. // This is less elegant than direct mini->PiP continuity, but repeated // testing shows mini-mode PiP entry is the unstable path.` | `// PiP handoff: restore fullscreen before PiP entry when backgrounding from mini mode. // Direct mini→PiP is unreliable (TextureView resize kills SurfaceTexture). // See MEMORY.md: "Android PiP — TextureView LayoutParams must NOT change".` | Tighter, links to the root cause instead of vague "less elegant". |
-| Line 907 | `// Some layers identify a video by id while others may still use legacy path formats.` | Remove or replace with: `// Normalize video identifier: backends use drive key, UI uses display path.` | "legacy path formats" implies something is broken; actually it's just two valid ID schemes. |
-
-### Edits NOT recommended (too risky or ambiguous)
-
-| Code | Why skip |
-|------|----------|
-| Remove `applySurfaceViewTransforms` + `findSurfaceViews` + `setSurfaceViewInset` entirely | Called on every PiP state change. Removing changes the call graph. Low risk but not zero — defer to a dedicated cleanup PR with a native rebuild + device test. |
-| Remove `surfaceViewInsetPx` field from PipBridge | Same — wired to a JS-exposed `AsyncFunction`. Removal requires coordinated TS + Kotlin change. |
-| Tighten `notifyPipModeChanged` dismissal-pause logic (nested `run {}` blocks) | Functional, tested, messy but not misleading. Refactoring risks timing changes in the dismissal detection polling loop. |
-
-### Regression checklist doc outline
-
-Proposed file: `docs/android-pip-regression-checklist.md`
-
-```markdown
-# Android PiP Regression Checklist
-
-Run after ANY change to PiP-related code (Kotlin bridge, VideoPlayerContext,
-VideoPlayerOverlayImpl PiP branches, or NitroVLC surface management).
-
-## Prerequisites
-- Physical Android device (emulator PiP behavior differs)
-- Android 12+ preferred (seamless PiP / setAutoEnterEnabled)
-- Fresh native build (`npm run android`) after Kotlin changes
-
-## Core scenarios
-
-### 1. Fullscreen → PiP → return (×3 cycles)
-- [ ] Enter fullscreen, press Home → PiP window appears
-- [ ] Tap PiP to return → fullscreen resumes, controls work
-- [ ] Repeat 2 more times without restarting — no black screen, no stuck state
-
-### 2. Mini-player → background → PiP
-- [ ] Play video, minimize to mini-player
-- [ ] Press Home → app should auto-maximize then enter PiP
-- [ ] Return to app → fullscreen resumes correctly
-
-### 3. PiP dismiss (swipe away)
-- [ ] Enter PiP, swipe the PiP window off-screen
-- [ ] Playback stops, no orphaned audio
-- [ ] Re-open app → player is in correct state (hidden or last mode)
-
-### 4. PiP with controls
-- [ ] Play/pause button in PiP window works
-- [ ] Rewind/forward buttons in PiP window work
-- [ ] Play state syncs back to app on PiP exit
-
-### 5. Rotation + PiP
-- [ ] Enter landscape fullscreen, press Home → PiP enters
-- [ ] Return to app → landscape fullscreen restored (not portrait)
-
-### 6. Quick PiP toggle (stress test)
-- [ ] Rapidly Home → return → Home → return (4+ times)
-- [ ] No crash, no black screen, no frozen UI
-
-## Known constraints
-- TextureView LayoutParams must NOT change during PiP (causes black screen)
-- `applySurfaceViewTransforms` is legacy/no-op for NitroVLC
-- `setSurfaceViewInset` always sends 0 — kept for defensive compat
-- PiP transition window (2200ms) suppresses audio focus loss / MediaSession pause
+```js
+const scaleY = fullH > 0 ? miniPipDynHeightShared.value / fullH : 1
+// wrapper: { width: fullW, height: fullH } with transform [{ scaleX }, { scaleY }]
 ```
+
+If the video is 4:3, `fullH` (16:9) is *shorter* than what the AR needs. VLC `resizeMode=contain` letterboxes inside the 16:9 wrapper. The clip box (`dynMiniHeight`) is computed from the real AR, so the letterbox bars are visible.
+
+If the video is 21:9, `fullH` is *taller* than needed, and VLC pillarboxes — the top/bottom bars appear again.
+
+### Proposed fix (minimal, single-variable)
+
+Replace the 16:9-locked `videoHeight` with an AR-aware height for the Android mini-mode baseline, while keeping the fullscreen page frame unchanged.
+
+**In `VideoPlayerOverlayImpl.tsx`, inside the `videoWrapperStyle` worklet** (~line 1623):
+
+```js
+// BEFORE:
+const fullH = videoHeightShared.value + cutoutInset
+
+// AFTER:
+const arAwareH = aspectRatioShared.value > 0
+  ? Math.round(screenWidthShared.value / aspectRatioShared.value)
+  : videoHeightShared.value
+const fullH = (Platform.OS === 'android' && isMiniPlayerModeShared.value)
+  ? arAwareH
+  : videoHeightShared.value + cutoutInset
+```
+
+This changes **only** the Android mini-mode path. Fullscreen, iOS, and PiP branches continue to use the 16:9 page frame height.
+
+### Why this is safe for PiP
+
+- The baseline wrapper stays at `screenWidth` wide (unchanged).
+- `fullH` only changes in the `isMiniPlayerModeShared` branch, which is **exited** before PiP entry (PiP always transitions from fullscreen, never from mini).
+- `frozenVideoHeightShared` (used by the PiP branch at line 1601) is unaffected — it still freezes the 16:9 fullscreen height.
+- The scale transform ratio (`miniHeight / fullH`) now divides two values that share the same AR, producing a pure size scale with no letterbox.
+
+### What about `frozenVideoHeightShared`?
+
+No change needed. It's only read in the `isPipLayoutActiveShared` branch (line 1601), which is mutually exclusive with the mini-player branch. PiP always operates from a fullscreen baseline.
+
+### Risk assessment
+
+| Concern | Risk |
+|---|---|
+| Android PiP black screen | **None** — PiP branch untouched, `frozenVideoHeightShared` unchanged |
+| Fullscreen layout shift | **None** — `fullH` change is gated on `isMiniPlayerModeShared` |
+| iOS mini-player | **None** — iOS doesn't enter the Android mini branch |
+| Scale correctness | **Improved** — scaleY now maps between same-AR rectangles |
+
+### Optional follow-up (not in this PR)
+
+The fullscreen page frame itself could also be made AR-aware (`videoHeight = screenWidth / effectiveAR` clamped to screen height), which would eliminate letterboxing in fullscreen too. But that touches the PiP-frozen values and the fullscreen→PiP transition path, so it's a separate, higher-risk change.

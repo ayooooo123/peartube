@@ -200,6 +200,10 @@ object PipBridge {
             val aspectRatio = getPipAspectRatio()
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
+            // Use the same stable fullscreen source rect here as in
+            // updateActivityPipParams(). Avoid feeding transient mini-player bounds
+            // into native PiP entry.
+            builder.setSourceRectHint(getFullscreenSourceRect(activity))
             builder.setActions(moduleInstance?.buildPipActions(activity) ?: emptyList())
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

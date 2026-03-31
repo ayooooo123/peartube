@@ -869,18 +869,8 @@ useEffect(() => {
             setTimeout(() => reassertNativePlayAfterPipExit('pip-exit+320ms'), 320)
           }
 
-          // Re-arm auto-PiP for the next app exit.
-          // This is the ONLY reliable place to do it on Android because:
-          // 1. The overlay's handlePipStatusChanged may not fire for Android PiP events
-          // 2. The auto-PiP effect deps may not change after PiP exit
-          // 3. Refs can't trigger effect re-runs
-          if (currentVideoRef.current) {
-            MediaSession.setAutoPictureInPicture(true)
-              .then(() => {
-                console.log('[VideoPlayerContext] Re-armed auto-PiP after Android PiP exit')
-              })
-              .catch(() => {})
-          }
+          // Auto-PiP re-arm is handled immediately on exit detection above
+          // (before the debounce). No need to duplicate it here.
         }
         pipTransitionInFlightRef.current = false
       })

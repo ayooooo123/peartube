@@ -1377,7 +1377,7 @@ class MediaSessionModule : Module() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         actions.add(RemoteAction(
-            Icon.createWithResource(context, android.R.drawable.ic_menu_share),
+            Icon.createWithResource(context, R.drawable.ic_pip_background),
             "Background",
             "Keep playing in background audio",
             backgroundAudioPendingIntent
@@ -1398,7 +1398,7 @@ class MediaSessionModule : Module() {
         )
         val playPauseIcon = Icon.createWithResource(
             context,
-            if (currentIsPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+            if (currentIsPlaying) R.drawable.ic_pip_pause else R.drawable.ic_pip_play
         )
         val playPauseLabel = if (currentIsPlaying) "Pause" else "Play"
         actions.add(RemoteAction(playPauseIcon, playPauseLabel, playPauseLabel, playPausePendingIntent))

@@ -48,6 +48,10 @@ object PipBridge {
     @Volatile private var lastIsInPip: Boolean = false
     @Volatile private var surfaceViewInsetPx: Float = 0f
 
+    fun isLastKnownInPip(): Boolean {
+        return lastIsInPip
+    }
+
     // PiP enter/exit can briefly drop focus and trigger lifecycle/audio-focus churn.
     // Track a short transition window so we can avoid treating that as a user dismissal.
     @Volatile private var pipTransitionUntilUptimeMs: Long = 0
@@ -883,13 +887,22 @@ class MediaSessionModule : Module() {
             PlaybackStateCompat.STATE_PAUSED
         }
 
-        val actions = PlaybackStateCompat.ACTION_PLAY or
-                PlaybackStateCompat.ACTION_PAUSE or
-                PlaybackStateCompat.ACTION_PLAY_PAUSE or
+        val actions = if (PipBridge.isLastKnownInPip() && !isPlaying) {
+                // While paused in PiP, keep Android from substituting a system
+                // MediaSession play button over our custom PiP actions.
                 PlaybackStateCompat.ACTION_STOP or
-                PlaybackStateCompat.ACTION_SEEK_TO or
-                PlaybackStateCompat.ACTION_FAST_FORWARD or
-                PlaybackStateCompat.ACTION_REWIND
+                        PlaybackStateCompat.ACTION_SEEK_TO or
+                        PlaybackStateCompat.ACTION_FAST_FORWARD or
+                        PlaybackStateCompat.ACTION_REWIND
+            } else {
+                PlaybackStateCompat.ACTION_PLAY or
+                        PlaybackStateCompat.ACTION_PAUSE or
+                        PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                        PlaybackStateCompat.ACTION_STOP or
+                        PlaybackStateCompat.ACTION_SEEK_TO or
+                        PlaybackStateCompat.ACTION_FAST_FORWARD or
+                        PlaybackStateCompat.ACTION_REWIND
+            }
 
         currentPlaybackState
             .setState(playbackState, position.toLong(), if (isPlaying) rate else 0f)

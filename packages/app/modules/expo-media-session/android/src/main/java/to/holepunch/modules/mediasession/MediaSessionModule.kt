@@ -1377,9 +1377,9 @@ class MediaSessionModule : Module() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         actions.add(RemoteAction(
-            Icon.createWithResource(context, android.R.drawable.ic_menu_close_clear_cancel),
-            "Background audio",
-            "Dismiss PiP and keep audio playing",
+            Icon.createWithResource(context, android.R.drawable.ic_menu_share),
+            "Background",
+            "Keep playing in background audio",
             backgroundAudioPendingIntent
         ))
 

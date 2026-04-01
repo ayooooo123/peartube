@@ -1324,7 +1324,7 @@ class MediaSessionModule : Module() {
         return Rational((clamped * 1000).toInt(), 1000)
     }
 
-    private fun refreshPipParams(activity: Activity) {
+    internal fun refreshPipParams(activity: Activity) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         if (!activity.isInPictureInPictureMode) return
 

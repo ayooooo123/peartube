@@ -1353,6 +1353,7 @@ class MediaSessionModule : Module() {
             backgroundAudioPendingIntent
         ))
 
+        android.util.Log.d("MediaSession", "buildPipActions: count=${actions.size} labels=${actions.map { it.title }} currentIsPlaying=$currentIsPlaying")
         return actions
     }
 

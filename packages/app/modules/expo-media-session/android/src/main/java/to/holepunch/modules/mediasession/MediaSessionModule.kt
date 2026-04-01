@@ -914,18 +914,16 @@ class MediaSessionModule : Module() {
         }
 
         val actions = if (PipBridge.isLastKnownInPip() && !isPlaying && PipBridge.shouldPreferCustomPlayActionsWhilePausedInPip()) {
-                PlaybackStateCompat.ACTION_STOP or
-                        PlaybackStateCompat.ACTION_SEEK_TO or
-                        PlaybackStateCompat.ACTION_FAST_FORWARD or
-                        PlaybackStateCompat.ACTION_REWIND
+                PlaybackStateCompat.ACTION_SEEK_TO
             } else {
+                // Match Grayjay's system-visible MediaSession action mask more closely.
+                // Grayjay advertises PLAY + PAUSE + PLAY_PAUSE + SEEK_TO (+ next/prev for queue),
+                // not STOP/FAST_FORWARD/REWIND. Keep our PiP-specific skip controls in the
+                // custom PiP action list, not in the system MediaSession transport mask.
                 PlaybackStateCompat.ACTION_PLAY or
                         PlaybackStateCompat.ACTION_PAUSE or
                         PlaybackStateCompat.ACTION_PLAY_PAUSE or
-                        PlaybackStateCompat.ACTION_STOP or
-                        PlaybackStateCompat.ACTION_SEEK_TO or
-                        PlaybackStateCompat.ACTION_FAST_FORWARD or
-                        PlaybackStateCompat.ACTION_REWIND
+                        PlaybackStateCompat.ACTION_SEEK_TO
             }
 
         currentPlaybackState

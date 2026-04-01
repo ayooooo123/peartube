@@ -1321,7 +1321,9 @@ class MediaSessionModule : Module() {
         val builder = PictureInPictureParams.Builder()
             .setAspectRatio(getPipAspectRatio())
 
-        val sourceRect = sourceRectHint ?: PipBridge.getAspectMatchedFullscreenSourceRect(activity)
+        val sourceRect = sourceRectHint
+            ?: getVideoSourceRect(activity)?.let { PipBridge.normalizeSourceRectHint(it) }
+            ?: PipBridge.getAspectMatchedFullscreenSourceRect(activity)
         builder.setSourceRectHint(sourceRect)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

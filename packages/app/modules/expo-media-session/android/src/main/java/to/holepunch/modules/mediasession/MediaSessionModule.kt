@@ -48,6 +48,8 @@ object PipBridge {
     @Volatile private var lastIsInPip: Boolean = false
     @Volatile private var surfaceViewInsetPx: Float = 0f
     @Volatile private var preferCustomPlayActionsWhilePausedInPip: Boolean = false
+    private val pipUiHandler = Handler(Looper.getMainLooper())
+    private var pendingDelayedPipExit: Runnable? = null
 
     fun isLastKnownInPip(): Boolean {
         return lastIsInPip
@@ -331,6 +333,11 @@ object PipBridge {
     fun notifyPipModeChanged(activity: Activity, isInPip: Boolean, newConfig: Configuration? = null) {
         android.util.Log.d("PipBridge", "notifyPipModeChanged: isInPip=$isInPip")
 
+        if (isInPip) {
+            pendingDelayedPipExit?.let { pipUiHandler.removeCallbacks(it) }
+            pendingDelayedPipExit = null
+        }
+
         val didStateChange = isInPip != lastIsInPip
         if (didStateChange) {
             markPipTransition()
@@ -361,13 +368,7 @@ object PipBridge {
                 }, 120)
             }
 
-            lastIsInPip = isInPip
-
             if (!isInPip) {
-                // Check window size for logging, but ALWAYS proceed with restore.
-                // Skipping restore when the window is still PiP-sized left the app
-                // in a half-PiP state where JS never got the exit event and couldn't
-                // re-arm auto-PiP for subsequent cycles.
                 val windowMetrics = activity.windowManager.currentWindowMetrics
                 val windowBounds = windowMetrics.bounds
                 val display = activity.windowManager.defaultDisplay
@@ -375,31 +376,42 @@ object PipBridge {
                 display.getRealSize(screenSize)
                 val stillPipSized = windowBounds.width() < screenSize.x * 0.8f
                 if (stillPipSized) {
-                    android.util.Log.d("PipBridge", "notifyPipModeChanged: window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y}), proceeding with restore anyway")
-                }
-                run {
-                    // Only run the dismissal-pause logic for real PiP exits
-                    run {
-                        val handler = android.os.Handler(android.os.Looper.getMainLooper())
-                        fun isAppProcessVisible(): Boolean {
-                            val info = ActivityManager.RunningAppProcessInfo()
-                            ActivityManager.getMyMemoryState(info)
-                            return info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
-                                info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
-                        }
-
-                        fun maybePauseAfterDismissal(attempt: Int) {
-                            if (activity.isDestroyed || activity.isFinishing) return
-                            if (isAppProcessVisible()) return
-                            if (attempt >= 8) {
-                                notifyPipDismissed()
-                                return
-                            }
-                            handler.postDelayed({ maybePauseAfterDismissal(attempt + 1) }, 250)
-                        }
-                        handler.postDelayed({ maybePauseAfterDismissal(0) }, 350)
+                    android.util.Log.d("PipBridge", "notifyPipModeChanged: window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y}), delaying exit handling")
+                    lastIsInPip = false
+                    val delayedExit = Runnable {
+                        pendingDelayedPipExit = null
+                        if (lastIsInPip) return@Runnable
+                        moduleInstance?.sendPipEvent(activity, false, newConfig)
                     }
+                    pendingDelayedPipExit = delayedExit
+                    pipUiHandler.postDelayed(delayedExit, 220)
+                    return
                 }
+
+                lastIsInPip = false
+                // Only run the dismissal-pause logic for real PiP exits
+                run {
+                    val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                    fun isAppProcessVisible(): Boolean {
+                        val info = ActivityManager.RunningAppProcessInfo()
+                        ActivityManager.getMyMemoryState(info)
+                        return info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+                            info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
+                    }
+
+                    fun maybePauseAfterDismissal(attempt: Int) {
+                        if (activity.isDestroyed || activity.isFinishing) return
+                        if (isAppProcessVisible()) return
+                        if (attempt >= 8) {
+                            notifyPipDismissed()
+                            return
+                        }
+                        handler.postDelayed({ maybePauseAfterDismissal(attempt + 1) }, 250)
+                    }
+                    handler.postDelayed({ maybePauseAfterDismissal(0) }, 350)
+                }
+            } else {
+                lastIsInPip = true
             }
         }
 

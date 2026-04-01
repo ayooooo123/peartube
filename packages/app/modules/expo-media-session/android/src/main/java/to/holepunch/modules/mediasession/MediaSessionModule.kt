@@ -189,7 +189,17 @@ object PipBridge {
 
             val params = builder.build()
             activity.setPictureInPictureParams(params)
-            activity.enterPictureInPictureMode(params)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // Re-apply fresh params with autoEnterEnabled=true immediately before
+                // manual PiP entry. This avoids stale cached fullscreen params from a
+                // previous cycle silently preventing PiP from actually appearing.
+                builder.setAutoEnterEnabled(true)
+                val freshParams = builder.build()
+                activity.setPictureInPictureParams(freshParams)
+                activity.enterPictureInPictureMode(freshParams)
+            } else {
+                activity.enterPictureInPictureMode(params)
+            }
             android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "onUserLeaveHint: PiP failed", e)

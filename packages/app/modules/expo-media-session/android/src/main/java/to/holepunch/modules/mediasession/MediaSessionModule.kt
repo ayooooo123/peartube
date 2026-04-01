@@ -928,15 +928,19 @@ class MediaSessionModule : Module() {
     }
 
     internal fun refreshMediaSessionPlaybackStateForPip() {
-        if (PipBridge.shouldSuppressTransportActionsForPip()) {
+        val suppressForPip = PipBridge.shouldSuppressTransportActionsForPip()
+        if (suppressForPip) {
             currentPlaybackState.setState(PlaybackStateCompat.STATE_NONE, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 0f)
+            mediaSession?.isActive = false
+        } else if (isSessionActive) {
+            mediaSession?.isActive = true
         }
         val built = currentPlaybackState
             .setActions(computePlaybackActions())
             .build()
         mediaSession?.setPlaybackState(built)
         updateNotification()
-        android.util.Log.d("MediaSession", "refreshMediaSessionPlaybackStateForPip: suppressTransportActionsForPip=${PipBridge.shouldSuppressTransportActionsForPip()} actions=${built.actions}")
+        android.util.Log.d("MediaSession", "refreshMediaSessionPlaybackStateForPip: suppressTransportActionsForPip=$suppressForPip isActive=${mediaSession?.isActive} actions=${built.actions}")
     }
 
     private fun clearNowPlayingInfo() {

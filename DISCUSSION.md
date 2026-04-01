@@ -49,3 +49,24 @@ We need to compare the deeper PiP lifecycle and playback/session integration bet
 - one targeted next patch, not a list of guesses
 
 ## Discussion
+
+## Hermes Lifecycle Diff
+
+Verified deeper differences between Grayjay and PearTube:
+
+1. Grayjay really does use 2 standard PiP RemoteActions while playing on this same device.
+2. PearTube now also supplies 2 custom PiP actions before entry, verified in logs.
+3. PearTube logs proved Android still collapses to a single pause button while playing, but shows both custom actions once paused.
+4. Grayjay MainActivity differs (`singleInstance`, `resizeableActivity=true`), but matching that in PearTube did not change the visible PiP controls.
+5. Grayjay's Android 12+ PiP entry relies on armed params / auto-enter semantics more than PearTube's original force-enter path, but matching that also did not change the visible controls.
+6. Suppressing MediaSession transport actions, advertising STATE_NONE, and even temporarily deactivating MediaSession during active PiP did not change Android's single-button playing-state behavior in PearTube.
+7. Therefore, the useful remaining proven changes are only the clean Grayjay-aligned action-layer ones:
+   - BroadcastReceiver dispatch
+   - Grayjay-style receiver payload extras
+   - 2 PiP actions (Background + Play/Pause)
+   - custom app-specific icons
+
+Conclusion:
+- Keep the clean action-layer alignment changes.
+- Revert the failed lifecycle/session experiments.
+- Remaining root cause is still deeper than action/session plumbing and likely tied to a subtler host/player/runtime difference that has not yet been isolated.

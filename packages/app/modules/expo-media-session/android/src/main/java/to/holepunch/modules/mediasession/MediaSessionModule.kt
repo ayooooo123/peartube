@@ -47,15 +47,6 @@ object PipBridge {
     @Volatile private var mainActivityDelegatedPipHandoffUntilUptimeMs: Long = 0
     @Volatile private var lastIsInPip: Boolean = false
     @Volatile private var surfaceViewInsetPx: Float = 0f
-    @Volatile private var suppressTransportActionsForPip: Boolean = false
-
-    fun setSuppressTransportActionsForPip(enabled: Boolean) {
-        suppressTransportActionsForPip = enabled
-    }
-
-    fun shouldSuppressTransportActionsForPip(): Boolean {
-        return suppressTransportActionsForPip
-    }
 
     // PiP enter/exit can briefly drop focus and trigger lifecycle/audio-focus churn.
     // Track a short transition window so we can avoid treating that as a user dismissal.
@@ -180,18 +171,16 @@ object PipBridge {
         }
 
         markPipTransition()
-        setSuppressTransportActionsForPip(true)
-        moduleInstance?.refreshMediaSessionPlaybackStateForPip()
         android.util.Log.d("PipBridge", "onUserLeaveHint: PiP transition marked")
 
         try {
             val aspectRatio = getPipAspectRatio()
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
-            // Match Grayjay more closely by using the actual video rect for PiP
-            // entry sizing instead of the whole fullscreen window. The shell can
-            // use this rect when deciding the initial pinned window presentation.
-            builder.setSourceRectHint(normalizeSourceRectHint(getLaunchIntoPipSourceRect(activity)))
+            // Use the same stable fullscreen source rect here as in
+            // updateActivityPipParams(). Avoid feeding transient mini-player bounds
+            // into native PiP entry.
+            builder.setSourceRectHint(getFullscreenSourceRect(activity))
             builder.setActions(moduleInstance?.buildPipActions(activity) ?: emptyList())
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -200,15 +189,8 @@ object PipBridge {
 
             val params = builder.build()
             activity.setPictureInPictureParams(params)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // Match Grayjay's Android 12+ flow more closely: arm auto-enter with
-                // the latest params and let the system enter PiP from Home/recents,
-                // instead of forcing a manual enter call on onUserLeaveHint.
-                android.util.Log.d("PipBridge", "onUserLeaveHint: armed auto-enter PiP with fresh params")
-            } else {
-                activity.enterPictureInPictureMode(params)
-                android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
-            }
+            activity.enterPictureInPictureMode(params)
+            android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "onUserLeaveHint: PiP failed", e)
         }
@@ -320,8 +302,6 @@ object PipBridge {
         val didStateChange = isInPip != lastIsInPip
         if (didStateChange) {
             markPipTransition()
-            setSuppressTransportActionsForPip(isInPip)
-            moduleInstance?.refreshMediaSessionPlaybackStateForPip()
 
             val isMainActivity = activity.javaClass.name.endsWith(".MainActivity")
 
@@ -877,15 +857,19 @@ class MediaSessionModule : Module() {
 
         currentMetadata.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration.toLong())
 
-        val playbackState = if (PipBridge.shouldSuppressTransportActionsForPip()) {
-            PlaybackStateCompat.STATE_NONE
-        } else if (isPlaying) {
+        val playbackState = if (isPlaying) {
             PlaybackStateCompat.STATE_PLAYING
         } else {
             PlaybackStateCompat.STATE_PAUSED
         }
 
-        val actions = computePlaybackActions()
+        val actions = PlaybackStateCompat.ACTION_PLAY or
+                PlaybackStateCompat.ACTION_PAUSE or
+                PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                PlaybackStateCompat.ACTION_STOP or
+                PlaybackStateCompat.ACTION_SEEK_TO or
+                PlaybackStateCompat.ACTION_FAST_FORWARD or
+                PlaybackStateCompat.ACTION_REWIND
 
         currentPlaybackState
             .setState(playbackState, position.toLong(), if (isPlaying) rate else 0f)
@@ -912,35 +896,6 @@ class MediaSessionModule : Module() {
                 refreshPipParams(activity)
             }
         }
-    }
-
-    private fun computePlaybackActions(): Long {
-        if (PipBridge.shouldSuppressTransportActionsForPip()) {
-            return PlaybackStateCompat.ACTION_STOP
-        }
-        return PlaybackStateCompat.ACTION_PLAY or
-                PlaybackStateCompat.ACTION_PAUSE or
-                PlaybackStateCompat.ACTION_PLAY_PAUSE or
-                PlaybackStateCompat.ACTION_STOP or
-                PlaybackStateCompat.ACTION_SEEK_TO or
-                PlaybackStateCompat.ACTION_FAST_FORWARD or
-                PlaybackStateCompat.ACTION_REWIND
-    }
-
-    internal fun refreshMediaSessionPlaybackStateForPip() {
-        val suppressForPip = PipBridge.shouldSuppressTransportActionsForPip()
-        if (suppressForPip) {
-            currentPlaybackState.setState(PlaybackStateCompat.STATE_NONE, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 0f)
-            mediaSession?.isActive = false
-        } else if (isSessionActive) {
-            mediaSession?.isActive = true
-        }
-        val built = currentPlaybackState
-            .setActions(computePlaybackActions())
-            .build()
-        mediaSession?.setPlaybackState(built)
-        updateNotification()
-        android.util.Log.d("MediaSession", "refreshMediaSessionPlaybackStateForPip: suppressTransportActionsForPip=$suppressForPip isActive=${mediaSession?.isActive} actions=${built.actions}")
     }
 
     private fun clearNowPlayingInfo() {

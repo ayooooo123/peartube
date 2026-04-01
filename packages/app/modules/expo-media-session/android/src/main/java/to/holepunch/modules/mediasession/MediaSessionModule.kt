@@ -310,6 +310,7 @@ object PipBridge {
     }
 
     fun notifyPipBoundsChanged(activity: Activity, newConfig: Configuration) {
+        android.util.Log.d("PipBridge", "notifyPipBoundsChanged: ${newConfig.screenWidthDp}x${newConfig.screenHeightDp}dp")
         notifyPipModeChanged(activity, true, newConfig)
         moduleInstance?.refreshPipParams(activity)
     }

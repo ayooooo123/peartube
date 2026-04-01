@@ -1250,7 +1250,7 @@ class MediaSessionModule : Module() {
         return try {
             PipBridge.setPendingPlayerLaunchPayload(payload)
             val intent = Intent().setComponent(ComponentName(context.packageName, "${context.packageName}.PlayerActivity"))
-                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             payload?.forEach { (key, value) ->
                 when (value) {
                     is String -> intent.putExtra(key, value)

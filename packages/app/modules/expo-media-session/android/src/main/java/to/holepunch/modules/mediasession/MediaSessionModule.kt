@@ -194,13 +194,13 @@ object PipBridge {
                 sourceRectHint = getAspectMatchedFullscreenSourceRect(activity),
                 autoEnterEnabled = true,
             ) ?: return
-            activity.setPictureInPictureParams(params)
+            moduleInstance?.setLoggedPipParams(activity, params, "PipBridge.onUserLeaveHint:set")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 // Re-apply fresh canonical params immediately before manual PiP entry.
-                activity.setPictureInPictureParams(params)
-                activity.enterPictureInPictureMode(params)
+                moduleInstance?.setLoggedPipParams(activity, params, "PipBridge.onUserLeaveHint:preEnterSet")
+                moduleInstance?.enterLoggedPipMode(activity, params, "PipBridge.onUserLeaveHint:enter")
             } else {
-                activity.enterPictureInPictureMode(params)
+                moduleInstance?.enterLoggedPipMode(activity, params, "PipBridge.onUserLeaveHint:enter")
             }
             android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
         } catch (e: Exception) {
@@ -240,7 +240,7 @@ object PipBridge {
                 sourceRectHint = sourceRect,
                 autoEnterEnabled = true,
             ) ?: return
-            activity.setPictureInPictureParams(params)
+            moduleInstance?.setLoggedPipParams(activity, params, "PipBridge.updatePipSourceRectForCapture:set")
             android.util.Log.d("PipBridge", "updatePipSourceRectForCapture: sourceRect=$sourceRect")
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "updatePipSourceRectForCapture failed", e)
@@ -286,7 +286,7 @@ object PipBridge {
                 sourceRectHint = sourceRectHint ?: getAspectMatchedFullscreenSourceRect(activity),
                 autoEnterEnabled = true,
             ) ?: return false
-            activity.enterPictureInPictureMode(params)
+            moduleInstance?.enterLoggedPipMode(activity, params, "PipBridge.enterPictureInPictureDirect:enter")
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "enterPictureInPictureDirect failed", e)
             false
@@ -1189,7 +1189,7 @@ class MediaSessionModule : Module() {
                 sourceRectHint = PipBridge.getAspectMatchedFullscreenSourceRect(activity),
                 autoEnterEnabled = true,
             )
-            return activity.enterPictureInPictureMode(params)
+            return enterLoggedPipMode(activity, params, "MediaSession.enterPiP:enter")
         } catch (e: Exception) {
             android.util.Log.e("MediaSession", "enterPiP: failed", e)
             return false
@@ -1229,7 +1229,7 @@ class MediaSessionModule : Module() {
                 autoEnterEnabled = effectiveEnabled && isPipHostActivity,
             )
 
-            activity.setPictureInPictureParams(params)
+            setLoggedPipParams(activity, params, "MediaSession.updateActivityPipParams:set")
             android.util.Log.d("MediaSession", "updateActivityPipParams: enabled=$effectiveEnabled (requested=$enabled, inPip=${activity.isInPictureInPictureMode}), sourceRect=$sourceRect")
         } catch (e: Exception) {
             android.util.Log.e("MediaSession", "updateActivityPipParams: failed", e)
@@ -1344,12 +1344,44 @@ class MediaSessionModule : Module() {
         return builder.build()
     }
 
+    internal fun logPipParamsWrite(reason: String, params: PictureInPictureParams) {
+        val actions = try {
+            params.actions?.map { it.title?.toString() ?: "<untitled>" } ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val autoEnter = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try { params.isAutoEnterEnabled.toString() } catch (_: Exception) { "unknown" }
+        } else {
+            "n/a"
+        }
+        val seamless = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try { params.isSeamlessResizeEnabled.toString() } catch (_: Exception) { "unknown" }
+        } else {
+            "n/a"
+        }
+        android.util.Log.d(
+            "MediaSession",
+            "PiP_WRITE reason=$reason actions=$actions autoEnter=$autoEnter seamless=$seamless sourceRect=${params.sourceRectHint} aspectRatio=${params.aspectRatio}"
+        )
+    }
+
+    internal fun setLoggedPipParams(activity: Activity, params: PictureInPictureParams, reason: String) {
+        logPipParamsWrite(reason, params)
+        activity.setPictureInPictureParams(params)
+    }
+
+    internal fun enterLoggedPipMode(activity: Activity, params: PictureInPictureParams, reason: String): Boolean {
+        logPipParamsWrite(reason, params)
+        return activity.enterPictureInPictureMode(params)
+    }
+
     internal fun refreshPipParams(activity: Activity) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         if (!activity.isInPictureInPictureMode) return
 
         try {
-            activity.setPictureInPictureParams(buildCanonicalPipParams(activity))
+            setLoggedPipParams(activity, buildCanonicalPipParams(activity), "MediaSession.refreshPipParams:set")
         } catch (e: Exception) {
             android.util.Log.e("MediaSession", "refreshPipParams failed: ${e.message}")
         }

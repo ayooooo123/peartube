@@ -376,15 +376,8 @@ object PipBridge {
                 display.getRealSize(screenSize)
                 val stillPipSized = windowBounds.width() < screenSize.x * 0.8f
                 if (stillPipSized) {
-                    android.util.Log.d("PipBridge", "notifyPipModeChanged: window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y}), delaying exit handling")
-                    lastIsInPip = false
-                    val delayedExit = Runnable {
-                        pendingDelayedPipExit = null
-                        if (lastIsInPip) return@Runnable
-                        moduleInstance?.sendPipEvent(activity, false, newConfig)
-                    }
-                    pendingDelayedPipExit = delayedExit
-                    pipUiHandler.postDelayed(delayedExit, 220)
+                    android.util.Log.d("PipBridge", "notifyPipModeChanged: window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y}), ignoring transient false event")
+                    lastIsInPip = true
                     return
                 }
 

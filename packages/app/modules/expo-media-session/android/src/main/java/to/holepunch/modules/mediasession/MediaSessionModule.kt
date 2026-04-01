@@ -286,7 +286,7 @@ object PipBridge {
                 sourceRectHint = sourceRectHint ?: getAspectMatchedFullscreenSourceRect(activity),
                 autoEnterEnabled = true,
             ) ?: return false
-            moduleInstance?.enterLoggedPipMode(activity, params, "PipBridge.enterPictureInPictureDirect:enter")
+            moduleInstance?.enterLoggedPipMode(activity, params, "PipBridge.enterPictureInPictureDirect:enter") ?: false
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "enterPictureInPictureDirect failed", e)
             false

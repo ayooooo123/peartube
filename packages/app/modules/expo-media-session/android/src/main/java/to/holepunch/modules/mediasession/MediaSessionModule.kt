@@ -1313,7 +1313,7 @@ class MediaSessionModule : Module() {
         return Rational((clamped * 1000).toInt(), 1000)
     }
 
-    private fun buildCanonicalPipParams(
+    internal fun buildCanonicalPipParams(
         activity: Activity,
         sourceRectHint: android.graphics.Rect? = null,
         autoEnterEnabled: Boolean? = null,

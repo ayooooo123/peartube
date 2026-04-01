@@ -486,6 +486,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         }
         console.log('[VideoPlayerContext] Going to background, wasPlaying:', isPlayingRef.current, 'playerMode:', playerModeRef.current)
 
+        // On this device, PiP drag/bounds-change churn can wobble AppState even while
+        // the video is still effectively in PiP. Re-arm Android auto-PiP immediately on
+        // that churn so the task-level PiP params don't stay degraded (`autoEnter=false`).
+        if (Platform.OS === 'android' && currentVideoRef.current && (isInPipModeRef.current || pipTransitionInFlightRef.current)) {
+          MediaSession.setAutoPictureInPicture(true).catch(() => {})
+        }
+
         // Reliability-first PiP handoff: when backgrounding from in-app mini
         // mode, restore fullscreen first so Android PiP enters from the stable
         // fullscreen player surface instead of the transformed mini-player.
@@ -500,6 +507,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
          maximizedForPipRef.current = false
           const wasInPip = isInPipModeRef.current || pipTransitionInFlightRef.current
           console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current, 'wasInPiP:', wasInPip, 'pipInFlight:', pipTransitionInFlightRef.current)
+
+          if (Platform.OS === 'android' && currentVideoRef.current && wasInPip) {
+            MediaSession.setAutoPictureInPicture(true).catch(() => {})
+          }
 
          // IMPORTANT: Don't clear PiP state on foreground if we were in PiP.
          // When returning from PiP, Android can deliver the AppState "active" event

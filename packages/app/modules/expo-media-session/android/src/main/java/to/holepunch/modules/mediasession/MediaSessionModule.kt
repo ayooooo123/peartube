@@ -1353,22 +1353,6 @@ class MediaSessionModule : Module() {
             backgroundAudioPendingIntent
         ))
 
-        val playPauseIntent = Intent(context, MediaControlReceiver::class.java).apply {
-            action = if (currentIsPlaying) ACTION_PIP_PAUSE else ACTION_PIP_PLAY
-        }
-        val playPausePendingIntent = PendingIntent.getBroadcast(
-            context,
-            REQUEST_PLAY_PAUSE,
-            playPauseIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val playPauseIcon = Icon.createWithResource(
-            context,
-            if (currentIsPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
-        )
-        val playPauseLabel = if (currentIsPlaying) "Pause" else "Play"
-        actions.add(RemoteAction(playPauseIcon, playPauseLabel, playPauseLabel, playPausePendingIntent))
-
         return actions
     }
 

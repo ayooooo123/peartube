@@ -27,6 +27,7 @@ export type RemoteCommandType =
   | 'seekTo'
   | 'nextTrack'
   | 'previousTrack'
+  | 'backgroundAudio'
 
 export interface RemoteCommandEvent {
   command: RemoteCommandType
@@ -71,6 +72,9 @@ interface MediaSessionModuleInterface {
   
   // Android only: check if PiP is supported
   isPictureInPictureSupported?(): Promise<boolean>
+
+  // Android only: dismiss PiP into background-audio mode while keeping session alive
+  enterBackgroundAudioMode?(): Promise<void>
 
   startCastForegroundService?(title: string, subtitle: string): Promise<void>
   updateCastForegroundService?(title: string, subtitle: string): Promise<void>
@@ -178,6 +182,17 @@ export async function setAutoPictureInPicture(enabled: boolean): Promise<void> {
     await native.setAutoPictureInPicture(enabled)
   } catch (err) {
     console.error('[MediaSession] setAutoPictureInPicture failed:', err)
+  }
+}
+
+export async function enterBackgroundAudioMode(): Promise<void> {
+  if (Platform.OS !== 'android') return
+  const native = getMediaSessionNative() as any
+  if (!native.enterBackgroundAudioMode) return
+  try {
+    await native.enterBackgroundAudioMode()
+  } catch (err) {
+    console.error('[MediaSession] enterBackgroundAudioMode failed:', err)
   }
 }
 

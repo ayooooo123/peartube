@@ -627,7 +627,24 @@ class MediaSessionModule : Module() {
                     setAutoPiP(enabled)
                     promise.resolve(null)
                 } catch (e: Exception) {
-                    promise.reject("PIP_ERROR", e.message ?: "Failed to set auto PiP", e)
+                    promise.reject("PIP_ERROR", e.message ?: "Failed to set Auto PiP", e)
+                }
+            }
+        }
+
+        AsyncFunction("enterBackgroundAudioMode") { promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    val activity = appContext.currentActivity
+                    if (activity != null) {
+                        setAutoPiP(false)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            activity.moveTaskToBack(true)
+                        }
+                    }
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject("PIP_ERROR", e.message ?: "Failed to enter background audio mode", e)
                 }
             }
         }
@@ -1358,6 +1375,23 @@ class MediaSessionModule : Module() {
             forwardPendingIntent
         ))
 
+        // Background-audio action
+        val backgroundAudioIntent = Intent(context, MediaPlaybackService::class.java).apply {
+            action = ACTION_PIP_BACKGROUND_AUDIO
+        }
+        val backgroundAudioPendingIntent = PendingIntent.getForegroundService(
+            context,
+            REQUEST_BACKGROUND_AUDIO,
+            backgroundAudioIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        actions.add(RemoteAction(
+            Icon.createWithResource(context, android.R.drawable.ic_menu_close_clear_cancel),
+            "Background audio",
+            "Dismiss PiP and keep audio playing",
+            backgroundAudioPendingIntent
+        ))
+
         return actions
     }
 
@@ -1411,6 +1445,11 @@ class MediaSessionModule : Module() {
         sendEvent("onRemoteCommand", mapOf("command" to "stop", "reason" to "pip-dismissed"))
     }
 
+    internal fun handlePipBackgroundAudio() {
+        android.util.Log.d("MediaSession", "handlePipBackgroundAudio")
+        sendEvent("onRemoteCommand", mapOf("command" to "backgroundAudio"))
+    }
+
     internal fun handlePipRewind() {
         android.util.Log.d("MediaSession", "handlePipRewind")
         sendEvent("onRemoteCommand", mapOf("command" to "skipBackward", "interval" to 10))
@@ -1457,6 +1496,7 @@ class MediaSessionModule : Module() {
         const val ACTION_PIP_PAUSE = "to.holepunch.mediasession.PIP_PAUSE"
         const val ACTION_PIP_REWIND = "to.holepunch.mediasession.PIP_REWIND"
         const val ACTION_PIP_FORWARD = "to.holepunch.mediasession.PIP_FORWARD"
+        const val ACTION_PIP_BACKGROUND_AUDIO = "to.holepunch.mediasession.PIP_BACKGROUND_AUDIO"
         const val ACTION_CAST_START = "to.holepunch.mediasession.CAST_START"
         const val ACTION_CAST_UPDATE = "to.holepunch.mediasession.CAST_UPDATE"
         const val ACTION_CAST_STOP = "to.holepunch.mediasession.CAST_STOP"
@@ -1466,5 +1506,6 @@ class MediaSessionModule : Module() {
         private const val REQUEST_PLAY_PAUSE = 1
         private const val REQUEST_REWIND = 2
         private const val REQUEST_FORWARD = 3
+        private const val REQUEST_BACKGROUND_AUDIO = 4
     }
 }

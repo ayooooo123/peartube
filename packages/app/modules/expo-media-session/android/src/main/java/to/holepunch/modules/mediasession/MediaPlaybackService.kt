@@ -119,6 +119,12 @@ class MediaPlaybackService : Service() {
                 PipServiceBridge.onForward()
                 return if (isCastMode) START_REDELIVER_INTENT else START_NOT_STICKY
             }
+            MediaSessionModule.ACTION_PIP_BACKGROUND_AUDIO -> {
+                android.util.Log.d("MediaPlaybackService", "PiP background-audio action received")
+                ensureForeground()
+                PipServiceBridge.onBackgroundAudio()
+                return if (isCastMode) START_REDELIVER_INTENT else START_NOT_STICKY
+            }
         }
 
         ensureForeground()
@@ -366,6 +372,10 @@ object PipServiceBridge {
     
     fun onForward() {
         moduleInstance?.handlePipForward()
+    }
+
+    fun onBackgroundAudio() {
+        moduleInstance?.handlePipBackgroundAudio()
     }
     
 }

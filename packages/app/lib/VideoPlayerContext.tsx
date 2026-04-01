@@ -647,6 +647,13 @@ useEffect(() => {
             try { playerRef.current?.pause?.() } catch {}
           }
           break
+        case 'backgroundAudio':
+          console.log('[VideoPlayerContext] Entering background audio from native control')
+          enterBackgroundAudio()
+          if (Platform.OS === 'android') {
+            MediaSession.enterBackgroundAudioMode?.().catch(() => {})
+          }
+          break
         case 'stop': {
           const isPipDismissed = event.reason === 'pip-dismissed'
 
@@ -716,7 +723,7 @@ useEffect(() => {
     })
 
     return () => subscription.remove()
-  }, [closeSession, dispatch, isPrimaryController, restoreLastClosedVideo, reassertNativePlayAfterPipExit])
+  }, [closeSession, dispatch, enterBackgroundAudio, isPrimaryController, restoreLastClosedVideo, reassertNativePlayAfterPipExit])
 
   // Audio interruption listener (iOS only) - Android relies on remote commands from AudioFocus
   useEffect(() => {

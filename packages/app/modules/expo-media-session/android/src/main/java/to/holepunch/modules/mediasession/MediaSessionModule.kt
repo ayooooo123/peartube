@@ -49,6 +49,14 @@ object PipBridge {
     @Volatile private var surfaceViewInsetPx: Float = 0f
     @Volatile private var preferCustomPlayActionsWhilePausedInPip: Boolean = false
 
+    fun isLastKnownInPip(): Boolean {
+        return lastIsInPip
+    }
+
+    fun setPreferCustomPlayActionsWhilePausedInPip(enabled: Boolean) {
+        preferCustomPlayActionsWhilePausedInPip = enabled
+    }
+
     fun shouldPreferCustomPlayActionsWhilePausedInPip(): Boolean {
         return preferCustomPlayActionsWhilePausedInPip
     }
@@ -318,7 +326,7 @@ object PipBridge {
         if (didStateChange) {
             markPipTransition()
             if (!isInPip) {
-                preferCustomPlayActionsWhilePausedInPip = false
+                setPreferCustomPlayActionsWhilePausedInPip(false)
             }
 
             val isMainActivity = activity.javaClass.name.endsWith(".MainActivity")
@@ -1450,14 +1458,14 @@ class MediaSessionModule : Module() {
 
     internal fun handlePipPlay() {
         android.util.Log.d("MediaSession", "handlePipPlay")
-        preferCustomPlayActionsWhilePausedInPip = false
+        PipBridge.setPreferCustomPlayActionsWhilePausedInPip(false)
         sendEvent("onRemoteCommand", mapOf("command" to "play"))
     }
 
     internal fun handlePipPause() {
         android.util.Log.d("MediaSession", "handlePipPause")
         if (PipBridge.isLastKnownInPip()) {
-            preferCustomPlayActionsWhilePausedInPip = true
+            PipBridge.setPreferCustomPlayActionsWhilePausedInPip(true)
         }
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }

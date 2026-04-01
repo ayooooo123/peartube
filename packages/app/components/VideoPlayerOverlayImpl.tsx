@@ -513,7 +513,6 @@ export function VideoPlayerOverlay() {
   // State for true fullscreen (landscape, hidden UI)
   const [isLandscapeFullscreen, setIsLandscapeFullscreen] = useState(false)
   const autoPipEnabledRef = useRef(false)
-  const androidPipSessionActiveRef = useRef(false)
   const [iosPipEnabled, setIosPipEnabled] = useState(false)
 
   // Mini player corner/drag state
@@ -2183,26 +2182,17 @@ export function VideoPlayerOverlay() {
     if (Platform.OS === 'android') {
       if (pipSupported === false) return
 
-      // Architectural simplification: Android PiP enablement should follow a stable
-      // playback-session signal, not transient UI/playerMode churn like 'hidden'.
-      // Keep PiP armed for the lifetime of an active playback session and only disarm
-      // once the session is truly gone.
-      const sessionActive = (currentVideo !== null || isLoading || isPlaying || isInPipMode) && !isCasting
-      androidPipSessionActiveRef.current = sessionActive
-      autoPipEnabledRef.current = sessionActive
-      console.log('[VideoPlayerOverlay] Auto-PiP session effect:', {
-        playerMode,
-        sessionActive,
-        hasCurrentVideo: currentVideo !== null,
-        isLoading,
-        isPlaying,
-        isInPipMode,
-        isCasting,
-      })
+      // Keep PiP enabled as long as there's an active video.
+      // Don't gate on playerMode — transitional states during PiP exit can
+      // cause false disables that break subsequent PiP entries.
+      const shouldEnable = currentVideo !== null && !isCasting
 
-      MediaSession.setAutoPictureInPicture(sessionActive)
+      autoPipEnabledRef.current = shouldEnable
+      console.log('[VideoPlayerOverlay] Auto-PiP effect:', playerMode, 'enabling:', shouldEnable)
+
+      MediaSession.setAutoPictureInPicture(shouldEnable)
         .then(() => {
-          console.log('[VideoPlayerOverlay] Auto-PiP set:', sessionActive)
+          console.log('[VideoPlayerOverlay] Auto-PiP set:', shouldEnable)
         })
         .catch((err) => {
           console.error('[VideoPlayerOverlay] Auto-PiP failed:', err)
@@ -2215,7 +2205,7 @@ export function VideoPlayerOverlay() {
       autoPipEnabledRef.current = shouldEnable
       setIosPipEnabled(shouldEnable)
     }
-  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, isLandscapeFullscreen, isLoading, isPlaying])
+  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, isLandscapeFullscreen])
 
   // PiP entry is handled natively via onUserLeaveHint in MainActivity
   // Same activity shrinks, same player continues (single-player architecture)

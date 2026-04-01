@@ -870,7 +870,9 @@ class MediaSessionModule : Module() {
 
         currentMetadata.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration.toLong())
 
-        val playbackState = if (isPlaying) {
+        val playbackState = if (PipBridge.shouldSuppressTransportActionsForPip()) {
+            PlaybackStateCompat.STATE_NONE
+        } else if (isPlaying) {
             PlaybackStateCompat.STATE_PLAYING
         } else {
             PlaybackStateCompat.STATE_PAUSED
@@ -919,6 +921,9 @@ class MediaSessionModule : Module() {
     }
 
     internal fun refreshMediaSessionPlaybackStateForPip() {
+        if (PipBridge.shouldSuppressTransportActionsForPip()) {
+            currentPlaybackState.setState(PlaybackStateCompat.STATE_NONE, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 0f)
+        }
         val built = currentPlaybackState
             .setActions(computePlaybackActions())
             .build()

@@ -1358,23 +1358,6 @@ class MediaSessionModule : Module() {
         val playPauseLabel = if (currentIsPlaying) "Pause" else "Play"
         actions.add(RemoteAction(playPauseIcon, playPauseLabel, playPauseLabel, playPausePendingIntent))
 
-        // Forward action
-        val forwardIntent = Intent(context, MediaPlaybackService::class.java).apply {
-            action = ACTION_PIP_FORWARD
-        }
-        val forwardPendingIntent = PendingIntent.getForegroundService(
-            context,
-            REQUEST_FORWARD,
-            forwardIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        actions.add(RemoteAction(
-            Icon.createWithResource(context, android.R.drawable.ic_media_ff),
-            "Forward",
-            "Forward 10 seconds",
-            forwardPendingIntent
-        ))
-
         // Background-audio action
         val backgroundAudioIntent = Intent(context, MediaPlaybackService::class.java).apply {
             action = ACTION_PIP_BACKGROUND_AUDIO

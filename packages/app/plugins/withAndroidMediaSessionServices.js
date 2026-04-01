@@ -57,13 +57,13 @@ function withAndroidMediaSessionServices(config) {
     if (!mainActivity) {
       console.warn('[withAndroidMediaSessionServices] No MainActivity found in manifest');
     } else {
-      ensureIntentFilter(mainActivity, {
-        action: [{ $: { 'android:name': 'android.intent.action.MAIN' } }],
-        category: [{ $: { 'android:name': 'android.intent.category.APP_MUSIC' } }],
-      });
-      ensureIntentFilter(mainActivity, {
-        action: [{ $: { 'android:name': 'android.intent.action.MUSIC_PLAYER' } }],
-        category: [{ $: { 'android:name': 'android.intent.category.DEFAULT' } }],
+      const filters = mainActivity['intent-filter'] || [];
+      mainActivity['intent-filter'] = filters.filter((filter) => {
+        const actions = (filter.action || []).map((a) => a.$?.['android:name']);
+        const categories = (filter.category || []).map((c) => c.$?.['android:name']);
+        const isAppMusic = actions.includes('android.intent.action.MAIN') && categories.includes('android.intent.category.APP_MUSIC');
+        const isMusicPlayer = actions.includes('android.intent.action.MUSIC_PLAYER');
+        return !isAppMusic && !isMusicPlayer;
       });
     }
 

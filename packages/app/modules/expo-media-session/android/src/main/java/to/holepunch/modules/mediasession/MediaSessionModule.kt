@@ -368,6 +368,18 @@ object PipBridge {
         moduleInstance?.handlePipStop()
     }
 
+    fun onPipPlayAction() {
+        moduleInstance?.handlePipPlay()
+    }
+
+    fun onPipPauseAction() {
+        moduleInstance?.handlePipPause()
+    }
+
+    fun onPipBackgroundAudioAction() {
+        moduleInstance?.handlePipBackgroundAudio()
+    }
+
     fun setSurfaceViewInset(topInsetPx: Float) {
         surfaceViewInsetPx = topInsetPx
         val activity = moduleInstance?.appContext?.currentActivity ?: return
@@ -1323,46 +1335,12 @@ class MediaSessionModule : Module() {
         val context = activity.applicationContext
         val actions = mutableListOf<RemoteAction>()
 
-        // Rewind action
-        val rewindIntent = Intent(context, MediaPlaybackService::class.java).apply {
-            action = ACTION_PIP_REWIND
-        }
-        val rewindPendingIntent = PendingIntent.getForegroundService(
-            context,
-            REQUEST_REWIND,
-            rewindIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        actions.add(RemoteAction(
-            Icon.createWithResource(context, android.R.drawable.ic_media_rew),
-            "Rewind",
-            "Rewind 10 seconds",
-            rewindPendingIntent
-        ))
-
-        // Play/Pause action
-        val playPauseIntent = Intent(context, MediaPlaybackService::class.java).apply {
-            action = if (currentIsPlaying) ACTION_PIP_PAUSE else ACTION_PIP_PLAY
-        }
-        val playPausePendingIntent = PendingIntent.getForegroundService(
-            context,
-            REQUEST_PLAY_PAUSE,
-            playPauseIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val playPauseIcon = if (currentIsPlaying) {
-            Icon.createWithResource(context, android.R.drawable.ic_media_pause)
-        } else {
-            Icon.createWithResource(context, android.R.drawable.ic_media_play)
-        }
-        val playPauseLabel = if (currentIsPlaying) "Pause" else "Play"
-        actions.add(RemoteAction(playPauseIcon, playPauseLabel, playPauseLabel, playPausePendingIntent))
-
-        // Background-audio action
-        val backgroundAudioIntent = Intent(context, MediaPlaybackService::class.java).apply {
+        // Match Grayjay's proven setup: background-audio first, play/pause second,
+        // dispatched through a BroadcastReceiver instead of a foreground service.
+        val backgroundAudioIntent = Intent(context, MediaControlReceiver::class.java).apply {
             action = ACTION_PIP_BACKGROUND_AUDIO
         }
-        val backgroundAudioPendingIntent = PendingIntent.getForegroundService(
+        val backgroundAudioPendingIntent = PendingIntent.getBroadcast(
             context,
             REQUEST_BACKGROUND_AUDIO,
             backgroundAudioIntent,
@@ -1374,6 +1352,22 @@ class MediaSessionModule : Module() {
             "Dismiss PiP and keep audio playing",
             backgroundAudioPendingIntent
         ))
+
+        val playPauseIntent = Intent(context, MediaControlReceiver::class.java).apply {
+            action = if (currentIsPlaying) ACTION_PIP_PAUSE else ACTION_PIP_PLAY
+        }
+        val playPausePendingIntent = PendingIntent.getBroadcast(
+            context,
+            REQUEST_PLAY_PAUSE,
+            playPauseIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val playPauseIcon = Icon.createWithResource(
+            context,
+            if (currentIsPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+        )
+        val playPauseLabel = if (currentIsPlaying) "Pause" else "Play"
+        actions.add(RemoteAction(playPauseIcon, playPauseLabel, playPauseLabel, playPausePendingIntent))
 
         return actions
     }

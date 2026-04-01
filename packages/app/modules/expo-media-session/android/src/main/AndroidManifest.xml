@@ -21,5 +21,9 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+
+        <receiver
+            android:name="to.holepunch.modules.mediasession.MediaControlReceiver"
+            android:exported="false" />
     </application>
 </manifest>

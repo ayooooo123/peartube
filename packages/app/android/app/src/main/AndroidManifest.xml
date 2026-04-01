@@ -48,7 +48,7 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="peartube"/>
       </intent-filter>
-
     </activity>
+    <activity android:name=".PlayerActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode|smallestScreenSize" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/AppTheme" android:exported="false" android:screenOrientation="unspecified" android:supportsPictureInPicture="true" android:resizeableActivity="true"/>
   </application>
 </manifest>

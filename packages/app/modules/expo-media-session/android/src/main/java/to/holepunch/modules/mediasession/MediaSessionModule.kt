@@ -676,6 +676,20 @@ class MediaSessionModule : Module() {
             }
         }
 
+        AsyncFunction("openPlayerActivity") { payload: Map<String, Any?>?, promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    promise.resolve(openPlayerActivity(payload))
+                } catch (e: Exception) {
+                    promise.reject("PLAYER_ACTIVITY_ERROR", e.message ?: "Failed to open PlayerActivity", e)
+                }
+            }
+        }
+
+        AsyncFunction("isInPlayerActivity") { promise: Promise ->
+            promise.resolve(isInPlayerActivity())
+        }
+
         AsyncFunction("enterBackgroundAudioMode") { promise: Promise ->
             CoroutineScope(Dispatchers.Main).launch {
                 try {
@@ -1201,6 +1215,32 @@ class MediaSessionModule : Module() {
 
         isAutoPipEnabled = enabled
         PipBridge.setPipEnabled(enabled)
+    }
+
+    private fun openPlayerActivity(payload: Map<String, Any?>? = null): Boolean {
+        val context = appContext.reactContext ?: return false
+        return try {
+            val intent = Intent().setComponent(ComponentName(context.packageName, "${context.packageName}.PlayerActivity"))
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            payload?.forEach { (key, value) ->
+                when (value) {
+                    is String -> intent.putExtra(key, value)
+                    is Boolean -> intent.putExtra(key, value)
+                    is Int -> intent.putExtra(key, value)
+                    is Double -> intent.putExtra(key, value)
+                }
+            }
+            ContextCompat.startActivity(context, intent, null)
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("MediaSession", "openPlayerActivity failed", e)
+            false
+        }
+    }
+
+    private fun isInPlayerActivity(): Boolean {
+        val activity = appContext.currentActivity ?: return false
+        return activity.javaClass.name == "${activity.packageName}.PlayerActivity"
     }
 
     /**

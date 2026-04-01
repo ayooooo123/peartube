@@ -79,6 +79,8 @@ interface MediaSessionModuleInterface {
   startCastForegroundService?(title: string, subtitle: string): Promise<void>
   updateCastForegroundService?(title: string, subtitle: string): Promise<void>
   stopCastForegroundService?(): Promise<void>
+  openPlayerActivity?(payload?: any): Promise<boolean>
+  isInPlayerActivity?(): Promise<boolean>
 }
 
 const mediaSessionFallback: MediaSessionModuleInterface = {
@@ -358,18 +360,27 @@ export function addPictureInPictureListener(
   return (emitter as any).addListener('onPictureInPictureChanged', listener)
 }
 
-// Stubs for removed PlayerActivity APIs — callers still reference these
-// but they are no-ops now that PlayerActivity has been removed.
+// Phase 1 PlayerActivity shell helpers. Most callers remain gated off for now,
+// but the native bridge is real again so we can incrementally test split-activity
+// playback ownership without another API rewrite later.
 export interface OpenPlayerActivityPayload { [key: string]: any }
 export interface PlaybackSnapshotEvent { [key: string]: any }
 export interface PlayerLaunchPayloadEvent { [key: string]: any }
-export async function openPlayerActivity(_payload?: any): Promise<boolean> { return false }
+export async function openPlayerActivity(payload?: any): Promise<boolean> {
+  const native = getMediaSessionNative() as any
+  if (!native.openPlayerActivity) return false
+  return native.openPlayerActivity(payload ?? null)
+}
 export async function consumePendingPlayerLaunchPayload(): Promise<null> { return null }
 export async function clearPendingPlayerLaunchPayload(): Promise<void> {}
 export async function getPlaybackSnapshot(): Promise<null> { return null }
 export async function primePlayerActivityPayload(_payload?: any): Promise<void> {}
 export async function launchPrimedPipPlayerActivity(): Promise<boolean> { return false }
-export async function isInPlayerActivity(): Promise<boolean> { return false }
+export async function isInPlayerActivity(): Promise<boolean> {
+  const native = getMediaSessionNative() as any
+  if (!native.isInPlayerActivity) return false
+  return native.isInPlayerActivity()
+}
 export function addPlayerLaunchPayloadListener(_listener: (event: any) => void): Subscription { return { remove: () => {} } }
 export function addPlaybackSnapshotListener(_listener: (event: any) => void): Subscription { return { remove: () => {} } }
 

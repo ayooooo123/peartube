@@ -311,6 +311,7 @@ object PipBridge {
 
     fun notifyPipBoundsChanged(activity: Activity, newConfig: Configuration) {
         notifyPipModeChanged(activity, true, newConfig)
+        moduleInstance?.refreshPipParams(activity)
     }
 
     private fun isPipHostActivity(activity: Activity): Boolean {

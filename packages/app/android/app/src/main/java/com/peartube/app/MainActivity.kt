@@ -70,4 +70,11 @@ class MainActivity : ReactActivity() {
       super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
       PipBridge.notifyPipModeChanged(this, isInPictureInPictureMode, newConfig)
   }
+
+  override fun onConfigurationChanged(newConfig: Configuration) {
+      super.onConfigurationChanged(newConfig)
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && isInPictureInPictureMode) {
+          PipBridge.notifyPipBoundsChanged(this, newConfig)
+      }
+  }
 }

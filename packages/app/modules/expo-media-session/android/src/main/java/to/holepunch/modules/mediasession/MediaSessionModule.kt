@@ -49,6 +49,14 @@ object PipBridge {
     @Volatile private var surfaceViewInsetPx: Float = 0f
     @Volatile private var suppressTransportActionsForPip: Boolean = false
 
+    fun setSuppressTransportActionsForPip(enabled: Boolean) {
+        suppressTransportActionsForPip = enabled
+    }
+
+    fun shouldSuppressTransportActionsForPip(): Boolean {
+        return suppressTransportActionsForPip
+    }
+
     // PiP enter/exit can briefly drop focus and trigger lifecycle/audio-focus churn.
     // Track a short transition window so we can avoid treating that as a user dismissal.
     @Volatile private var pipTransitionUntilUptimeMs: Long = 0
@@ -172,7 +180,7 @@ object PipBridge {
         }
 
         markPipTransition()
-        suppressTransportActionsForPip = true
+        setSuppressTransportActionsForPip(true)
         moduleInstance?.refreshMediaSessionPlaybackStateForPip()
         android.util.Log.d("PipBridge", "onUserLeaveHint: PiP transition marked")
 
@@ -305,7 +313,7 @@ object PipBridge {
         val didStateChange = isInPip != lastIsInPip
         if (didStateChange) {
             markPipTransition()
-            suppressTransportActionsForPip = isInPip
+            setSuppressTransportActionsForPip(isInPip)
             moduleInstance?.refreshMediaSessionPlaybackStateForPip()
 
             val isMainActivity = activity.javaClass.name.endsWith(".MainActivity")
@@ -898,8 +906,8 @@ class MediaSessionModule : Module() {
     }
 
     private fun computePlaybackActions(): Long {
-        if (suppressTransportActionsForPip) {
-            return PlaybackStateCompat.ACTION_NONE or PlaybackStateCompat.ACTION_STOP
+        if (PipBridge.shouldSuppressTransportActionsForPip()) {
+            return PlaybackStateCompat.ACTION_STOP
         }
         return PlaybackStateCompat.ACTION_PLAY or
                 PlaybackStateCompat.ACTION_PAUSE or
@@ -916,7 +924,7 @@ class MediaSessionModule : Module() {
             .build()
         mediaSession?.setPlaybackState(built)
         updateNotification()
-        android.util.Log.d("MediaSession", "refreshMediaSessionPlaybackStateForPip: suppressTransportActionsForPip=$suppressTransportActionsForPip actions=${built.actions}")
+        android.util.Log.d("MediaSession", "refreshMediaSessionPlaybackStateForPip: suppressTransportActionsForPip=${PipBridge.shouldSuppressTransportActionsForPip()} actions=${built.actions}")
     }
 
     private fun clearNowPlayingInfo() {

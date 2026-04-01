@@ -47,6 +47,11 @@ object PipBridge {
     @Volatile private var mainActivityDelegatedPipHandoffUntilUptimeMs: Long = 0
     @Volatile private var lastIsInPip: Boolean = false
     @Volatile private var surfaceViewInsetPx: Float = 0f
+    @Volatile private var preferCustomPlayActionsWhilePausedInPip: Boolean = false
+
+    fun shouldPreferCustomPlayActionsWhilePausedInPip(): Boolean {
+        return preferCustomPlayActionsWhilePausedInPip
+    }
 
     // PiP enter/exit can briefly drop focus and trigger lifecycle/audio-focus churn.
     // Track a short transition window so we can avoid treating that as a user dismissal.
@@ -312,6 +317,9 @@ object PipBridge {
         val didStateChange = isInPip != lastIsInPip
         if (didStateChange) {
             markPipTransition()
+            if (!isInPip) {
+                preferCustomPlayActionsWhilePausedInPip = false
+            }
 
             val isMainActivity = activity.javaClass.name.endsWith(".MainActivity")
 
@@ -883,13 +891,20 @@ class MediaSessionModule : Module() {
             PlaybackStateCompat.STATE_PAUSED
         }
 
-        val actions = PlaybackStateCompat.ACTION_PLAY or
-                PlaybackStateCompat.ACTION_PAUSE or
-                PlaybackStateCompat.ACTION_PLAY_PAUSE or
+        val actions = if (PipBridge.isLastKnownInPip() && !isPlaying && PipBridge.shouldPreferCustomPlayActionsWhilePausedInPip()) {
                 PlaybackStateCompat.ACTION_STOP or
-                PlaybackStateCompat.ACTION_SEEK_TO or
-                PlaybackStateCompat.ACTION_FAST_FORWARD or
-                PlaybackStateCompat.ACTION_REWIND
+                        PlaybackStateCompat.ACTION_SEEK_TO or
+                        PlaybackStateCompat.ACTION_FAST_FORWARD or
+                        PlaybackStateCompat.ACTION_REWIND
+            } else {
+                PlaybackStateCompat.ACTION_PLAY or
+                        PlaybackStateCompat.ACTION_PAUSE or
+                        PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                        PlaybackStateCompat.ACTION_STOP or
+                        PlaybackStateCompat.ACTION_SEEK_TO or
+                        PlaybackStateCompat.ACTION_FAST_FORWARD or
+                        PlaybackStateCompat.ACTION_REWIND
+            }
 
         currentPlaybackState
             .setState(playbackState, position.toLong(), if (isPlaying) rate else 0f)
@@ -1435,11 +1450,15 @@ class MediaSessionModule : Module() {
 
     internal fun handlePipPlay() {
         android.util.Log.d("MediaSession", "handlePipPlay")
+        preferCustomPlayActionsWhilePausedInPip = false
         sendEvent("onRemoteCommand", mapOf("command" to "play"))
     }
 
     internal fun handlePipPause() {
         android.util.Log.d("MediaSession", "handlePipPause")
+        if (PipBridge.isLastKnownInPip()) {
+            preferCustomPlayActionsWhilePausedInPip = true
+        }
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }
 

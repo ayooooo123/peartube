@@ -78,4 +78,12 @@ class MainActivity : ReactActivity() {
           PipBridge.notifyPipBoundsChanged(this, newConfig)
       }
   }
+
+  override fun onPictureInPictureUiStateChanged(pipState: android.app.PictureInPictureUiState) {
+      super.onPictureInPictureUiStateChanged(pipState)
+      android.util.Log.d("MainActivity", "onPictureInPictureUiStateChanged: isStashed=${pipState.isStashed} transitioningToPip=${pipState.isTransitioningToPip}")
+      if (android.os.Build.VERSION.SDK_INT >= 35 && isInPictureInPictureMode) {
+          PipBridge.notifyPipUiStateChanged(this, pipState)
+      }
+  }
 }

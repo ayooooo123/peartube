@@ -315,6 +315,13 @@ object PipBridge {
         moduleInstance?.refreshPipParams(activity)
     }
 
+    fun notifyPipUiStateChanged(activity: Activity, pipState: android.app.PictureInPictureUiState) {
+        android.util.Log.d("PipBridge", "notifyPipUiStateChanged: isStashed=${pipState.isStashed} transitioningToPip=${pipState.isTransitioningToPip}")
+        if (activity.isInPictureInPictureMode) {
+            moduleInstance?.refreshPipParams(activity)
+        }
+    }
+
     private fun isPipHostActivity(activity: Activity): Boolean {
         val className = activity.javaClass.name
         return className == "${activity.packageName}.MainActivity"

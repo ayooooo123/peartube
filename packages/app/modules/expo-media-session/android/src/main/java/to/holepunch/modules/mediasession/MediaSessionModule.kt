@@ -326,6 +326,16 @@ object PipBridge {
                 applySurfaceViewTransforms(activity, isInPip, newConfig)
             }, 50)
 
+            // Grayjay keeps PiP params hot by reapplying them on playback-state
+            // changes. Re-apply shortly after actual PiP entry too, so the shell gets
+            // one more chance to surface the latest custom actions while already in
+            // pinned mode rather than only at pre-entry time.
+            if (isInPip) {
+                handler.postDelayed({
+                    moduleInstance?.refreshPipParams(activity)
+                }, 120)
+            }
+
             lastIsInPip = isInPip
 
             if (!isInPip) {

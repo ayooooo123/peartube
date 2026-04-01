@@ -188,10 +188,10 @@ object PipBridge {
             val aspectRatio = getPipAspectRatio()
             val builder = PictureInPictureParams.Builder()
                 .setAspectRatio(aspectRatio)
-            // Use the same stable fullscreen source rect here as in
-            // updateActivityPipParams(). Avoid feeding transient mini-player bounds
-            // into native PiP entry.
-            builder.setSourceRectHint(getFullscreenSourceRect(activity))
+            // Match Grayjay more closely by using the actual video rect for PiP
+            // entry sizing instead of the whole fullscreen window. The shell can
+            // use this rect when deciding the initial pinned window presentation.
+            builder.setSourceRectHint(normalizeSourceRectHint(getLaunchIntoPipSourceRect(activity)))
             builder.setActions(moduleInstance?.buildPipActions(activity) ?: emptyList())
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

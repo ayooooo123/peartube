@@ -569,6 +569,7 @@ class MediaSessionModule : Module() {
     private var isAutoPipEnabled: Boolean = false
     private var pipAspectRatioWidth: Int = 16
     private var pipAspectRatioHeight: Int = 9
+    private var lastPipParamsRefreshUptimeMs: Long = 0
 
 
     override fun definition() = ModuleDefinition {
@@ -932,11 +933,17 @@ class MediaSessionModule : Module() {
         mediaSession?.setMetadata(currentMetadata.build())
         updateNotification()
 
-        // Update PiP actions when play state changes
-        if (playStateChanged && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        // Update PiP actions when play state changes, and keep them hot while
+        // actively playing in PiP so shell-driven UI changes (like drag/reposition)
+        // don't leave Android showing a stale/default control strip.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val activity = appContext.currentActivity
             if (activity != null && activity.isInPictureInPictureMode) {
-                refreshPipParams(activity)
+                val now = SystemClock.uptimeMillis()
+                if (playStateChanged || (isPlaying && now - lastPipParamsRefreshUptimeMs >= 750)) {
+                    refreshPipParams(activity)
+                    lastPipParamsRefreshUptimeMs = now
+                }
             }
         }
     }

@@ -196,13 +196,16 @@ object PipBridge {
             ) ?: return
             activity.setPictureInPictureParams(params)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // Re-apply fresh canonical params immediately before manual PiP entry.
-                activity.setPictureInPictureParams(params)
-                activity.enterPictureInPictureMode(params)
+                // Android 12+ already supports auto-enter PiP on home/leave once the
+                // task is armed with canonical params. Let the system own the actual
+                // transition instead of force-entering here, which appears to produce
+                // a degraded shell-visible task snapshot (`isAutoPipEnabled=false`,
+                // single remote action) immediately after entry.
+                android.util.Log.d("PipBridge", "onUserLeaveHint: armed canonical PiP params for system auto-enter")
             } else {
                 activity.enterPictureInPictureMode(params)
+                android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
             }
-            android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "onUserLeaveHint: PiP failed", e)
         }

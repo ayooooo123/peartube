@@ -200,8 +200,15 @@ object PipBridge {
 
             val params = builder.build()
             activity.setPictureInPictureParams(params)
-            activity.enterPictureInPictureMode(params)
-            android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // Match Grayjay's Android 12+ flow more closely: arm auto-enter with
+                // the latest params and let the system enter PiP from Home/recents,
+                // instead of forcing a manual enter call on onUserLeaveHint.
+                android.util.Log.d("PipBridge", "onUserLeaveHint: armed auto-enter PiP with fresh params")
+            } else {
+                activity.enterPictureInPictureMode(params)
+                android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
+            }
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "onUserLeaveHint: PiP failed", e)
         }

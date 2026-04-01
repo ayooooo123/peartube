@@ -48,14 +48,7 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="peartube"/>
       </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN"/>
-        <category android:name="android.intent.category.APP_MUSIC"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.MUSIC_PLAYER"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-      </intent-filter>
+
     </activity>
   </application>
 </manifest>

@@ -513,7 +513,7 @@ export function VideoPlayerOverlay() {
   // State for true fullscreen (landscape, hidden UI)
   const [isLandscapeFullscreen, setIsLandscapeFullscreen] = useState(false)
   const autoPipEnabledRef = useRef(false)
-  const autoPipDisableTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const androidPipSessionActiveRef = useRef(false)
   const [iosPipEnabled, setIosPipEnabled] = useState(false)
 
   // Mini player corner/drag state
@@ -2183,49 +2183,30 @@ export function VideoPlayerOverlay() {
     if (Platform.OS === 'android') {
       if (pipSupported === false) return
 
-      const hasActiveVideo = currentVideo !== null && !isCasting
-      const shouldEnable = hasActiveVideo
-      const shouldDelayDisable = !shouldEnable && playerMode === 'hidden'
+      // Architectural simplification: Android PiP enablement should follow a stable
+      // playback-session signal, not transient UI/playerMode churn like 'hidden'.
+      // Keep PiP armed for the lifetime of an active playback session and only disarm
+      // once the session is truly gone.
+      const sessionActive = (currentVideo !== null || isLoading || isPlaying || isInPipMode) && !isCasting
+      androidPipSessionActiveRef.current = sessionActive
+      autoPipEnabledRef.current = sessionActive
+      console.log('[VideoPlayerOverlay] Auto-PiP session effect:', {
+        playerMode,
+        sessionActive,
+        hasCurrentVideo: currentVideo !== null,
+        isLoading,
+        isPlaying,
+        isInPipMode,
+        isCasting,
+      })
 
-      if (autoPipDisableTimeoutRef.current) {
-        clearTimeout(autoPipDisableTimeoutRef.current)
-        autoPipDisableTimeoutRef.current = null
-      }
-
-      autoPipEnabledRef.current = shouldEnable
-      console.log('[VideoPlayerOverlay] Auto-PiP effect:', playerMode, 'enabling:', shouldEnable, 'delayDisable:', shouldDelayDisable)
-
-      if (shouldEnable) {
-        MediaSession.setAutoPictureInPicture(true)
-          .then(() => {
-            console.log('[VideoPlayerOverlay] Auto-PiP set:', true)
-          })
-          .catch((err) => {
-            console.error('[VideoPlayerOverlay] Auto-PiP failed:', err)
-          })
-      } else if (shouldDelayDisable) {
-        // Transient Android hidden-state churn is still poisoning the task's PiP
-        // params snapshot by writing autoEnter=false too eagerly. Only commit the
-        // disable if the player stays genuinely hidden/gone for a short window.
-        autoPipDisableTimeoutRef.current = setTimeout(() => {
-          autoPipDisableTimeoutRef.current = null
-          MediaSession.setAutoPictureInPicture(false)
-            .then(() => {
-              console.log('[VideoPlayerOverlay] Auto-PiP set:', false)
-            })
-            .catch((err) => {
-              console.error('[VideoPlayerOverlay] Auto-PiP failed:', err)
-            })
-        }, 1200)
-      } else {
-        MediaSession.setAutoPictureInPicture(false)
-          .then(() => {
-            console.log('[VideoPlayerOverlay] Auto-PiP set:', false)
-          })
-          .catch((err) => {
-            console.error('[VideoPlayerOverlay] Auto-PiP failed:', err)
-          })
-      }
+      MediaSession.setAutoPictureInPicture(sessionActive)
+        .then(() => {
+          console.log('[VideoPlayerOverlay] Auto-PiP set:', sessionActive)
+        })
+        .catch((err) => {
+          console.error('[VideoPlayerOverlay] Auto-PiP failed:', err)
+        })
     } else if (Platform.OS === 'ios') {
       const shouldEnable =
         (playerMode === 'fullscreen' || (playerMode === 'mini' && !disableMiniLayoutOnAndroidSplit)) &&
@@ -2234,14 +2215,7 @@ export function VideoPlayerOverlay() {
       autoPipEnabledRef.current = shouldEnable
       setIosPipEnabled(shouldEnable)
     }
-
-    return () => {
-      if (autoPipDisableTimeoutRef.current) {
-        clearTimeout(autoPipDisableTimeoutRef.current)
-        autoPipDisableTimeoutRef.current = null
-      }
-    }
-  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, isLandscapeFullscreen])
+  }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, isLandscapeFullscreen, isLoading, isPlaying])
 
   // PiP entry is handled natively via onUserLeaveHint in MainActivity
   // Same activity shrinks, same player continues (single-player architecture)

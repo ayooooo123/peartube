@@ -1339,6 +1339,7 @@ class MediaSessionModule : Module() {
         // dispatched through a BroadcastReceiver instead of a foreground service.
         val backgroundAudioIntent = Intent(context, MediaControlReceiver::class.java).apply {
             action = ACTION_PIP_BACKGROUND_AUDIO
+            putExtra(MediaControlReceiver.EXTRA_MEDIA_ACTION, MediaControlReceiver.EVENT_BACKGROUND)
         }
         val backgroundAudioPendingIntent = PendingIntent.getBroadcast(
             context,
@@ -1352,6 +1353,26 @@ class MediaSessionModule : Module() {
             "Dismiss PiP and keep audio playing",
             backgroundAudioPendingIntent
         ))
+
+        val playPauseIntent = Intent(context, MediaControlReceiver::class.java).apply {
+            action = if (currentIsPlaying) ACTION_PIP_PAUSE else ACTION_PIP_PLAY
+            putExtra(
+                MediaControlReceiver.EXTRA_MEDIA_ACTION,
+                if (currentIsPlaying) MediaControlReceiver.EVENT_PAUSE else MediaControlReceiver.EVENT_PLAY,
+            )
+        }
+        val playPausePendingIntent = PendingIntent.getBroadcast(
+            context,
+            REQUEST_PLAY_PAUSE,
+            playPauseIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val playPauseIcon = Icon.createWithResource(
+            context,
+            if (currentIsPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+        )
+        val playPauseLabel = if (currentIsPlaying) "Pause" else "Play"
+        actions.add(RemoteAction(playPauseIcon, playPauseLabel, playPauseLabel, playPausePendingIntent))
 
         android.util.Log.d("MediaSession", "buildPipActions: count=${actions.size} labels=${actions.map { it.title }} currentIsPlaying=$currentIsPlaying")
         return actions

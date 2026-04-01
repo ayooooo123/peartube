@@ -1325,11 +1325,12 @@ class MediaSessionModule : Module() {
         builder.setSourceRectHint(sourceRect)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Keep the shell-visible PiP params consistent across every write site.
-            // Grayjay's task-level shell logs show actions + auto-enter preserved during
-            // bounds changes; PearTube previously rewrote params with inconsistent field
-            // subsets depending on code path.
-            builder.setSeamlessResizeEnabled(true)
+            // Fresh same-device Grayjay shell logs show the stable path keeps
+            // isSeamlessResizeEnabled=false while preserving autoEnter/actions through
+            // PiP entry and bounds changes. PearTube's shell snapshot keeps mutating to
+            // autoEnter=false with a PiP-sized sourceRectHint while seamless resize is on.
+            // Match Grayjay's stable shell-visible config and disable seamless resize.
+            builder.setSeamlessResizeEnabled(false)
             builder.setAutoEnterEnabled(autoEnterEnabled ?: PipBridge.isPipEnabled())
         }
 

@@ -189,29 +189,16 @@ object PipBridge {
         android.util.Log.d("PipBridge", "onUserLeaveHint: PiP transition marked")
 
         try {
-            val aspectRatio = getPipAspectRatio()
-            val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(aspectRatio)
-            // Use the same stable fullscreen source rect here as in
-            // updateActivityPipParams(). Avoid feeding transient mini-player bounds
-            // into native PiP entry.
-            builder.setSourceRectHint(getFullscreenSourceRect(activity))
-            builder.setActions(moduleInstance?.buildPipActions(activity) ?: emptyList())
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setAutoEnterEnabled(true)
-            }
-
-            val params = builder.build()
+            val params = moduleInstance?.buildCanonicalPipParams(
+                activity,
+                sourceRectHint = getAspectMatchedFullscreenSourceRect(activity),
+                autoEnterEnabled = true,
+            ) ?: return
             activity.setPictureInPictureParams(params)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // Re-apply fresh params with autoEnterEnabled=true immediately before
-                // manual PiP entry. This avoids stale cached fullscreen params from a
-                // previous cycle silently preventing PiP from actually appearing.
-                builder.setAutoEnterEnabled(true)
-                val freshParams = builder.build()
-                activity.setPictureInPictureParams(freshParams)
-                activity.enterPictureInPictureMode(freshParams)
+                // Re-apply fresh canonical params immediately before manual PiP entry.
+                activity.setPictureInPictureParams(params)
+                activity.enterPictureInPictureMode(params)
             } else {
                 activity.enterPictureInPictureMode(params)
             }
@@ -248,16 +235,12 @@ object PipBridge {
             }
             if (sourceRect == null) return
 
-            val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(getPipAspectRatio())
-                .setSourceRectHint(sourceRect)
-                .setSeamlessResizeEnabled(true)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                builder.setAutoEnterEnabled(true)
-            }
-            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
-            builder.setActions(actions)
-            activity.setPictureInPictureParams(builder.build())
+            val params = moduleInstance?.buildCanonicalPipParams(
+                activity,
+                sourceRectHint = sourceRect,
+                autoEnterEnabled = true,
+            ) ?: return
+            activity.setPictureInPictureParams(params)
             android.util.Log.d("PipBridge", "updatePipSourceRectForCapture: sourceRect=$sourceRect")
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "updatePipSourceRectForCapture failed", e)
@@ -298,13 +281,12 @@ object PipBridge {
         if (!isPipHostActivity(activity)) return false
         return try {
             markPipTransition()
-            val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(getPipAspectRatio())
-                .setSeamlessResizeEnabled(true)
-            builder.setSourceRectHint(sourceRectHint ?: getAspectMatchedFullscreenSourceRect(activity))
-            val actions = moduleInstance?.buildPipActions(activity) ?: emptyList()
-            builder.setActions(actions)
-            activity.enterPictureInPictureMode(builder.build())
+            val params = moduleInstance?.buildCanonicalPipParams(
+                activity,
+                sourceRectHint = sourceRectHint ?: getAspectMatchedFullscreenSourceRect(activity),
+                autoEnterEnabled = true,
+            ) ?: return false
+            activity.enterPictureInPictureMode(params)
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "enterPictureInPictureDirect failed", e)
             false
@@ -1202,26 +1184,12 @@ class MediaSessionModule : Module() {
         val activity = appContext.currentActivity ?: return false
 
         try {
-            val aspectRatio = getPipAspectRatio()
-
-            val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(aspectRatio)
-
-            val sourceRect = getVideoSourceRect(activity)
-            if (sourceRect != null) {
-                builder.setSourceRectHint(sourceRect)
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // Android 12+ supports seamless PiP resizing. For video playback we want
-                // the system to resize the activity/window smoothly to avoid disruptive
-                // surface churn during PiP enter/exit.
-                builder.setSeamlessResizeEnabled(true)
-            }
-
-            builder.setActions(buildPipActions(activity))
-
-            return activity.enterPictureInPictureMode(builder.build())
+            val params = buildCanonicalPipParams(
+                activity,
+                sourceRectHint = PipBridge.getAspectMatchedFullscreenSourceRect(activity),
+                autoEnterEnabled = true,
+            )
+            return activity.enterPictureInPictureMode(params)
         } catch (e: Exception) {
             android.util.Log.e("MediaSession", "enterPiP: failed", e)
             return false
@@ -1254,29 +1222,15 @@ class MediaSessionModule : Module() {
         val effectiveEnabled = if (PipBridge.isPipEnabled()) true else enabled
 
         try {
-            val aspectRatio = PipBridge.getPipAspectRatio()
+            val sourceRect = PipBridge.getAspectMatchedFullscreenSourceRect(activity)
+            val params = buildCanonicalPipParams(
+                activity,
+                sourceRectHint = sourceRect,
+                autoEnterEnabled = effectiveEnabled && isPipHostActivity,
+            )
 
-            val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(aspectRatio)
-
-            // SIMPLIFIED FOR RELIABILITY: on MainActivity, use a stable fullscreen
-            // source rect instead of the transformed mini-player rect. The mini-player
-            // overlay can move/scale independently, and feeding those transient bounds
-            // into Android PiP has caused silent PiP entry failures.
-            val sourceRect = PipBridge.getFullscreenSourceRect(activity)
-            builder.setSourceRectHint(sourceRect)
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // Favor reliability over fancy transition behavior. Mini-player PiP
-                // entry has been unstable with transformed layouts, so keep params
-                // simple and only arm auto-enter.
-                builder.setAutoEnterEnabled(effectiveEnabled && isPipHostActivity)
-            }
-
-            builder.setActions(buildPipActions(activity))
-
-            activity.setPictureInPictureParams(builder.build())
-            android.util.Log.d("MediaSession", "updateActivityPipParams: enabled=$effectiveEnabled (requested=$enabled, inPip=${activity.isInPictureInPictureMode}), aspectRatio=$aspectRatio sourceRect=$sourceRect")
+            activity.setPictureInPictureParams(params)
+            android.util.Log.d("MediaSession", "updateActivityPipParams: enabled=$effectiveEnabled (requested=$enabled, inPip=${activity.isInPictureInPictureMode}), sourceRect=$sourceRect")
         } catch (e: Exception) {
             android.util.Log.e("MediaSession", "updateActivityPipParams: failed", e)
         }
@@ -1359,26 +1313,43 @@ class MediaSessionModule : Module() {
         return Rational((clamped * 1000).toInt(), 1000)
     }
 
+    private fun buildCanonicalPipParams(
+        activity: Activity,
+        sourceRectHint: android.graphics.Rect? = null,
+        autoEnterEnabled: Boolean? = null,
+    ): PictureInPictureParams {
+        val builder = PictureInPictureParams.Builder()
+            .setAspectRatio(getPipAspectRatio())
+
+        val sourceRect = sourceRectHint ?: PipBridge.getAspectMatchedFullscreenSourceRect(activity)
+        builder.setSourceRectHint(sourceRect)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Keep the shell-visible PiP params consistent across every write site.
+            // Grayjay's task-level shell logs show actions + auto-enter preserved during
+            // bounds changes; PearTube previously rewrote params with inconsistent field
+            // subsets depending on code path.
+            builder.setSeamlessResizeEnabled(true)
+            builder.setAutoEnterEnabled(autoEnterEnabled ?: PipBridge.isPipEnabled())
+        }
+
+        val actions = buildPipActions(activity)
+        builder.setActions(actions)
+
+        android.util.Log.d(
+            "MediaSession",
+            "buildCanonicalPipParams: actions=${actions.map { it.title }} autoEnter=${if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) (autoEnterEnabled ?: PipBridge.isPipEnabled()) else "n/a"} seamless=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.S} sourceRect=$sourceRect aspectRatio=${getPipAspectRatio()}"
+        )
+
+        return builder.build()
+    }
+
     internal fun refreshPipParams(activity: Activity) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         if (!activity.isInPictureInPictureMode) return
 
         try {
-            val builder = PictureInPictureParams.Builder()
-                .setAspectRatio(getPipAspectRatio())
-
-            val sourceRect = getVideoSourceRect(activity)
-            if (sourceRect != null) {
-                builder.setSourceRectHint(sourceRect)
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // See enterPiP(): prefer seamless resize for video playback.
-                builder.setSeamlessResizeEnabled(true)
-            }
-
-            builder.setActions(buildPipActions(activity))
-            activity.setPictureInPictureParams(builder.build())
+            activity.setPictureInPictureParams(buildCanonicalPipParams(activity))
         } catch (e: Exception) {
             android.util.Log.e("MediaSession", "refreshPipParams failed: ${e.message}")
         }

@@ -1459,6 +1459,7 @@ class MediaSessionModule : Module() {
     internal fun handlePipPlay() {
         android.util.Log.d("MediaSession", "handlePipPlay")
         PipBridge.setPreferCustomPlayActionsWhilePausedInPip(false)
+        updatePipPlayState(true)
         sendEvent("onRemoteCommand", mapOf("command" to "play"))
     }
 
@@ -1467,6 +1468,7 @@ class MediaSessionModule : Module() {
         if (PipBridge.isLastKnownInPip()) {
             PipBridge.setPreferCustomPlayActionsWhilePausedInPip(true)
         }
+        updatePipPlayState(false)
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }
 

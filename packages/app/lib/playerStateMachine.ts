@@ -15,6 +15,7 @@ export type PlayerStateMode =
   | 'loading'
   | 'fullscreen'
   | 'mini'
+  | 'background_audio'
   | 'pip_entering'
   | 'pip_active'
   | 'pip_exiting'
@@ -52,6 +53,7 @@ export type TransitionSource =
   | 'closeVideo'
   | 'minimizePlayer'
   | 'maximizePlayer'
+  | 'enterBackgroundAudio'
 
 export type PlayerEvent =
   | {
@@ -86,6 +88,10 @@ export type PlayerEvent =
   | {
       type: 'MAXIMIZE'
       source: 'maximizePlayer'
+    }
+  | {
+      type: 'ENTER_BACKGROUND_AUDIO'
+      source: 'enterBackgroundAudio'
     }
   | {
       type: 'APP_BACKGROUND'
@@ -170,12 +176,21 @@ type TransitionMap = {
     CLOSE_VIDEO: 'hidden'
     MINIMIZE: 'mini' | 'pip_entering'
     MAXIMIZE: 'fullscreen'
+    ENTER_BACKGROUND_AUDIO: 'background_audio'
     APP_BACKGROUND: 'fullscreen' | 'mini'
     APP_FOREGROUND: 'mini' | 'fullscreen'
     REMOTE_PLAY: 'mini' | 'fullscreen'
     REMOTE_PAUSE: 'mini'
     REMOTE_TOGGLE_PLAY_PAUSE: 'mini' | 'fullscreen'
     FORCE_RELOAD_PLAYBACK: 'fullscreen'
+  }
+  background_audio: {
+    CLOSE_VIDEO: 'hidden'
+    MAXIMIZE: 'fullscreen'
+    REMOTE_PLAY: 'background_audio'
+    REMOTE_PAUSE: 'background_audio'
+    REMOTE_TOGGLE_PLAY_PAUSE: 'background_audio'
+    APP_FOREGROUND: 'fullscreen'
   }
   pip_entering: {
     PIP_ENTERED_ANDROID: 'pip_active' | 'pip_entering'
@@ -231,6 +246,8 @@ function toUnifiedViewMode(mode: PlayerStateMode): PlayerViewMode {
       return 'fullscreen'
     case 'mini':
       return 'mini'
+    case 'background_audio':
+      return 'hidden'
     case 'pip_entering':
     case 'pip_active':
     case 'pip_exiting':
@@ -244,6 +261,8 @@ function toUnifiedEvent(event: PlayerEvent): PlayerViewModeEvent | null {
       return { type: 'MINIMIZE', origin: 'user' }
     case 'MAXIMIZE':
       return { type: 'MAXIMIZE', origin: 'user' }
+    case 'ENTER_BACKGROUND_AUDIO':
+      return { type: 'CLOSE', origin: 'appState' }
     case 'CLOSE_VIDEO':
       return {
         type: 'CLOSE',
@@ -441,6 +460,8 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
           return withMode(state, 'mini')
         case 'MAXIMIZE':
           return withMode(state, 'fullscreen')
+        case 'ENTER_BACKGROUND_AUDIO':
+          return withMode(state, 'background_audio')
         case 'APP_BACKGROUND':
           return {
             ...state,
@@ -502,6 +523,8 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
           return withMode(state, 'mini')
         case 'MAXIMIZE':
           return withMode(state, 'fullscreen')
+        case 'ENTER_BACKGROUND_AUDIO':
+          return withMode(state, 'background_audio')
         case 'APP_BACKGROUND':
           if (ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
             // KEEP: split-activity PiP handoff still needs a fullscreen-sized surface on Android.
@@ -618,6 +641,8 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
         case 'REMOTE_TOGGLE_PLAY_PAUSE':
         case 'PIP_ENTERED_ANDROID':
           return invalidTransition(state, event)
+        case 'ENTER_BACKGROUND_AUDIO':
+          return withMode(state, 'background_audio')
         case 'PIP_EXITED_ANDROID':
           if (!event.wasInPip) {
             return {
@@ -631,6 +656,30 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
             mode: event.restoreMode,
             wasPlayingWhenPipEntered: false,
           }
+        case 'CLOSE_VIDEO':
+          return toHiddenState(state)
+      }
+      break
+    }
+    case 'background_audio': {
+      switch (event.type) {
+        case 'LOAD_VIDEO':
+          return toFullscreenState(state, event.video, event.url, true)
+        case 'RESTORE_FROM_LAST_CLOSED':
+        case 'FORCE_RELOAD_PLAYBACK':
+        case 'MINIMIZE':
+        case 'APP_BACKGROUND':
+        case 'PIP_ENTERED_ANDROID':
+        case 'PIP_EXITED_ANDROID':
+          return invalidTransition(state, event)
+        case 'MAXIMIZE':
+        case 'APP_FOREGROUND':
+          return withMode(state, 'fullscreen')
+        case 'REMOTE_PLAY':
+        case 'REMOTE_PAUSE':
+        case 'REMOTE_TOGGLE_PLAY_PAUSE':
+        case 'ENTER_BACKGROUND_AUDIO':
+          return withMode(state, 'background_audio')
         case 'CLOSE_VIDEO':
           return toHiddenState(state)
       }

@@ -80,6 +80,7 @@ interface VideoPlayerContextType {
   pauseVideo: () => void
   resumeVideo: () => void
   closeVideo: () => void
+  enterBackgroundAudio: () => void
   suppressForegroundRestoreOnce: () => void
   suppressForegroundRestoreFor: (ms: number) => void
   clearLastClosedVideo: () => void
@@ -135,7 +136,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const playerMode: PlayerMode =
     state.mode === 'mini'
       ? (androidSplitPlayerEnabled ? 'fullscreen' : 'mini')
-      : state.mode === 'hidden'
+      : state.mode === 'hidden' || state.mode === 'background_audio'
         ? 'hidden'
         : 'fullscreen'
   const [videoStats, setVideoStats] = useState<VideoStats | null>(null)
@@ -536,7 +537,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         // When PiP silently fails (wasInPip=false but video is still playing),
         // dispatching APP_FOREGROUND can transition playerMode to 'hidden' which
         // tears down the video unnecessarily.
-        const skipForActivePlayback = Platform.OS === 'android' && !wasInPip && currentVideoRef.current && wasPlayingWhenBackgroundedRef.current
+        const skipForActivePlayback = Platform.OS === 'android' && state.mode !== 'background_audio' && !wasInPip && currentVideoRef.current && wasPlayingWhenBackgroundedRef.current
         if (!skipLifecycleDispatchForSplitAndroid && !skipAppForegroundDispatchForPip && !skipForActivePlayback) {
           dispatch({
             type: 'APP_FOREGROUND',
@@ -573,7 +574,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
      const subscription = AppState.addEventListener('change', handleAppStateChange)
      return () => subscription.remove()
-    }, [dispatch, forceReloadPlayback, isPrimaryController, restoreLastClosedVideo])
+    }, [dispatch, forceReloadPlayback, isPrimaryController, restoreLastClosedVideo, state.mode])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
@@ -1349,6 +1350,12 @@ useEffect(() => {
     closeSession('user')
   }, [closeSession])
 
+  const enterBackgroundAudio = useCallback(() => {
+    if (!currentVideoRef.current || !videoUrlRef.current) return
+    console.log('[VideoPlayerContext] Entering background audio mode')
+    dispatch({ type: 'ENTER_BACKGROUND_AUDIO', source: 'enterBackgroundAudio' })
+  }, [dispatch])
+
   const suppressForegroundRestoreOnce = useCallback(() => {
     suppressForegroundRestoreRef.current = true
   }, [])
@@ -1760,6 +1767,7 @@ useEffect(() => {
     pauseVideo,
     resumeVideo,
     closeVideo,
+    enterBackgroundAudio,
     suppressForegroundRestoreOnce,
     suppressForegroundRestoreFor,
     clearLastClosedVideo,
@@ -1788,7 +1796,7 @@ useEffect(() => {
     currentTime, duration, progress,
     // Callbacks (stable references via useCallback)
     loadAndPlayVideo, pauseVideo, resumeVideo,
-    closeVideo, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo, minimizePlayer, maximizePlayer, seekTo, seekBy, setPlaybackRate,
+    closeVideo, enterBackgroundAudio, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo, minimizePlayer, maximizePlayer, seekTo, seekBy, setPlaybackRate,
     setIsInPipMode,
     onProgress, onPlaying, onPaused, onBuffering,
     onEnded, onError, onVideoStateChange,

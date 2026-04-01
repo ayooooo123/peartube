@@ -235,7 +235,7 @@ export type TransitionDecision<
 
 const DEV_INVALID_TRANSITION = '[player-state-machine] Invalid transition:'
 const DEV_CONTRACT_MISMATCH = '[player-state-machine] Contract mismatch:'
-const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false
+const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = true
 
 function toUnifiedViewMode(mode: PlayerStateMode): PlayerViewMode {
   switch (mode) {

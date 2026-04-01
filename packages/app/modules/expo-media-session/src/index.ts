@@ -81,6 +81,8 @@ interface MediaSessionModuleInterface {
   stopCastForegroundService?(): Promise<void>
   openPlayerActivity?(payload?: any): Promise<boolean>
   isInPlayerActivity?(): Promise<boolean>
+  consumePendingPlayerLaunchPayload?(): Promise<any | null>
+  clearPendingPlayerLaunchPayload?(): Promise<void>
 }
 
 const mediaSessionFallback: MediaSessionModuleInterface = {
@@ -371,8 +373,16 @@ export async function openPlayerActivity(payload?: any): Promise<boolean> {
   if (!native.openPlayerActivity) return false
   return native.openPlayerActivity(payload ?? null)
 }
-export async function consumePendingPlayerLaunchPayload(): Promise<null> { return null }
-export async function clearPendingPlayerLaunchPayload(): Promise<void> {}
+export async function consumePendingPlayerLaunchPayload(): Promise<any | null> {
+  const native = getMediaSessionNative() as any
+  if (!native.consumePendingPlayerLaunchPayload) return null
+  return native.consumePendingPlayerLaunchPayload()
+}
+export async function clearPendingPlayerLaunchPayload(): Promise<void> {
+  const native = getMediaSessionNative() as any
+  if (!native.clearPendingPlayerLaunchPayload) return
+  return native.clearPendingPlayerLaunchPayload()
+}
 export async function getPlaybackSnapshot(): Promise<null> { return null }
 export async function primePlayerActivityPayload(_payload?: any): Promise<void> {}
 export async function launchPrimedPipPlayerActivity(): Promise<boolean> { return false }
@@ -381,7 +391,11 @@ export async function isInPlayerActivity(): Promise<boolean> {
   if (!native.isInPlayerActivity) return false
   return native.isInPlayerActivity()
 }
-export function addPlayerLaunchPayloadListener(_listener: (event: any) => void): Subscription { return { remove: () => {} } }
+export function addPlayerLaunchPayloadListener(listener: (event: any) => void): Subscription {
+  const emitter = getMediaSessionEmitter()
+  if (!emitter) return { remove: () => {} }
+  return (emitter as any).addListener('onPlayerLaunchPayload', listener)
+}
 export function addPlaybackSnapshotListener(_listener: (event: any) => void): Subscription { return { remove: () => {} } }
 
 export default {

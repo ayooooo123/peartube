@@ -48,6 +48,7 @@ object PipBridge {
     @Volatile private var lastIsInPip: Boolean = false
     @Volatile private var surfaceViewInsetPx: Float = 0f
     @Volatile private var preferCustomPlayActionsWhilePausedInPip: Boolean = false
+    @Volatile private var pendingPlayerLaunchPayload: Map<String, Any?>? = null
     private val pipUiHandler = Handler(Looper.getMainLooper())
     private var pendingDelayedPipExit: Runnable? = null
 
@@ -78,6 +79,23 @@ object PipBridge {
         if (moduleInstance === module) {
             moduleInstance = null
         }
+    }
+
+    fun setPendingPlayerLaunchPayload(payload: Map<String, Any?>?) {
+        pendingPlayerLaunchPayload = payload?.toMap()
+        payload?.let {
+            moduleInstance?.sendEvent("onPlayerLaunchPayload", it)
+        }
+    }
+
+    fun consumePendingPlayerLaunchPayload(): Map<String, Any?>? {
+        val payload = pendingPlayerLaunchPayload?.toMap()
+        pendingPlayerLaunchPayload = null
+        return payload
+    }
+
+    fun clearPendingPlayerLaunchPayload() {
+        pendingPlayerLaunchPayload = null
     }
 
     private fun markPipTransition() {
@@ -574,7 +592,8 @@ class MediaSessionModule : Module() {
             "onRemoteCommand",
             "onAudioInterruption",
             "onAudioRouteChange",
-            "onPictureInPictureChanged"
+            "onPictureInPictureChanged",
+            "onPlayerLaunchPayload"
         )
 
         AsyncFunction("setActive") { active: Boolean, promise: Promise ->
@@ -688,6 +707,15 @@ class MediaSessionModule : Module() {
 
         AsyncFunction("isInPlayerActivity") { promise: Promise ->
             promise.resolve(isInPlayerActivity())
+        }
+
+        AsyncFunction("consumePendingPlayerLaunchPayload") { promise: Promise ->
+            promise.resolve(PipBridge.consumePendingPlayerLaunchPayload())
+        }
+
+        AsyncFunction("clearPendingPlayerLaunchPayload") { promise: Promise ->
+            PipBridge.clearPendingPlayerLaunchPayload()
+            promise.resolve(null)
         }
 
         AsyncFunction("enterBackgroundAudioMode") { promise: Promise ->
@@ -1220,6 +1248,7 @@ class MediaSessionModule : Module() {
     private fun openPlayerActivity(payload: Map<String, Any?>? = null): Boolean {
         val context = appContext.reactContext ?: return false
         return try {
+            PipBridge.setPendingPlayerLaunchPayload(payload)
             val intent = Intent().setComponent(ComponentName(context.packageName, "${context.packageName}.PlayerActivity"))
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             payload?.forEach { (key, value) ->

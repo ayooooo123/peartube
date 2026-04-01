@@ -14,7 +14,7 @@ import * as MediaSession from '../modules/expo-media-session/src'
 import { usePlayerStateMachine } from './playerStateMachine'
 import type { ModeBeforePip, PlayerState } from './playerStateMachine'
 
-const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false
+const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = true
 const CAST_ACTIVE_GLOBAL_KEY = '__PEARTUBE_CAST_ACTIVE__'
 let ACTIVE_VIDEO_PLAYER_CONTROLLER_ID: number | null = null
 let NEXT_VIDEO_PLAYER_CONTROLLER_ID = 1
@@ -222,9 +222,21 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   useEffect(() => {
     const controllerId = controllerIdRef.current
-    const tryAcquireController = () => {
+    let cancelled = false
+
+    const tryAcquireController = async () => {
+      let shouldPreferThisController = false
+
+      if (Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
+        try {
+          shouldPreferThisController = await MediaSession.isInPlayerActivity()
+        } catch {}
+      }
+
+      if (cancelled) return
+
       const activeId = ACTIVE_VIDEO_PLAYER_CONTROLLER_ID
-      if (activeId === null || activeId === controllerId) {
+      if (shouldPreferThisController || activeId === null || activeId === controllerId) {
         ACTIVE_VIDEO_PLAYER_CONTROLLER_ID = controllerId
         setIsPrimaryController(true)
         return
@@ -232,10 +244,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       setIsPrimaryController(false)
     }
 
-    tryAcquireController()
-    const timer = setInterval(tryAcquireController, 300)
+    void tryAcquireController()
+    const timer = setInterval(() => {
+      void tryAcquireController()
+    }, 300)
 
     return () => {
+      cancelled = true
       clearInterval(timer)
       if (ACTIVE_VIDEO_PLAYER_CONTROLLER_ID === controllerId) {
         ACTIVE_VIDEO_PLAYER_CONTROLLER_ID = null
@@ -1043,7 +1058,6 @@ useEffect(() => {
 
   useEffect(() => {
     if (Platform.OS !== 'android' || !ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) return
-    if (!isPrimaryController) return
 
     let cancelled = false
 
@@ -1161,16 +1175,6 @@ useEffect(() => {
     const requestKey = `${video.channelKey || ''}:${video.id || video.path || ''}:${url}`
 
     if (Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-      const isFirstPlayFromHidden =
-        playerModeRef.current === 'hidden' &&
-        !isInPipModeRef.current &&
-        !pipTransitionInFlightRef.current
-
-      if (isFirstPlayFromHidden) {
-        startInActivityPlayback(video, url, 'split-first-play-inline')
-        return
-      }
-
       if (isCastSessionLikelyActiveGlobally()) {
         startInActivityPlayback(video, url, 'direct-cast-active')
         return

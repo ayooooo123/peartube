@@ -116,6 +116,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
   const LIST_VIDEOS_CACHE_TTL_MS = 15_000
   const LIST_VIDEOS_EMPTY_CACHE_TTL_MS = 1_000
   const CHANNEL_META_CACHE_TTL_MS = 30_000
+  const VIDEO_AVAILABILITY_CACHE_TTL_MS = 30_000
   /** @type {Map<string, Promise<any>>} */
   const prefetchInFlight = new Map()
   const activeRangeRequests = new Map() // key: `${driveKey}:${videoPath}`, value: { ranges: [], core, onDownload, onUpload }
@@ -124,6 +125,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
   const listVideosCache = new Map()
   /** @type {Map<string, { ts: number, value: any }>} */
   const channelMetaCache = new Map()
+  /** @type {Map<string, { ts: number, value: any }>} */
+  const videoAvailabilityCache = new Map()
 
   function cloneArrayOfObjects(arr) {
     if (!Array.isArray(arr)) return []
@@ -138,6 +141,11 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
   function invalidateChannelCaches(driveKey) {
     try { listVideosCache.delete(driveKey) } catch {}
     try { channelMetaCache.delete(driveKey) } catch {}
+    try {
+      for (const key of videoAvailabilityCache.keys()) {
+        if (key.startsWith(`${driveKey}:`)) videoAvailabilityCache.delete(key)
+      }
+    } catch {}
   }
 
   // ============================================
@@ -468,6 +476,97 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           })
         }
 
+        const probeVideoAvailability = async (video) => {
+          const id = extractVideoId(video)
+          const blobsCoreKey = video?.blobsCoreKey
+          const blobIdRaw = video?.blobId
+          if (!id || !blobsCoreKey || !blobIdRaw) {
+            return 'unknown'
+          }
+
+          const cacheKey = `${driveKey}:${id}:${blobsCoreKey}:${blobIdRaw}`
+          const cachedAvailability = videoAvailabilityCache.get(cacheKey)
+          if (cachedAvailability && (Date.now() - cachedAvailability.ts) < VIDEO_AVAILABILITY_CACHE_TTL_MS) {
+            return cachedAvailability.value
+          }
+
+          // IMPORTANT: discovery feed availability must be cheap and non-blocking.
+          // Do local-only checks here. Real playback validation happens when the
+          // user opens the video, not during feed hydration.
+          let availability = 'unknown'
+          try {
+            const keyBuf = b4a.from(blobsCoreKey, 'hex')
+            const core = ctx.store.get({ key: keyBuf })
+            await core.ready()
+
+            let blobId = blobIdRaw
+            if (typeof blobId === 'string') {
+              const parts = blobId.split(':').map(Number)
+              if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
+                blobId = {
+                  blockOffset: parts[0],
+                  blockLength: parts[1],
+                  byteOffset: parts[2],
+                  byteLength: parts[3]
+                }
+              }
+            }
+
+            const startBlock = blobId?.blockOffset
+            const totalBlocks = blobId?.blockLength
+            const endBlock = Number.isFinite(startBlock) && Number.isFinite(totalBlocks)
+              ? startBlock + totalBlocks
+              : null
+
+            if (Number.isFinite(startBlock) && Number.isFinite(endBlock)) {
+              const fullyCached = await core.has(startBlock, endBlock)
+              if (fullyCached) {
+                availability = 'playable'
+              } else {
+                const headEnd = Math.min(endBlock, startBlock + Math.max(1, Math.min(32, totalBlocks || 32)))
+                let initialAvailable = false
+                try {
+                  initialAvailable = await core.has(startBlock, headEnd)
+                } catch {}
+                availability = initialAvailable ? 'playable' : 'unknown'
+              }
+            }
+          } catch (err) {
+            availability = 'unknown'
+          }
+
+          videoAvailabilityCache.set(cacheKey, { ts: Date.now(), value: availability })
+          return availability
+        }
+
+        const attachVideoAvailability = async (videos) => {
+          if (!Array.isArray(videos) || videos.length === 0) return []
+          const MAX_PROBES = 8
+          const idsToProbe = new Set(
+            videos
+              .slice(0, MAX_PROBES)
+              .map((video) => extractVideoId(video))
+              .filter(Boolean)
+          )
+
+          const availabilityById = new Map()
+          await Promise.all(Array.from(idsToProbe).map(async (id) => {
+            const video = videos.find((candidate) => extractVideoId(candidate) === id)
+            if (!video) return
+            const availability = await probeVideoAvailability(video)
+            availabilityById.set(id, availability)
+          }))
+
+          return videos.map((video) => {
+            const id = extractVideoId(video)
+            const availability = id ? (availabilityById.get(id) || 'unknown') : 'unknown'
+            return {
+              ...video,
+              availability,
+            }
+          })
+        }
+
         // FAST PATH: If publicBeeKey is provided, read directly from PublicBee
         // This is the preferred path for public feed viewers - no Autobase sync needed
         // IMPORTANT: If publicBeeKey is provided, this is definitely a multi-writer channel,
@@ -482,10 +581,11 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             console.log('[API] LIST_VIDEOS: PublicBee returned', videos?.length, 'videos')
             const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
             const enriched = await enrichMissingBlobMeta(result, (id) => publicBee.getVideo(id))
-            listVideosCache.set(driveKey, { ts: Date.now(), value: enriched })
+            const withAvailability = await attachVideoAvailability(enriched)
+            listVideosCache.set(driveKey, { ts: Date.now(), value: withAvailability })
             // YouTube-Fast: background index for search
-            backgroundIndexVideos(enriched, driveKey)
-            return cloneArrayOfObjects(enriched)
+            backgroundIndexVideos(withAvailability, driveKey)
+            return cloneArrayOfObjects(withAvailability)
           } catch (err) {
             console.log('[API] LIST_VIDEOS: PublicBee fast path failed:', err.message, '- trying channel directly')
             // If PublicBee fails, try loading the channel directly (for paired devices or when PublicBee isn't synced)
@@ -495,10 +595,11 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               console.log('[API] LIST_VIDEOS: channel fallback returned', videos?.length, 'videos')
               const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
               const enriched = await enrichMissingBlobMeta(result, (id) => channel.getVideo(id))
-              listVideosCache.set(driveKey, { ts: Date.now(), value: enriched })
+              const withAvailability = await attachVideoAvailability(enriched)
+              listVideosCache.set(driveKey, { ts: Date.now(), value: withAvailability })
               // YouTube-Fast: background index for search
-              backgroundIndexVideos(enriched, driveKey)
-              return cloneArrayOfObjects(enriched)
+              backgroundIndexVideos(withAvailability, driveKey)
+              return cloneArrayOfObjects(withAvailability)
             } catch (channelErr) {
               console.log('[API] LIST_VIDEOS: channel fallback also failed:', channelErr.message)
               // Return empty - do NOT fall through to legacy paths since this is a multi-writer channel
@@ -518,10 +619,11 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         console.log('[API] LIST_VIDEOS returning', videos?.length, 'videos from channel')
         const result = (videos || []).map(v => ({ ...v, channelKey: driveKey }))
         const enriched = await enrichMissingBlobMeta(result, (id) => channel.getVideo(id))
-        listVideosCache.set(driveKey, { ts: Date.now(), value: enriched })
+        const withAvailability = await attachVideoAvailability(enriched)
+        listVideosCache.set(driveKey, { ts: Date.now(), value: withAvailability })
         // YouTube-Fast: background index for search
-        backgroundIndexVideos(enriched, driveKey)
-        return cloneArrayOfObjects(enriched)
+        backgroundIndexVideos(withAvailability, driveKey)
+        return cloneArrayOfObjects(withAvailability)
       } catch (err) {
         console.error('[API] LIST_VIDEOS error:', err.message);
         return [];
@@ -626,6 +728,51 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
       const blobsKeyHex = b4a.toString(blobEntry.blobsKey, 'hex')
       console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
       return getVideoUrlFromBlob(ctx, blobsKeyHex, blobEntry.blobId, { mimeType: meta.mimeType })
+    },
+
+    /**
+     * Prepare normal watch playback without forcing the UI to orchestrate warmup and URL resolution separately.
+     * Warmup is best-effort and must not block returning a playable blob-server URL.
+     * @param {string} driveKey
+     * @param {string} videoPath
+     * @param {string} [publicBeeKey]
+     * @param {string} [blobId]
+     * @param {string} [blobsCoreKey]
+     * @param {string} [mimeType]
+     * @returns {Promise<{url: string, stats: Object, warmupStarted: boolean}>}
+     */
+    async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
+      console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
+
+      let warmupStarted = true
+
+      try {
+        Promise.resolve(this.prefetchVideo(driveKey, videoPath, publicBeeKey)).catch((err) => {
+          warmupStarted = false
+          console.log('[API] preparePlayback warmup failed:', err?.message || err)
+        })
+      } catch (err) {
+        warmupStarted = false
+        console.log('[API] preparePlayback warmup failed:', err?.message || err)
+      }
+
+      const result = await this.getVideoUrl(
+        driveKey,
+        videoPath,
+        publicBeeKey,
+        blobId,
+        blobsCoreKey,
+        mimeType
+      )
+
+      // Allow immediate async warmup failures to settle without waiting for the warmup itself.
+      await Promise.resolve()
+
+      return {
+        url: result.url,
+        stats: this.getVideoStats(driveKey, videoPath),
+        warmupStarted,
+      }
     },
 
     /**

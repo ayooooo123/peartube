@@ -19,6 +19,7 @@ import {
   getFeedVideoHydrationMode,
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
+  getVisibleSeededFeedEntries,
 } from '@/lib/feed-hydration'
 
 // Public feed types
@@ -28,6 +29,7 @@ interface FeedEntry {
   publicBeeKey?: string  // Fast path key for viewers (auto-replicating Hyperbee)
   addedAt: number
   source: 'peer' | 'local'
+  peerCount?: number
 }
 
 interface ChannelMeta {
@@ -303,12 +305,14 @@ export default function HomeScreen() {
           }
         }
 
-        return (videos || []).map((v: any) => ({
-          ...v,
-          channelKey,
-          publicBeeKey: publicBeeKey || undefined,  // Include for video playback
-          channel: { name: channelMetaRef.current[channelKey]?.name || 'Unknown' }
-        }))
+        return (videos || [])
+          .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+          .map((v: any) => ({
+            ...v,
+            channelKey,
+            publicBeeKey: publicBeeKey || undefined,  // Include for video playback
+            channel: { name: channelMetaRef.current[channelKey]?.name || 'Unknown' }
+          }))
       } catch (err: any) {
         // Continue with other channels - this is expected for channels that haven't synced yet
         console.log('[Home] Failed to load videos from channel:', channelKey, '-', err?.message || err)
@@ -366,14 +370,16 @@ export default function HomeScreen() {
         }
       }
         if (Array.isArray(videoList)) {
-          const videosWithChannel = videoList.map((v: any) => ({
-            ...v,
-            channelKey: driveKey,
-            publicBeeKey: publicBeeKey || undefined,  // Include for video playback
-            channel: channelMeta[driveKey]
-              ? { name: channelMeta[driveKey].name || 'Channel' }
-              : undefined
-          }))
+          const videosWithChannel = videoList
+            .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+            .map((v: any) => ({
+              ...v,
+              channelKey: driveKey,
+              publicBeeKey: publicBeeKey || undefined,  // Include for video playback
+              channel: channelMeta[driveKey]
+                ? { name: channelMeta[driveKey].name || 'Channel' }
+                : undefined
+            }))
           setChannelVideos(videosWithChannel)
           // Fetch thumbnails for channel videos
           fetchThumbnailsForVideos(videosWithChannel)
@@ -405,13 +411,6 @@ export default function HomeScreen() {
         ? video.path
         : video.id
 
-      // Start prefetch early to warm peers before URL resolution
-      void rpc.prefetchVideo({
-        channelKey: video.channelKey,
-        videoId: videoRef,
-        publicBeeKey: (video as any).publicBeeKey || undefined,
-      }).catch(() => {})
-
       // INSTANT PATH: Pass blobId and blobsCoreKey directly if available
       // This skips metadata fetch entirely for instant playback
       const videoAny = video as any
@@ -422,19 +421,20 @@ export default function HomeScreen() {
         videoAny.blobsCoreKey || undefined,
       )
       const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
-      if (cachedUrl) {
-        loadAndPlayVideo(video, cachedUrl)
-        return
-      }
-      const result = await rpc.getVideoUrl({
+      const playbackRequest = {
         channelKey: video.channelKey,
         videoId: videoRef,
         publicBeeKey: videoAny.publicBeeKey || undefined,
-        // Direct blob info for instant playback (no metadata fetch)
         blobId: videoAny.blobId || undefined,
         blobsCoreKey: videoAny.blobsCoreKey || undefined,
         mimeType: videoAny.mimeType || undefined,
-      })
+      }
+      if (cachedUrl) {
+        void rpc.preparePlayback(playbackRequest).catch(() => {})
+        loadAndPlayVideo(video, cachedUrl)
+        return
+      }
+      const result = await rpc.preparePlayback(playbackRequest)
 
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
@@ -460,13 +460,6 @@ export default function HomeScreen() {
         ? video.path
         : video.id
 
-      // Start prefetch early to warm peers before URL resolution
-      void rpc.prefetchVideo({
-        channelKey: video.channelKey,
-        videoId: videoRef,
-        publicBeeKey: (video as any).publicBeeKey || undefined,
-      }).catch(() => {})
-
       // Get video URL from backend - use instant path if we have blob info
       const videoAny = video as any
       const cacheKey = makeVideoUrlCacheKey(
@@ -476,18 +469,20 @@ export default function HomeScreen() {
         videoAny.blobsCoreKey || undefined,
       )
       const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
-      if (cachedUrl) {
-        loadAndPlayVideo(video, cachedUrl)
-        return
-      }
-      const result = await rpc.getVideoUrl({
+      const playbackRequest = {
         channelKey: video.channelKey,
         videoId: videoRef,
         publicBeeKey: videoAny.publicBeeKey || undefined,
         blobId: videoAny.blobId || undefined,
         blobsCoreKey: videoAny.blobsCoreKey || undefined,
         mimeType: videoAny.mimeType || undefined,
-      })
+      }
+      if (cachedUrl) {
+        void rpc.preparePlayback(playbackRequest).catch(() => {})
+        loadAndPlayVideo(video, cachedUrl)
+        return
+      }
+      const result = await rpc.preparePlayback(playbackRequest)
 
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
@@ -538,16 +533,21 @@ export default function HomeScreen() {
   })
 
   // Add thumbnails to feed videos from cache
-  const feedVideosWithThumbs: VideoData[] = feedVideos.map(v => {
-    const cacheKey = `${v.channelKey}:${v.id}`
-    return {
-      ...v,
-      channel: {
-        name: channelMeta[v.channelKey]?.name || v.channel?.name || 'Unknown'
-      },
-      thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
-    }
-  })
+  const visibleSeededFeedEntries = getVisibleSeededFeedEntries(feedEntries)
+  const seededFeedChannelKeys = new Set(visibleSeededFeedEntries.map((entry) => entry.channelKey || entry.driveKey).filter(Boolean))
+
+  const feedVideosWithThumbs: VideoData[] = feedVideos
+    .filter(v => seededFeedChannelKeys.has(v.channelKey))
+    .map(v => {
+      const cacheKey = `${v.channelKey}:${v.id}`
+      return {
+        ...v,
+        channel: {
+          name: channelMeta[v.channelKey]?.name || v.channel?.name || 'Unknown'
+        },
+        thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
+      }
+    })
 
   const backendConnecting = !ready
   const backendLoading = Boolean(loading)
@@ -767,11 +767,11 @@ export default function HomeScreen() {
                 <ActivityIndicator color={colors.primary} />
                 <Text className="text-caption text-pear-text-muted mt-2">Discovering videos...</Text>
               </View>
-            ) : feedVideos.length === 0 ? (
+            ) : feedVideosWithThumbs.length === 0 ? (
               <View className="py-8 items-center bg-pear-bg-elevated rounded-xl">
                 <Feather name="globe" color={colors.textMuted} size={32} />
-                <Text className="text-label text-pear-text mt-2">No videos discovered yet</Text>
-                <Text className="text-caption text-pear-text-muted mt-1">Click refresh or wait for peers to connect</Text>
+                <Text className="text-label text-pear-text mt-2">No seeded videos discovered yet</Text>
+                <Text className="text-caption text-pear-text-muted mt-1">Click refresh or wait for peers that are actively announcing channels</Text>
               </View>
             ) : (
               <View style={isDesktop ? {
@@ -781,7 +781,7 @@ export default function HomeScreen() {
               } : { gap: 12 }}>
                 {feedVideosWithThumbs
                   .filter(v => activeCategory === 'All' || (v as any).category === activeCategory)
-                  .map((video) => (
+                  .map((video, index) => (
                   <View
                     key={`${video.channelKey}-${video.id}`}
                     style={isDesktop ? {
@@ -793,6 +793,7 @@ export default function HomeScreen() {
                       onPress={() => playVideo(video)}
                       showChannelInfo={true}
                       onChannelPress={video.channelKey ? () => router.push('/channel/' + video.channelKey) : undefined}
+                      testID={index === 0 ? 'discover-feed-first-video' : undefined}
                     />
                   </View>
                 ))}

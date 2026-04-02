@@ -512,7 +512,25 @@ B.listVideos = async (r: any) => {
   }))
   return { videos: enriched }
 }
-B.getVideoUrl = async (r: any) => { const res = await api.getVideoUrl(r.channelKey, r.videoId, r.publicBeeKey); return { url: res.url } }
+B.getVideoUrl = async (r: any) => {
+  const res = await api.getVideoUrl(
+    r.channelKey,
+    r.videoId,
+    r.publicBeeKey,
+    r.blobId,
+    r.blobsCoreKey,
+    r.mimeType
+  )
+  return { url: res.url }
+}
+B.preparePlayback = async (r: any) => api.preparePlayback(
+  r.channelKey,
+  r.videoId,
+  r.publicBeeKey,
+  r.blobId,
+  r.blobsCoreKey,
+  r.mimeType
+)
 B.getVideoData = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey); return { video: v || { id: r.videoId, title: 'Unknown' } } }
 B.getVideoMetadata = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId); return { video: v || { id: r.videoId, title: 'Unknown' } } }
 B.downloadVideo = async (r: any) => { try { const res = await api.getVideoUrl(r.channelKey, r.videoId, r.publicBeeKey); if (!res?.url) return { success: false, error: 'Failed to get URL' }; const meta = await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey); let size = 0; if (meta?.blobId) { const p = meta.blobId.split(':').map(Number); if (p.length === 4) size = p[3] } return { success: true, filePath: res.url, size: size || meta?.size || 0 } } catch (e: any) { return { success: false, error: e?.message } } }
@@ -523,7 +541,21 @@ B.subscribeChannel = async (r: any) => { await api.subscribeChannel(r.channelKey
 B.unsubscribeChannel = async (r: any) => { await api.unsubscribeChannel(r.channelKey); return { success: true } }
 B.getSubscriptions = async () => { const s = await api.getSubscriptions(); return { subscriptions: s.map((i: any) => ({ channelKey: i.driveKey, channelName: i.name })) } }
 B.joinChannel = async (r: any) => { await api.subscribeChannel(r.channelKey); return { success: true } }
-B.getPublicFeed = async () => { const r = api.getPublicFeed(); return { entries: r.entries.map((e: any) => ({ channelKey: e.driveKey, publicBeeKey: e.publicBeeKey || '', channelName: e.name || '', videoCount: 0, peerCount: 0, lastSeen: 0 })) } }
+B.getPublicFeed = async () => {
+  const r = api.getPublicFeed()
+  return {
+    entries: (r.entries || [])
+      .map((e: any) => ({
+        channelKey: e.channelKey || e.driveKey || '',
+        publicBeeKey: e.publicBeeKey || null,
+        channelName: e.channelName || e.name || null,
+        videoCount: e.videoCount || 0,
+        peerCount: e.peerCount || 0,
+        lastSeen: e.lastSeen || 0,
+      }))
+      .filter((e: any) => typeof e.channelKey === 'string' && e.channelKey.length > 0)
+  }
+}
 B.refreshFeed = async () => { api.refreshFeed(); return { success: true } }
 B.submitToFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.submitToFeed(a.driveKey); return { success: true } }
 B.unpublishFromFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.unpublishFromFeed(a.driveKey); return { success: true } }

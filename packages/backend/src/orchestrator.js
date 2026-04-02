@@ -374,6 +374,10 @@ export async function createBackendContext(config) {
     videoStats
   });
 
+  if (typeof api.getAvailabilityHints === 'function') {
+    publicFeed.setAvailabilityHintProvider((requests, conn) => api.getAvailabilityHints(requests, conn))
+  }
+
   // Return result - heavy channel warming happens in background
   const result = {
     ctx,

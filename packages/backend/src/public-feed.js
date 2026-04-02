@@ -42,10 +42,20 @@ export class PublicFeedManager {
     this.publishedChannels = new Set();
     /** @type {Map<any, any>} conn → protomux channel */
     this.peerChannels = new Map();
+    /** @type {Map<any, Set<string>>} conn → announced driveKeys */
+    this.peerFeedKeys = new Map();
+    /** @type {Map<string, number>} driveKey → live announcing peer count */
+    this.entryPeerCounts = new Map();
     /** @type {Set<any>} Active feed connections */
     this.feedConnections = new Set();
     /** @type {Set<any>} Connections already wired for the feed protocol */
     this.wiredConnections = new Set();
+    /** @type {((requests: any[], conn?: any) => Promise<any[]>) | null} */
+    this.availabilityHintProvider = null;
+    /** @type {number} */
+    this._nextAvailabilityRequestId = 1;
+    /** @type {Map<string, { resolve: Function, timeout: any }>} */
+    this.pendingAvailabilityRequests = new Map();
     /** @type {(() => void) | null} */
     this.onFeedUpdate = null;
     /** @type {((conn: any) => void) | null} */
@@ -86,6 +96,63 @@ export class PublicFeedManager {
    */
   setOnFeedSync(callback) {
     this.onFeedSync = callback;
+  }
+
+  /**
+   * Set local provider for availability hints served over the feed channel.
+   * Provider must be cheap/local-only; no network waits.
+   * @param {(requests: any[], conn?: any) => Promise<any[]>} callback
+   */
+  setAvailabilityHintProvider(callback) {
+    this.availabilityHintProvider = callback;
+  }
+
+  async requestAvailabilityHints(requests, { timeoutMs = 250, maxPeers = 4 } = {}) {
+    const peers = Array.from(this.feedConnections).slice(0, maxPeers)
+    if (!Array.isArray(requests) || requests.length === 0 || peers.length === 0) return []
+
+    const perPeer = peers.map((conn) => new Promise((resolve) => {
+      const channel = this.peerChannels.get(conn)
+      if (!channel) return resolve([])
+      const requestId = `${Date.now()}:${this._nextAvailabilityRequestId++}`
+      const timeout = setTimeout(() => {
+        this.pendingAvailabilityRequests.delete(requestId)
+        resolve([])
+      }, timeoutMs)
+      this.pendingAvailabilityRequests.set(requestId, {
+        resolve: (hints) => {
+          clearTimeout(timeout)
+          resolve(Array.isArray(hints) ? hints : [])
+        },
+        timeout,
+      })
+      try {
+        channel.messages[0].send({
+          type: 'AVAILABILITY_HINT_REQUEST',
+          requestId,
+          requests,
+        })
+      } catch {
+        clearTimeout(timeout)
+        this.pendingAvailabilityRequests.delete(requestId)
+        resolve([])
+      }
+    }))
+
+    const settled = await Promise.allSettled(perPeer)
+    const merged = new Map()
+    for (const res of settled) {
+      if (res.status !== 'fulfilled') continue
+      for (const hint of res.value || []) {
+        const key = `${hint?.driveKey || ''}:${hint?.id || ''}`
+        if (!hint?.driveKey || !hint?.id) continue
+        const prev = merged.get(key)
+        if (!prev || prev.availability !== 'playable') {
+          if (hint.availability === 'playable' || !prev) merged.set(key, hint)
+        }
+      }
+    }
+    return Array.from(merged.values())
   }
 
   /**
@@ -190,8 +257,15 @@ export class PublicFeedManager {
     this.started = false;
     this.wiredConnections.clear();
     this.peerChannels.clear();
+    this.peerFeedKeys.clear();
+    this.entryPeerCounts.clear();
     this.feedConnections.clear();
     try {
+      for (const pending of this.pendingAvailabilityRequests.values()) {
+        try { clearTimeout(pending.timeout) } catch {}
+        try { pending.resolve([]) } catch {}
+      }
+      this.pendingAvailabilityRequests.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)
     } catch {}
     this._persistTimer = null
@@ -215,8 +289,9 @@ export class PublicFeedManager {
   async _persistDiscoveredNow() {
     if (!this.metaDb) return
     try {
-      // Store entries with publicBeeKey (new format)
-      const entries = Array.from(this.entries.values())
+      // Persist only live peer-discovered channels plus all local/published channels.
+      const entries = this.getFeed()
+        .filter((e) => e.source === 'local' || (e.peerCount || 0) > 0)
         .slice(0, this._persistMaxEntries)
         .map(e => ({
           driveKey: e.driveKey,
@@ -271,6 +346,7 @@ export class PublicFeedManager {
     // Clean up on connection close
     conn.on('close', () => {
       console.log('[PublicFeed] Connection closed');
+      this._clearPeerFeedKeys(conn);
       this.wiredConnections.delete(conn);
       this.peerChannels.delete(conn);
       this.feedConnections.delete(conn);
@@ -278,6 +354,7 @@ export class PublicFeedManager {
 
     conn.on('error', (err) => {
       console.error('[PublicFeed] Connection error:', err.message);
+      this._clearPeerFeedKeys(conn);
       this.wiredConnections.delete(conn);
       this.peerChannels.delete(conn);
       this.feedConnections.delete(conn);
@@ -329,6 +406,7 @@ export class PublicFeedManager {
       },
       onclose: () => {
         console.log('[PublicFeed] Feed channel closed');
+        this._clearPeerFeedKeys(conn);
         this.peerChannels.delete(conn);
         this.feedConnections.delete(conn);
       }
@@ -390,6 +468,51 @@ export class PublicFeedManager {
     }
   }
 
+  _setPeerFeedKeys(conn, keys) {
+    const nextKeys = new Set((keys || []).filter(Boolean))
+    const prevKeys = this.peerFeedKeys.get(conn) || new Set()
+    const changed = nextKeys.size !== prevKeys.size || Array.from(nextKeys).some((key) => !prevKeys.has(key))
+
+    if (!changed) return false
+
+    for (const key of prevKeys) {
+      const nextCount = Math.max(0, (this.entryPeerCounts.get(key) || 0) - 1)
+      if (nextCount > 0) this.entryPeerCounts.set(key, nextCount)
+      else this.entryPeerCounts.delete(key)
+    }
+
+    for (const key of nextKeys) {
+      this.entryPeerCounts.set(key, (this.entryPeerCounts.get(key) || 0) + 1)
+    }
+
+    this.peerFeedKeys.set(conn, nextKeys)
+    return true
+  }
+
+  _clearPeerFeedKeys(conn) {
+    const prevKeys = this.peerFeedKeys.get(conn)
+    if (!prevKeys) return false
+
+    let pruned = false
+    for (const key of prevKeys) {
+      const nextCount = Math.max(0, (this.entryPeerCounts.get(key) || 0) - 1)
+      if (nextCount > 0) {
+        this.entryPeerCounts.set(key, nextCount)
+      } else {
+        this.entryPeerCounts.delete(key)
+        const entry = this.entries.get(key)
+        if (entry?.source === 'peer') {
+          this.entries.delete(key)
+          pruned = true
+        }
+      }
+    }
+
+    this.peerFeedKeys.delete(conn)
+    if (pruned) this._schedulePersistDiscovered()
+    return true
+  }
+
   /**
    * Handle incoming feed protocol messages
    * @param {Object} msg
@@ -402,34 +525,41 @@ export class PublicFeedManager {
     if (msg.type === 'HAVE_FEED') {
       let added = 0;
       const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
+      let announcedKeys = []
+      let receivedCount = 0
 
       // Prefer new entries format (with publicBeeKey)
       if (msg.entries && Array.isArray(msg.entries)) {
       log.debug('HAVE_FEED received (entries)', { count: msg.entries.length })
+        receivedCount = msg.entries.length
         for (const entry of msg.entries) {
-          if (entry.driveKey && isValidKey(entry.publicBeeKey) && this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey)) {
+          if (!entry?.driveKey || !isValidKey(entry.publicBeeKey)) continue
+          announcedKeys.push(entry.driveKey)
+          if (this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey)) {
             added++;
           }
         }
-        try {
-          this.onFeedSync?.({ type: 'HAVE_FEED', added, received: msg.entries.length });
-        } catch {}
       }
       // Fallback to legacy keys array
       else if (msg.keys && Array.isArray(msg.keys)) {
       log.debug('HAVE_FEED received (legacy keys)', { count: msg.keys.length })
+        receivedCount = msg.keys.length
         for (const key of msg.keys) {
+          if (!key) continue
+          announcedKeys.push(key)
           if (this.addEntry(key, 'peer')) {
             added++;
           }
         }
-        try {
-          this.onFeedSync?.({ type: 'HAVE_FEED', added, received: msg.keys.length });
-        } catch {}
       }
 
+      const peerSetChanged = this._setPeerFeedKeys(conn, announcedKeys)
+      try {
+        this.onFeedSync?.({ type: 'HAVE_FEED', added, received: receivedCount });
+      } catch {}
+
     log.debug('Merged feed entries', { added, total: this.entries.size })
-      if (added > 0) {
+      if (added > 0 || peerSetChanged) {
         this.onFeedUpdate?.();
         this._schedulePersistDiscovered()
       }
@@ -466,6 +596,29 @@ export class PublicFeedManager {
         this.onFeedUpdate?.();
         this._schedulePersistDiscovered()
       }
+    }
+    else if (msg.type === 'AVAILABILITY_HINT_REQUEST' && msg.requestId && Array.isArray(msg.requests)) {
+      ;(async () => {
+        try {
+          const hints = this.availabilityHintProvider
+            ? await this.availabilityHintProvider(msg.requests, conn)
+            : []
+          const channel = this.peerChannels.get(conn)
+          if (!channel) return
+          channel.messages[0].send({
+            type: 'AVAILABILITY_HINT_RESPONSE',
+            requestId: msg.requestId,
+            hints: Array.isArray(hints) ? hints : [],
+          })
+        } catch {}
+      })()
+    }
+    else if (msg.type === 'AVAILABILITY_HINT_RESPONSE' && msg.requestId) {
+      const pending = this.pendingAvailabilityRequests.get(msg.requestId)
+      if (!pending) return
+      this.pendingAvailabilityRequests.delete(msg.requestId)
+      try { clearTimeout(pending.timeout) } catch {}
+      pending.resolve(msg.hints || [])
     }
     else {
       console.log('[PublicFeed] Unknown message type:', msg?.type);
@@ -508,7 +661,8 @@ export class PublicFeedManager {
       driveKey,
       publicBeeKey: isValidKey(publicBeeKey) ? publicBeeKey : null, // Key for viewers to use (auto-replicating Hyperbee)
       addedAt: Date.now(),
-      source
+      source,
+      peerCount: source === 'local' ? 1 : 0,
     });
 
     // Persist (debounced) so restarts retain discovered keys.
@@ -660,6 +814,13 @@ export class PublicFeedManager {
   getFeed() {
     return Array.from(this.entries.values())
       .filter(e => !this.hiddenKeys.has(e.driveKey))
+      .map((entry) => ({
+        ...entry,
+        peerCount: entry.source === 'local'
+          ? Math.max(1, this.entryPeerCounts.get(entry.driveKey) || 0)
+          : (this.entryPeerCounts.get(entry.driveKey) || 0)
+      }))
+      .filter((entry) => entry.source === 'local' || (entry.peerCount || 0) > 0)
       .sort((a, b) => b.addedAt - a.addedAt);
   }
 

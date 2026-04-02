@@ -125,3 +125,89 @@ test('feed channel open sends HAVE_FEED immediately', () => {
     manager.stop()
   }
 })
+
+test('availability hint request is answered on the existing feed channel', async () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+  const sent = []
+
+  manager.setAvailabilityHintProvider(async (requests) => requests.map((req) => ({
+    driveKey: req.driveKey,
+    id: req.id,
+    availability: 'playable',
+    contiguousBlocks: 12,
+    hasHeadBlock: true,
+    lastSeenAt: 123,
+    activelyServing: true,
+  })))
+
+  const originalFrom = Protomux.from
+  Protomux.from = () => ({
+    pair() {},
+    createChannel() {
+      return {
+        messages: [{ send(msg) { sent.push(msg) } }],
+        open() {},
+      }
+    }
+  })
+
+  try {
+    manager.handleConnection(conn, {})
+    manager.handleMessage({
+      type: 'AVAILABILITY_HINT_REQUEST',
+      requestId: 'req-1',
+      requests: [{ driveKey: DRIVE_KEY, id: 'v1', blobsCoreKey: '33'.repeat(32), blobId: '1:2:3:4' }],
+    }, conn)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const response = sent.find((msg) => msg.type === 'AVAILABILITY_HINT_RESPONSE')
+    assert.ok(response)
+    assert.equal(response.requestId, 'req-1')
+    assert.equal(response.hints[0].availability, 'playable')
+  } finally {
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
+test('requestAvailabilityHints merges playable responses from feed peers (including relayed peers on same channel)', async () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+  const sent = []
+
+  const originalFrom = Protomux.from
+  Protomux.from = () => ({
+    pair() {},
+    createChannel() {
+      return {
+        messages: [{ send(msg) { sent.push(msg) } }],
+        open() {},
+      }
+    }
+  })
+
+  try {
+    manager.handleConnection(conn, {})
+    manager.feedConnections.add(conn)
+    const promise = manager.requestAvailabilityHints([
+      { driveKey: DRIVE_KEY, id: 'v1', blobsCoreKey: '33'.repeat(32), blobId: '1:2:3:4' }
+    ], { timeoutMs: 100, maxPeers: 1 })
+
+    const request = sent.find((msg) => msg.type === 'AVAILABILITY_HINT_REQUEST')
+    assert.ok(request)
+    manager.handleMessage({
+      type: 'AVAILABILITY_HINT_RESPONSE',
+      requestId: request.requestId,
+      hints: [{ driveKey: DRIVE_KEY, id: 'v1', availability: 'playable', hasHeadBlock: true, contiguousBlocks: 8 }]
+    }, conn)
+
+    const hints = await promise
+    assert.equal(hints.length, 1)
+    assert.equal(hints[0].availability, 'playable')
+  } finally {
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})

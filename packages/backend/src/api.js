@@ -215,6 +215,62 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
 
   return {
     invalidateChannelCaches,
+    async getAvailabilityHints(requests = []) {
+      const hints = []
+      for (const req of requests) {
+        const id = req?.id
+        if (!id) continue
+        const local = await (async () => {
+          try {
+            const video = {
+              id,
+              blobsCoreKey: req?.blobsCoreKey,
+              blobId: req?.blobId,
+            }
+            const key = req?.driveKey || 'unknown'
+            // Reuse the cheap local-only availability path shape
+            const cacheKey = `${key}:${id}:${video.blobsCoreKey}:${video.blobId}`
+            const cachedAvailability = videoAvailabilityCache.get(cacheKey)
+            if (cachedAvailability && (Date.now() - cachedAvailability.ts) < VIDEO_AVAILABILITY_CACHE_TTL_MS) {
+              return { availability: cachedAvailability.value, contiguousBlocks: cachedAvailability.value === 'playable' ? 1 : 0, hasHeadBlock: cachedAvailability.value === 'playable' }
+            }
+            const keyBuf = video?.blobsCoreKey ? b4a.from(video.blobsCoreKey, 'hex') : null
+            if (!keyBuf || !video?.blobId) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+            const core = ctx.store.get({ key: keyBuf })
+            await core.ready()
+            let blobId = video.blobId
+            if (typeof blobId === 'string') {
+              const parts = blobId.split(':').map(Number)
+              if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
+                blobId = { blockOffset: parts[0], blockLength: parts[1], byteOffset: parts[2], byteLength: parts[3] }
+              }
+            }
+            const startBlock = blobId?.blockOffset
+            const totalBlocks = blobId?.blockLength
+            const endBlock = Number.isFinite(startBlock) && Number.isFinite(totalBlocks) ? startBlock + totalBlocks : null
+            if (!Number.isFinite(startBlock) || !Number.isFinite(endBlock)) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+            const fullyCached = await core.has(startBlock, endBlock)
+            if (fullyCached) return { availability: 'playable', contiguousBlocks: totalBlocks || 0, hasHeadBlock: true }
+            const headEnd = Math.min(endBlock, startBlock + Math.max(1, Math.min(32, totalBlocks || 32)))
+            let initialAvailable = false
+            try { initialAvailable = await core.has(startBlock, headEnd) } catch {}
+            return { availability: initialAvailable ? 'playable' : 'unknown', contiguousBlocks: initialAvailable ? Math.max(1, headEnd - startBlock) : 0, hasHeadBlock: initialAvailable }
+          } catch {
+            return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+          }
+        })()
+        hints.push({
+          driveKey: req?.driveKey,
+          id,
+          availability: local.availability,
+          contiguousBlocks: local.contiguousBlocks,
+          hasHeadBlock: local.hasHeadBlock,
+          lastSeenAt: Date.now(),
+          activelyServing: local.availability === 'playable',
+        })
+      }
+      return hints
+    },
     // ============================================
     // Channel Operations
     // ============================================
@@ -476,24 +532,23 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           })
         }
 
-        const probeVideoAvailability = async (video) => {
+        const getLocalVideoAvailabilityHint = async (video) => {
           const id = extractVideoId(video)
           const blobsCoreKey = video?.blobsCoreKey
           const blobIdRaw = video?.blobId
           if (!id || !blobsCoreKey || !blobIdRaw) {
-            return 'unknown'
+            return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
           }
 
           const cacheKey = `${driveKey}:${id}:${blobsCoreKey}:${blobIdRaw}`
           const cachedAvailability = videoAvailabilityCache.get(cacheKey)
           if (cachedAvailability && (Date.now() - cachedAvailability.ts) < VIDEO_AVAILABILITY_CACHE_TTL_MS) {
-            return cachedAvailability.value
+            return { availability: cachedAvailability.value, contiguousBlocks: cachedAvailability.value === 'playable' ? 1 : 0, hasHeadBlock: cachedAvailability.value === 'playable' }
           }
 
-          // IMPORTANT: discovery feed availability must be cheap and non-blocking.
-          // Do local-only checks here. Real playback validation happens when the
-          // user opens the video, not during feed hydration.
           let availability = 'unknown'
+          let contiguousBlocks = 0
+          let hasHeadBlock = false
           try {
             const keyBuf = b4a.from(blobsCoreKey, 'hex')
             const core = ctx.store.get({ key: keyBuf })
@@ -522,12 +577,16 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
               const fullyCached = await core.has(startBlock, endBlock)
               if (fullyCached) {
                 availability = 'playable'
+                contiguousBlocks = totalBlocks || 0
+                hasHeadBlock = true
               } else {
                 const headEnd = Math.min(endBlock, startBlock + Math.max(1, Math.min(32, totalBlocks || 32)))
                 let initialAvailable = false
                 try {
                   initialAvailable = await core.has(startBlock, headEnd)
                 } catch {}
+                hasHeadBlock = initialAvailable
+                contiguousBlocks = initialAvailable ? Math.max(1, headEnd - startBlock) : 0
                 availability = initialAvailable ? 'playable' : 'unknown'
               }
             }
@@ -536,26 +595,49 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           }
 
           videoAvailabilityCache.set(cacheKey, { ts: Date.now(), value: availability })
-          return availability
+          return { availability, contiguousBlocks, hasHeadBlock }
+        }
+
+        const probeVideoAvailability = async (video) => {
+          const hint = await getLocalVideoAvailabilityHint(video)
+          return hint.availability
         }
 
         const attachVideoAvailability = async (videos) => {
           if (!Array.isArray(videos) || videos.length === 0) return []
           const MAX_PROBES = 8
-          const idsToProbe = new Set(
-            videos
-              .slice(0, MAX_PROBES)
-              .map((video) => extractVideoId(video))
-              .filter(Boolean)
-          )
+          const sample = videos.slice(0, MAX_PROBES)
+          const idsToProbe = new Set(sample.map((video) => extractVideoId(video)).filter(Boolean))
 
           const availabilityById = new Map()
+          const unknownRequests = []
+
           await Promise.all(Array.from(idsToProbe).map(async (id) => {
             const video = videos.find((candidate) => extractVideoId(candidate) === id)
             if (!video) return
-            const availability = await probeVideoAvailability(video)
-            availabilityById.set(id, availability)
+            const hint = await getLocalVideoAvailabilityHint(video)
+            availabilityById.set(id, hint.availability)
+            if (hint.availability === 'unknown' && video?.blobsCoreKey && video?.blobId) {
+              unknownRequests.push({
+                driveKey,
+                id,
+                blobsCoreKey: video.blobsCoreKey,
+                blobId: video.blobId,
+              })
+            }
           }))
+
+          if (unknownRequests.length > 0 && publicFeed?.requestAvailabilityHints) {
+            try {
+              const hinted = await publicFeed.requestAvailabilityHints(unknownRequests, { timeoutMs: 250, maxPeers: 4 })
+              for (const hint of hinted || []) {
+                if (!hint?.id) continue
+                if (hint.availability === 'playable') {
+                  availabilityById.set(hint.id, 'playable')
+                }
+              }
+            } catch {}
+          }
 
           return videos.map((video) => {
             const id = extractVideoId(video)

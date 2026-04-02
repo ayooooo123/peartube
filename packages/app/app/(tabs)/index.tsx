@@ -306,7 +306,7 @@ export default function HomeScreen() {
         }
 
         return (videos || [])
-          .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+          .filter((v: any) => (v?.availability || 'unknown') === 'playable')
           .map((v: any) => ({
             ...v,
             channelKey,
@@ -371,7 +371,7 @@ export default function HomeScreen() {
       }
         if (Array.isArray(videoList)) {
           const videosWithChannel = videoList
-            .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+            .filter((v: any) => (v?.availability || 'unknown') === 'playable')
             .map((v: any) => ({
               ...v,
               channelKey: driveKey,

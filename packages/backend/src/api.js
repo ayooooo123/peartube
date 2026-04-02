@@ -605,7 +605,7 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
 
         const attachVideoAvailability = async (videos) => {
           if (!Array.isArray(videos) || videos.length === 0) return []
-          const MAX_PROBES = 8
+          const MAX_PROBES = 12
           const sample = videos.slice(0, MAX_PROBES)
           const idsToProbe = new Set(sample.map((video) => extractVideoId(video)).filter(Boolean))
 
@@ -629,11 +629,22 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
 
           if (unknownRequests.length > 0 && publicFeed?.requestAvailabilityHints) {
             try {
-              const hinted = await publicFeed.requestAvailabilityHints(unknownRequests, { timeoutMs: 250, maxPeers: 4 })
+              const hinted = await publicFeed.requestAvailabilityHints(unknownRequests, { timeoutMs: 400, maxPeers: 6 })
+              const hintedPlayableIds = new Set()
               for (const hint of hinted || []) {
                 if (!hint?.id) continue
                 if (hint.availability === 'playable') {
+                  hintedPlayableIds.add(hint.id)
                   availabilityById.set(hint.id, 'playable')
+                }
+              }
+
+              const peerCount = publicFeed?.feedConnections?.size || 0
+              if (peerCount > 0) {
+                for (const req of unknownRequests) {
+                  if (!hintedPlayableIds.has(req.id) && availabilityById.get(req.id) === 'unknown') {
+                    availabilityById.set(req.id, 'unavailable')
+                  }
                 }
               }
             } catch {}

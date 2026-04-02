@@ -375,6 +375,23 @@ export function VideoPlayerOverlay() {
   // during the PiP exit tail where window metrics can stay small for a few frames.
   const pipExitBlockEarlyDetectRef = useRef(false)
   const pipModePrevRef = useRef(false)
+  const [showControls, setShowControls] = useState(false)
+  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const [miniPlayerCorner, setMiniPlayerCorner] = useState<MiniPlayerCorner>('bottom-right')
+  const [miniPlayerSizeMode, setMiniPlayerSizeMode] = useState<'compact' | 'expanded'>('compact')
+  const [isDraggingMiniPlayer, setIsDraggingMiniPlayer] = useState(false)
+  const [miniPlayerDragOffset, setMiniPlayerDragOffset] = useState({ x: 0, y: 0 })
+  const miniPlayerDragStartRef = useRef({ x: 0, y: 0, cornerX: 0, cornerY: 0 })
+
+  const showControlsTemporarily = useCallback(() => {
+    setShowControls(true)
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current)
+    }
+    controlsTimeoutRef.current = setTimeout(() => {
+      setShowControls(false)
+    }, 3000)
+  }, [])
 
   useEffect(() => {
     if (isInPipMode) {
@@ -507,26 +524,17 @@ export function VideoPlayerOverlay() {
   const [pipSupported, setPipSupported] = useState<boolean | null>(null)
   const pipExitNeedsRearmRef = useRef(false)
 
-  // State for showing custom controls overlay
-  const [showControls, setShowControls] = useState(false)
-  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   // State for true fullscreen (landscape, hidden UI)
   const [isLandscapeFullscreen, setIsLandscapeFullscreen] = useState(false)
   const autoPipEnabledRef = useRef(false)
   const [iosPipEnabled, setIosPipEnabled] = useState(false)
 
   // Mini player corner/drag state
-  const [miniPlayerCorner, setMiniPlayerCorner] = useState<MiniPlayerCorner>('bottom-right')
-  const [miniPlayerSizeMode, setMiniPlayerSizeMode] = useState<'compact' | 'expanded'>('compact')
-  const [isDraggingMiniPlayer, setIsDraggingMiniPlayer] = useState(false)
-  const [miniPlayerDragOffset, setMiniPlayerDragOffset] = useState({ x: 0, y: 0 })
-  const miniPlayerDragStartRef = useRef({ x: 0, y: 0, cornerX: 0, cornerY: 0 })
   const [pendingLandscapeExit, setPendingLandscapeExit] = useState(false)
   const disableMiniLayoutOnAndroidSplit = Platform.OS === 'android' && androidSplitPlayerEnabled
   const showLegacyMiniUi =
     playerMode === 'mini' &&
     !isLandscapeFullscreen &&
-    !pendingLandscapeExit &&
     !isInPipMode &&
     !disableMiniLayoutOnAndroidSplit
   const isLandscapeFullscreenShared = useSharedValue(false)
@@ -764,17 +772,6 @@ export function VideoPlayerOverlay() {
 
   // Native overlay disabled - testing simple padding approach
 
-  // Show controls temporarily
-  const showControlsTemporarily = useCallback(() => {
-    setShowControls(true)
-    if (controlsTimeoutRef.current) {
-      clearTimeout(controlsTimeoutRef.current)
-    }
-    controlsTimeoutRef.current = setTimeout(() => {
-      setShowControls(false)
-    }, 3000)
-  }, [])
-
   useEffect(() => {
     if (wasInPipRef.current && !isInPipMode && playerMode === 'fullscreen') {
       showControlsTemporarily()
@@ -795,23 +792,14 @@ export function VideoPlayerOverlay() {
       setPipWindowSize({ width: event.width, height: event.height })
     } else if (!event.isInPictureInPicture) {
       setPipWindowSize(null)
-      if (AppState.currentState === 'active') {
-        maximizePlayer()
+
+      // Android PiP exit recovery is handled in VideoPlayerContext via the
+      // reducer/state machine. Calling maximizePlayer() here can produce
+      // invalid transitions during repeated PiP cycles.
+      if (Platform.OS !== 'android' && AppState.currentState === 'active') {
+        maximizePlayer('overlay-pip-exit-ios')
       }
 
-      // Android: directly re-arm auto-PiP after exit.
-      // Cannot rely on the main auto-PiP effect for this because after PiP exit
-      // the deps often settle to the same values as before PiP entry, so the
-      // effect doesn't re-fire. Calling setAutoPictureInPicture directly here
-      // ensures the native PipBridge is re-enabled for the next app exit.
-      if (Platform.OS === 'android' && currentVideo !== null && !isCasting) {
-        MediaSession.setAutoPictureInPicture(true)
-          .then(() => {
-            autoPipEnabledRef.current = true
-            console.log('[VideoPlayerOverlay] Re-armed Auto-PiP directly after PiP exit')
-          })
-          .catch(() => {})
-      }
     }
   }, [setIsInPipMode, setPipWindowSize, maximizePlayer, pipSupported, currentVideo, isCasting])
 
@@ -1199,7 +1187,7 @@ export function VideoPlayerOverlay() {
   }, [playerMode, isInPipMode, disableMiniLayoutOnAndroidSplit])
 
   const maximizeFromMini = useCallback(() => {
-    maximizePlayer()
+    maximizePlayer('overlay-mini-button')
   }, [maximizePlayer])
 
   const toggleMiniPlayerSizeMode = useCallback(() => {
@@ -1371,7 +1359,7 @@ export function VideoPlayerOverlay() {
           runOnJS(minimizePlayer)()
       } else {
         animProgress.value = withSpring(1, SPRING_CONFIG_BOUNCY)
-        runOnJS(maximizePlayer)()
+        runOnJS(maximizePlayer)('overlay-pan-snap')
       }
     })
     .onFinalize(() => {
@@ -2170,33 +2158,22 @@ export function VideoPlayerOverlay() {
     MediaSession.setSurfaceViewInset(0).catch(() => {})
   }, [playerMode, isInPipMode, isLandscapeFullscreen])
 
-  // Single unified Android auto-PiP effect.
-  // On Android: enable PiP whenever there's an active video, regardless of playerMode.
-  // Only disable when the video is actually gone (currentVideo === null) or casting.
-  // This prevents transitional playerMode values during PiP exit from accidentally
-  // calling setAutoPictureInPicture(false) and breaking subsequent PiP entries.
+  // Unified PiP arming effect.
+  // On Android single-host playback, PiP must remain armed whenever a fullscreen
+  // video is active; otherwise onUserLeaveHint sees pipEnabled=false and the app
+  // backgrounds without entering PiP, which then surfaces the reconnect/loading overlay.
   useEffect(() => {
     if (Platform.OS === 'web') return
     if (isInPipMode) return
 
     if (Platform.OS === 'android') {
-      if (pipSupported === false) return
-
-      // Keep PiP enabled as long as there's an active video.
-      // Don't gate on playerMode — transitional states during PiP exit can
-      // cause false disables that break subsequent PiP entries.
-      const shouldEnable = currentVideo !== null && !isCasting
-
+      const shouldEnable =
+        (playerMode === 'fullscreen' || playerMode === 'mini') &&
+        currentVideo !== null &&
+        !isCasting
       autoPipEnabledRef.current = shouldEnable
-      console.log('[VideoPlayerOverlay] Auto-PiP effect:', playerMode, 'enabling:', shouldEnable)
-
       MediaSession.setAutoPictureInPicture(shouldEnable)
-        .then(() => {
-          console.log('[VideoPlayerOverlay] Auto-PiP set:', shouldEnable)
-        })
-        .catch((err) => {
-          console.error('[VideoPlayerOverlay] Auto-PiP failed:', err)
-        })
+      return
     } else if (Platform.OS === 'ios') {
       const shouldEnable =
         (playerMode === 'fullscreen' || (playerMode === 'mini' && !disableMiniLayoutOnAndroidSplit)) &&
@@ -2206,9 +2183,6 @@ export function VideoPlayerOverlay() {
       setIosPipEnabled(shouldEnable)
     }
   }, [playerMode, currentVideo, isCasting, pipSupported, isInPipMode, disableMiniLayoutOnAndroidSplit, isLandscapeFullscreen])
-
-  // PiP entry is handled natively via onUserLeaveHint in MainActivity
-  // Same activity shrinks, same player continues (single-player architecture)
 
   // Downloads context for browser-style download manager
   const { addDownload } = useDownloads()
@@ -3126,7 +3100,7 @@ export function VideoPlayerOverlay() {
         </>
       )}
 
-      {!isLandscapeFullscreen && !pendingLandscapeExit && !isInPipMode && (
+      {!isLandscapeFullscreen && !isInPipMode && (
         <Animated.View
           style={[styles.fullscreenContent, fullscreenContentStyle]}
         >

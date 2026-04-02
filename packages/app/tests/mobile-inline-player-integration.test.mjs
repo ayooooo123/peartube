@@ -48,11 +48,12 @@ test('Android split-player mode is disabled in JS state management', () => {
 })
 
 
-test('VideoPlayerContext no longer tries to bootstrap split playback from pending launch payloads', () => {
+test('VideoPlayerContext avoids split-player launch listeners but keeps PlayerActivity payloads primed for PiP handoff', () => {
   const contextSource = readAppFile('lib/VideoPlayerContext.tsx')
 
   assert.doesNotMatch(contextSource, /addPlayerLaunchPayloadListener/)
   assert.doesNotMatch(contextSource, /consumePendingPlayerLaunchPayload/)
+  assert.match(contextSource, /MediaSession\.primePlayerActivityPayload\(/)
 })
 
 test('expo-media-session keeps the PlayerActivity helpers wired to the native module', () => {
@@ -87,7 +88,18 @@ test('Android PlayerActivity plugin sources the native host template for prebuil
   assert.doesNotMatch(templateSource, /ReactActivity/)
 })
 
-test('Android PiP and media session routing prefer the native PlayerActivity controller when active', () => {
+test('MainActivity PiP callbacks route directly into the native PiP bridge', () => {
+  const activitySource = readAppFile('android/app/src/main/java/com/peartube/app/MainActivity.kt')
+  const pluginSource = readAppFile('plugins/withMainActivityPiPCallback.js')
+
+  assert.match(activitySource, /PipBridge\.onUserLeaveHint\(this\)/)
+  assert.doesNotMatch(activitySource, /delegateMainActivityLeaveHintToPlayer/)
+  assert.match(activitySource, /PipBridge\.notifyPipBoundsChanged\(this, newConfig\)/)
+  assert.match(activitySource, /PipBridge\.notifyPipUiStateChanged\(this, pipState\)/)
+  assert.match(pluginSource, /PipBridge\.onUserLeaveHint\(this\)/)
+})
+
+test('Android PiP host checks are aligned to the MainActivity single-host flow', () => {
   const source = readAppFile(
     'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt',
   )
@@ -104,8 +116,9 @@ test('Android PiP and media session routing prefer the native PlayerActivity con
   assert.match(source, /PlaybackHostBridge\.dispatchStop\(/)
   assert.match(source, /PlaybackHostBridge\.dispatchSeekTo\(pos\)/)
   assert.match(source, /PlaybackHostBridge\.dispatchSeekBy\(10000\)/)
-  assert.match(source, /fun isPipHostActivity\(activity: Activity\): Boolean \{[\s\S]*className == "\$\{activity\.packageName}\.PlayerActivity"/)
-  assert.doesNotMatch(source, /className == "\$\{activity\.packageName}\.MainActivity"/)
+  assert.match(source, /fun isPipHostActivity\(activity: Activity\): Boolean \{[\s\S]*className == "\$\{activity\.packageName}\.MainActivity"/)
+  assert.doesNotMatch(source, /className == "\$\{activity\.packageName}\.PlayerActivity"/)
+  assert.match(source, /if \(!PipBridge\.isPipHostActivity\(activity\)\) \{[\s\S]*skip non-PiP host/)
 })
 
 test('Android single-host playback no longer depends on expo-pear-player', () => {
@@ -124,7 +137,7 @@ test('stale split-player experiment directories are absent from the app package'
   assert.equal(fs.existsSync(androidPlaybackRoot), false)
 })
 
-test('Expo Android plugins keep PlayerActivity PiP wiring and preserve ExoPlayer resources', () => {
+test('Expo Android plugins keep MainActivity as the PiP host and preserve ExoPlayer resources', () => {
   const appConfig = readAppFile('app.json')
   const pipPlugin = readAppFile('plugins/withAndroidPiP.js')
   const keepPlugin = readAppFile('plugins/withExoplayerKeepResources.js')
@@ -132,7 +145,8 @@ test('Expo Android plugins keep PlayerActivity PiP wiring and preserve ExoPlayer
 
   assert.match(appConfig, /withExoplayerKeepResources\.js/)
   assert.match(pipPlugin, /PlayerActivity/)
-  assert.match(pipPlugin, /delete mainActivity\.\$\['android:supportsPictureInPicture'\]/)
+  assert.match(pipPlugin, /mainActivity\.\$\['android:supportsPictureInPicture'\] = 'true'/)
+  assert.match(pipPlugin, /mainActivity\.\$\['android:resizeableActivity'\] = 'true'/)
   assert.match(appConfig, /withMainActivityPiPCallback\.js/)
   assert.match(keepPlugin, /keep\.xml/)
   assert.equal(fs.existsSync(keepXmlPath), true)
@@ -145,10 +159,10 @@ test('Android app declares explicit Media3 dependencies for the native PlayerAct
   assert.match(buildGradle, /implementation\("androidx\.media3:media3-ui:1\.8\.0"\)/)
 })
 
-test('Android manifest keeps PlayerActivity as the only PiP-capable native host', () => {
+test('Android manifest keeps MainActivity as the PiP-capable native host', () => {
   const manifestSource = readAppFile('android/app/src/main/AndroidManifest.xml')
 
-  assert.match(manifestSource, /android:name="\.PlayerActivity"[\s\S]*android:supportsPictureInPicture="true"/)
-  assert.match(manifestSource, /android:name="\.PlayerActivity"[\s\S]*android:resizeableActivity="true"/)
-  assert.doesNotMatch(manifestSource, /android:name="\.MainActivity"[^>]*android:supportsPictureInPicture="true"/)
+  assert.match(manifestSource, /android:name="\.MainActivity"[^>]*android:supportsPictureInPicture="true"/)
+  assert.match(manifestSource, /android:name="\.MainActivity"[^>]*android:resizeableActivity="true"/)
+  assert.doesNotMatch(manifestSource, /android:name="\.PlayerActivity"[^>]*android:supportsPictureInPicture="true"/)
 })

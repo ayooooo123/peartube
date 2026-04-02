@@ -26,6 +26,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Rational
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
 import androidx.media.session.MediaButtonReceiver
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -38,7 +39,7 @@ import kotlinx.coroutines.withContext
 import java.net.URL
 
 /**
- * Simplified PiP bridge for MainActivity callbacks.
+ * Simplified PiP bridge for PlayerActivity callbacks.
  */
 object PipBridge {
     private var moduleInstance: MediaSessionModule? = null
@@ -51,6 +52,9 @@ object PipBridge {
     @Volatile private var pendingPlayerLaunchPayload: Map<String, Any?>? = null
     private val pipUiHandler = Handler(Looper.getMainLooper())
     private var pendingDelayedPipExit: Runnable? = null
+    private var pendingDelayedPipEnterRetry: Runnable? = null
+    private var lastPipExitConfirmedUptimeMs: Long = 0
+    private var forceImmediatePipOnNextLeaveHint: Boolean = false
 
     fun isLastKnownInPip(): Boolean {
         return lastIsInPip
@@ -83,9 +87,6 @@ object PipBridge {
 
     fun setPendingPlayerLaunchPayload(payload: Map<String, Any?>?) {
         pendingPlayerLaunchPayload = payload?.toMap()
-        payload?.let {
-            moduleInstance?.sendEvent("onPlayerLaunchPayload", it)
-        }
     }
 
     fun consumePendingPlayerLaunchPayload(): Map<String, Any?>? {
@@ -98,12 +99,27 @@ object PipBridge {
         pendingPlayerLaunchPayload = null
     }
 
+    fun peekPendingPlayerLaunchPayload(): Map<String, Any?>? {
+        return pendingPlayerLaunchPayload?.toMap()
+    }
+
     private fun markPipTransition() {
         pipTransitionUntilUptimeMs = SystemClock.uptimeMillis() + 2200
     }
 
     fun isInPipTransition(): Boolean {
         return SystemClock.uptimeMillis() <= pipTransitionUntilUptimeMs
+    }
+
+    fun hasPendingDelayedPipExit(): Boolean = pendingDelayedPipExit != null
+
+    fun getLastIsInPipForDebug(): Boolean = lastIsInPip
+
+    fun getLastPipExitConfirmedUptimeMsForDebug(): Long = lastPipExitConfirmedUptimeMs
+
+    fun armImmediatePipOnNextLeaveHint() {
+        forceImmediatePipOnNextLeaveHint = true
+        android.util.Log.d("PipBridge", "armImmediatePipOnNextLeaveHint: armed=true")
     }
 
     fun setPipEnabled(enabled: Boolean) {
@@ -121,6 +137,16 @@ object PipBridge {
 
     fun markMainActivityDelegatedPipHandoff() {
         mainActivityDelegatedPipHandoffUntilUptimeMs = SystemClock.uptimeMillis() + 2200
+    }
+
+    fun delegateMainActivityLeaveHintToPlayer(activity: Activity) {
+        if (activity.javaClass.name != "${activity.packageName}.MainActivity") return
+        if (!pipEnabled) {
+            android.util.Log.d("PipBridge", "delegateMainActivityLeaveHintToPlayer: PiP not enabled")
+            return
+        }
+        val launched = moduleInstance?.launchPlayerActivityForPipFrom(activity) == true
+        android.util.Log.d("PipBridge", "delegateMainActivityLeaveHintToPlayer: launched=$launched")
     }
 
     @JvmStatic
@@ -213,14 +239,46 @@ object PipBridge {
                 autoEnterEnabled = true,
             ) ?: return
             moduleInstance?.setLoggedPipParams(activity, params, "PipBridge.onUserLeaveHint:set")
+            val forceImmediate = forceImmediatePipOnNextLeaveHint
+            forceImmediatePipOnNextLeaveHint = false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                // Re-apply fresh canonical params immediately before manual PiP entry.
+                // Android 12+ usually prefers auto-enter. But after mini -> maximize -> Home,
+                // the activity can already be STARTED/unfocused by the time later JS/app-state
+                // fallbacks run. If JS explicitly armed the next leave-hint after exiting mini,
+                // spend one immediate native attempt here while the leave-hint callback is live.
                 moduleInstance?.setLoggedPipParams(activity, params, "PipBridge.onUserLeaveHint:preEnterSet")
-                moduleInstance?.enterLoggedPipMode(activity, params, "PipBridge.onUserLeaveHint:enter")
+                if (forceImmediate) {
+                    android.util.Log.d("PipBridge", "onUserLeaveHint: forceImmediatePipOnNextLeaveHint=true, attempting immediate enter")
+                    moduleInstance?.enterLoggedPipMode(activity, params, "PipBridge.onUserLeaveHint:forcedImmediateEnter")
+                    return
+                }
+                pendingDelayedPipEnterRetry?.let { pipUiHandler.removeCallbacks(it) }
+                val retryActivity = activity
+                val delayedRetry = Runnable {
+                    pendingDelayedPipEnterRetry = null
+                    if (!pipEnabled) return@Runnable
+                    if (lastIsInPip || retryActivity.isInPictureInPictureMode) return@Runnable
+                    if (retryActivity.isFinishing || retryActivity.isDestroyed) return@Runnable
+                    if (!isPipHostActivity(retryActivity)) return@Runnable
+                    try {
+                        val retryParams = moduleInstance?.buildCanonicalPipParams(
+                            retryActivity,
+                            sourceRectHint = getAspectMatchedFullscreenSourceRect(retryActivity),
+                            autoEnterEnabled = true,
+                        ) ?: return@Runnable
+                        moduleInstance?.setLoggedPipParams(retryActivity, retryParams, "PipBridge.onUserLeaveHint:delayedRetrySet")
+                        moduleInstance?.enterLoggedPipMode(retryActivity, retryParams, "PipBridge.onUserLeaveHint:delayedRetryEnter")
+                    } catch (e: Exception) {
+                        android.util.Log.e("PipBridge", "onUserLeaveHint: delayed PiP retry failed", e)
+                    }
+                }
+                pendingDelayedPipEnterRetry = delayedRetry
+                pipUiHandler.postDelayed(delayedRetry, 180)
+                android.util.Log.d("PipBridge", "onUserLeaveHint: awaiting system auto-enter on Android 12+ with delayed retry fallback")
             } else {
                 moduleInstance?.enterLoggedPipMode(activity, params, "PipBridge.onUserLeaveHint:enter")
+                android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
             }
-            android.util.Log.d("PipBridge", "onUserLeaveHint: entered PiP mode directly")
         } catch (e: Exception) {
             android.util.Log.e("PipBridge", "onUserLeaveHint: PiP failed", e)
         }
@@ -324,9 +382,9 @@ object PipBridge {
         }
     }
 
-    private fun isPipHostActivity(activity: Activity): Boolean {
+    fun isPipHostActivity(activity: Activity): Boolean {
         val className = activity.javaClass.name
-        return className == "${activity.packageName}.MainActivity"
+        return className == "${activity.packageName}.PlayerActivity"
     }
 
     @JvmStatic
@@ -336,6 +394,8 @@ object PipBridge {
         if (isInPip) {
             pendingDelayedPipExit?.let { pipUiHandler.removeCallbacks(it) }
             pendingDelayedPipExit = null
+            pendingDelayedPipEnterRetry?.let { pipUiHandler.removeCallbacks(it) }
+            pendingDelayedPipEnterRetry = null
         }
 
         val didStateChange = isInPip != lastIsInPip
@@ -376,7 +436,29 @@ object PipBridge {
                 display.getRealSize(screenSize)
                 val stillPipSized = windowBounds.width() < screenSize.x * 0.8f
                 if (stillPipSized) {
-                    android.util.Log.d("PipBridge", "notifyPipModeChanged: window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y}), ignoring transient false event")
+                    android.util.Log.d("PipBridge", "notifyPipModeChanged: window still PiP-sized (${windowBounds.width()}x${windowBounds.height()} vs ${screenSize.x}x${screenSize.y}), delaying false exit event")
+                    pendingDelayedPipExit?.let { pipUiHandler.removeCallbacks(it) }
+                    val delayedExit = Runnable {
+                        if (activity.isDestroyed || activity.isFinishing) return@Runnable
+                        val delayedMetrics = activity.windowManager.currentWindowMetrics
+                        val delayedBounds = delayedMetrics.bounds
+                        val delayedStillPipSized = delayedBounds.width() < screenSize.x * 0.8f
+                        if (delayedStillPipSized) {
+                            android.util.Log.d("PipBridge", "notifyPipModeChanged: delayed false exit still PiP-sized (${delayedBounds.width()}x${delayedBounds.height()} vs ${screenSize.x}x${screenSize.y}), keeping PiP state")
+                            lastIsInPip = true
+                            return@Runnable
+                        }
+                        lastPipExitConfirmedUptimeMs = SystemClock.uptimeMillis()
+                        android.util.Log.d(
+                            "PipBridge",
+                            "notifyPipModeChanged: delayed false exit confirmed after resize pendingDelayedPipExit=${pendingDelayedPipExit != null} lastIsInPipBefore=$lastIsInPip bounds=${delayedBounds.width()}x${delayedBounds.height()} screen=${screenSize.x}x${screenSize.y} uptime=${lastPipExitConfirmedUptimeMs}"
+                        )
+                        lastIsInPip = false
+                        pendingDelayedPipExit = null
+                        moduleInstance?.sendPipEvent(activity, false, newConfig)
+                    }
+                    pendingDelayedPipExit = delayedExit
+                    pipUiHandler.postDelayed(delayedExit, 180)
                     lastIsInPip = true
                     return
                 }
@@ -695,12 +777,42 @@ class MediaSessionModule : Module() {
             }
         }
 
+        AsyncFunction("armImmediatePipOnNextLeaveHint") { promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    PipBridge.armImmediatePipOnNextLeaveHint()
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject("PIP_ERROR", e.message ?: "Failed to arm immediate PiP on next leave hint", e)
+                }
+            }
+        }
+
         AsyncFunction("openPlayerActivity") { payload: Map<String, Any?>?, promise: Promise ->
             CoroutineScope(Dispatchers.Main).launch {
                 try {
                     promise.resolve(openPlayerActivity(payload))
                 } catch (e: Exception) {
                     promise.reject("PLAYER_ACTIVITY_ERROR", e.message ?: "Failed to open PlayerActivity", e)
+                }
+            }
+        }
+
+        AsyncFunction("primePlayerActivityPayload") { payload: Map<String, Any?>?, promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    val playerPayload = PlayerActivityPayload.fromMap(payload)
+                    if (playerPayload == null) {
+                        PipBridge.clearPendingPlayerLaunchPayload()
+                        PlaybackHostBridge.clearLaunchPayload()
+                    } else {
+                        val primedPayload = playerPayload.toMap(requestPipOnLaunchOverride = false)
+                        PipBridge.setPendingPlayerLaunchPayload(primedPayload)
+                        PlaybackHostBridge.rememberLaunchPayload(playerPayload)
+                    }
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject("PLAYER_ACTIVITY_ERROR", e.message ?: "Failed to prime PlayerActivity payload", e)
                 }
             }
         }
@@ -721,7 +833,7 @@ class MediaSessionModule : Module() {
         AsyncFunction("enterBackgroundAudioMode") { promise: Promise ->
             CoroutineScope(Dispatchers.Main).launch {
                 try {
-                    val activity = appContext.currentActivity
+                    val activity = resolvePlaybackHostActivity()
                     if (activity != null) {
                         setAutoPiP(false)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -830,12 +942,14 @@ class MediaSessionModule : Module() {
         OnCreate {
             PipBridge.register(this@MediaSessionModule)
             PipServiceBridge.register(this@MediaSessionModule)
+            PlaybackHostBridge.register(this@MediaSessionModule)
             MediaSessionRegistry.setCallback(mediaSessionCallback)
         }
 
         OnDestroy {
             PipBridge.unregister(this@MediaSessionModule)
             PipServiceBridge.unregister(this@MediaSessionModule)
+            PlaybackHostBridge.unregister(this@MediaSessionModule)
             cleanup()
         }
     }
@@ -911,16 +1025,16 @@ class MediaSessionModule : Module() {
     }
 
     private fun setSessionActivityIfAvailable(context: Context) {
-        val launchIntent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-        if (launchIntent != null) {
-            val pendingIntent = PendingIntent.getActivity(
-                context,
-                0,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            mediaSession?.setSessionActivity(pendingIntent)
-        }
+        val pendingIntent = PlaybackHostBridge.buildPlayerActivityPendingIntent(context)
+            ?: context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launchIntent ->
+                PendingIntent.getActivity(
+                    context,
+                    0,
+                    launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            }
+        mediaSession?.setSessionActivity(pendingIntent)
     }
 
     private fun updatePlaybackState(state: Map<String, Any?>) {
@@ -968,9 +1082,12 @@ class MediaSessionModule : Module() {
         mediaSession?.setMetadata(currentMetadata.build())
         updateNotification()
 
-        // Update PiP actions when play state changes
+        // Update PiP actions when play state changes.
+        // Use the resolved playback host activity so PlayerActivity-owned PiP keeps
+        // its custom actions in sync even when appContext.currentActivity has already
+        // swung back to MainActivity or null.
         if (playStateChanged && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val activity = appContext.currentActivity
+            val activity = resolvePlaybackHostActivity()
             if (activity != null && activity.isInPictureInPictureMode) {
                 refreshPipParams(activity)
             }
@@ -989,6 +1106,7 @@ class MediaSessionModule : Module() {
     private val mediaSessionCallback = object : MediaSessionCompat.Callback() {
         override fun onPlay() {
             android.util.Log.d("MediaSession", "onPlay callback")
+            if (PlaybackHostBridge.dispatchPlay()) return
             // JS/react-native-video owns desired playback state. Do not optimistically
             // flip MediaSession/PiP actions here before the player state is actually
             // reconciled back through setPlaybackState().
@@ -1010,6 +1128,7 @@ class MediaSessionModule : Module() {
                 return
             }
 
+            if (PlaybackHostBridge.dispatchPause()) return
             sendEvent("onRemoteCommand", mapOf("command" to "pause"))
         }
 
@@ -1024,6 +1143,7 @@ class MediaSessionModule : Module() {
                 return
             }
 
+            if (PlaybackHostBridge.dispatchStop()) return
             sendEvent("onRemoteCommand", mapOf("command" to "stop"))
         }
 
@@ -1036,14 +1156,17 @@ class MediaSessionModule : Module() {
         }
 
         override fun onSeekTo(pos: Long) {
+            if (PlaybackHostBridge.dispatchSeekTo(pos)) return
             sendEvent("onRemoteCommand", mapOf("command" to "seekTo", "position" to (pos / 1000.0)))
         }
 
         override fun onFastForward() {
+            if (PlaybackHostBridge.dispatchSeekBy(10000)) return
             sendEvent("onRemoteCommand", mapOf("command" to "skipForward", "interval" to 10))
         }
 
         override fun onRewind() {
+            if (PlaybackHostBridge.dispatchSeekBy(-10000)) return
             sendEvent("onRemoteCommand", mapOf("command" to "skipBackward", "interval" to 10))
         }
     }
@@ -1053,7 +1176,7 @@ class MediaSessionModule : Module() {
         currentIsPlaying = isPlaying
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val activity = appContext.currentActivity
+            val activity = resolvePlaybackHostActivity()
             if (activity != null && activity.isInPictureInPictureMode) {
                 refreshPipParams(activity)
             }
@@ -1221,9 +1344,13 @@ class MediaSessionModule : Module() {
         context.startService(intent)
     }
 
+    private fun resolvePlaybackHostActivity(): Activity? {
+        return PlaybackHostBridge.currentHostActivity() ?: appContext.currentActivity
+    }
+
     private fun enterPiP(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
-        val activity = appContext.currentActivity ?: return false
+        val activity = resolvePlaybackHostActivity() ?: return false
 
         try {
             val params = buildCanonicalPipParams(
@@ -1248,17 +1375,15 @@ class MediaSessionModule : Module() {
     private fun openPlayerActivity(payload: Map<String, Any?>? = null): Boolean {
         val context = appContext.reactContext ?: return false
         return try {
+            val playerPayload = PlayerActivityPayload.fromMap(payload)
             PipBridge.setPendingPlayerLaunchPayload(payload)
-            val intent = Intent().setComponent(ComponentName(context.packageName, "${context.packageName}.PlayerActivity"))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            payload?.forEach { (key, value) ->
-                when (value) {
-                    is String -> intent.putExtra(key, value)
-                    is Boolean -> intent.putExtra(key, value)
-                    is Int -> intent.putExtra(key, value)
-                    is Double -> intent.putExtra(key, value)
-                }
-            }
+            PlaybackHostBridge.rememberLaunchPayload(playerPayload)
+            PipBridge.suppressNextMainUserLeaveHint()
+            PipBridge.markMainActivityDelegatedPipHandoff()
+            val intent = playerPayload?.buildIntent(context)
+                ?: Intent().setComponent(ComponentName(context.packageName, "${context.packageName}.PlayerActivity"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    .also { PlayerActivityPayload.putIntoIntent(it, payload) }
             ContextCompat.startActivity(context, intent, null)
             true
         } catch (e: Exception) {
@@ -1267,8 +1392,29 @@ class MediaSessionModule : Module() {
         }
     }
 
+    internal fun launchPlayerActivityForPipFrom(activity: Activity): Boolean {
+        return try {
+            val payload = PlaybackHostBridge.currentLaunchPayload()?.toMap(requestPipOnLaunchOverride = true)
+                ?: PipBridge.peekPendingPlayerLaunchPayload()?.toMutableMap()?.apply {
+                    put(PlayerActivityPayload.KEY_REQUEST_PIP_ON_LAUNCH, true)
+                }
+                ?: return false
+            val playerPayload = PlayerActivityPayload.fromMap(payload) ?: return false
+            PipBridge.setPendingPlayerLaunchPayload(payload)
+            PlaybackHostBridge.rememberLaunchPayload(playerPayload)
+            PipBridge.suppressNextMainUserLeaveHint()
+            PipBridge.markMainActivityDelegatedPipHandoff()
+            val intent = playerPayload.buildIntent(activity, requestPipOnLaunchOverride = true)
+            ContextCompat.startActivity(activity, intent, null)
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("MediaSession", "launchPlayerActivityForPipFrom failed", e)
+            false
+        }
+    }
+
     private fun isInPlayerActivity(): Boolean {
-        val activity = appContext.currentActivity ?: return false
+        val activity = resolvePlaybackHostActivity() ?: return false
         return activity.javaClass.name == "${activity.packageName}.PlayerActivity"
     }
 
@@ -1279,9 +1425,11 @@ class MediaSessionModule : Module() {
     internal fun updateActivityPipParams(enabled: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
-        val activity = appContext.currentActivity ?: return
-        val className = activity.javaClass.name
-        val isPipHostActivity = className == "${activity.packageName}.MainActivity"
+        val activity = resolvePlaybackHostActivity() ?: return
+        if (!PipBridge.isPipHostActivity(activity)) {
+            android.util.Log.d("MediaSession", "updateActivityPipParams: skip non-PiP host ${activity.javaClass.name}")
+            return
+        }
 
         // CRITICAL: never set autoEnterEnabled=false while PiP is enabled at the
         // bridge level. On Android 12+ with seamless PiP, isInPictureInPictureMode
@@ -1295,7 +1443,7 @@ class MediaSessionModule : Module() {
             val params = buildCanonicalPipParams(
                 activity,
                 sourceRectHint = sourceRect,
-                autoEnterEnabled = effectiveEnabled && isPipHostActivity,
+                autoEnterEnabled = effectiveEnabled,
             )
 
             setLoggedPipParams(activity, params, "MediaSession.updateActivityPipParams:set")
@@ -1445,7 +1593,22 @@ class MediaSessionModule : Module() {
 
     internal fun enterLoggedPipMode(activity: Activity, params: PictureInPictureParams, reason: String): Boolean {
         logPipParamsWrite(reason, params)
-        return activity.enterPictureInPictureMode(params)
+        val lifecycleState = (activity as? LifecycleOwner)?.lifecycle?.currentState?.toString() ?: "n/a"
+        val decorView = activity.window?.decorView
+        val bounds = activity.windowManager.currentWindowMetrics.bounds
+        val lastPipExitConfirmedUptimeMs = PipBridge.getLastPipExitConfirmedUptimeMsForDebug()
+        val sinceLastExit = if (lastPipExitConfirmedUptimeMs > 0L) {
+            SystemClock.uptimeMillis() - lastPipExitConfirmedUptimeMs
+        } else {
+            -1L
+        }
+        android.util.Log.d(
+            "MediaSession",
+            "PiP_ENTER_STATE reason=$reason activity=${activity.javaClass.simpleName} lifecycle=$lifecycleState hasWindowFocus=${activity.hasWindowFocus()} decorAttached=${decorView?.isAttachedToWindow} decorSize=${decorView?.width}x${decorView?.height} bounds=${bounds.width()}x${bounds.height()} pendingDelayedPipExit=${PipBridge.hasPendingDelayedPipExit()} lastIsInPip=${PipBridge.getLastIsInPipForDebug()} isChangingConfigurations=${activity.isChangingConfigurations} isFinishing=${activity.isFinishing} isDestroyed=${activity.isDestroyed} sinceLastPipExitMs=$sinceLastExit"
+        )
+        val entered = activity.enterPictureInPictureMode(params)
+        android.util.Log.d("MediaSession", "PiP_ENTER_RESULT reason=$reason entered=$entered inPipNow=${activity.isInPictureInPictureMode}")
+        return entered
     }
 
     internal fun refreshPipParams(activity: Activity) {
@@ -1493,7 +1656,7 @@ class MediaSessionModule : Module() {
         }
         val playPausePendingIntent = PendingIntent.getBroadcast(
             context,
-            REQUEST_PLAY_PAUSE,
+            if (currentIsPlaying) REQUEST_PIP_PAUSE else REQUEST_PIP_PLAY,
             playPauseIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -1547,6 +1710,7 @@ class MediaSessionModule : Module() {
         android.util.Log.d("MediaSession", "handlePipPlay")
         PipBridge.setPreferCustomPlayActionsWhilePausedInPip(false)
         updatePipPlayState(true)
+        if (PlaybackHostBridge.dispatchPlay()) return
         sendEvent("onRemoteCommand", mapOf("command" to "play"))
     }
 
@@ -1556,27 +1720,65 @@ class MediaSessionModule : Module() {
             PipBridge.setPreferCustomPlayActionsWhilePausedInPip(true)
         }
         updatePipPlayState(false)
+        if (PlaybackHostBridge.dispatchPause()) return
         sendEvent("onRemoteCommand", mapOf("command" to "pause"))
     }
 
     internal fun handlePipStop() {
         android.util.Log.d("MediaSession", "handlePipStop")
+        if (PlaybackHostBridge.dispatchStop("pip-dismissed")) return
         sendEvent("onRemoteCommand", mapOf("command" to "stop", "reason" to "pip-dismissed"))
     }
 
     internal fun handlePipBackgroundAudio() {
         android.util.Log.d("MediaSession", "handlePipBackgroundAudio")
+        if (PlaybackHostBridge.dispatchEnterBackgroundAudio()) return
         sendEvent("onRemoteCommand", mapOf("command" to "backgroundAudio"))
     }
 
     internal fun handlePipRewind() {
         android.util.Log.d("MediaSession", "handlePipRewind")
+        if (PlaybackHostBridge.dispatchSeekBy(-10000)) return
         sendEvent("onRemoteCommand", mapOf("command" to "skipBackward", "interval" to 10))
     }
 
     internal fun handlePipForward() {
         android.util.Log.d("MediaSession", "handlePipForward")
+        if (PlaybackHostBridge.dispatchSeekBy(10000)) return
         sendEvent("onRemoteCommand", mapOf("command" to "skipForward", "interval" to 10))
+    }
+
+    internal fun applySessionActiveFromNative(active: Boolean) {
+        val apply = { setSessionActive(active) }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            apply()
+        } else {
+            Handler(Looper.getMainLooper()).post(apply)
+        }
+    }
+
+    internal fun applyNowPlayingFromNative(metadata: Map<String, Any?>) {
+        CoroutineScope(Dispatchers.Main).launch {
+            updateNowPlaying(metadata)
+        }
+    }
+
+    internal fun applyPlaybackStateFromNative(state: Map<String, Any?>) {
+        CoroutineScope(Dispatchers.Main).launch {
+            updatePlaybackState(state)
+        }
+    }
+
+    internal fun clearNowPlayingFromNative() {
+        CoroutineScope(Dispatchers.Main).launch {
+            clearNowPlayingInfo()
+        }
+    }
+
+    internal fun refreshSessionActivityIntentFromNative() {
+        val context = appContext.reactContext ?: return
+        setSessionActivityIfAvailable(context)
+        updateNotification()
     }
 
     private fun cleanup() {
@@ -1622,9 +1824,10 @@ class MediaSessionModule : Module() {
         const val EXTRA_CAST_TITLE = "castTitle"
         const val EXTRA_CAST_SUBTITLE = "castSubtitle"
 
-        private const val REQUEST_PLAY_PAUSE = 1
-        private const val REQUEST_REWIND = 2
-        private const val REQUEST_FORWARD = 3
-        private const val REQUEST_BACKGROUND_AUDIO = 4
+        private const val REQUEST_PIP_PLAY = 1
+        private const val REQUEST_PIP_PAUSE = 2
+        private const val REQUEST_SKIP_BACK = 3
+        private const val REQUEST_SKIP_FORWARD = 4
+        private const val REQUEST_BACKGROUND_AUDIO = 5
     }
 }

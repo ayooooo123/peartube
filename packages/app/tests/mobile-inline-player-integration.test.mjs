@@ -29,52 +29,83 @@ test('native mobile inline player is backed by react-native-video', () => {
   )
 })
 
-test('Android minimize returns to the in-app mini player when split-player mode is disabled', () => {
+test('Android minimize restores the in-app mini player path', () => {
   const source = readAppFile('lib/VideoPlayerContext.tsx')
   const minimizeBody =
     source.match(/const minimizePlayer = useCallback\(\(_optionsOrEvent\?: unknown\) => \{([\s\S]*?)\n  }, \[/)?.[1] ?? ''
 
   assert.ok(minimizeBody, 'minimizePlayer callback should exist')
-  assert.match(
-    minimizeBody,
-    /if \(ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY\) \{[\s\S]*MediaSession\.openPlayerActivity\(\{/,
-  )
-  assert.match(
-    minimizeBody,
-    /dispatch\(\{\s*type: 'MINIMIZE',[\s\S]*platform: Platform\.OS === 'web' \? 'web' : Platform\.OS === 'android' \? 'android' : 'ios'/,
-    'when split mode is disabled, Android minimize should dispatch the normal mini-player transition instead of entering PiP directly',
-  )
-  assert.doesNotMatch(
-    minimizeBody,
-    /pendingAndroidMinimizeCloseRef\.current = false\s*MediaSession\.enterPictureInPicture\(\)\.catch/,
-    'single-host Android minimize should no longer force PiP when split-player mode is disabled',
-  )
+  assert.match(minimizeBody, /dispatch\(\{[\s\S]*type: 'MINIMIZE'/)
+  assert.doesNotMatch(minimizeBody, /MediaSession\.openPlayerActivity\(/)
 })
 
-test('Android split-player mode stays disabled in JS state management', () => {
+test('Android split-player mode is disabled in JS state management', () => {
+  const videoPlayerContext = readAppFile('lib/VideoPlayerContext.tsx')
+  const playerStateMachine = readAppFile('lib/playerStateMachine.ts')
+
+  assert.match(videoPlayerContext, /const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false/)
+  assert.match(playerStateMachine, /const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false/)
+})
+
+
+test('VideoPlayerContext no longer tries to bootstrap split playback from pending launch payloads', () => {
   const contextSource = readAppFile('lib/VideoPlayerContext.tsx')
-  const reducerSource = readAppFile('lib/playerStateMachine.ts')
 
-  assert.match(contextSource, /const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false/)
-  assert.match(reducerSource, /const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false/)
+  assert.doesNotMatch(contextSource, /addPlayerLaunchPayloadListener/)
+  assert.doesNotMatch(contextSource, /consumePendingPlayerLaunchPayload/)
 })
 
-test('expo-media-session keeps PlayerActivity helpers as no-op compatibility shims', () => {
+test('expo-media-session keeps the PlayerActivity helpers wired to the native module', () => {
   const source = readAppFile('modules/expo-media-session/src/index.ts')
 
-  assert.match(source, /openPlayerActivity\(_payload\?: any\): Promise<boolean> \{ return false }/)
-  assert.match(source, /primePlayerActivityPayload\(_payload\?: any\): Promise<void> \{\}/)
+  assert.match(source, /if \(!native\.openPlayerActivity\) return false/)
+  assert.match(source, /return native\.openPlayerActivity\(payload \?\? null\)/)
+  assert.match(source, /primePlayerActivityPayload\(payload\?: any\): Promise<void>/)
   assert.match(source, /launchPrimedPipPlayerActivity\(\): Promise<boolean> \{ return false }/)
-  assert.match(source, /isInPlayerActivity\(\): Promise<boolean> \{ return false }/)
+  assert.match(source, /if \(!native\.isInPlayerActivity\) return false/)
 })
 
-test('Android PiP bridge targets MainActivity when react-native-video owns playback', () => {
+test('Android PlayerActivity is a native Media3 host instead of a ReactActivity shell', () => {
+  const source = readAppFile('android/app/src/main/java/com/peartube/app/PlayerActivity.kt')
+
+  assert.match(source, /class PlayerActivity : AppCompatActivity\(\)/)
+  assert.match(source, /PlayerView/)
+  assert.match(source, /ExoPlayer/)
+  assert.doesNotMatch(source, /ReactActivity/)
+  assert.match(source, /requestPipOnLaunch/)
+  assert.match(source, /PipBridge\.enterPictureInPictureDirect/)
+})
+
+test('Android PlayerActivity plugin sources the native host template for prebuilds', () => {
+  const pluginSource = readAppFile('plugins/withAndroidPiP.js')
+  const templateSource = readAppFile('plugins/templates/PlayerActivity.kt.template')
+
+  assert.match(pluginSource, /PlayerActivity\.kt\.template/)
+  assert.match(templateSource, /class PlayerActivity : AppCompatActivity\(\)/)
+  assert.match(templateSource, /PlayerView/)
+  assert.match(templateSource, /ExoPlayer/)
+  assert.doesNotMatch(templateSource, /ReactActivity/)
+})
+
+test('Android PiP and media session routing prefer the native PlayerActivity controller when active', () => {
   const source = readAppFile(
     'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/MediaSessionModule.kt',
   )
+  const bridgeSource = readAppFile(
+    'modules/expo-media-session/android/src/main/java/to/holepunch/modules/mediasession/PlayerHostBridge.kt',
+  )
 
-  assert.match(source, /With react-native-video, PiP runs in the main activity \(no PlayerActivity handoff\)\./)
-  assert.match(source, /return className == "\$\{activity\.packageName}\.MainActivity"/)
+  assert.match(bridgeSource, /interface NativePlaybackController/)
+  assert.match(bridgeSource, /fun dispatchPlay\(\): Boolean/)
+  assert.match(bridgeSource, /fun dispatchPause\(\): Boolean/)
+  assert.match(bridgeSource, /fun dispatchSeekBy\(deltaMs: Long\): Boolean/)
+  assert.match(source, /PlaybackHostBridge\.dispatchPlay\(\)/)
+  assert.match(source, /PlaybackHostBridge\.dispatchPause\(\)/)
+  assert.match(source, /PlaybackHostBridge\.dispatchStop\(/)
+  assert.match(source, /PlaybackHostBridge\.dispatchSeekTo\(pos\)/)
+  assert.match(source, /PlaybackHostBridge\.dispatchSeekBy\(10000\)/)
+  assert.match(source, /fun isPipHostActivity\(activity: Activity\): Boolean \{[\s\S]*className == "\$\{activity\.packageName}\.PlayerActivity"/)
+  assert.doesNotMatch(source, /className == "\$\{activity\.packageName}\.MainActivity"/)
 })
 
 test('Android single-host playback no longer depends on expo-pear-player', () => {
@@ -93,17 +124,31 @@ test('stale split-player experiment directories are absent from the app package'
   assert.equal(fs.existsSync(androidPlaybackRoot), false)
 })
 
-test('Expo Android plugins keep PiP on MainActivity and preserve ExoPlayer resources', () => {
+test('Expo Android plugins keep PlayerActivity PiP wiring and preserve ExoPlayer resources', () => {
   const appConfig = readAppFile('app.json')
   const pipPlugin = readAppFile('plugins/withAndroidPiP.js')
-  const callbackPlugin = readAppFile('plugins/withMainActivityPiPCallback.js')
   const keepPlugin = readAppFile('plugins/withExoplayerKeepResources.js')
   const keepXmlPath = path.join(appRoot, 'android/app/src/main/res/raw/keep.xml')
 
   assert.match(appConfig, /withExoplayerKeepResources\.js/)
-  assert.doesNotMatch(pipPlugin, /PlayerActivity/)
-  assert.match(pipPlugin, /android:supportsPictureInPicture/)
-  assert.doesNotMatch(callbackPlugin, /onConfigurationChanged/)
+  assert.match(pipPlugin, /PlayerActivity/)
+  assert.match(pipPlugin, /delete mainActivity\.\$\['android:supportsPictureInPicture'\]/)
+  assert.match(appConfig, /withMainActivityPiPCallback\.js/)
   assert.match(keepPlugin, /keep\.xml/)
   assert.equal(fs.existsSync(keepXmlPath), true)
+})
+
+test('Android app declares explicit Media3 dependencies for the native PlayerActivity host', () => {
+  const buildGradle = readAppFile('android/app/build.gradle')
+
+  assert.match(buildGradle, /implementation\("androidx\.media3:media3-exoplayer:1\.8\.0"\)/)
+  assert.match(buildGradle, /implementation\("androidx\.media3:media3-ui:1\.8\.0"\)/)
+})
+
+test('Android manifest keeps PlayerActivity as the only PiP-capable native host', () => {
+  const manifestSource = readAppFile('android/app/src/main/AndroidManifest.xml')
+
+  assert.match(manifestSource, /android:name="\.PlayerActivity"[\s\S]*android:supportsPictureInPicture="true"/)
+  assert.match(manifestSource, /android:name="\.PlayerActivity"[\s\S]*android:resizeableActivity="true"/)
+  assert.doesNotMatch(manifestSource, /android:name="\.MainActivity"[^>]*android:supportsPictureInPicture="true"/)
 })

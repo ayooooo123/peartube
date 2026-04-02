@@ -4,8 +4,10 @@ export async function createRelayRuntime({ config, logger }) {
     import('@peartube/backend/public-feed')
   ])
 
+  const corestorePath = config?.paths?.corestore || config.storage.path
+
   const ctx = await initializeStorage({
-    storagePath: config.storage.path,
+    storagePath: corestorePath,
     wrapTimeout: true
   })
 
@@ -46,6 +48,7 @@ export async function createRelayRuntime({ config, logger }) {
     async start() {
       logger.runtime?.info('Initializing relay runtime', {
         storagePath: config.storage.path,
+        corestorePath,
         mode: config.mode,
         policy: config.policy
       })

@@ -328,11 +328,9 @@ export default function HomeScreen() {
           }
         }
 
-        const renderable = (videos || []).filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
-        const playable = renderable.filter((v: any) => (v?.availability || 'unknown') === 'playable')
-        const chosen = playable.length > 0 ? playable : renderable
-
-        return chosen.map((v: any) => ({
+        return (videos || [])
+          .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+          .map((v: any) => ({
           ...v,
           channelKey,
           publicBeeKey: publicBeeKey || undefined,
@@ -409,10 +407,9 @@ export default function HomeScreen() {
         }
       }
         if (Array.isArray(videoList)) {
-          const renderable = videoList.filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
-          const playable = renderable.filter((v: any) => (v?.availability || 'unknown') === 'playable')
-          const chosen = playable.length > 0 ? playable : renderable
-          const videosWithChannel = chosen.map((v: any) => ({
+          const videosWithChannel = videoList
+            .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+            .map((v: any) => ({
             ...v,
             channelKey: driveKey,
             publicBeeKey: publicBeeKey || undefined,

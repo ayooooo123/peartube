@@ -637,21 +637,10 @@ export function createApi({
           if (unknownRequests.length > 0 && publicFeed?.requestAvailabilityHints) {
             try {
               const hinted = await publicFeed.requestAvailabilityHints(unknownRequests, { timeoutMs: 400, maxPeers: 6 })
-              const hintedPlayableIds = new Set()
               for (const hint of hinted || []) {
                 if (!hint?.id) continue
                 if (hint.availability === 'playable') {
-                  hintedPlayableIds.add(hint.id)
                   availabilityById.set(hint.id, 'playable')
-                }
-              }
-
-              const peerCount = publicFeed?.feedConnections?.size || 0
-              if (peerCount > 0) {
-                for (const req of unknownRequests) {
-                  if (!hintedPlayableIds.has(req.id) && availabilityById.get(req.id) === 'unknown') {
-                    availabilityById.set(req.id, 'unavailable')
-                  }
                 }
               }
             } catch {}

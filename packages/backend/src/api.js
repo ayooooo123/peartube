@@ -716,10 +716,38 @@ export function createApi({
         // IMPORTANT: Never block listVideos on network sync.
         // Mobile has a 30s init timeout, and pairing/DHT discovery can exceed that.
         // Return current materialized view immediately; the UI already retries.
-        const videos = await channel.listVideos()
+        let videos = await channel.listVideos()
+        let usedOwnerPublicBeeFallback = false
+        let resolvedPublicBeeKey = null
+        if ((videos?.length || 0) === 0 && channel?.publicBee && typeof channel.publicBee.listVideos === 'function') {
+          try {
+            const publicBeeVideos = await channel.publicBee.listVideos()
+            if ((publicBeeVideos?.length || 0) > 0) {
+              videos = publicBeeVideos
+              usedOwnerPublicBeeFallback = true
+              resolvedPublicBeeKey =
+                channel.publicBeeKey ||
+                (typeof channel.getPublicBeeKey === 'function'
+                  ? await channel.getPublicBeeKey().catch(() => null)
+                  : null)
+              console.log('[API] LIST_VIDEOS: owner publicBee fallback returned', publicBeeVideos.length, 'videos')
+            }
+          } catch (fallbackErr) {
+            console.log('[API] LIST_VIDEOS: owner publicBee fallback failed:', fallbackErr?.message)
+          }
+        }
         console.log('[API] LIST_VIDEOS returning', videos?.length, 'videos from channel')
-        const result = (videos || []).map(v => ({ ...v, channelKey: driveKey }))
-        const enriched = await enrichMissingBlobMeta(result, (id) => channel.getVideo(id))
+        const result = (videos || []).map(v => ({
+          ...v,
+          channelKey: driveKey,
+          publicBeeKey: v?.publicBeeKey || resolvedPublicBeeKey || null,
+        }))
+        const enriched = await enrichMissingBlobMeta(
+          result,
+          (id) => usedOwnerPublicBeeFallback && typeof channel.publicBee?.getVideo === 'function'
+            ? channel.publicBee.getVideo(id)
+            : channel.getVideo(id)
+        )
         const withAvailability = await attachVideoAvailability(enriched)
         listVideosCache.set(driveKey, { ts: Date.now(), value: withAvailability })
         // YouTube-Fast: background index for search
@@ -1257,7 +1285,9 @@ export function createApi({
       const rawFeed = publicFeed.getFeed();
       const feed = rawFeed
         .map((entry) => ({
+          driveKey: entry?.driveKey || entry?.channelKey || '',
           channelKey: entry?.channelKey || entry?.driveKey || '',
+          source: entry?.source || 'peer',
           publicBeeKey: entry?.publicBeeKey || null,
           channelName: entry?.channelName || null,
           videoCount: entry?.videoCount || 0,

@@ -1,11 +1,9 @@
 /**
- * PearTube Mobile Handler Adapters
+ * PearTube shared app handler adapters.
  *
- * Attaches HRPC handler implementations to the backend object.
- * These are looked up at call-time by registerSharedHandlers via
- * getSharedHandler(backend, name) -> backend[camelCase(name)].
- *
- * Same pattern as the desktop worker (pear-src/workers/core/index.ts).
+ * This mirrors the app-side mobile handler layer so backend bootstrap can
+ * attach it without crossing workspace package boundaries inside Pear's
+ * symlinked node_modules layout.
  */
 
 /**
@@ -15,7 +13,6 @@
 export function attachMobileHandlers(B, deps) {
   const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder } = deps
 
-  // --- Identity handlers ---
   B.createIdentity = async (r) => {
     const result = await identityManager.createIdentity(r.name || 'New Channel', true)
     if (result.mnemonic) {
@@ -44,7 +41,6 @@ export function attachMobileHandlers(B, deps) {
     catch { return { valid: false, identityPublicKey: '', devicePublicKey: '' } }
   }
 
-  // --- Channel handlers ---
   B.getChannel = async (r) => ({ channel: await api.getChannel(r.publicKey || '') })
   B.updateChannel = async (r) => {
     const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }
@@ -60,7 +56,6 @@ export function attachMobileHandlers(B, deps) {
   }
   B.getChannelMeta = async (r) => { const m = await api.getChannelMeta(r.channelKey, r.publicBeeKey || null); return { name: m.name, description: m.description, videoCount: m.videoCount || 0 } }
 
-  // --- Video handlers ---
   B.listVideos = async (r) => {
     const ck = r?.channelKey || ''; if (!ck) return { videos: [] }
     let raw = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch { return { videos: [] } }
@@ -81,7 +76,6 @@ export function attachMobileHandlers(B, deps) {
         blobId: v?.blobId ? String(v.blobId) : null,
         blobsCoreKey: v?.blobsCoreKey ? String(v.blobsCoreKey) : null,
         mimeType: v?.mimeType ? String(v.mimeType) : null,
-        availability: v?.availability ? String(v.availability) : null,
         thumbnailBlobId: v?.thumbnailBlobId ? String(v.thumbnailBlobId) : null,
         thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey ? String(v.thumbnailBlobsCoreKey) : null,
         thumbnailMimeType: v?.thumbnailMimeType ? String(v.thumbnailMimeType) : null,
@@ -120,13 +114,11 @@ export function attachMobileHandlers(B, deps) {
   B.prefetchVideo = async (r) => api.prefetchVideo(r.channelKey, r.videoId, r.publicBeeKey)
   B.getVideoStats = async (r) => ({ stats: { videoId: r.videoId, channelKey: r.channelKey, ...(await api.getVideoStats(r.channelKey, r.videoId) || {}) } })
 
-  // --- Subscription handlers ---
   B.subscribeChannel = async (r) => { await api.subscribeChannel(r.channelKey); return { success: true } }
   B.unsubscribeChannel = async (r) => { await api.unsubscribeChannel(r.channelKey); return { success: true } }
   B.getSubscriptions = async () => { const s = await api.getSubscriptions(); return { subscriptions: s.map(i => ({ channelKey: i.driveKey, channelName: i.name })) } }
   B.joinChannel = async (r) => { await api.subscribeChannel(r.channelKey); return { success: true } }
 
-  // --- Public Feed handlers ---
   B.getPublicFeed = async () => { const r = await api.getPublicFeed(); return { entries: r.entries.map(e => ({ channelKey: e.driveKey || e.channelKey, driveKey: e.driveKey || e.channelKey, source: e.source || 'peer', publicBeeKey: e.publicBeeKey || null, channelName: e.name, videoCount: e.videoCount || 0, peerCount: e.peerCount || 0, lastSeen: e.lastSeen || 0 })) } }
   B.refreshFeed = async () => { await api.refreshFeed(); return { success: true } }
   B.submitToFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.submitToFeed(a.driveKey); return { success: true } }
@@ -134,12 +126,10 @@ export function attachMobileHandlers(B, deps) {
   B.isChannelPublished = async () => { const a = identityManager.getActiveIdentity(); return a?.driveKey ? api.isChannelPublished(a.driveKey) : { published: false } }
   B.hideChannel = async (r) => { await api.hideChannel(r.channelKey); return { success: true } }
 
-  // --- Status handlers ---
   B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getActiveIdentity() !== null, blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0 } })
   B.getBlobServerPort = async () => ({ port: ctx.blobServer?.port || ctx.blobServerPort || 0 })
   B.getSwarmStatus = async () => { const s = await api.getSwarmStatus(); return { connected: s.swarmConnections > 0, peerCount: s.swarmConnections } }
 
-  // --- Seeding/Storage handlers ---
   B.getSeedingStatus = async () => { const s = await api.getSeedingStatus(); return { status: { enabled: s.config?.autoSeedWatched || false, usedStorage: s.storageUsedBytes || 0, maxStorage: (s.maxStorageGB || 10) * 1024 * 1024 * 1024, seedingCount: s.activeSeeds || 0 } } }
   B.setSeedingConfig = async (r) => { await api.setSeedingConfig(r.config || {}); return { success: true } }
   B.pinChannel = async (r) => { await api.pinChannel(r.channelKey); return { success: true } }
@@ -149,11 +139,9 @@ export function attachMobileHandlers(B, deps) {
   B.setStorageLimit = async (r) => api.setStorageLimit(r.maxGB)
   B.clearCache = async () => api.clearCache()
 
-  // --- Transcode settings ---
   B.getTranscodeSettings = async () => api.getTranscodeSettings()
   B.setTranscodeSettings = async (r) => api.setTranscodeSettings(r || {})
 
-  // --- Multi-device pairing ---
   B.createDeviceInvite = async (r) => ({ inviteCode: (await api.createDeviceInvite(r.channelKey)).inviteCode })
   B.pairDevice = async (r) => {
     const res = await api.pairDevice(r.inviteCode, r.deviceName || '')
@@ -162,7 +150,6 @@ export function attachMobileHandlers(B, deps) {
   }
   B.listDevices = async (r) => ({ devices: (await api.listDevices(r.channelKey)).devices || [] })
 
-  // --- Comment handlers ---
   B.addComment = async (r) => { try { const res = await api.addComment?.(r.channelKey, r.videoId, r.text, r.parentId, r.publicBeeKey); return { success: Boolean(res?.success), commentId: res?.commentId || null, queued: false, error: res?.error || null } } catch (e) { return { success: false, error: e?.message } } }
   B.listComments = async (r) => {
     try {
@@ -174,7 +161,6 @@ export function attachMobileHandlers(B, deps) {
   B.hideComment = async (r) => { try { const res = await api.hideComment?.(r.channelKey, r.videoId, r.commentId, r.publicBeeKey); return { success: Boolean(res?.success), error: res?.error || null } } catch (e) { return { success: false, error: e?.message } } }
   B.removeComment = async (r) => { try { const res = await api.removeComment?.(r.channelKey, r.videoId, r.commentId, r.publicBeeKey); return { success: Boolean(res?.success), queued: false, error: res?.error || null } } catch (e) { return { success: false, queued: false, error: e?.message } } }
 
-  // --- Reaction handlers ---
   B.addReaction = async (r) => { try { const res = await api.addReaction?.(r.channelKey, r.videoId, r.reactionType, r.publicBeeKey); return { success: Boolean(res?.success), queued: false, error: res?.error || null } } catch (e) { return { success: false, queued: false, error: e?.message } } }
   B.removeReaction = async (r) => { try { const res = await api.removeReaction?.(r.channelKey, r.videoId, r.publicBeeKey); return { success: Boolean(res?.success), queued: false, error: res?.error || null } } catch (e) { return { success: false, queued: false, error: e?.message } } }
   B.getReactions = async (r) => {
@@ -185,11 +171,9 @@ export function attachMobileHandlers(B, deps) {
     } catch (e) { return { success: false, counts: [], error: e?.message } }
   }
 
-  // --- Desktop-specific stubs ---
   B.pickVideoFile = async () => ({ filePath: null, cancelled: true })
   B.pickImageFile = async () => ({ filePath: null, cancelled: true })
 
-  // --- MPV stubs ---
   B.mpvAvailable = async () => ({ available: false, error: 'MPV not supported on mobile' })
   B.mpvCreate = async () => ({ success: false, error: 'MPV not supported on mobile' })
   B.mpvLoadFile = async () => ({ success: false, error: 'MPV not supported on mobile' })
@@ -200,7 +184,6 @@ export function attachMobileHandlers(B, deps) {
   B.mpvRenderFrame = async () => ({ success: false, error: 'MPV not supported on mobile' })
   B.mpvDestroy = async () => ({ success: false, error: 'MPV not supported on mobile' })
 
-  // --- Event no-ops ---
   B.eventReady = () => {}; B.eventError = () => {}
   B.eventCastDeviceFound = () => {}; B.eventCastDeviceLost = () => {}
   B.eventCastPlaybackState = () => {}; B.eventCastTimeUpdate = () => {}
@@ -211,7 +194,6 @@ export function attachMobileHandlers(B, deps) {
   }
   B.eventTranscodeProgress = () => {}
 
-  // --- Mobile-specific file handlers (use bare-fs/bare-path) ---
   B.uploadVideo = async (r) => {
     const active = identityManager.getActiveIdentity()
     if (!active?.driveKey) throw new Error('No active identity')
@@ -262,7 +244,6 @@ export function attachMobileHandlers(B, deps) {
     } catch (err) { return { success: false, error: err?.message } }
   }
 
-  // --- Transcode handlers ---
   B.transcodeStart = async (r) => {
     try {
       const onProgress = (sid, pct) => { try { rpc.eventTranscodeProgress?.({ sessionId: sid, percent: pct, bytesWritten: 0 }) } catch {} }
@@ -273,7 +254,6 @@ export function attachMobileHandlers(B, deps) {
   B.transcodeStop = async (r) => { try { const res = await transcoder.stopTranscode(r.sessionId); return { success: res.success, error: res.error || '' } } catch (err) { return { success: false, error: err?.message } } }
   B.transcodeStatus = async (r) => { try { const s = await transcoder.getStatus(r.sessionId); return { status: s.status || '', progress: s.progress || 0, bytesWritten: s.bytesWritten || 0, error: s.error || '' } } catch (err) { return { status: 'error', progress: 0, bytesWritten: 0, error: err?.message } } }
 
-  // --- Search (globalSearchVideos is in SHARED_HANDLER_NAMES) ---
   B.globalSearchVideos = async (r) => {
     try { const raw = await api.globalSearchVideos(r.query, { topK: r.topK || 20 }); return { results: (raw || []).map((i) => ({ id: String(i.id || ''), score: i.score != null ? String(i.score) : null, metadata: i.metadata ? JSON.stringify(i.metadata) : null })) } }
     catch { return { results: [] } }

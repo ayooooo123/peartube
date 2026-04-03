@@ -313,6 +313,17 @@ export default function HomeScreen() {
       const publicBeeKey = entry.publicBeeKey || undefined
       if (!channelKey) return [] as VideoData[]
 
+      // Fast path for the local published channel: reuse already-loaded local videos
+      // instead of waiting on public-bee/channel hydration APIs.
+      if (entry?.source === 'local' && identity?.driveKey && channelKey === identity.driveKey) {
+        return (videos || []).map((v: any) => ({
+          ...v,
+          channelKey,
+          publicBeeKey: publicBeeKey || undefined,
+          channel: { name: channelMetaRef.current[channelKey]?.name || 'Your channel' }
+        }))
+      }
+
       try {
         if (hydrationMode === 'network') {
           await withTimeout(rpc.joinChannel({ channelKey }), PER_CHANNEL_TIMEOUT, { success: false })

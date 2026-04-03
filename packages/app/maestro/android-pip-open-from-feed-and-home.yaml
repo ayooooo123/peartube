@@ -1,0 +1,18 @@
+appId: com.peartube.app
+name: Android PiP open first Discover feed video then Home
+---
+- extendedWaitUntil:
+    visible:
+      id: discover-feed-first-video
+    timeout: 90000
+- tapOn:
+    id: discover-feed-first-video
+- extendedWaitUntil:
+    visible:
+      id: video-tap-overlay
+    timeout: 45000
+- tapOn:
+    id: video-tap-overlay
+    optional: true
+- waitForAnimationToEnd
+- pressKey: home

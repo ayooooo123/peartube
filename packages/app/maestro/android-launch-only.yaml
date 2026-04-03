@@ -1,0 +1,6 @@
+appId: com.peartube.app
+name: Android launch only
+---
+- launchApp:
+    clearState: false
+    stopApp: true

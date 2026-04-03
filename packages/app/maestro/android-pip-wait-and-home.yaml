@@ -1,0 +1,12 @@
+appId: com.peartube.app
+name: Android PiP wait for player then Home
+---
+- extendedWaitUntil:
+    visible:
+      id: video-tap-overlay
+    timeout: 45000
+- tapOn:
+    id: video-tap-overlay
+    optional: true
+- waitForAnimationToEnd
+- pressKey: home

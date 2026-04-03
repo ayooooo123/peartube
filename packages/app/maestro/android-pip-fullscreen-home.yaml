@@ -1,0 +1,16 @@
+appId: com.peartube.app
+name: Android PiP fullscreen -> Home repro
+---
+- launchApp:
+    clearState: false
+    stopApp: true
+- openLink: ${PEARTUBE_VIDEO_DEEPLINK}
+- extendedWaitUntil:
+    visible:
+      id: video-tap-overlay
+    timeout: 30000
+- tapOn:
+    id: video-tap-overlay
+    optional: true
+- waitForAnimationToEnd
+- pressKey: home

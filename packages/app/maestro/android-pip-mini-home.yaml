@@ -1,0 +1,17 @@
+appId: com.peartube.app
+name: Android PiP mini -> Home repro
+---
+- extendedWaitUntil:
+    visible:
+      id: discover-feed-first-video
+    timeout: 90000
+- tapOn:
+    id: discover-feed-first-video
+- waitForAnimationToEnd
+- pressKey: back
+- extendedWaitUntil:
+    visible:
+      id: mini-player-close
+    timeout: 15000
+- waitForAnimationToEnd
+- pressKey: home

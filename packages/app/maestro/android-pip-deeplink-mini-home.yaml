@@ -1,0 +1,19 @@
+appId: com.peartube.app
+name: Android PiP deeplink mini -> Home repro
+---
+- launchApp:
+    clearState: false
+    stopApp: true
+- openLink: ${PEARTUBE_VIDEO_DEEPLINK}
+- extendedWaitUntil:
+    visible:
+      id: player-minimize-button
+    timeout: 30000
+- tapOn:
+    id: player-minimize-button
+- extendedWaitUntil:
+    visible:
+      id: mini-player-close
+    timeout: 10000
+- waitForAnimationToEnd
+- pressKey: home

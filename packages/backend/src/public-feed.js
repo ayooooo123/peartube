@@ -509,7 +509,15 @@ export class PublicFeedManager {
       } else {
         this.entryPeerCounts.delete(key)
         const entry = this.entries.get(key)
-        if (entry?.source === 'peer') {
+        // Keep cached peer-discovered channels if they have a valid publicBeeKey.
+        // This lets discovery/feed hydration continue to show cached channels and
+        // videos even when no live peer is currently connected.
+        const keepCachedPeerEntry =
+          entry?.source === 'peer' &&
+          typeof entry?.publicBeeKey === 'string' &&
+          /^[a-f0-9]{64}$/i.test(entry.publicBeeKey)
+
+        if (entry?.source === 'peer' && !keepCachedPeerEntry) {
           this.entries.delete(key)
           pruned = true
         }

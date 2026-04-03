@@ -232,6 +232,27 @@ test('requestFeedsFromPeers sends NEED_FEED so peers reply with their feed', () 
   }
 })
 
+test('peer entries with publicBeeKey survive peer disconnect at peerCount zero', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+
+  try {
+    manager.addEntry(DRIVE_KEY, 'peer', PUBLIC_BEE_KEY)
+    manager.peerFeedKeys.set(conn, new Set([DRIVE_KEY]))
+    manager.entryPeerCounts.set(DRIVE_KEY, 1)
+
+    manager._clearPeerFeedKeys(conn)
+
+    const entry = manager.entries.get(DRIVE_KEY)
+    assert.ok(entry)
+    assert.equal(entry.source, 'peer')
+    assert.equal(manager.entryPeerCounts.has(DRIVE_KEY), false)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('requestAvailabilityHints merges playable responses from feed peers (including relayed peers on same channel)', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

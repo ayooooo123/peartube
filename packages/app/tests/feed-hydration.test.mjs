@@ -5,6 +5,7 @@ import {
   getFeedVideoHydrationMode,
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
+  getVisibleSeededFeedEntries,
 } from '../lib/feed-hydration.js'
 
 test('getMissingChannelMetaRequests dedupes channels and respects the visible-first limit', () => {
@@ -21,18 +22,33 @@ test('getMissingChannelMetaRequests dedupes channels and respects the visible-fi
   ])
 })
 
-test('getFeedVideoLoadEntries returns unique channels in feed order', () => {
-  const entries = getFeedVideoLoadEntries([
-    { driveKey: 'a' },
-    { driveKey: 'b' },
-    { driveKey: 'a' },
-    { driveKey: 'c' },
+test('getVisibleSeededFeedEntries returns deduped feed entries in order', () => {
+  const entries = getVisibleSeededFeedEntries([
+    { driveKey: 'a', peerCount: 1 },
+    { driveKey: 'b', peerCount: 2 },
+    { driveKey: 'b', peerCount: 2 },
+    { driveKey: 'c', peerCount: 1 },
   ], 3)
 
   assert.deepEqual(entries, [
-    { driveKey: 'a' },
-    { driveKey: 'b' },
-    { driveKey: 'c' },
+    { driveKey: 'a', peerCount: 1 },
+    { driveKey: 'b', peerCount: 2 },
+    { driveKey: 'c', peerCount: 1 },
+  ])
+})
+
+test('getFeedVideoLoadEntries follows deduped visible-entry order', () => {
+  const entries = getFeedVideoLoadEntries([
+    { driveKey: 'a', peerCount: 1 },
+    { driveKey: 'b', peerCount: 3 },
+    { driveKey: 'b', peerCount: 3 },
+    { driveKey: 'c', peerCount: 1 },
+  ], 3)
+
+  assert.deepEqual(entries, [
+    { driveKey: 'a', peerCount: 1 },
+    { driveKey: 'b', peerCount: 3 },
+    { driveKey: 'c', peerCount: 1 },
   ])
 })
 
@@ -56,4 +72,9 @@ test('getFeedVideoHydrationMode uses local-only hydration for cached entries bef
     feedEntries: [],
     swarmStatus: { peers: 0, feedConnections: 0 },
   }), 'off')
+
+  assert.equal(getFeedVideoHydrationMode({
+    feedEntries: [{ driveKey: 'a', peerCount: 2 }],
+    swarmStatus: null,
+  }), 'network')
 })

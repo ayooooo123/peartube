@@ -1,11 +1,18 @@
 export async function createRelayRuntime({ config, logger }) {
-  const [{ initializeStorage, loadChannel, loadPublicBee }, { PublicFeedManager }, { CacheManager }, fs, path] = await Promise.all([
+  const [
+    { initializeStorage, loadChannel, loadPublicBee },
+    { PublicFeedManager },
+    { CacheManager },
+    { loadBareOrNodeFsModule, loadBareOrNodePathModule }
+  ] = await Promise.all([
     import('@peartube/backend/storage'),
     import('@peartube/backend/public-feed'),
     import('./cache-manager.js'),
-    import('node:fs/promises'),
-    import('node:path')
+    import('../../backend/src/runtime-modules.js')
   ])
+
+  const fs = await loadBareOrNodeFsModule()
+  const path = await loadBareOrNodePathModule()
 
   const storageRoot = config.storage.path
   const legacyNestedCorestorePath = config?.paths?.corestore || path.join(storageRoot, 'corestore')

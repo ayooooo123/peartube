@@ -1,122 +1,110 @@
-# Task: Rebalance discovery feed speed vs correctness
+# Task: Improve discovery feed breadth / initial sync so more channels/videos show up
 
-## Problem
-User reports discovery feed videos are loading impossibly slow.
+## Current log evidence
+- Public feed currently returns only 1 entry despite 2 peers:
+  `[API] Returning 1 feed entries (2 peers, keyed=1, fallback=0, raw=1)`
+- For that one channel, `LIST_VIDEOS` returns 0 via both PublicBee and channel fallback.
 
-## Current situation
-We tightened correctness so only `availability === 'playable'` items render.
-That stopped false positives, but now the feed can look empty/slow until we get positive evidence.
+## Conclusion
+The current empty feed is not primarily availability filtering. The bigger issue is discovery breadth / initial feed sync / hydration.
 
-## Likely combined bottleneck
-- public feed entries arrive quickly
-- channel/video hydration is slower
-- positive availability evidence is even slower
-- strict playable-only filtering means nothing renders until all three line up
+## Likely areas
+- `packages/backend/src/public-feed.js`
+  - initial HAVE_FEED exchange
+  - requestFeedsFromPeers / sync behavior
+  - peer entry pruning
+- `packages/backend/src/orchestrator.js`
+  - startup timing around publicFeed.start()
+- `packages/app/app/(tabs)/index.tsx`
+  - refresh cadence after feed sync
 
-## Better UX direction
-Two-stage rendering:
-1. Render discovered videos as soon as listVideos() returns
-2. Mark them as `checking` / `unknown` in UI
-3. Upgrade to playable or hide later when hints resolve
+## Goal
+Get more real feed entries quickly and avoid deciding the feed is empty too early.
 
-This gives:
-- fast first paint
-- fewer false negatives
-- avoids the previous bug where completely unseeded videos looked fully watchable
+## Candidate fixes
+1. Aggressively re-request HAVE_FEED from peers for a short warm window after startup
+2. Delay/prune peer entry removal less aggressively on transient connection churn
+3. Trigger UI refresh/feed reload after each feed sync burst, not just initial load
+4. Keep polling public feed briefly after app start while peer count > 0 and feed is still tiny
 
 ## Discussion
 
 ## Codex Proposal
 
-Implement discovery rendering as a two-stage pipeline on the frontend:
+### Independent diagnosis
+- The narrow discovery result is mainly a sync-timing problem, not a final "no content exists" result.
+- `packages/backend/src/public-feed.js` does send `HAVE_FEED` on channel open, but after that the only explicit re-request path is `requestFeedsFromPeers()`, which just re-sends once to currently wired peers and is only reached by manual/UI refresh or the 30s poll in `index.tsx`.
+- That means startup can easily miss breadth if peers are connected but have not finished opening their own feed channel, loading published/discovered entries, or are briefly churning during the first few seconds.
+- `public-feed.js` also prunes peer-discovered entries immediately in `_clearPeerFeedKeys()` when a connection closes/errors. Since `getFeed()` only returns peer entries with `peerCount > 0`, transient disconnects can collapse the feed back to 0/1 entries and make the app believe discovery is exhausted.
+- In `packages/backend/src/orchestrator.js`, deferred warm-up currently focuses on identities/subscriptions/pins/seeds, but there is no short startup discovery burst that keeps asking peers for feed state during the initial network warm window.
+- In `packages/app/app/(tabs)/index.tsx`, the home feed loads immediately and then refreshes every 30s. If the first `getPublicFeed()` lands before peer sync settles, the UI can show an effectively empty discovery state much too early.
 
-1. Stage 1: render every `listVideos()` result immediately unless we have explicit negative evidence.
-2. Stage 2: let availability hints upgrade cards to `playable` or remove them later if they resolve to `unavailable`.
+### Practical fix plan
+1. Add a backend startup warm-window sync burst
+   - In `public-feed.js`, add a short-lived startup scheduler, for example 8-15 seconds total.
+   - During that window, re-run `requestFeedsFromPeers()` on a fast cadence with backoff, e.g. immediately, 1s, 2s, 4s, 8s.
+   - Also trigger a refresh when each new feed channel opens, but guard with a small debounce so multiple peers do not spam.
+   - Goal: if a peer was connected before its feed protocol was ready, or if its entries arrive slightly later, we still solicit a broader `HAVE_FEED` set quickly.
 
-Why this fits the current code:
-- `packages/backend/src/api.js` already returns per-video `availability` and only flips unknown items to `unavailable` when hint requests come back negative while peers exist.
-- The strict frontend gate is in `packages/app/app/(tabs)/index.tsx` today, not the web screen. Both the discovery loader and channel view do:
-  - `.filter((v: any) => (v?.availability || 'unknown') === 'playable')`
-- That means first paint waits for positive proof, which is exactly the slow path we are trying to avoid.
+2. Make `requestFeedsFromPeers()` a true sync nudge, not a one-shot manual action
+   - Keep the existing resend of `HAVE_FEED`, since peers already treat that as the exchange trigger.
+   - Extend it to optionally target only peers with no announced keys yet, plus a mode that targets all peers during startup warm-up.
+   - Record `lastFeedRequestAt` / `lastFeedSyncAt` per connection so we can re-request peers that stay silent for the first few seconds.
 
-Exact frontend change I would make now:
-- In `packages/app/app/(tabs)/index.tsx`, change both filters from:
-  - `(v?.availability || 'unknown') === 'playable'`
-- to:
-  - `(v?.availability || 'unknown') !== 'unavailable'`
+3. Stop treating transient peer churn as authoritative feed disappearance
+   - In `_clearPeerFeedKeys()`, do not immediately delete peer entries from `this.entries` when peer count falls to zero.
+   - Instead, mark them stale with `lastSeen`, keep them in memory for a grace TTL (for example 2-10 minutes), and only hard-prune later.
+   - Update `getFeed()` so recently seen peer entries remain eligible during the grace period, possibly surfaced as `peerCount: 0` but still discoverable.
+   - This avoids the current pattern where a brief disconnect wipes out discovery breadth and causes premature empty-feed conclusions.
 
-That gives the intended behavior:
-- `playable` renders
-- `unknown` renders immediately
-- `unavailable` stays hidden
+4. Persist and surface a "warm startup" state to the UI
+   - In `orchestrator.js`, after `publicFeed.start()`, kick off the warm-window sync burst immediately rather than waiting for the deferred background phase.
+   - Wire `onFeedSync` / `onFeedConnectionOpen` to refresh frontend-visible state more often during startup.
+   - Expose enough status for the app to know: peers exist, feed sync is still warming, and empty feed is not yet final.
 
-Important follow-up found while inspecting the same path:
-- `packages/app/pear-src/workers/core/index.ts` currently strips `availability` when it remaps `api.listVideos(...)` results into RPC payloads.
-- So if we want the frontend to distinguish `unknown` from `unavailable`, the worker should also forward `availability` (for example `availability: v.availability || 'unknown'`).
-- If we do not forward it, the proposed relaxed filter still improves first paint, but it cannot later hide explicit negatives because everything arrives as implicit `unknown`.
+5. Make the app poll aggressively only while the result set is still tiny
+   - In `index.tsx`, add a short warm polling loop for the first 10-20 seconds after mount/foreground/resume when `peerCount > 0` and `feedEntries.length` is still very small (for example `< 5`).
+   - Example cadence: every 1-2 seconds during warm-up, then fall back to the current 30s interval.
+   - Keep the existing backend event subscription, but do not rely on it alone because the backend may have connected peers before the broader feed exchange completes.
 
-Recommendation:
-- Do the filter relaxation and worker forwarding together as the minimum viable fix.
-- Keep the existing sort/merge behavior; only change the inclusion rule.
-- Do not block discovery cards on thumbnails or positive availability.
+6. Avoid premature empty-feed UX
+   - Gate the "No seeded videos discovered yet" empty state behind a stronger condition: only show it once the warm window has expired or peer count is actually zero.
+   - Before then, show a softer status such as "Syncing discovery from peers…".
+   - This matches the real backend state: connected peers plus tiny feed should be treated as incomplete sync, not final emptiness.
 
-On a lightweight `checking` badge/state:
-- I do not think a badge is required for the first fix.
-- The main UX regression is empty/slow discovery, and the filter change solves that with minimal surface area.
-- A badge becomes worthwhile only after availability is forwarded end-to-end and we confirm users are confused by cards that appear before playback is confirmed.
+### Suggested implementation order
+- First: backend warm-window re-request loop in `public-feed.js`.
+- Second: entry-retention grace period instead of immediate prune on disconnect.
+- Third: orchestrator startup hook so warm sync begins as soon as public feed starts.
+- Fourth: frontend warm polling + delayed empty-state messaging.
 
-Why I would defer the badge for now:
-- The current web `VideoGrid` / `VideoCard` props do not carry availability, so adding a badge is a broader UI plumbing change than the filter fix.
-- A badge introduces product decisions we do not yet have settled: wording (`Checking`, `Verifying`, `Availability unknown`), when it clears, and whether a card should stay clickable while checking.
-- We already have a safe backend state model where explicit negatives can hide later; that gives most of the value without extra visual noise.
-
-If we do want a very small follow-up later:
-- Add `availability?: 'playable' | 'unknown' | 'unavailable'` to the card data shape.
-- Show a subtle top-left `Checking` pill only for `unknown` items in discovery, not on channel pages or owned videos.
-- Remove the pill automatically when the card becomes `playable`; drop the card if it becomes `unavailable`.
-
-Bottom line:
-- Ship the two-stage behavior now by changing the frontend inclusion rule to hide only `unavailable`.
-- Forward `availability` through the worker in the same patch so later negative evidence can actually remove cards.
-- Treat the checking badge as a later polish item unless user testing shows the temporary ambiguity is a real problem.
+### Expected impact
+- More peers will contribute `HAVE_FEED` entries during the first startup seconds.
+- Discovery breadth should grow from the current 1-entry/2-peer behavior without waiting for the 30s refresh interval.
+- Temporary network churn will stop collapsing discovery back to empty, so initial sync will feel much more stable.
 
 ## Claude Proposal
+Smallest robust fix: add a short backend warm-sync burst that re-requests peer feeds for the first few seconds after startup / first feed connection, instead of relying on the one-shot HAVE_FEED exchange plus the UI's 30s refresh interval.
 
-Minimal change: keep the existing progressive `loadFeedVideos()` shape, but stop requiring `availability === 'playable'` for first render.
+Why this is the best small fix from the inspected files:
+- `packages/backend/src/public-feed.js` already has `requestFeedsFromPeers()`, but it is only used when the UI explicitly calls `refreshFeed()`.
+- `createFeedChannel(... onopen)` sends exactly one `HAVE_FEED` immediately. If that happens before the remote peer has finished loading/restoring its own published/discovered entries, we lock in a very narrow initial snapshot.
+- `packages/app/app/(tabs)/index.tsx` already reloads on backend `onFeedUpdate`, so the UI is not the primary bottleneck. It also only does periodic refresh every 30s, which is too slow for initial discovery.
+- `packages/backend/src/orchestrator.js` is the right place to schedule a temporary startup-only retry burst without changing feed semantics.
 
-Implementation sketch:
+Proposed change:
+- In `orchestrator.js`, after `publicFeed.start()` and/or on the first `onFeedConnectionOpen`, schedule a tiny bounded retry loop such as at ~0s / 2s / 5s / 10s:
+  - call `publicFeed.requestFeedsFromPeers()`
+  - stop early if there are no feed peers
+  - optionally stop once the feed reaches a modest threshold (for example `getFeed().length >= 10`)
+- Keep this startup-only; do not turn it into permanent aggressive polling.
 
-1. In `packages/app/app/(tabs)/index.tsx`, change the discover-feed path in `loadEntry()` so `rpc.listVideos()` results are mapped into `feedVideos` immediately.
-   - Keep `availability` on each mapped video.
-   - First pass should include `unknown` / `checking` / `playable` items.
-   - Only exclude clearly dead states if we already have them (`unavailable`, `missing`, etc.).
+Why this should help:
+- It covers the race where peers connect before their local published/discovered feed has been fully restored or hydrated.
+- It improves breadth quickly without touching availability filtering, video hydration, or peer pruning.
+- It uses existing protocol behavior (`HAVE_FEED`) and requires the least code/risk.
 
-2. Add a tiny second-stage refinement pass after first merge.
-   - Re-run `listVideos({ channelKey, publicBeeKey })` for already-rendered channels with a slightly longer timeout.
-   - Merge by `channelKey + id` so later metadata overwrites earlier `availability`.
-   - If an item resolves to a hard negative state, remove it then.
-   - This preserves fast first paint while still converging toward correctness.
-
-3. Keep playback strict.
-   - Do not auto-assume unknown items are safe to play.
-   - If a user taps an `unknown` / `checking` card, let the normal `preparePlayback()` path be the source of truth.
-   - Optional tiny guard: disable tap only for explicit negative states, not for `unknown`.
-
-4. Small UI affordance in feed card.
-   - `VideoCard` currently shows title/channel/time only; there is no availability status.
-   - Add a minimal muted label or pill for non-playable-positive states:
-     - `checking` -> “Checking…”
-     - `unknown` -> “Syncing…”
-   - Hide the badge once state becomes `playable`.
-
-Why this is small-scope:
-- no new backend API
-- no feed architecture rewrite
-- uses the existing progressive merge behavior already present in `loadFeedVideos()`
-- only changes filtering and adds a lightweight refinement/update path
-
-Concretely, the biggest current blocker is here:
-- discover feed filters `listVideos()` results to playable-only before rendering
-- `feedVideosWithThumbs` also only shows videos from seeded/discovered channels
-
-That means the app already has a decent fast path, but it throws away early `unknown` results. Rendering those early and refining them later should materially improve perceived discovery speed with minimal risk.
+What I would not choose as the first fix:
+- UI-only polling in `index.tsx`: helpful, but it papers over a backend discovery timing issue and depends on the screen being open.
+- Relaxing pruning in `public-feed.js`: logs point more toward under-sync at startup than churn-driven removal.
+- Changing availability filtering: not the reported problem; the known discovered channel already had 0 videos.

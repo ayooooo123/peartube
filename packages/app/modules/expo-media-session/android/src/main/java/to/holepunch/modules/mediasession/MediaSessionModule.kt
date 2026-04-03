@@ -39,7 +39,7 @@ import kotlinx.coroutines.withContext
 import java.net.URL
 
 /**
- * Simplified PiP bridge for PlayerActivity callbacks.
+ * Simplified PiP bridge for MainActivity-owned Android PiP callbacks.
  */
 object PipBridge {
     private var moduleInstance: MediaSessionModule? = null
@@ -200,11 +200,17 @@ object PipBridge {
      * always build fresh PiP params, apply them to the activity, then enter PiP.
      */
     fun onUserLeaveHint(activity: Activity) {
-        android.util.Log.d("PipBridge", "onUserLeaveHint: pipEnabled=$pipEnabled")
+        val fallbackEnabled = moduleInstance?.canEnterPipFromActivePlayback() == true
+        android.util.Log.d("PipBridge", "onUserLeaveHint: pipEnabled=$pipEnabled fallbackEnabled=$fallbackEnabled")
 
-        if (!pipEnabled) {
+        if (!pipEnabled && !fallbackEnabled) {
             android.util.Log.d("PipBridge", "onUserLeaveHint: PiP not enabled, skipping")
             return
+        }
+
+        if (!pipEnabled && fallbackEnabled) {
+            android.util.Log.d("PipBridge", "onUserLeaveHint: recovering from stale pipEnabled via active playback fallback")
+            pipEnabled = true
         }
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
@@ -384,7 +390,7 @@ object PipBridge {
 
     fun isPipHostActivity(activity: Activity): Boolean {
         val className = activity.javaClass.name
-        return className == "${activity.packageName}.PlayerActivity"
+        return className == "${activity.packageName}.MainActivity"
     }
 
     @JvmStatic
@@ -1051,7 +1057,13 @@ class MediaSessionModule : Module() {
             PlaybackStateCompat.STATE_PAUSED
         }
 
-        val actions = if (PipBridge.isLastKnownInPip() && !isPlaying && PipBridge.shouldPreferCustomPlayActionsWhilePausedInPip()) {
+        val actions = if (PipBridge.isLastKnownInPip()) {
+                // Let PictureInPictureParams.setActions(...) fully own the visible PiP
+                // controls. If MediaSession also advertises transport actions here, some
+                // Android shells synthesize their own play/pause controls and displace the
+                // custom RemoteAction list we keep reapplying during PiP.
+                0L
+            } else if (!isPlaying && PipBridge.shouldPreferCustomPlayActionsWhilePausedInPip()) {
                 PlaybackStateCompat.ACTION_SEEK_TO
             } else {
                 // Match Grayjay's system-visible MediaSession action mask more closely.
@@ -1083,9 +1095,8 @@ class MediaSessionModule : Module() {
         updateNotification()
 
         // Update PiP actions when play state changes.
-        // Use the resolved playback host activity so PlayerActivity-owned PiP keeps
-        // its custom actions in sync even when appContext.currentActivity has already
-        // swung back to MainActivity or null.
+        // Use the resolved PiP host activity so custom actions stay in sync even
+        // if appContext.currentActivity has already swung to null mid-transition.
         if (playStateChanged && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val activity = resolvePlaybackHostActivity()
             if (activity != null && activity.isInPictureInPictureMode) {
@@ -1345,12 +1356,21 @@ class MediaSessionModule : Module() {
     }
 
     private fun resolvePlaybackHostActivity(): Activity? {
-        return PlaybackHostBridge.currentHostActivity() ?: appContext.currentActivity
+        val currentActivity = appContext.currentActivity
+        if (currentActivity != null) {
+            return currentActivity
+        }
+        val nativeHostActivity = PlaybackHostBridge.currentHostActivity()
+        if (nativeHostActivity != null && PipBridge.isPipHostActivity(nativeHostActivity)) {
+            return nativeHostActivity
+        }
+        return nativeHostActivity
     }
 
     private fun enterPiP(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
         val activity = resolvePlaybackHostActivity() ?: return false
+        if (!PipBridge.isPipHostActivity(activity)) return false
 
         try {
             val params = buildCanonicalPipParams(
@@ -1370,6 +1390,13 @@ class MediaSessionModule : Module() {
 
         isAutoPipEnabled = enabled
         PipBridge.setPipEnabled(enabled)
+    }
+
+    internal fun canEnterPipFromActivePlayback(): Boolean {
+        // Native-first fallback used when JS-side pipEnabled gets stale after
+        // in-app transitions (mini/fullscreen) but the same active playback
+        // session is still running and should be PiP-eligible.
+        return isSessionActive && currentIsPlaying
     }
 
     private fun openPlayerActivity(payload: Map<String, Any?>? = null): Boolean {

@@ -635,10 +635,10 @@ export class PublicFeedManager {
   addEntry(driveKey, source, publicBeeKey = null) {
     const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
 
-    // Pre-alpha: peer entries must include a PublicBee key.
-    if (source === 'peer' && !isValidKey(publicBeeKey)) {
-      return false
-    }
+    // Accept legacy peer entries even if they don't include a PublicBee key yet.
+    // Prefer keyed entries when available, but do not drop the channel entirely —
+    // older peers may still announce only drive keys, and we can hydrate via
+    // channel/autobase fallback once the feed entry is visible.
 
     // Skip if already exists or hidden
     if (this.entries.has(driveKey) || this.hiddenKeys.has(driveKey)) {

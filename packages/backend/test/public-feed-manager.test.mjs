@@ -142,6 +142,22 @@ test('getFeed keeps cached peer entries with publicBeeKey even when peerCount is
   }
 })
 
+test('addEntry accepts legacy peer entries without publicBeeKey', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    const added = manager.addEntry(DRIVE_KEY, 'peer')
+    assert.equal(added, true)
+    const entry = manager.entries.get(DRIVE_KEY)
+    assert.ok(entry)
+    assert.equal(entry.publicBeeKey, null)
+    assert.equal(entry.source, 'peer')
+  } finally {
+    manager.stop()
+  }
+})
+
 test('availability hint request is answered on the existing feed channel', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

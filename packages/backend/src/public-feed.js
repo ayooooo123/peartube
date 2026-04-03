@@ -397,11 +397,19 @@ export class PublicFeedManager {
         try {
           this.onFeedConnectionOpen?.(conn);
         } catch {}
-        // Immediately send our feed when channel opens
+        // Immediately send our feed when channel opens.
         try {
           this.sendHaveFeed(conn);
         } catch (err) {
           console.log('[PublicFeed] sendHaveFeed failed on open (non-fatal):', err?.message);
+        }
+        // Also immediately request the peer's current feed snapshot so discovery
+        // does not wait for the next periodic refresh cycle.
+        try {
+          channel.messages[0].send({ type: 'NEED_FEED' })
+          console.log('[PublicFeed] Sent NEED_FEED on channel open')
+        } catch (err) {
+          console.log('[PublicFeed] NEED_FEED on open failed (non-fatal):', err?.message)
         }
       },
       onclose: () => {

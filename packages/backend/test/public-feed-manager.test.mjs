@@ -111,7 +111,7 @@ test('feed channel open sends HAVE_FEED immediately', () => {
   try {
     manager.handleConnection(conn, {})
 
-    assert.equal(sent.length, 1)
+    assert.equal(sent.length, 2)
     assert.deepEqual(sent[0], {
       type: 'HAVE_FEED',
       keys: [DRIVE_KEY],
@@ -120,6 +120,7 @@ test('feed channel open sends HAVE_FEED immediately', () => {
         publicBeeKey: PUBLIC_BEE_KEY
       }]
     })
+    assert.deepEqual(sent[1], { type: 'NEED_FEED' })
   } finally {
     Protomux.from = originalFrom
     manager.stop()

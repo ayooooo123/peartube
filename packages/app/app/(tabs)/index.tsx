@@ -328,14 +328,16 @@ export default function HomeScreen() {
           }
         }
 
-        return (videos || [])
-          .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
-          .map((v: any) => ({
-            ...v,
-            channelKey,
-            publicBeeKey: publicBeeKey || undefined,
-            channel: { name: channelMetaRef.current[channelKey]?.name || 'Unknown' }
-          }))
+        const renderable = (videos || []).filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+        const playable = renderable.filter((v: any) => (v?.availability || 'unknown') === 'playable')
+        const chosen = playable.length > 0 ? playable : renderable
+
+        return chosen.map((v: any) => ({
+          ...v,
+          channelKey,
+          publicBeeKey: publicBeeKey || undefined,
+          channel: { name: channelMetaRef.current[channelKey]?.name || 'Unknown' }
+        }))
       } catch (err: any) {
         console.log('[Home] Failed to load videos from channel:', channelKey, '-', err?.message || err)
         return [] as VideoData[]
@@ -407,16 +409,17 @@ export default function HomeScreen() {
         }
       }
         if (Array.isArray(videoList)) {
-          const videosWithChannel = videoList
-            .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
-            .map((v: any) => ({
-              ...v,
-              channelKey: driveKey,
-              publicBeeKey: publicBeeKey || undefined,  // Include for video playback
-              channel: channelMeta[driveKey]
-                ? { name: channelMeta[driveKey].name || 'Channel' }
-                : undefined
-            }))
+          const renderable = videoList.filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+          const playable = renderable.filter((v: any) => (v?.availability || 'unknown') === 'playable')
+          const chosen = playable.length > 0 ? playable : renderable
+          const videosWithChannel = chosen.map((v: any) => ({
+            ...v,
+            channelKey: driveKey,
+            publicBeeKey: publicBeeKey || undefined,
+            channel: channelMeta[driveKey]
+              ? { name: channelMeta[driveKey].name || 'Channel' }
+              : undefined
+          }))
           setChannelVideos(videosWithChannel)
           // Fetch thumbnails for channel videos
           fetchThumbnailsForVideos(videosWithChannel)

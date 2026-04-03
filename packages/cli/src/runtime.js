@@ -2,24 +2,49 @@ export async function createRelayRuntime({ config, logger }) {
   const [
     { initializeStorage, loadChannel, loadPublicBee },
     { PublicFeedManager },
-    { CacheManager }
+    { CacheManager },
+    { readPrimaryKeyFile, writePrimaryKeyFile }
   ] = await Promise.all([
     import('@peartube/backend/storage'),
     import('@peartube/backend/public-feed'),
-    import('./cache-manager.js')
+    import('./cache-manager.js'),
+    import('../../backend/src/identity-key-file.js')
   ])
 
   const storageRoot = config.storage.path
 
   // IMPORTANT: backend storage expects the top-level relay storage root here.
-  // The nested `<root>/corestore` directory is part of the normal on-disk layout
-  // created by hypercore-storage, so do NOT try to migrate/move it on restart.
-  // Doing so corrupts the device-file metadata and causes:
-  //   Error: Invalid device file, was modified
+  // The nested `<root>/corestore` directory is part of the normal on-disk layout.
+  // Relay runtime bypasses the backend orchestrator, so it must persist/reuse the
+  // Corestore primaryKey itself. Otherwise each restart opens the same storage
+  // with a new random primary key, which can produce device-file/Corestore errors.
+  let primaryKey = null
+  try {
+    primaryKey = await readPrimaryKeyFile(storageRoot)
+  } catch (err) {
+    logger.runtime?.warn('Failed to read relay primary-key file', {
+      error: err?.message || String(err),
+      storageRoot,
+    })
+  }
+
   const ctx = await initializeStorage({
     storagePath: storageRoot,
+    primaryKey,
     wrapTimeout: true
   })
+
+  if (!primaryKey && ctx?.store?.primaryKey) {
+    try {
+      await writePrimaryKeyFile(storageRoot, ctx.store.primaryKey)
+      logger.runtime?.info('Persisted relay Corestore primary key', { storageRoot })
+    } catch (err) {
+      logger.runtime?.warn('Failed to persist relay primary-key file', {
+        error: err?.message || String(err),
+        storageRoot,
+      })
+    }
+  }
 
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb)
   const cacheManager = new CacheManager(ctx.store, ctx.metaDb, config?.storage?.maxBytes || 0)

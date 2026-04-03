@@ -79,6 +79,7 @@ export const SHARED_HANDLER_NAMES = [
   'GetVideoStats',
   'GetVideoThumbnail',
   'GetVideoUrl',
+  'PreparePlayback',
   'GlobalSearchVideos',
   'HideChannel',
   'HideComment',

@@ -234,6 +234,7 @@ ns.register({
     { name: 'blobId', type: 'string', required: false },
     { name: 'blobsCoreKey', type: 'string', required: false },
     { name: 'mimeType', type: 'string', required: false },
+    { name: 'availability', type: 'string', required: false },
     { name: 'thumbnailBlobId', type: 'string', required: false },
     { name: 'thumbnailBlobsCoreKey', type: 'string', required: false },
     { name: 'thumbnailMimeType', type: 'string', required: false },
@@ -274,6 +275,27 @@ ns.register({
   name: 'get-video-url-response',
   fields: [
     { name: 'url', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'prepare-playback-request',
+  fields: [
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'publicBeeKey', type: 'string', required: false },
+    { name: 'blobId', type: 'string', required: false },
+    { name: 'blobsCoreKey', type: 'string', required: false },
+    { name: 'mimeType', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'prepare-playback-response',
+  fields: [
+    { name: 'url', type: 'string', required: true },
+    { name: 'stats', type: '@peartube/video-stats', required: false },
+    { name: 'warmupStarted', type: 'bool', required: true }
   ]
 })
 
@@ -2081,6 +2103,12 @@ rpcNs.register({
   name: 'get-video-url',
   request: { name: '@peartube/get-video-url-request', stream: false },
   response: { name: '@peartube/get-video-url-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'prepare-playback',
+  request: { name: '@peartube/prepare-playback-request', stream: false },
+  response: { name: '@peartube/prepare-playback-response', stream: false }
 })
 
 rpcNs.register({

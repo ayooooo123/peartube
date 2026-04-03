@@ -1,5 +1,6 @@
+import { PROTOCOL_VERSION } from '@peartube/host'
+
 function noop() {}
-const PROTOCOL_VERSION = 1
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -55,11 +56,65 @@ function buildSharedSystemHandlers(backend) {
   }
 }
 
+export async function attachSharedAppHandlers(options = {}) {
+  const {
+    backend,
+    api,
+    identityManager,
+    uploadManager,
+    ctx,
+    rpc,
+    storagePath,
+    autoAttachSharedAppHandlers = false,
+    loadSharedAppHandlers = () => import('./mobile-handlers.js')
+  } = options
+
+  if (!autoAttachSharedAppHandlers) {
+    return false
+  }
+
+  const { attachMobileHandlers } = await loadSharedAppHandlers()
+  if (typeof attachMobileHandlers !== 'function') {
+    return false
+  }
+
+  attachMobileHandlers(backend, {
+    api,
+    identityManager,
+    uploadManager,
+    ctx,
+    initializeIdentityFromMnemonic:
+      typeof backend?.initializeIdentityFromMnemonic === 'function'
+        ? backend.initializeIdentityFromMnemonic.bind(backend)
+        : async () => ({ needsRestart: false }),
+    rpc,
+    fs: null,
+    path: null,
+    storagePath,
+    generateAndStoreThumbnail: async () => null,
+    transcoder: {
+      async startTranscode() {
+        return { success: false, error: 'Transcoding is not wired in the embedded native host yet.' }
+      },
+      stopTranscode() {
+        return { success: false, error: 'Transcoding is not wired in the embedded native host yet.' }
+      },
+      getStatus() {
+        return { status: 'unavailable', progress: 0, bytesWritten: 0, error: 'Transcoding is not wired in the embedded native host yet.' }
+      }
+    }
+  })
+
+  return true
+}
+
 export async function createBackend(opts = {}) {
   const {
     storagePath,
     stream,
     platform = 'desktop',
+    autoAttachSharedAppHandlers = false,
+    loadSharedAppHandlers,
     onReady,
     onError,
     onVideoStats,
@@ -90,13 +145,11 @@ export async function createBackend(opts = {}) {
       { shutdownBackend },
       specModule,
       { registerSharedHandlers },
-      { attachMobileHandlers },
     ] = await Promise.all([
       import('./orchestrator.js'),
       import('./storage.js'),
-      import('../../spec/spec/hrpc/index.js'),
+      import('@peartube/spec'),
       import('./hrpc-handlers.js'),
-      import('../../app/backend/mobile-handlers.mjs'),
     ])
 
     const HRPC = specModule?.default ?? specModule
@@ -112,35 +165,24 @@ export async function createBackend(opts = {}) {
       ...buildSharedSystemHandlers(backend)
     }
 
-    attachMobileHandlers(backend, {
+    await appendDebugLine('[createBackend] constructing HRPC')
+    rpc = new HRPC(stream)
+
+    const attachedSharedAppHandlers = await attachSharedAppHandlers({
+      backend,
       api: backend.api,
       identityManager: backend.identityManager,
       uploadManager: backend.uploadManager,
       ctx: backend.ctx,
-      initializeIdentityFromMnemonic:
-        typeof backend.initializeIdentityFromMnemonic === 'function'
-          ? backend.initializeIdentityFromMnemonic.bind(backend)
-          : async () => ({ needsRestart: false }),
       rpc,
-      fs: null,
-      path: null,
-      generateAndStoreThumbnail: async () => null,
-      transcoder: {
-        async startTranscode() {
-          return { success: false, error: 'Transcoding is not wired in the embedded native host yet.' }
-        },
-        stopTranscode() {
-          return { success: false, error: 'Transcoding is not wired in the embedded native host yet.' }
-        },
-        getStatus() {
-          return { status: 'unavailable', progress: 0, bytesWritten: 0, error: 'Transcoding is not wired in the embedded native host yet.' }
-        }
-      }
+      storagePath,
+      autoAttachSharedAppHandlers,
+      loadSharedAppHandlers
     })
-    await appendDebugLine('[createBackend] mobile-style handler adapters attached')
+    if (attachedSharedAppHandlers) {
+      await appendDebugLine('[createBackend] shared app handler adapters attached')
+    }
 
-    await appendDebugLine('[createBackend] constructing HRPC')
-    rpc = new HRPC(stream)
     await appendDebugLine('[createBackend] registering shared handlers')
     registerSharedHandlers(rpc, backend)
     await appendDebugLine('[createBackend] shared handlers registered')

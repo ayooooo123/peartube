@@ -27,17 +27,45 @@ declare global {
 // Module state
 let _blobServerPort: number | null = null;
 let _isInitialized = false;
+
+function getPearWorkerClient() {
+  if (typeof window === 'undefined') return null;
+  return window.PearWorkerClient ?? null;
+}
+
+async function waitForPearWorkerClient(timeoutMs = 10000) {
+  const existingClient = getPearWorkerClient();
+  if (existingClient) return existingClient;
+
+  const startedAt = Date.now();
+
+  return await new Promise<NonNullable<Window['PearWorkerClient']>>((resolve, reject) => {
+    const poll = () => {
+      const workerClient = getPearWorkerClient();
+      if (workerClient) {
+        resolve(workerClient);
+        return;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        reject(new Error('PearWorkerClient not available - ensure worker-client.js is loaded'));
+        return;
+      }
+
+      setTimeout(poll, 25);
+    };
+
+    poll();
+  });
+}
+
 const mainRunner = createWebRunner({
   async connectTransport() {
     if (typeof window === 'undefined') {
       throw new Error('Platform RPC can only be initialized in browser context');
     }
 
-    const workerClient = window.PearWorkerClient;
-    if (!workerClient) {
-      throw new Error('PearWorkerClient not available - ensure worker-client.js is loaded');
-    }
-
+    const workerClient = await waitForPearWorkerClient();
     return workerClient.connect();
   }
 });
@@ -81,9 +109,7 @@ export async function initPlatformRPC(): Promise<void> {
     throw new Error('Platform RPC can only be initialized in browser context');
   }
 
-  if (!window.PearWorkerClient) {
-    throw new Error('PearWorkerClient not available - ensure worker-client.js is loaded');
-  }
+  await waitForPearWorkerClient();
 
   console.log('[Platform RPC] Initializing via PearWorkerClient...');
 
@@ -194,11 +220,18 @@ export const rpc = {
     return ensureRPC().listVideos(req);
   },
 
-  async getVideoUrl(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+  async getVideoUrl(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }, videoId?: string) {
     const req = typeof channelKeyOrReq === 'string'
       ? { channelKey: channelKeyOrReq, videoId: videoId! }
       : channelKeyOrReq;
     return ensureRPC().getVideoUrl(req);
+  },
+
+  async preparePlayback(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().preparePlayback(req);
   },
 
   async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string }, videoId?: string) {

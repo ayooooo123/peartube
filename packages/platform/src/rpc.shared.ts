@@ -1,8 +1,8 @@
-import { PROTOCOL_EVENTS } from '../../protocol/src/event-map.js'
+import { PROTOCOL_EVENTS } from '@peartube/protocol/events'
 
 export type HostReadyData = {
   blobServerPort: number | null
-  protocolVersion: 1
+  protocolVersion: 2
 }
 
 export type HostErrorData = {
@@ -25,10 +25,10 @@ type PlatformRunner = {
     args?: string[]
   }): Promise<{
     stream: any
-    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: 1 }>
+    waitUntilReady(): Promise<{ blobServerPort: number | null; protocolVersion: 2 }>
     terminate(): Promise<void>
     onLifecycle(cb: (event:
-      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: 1 } }
+      | { type: 'host.ready', data: { blobServerPort: number | null; protocolVersion: 2 } }
       | { type: 'host.error', code: string, message: string, retryable: boolean }
       | { type: 'transport.closed', reason?: string }
     ) => void): () => void

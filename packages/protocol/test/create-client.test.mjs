@@ -12,11 +12,11 @@ class FakeHRPC {
 
   getStatus() {
     return Promise.resolve({
-      status: {
-        blobServerPort: 9999,
-        protocolVersion: 1
-      }
-    })
+        status: {
+          blobServerPort: 9999,
+          protocolVersion: 2
+        }
+      })
   }
 
   onEventFeedUpdate(handler) {
@@ -52,7 +52,7 @@ test('createProtocolClient remaps feed update events', async (t) => {
 
   const ready = await client.ready()
 
-  t.alike(ready, { blobServerPort: 9999, protocolVersion: 1 })
+  t.alike(ready, { blobServerPort: 9999, protocolVersion: 2 })
   t.alike(readyEvents[0], ready)
 
   FakeHRPC.instances[0].handlers.feedUpdate({ action: 'update', channelKey: 'abc' })
@@ -85,7 +85,7 @@ test('createProtocolClient fails fast on protocol version mismatch', async (t) =
       return Promise.resolve({
         status: {
           blobServerPort: 9999,
-          protocolVersion: 2
+          protocolVersion: 1
         }
       })
     }

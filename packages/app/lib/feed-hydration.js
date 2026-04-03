@@ -1,8 +1,15 @@
+function getFeedEntryPriority(entry) {
+  if (entry?.source === 'local') return 0
+  if ((entry?.peerCount ?? 0) > 0) return 1
+  if (entry?.publicBeeKey) return 2
+  return 3
+}
+
 export function getMissingChannelMetaRequests(feedEntries, channelMeta, limit = Infinity) {
   const requests = []
   const seen = new Set()
 
-  for (const entry of feedEntries || []) {
+  for (const entry of getVisibleSeededFeedEntries(feedEntries, Infinity)) {
     const channelKey = entry?.channelKey || entry?.driveKey
     if (!channelKey || seen.has(channelKey)) continue
     seen.add(channelKey)
@@ -28,14 +35,66 @@ export function getVisibleSeededFeedEntries(feedEntries, limit = Infinity) {
     if (!channelKey || seen.has(channelKey)) continue
     seen.add(channelKey)
     visible.push(entry)
-    if (visible.length >= limit) break
   }
 
   return visible
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => {
+      const priority = getFeedEntryPriority(a.entry) - getFeedEntryPriority(b.entry)
+      return priority !== 0 ? priority : a.index - b.index
+    })
+    .slice(0, limit)
+    .map(({ entry }) => entry)
 }
 
 export function getFeedVideoLoadEntries(feedEntries, limit = 15) {
   return getVisibleSeededFeedEntries(feedEntries, limit)
+}
+
+function canUseFeedPreviewVideos(entry, identityDriveKey) {
+  const channelKey = entry?.channelKey || entry?.driveKey || null
+  if (!channelKey) return false
+  if (identityDriveKey && channelKey === identityDriveKey) return true
+  if (entry?.source === 'local') return true
+  return (entry?.peerCount ?? 0) > 0
+}
+
+export function getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey, limit = 15) {
+  const videos = []
+  const seen = new Set()
+
+  for (const entry of getVisibleSeededFeedEntries(feedEntries, Infinity)) {
+    if (!canUseFeedPreviewVideos(entry, identityDriveKey)) continue
+
+    const channelKey = entry?.channelKey || entry?.driveKey
+    const publicBeeKey = entry?.publicBeeKey || undefined
+    const channelName =
+      channelMeta?.[channelKey]?.name ||
+      entry?.channelName ||
+      (identityDriveKey && channelKey === identityDriveKey ? 'Your channel' : 'Unknown')
+
+    for (const preview of entry?.previewVideos || []) {
+      const videoKey = `${channelKey}:${preview?.id || preview?.path || ''}`
+      if (!preview?.id || seen.has(videoKey)) continue
+      if (!shouldRenderFeedVideo({
+        video: { ...preview, channelKey },
+        identityDriveKey,
+      })) continue
+
+      seen.add(videoKey)
+      videos.push({
+        ...preview,
+        channelKey,
+        driveKey: channelKey,
+        publicBeeKey,
+        channel: { name: channelName },
+      })
+    }
+  }
+
+  return videos
+    .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
+    .slice(0, limit)
 }
 
 export function getFeedVideoHydrationMode({ feedEntries, swarmStatus }) {
@@ -60,4 +119,10 @@ export function getFeedVideoHydrationMode({ feedEntries, swarmStatus }) {
 
 export function shouldAutoLoadFeedVideos({ feedEntries, swarmStatus }) {
   return getFeedVideoHydrationMode({ feedEntries, swarmStatus }) !== 'off'
+}
+
+export function shouldRenderFeedVideo({ video, identityDriveKey }) {
+  const channelKey = video?.channelKey || video?.driveKey || null
+  if (identityDriveKey && channelKey === identityDriveKey) return true
+  return video?.availability === 'playable'
 }

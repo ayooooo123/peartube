@@ -1,5 +1,5 @@
-import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from '../../host/src/index.js'
-import DefaultHRPC from '../../spec/spec/hrpc/index.js'
+import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from '@peartube/host'
+import DefaultHRPC from '@peartube/spec'
 
 import { PROTOCOL_EVENT_BINDINGS, PROTOCOL_EVENTS } from './event-map.js'
 

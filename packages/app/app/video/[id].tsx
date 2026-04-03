@@ -21,7 +21,7 @@ import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 
-// HRPC methods used: getVideoUrl, prefetchVideo, getVideoStats, getChannelMeta
+// HRPC methods used: preparePlayback, getVideoUrl, getVideoStats, getChannelMeta
 
 function formatDate(timestamp: number | string): string {
   const value = typeof timestamp === 'string'
@@ -38,6 +38,18 @@ function showCastAlert(message: string) {
     return
   }
   Alert.alert('Chromecast', message)
+}
+
+function isStatsComplete(stats: VideoStats | null | undefined) {
+  if (!stats) return false
+  return Boolean(
+    stats.isComplete ||
+    stats.status === 'complete' ||
+    stats.progress >= 100 ||
+    (typeof stats.totalBlocks === 'number' &&
+      stats.totalBlocks > 0 &&
+      stats.downloadedBlocks >= stats.totalBlocks)
+  )
 }
 
 // P2P Stats Overlay Component
@@ -358,23 +370,6 @@ export default function VideoPlayerScreen() {
     }
   }, [rpc, videoData?.channelKey, videoData?.publicBeeKey])
 
-  const startPrefetch = useCallback(async (videoRefOverride?: string) => {
-    if (!videoData || !rpc) return
-    try {
-      const videoRef = videoRefOverride ||
-        ((videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
-          ? videoData.path
-          : videoData.id)
-      await rpc.prefetchVideo({
-        channelKey: videoData.channelKey,
-        videoId: videoRef,
-        publicBeeKey: (videoData as any)?.publicBeeKey || undefined
-      })
-    } catch (err) {
-      console.error('[VideoPlayer] Prefetch failed:', err)
-    }
-  }, [rpc, videoData])
-
   const startStatsPolling = useCallback(() => {
     if (!videoData || !rpc) return
     if (statsPollingRef.current) clearInterval(statsPollingRef.current)
@@ -393,14 +388,7 @@ export default function VideoPlayerScreen() {
         console.log('[VideoPlayer] Got stats:', stats ? `${stats.progress}%` : 'null')
         if (stats) {
           setLocalStats(stats as VideoStats)
-          const done =
-            stats.isComplete ||
-            stats.status === 'complete' ||
-            stats.progress >= 100 ||
-            (typeof stats.totalBlocks === 'number' &&
-              stats.totalBlocks > 0 &&
-              stats.downloadedBlocks >= stats.totalBlocks)
-          if (done && statsPollingRef.current) {
+          if (isStatsComplete(stats as VideoStats) && statsPollingRef.current) {
             clearInterval(statsPollingRef.current)
             statsPollingRef.current = null
           }
@@ -422,14 +410,16 @@ export default function VideoPlayerScreen() {
       const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
         ? videoData.path
         : videoData.id
-
-      // Start prefetch early to warm up peers and head blocks before playback
-      if (Platform.OS !== 'web' || isPear) {
-        startPrefetch(videoRef)
+      const videoAny = videoData as any
+      const playbackRequest = {
+        channelKey: videoData.channelKey,
+        videoId: videoRef,
+        publicBeeKey: videoAny.publicBeeKey || undefined,
+        blobId: videoAny.blobId || undefined,
+        blobsCoreKey: videoAny.blobsCoreKey || undefined,
+        mimeType: videoAny.mimeType || undefined,
       }
 
-      // Get video URL from backend - use instant path if we have blob info
-      const videoAny = videoData as any
       const cacheKey = makeVideoUrlCacheKey(
         videoData.channelKey,
         videoRef,
@@ -440,34 +430,42 @@ export default function VideoPlayerScreen() {
       if (cachedUrl) {
         loadAndPlayVideo(videoData, cachedUrl)
         if (Platform.OS !== 'web' || isPear) {
-          setTimeout(() => startStatsPolling(), 500)
+          void rpc.preparePlayback(playbackRequest).then((result) => {
+            if (result?.stats) {
+              setLocalStats(result.stats as VideoStats)
+            }
+            if (!isStatsComplete(result?.stats as VideoStats | null | undefined)) {
+              setTimeout(() => startStatsPolling(), 500)
+            }
+          }).catch((err) => {
+            console.error('[VideoPlayer] preparePlayback failed:', err)
+            setTimeout(() => startStatsPolling(), 500)
+          })
         }
         return
       }
-      const result = await rpc.getVideoUrl({
-        channelKey: videoData.channelKey,
-        videoId: videoRef,
-        blobId: videoAny.blobId || undefined,
-        blobsCoreKey: videoAny.blobsCoreKey || undefined,
-        mimeType: videoAny.mimeType || undefined,
-      })
+      const result = await rpc.preparePlayback(playbackRequest)
 
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         // Use context's loadAndPlayVideo - this uses the shared player
         loadAndPlayVideo(videoData, result.url)
 
-        // Start prefetch and poll for stats
+        if (result?.stats) {
+          setLocalStats(result.stats as VideoStats)
+        }
+
         if (Platform.OS !== 'web' || isPear) {
-          // Poll for stats - delay slightly to let prefetchVideo initialize stats
-          setTimeout(() => startStatsPolling(), 500)
+          if (!isStatsComplete(result?.stats as VideoStats | null | undefined)) {
+            setTimeout(() => startStatsPolling(), 500)
+          }
         }
       }
     } catch (err) {
       console.error('[VideoPlayer] Failed to load video:', err)
       setIsLoading(false)
     }
-  }, [isPear, loadAndPlayVideo, rpc, setIsLoading, startPrefetch, startStatsPolling, videoData])
+  }, [isPear, loadAndPlayVideo, rpc, setIsLoading, startStatsPolling, videoData])
 
   // Load video when videoData is available (either from params or fetched)
   useEffect(() => {
@@ -530,7 +528,7 @@ export default function VideoPlayerScreen() {
       {/* Video Player Area */}
       <View style={styles.playerContainer}>
         {/* Minimize button overlay (chevron down) */}
-        <Pressable style={styles.backButton} onPress={goBack}>
+        <Pressable testID="player-minimize-button" style={styles.backButton} onPress={goBack}>
           <Feather name="chevron-down" color="#fff" size={28} />
         </Pressable>
         <Pressable style={styles.searchButton} onPress={goSearch}>

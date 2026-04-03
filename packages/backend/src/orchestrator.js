@@ -355,18 +355,8 @@ export async function createBackendContext(config) {
   await appendDebugLine('[orchestrator] loadIdentities done')
   ipcLog('[orchestrator] loadIdentities done')
 
-  // Phase 6.5: Start public feed discovery immediately so UIs can get updates without waiting
-  ipcLog('[orchestrator] publicFeed.start starting')
-  await appendDebugLine('[orchestrator] publicFeed.start starting')
-  try {
-    await publicFeed.start();
-  } catch (e) {
-    console.error('[Orchestrator] Public feed start failed:', e?.message);
-  }
-  await appendDebugLine('[orchestrator] publicFeed.start done')
-  ipcLog('[orchestrator] publicFeed.start done')
-
-  // Phase 7: Create unified API
+  // Phase 6: Create unified API before feed start so the initial HAVE_FEED
+  // exchange can already include local availability hints and serving manifests.
   const api = createApi({
     ctx,
     publicFeed,
@@ -377,6 +367,20 @@ export async function createBackendContext(config) {
   if (typeof api.getAvailabilityHints === 'function') {
     publicFeed.setAvailabilityHintProvider((requests, conn) => api.getAvailabilityHints(requests, conn))
   }
+  if (typeof api.getFeedSnapshotEntries === 'function') {
+    publicFeed.setFeedSnapshotProvider((entries) => api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
+  }
+
+  // Phase 6.5: Start public feed discovery immediately so UIs can get updates without waiting
+  ipcLog('[orchestrator] publicFeed.start starting')
+  await appendDebugLine('[orchestrator] publicFeed.start starting')
+  try {
+    await publicFeed.start();
+  } catch (e) {
+    console.error('[Orchestrator] Public feed start failed:', e?.message);
+  }
+  await appendDebugLine('[orchestrator] publicFeed.start done')
+  ipcLog('[orchestrator] publicFeed.start done')
 
   // Return result - heavy channel warming happens in background
   const result = {

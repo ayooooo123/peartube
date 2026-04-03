@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 5,
   "schema": [
     {
       "name": "empty",
@@ -527,6 +527,12 @@
           "version": 3
         },
         {
+          "name": "availability",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
           "name": "thumbnailBlobId",
           "required": false,
           "type": "string",
@@ -548,7 +554,7 @@
           "name": "publicBeeKey",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 5
         }
       ]
     },
@@ -5129,6 +5135,76 @@
           "required": false,
           "type": "string",
           "version": 2
+        }
+      ]
+    },
+    {
+      "name": "prepare-playback-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "blobId",
+          "required": false,
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "blobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "mimeType",
+          "required": false,
+          "type": "string",
+          "version": 4
+        }
+      ]
+    },
+    {
+      "name": "prepare-playback-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "url",
+          "required": true,
+          "type": "string",
+          "version": 4
+        },
+        {
+          "name": "stats",
+          "required": false,
+          "type": "@peartube/video-stats",
+          "version": 4
+        },
+        {
+          "name": "warmupStarted",
+          "required": false,
+          "type": "bool",
+          "version": 4
         }
       ]
     }

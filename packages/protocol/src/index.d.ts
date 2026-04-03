@@ -1,9 +1,9 @@
 export type ProtocolReadyData = {
   blobServerPort: number | null
-  protocolVersion: 1
+  protocolVersion: 2
 }
 
-export const PROTOCOL_VERSION: 1
+export const PROTOCOL_VERSION: 2
 
 export const HOST_ERROR_CODES: {
   readonly HOST_START_FAILED: 'HOST_START_FAILED'

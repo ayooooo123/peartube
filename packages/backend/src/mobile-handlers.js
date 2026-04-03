@@ -76,6 +76,7 @@ export function attachMobileHandlers(B, deps) {
         blobId: v?.blobId ? String(v.blobId) : null,
         blobsCoreKey: v?.blobsCoreKey ? String(v.blobsCoreKey) : null,
         mimeType: v?.mimeType ? String(v.mimeType) : null,
+        availability: v?.availability ? String(v.availability) : null,
         thumbnailBlobId: v?.thumbnailBlobId ? String(v.thumbnailBlobId) : null,
         thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey ? String(v.thumbnailBlobsCoreKey) : null,
         thumbnailMimeType: v?.thumbnailMimeType ? String(v.thumbnailMimeType) : null,
@@ -119,7 +120,24 @@ export function attachMobileHandlers(B, deps) {
   B.getSubscriptions = async () => { const s = await api.getSubscriptions(); return { subscriptions: s.map(i => ({ channelKey: i.driveKey, channelName: i.name })) } }
   B.joinChannel = async (r) => { await api.subscribeChannel(r.channelKey); return { success: true } }
 
-  B.getPublicFeed = async () => { const r = await api.getPublicFeed(); return { entries: r.entries.map(e => ({ channelKey: e.driveKey || e.channelKey, driveKey: e.driveKey || e.channelKey, source: e.source || 'peer', publicBeeKey: e.publicBeeKey || null, channelName: e.name, videoCount: e.videoCount || 0, peerCount: e.peerCount || 0, lastSeen: e.lastSeen || 0 })) } }
+  B.getPublicFeed = async () => {
+    const r = await api.getPublicFeed()
+    return {
+      entries: r.entries.map(e => ({
+        channelKey: e.driveKey || e.channelKey,
+        driveKey: e.driveKey || e.channelKey,
+        source: e.source || 'peer',
+        publicBeeKey: e.publicBeeKey || null,
+        channelName: e.channelName || e.name || null,
+        videoCount: e.videoCount || 0,
+        peerCount: e.peerCount || 0,
+        lastSeen: e.lastSeen || 0,
+        manifestUpdatedAt: e.manifestUpdatedAt || 0,
+        previewVideos: Array.isArray(e.previewVideos) ? e.previewVideos : [],
+      })),
+      stats: r.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
+    }
+  }
   B.refreshFeed = async () => { await api.refreshFeed(); return { success: true } }
   B.submitToFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.submitToFeed(a.driveKey); return { success: true } }
   B.unpublishFromFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.unpublishFromFeed(a.driveKey); return { success: true } }
@@ -128,7 +146,18 @@ export function attachMobileHandlers(B, deps) {
 
   B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getActiveIdentity() !== null, blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0 } })
   B.getBlobServerPort = async () => ({ port: ctx.blobServer?.port || ctx.blobServerPort || 0 })
-  B.getSwarmStatus = async () => { const s = await api.getSwarmStatus(); return { connected: s.swarmConnections > 0, peerCount: s.swarmConnections } }
+  B.getSwarmStatus = async () => {
+    const s = await api.getSwarmStatus()
+    return {
+      connected: s.swarmConnections > 0,
+      peerCount: s.swarmConnections || 0,
+      swarmConnections: s.swarmConnections || 0,
+      swarmPeers: s.swarmPeers || 0,
+      feedConnections: s.feedConnections || 0,
+      feedEntries: s.feedEntries || 0,
+      channelsLoaded: s.channelsLoaded || 0,
+    }
+  }
 
   B.getSeedingStatus = async () => { const s = await api.getSeedingStatus(); return { status: { enabled: s.config?.autoSeedWatched || false, usedStorage: s.storageUsedBytes || 0, maxStorage: (s.maxStorageGB || 10) * 1024 * 1024 * 1024, seedingCount: s.activeSeeds || 0 } } }
   B.setSeedingConfig = async (r) => { await api.setSeedingConfig(r.config || {}); return { success: true } }

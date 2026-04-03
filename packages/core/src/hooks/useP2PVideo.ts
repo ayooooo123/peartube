@@ -20,6 +20,7 @@ export interface P2PVideoState {
 export interface P2PVideoService {
   getVideoUrl(driveKey: string, videoPath: string): Promise<{ url: string }>;
   prefetchVideo(driveKey: string, videoPath: string): Promise<{ success: boolean }>;
+  preparePlayback?(driveKey: string, videoPath: string): Promise<{ url: string; stats?: VideoStats | null }>;
   getVideoStats(driveKey: string, videoPath: string): Promise<VideoStats>;
 }
 
@@ -122,23 +123,37 @@ export function useP2PVideo(
     });
 
     try {
-      // Get video URL
-      const urlResult = await service.getVideoUrl(channelKey, videoPath);
+      if (typeof service.preparePlayback === 'function') {
+        const playback = await service.preparePlayback(channelKey, videoPath);
 
-      if (cancelledRef.current) return;
+        if (cancelledRef.current) return;
 
-      setState(prev => ({
-        ...prev,
-        url: urlResult.url,
-        status: 'prefetching',
-      }));
+        setState(prev => ({
+          ...prev,
+          url: playback.url,
+          stats: playback.stats || null,
+          status: playback.stats?.isComplete ? 'ready' : 'prefetching',
+        }));
 
-      // Start prefetching
-      await service.prefetchVideo(channelKey, videoPath);
+        if (playback.stats?.isComplete) {
+          return;
+        }
+      } else {
+        const urlResult = await service.getVideoUrl(channelKey, videoPath);
 
-      if (cancelledRef.current) return;
+        if (cancelledRef.current) return;
 
-      // Get initial stats
+        setState(prev => ({
+          ...prev,
+          url: urlResult.url,
+          status: 'prefetching',
+        }));
+
+        await service.prefetchVideo(channelKey, videoPath);
+
+        if (cancelledRef.current) return;
+      }
+
       const initialStats = await service.getVideoStats(channelKey, videoPath);
 
       if (cancelledRef.current) return;

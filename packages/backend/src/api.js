@@ -124,6 +124,7 @@ export function createApi({
   const LIST_VIDEOS_EMPTY_CACHE_TTL_MS = 1_000
   const CHANNEL_META_CACHE_TTL_MS = 30_000
   const VIDEO_AVAILABILITY_CACHE_TTL_MS = 30_000
+  const VIDEO_AVAILABILITY_NEGATIVE_CACHE_TTL_MS = 1_500
   /** @type {Map<string, Promise<any>>} */
   const prefetchInFlight = new Map()
   const activeRangeRequests = new Map() // key: `${driveKey}:${videoPath}`, value: { ranges: [], core, onDownload, onUpload }
@@ -143,6 +144,16 @@ export function createApi({
   function cloneObject(obj) {
     if (!obj || typeof obj !== 'object') return obj
     return { ...obj }
+  }
+
+  function getVideoAvailabilityCacheTtl(value) {
+    return value === 'playable'
+      ? VIDEO_AVAILABILITY_CACHE_TTL_MS
+      : VIDEO_AVAILABILITY_NEGATIVE_CACHE_TTL_MS
+  }
+
+  function isValidHypercoreHex(value) {
+    return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
   }
 
   function invalidateChannelCaches(driveKey) {
@@ -238,7 +249,10 @@ export function createApi({
             // Reuse the cheap local-only availability path shape
             const cacheKey = `${key}:${id}:${video.blobsCoreKey}:${video.blobId}`
             const cachedAvailability = videoAvailabilityCache.get(cacheKey)
-            if (cachedAvailability && (Date.now() - cachedAvailability.ts) < VIDEO_AVAILABILITY_CACHE_TTL_MS) {
+            if (
+              cachedAvailability &&
+              (Date.now() - cachedAvailability.ts) < getVideoAvailabilityCacheTtl(cachedAvailability.value)
+            ) {
               return { availability: cachedAvailability.value, contiguousBlocks: cachedAvailability.value === 'playable' ? 1 : 0, hasHeadBlock: cachedAvailability.value === 'playable' }
             }
             const keyBuf = video?.blobsCoreKey ? b4a.from(video.blobsCoreKey, 'hex') : null
@@ -478,16 +492,6 @@ export function createApi({
     async listVideos(driveKey, publicBeeKey) {
       console.log('[API] LIST_VIDEOS for:', driveKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16));
       try {
-        const cached = listVideosCache.get(driveKey)
-        if (cached) {
-          const ttl = Array.isArray(cached.value) && cached.value.length === 0
-            ? LIST_VIDEOS_EMPTY_CACHE_TTL_MS
-            : LIST_VIDEOS_CACHE_TTL_MS
-          if ((Date.now() - cached.ts) < ttl) {
-          return cloneArrayOfObjects(cached.value)
-          }
-        }
-
         const extractVideoId = (video) => {
           if (!video) return null
           if (video.id) return video.id
@@ -549,7 +553,10 @@ export function createApi({
 
           const cacheKey = `${driveKey}:${id}:${blobsCoreKey}:${blobIdRaw}`
           const cachedAvailability = videoAvailabilityCache.get(cacheKey)
-          if (cachedAvailability && (Date.now() - cachedAvailability.ts) < VIDEO_AVAILABILITY_CACHE_TTL_MS) {
+          if (
+            cachedAvailability &&
+            (Date.now() - cachedAvailability.ts) < getVideoAvailabilityCacheTtl(cachedAvailability.value)
+          ) {
             return { availability: cachedAvailability.value, contiguousBlocks: cachedAvailability.value === 'playable' ? 1 : 0, hasHeadBlock: cachedAvailability.value === 'playable' }
           }
 
@@ -605,11 +612,6 @@ export function createApi({
           return { availability, contiguousBlocks, hasHeadBlock }
         }
 
-        const probeVideoAvailability = async (video) => {
-          const hint = await getLocalVideoAvailabilityHint(video)
-          return hint.availability
-        }
-
         const attachVideoAvailability = async (videos) => {
           if (!Array.isArray(videos) || videos.length === 0) return []
           const MAX_PROBES = 12
@@ -648,12 +650,28 @@ export function createApi({
 
           return videos.map((video) => {
             const id = extractVideoId(video)
-            const availability = id ? (availabilityById.get(id) || 'unknown') : 'unknown'
+            let availability = 'unknown'
+            if (id && availabilityById.has(id)) {
+              availability = availabilityById.get(id) === 'playable' ? 'playable' : 'unavailable'
+            } else if (!id) {
+              availability = 'unavailable'
+            }
             return {
               ...video,
               availability,
             }
           })
+        }
+
+        const cached = listVideosCache.get(driveKey)
+        if (cached) {
+          const ttl = Array.isArray(cached.value) && cached.value.length === 0
+            ? LIST_VIDEOS_EMPTY_CACHE_TTL_MS
+            : LIST_VIDEOS_CACHE_TTL_MS
+          if ((Date.now() - cached.ts) < ttl) {
+            const revalidated = await attachVideoAvailability(cloneArrayOfObjects(cached.value))
+            return cloneArrayOfObjects(revalidated)
+          }
         }
 
         // FAST PATH: If publicBeeKey is provided, read directly from PublicBee
@@ -1270,6 +1288,167 @@ export function createApi({
       return enriched;
     },
 
+    /**
+     * Build compact, locally-provable feed snapshots for the provided entries.
+     * This is used by the feed gossip protocol so peers can advertise recent,
+     * playable videos without forcing the receiver to fan out into N channel reads.
+     * @param {Array<{driveKey: string, publicBeeKey?: string | null}>} entries
+     * @param {{limitPerChannel?: number}} [options]
+     * @returns {Promise<Array<Object>>}
+     */
+    async getFeedSnapshotEntries(entries = [], { limitPerChannel = 3 } = {}) {
+      if (!Array.isArray(entries) || entries.length === 0) return []
+
+      const extractVideoId = (video) => {
+        if (!video) return null
+        if (video.id) return video.id
+        if (video.path && typeof video.path === 'string') {
+          const match = video.path.match(/\/videos\/([^.\/]+)/)
+          if (match?.[1]) return match[1]
+          const base = video.path.split('/').pop() || ''
+          return base.replace(/\.[^./]+$/, '') || null
+        }
+        return null
+      }
+
+      const enrichMissingBlobMeta = async (videos, fetcher) => {
+        const missing = (videos || []).filter(v => !v?.blobId || !v?.blobsCoreKey)
+        if (missing.length === 0) return videos
+
+        const ids = Array.from(new Set(
+          missing
+            .slice(0, Math.max(limitPerChannel * 2, limitPerChannel))
+            .map(v => extractVideoId(v))
+            .filter(Boolean)
+        ))
+        if (ids.length === 0) return videos
+
+        const metaById = new Map()
+        await Promise.all(ids.map(async (id) => {
+          try {
+            const meta = await fetcher(id)
+            if (meta) metaById.set(id, meta)
+          } catch {}
+        }))
+
+        if (metaById.size === 0) return videos
+
+        return (videos || []).map((video) => {
+          if (!video || (video.blobId && video.blobsCoreKey)) return video
+          const id = extractVideoId(video)
+          const meta = id ? metaById.get(id) : null
+          if (!meta) return video
+          return {
+            ...video,
+            blobId: video.blobId || meta.blobId,
+            blobsCoreKey: video.blobsCoreKey || meta.blobsCoreKey,
+            mimeType: video.mimeType || meta.mimeType,
+            thumbnailBlobId: video.thumbnailBlobId || meta.thumbnailBlobId,
+            thumbnailBlobsCoreKey: video.thumbnailBlobsCoreKey || meta.thumbnailBlobsCoreKey,
+            thumbnailMimeType: video.thumbnailMimeType || meta.thumbnailMimeType,
+          }
+        })
+      }
+
+      const getStableManifestUpdatedAt = (meta, videos, publicBee) => {
+        let ts = 0
+
+        const candidates = [
+          meta?.updatedAt,
+          meta?.createdAt,
+          publicBee?.core?.length ? Number(publicBee.core.length) : 0,
+        ]
+
+        for (const video of videos || []) {
+          candidates.push(
+            video?.syncedAt,
+            video?.updatedAt,
+            video?.uploadedAt,
+          )
+        }
+
+        for (const value of candidates) {
+          const next = Number(value || 0) || 0
+          if (next > ts) ts = next
+        }
+
+        return ts
+      }
+
+      const snapshots = await Promise.all(entries.map(async (entry) => {
+        const driveKey = entry?.driveKey
+        const publicBeeKey = entry?.publicBeeKey || null
+        if (!driveKey || !publicBeeKey) return null
+
+        try {
+          const publicBee = await loadPublicBee(ctx, publicBeeKey)
+          const [meta, rawVideos] = await Promise.all([
+            publicBee.getMetadata().catch(() => null),
+            publicBee.listVideos().catch(() => []),
+          ])
+
+          const baseVideos = (rawVideos || []).map((video) => ({
+            ...video,
+            channelKey: driveKey,
+            publicBeeKey,
+          }))
+          const enrichedVideos = await enrichMissingBlobMeta(baseVideos, (id) => publicBee.getVideo(id))
+          const hintRequests = enrichedVideos
+            .slice(0, Math.max(limitPerChannel * 2, limitPerChannel))
+            .map((video) => {
+              const id = extractVideoId(video)
+              if (!id || !video?.blobId || !video?.blobsCoreKey) return null
+              return {
+                driveKey,
+                id,
+                blobId: video.blobId,
+                blobsCoreKey: video.blobsCoreKey,
+              }
+            })
+            .filter(Boolean)
+
+          const hints = await this.getAvailabilityHints(hintRequests)
+          const hintById = new Map((hints || []).map((hint) => [hint.id, hint]))
+
+          const previewVideos = enrichedVideos
+            .map((video) => {
+              const id = extractVideoId(video)
+              if (!id) return null
+              const hint = hintById.get(id)
+              return {
+                id,
+                title: video?.title ? String(video.title) : 'Untitled',
+                uploadedAt: Number(video?.uploadedAt || 0) || 0,
+                duration: Number(video?.duration || 0) || 0,
+                thumbnail: video?.thumbnail ? String(video.thumbnail) : null,
+                blobId: video?.blobId ? String(video.blobId) : null,
+                blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
+                mimeType: video?.mimeType ? String(video.mimeType) : null,
+                availability: hint?.availability === 'playable' ? 'playable' : 'unavailable',
+                thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
+                thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
+                thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
+              }
+            })
+            .filter((video) => video && video.availability === 'playable')
+            .slice(0, limitPerChannel)
+
+          return {
+            driveKey,
+            publicBeeKey,
+            channelName: meta?.name || null,
+            videoCount: Array.isArray(rawVideos) ? rawVideos.length : 0,
+            manifestUpdatedAt: getStableManifestUpdatedAt(meta, rawVideos, publicBee),
+            previewVideos,
+          }
+        } catch {
+          return null
+        }
+      }))
+
+      return snapshots.filter(Boolean)
+    },
+
     // ============================================
     // Public Feed Operations
     // ============================================
@@ -1284,16 +1463,23 @@ export function createApi({
       }
       const rawFeed = publicFeed.getFeed();
       const feed = rawFeed
-        .map((entry) => ({
-          driveKey: entry?.driveKey || entry?.channelKey || '',
-          channelKey: entry?.channelKey || entry?.driveKey || '',
-          source: entry?.source || 'peer',
-          publicBeeKey: entry?.publicBeeKey || null,
-          channelName: entry?.channelName || null,
-          videoCount: entry?.videoCount || 0,
-          peerCount: entry?.peerCount || 0,
-          lastSeen: entry?.lastSeen || entry?.addedAt || 0,
-        }))
+        .map((entry) => {
+          const peerCount = entry?.peerCount || 0
+          const source = entry?.source || 'peer'
+          const canRenderPreviewVideos = source === 'local' || peerCount > 0
+          return {
+            driveKey: entry?.driveKey || entry?.channelKey || '',
+            channelKey: entry?.channelKey || entry?.driveKey || '',
+            source,
+            publicBeeKey: entry?.publicBeeKey || null,
+            channelName: entry?.channelName || null,
+            videoCount: entry?.videoCount || 0,
+            peerCount,
+            lastSeen: entry?.lastSeen || entry?.addedAt || 0,
+            manifestUpdatedAt: canRenderPreviewVideos ? (entry?.manifestUpdatedAt || 0) : 0,
+            previewVideos: canRenderPreviewVideos && Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
+          }
+        })
         .filter((entry) => typeof entry.channelKey === 'string' && entry.channelKey.length > 0)
       const stats = publicFeed.getStats();
       const keyedEntries = feed.filter((e) => typeof e.publicBeeKey === 'string' && e.publicBeeKey.length > 0).length;
@@ -1359,6 +1545,12 @@ export function createApi({
           }
         } catch (err) {
           console.log('[API] submitToFeed: channel/comments init error:', err?.message);
+        }
+        if (!isValidHypercoreHex(publicBeeKey)) {
+          return {
+            success: false,
+            error: 'Unable to publish channel: missing publicBeeKey',
+          }
         }
         await publicFeed.submitChannel(driveKey, publicBeeKey);
       }

@@ -46,7 +46,7 @@ test('startHost forwards ready payload with protocolVersion and lifecycle event'
 
   const ready = await session.waitUntilReady()
 
-  t.alike(ready, { blobServerPort: 7777, protocolVersion: 1 })
+  t.alike(ready, { blobServerPort: 7777, protocolVersion: 2 })
   t.alike(lifecycleEvents, [{ type: 'host.ready', data: ready }])
 })
 
@@ -60,7 +60,7 @@ test('startHost terminate is idempotent', async (t) => {
     args: [],
     stream: createFakeStream(),
     createBackendImpl: async ({ onReady }) => {
-      onReady({ blobServerPort: 7777, protocolVersion: 1 })
+      onReady({ blobServerPort: 7777, protocolVersion: 2 })
       return {
         destroy: async () => {
           destroyCalls++
@@ -90,7 +90,7 @@ test('startHost forwards feed and video callbacks to createBackend', async (t) =
     createBackendImpl: async ({ onReady, onFeedUpdate, onVideoStats }) => {
       onFeedUpdate?.()
       onVideoStats?.('channel-key', 'video-id', { peerCount: 3 })
-      onReady({ blobServerPort: 7777, protocolVersion: 1 })
+      onReady({ blobServerPort: 7777, protocolVersion: 2 })
       return { destroy: async () => {} }
     }
   })

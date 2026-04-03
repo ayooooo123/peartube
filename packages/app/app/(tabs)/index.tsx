@@ -16,10 +16,12 @@ import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import {
+  getFeedPreviewVideos,
   getFeedVideoHydrationMode,
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
   getVisibleSeededFeedEntries,
+  shouldRenderFeedVideo,
 } from '@/lib/feed-hydration'
 
 // Public feed types
@@ -30,6 +32,24 @@ interface FeedEntry {
   addedAt: number
   source: 'peer' | 'local'
   peerCount?: number
+  channelName?: string | null
+  videoCount?: number
+  lastSeen?: number
+  manifestUpdatedAt?: number
+  previewVideos?: Array<{
+    id: string
+    title?: string
+    uploadedAt?: number
+    duration?: number
+    thumbnail?: string | null
+    blobId?: string | null
+    blobsCoreKey?: string | null
+    mimeType?: string | null
+    availability?: 'playable' | 'unavailable' | 'unknown'
+    thumbnailBlobId?: string | null
+    thumbnailBlobsCoreKey?: string | null
+    thumbnailMimeType?: string | null
+  }>
 }
 
 interface ChannelMeta {
@@ -360,7 +380,10 @@ export default function HomeScreen() {
         }
 
         return (videos || [])
-          .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+          .filter((v: any) => shouldRenderFeedVideo({
+            video: { ...v, channelKey },
+            identityDriveKey: identity?.driveKey || null,
+          }))
           .map((v: any) => ({
           ...v,
           channelKey,
@@ -422,6 +445,35 @@ export default function HomeScreen() {
     })
   }, [feedEntries, videos, identity?.driveKey])
 
+  // Seed Discover immediately from live manifest previews so the first render
+  // can show provably playable remote cards before per-channel hydration finishes.
+  useEffect(() => {
+    const previewVideos = getFeedPreviewVideos(
+      feedEntries,
+      channelMeta,
+      identity?.driveKey || null,
+      18
+    ) as VideoData[]
+    if (previewVideos.length === 0) return
+
+    setFeedVideos((prev) => {
+      const byKey = new Map<string, VideoData>()
+      for (const video of prev) {
+        const key = `${video.channelKey || ''}:${video.id || video.path || ''}`
+        byKey.set(key, video)
+      }
+      for (const video of previewVideos) {
+        const key = `${video.channelKey || ''}:${video.id || video.path || ''}`
+        byKey.set(key, video)
+      }
+      return Array.from(byKey.values())
+        .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
+        .slice(0, 50)
+    })
+
+    fetchThumbnailsForVideos(previewVideos)
+  }, [feedEntries, channelMeta, identity?.driveKey, fetchThumbnailsForVideos])
+
   // Load feed videos when feed entries change
   useEffect(() => {
     if (getFeedVideoHydrationMode({ feedEntries, swarmStatus }) !== 'off') {
@@ -458,7 +510,10 @@ export default function HomeScreen() {
       }
         if (Array.isArray(videoList)) {
           const videosWithChannel = videoList
-            .filter((v: any) => (v?.availability || 'unknown') !== 'unavailable')
+            .filter((v: any) => shouldRenderFeedVideo({
+              video: { ...v, channelKey: driveKey },
+              identityDriveKey: identity?.driveKey || null,
+            }))
             .map((v: any) => ({
             ...v,
             channelKey: driveKey,
@@ -476,7 +531,7 @@ export default function HomeScreen() {
     } finally {
       setLoadingChannel(false)
     }
-  }, [rpc, channelMeta, fetchThumbnailsForVideos, feedEntries])
+  }, [rpc, channelMeta, fetchThumbnailsForVideos, feedEntries, identity?.driveKey])
 
   const closeChannelView = useCallback(() => {
     setViewingChannel(null)

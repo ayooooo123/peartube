@@ -6,7 +6,8 @@
  * mobile runtime under the default `createMobileRuntimeBackend()` path.
  */
 
-import { startHost } from '../../host/src/start-host.js'
+import { startHost } from '@peartube/host/start-host'
+import { PROTOCOL_VERSION } from '@peartube/host'
 import { attachLazyCastHandlers } from './lazy-cast-handlers.mjs'
 
 let HRPC = null
@@ -653,7 +654,7 @@ export async function createMobileRuntimeBackend(options = {}) {
   await restoreFeedCache()
 
   const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
-  onReady({ blobServerPort: blobPort, protocolVersion: 1 })
+  onReady({ blobServerPort: blobPort, protocolVersion: PROTOCOL_VERSION })
 
   try {
     rpc.eventReady({

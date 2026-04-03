@@ -275,6 +275,15 @@ export class PublicChannelBee extends ReadyResource {
 
       // Sync videos
       const videos = await channel.listVideos()
+      if ((videos?.length || 0) === 0) {
+        const existingVideos = await this.listVideos()
+        if (existingVideos.length > 0) {
+          console.warn(
+            '[PublicBee] syncFromChannel: channel returned 0 videos while public bee still has content; skipping destructive sync'
+          )
+          return
+        }
+      }
       await this.syncVideos(videos)
 
       console.log('[PublicBee] Synced from channel:', channel.keyHex?.slice(0, 16))

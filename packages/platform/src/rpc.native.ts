@@ -32,7 +32,8 @@ declare const HRPC: new (stream: any) => {
   getIdentities(req: {}): Promise<any>;
   setActiveIdentity(req: { publicKey: string }): Promise<any>;
   listVideos(req: { channelKey: string }): Promise<any>;
-  getVideoUrl(req: { channelKey: string; videoId: string }): Promise<any>;
+  getVideoUrl(req: { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }): Promise<any>;
+  preparePlayback(req: { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }): Promise<any>;
   prefetchVideo(req: { channelKey: string; videoId: string; publicBeeKey?: string }): Promise<any>;
   getVideoStats(req: { channelKey: string; videoId: string }): Promise<any>;
   getVideoThumbnail(req: { channelKey: string; videoId: string }): Promise<any>;
@@ -186,6 +187,11 @@ mainBridge.events.onReady((data: any) => {
 });
 
 mainBridge.events.onError((data: any) => {
+  if (_isInitialized || mainBridge.isInitialized()) {
+    console.warn('[Platform RPC] Received host error after bridge was already initialized:', data?.message || data)
+    return;
+  }
+
   _isInitialized = false;
   _startupState = 'error';
 });
@@ -503,6 +509,14 @@ export async function initPlatformRPC(config: {
     return;
   }
 
+  if (mainBridge.isInitialized()) {
+    _isInitialized = true;
+    _startupState = 'ready';
+    _blobServerPort = mainBridge.getBlobServerPort();
+    console.log('[Platform RPC] Reusing existing initialized shared bridge');
+    return;
+  }
+
   if (_initPromise) {
     await _initPromise;
     return;
@@ -584,13 +598,6 @@ export async function initPlatformRPC(config: {
 
     if (downloaderWorkerPath) {
       console.log('[Platform RPC] Downloader worker ready:', downloaderWorkerPath);
-    }
-
-    if (mainBridge.isInitialized()) {
-      console.log('[Platform RPC] Terminating stale shared bridge before reinit');
-      await mainBridge.terminate().catch(() => {});
-      _isInitialized = false;
-      _blobServerPort = null;
     }
 
     _startupState = 'starting-worklet';
@@ -908,11 +915,18 @@ export const rpc = {
     return ensureRPC().listVideos(req);
   },
 
-  async getVideoUrl(channelKeyOrReq: string | { channelKey: string; videoId: string }, videoId?: string) {
+  async getVideoUrl(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }, videoId?: string) {
     const req = typeof channelKeyOrReq === 'string'
       ? { channelKey: channelKeyOrReq, videoId: videoId! }
       : channelKeyOrReq;
     return ensureRPC().getVideoUrl(req);
+  },
+
+  async preparePlayback(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string; blobId?: string; blobsCoreKey?: string; mimeType?: string }, videoId?: string) {
+    const req = typeof channelKeyOrReq === 'string'
+      ? { channelKey: channelKeyOrReq, videoId: videoId! }
+      : channelKeyOrReq;
+    return ensureRPC().preparePlayback(req);
   },
 
   async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string }, videoId?: string) {

@@ -38,6 +38,7 @@ interface VideoCardProps {
   onPress: () => void
   onChannelPress?: () => void
   showChannelInfo?: boolean
+  testID?: string
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
@@ -49,7 +50,7 @@ function getChannelInitial(name?: string, key?: string): string {
   return 'P'
 }
 
-function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = true }: VideoCardProps) {
+function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = true, testID }: VideoCardProps) {
   const channelKey = video.channelKey || video.driveKey
 
   // Memoize derived values to prevent recalculation on every render
@@ -99,7 +100,7 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
   }))
 
   return (
-    <Pressable onPress={handlePress} style={getPressedStyle}>
+    <Pressable onPress={handlePress} style={getPressedStyle} testID={testID}>
       {/* Thumbnail */}
       <ThumbnailImage
         thumbnailUrl={video.thumbnailUrl || video.thumbnail}

@@ -1,4 +1,4 @@
-import { createProtocolClient, PROTOCOL_EVENTS } from '../../protocol/src/index.js'
+import { createProtocolClient, PROTOCOL_EVENTS } from '@peartube/protocol'
 
 import type { PlatformLifecycleEvent, PlatformRunner } from './rpc.shared'
 import { launchNativeWorklet } from './native-worklet-launch.js'

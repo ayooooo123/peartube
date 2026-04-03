@@ -46,7 +46,7 @@ test('startMobileBackend delegates startup through the shared host contract', as
     }
   })
 
-  t.alike(await session.waitUntilReady(), { blobServerPort: 6123, protocolVersion: 1 })
+  t.alike(await session.waitUntilReady(), { blobServerPort: 6123, protocolVersion: 2 })
   t.is(attachedBackend?.mobileHandlersAttached, true)
   t.is(attachedBackend?.castHandlersAttached, true)
 

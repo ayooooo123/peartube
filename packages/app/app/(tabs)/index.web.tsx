@@ -508,15 +508,8 @@ function WatchPageView({
           ? currentVideo.path
           : currentVideo.id
         const videoAny = currentVideo as any
-        // Start prefetch early to warm peers before URL resolution
-        void rpc.prefetchVideo({
+        const result = await rpc.preparePlayback({
           channelKey,
-          videoId: videoRef,
-          publicBeeKey: videoAny.publicBeeKey || undefined,
-        }).catch(() => {})
-        // Get video URL from backend - use instant path if we have blob info
-        const result = await rpc.getVideoUrl({
-          channelKey: channelKey,
           videoId: videoRef,
           publicBeeKey: videoAny.publicBeeKey || undefined,
           blobId: videoAny.blobId || undefined,
@@ -528,6 +521,9 @@ function WatchPageView({
 
         if (result?.url) {
           setVideoUrl(result.url)
+          if (result?.stats) {
+            setVideoStats(result.stats)
+          }
         } else {
           setError('Failed to get video URL')
         }
@@ -623,13 +619,6 @@ function WatchPageView({
     const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
       ? video.path
       : video.id
-
-    // Start prefetch first
-    rpc.prefetchVideo({
-      channelKey: channelKey,
-      videoId: videoRef,
-      publicBeeKey,
-    }).catch((err: any) => console.log('[WatchPage] Prefetch already running or failed:', err))
 
     async function pollStats() {
       try {

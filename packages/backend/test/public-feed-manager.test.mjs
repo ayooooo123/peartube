@@ -33,6 +33,22 @@ function createMetaDb() {
   }
 }
 
+function createPersistedMetaDb(seed = {}) {
+  const state = new Map(Object.entries(seed))
+  return {
+    async get(key) {
+      return state.has(key) ? { value: state.get(key) } : null
+    },
+    async put(key, value) {
+      state.set(key, value)
+    },
+    async del(key) {
+      state.delete(key)
+    },
+    state,
+  }
+}
+
 function createConnection() {
   return new EventEmitter()
 }
@@ -127,6 +143,69 @@ test('feed channel open sends HAVE_FEED immediately', () => {
   }
 })
 
+test('feed channel open includes serving manifest snapshots when available', async () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+  const sent = []
+
+  manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY)
+  manager.setFeedSnapshotProvider(async () => [{
+    driveKey: DRIVE_KEY,
+    publicBeeKey: PUBLIC_BEE_KEY,
+    channelName: 'Manifest Channel',
+    videoCount: 2,
+    manifestUpdatedAt: 42,
+    previewVideos: [{
+      id: 'preview-1',
+      title: 'Manifest Video',
+      uploadedAt: 42,
+      blobId: '0:8:0:1024',
+      blobsCoreKey: '33'.repeat(32),
+      mimeType: 'video/mp4',
+      availability: 'playable',
+    }],
+  }])
+
+  const originalFrom = Protomux.from
+  Protomux.from = () => ({
+    pair() {},
+    createChannel(opts) {
+      return {
+        messages: [{
+          send(msg) {
+            sent.push(msg)
+          }
+        }],
+        open() {
+          opts.onopen()
+        }
+      }
+    }
+  })
+
+  try {
+    manager.handleConnection(conn, {})
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.equal(sent.length, 3)
+    assert.equal(sent[0].type, 'HAVE_FEED')
+    assert.deepEqual(sent[0].entries[0], {
+      driveKey: DRIVE_KEY,
+      publicBeeKey: PUBLIC_BEE_KEY,
+    })
+    assert.deepEqual(sent[1], { type: 'NEED_FEED' })
+    assert.equal(sent[2].type, 'HAVE_FEED')
+    assert.equal(sent[2].entries[0].channelName, 'Manifest Channel')
+    assert.equal(sent[2].entries[0].videoCount, 2)
+    assert.equal(sent[2].entries[0].manifestUpdatedAt, 42)
+    assert.equal(sent[2].entries[0].previewVideos[0].id, 'preview-1')
+  } finally {
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
 test('getFeed keeps cached peer entries with publicBeeKey even when peerCount is zero', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
@@ -140,6 +219,46 @@ test('getFeed keeps cached peer entries with publicBeeKey even when peerCount is
     assert.equal(feed[0].peerCount, 0)
   } finally {
     manager.stop()
+  }
+})
+
+test('keyed peer entries survive persistence and restart even when peerCount is zero', async () => {
+  const metaDb = createPersistedMetaDb()
+  const first = new PublicFeedManager(createSwarm(), metaDb)
+
+  try {
+    first.addEntry(DRIVE_KEY, 'peer', PUBLIC_BEE_KEY, {
+      channelName: 'Persisted Channel',
+      manifestUpdatedAt: 55,
+      previewVideos: [{
+        id: 'preview-persisted',
+        title: 'Persisted preview',
+        uploadedAt: 55,
+        availability: 'playable',
+      }],
+    })
+
+    await first._persistDiscoveredNow()
+
+    const persisted = metaDb.state.get('discovered-channels-v2')
+    assert.equal(Array.isArray(persisted), true)
+    assert.equal(persisted.length, 1)
+    assert.equal(persisted[0].driveKey, DRIVE_KEY)
+    assert.equal(persisted[0].publicBeeKey, PUBLIC_BEE_KEY)
+  } finally {
+    first.stop()
+  }
+
+  const second = new PublicFeedManager(createSwarm(), metaDb)
+  try {
+    await second.start()
+    const feed = second.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].driveKey, DRIVE_KEY)
+    assert.equal(feed[0].publicBeeKey, PUBLIC_BEE_KEY)
+    assert.equal(feed[0].peerCount, 0)
+  } finally {
+    second.stop()
   }
 })
 
@@ -248,6 +367,67 @@ test('peer entries with publicBeeKey survive peer disconnect at peerCount zero',
     assert.ok(entry)
     assert.equal(entry.source, 'peer')
     assert.equal(manager.entryPeerCounts.has(DRIVE_KEY), false)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('peer disconnect notifies listeners when a cached keyed entry loses live announcers', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+  let updates = 0
+
+  manager.setOnFeedUpdate(() => {
+    updates += 1
+  })
+
+  try {
+    manager.addEntry(DRIVE_KEY, 'peer', PUBLIC_BEE_KEY)
+    manager.peerFeedKeys.set(conn, new Set([DRIVE_KEY]))
+    manager.entryPeerCounts.set(DRIVE_KEY, 1)
+
+    manager._clearPeerFeedKeys(conn)
+
+    assert.equal(updates, 1)
+    assert.equal(manager.getFeed()[0]?.peerCount, 0)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('handle HAVE_FEED stores serving manifest data on the entry', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+
+  try {
+    manager.handleMessage({
+      type: 'HAVE_FEED',
+      entries: [{
+        driveKey: DRIVE_KEY,
+        publicBeeKey: PUBLIC_BEE_KEY,
+        channelName: 'Manifest Channel',
+        videoCount: 3,
+        manifestUpdatedAt: 99,
+        previewVideos: [{
+          id: 'preview-2',
+          title: 'Preview',
+          uploadedAt: 99,
+          blobId: '0:8:0:1024',
+          blobsCoreKey: '44'.repeat(32),
+          mimeType: 'video/mp4',
+          availability: 'playable',
+        }],
+      }],
+    }, conn)
+
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].channelName, 'Manifest Channel')
+    assert.equal(feed[0].videoCount, 3)
+    assert.equal(feed[0].manifestUpdatedAt, 99)
+    assert.equal(feed[0].previewVideos[0].id, 'preview-2')
   } finally {
     manager.stop()
   }

@@ -155,6 +155,27 @@ export interface PublicFeedEntry {
   driveKey: string;       // Channel key
   addedAt: number;        // Unix timestamp when discovered
   source: 'peer' | 'local'; // How we learned about it
+  channelKey?: string;
+  publicBeeKey?: string | null;
+  channelName?: string | null;
+  videoCount?: number;
+  peerCount?: number;
+  lastSeen?: number;
+  manifestUpdatedAt?: number;
+  previewVideos?: Array<{
+    id: string;
+    title?: string;
+    uploadedAt?: number;
+    duration?: number;
+    thumbnail?: string | null;
+    blobId?: string | null;
+    blobsCoreKey?: string | null;
+    mimeType?: string | null;
+    availability?: 'playable' | 'unavailable' | 'unknown';
+    thumbnailBlobId?: string | null;
+    thumbnailBlobsCoreKey?: string | null;
+    thumbnailMimeType?: string | null;
+  }>;
 }
 
 /**

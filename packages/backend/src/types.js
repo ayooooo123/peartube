@@ -77,8 +77,14 @@
 /**
  * @typedef {Object} PublicFeedEntry
  * @property {string} driveKey - Channel key
+ * @property {string | null} [publicBeeKey] - PublicBee key for viewer fast-path access
  * @property {number} addedAt - When discovered
  * @property {'peer'|'local'} source - How discovered
+ * @property {number} [peerCount] - Live announcer count for this channel (local channels count as at least 1)
+ * @property {string | null} [channelName] - Best-effort channel name snapshot from the serving peer
+ * @property {number} [videoCount] - Best-effort channel video count snapshot
+ * @property {number} [manifestUpdatedAt] - When previewVideos were last proven locally playable by the announcing peer
+ * @property {Array<Object>} [previewVideos] - Compact playable-video manifest for first paint
  */
 
 /**

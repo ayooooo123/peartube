@@ -95,6 +95,7 @@ export const RPC_METHODS = {
   // Videos
   listVideos: 'listVideos',
   getVideoUrl: 'getVideoUrl',
+  preparePlayback: 'preparePlayback',
   uploadVideo: 'uploadVideo',
   prefetchVideo: 'prefetchVideo',
   getVideoStats: 'getVideoStats',

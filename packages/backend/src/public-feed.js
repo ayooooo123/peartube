@@ -52,6 +52,8 @@ export class PublicFeedManager {
     this.wiredConnections = new Set();
     /** @type {((requests: any[], conn?: any) => Promise<any[]>) | null} */
     this.availabilityHintProvider = null;
+    /** @type {((entries: any[], conn?: any) => Promise<any[]>) | null} */
+    this.feedSnapshotProvider = null;
     /** @type {number} */
     this._nextAvailabilityRequestId = 1;
     /** @type {Map<string, { resolve: Function, timeout: any }>} */
@@ -105,6 +107,128 @@ export class PublicFeedManager {
    */
   setAvailabilityHintProvider(callback) {
     this.availabilityHintProvider = callback;
+  }
+
+  /**
+   * Set local provider for compact feed snapshots served over the feed channel.
+   * Provider must be cheap/local-only; no network waits.
+   * @param {(entries: any[], conn?: any) => Promise<any[]>} callback
+   */
+  setFeedSnapshotProvider(callback) {
+    this.feedSnapshotProvider = callback;
+  }
+
+  _sanitizePreviewVideos(videos) {
+    if (!Array.isArray(videos)) return []
+    return videos
+      .filter((video) => video && typeof video === 'object' && typeof video.id === 'string' && video.id.length > 0)
+      .slice(0, 3)
+      .map((video) => ({
+        id: String(video.id),
+        title: video?.title ? String(video.title) : 'Untitled',
+        uploadedAt: Number(video?.uploadedAt || 0) || 0,
+        duration: Number(video?.duration || 0) || 0,
+        thumbnail: video?.thumbnail ? String(video.thumbnail) : null,
+        blobId: video?.blobId ? String(video.blobId) : null,
+        blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
+        mimeType: video?.mimeType ? String(video.mimeType) : null,
+        availability: video?.availability === 'playable' ? 'playable' : 'unavailable',
+        thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
+        thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
+        thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
+      }))
+  }
+
+  _serializeEntry(entry) {
+    const serialized = {
+      driveKey: entry.driveKey,
+      publicBeeKey: entry.publicBeeKey || null,
+    }
+    if (entry.channelName) serialized.channelName = entry.channelName
+    if (Number(entry.videoCount || 0) > 0) serialized.videoCount = Number(entry.videoCount || 0)
+    if (Number(entry.manifestUpdatedAt || 0) > 0) serialized.manifestUpdatedAt = Number(entry.manifestUpdatedAt || 0)
+    const previewVideos = this._sanitizePreviewVideos(entry.previewVideos)
+    if (previewVideos.length > 0) serialized.previewVideos = previewVideos
+    return serialized
+  }
+
+  _applyEntrySnapshot(driveKey, snapshot = {}) {
+    const entry = this.entries.get(driveKey)
+    if (!entry) return false
+
+    let changed = false
+
+    if (typeof snapshot.publicBeeKey === 'string' && snapshot.publicBeeKey && snapshot.publicBeeKey !== entry.publicBeeKey) {
+      entry.publicBeeKey = snapshot.publicBeeKey
+      changed = true
+    }
+    if (typeof snapshot.channelName === 'string' && snapshot.channelName && snapshot.channelName !== entry.channelName) {
+      entry.channelName = snapshot.channelName
+      changed = true
+    }
+    if (Number.isFinite(snapshot.videoCount) && Number(snapshot.videoCount) !== Number(entry.videoCount || 0)) {
+      entry.videoCount = Number(snapshot.videoCount)
+      changed = true
+    }
+
+    const nextManifestUpdatedAt = Number(snapshot.manifestUpdatedAt || 0) || 0
+    const incomingPreviewVideos = Array.isArray(snapshot.previewVideos)
+      ? this._sanitizePreviewVideos(snapshot.previewVideos)
+      : null
+    const canApplyManifest =
+      incomingPreviewVideos &&
+      (
+        nextManifestUpdatedAt === 0 ||
+        Number(entry.manifestUpdatedAt || 0) === 0 ||
+        nextManifestUpdatedAt >= Number(entry.manifestUpdatedAt || 0)
+      )
+
+    if (canApplyManifest) {
+      const currentSerialized = JSON.stringify(this._sanitizePreviewVideos(entry.previewVideos))
+      const nextSerialized = JSON.stringify(incomingPreviewVideos)
+      if (currentSerialized !== nextSerialized) {
+        entry.previewVideos = incomingPreviewVideos
+        changed = true
+      }
+      if (nextManifestUpdatedAt && nextManifestUpdatedAt !== Number(entry.manifestUpdatedAt || 0)) {
+        entry.manifestUpdatedAt = nextManifestUpdatedAt
+        changed = true
+      } else if (!entry.manifestUpdatedAt && incomingPreviewVideos.length > 0) {
+        entry.manifestUpdatedAt = Date.now()
+        changed = true
+      }
+    }
+
+    return changed
+  }
+
+  async _resolveFeedSnapshots(entries, conn) {
+    if (!this.feedSnapshotProvider || !Array.isArray(entries) || entries.length === 0) return entries
+    try {
+      const snapshots = await this.feedSnapshotProvider(entries, conn)
+      if (!Array.isArray(snapshots) || snapshots.length === 0) return entries
+
+      const byKey = new Map(entries.map((entry) => [entry.driveKey, { ...entry }]))
+      for (const snapshot of snapshots) {
+        const driveKey = snapshot?.driveKey
+        if (!driveKey || !byKey.has(driveKey)) continue
+
+        const merged = {
+          ...byKey.get(driveKey),
+          publicBeeKey: snapshot.publicBeeKey || byKey.get(driveKey)?.publicBeeKey || null,
+          channelName: snapshot.channelName || byKey.get(driveKey)?.channelName || null,
+          videoCount: Number(snapshot.videoCount || byKey.get(driveKey)?.videoCount || 0) || 0,
+          manifestUpdatedAt: Number(snapshot.manifestUpdatedAt || byKey.get(driveKey)?.manifestUpdatedAt || 0) || 0,
+          previewVideos: this._sanitizePreviewVideos(snapshot.previewVideos || byKey.get(driveKey)?.previewVideos),
+        }
+        byKey.set(driveKey, merged)
+        this._applyEntrySnapshot(driveKey, merged)
+      }
+
+      return Array.from(byKey.values())
+    } catch {
+      return entries
+    }
   }
 
   async requestAvailabilityHints(requests, { timeoutMs = 250, maxPeers = 4 } = {}) {
@@ -176,7 +300,7 @@ export class PublicFeedManager {
             if (key) {
               this.publishedChannels.add(key);
               // Add to entries WITH publicBeeKey so HAVE_FEED includes it
-              this.addEntry(key, 'local', publicBeeKey);
+              this.addEntry(key, 'local', publicBeeKey, item);
             }
           }
           console.log('[PublicFeed] Loaded', this.publishedChannels.size, 'published channels from db (v2 format)');
@@ -207,7 +331,7 @@ export class PublicFeedManager {
         const cachedV2 = await this.metaDb.get('discovered-channels-v2').catch(() => null)
         if (cachedV2?.value && Array.isArray(cachedV2.value) && cachedV2.value.length) {
           for (const entry of cachedV2.value) {
-            if (entry.driveKey && this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey)) {
+            if (entry.driveKey && this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey, entry)) {
               restored++
             }
           }
@@ -289,13 +413,18 @@ export class PublicFeedManager {
   async _persistDiscoveredNow() {
     if (!this.metaDb) return
     try {
+      const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
       // Persist only live peer-discovered channels plus all local/published channels.
       const entries = this.getFeed()
-        .filter((e) => e.source === 'local' || (e.peerCount || 0) > 0)
+        .filter((e) => e.source === 'local' || (e.peerCount || 0) > 0 || isValidKey(e.publicBeeKey))
         .slice(0, this._persistMaxEntries)
         .map(e => ({
           driveKey: e.driveKey,
-          publicBeeKey: e.publicBeeKey || null
+          publicBeeKey: e.publicBeeKey || null,
+          channelName: e.channelName || null,
+          videoCount: Number(e.videoCount || 0) || 0,
+          manifestUpdatedAt: Number(e.manifestUpdatedAt || 0) || 0,
+          previewVideos: this._sanitizePreviewVideos(e.previewVideos),
         }))
       await this.metaDb.put('discovered-channels-v2', entries)
 
@@ -459,21 +588,35 @@ export class PublicFeedManager {
 
     // Pre-alpha: the public feed is PublicBee-only. We only advertise entries
     // that include a valid publicBeeKey so viewers can fetch instantly without Autobase.
-    const values = Array.from(this.entries.values()).filter(e => isValidKey(e.publicBeeKey))
-    const keys = values.map(e => e.driveKey)
-    const entries = values.map(e => ({
-      driveKey: e.driveKey,
-      publicBeeKey: e.publicBeeKey
-    }))
-    const msg = { type: 'HAVE_FEED', keys, entries };
+    const baseEntries = Array.from(this.entries.values())
+      .filter(e => isValidKey(e.publicBeeKey))
+      .map((entry) => this._serializeEntry(entry))
 
-    console.log('[PublicFeed] Sending HAVE_FEED with', keys.length, 'entries');
-    try {
-      channel.messages[0].send(msg);
-      console.log('[PublicFeed] HAVE_FEED sent successfully');
-    } catch (err) {
-      console.error('[PublicFeed] Failed to send HAVE_FEED:', err.message);
+    const sendEntries = (entries) => {
+      const keys = entries.map(e => e.driveKey)
+      const msg = { type: 'HAVE_FEED', keys, entries }
+
+      console.log('[PublicFeed] Sending HAVE_FEED with', keys.length, 'entries');
+      try {
+        channel.messages[0].send(msg);
+        console.log('[PublicFeed] HAVE_FEED sent successfully');
+      } catch (err) {
+        console.error('[PublicFeed] Failed to send HAVE_FEED:', err.message);
+      }
     }
+
+    sendEntries(baseEntries)
+    if (!this.feedSnapshotProvider) return
+
+    void this._resolveFeedSnapshots(baseEntries, conn)
+      .then((entries) => {
+        const baseSerialized = JSON.stringify(baseEntries)
+        const nextSerialized = JSON.stringify(entries)
+        if (nextSerialized !== baseSerialized) {
+          sendEntries(entries)
+        }
+      })
+      .catch(() => {})
   }
 
   _setPeerFeedKeys(conn, keys) {
@@ -502,7 +645,9 @@ export class PublicFeedManager {
     if (!prevKeys) return false
 
     let pruned = false
+    let changed = false
     for (const key of prevKeys) {
+      changed = true
       const nextCount = Math.max(0, (this.entryPeerCounts.get(key) || 0) - 1)
       if (nextCount > 0) {
         this.entryPeerCounts.set(key, nextCount)
@@ -526,7 +671,10 @@ export class PublicFeedManager {
 
     this.peerFeedKeys.delete(conn)
     if (pruned) this._schedulePersistDiscovered()
-    return true
+    if (changed) {
+      try { this.onFeedUpdate?.() } catch {}
+    }
+    return changed
   }
 
   /**
@@ -540,6 +688,7 @@ export class PublicFeedManager {
     // Handle HAVE_FEED - peer is sharing their known channels
     if (msg.type === 'HAVE_FEED') {
       let added = 0;
+      let updated = 0;
       const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
       let announcedKeys = []
       let receivedCount = 0
@@ -551,8 +700,10 @@ export class PublicFeedManager {
         for (const entry of msg.entries) {
           if (!entry?.driveKey || !isValidKey(entry.publicBeeKey)) continue
           announcedKeys.push(entry.driveKey)
-          if (this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey)) {
+          if (this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey, entry)) {
             added++;
+          } else if (this._applyEntrySnapshot(entry.driveKey, entry)) {
+            updated++;
           }
         }
       }
@@ -575,7 +726,7 @@ export class PublicFeedManager {
       } catch {}
 
     log.debug('Merged feed entries', { added, total: this.entries.size })
-      if (added > 0 || peerSetChanged) {
+      if (added > 0 || updated > 0 || peerSetChanged) {
         this.onFeedUpdate?.();
         this._schedulePersistDiscovered()
       }
@@ -585,11 +736,14 @@ export class PublicFeedManager {
       console.log('[PublicFeed] SUBMIT_CHANNEL received:', msg.key?.slice(0, 16), 'publicBee:', msg.publicBeeKey?.slice(0, 16) || 'none');
       const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
       if (!isValidKey(msg.publicBeeKey)) return
-      if (this.addEntry(msg.key, 'peer', msg.publicBeeKey)) {
+      if (this.addEntry(msg.key, 'peer', msg.publicBeeKey, msg)) {
         this.onFeedUpdate?.();
         this._schedulePersistDiscovered()
         // Re-gossip to other peers (exclude sender, include publicBeeKey)
-        this.broadcastSubmitChannel(msg.key, conn, msg.publicBeeKey);
+        this.broadcastSubmitChannel(msg.key, conn, msg.publicBeeKey, msg);
+      } else if (this._applyEntrySnapshot(msg.key, msg)) {
+        this.onFeedUpdate?.()
+        this._schedulePersistDiscovered()
       }
     }
     // Handle legacy NEED_FEED/FEED_RESPONSE for backwards compat
@@ -648,7 +802,7 @@ export class PublicFeedManager {
    * @param {string} [publicBeeKey] - The public Hyperbee key (for viewers to load)
    * @returns {boolean}
    */
-  addEntry(driveKey, source, publicBeeKey = null) {
+  addEntry(driveKey, source, publicBeeKey = null, snapshot = null) {
     const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
 
     // Accept legacy peer entries even if they don't include a PublicBee key yet.
@@ -662,6 +816,12 @@ export class PublicFeedManager {
       const existing = this.entries.get(driveKey)
       if (existing && !existing.publicBeeKey && isValidKey(publicBeeKey)) {
         existing.publicBeeKey = publicBeeKey
+        this._schedulePersistDiscovered()
+      }
+      if (existing && snapshot && this._applyEntrySnapshot(driveKey, {
+        ...snapshot,
+        publicBeeKey: isValidKey(publicBeeKey) ? publicBeeKey : existing.publicBeeKey || null,
+      })) {
         this._schedulePersistDiscovered()
       }
       return false;
@@ -679,6 +839,10 @@ export class PublicFeedManager {
       addedAt: Date.now(),
       source,
       peerCount: source === 'local' ? 1 : 0,
+      channelName: snapshot?.channelName || null,
+      videoCount: Number(snapshot?.videoCount || 0) || 0,
+      manifestUpdatedAt: Number(snapshot?.manifestUpdatedAt || 0) || 0,
+      previewVideos: this._sanitizePreviewVideos(snapshot?.previewVideos),
     });
 
     // Persist (debounced) so restarts retain discovered keys.
@@ -705,6 +869,12 @@ export class PublicFeedManager {
       }
     }
 
+    let snapshot = null
+    if (this.feedSnapshotProvider) {
+      const resolved = await this._resolveFeedSnapshots([{ driveKey, publicBeeKey }], null).catch(() => null)
+      snapshot = Array.isArray(resolved) ? resolved[0] || null : null
+    }
+
     // Persist to database so it survives restart (use v2 format with publicBeeKey)
     if (!this.publishedChannels.has(driveKey)) {
       this.publishedChannels.add(driveKey);
@@ -712,7 +882,7 @@ export class PublicFeedManager {
     await this._persistPublishedChannels();
 
     // Broadcast to all peers (include publicBeeKey)
-    this.broadcastSubmitChannel(driveKey, null, publicBeeKey);
+    this.broadcastSubmitChannel(driveKey, null, publicBeeKey, snapshot);
     this._schedulePersistDiscovered()
   }
 
@@ -729,7 +899,11 @@ export class PublicFeedManager {
         const entry = this.entries.get(driveKey);
         publishedArray.push({
           driveKey,
-          publicBeeKey: entry?.publicBeeKey || null
+          publicBeeKey: entry?.publicBeeKey || null,
+          channelName: entry?.channelName || null,
+          videoCount: Number(entry?.videoCount || 0) || 0,
+          manifestUpdatedAt: Number(entry?.manifestUpdatedAt || 0) || 0,
+          previewVideos: this._sanitizePreviewVideos(entry?.previewVideos),
         });
       }
       await this.metaDb.put('published-channels-v2', publishedArray);
@@ -775,11 +949,15 @@ export class PublicFeedManager {
    * @param {any} [excludeConn]
    * @param {string} [publicBeeKey] - The public Hyperbee key for viewers
    */
-  broadcastSubmitChannel(driveKey, excludeConn, publicBeeKey = null) {
+  broadcastSubmitChannel(driveKey, excludeConn, publicBeeKey = null, snapshot = null) {
     const msg = {
       type: 'SUBMIT_CHANNEL',
       key: driveKey,
-      publicBeeKey: publicBeeKey || null
+      publicBeeKey: publicBeeKey || null,
+      channelName: snapshot?.channelName || null,
+      videoCount: Number(snapshot?.videoCount || 0) || 0,
+      manifestUpdatedAt: Number(snapshot?.manifestUpdatedAt || 0) || 0,
+      previewVideos: this._sanitizePreviewVideos(snapshot?.previewVideos),
     };
 
     let sent = 0;

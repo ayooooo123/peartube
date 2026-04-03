@@ -78,7 +78,7 @@ function validateStartOptions(options) {
 }
 
 async function loadCreateBackend() {
-  const module = await import('../../backend/src/backend-entry.js')
+  const module = await import('@peartube/backend/backend-entry')
   return module.createBackend
 }
 

@@ -1,4 +1,4 @@
-import { PROTOCOL_EVENTS } from '../../protocol/src/event-map.js'
+import { PROTOCOL_EVENTS } from '@peartube/protocol/events'
 
 import type { PlatformLifecycleEvent, PlatformRunner, ProtocolClientLike } from './rpc.shared'
 

@@ -104,6 +104,11 @@ export async function createRelayService({
         lastError: null
       })
 
+      if (resolved.publicBeeKey) {
+        await runtime.cacheManager?.addChannel?.(resolved.channelKey, resolved.publicBeeKey, 'discovered').catch(() => {})
+        await runtime.publicFeed?.submitChannel?.(resolved.channelKey, resolved.publicBeeKey).catch(() => {})
+      }
+
       logger.mirror.info('Channel mirrored', {
         channelKey: resolved.channelKey,
         ownerKey: resolved.ownerKey || null,

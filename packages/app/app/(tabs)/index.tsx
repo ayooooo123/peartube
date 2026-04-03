@@ -282,7 +282,8 @@ export default function HomeScreen() {
     const runId = feedLoadRunIdRef.current + 1
     feedLoadRunIdRef.current = runId
     setLoadingFeedVideos(true)
-    setFeedVideos([])
+    // Keep existing Discover cards visible during background refresh/hydration.
+    // Only merge in fresher results; do not blank the whole feed on every cycle.
 
     // Smaller initial tranche for fast first paint, then background-fill more.
     const PER_CHANNEL_TIMEOUT = hydrationMode === 'network' ? 4000 : 1500

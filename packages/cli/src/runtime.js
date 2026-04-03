@@ -1,7 +1,8 @@
 export async function createRelayRuntime({ config, logger }) {
-  const [{ initializeStorage, loadChannel, loadPublicBee }, { PublicFeedManager }] = await Promise.all([
+  const [{ initializeStorage, loadChannel, loadPublicBee }, { PublicFeedManager }, { CacheManager }] = await Promise.all([
     import('@peartube/backend/storage'),
-    import('@peartube/backend/public-feed')
+    import('@peartube/backend/public-feed'),
+    import('./cache-manager.js')
   ])
 
   const corestorePath = config?.paths?.corestore || config.storage.path
@@ -12,6 +13,7 @@ export async function createRelayRuntime({ config, logger }) {
   })
 
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb)
+  const cacheManager = new CacheManager(ctx.store, ctx.metaDb, config?.storage?.maxBytes || 0)
   let candidateHandler = null
 
   function emitFeedEntries() {
@@ -33,6 +35,11 @@ export async function createRelayRuntime({ config, logger }) {
 
   publicFeed.setOnFeedUpdate(() => {
     try {
+      for (const entry of publicFeed.entries.values()) {
+        if (entry?.driveKey && entry?.publicBeeKey) {
+          cacheManager.addChannel(entry.driveKey, entry.publicBeeKey, 'discovered').catch(() => {})
+        }
+      }
       emitFeedEntries()
     } catch (err) {
       logger.runtime?.error('Feed update failed', { error: err?.message || String(err) })
@@ -42,6 +49,7 @@ export async function createRelayRuntime({ config, logger }) {
   return {
     ctx,
     publicFeed,
+    cacheManager,
     setCandidateHandler(handler) {
       candidateHandler = handler
     },
@@ -52,7 +60,24 @@ export async function createRelayRuntime({ config, logger }) {
         mode: config.mode,
         policy: config.policy
       })
+      await cacheManager.init()
       await publicFeed.start()
+
+      // Restore mirrored/cached channels as actively served feed entries so the
+      // relay behaves like a real serving peer even when original publishers are offline.
+      for (const channel of cacheManager.getChannels()) {
+        if (!channel?.driveKey || !channel?.publicBeeKey) continue
+        try {
+          await loadPublicBee(ctx, channel.publicBeeKey)
+          await publicFeed.submitChannel(channel.driveKey, channel.publicBeeKey)
+        } catch (err) {
+          logger.runtime?.debug('Failed to restore cached mirrored channel', {
+            channelKey: channel.driveKey,
+            error: err?.message || String(err)
+          })
+        }
+      }
+
       logger.runtime?.info('Relay runtime started', this.getNetworkStats())
       emitFeedEntries()
     },

@@ -381,7 +381,7 @@ export default function HomeScreen() {
     } catch {
       if (feedLoadRunIdRef.current === runId) setLoadingFeedVideos(false)
     }
-  }, [rpc, feedEntries, swarmStatus, fetchThumbnailsForVideos])
+  }, [rpc, feedEntries, swarmStatus, fetchThumbnailsForVideos, videos, identity?.driveKey])
 
   // Load feed videos when feed entries change
   useEffect(() => {

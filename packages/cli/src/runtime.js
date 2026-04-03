@@ -31,7 +31,11 @@ export async function createRelayRuntime({ config, logger }) {
   const ctx = await initializeStorage({
     storagePath: storageRoot,
     primaryKey,
-    wrapTimeout: true
+    wrapTimeout: true,
+    // Docker/bind-mounted relay volumes can trip device-file inode/mtime validation
+    // across clean container restarts even with the same persisted primary key.
+    // The relay is a single-writer service, so disable device-file enforcement here.
+    corestoreAllowBackup: true
   })
 
   if (!primaryKey && ctx?.store?.primaryKey) {

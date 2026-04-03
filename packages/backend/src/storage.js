@@ -335,7 +335,8 @@ export async function initializeStorage(config) {
     blobServerHost: blobServerHostOverride,
     blobServerBindHost: blobServerBindHostOverride,
     primaryKey = null,
-    corestoreWaitForLock = false
+    corestoreWaitForLock = false,
+    corestoreAllowBackup = false
   } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
@@ -368,8 +369,8 @@ export async function initializeStorage(config) {
   console.log('[Storage] Corestore primaryKey:', primaryKey ? 'provided (deterministic)' : 'not provided (random)');
   console.log('[Storage] Corestore lock wait:', corestoreWaitForLock ? 'enabled' : 'disabled');
   const corestoreOptions = primaryKey
-    ? { primaryKey, unsafe: true, wait: corestoreWaitForLock }
-    : { wait: corestoreWaitForLock }
+    ? { primaryKey, unsafe: true, wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
+    : { wait: corestoreWaitForLock, allowBackup: corestoreAllowBackup }
   let store = await createCorestoreInstance(storagePath, corestoreOptions)
 
   console.log('[Storage] Waiting for Corestore ready...');

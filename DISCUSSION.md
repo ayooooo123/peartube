@@ -1,121 +1,122 @@
-# Task: Fix relay CLI/container restart error: device-file 'Invalid device file, was modified'
+# Task: Rebalance discovery feed speed vs correctness
 
-## Symptom
-Starting and stopping the relay in the user's container runtime throws during Corestore open:
+## Problem
+User reports discovery feed videos are loading impossibly slow.
 
-```
-Error: Invalid device file, was modified
-  at device-file/index.js
-  at RocksDBState._open
-  at hypercore-storage
-  at Corestore._open
-```
+## Current situation
+We tightened correctness so only `availability === 'playable'` items render.
+That stopped false positives, but now the feed can look empty/slow until we get positive evidence.
 
-## Interpretation
-This usually means the storage metadata in `device-file` thinks the underlying device/inode identity changed between runs. In container environments this often happens with:
-- bind mounts / overlayfs / ephemeral writable layers
-- volume paths recreated between runs
-- file locking/device identity assumptions not surviving container restart patterns
+## Likely combined bottleneck
+- public feed entries arrive quickly
+- channel/video hydration is slower
+- positive availability evidence is even slower
+- strict playable-only filtering means nothing renders until all three line up
 
-## Goal
-Find the relay CLI storage path and startup behavior, then determine the safest fix.
-Likely options:
-1. change relay storage path strategy
-2. avoid device-file verification mode in container env if supported
-3. ensure persistent volume path is stable
-4. wipe/recreate only the specific invalid store metadata when corrupt/incompatible
+## Better UX direction
+Two-stage rendering:
+1. Render discovered videos as soon as listVideos() returns
+2. Mark them as `checking` / `unknown` in UI
+3. Upgrade to playable or hide later when hints resolve
 
-## Files to inspect
-- packages/cli/src/service.js
-- packages/backend/src/storage.js
-- any relay startup command / docker / container scripts
+This gives:
+- fast first paint
+- fewer false negatives
+- avoids the previous bug where completely unseeded videos looked fully watchable
 
 ## Discussion
 
 ## Codex Proposal
 
-### Independent diagnosis
-The relay CLI is opening Corestore directly against `config.storage.path` (`packages/cli/src/runtime.js`), and that path is also where the container image sets `WORKDIR`, `PEARTUBE_STORAGE_PATH`, and the Docker `VOLUME` (`packages/cli/Dockerfile`). Corestore itself is created as `new Corestore(storagePath, options)` in `packages/backend/src/storage.js`, so RocksDB/device-file metadata is anchored to the filesystem identity of that exact mounted directory.
+Implement discovery rendering as a two-stage pipeline on the frontend:
 
-`Invalid device file, was modified` is more consistent with a storage-root identity change than with a logical relay config problem. In practice that means one of these is likely happening between container runs:
-- the relay data directory is landing on a different underlying device/inode after restart
-- the container is using a bind mount or overlay-backed path whose reported device metadata changes across restarts
-- the storage root was recreated/rebound while preserving some files, so `device-file` sees the old metadata and aborts before Corestore can open
+1. Stage 1: render every `listVideos()` result immediately unless we have explicit negative evidence.
+2. Stage 2: let availability hints upgrade cards to `playable` or remove them later if they resolve to `unavailable`.
 
-A notable code-path difference: the backend/orchestrator path has persistence and retry logic around Corestore seed selection (`packages/backend/src/orchestrator.js`, `identity-key-file.js`, `corestore-error-utils.js`), but the relay CLI does not use that path. The CLI calls `initializeStorage()` directly with only `{ storagePath, wrapTimeout: true }` (`packages/cli/src/runtime.js`). That means:
-- no standalone primary-key persistence/reuse in the CLI path
-- no orchestrator-style retry/fallback behavior
-- no classification of the device-file failure into a safer recovery mode
+Why this fits the current code:
+- `packages/backend/src/api.js` already returns per-video `availability` and only flips unknown items to `unavailable` when hint requests come back negative while peers exist.
+- The strict frontend gate is in `packages/app/app/(tabs)/index.tsx` today, not the web screen. Both the discovery loader and channel view do:
+  - `.filter((v: any) => (v?.availability || 'unknown') === 'playable')`
+- That means first paint waits for positive proof, which is exactly the slow path we are trying to avoid.
 
-This does not prove the primary key is the cause of the error; the immediate failure still looks like filesystem identity verification in `device-file`. But it does mean the CLI currently has no controlled recovery path once the mount identity changes.
+Exact frontend change I would make now:
+- In `packages/app/app/(tabs)/index.tsx`, change both filters from:
+  - `(v?.availability || 'unknown') === 'playable'`
+- to:
+  - `(v?.availability || 'unknown') !== 'unavailable'`
 
-### What looks safe to change
-1. Separate app metadata from Corestore data
-   - Today the relay uses one root for everything: Corestore internals plus `relay-catalog.json` and `relay-status.json` (`packages/cli/src/config.js`, `packages/cli/src/catalog.js`).
-   - Safer layout: keep `config.storage.path` as the relay home, but open Corestore under a dedicated child such as `<storage>/corestore` or `<storage>/db/corestore`.
-   - Benefit: if device-file metadata becomes invalid, we can surgically reset only the Corestore subtree without deleting relay catalog/status/config artifacts.
-   - This is the cleanest safe code change because it does not weaken integrity checks; it just narrows the blast radius.
+That gives the intended behavior:
+- `playable` renders
+- `unknown` renders immediately
+- `unavailable` stays hidden
 
-2. Add explicit CLI startup checks for stable persistent storage
-   - Before opening Corestore, detect and warn/refuse when `storage.path` is relative, inside obviously ephemeral locations, or equals the container working directory without a mounted volume.
-   - The backend already warns on default/relative storage in `packages/backend/src/storage.js`; the relay container path should go further and document/recommend named volumes over bind mounts for restarts.
-   - In docs/examples, strongly prefer the existing named-volume pattern from `packages/cli/docker-compose.example.yml` and explicitly warn that bind-mounting overlay-backed or recreated host directories can trip device-file validation.
+Important follow-up found while inspecting the same path:
+- `packages/app/pear-src/workers/core/index.ts` currently strips `availability` when it remaps `api.listVideos(...)` results into RPC payloads.
+- So if we want the frontend to distinguish `unknown` from `unavailable`, the worker should also forward `availability` (for example `availability: v.availability || 'unknown'`).
+- If we do not forward it, the proposed relaxed filter still improves first paint, but it cannot later hide explicit negatives because everything arrives as implicit `unknown`.
 
-3. Reuse the backend identity/primary-key persistence logic in the relay CLI
-   - Even though the current error is probably not caused by seed mismatch, the CLI should still persist and reuse the Corestore primary key the same way the backend does.
-   - Lowest-risk implementation: factor a small shared helper from `packages/backend/src/orchestrator.js` + `identity-key-file.js` and use it in `packages/cli/src/runtime.js` before `initializeStorage()`.
-   - Benefit: makes container restarts more deterministic and aligns relay behavior with the more battle-tested backend path.
-   - Limitation: this alone probably will not fix `Invalid device file, was modified` if the mount identity itself changes.
+Recommendation:
+- Do the filter relaxation and worker forwarding together as the minimum viable fix.
+- Keep the existing sort/merge behavior; only change the inclusion rule.
+- Do not block discovery cards on thumbnails or positive availability.
 
-4. Add a narrowly-scoped recovery path for device-file invalidation
-   - Treat this error as a distinct startup failure class.
-   - Provide an explicit opt-in mode/env var for the relay, e.g. `PEARTUBE_CORESTORE_RESET_ON_DEVICE_MISMATCH=1`.
-   - On that specific error only, close any partial store and move aside only the Corestore subtree (`corestore/`, `db/`, `cores/`, `primary-key`, `CORESTORE` depending on final layout), preserving `relay-catalog.json` and `relay-status.json`, then reopen.
-   - If we first isolate Corestore into its own subdirectory, this becomes much safer and easier to reason about.
-   - I would avoid unconditional auto-delete on this error in the current mixed-layout design.
+On a lightweight `checking` badge/state:
+- I do not think a badge is required for the first fix.
+- The main UX regression is empty/slow discovery, and the filter change solves that with minimal surface area.
+- A badge becomes worthwhile only after availability is forwarded end-to-end and we confirm users are confused by cards that appear before playback is confirmed.
 
-5. Add a preflight marker for operator diagnostics
-   - Write a tiny plain JSON marker in the relay home on clean startup containing the resolved storage path and a snapshot of `stat()` data for the storage root.
-   - On next boot, if the marker exists but the root device/inode changed, log a targeted message explaining that the persistent volume identity changed and that Corestore/device-file may reject the store.
-   - This is safe and helps confirm whether the problem is Docker volume identity versus internal corruption.
+Why I would defer the badge for now:
+- The current web `VideoGrid` / `VideoCard` props do not carry availability, so adding a badge is a broader UI plumbing change than the filter fix.
+- A badge introduces product decisions we do not yet have settled: wording (`Checking`, `Verifying`, `Availability unknown`), when it clears, and whether a card should stay clickable while checking.
+- We already have a safe backend state model where explicit negatives can hide later; that gives most of the value without extra visual noise.
 
-### Recommended mitigation order
-A. Operational fix first
-- Ensure the relay is restarted with the same named Docker volume, not a recreated bind mount or ephemeral writable layer.
-- Keep `PEARTUBE_STORAGE_PATH` pointed at the mounted volume path, not a path copied into the image layer.
+If we do want a very small follow-up later:
+- Add `availability?: 'playable' | 'unknown' | 'unavailable'` to the card data shape.
+- Show a subtle top-left `Checking` pill only for `unknown` items in discovery, not on channel pages or owned videos.
+- Remove the pill automatically when the card becomes `playable`; drop the card if it becomes `unavailable`.
 
-B. Safe code fix next
-- Refactor the CLI to use a dedicated Corestore subdirectory under `config.storage.path`.
-- Keep relay catalog/status files at the top level.
-- Add a targeted error message for the device-file mismatch case.
-
-C. Optional controlled recovery
-- After the layout split, add an opt-in reset/move-aside path for only the Corestore subtree on this exact error.
-
-### Bottom line
-My second-opinion diagnosis is that the root issue is most likely persistent-volume identity instability across container restarts, not relay admission logic or catalog corruption. The safest code change is not to bypass `device-file`, but to isolate Corestore into its own subdirectory and add a controlled, opt-in recovery path around that subtree. The relay CLI should also adopt the backend's primary-key persistence pattern so restart behavior is more deterministic overall.
+Bottom line:
+- Ship the two-stage behavior now by changing the frontend inclusion rule to hide only `unavailable`.
+- Forward `availability` through the worker in the same patch so later negative evidence can actually remove cards.
+- Treat the checking badge as a later polish item unless user testing shows the temporary ambiguity is a real problem.
 
 ## Claude Proposal
-The relay CLI passes `config.storage.path` straight through to backend `initializeStorage()` via `packages/cli/src/runtime.js`, and `packages/cli/src/service.js` also uses that same directory for relay sidecar files (`relay-catalog.json` and `relay-status.json`). In `packages/backend/src/storage.js`, Corestore is opened directly at that exact path with `new Corestore(storagePath, options)` and no container-specific override. The default relay path is also relative (`./peartube-relay`).
 
-Most likely cause:
-- in container restarts, the directory backing `config.storage.path` is not the same underlying filesystem identity that RocksDB/device-file saw on first boot
-- this is especially likely with overlayfs writable layers, recreated bind-mount targets, changing working directories with a relative path, or a volume mount that resolves to a fresh device/inode after restart
-- once `device-file` detects that identity mismatch, Corestore open fails early with `Invalid device file, was modified`
+Minimal change: keep the existing progressive `loadFeedVideos()` shape, but stop requiring `availability === 'playable'` for first render.
 
-Safest fix:
-1. require/document a stable absolute persistent volume for relay storage in containers
-2. store Corestore/RocksDB in its own dedicated subdirectory under the relay storage root (for example `<storage>/corestore`), while keeping relay JSON files alongside it
-3. add a one-time migration or explicit compatibility handling from the old flat layout to the dedicated subdirectory
+Implementation sketch:
 
-Why this is safest:
-- it avoids weakening Corestore/device-file integrity checks
-- it avoids automatically deleting RocksDB metadata on open failure
-- it makes the runtime less sensitive to relative-path/container cwd changes
-- it separates Corestore’s internal database from relay-managed JSON/status files and any future sidecar files
+1. In `packages/app/app/(tabs)/index.tsx`, change the discover-feed path in `loadEntry()` so `rpc.listVideos()` results are mapped into `feedVideos` immediately.
+   - Keep `availability` on each mapped video.
+   - First pass should include `unknown` / `checking` / `playable` items.
+   - Only exclude clearly dead states if we already have them (`unavailable`, `missing`, etc.).
 
-What I would not do first:
-- do not disable device-file verification globally just to make containers pass
-- do not auto-wipe the store on this error unless there is an explicit recovery path and operator opt-in, because that risks silent data loss
+2. Add a tiny second-stage refinement pass after first merge.
+   - Re-run `listVideos({ channelKey, publicBeeKey })` for already-rendered channels with a slightly longer timeout.
+   - Merge by `channelKey + id` so later metadata overwrites earlier `availability`.
+   - If an item resolves to a hard negative state, remove it then.
+   - This preserves fast first paint while still converging toward correctness.
 
-If we need an additional short-term mitigation, it should be documentation/config validation that rejects or warns on relative storage paths in container mode, but the primary code fix should be moving Corestore to a stable dedicated subdirectory and ensuring operators mount that directory persistently.
+3. Keep playback strict.
+   - Do not auto-assume unknown items are safe to play.
+   - If a user taps an `unknown` / `checking` card, let the normal `preparePlayback()` path be the source of truth.
+   - Optional tiny guard: disable tap only for explicit negative states, not for `unknown`.
+
+4. Small UI affordance in feed card.
+   - `VideoCard` currently shows title/channel/time only; there is no availability status.
+   - Add a minimal muted label or pill for non-playable-positive states:
+     - `checking` -> “Checking…”
+     - `unknown` -> “Syncing…”
+   - Hide the badge once state becomes `playable`.
+
+Why this is small-scope:
+- no new backend API
+- no feed architecture rewrite
+- uses the existing progressive merge behavior already present in `loadFeedVideos()`
+- only changes filtering and adds a lightweight refinement/update path
+
+Concretely, the biggest current blocker is here:
+- discover feed filters `listVideos()` results to playable-only before rendering
+- `feedVideosWithThumbs` also only shows videos from seeded/discovered channels
+
+That means the app already has a decent fast path, but it throws away early `unknown` results. Rendering those early and refining them later should materially improve perceived discovery speed with minimal risk.

@@ -104,6 +104,7 @@ final class AppState {
   var studioChannelVideos: [NativeVideo] = []
   var studioUploadJobs: [NativeUploadJob] = []
   var selectedStudioVideoID: NativeVideo.ID?
+  private var hasLoadedStudioWorkspace = false
 
   private var sectionCatalog: [AppSection: [NativeVideo]]
   private var searchResults: [NativeVideo] = []
@@ -159,6 +160,14 @@ final class AppState {
     studioUploadJobs.first
   }
 
+  var presentedStudioUploadJob: NativeUploadJob? {
+    guard let job = activeStudioUploadJob else { return nil }
+    if job.state == .completed, selectedStudioVideoID != nil {
+      return nil
+    }
+    return job
+  }
+
   var studioWorkspaceProfile: NativeChannelProfile? {
     if let studioChannelProfile {
       return studioChannelProfile
@@ -171,12 +180,12 @@ final class AppState {
       avatarURL: nil,
       name: activeIdentityName,
       description: nil,
-      videoCount: studioWorkspaceVideos.count
+      videoCount: resolvedStudioWorkspaceVideoCount
     )
   }
 
   var studioWorkspaceVideos: [NativeVideo] {
-    if !studioChannelVideos.isEmpty {
+    if hasLoadedStudioWorkspace {
       return studioChannelVideos
     }
 
@@ -185,9 +194,7 @@ final class AppState {
 
   var studioEditingVideo: NativeVideo? {
     guard let selectedStudioVideoID else { return nil }
-    return uniqueVideoLookup[selectedStudioVideoID]
-      ?? studioWorkspaceVideos.first(where: { $0.id == selectedStudioVideoID })
-      ?? channelPageVideos.first(where: { $0.id == selectedStudioVideoID })
+    return studioWorkspaceVideos.first(where: { $0.id == selectedStudioVideoID })
   }
 
   var displayedVideos: [NativeVideo] {
@@ -332,6 +339,7 @@ final class AppState {
   }
 
   func applySnapshot(_ snapshot: NativeBrowseSnapshot) {
+    let previousActiveStudioChannelKey = studioChannelProfile?.channelKey
     browseState = snapshot.state
     sectionCatalog = [
       .home: snapshot.sections.home,
@@ -342,10 +350,12 @@ final class AppState {
     ]
     lastErrorMessage = nil
     refreshChannelPageProfile()
-    if hasActiveIdentity {
-      refreshStudioWorkspaceProfile()
-    } else {
+    if !hasActiveIdentity {
       clearStudioWorkspace()
+    } else if previousActiveStudioChannelKey != activeIdentityChannelKey {
+      clearStudioWorkspace()
+    } else {
+      refreshStudioWorkspaceProfile()
     }
     refreshPinnedPlaybackVideo()
     refreshPinnedWatchVideo()
@@ -497,18 +507,17 @@ final class AppState {
 
     if let videos {
       studioChannelVideos = videos
+      hasLoadedStudioWorkspace = true
     }
 
-    if selectedStudioVideoID == nil {
-      selectedStudioVideoID = studioWorkspaceVideos.first?.id ?? self.videos(for: .studio).first?.id
-    }
-
+    refreshStudioWorkspaceProfile()
     refreshStudioEditingSelection()
   }
 
   func clearStudioWorkspace() {
     studioChannelProfile = nil
     studioChannelVideos = []
+    hasLoadedStudioWorkspace = false
     selectedStudioVideoID = nil
   }
 
@@ -750,7 +759,7 @@ final class AppState {
         avatarURL: profile.avatarURL?.absoluteString,
         name: profile.name,
         description: profile.description,
-        videoCount: studioWorkspaceVideos.count
+        videoCount: resolvedStudioWorkspaceVideoCount
       )
     }
   }
@@ -797,15 +806,29 @@ final class AppState {
       avatarURL: profile.avatarURL?.absoluteString,
       name: profile.name,
       description: profile.description,
-      videoCount: max(profile.videoCount, studioWorkspaceVideos.count)
+      videoCount: resolvedStudioWorkspaceVideoCount
     )
   }
 
   private func refreshStudioEditingSelection() {
-    guard let selectedStudioVideoID else { return }
-    if !studioWorkspaceVideos.contains(where: { $0.id == selectedStudioVideoID }),
-       uniqueVideoLookup[selectedStudioVideoID] == nil {
-      self.selectedStudioVideoID = studioWorkspaceVideos.first?.id ?? videos(for: .studio).first?.id
+    let workspaceVideos = studioWorkspaceVideos
+
+    guard !workspaceVideos.isEmpty else {
+      selectedStudioVideoID = nil
+      return
     }
+
+    guard let selectedStudioVideoID else {
+      self.selectedStudioVideoID = workspaceVideos.first?.id
+      return
+    }
+
+    if !workspaceVideos.contains(where: { $0.id == selectedStudioVideoID }) {
+      self.selectedStudioVideoID = workspaceVideos.first?.id
+    }
+  }
+
+  private var resolvedStudioWorkspaceVideoCount: Int {
+    hasLoadedStudioWorkspace ? studioChannelVideos.count : videos(for: .studio).count
   }
 }

@@ -1,4 +1,6 @@
 import AVFoundation
+import AVKit
+import SwiftUI
 import XCTest
 @testable import PearTubeDesktop
 
@@ -187,6 +189,30 @@ final class PearTubeDesktopTests: XCTestCase {
     XCTAssertNil(appState.selectedVideoID)
     XCTAssertEqual(appState.miniPlayerVideo?.id, "channel-a:video-1")
     XCTAssertTrue(appState.isPlayingPreview)
+  }
+
+  func testNativeAVPlayerViewShowsBuiltInPlaybackControlsByDefault() {
+    let hostingView = NSHostingView(rootView: NativeAVPlayerView(player: AVPlayer()))
+    hostingView.frame = CGRect(x: 0, y: 0, width: 320, height: 180)
+    hostingView.layoutSubtreeIfNeeded()
+
+    let playerView = findSubview(in: hostingView, ofType: AVPlayerView.self)
+
+    XCTAssertNotNil(playerView)
+    XCTAssertEqual(playerView?.controlsStyle, .default)
+    XCTAssertTrue(playerView?.showsFullScreenToggleButton ?? false)
+  }
+
+  func testNativeAVPlayerViewCanHideBuiltInPlaybackControls() {
+    let hostingView = NSHostingView(rootView: NativeAVPlayerView(player: AVPlayer(), hidesControls: true))
+    hostingView.frame = CGRect(x: 0, y: 0, width: 320, height: 180)
+    hostingView.layoutSubtreeIfNeeded()
+
+    let playerView = findSubview(in: hostingView, ofType: AVPlayerView.self)
+
+    XCTAssertNotNil(playerView)
+    XCTAssertEqual(playerView?.controlsStyle, .none)
+    XCTAssertFalse(playerView?.showsFullScreenToggleButton ?? true)
   }
 
   func testSuccessfulBootstrapLeavesDiagnosticsAndReturnsToHome() {
@@ -599,6 +625,24 @@ final class PearTubeDesktopTests: XCTestCase {
     XCTAssertEqual(appState.selectedStudioVideoID, newestVideo.id)
   }
 
+  func testCompletedStudioUploadJobIsHiddenFromStudioStatusCard() {
+    let appState = AppState()
+    let uploadedVideo = makeVideo(
+      id: "channel-owner:video-new",
+      backendVideoID: "video-new",
+      channelKey: "channel-owner",
+      title: "Newest Upload",
+      channelName: "Owner Channel",
+      sections: [.studio, .library]
+    )
+
+    appState.beginStudioUpload(fileName: "newest.mov", title: "Newest Upload")
+    appState.completeStudioUpload(with: uploadedVideo)
+
+    XCTAssertEqual(appState.activeStudioUploadJob?.state, .completed)
+    XCTAssertNil(appState.presentedStudioUploadJob)
+  }
+
   func testResolveUploadedStudioVideoPrefersProgressVideoIDThenFirstOwnerTitleMatch() {
     let activeIdentityChannelKey = "channel-owner"
     let matchingVideo = makeVideo(
@@ -717,6 +761,130 @@ final class PearTubeDesktopTests: XCTestCase {
 
     XCTAssertEqual(appState.selectedStudioVideoID, secondVideo.id)
     XCTAssertEqual(appState.studioEditingVideo?.title, "Second Video Updated")
+  }
+
+  func testLoadedEmptyStudioWorkspaceClearsSnapshotFallbackAndEditingSelection() {
+    let appState = AppState()
+    let snapshotVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "Snapshot Video",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [],
+        subscriptions: [],
+        library: [],
+        studio: [snapshotVideo],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: [],
+        identityChannelKeys: ["channel-owner"],
+        activeIdentityName: "Owner Channel",
+        activeIdentityChannelKey: "channel-owner",
+        activeChannelPublished: true
+      )
+    )
+    let profile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 1
+    )
+
+    appState.applySnapshot(snapshot)
+    appState.selectStudioVideoForEditing(snapshotVideo.id)
+    appState.updateStudioWorkspace(profile: profile, videos: [])
+
+    XCTAssertTrue(appState.studioWorkspaceVideos.isEmpty)
+    XCTAssertEqual(appState.studioWorkspaceProfile?.videoCount, 0)
+    XCTAssertNil(appState.selectedStudioVideoID)
+    XCTAssertNil(appState.studioEditingVideo)
+  }
+
+  func testStudioWorkspaceProfileUsesLoadedWorkspaceVideoCount() {
+    let appState = AppState()
+    let loadedVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "Loaded Video",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+    let profile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 4
+    )
+
+    appState.updateStudioWorkspace(profile: profile, videos: [loadedVideo])
+
+    XCTAssertEqual(appState.studioWorkspaceVideos.map(\.id), [loadedVideo.id])
+    XCTAssertEqual(appState.studioWorkspaceProfile?.videoCount, 1)
+  }
+
+  func testApplyingSnapshotForDifferentActiveIdentityClearsPreviouslyLoadedStudioWorkspace() {
+    let appState = AppState()
+    let loadedVideo = makeVideo(
+      id: "channel-owner:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-owner",
+      title: "Owner Video",
+      channelName: "Owner Channel",
+      sections: [.studio]
+    )
+    let loadedProfile = appState.makeChannelProfile(
+      channelKey: "channel-owner",
+      publicBeeKey: "bee-owner",
+      name: "Owner Channel",
+      description: "Owner profile",
+      videoCount: 1
+    )
+    let snapshotVideo = makeVideo(
+      id: "channel-next:video-1",
+      backendVideoID: "video-1",
+      channelKey: "channel-next",
+      title: "Next Identity Video",
+      channelName: "Next Channel",
+      sections: [.studio]
+    )
+    let snapshot = NativeBrowseSnapshot(
+      generatedAt: 2,
+      sections: NativeBrowseSections(
+        home: [],
+        subscriptions: [],
+        library: [],
+        studio: [snapshotVideo],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 1),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: [],
+        identityChannelKeys: ["channel-next"],
+        activeIdentityName: "Next Channel",
+        activeIdentityChannelKey: "channel-next",
+        activeChannelPublished: false
+      )
+    )
+
+    appState.updateStudioWorkspace(profile: loadedProfile, videos: [loadedVideo])
+    appState.selectStudioVideoForEditing(loadedVideo.id)
+    appState.applySnapshot(snapshot)
+
+    XCTAssertEqual(appState.studioWorkspaceVideos.map(\.id), [snapshotVideo.id])
+    XCTAssertEqual(appState.selectedStudioVideoID, snapshotVideo.id)
+    XCTAssertEqual(appState.studioEditingVideo?.id, snapshotVideo.id)
+    XCTAssertEqual(appState.studioWorkspaceProfile?.channelKey, "channel-next")
   }
 
   func testUpsertOwnedVideoRefreshesStudioWorkspaceAndChannelPageCopies() {
@@ -1001,7 +1169,7 @@ final class PearTubeDesktopTests: XCTestCase {
 
     let response = NativeBridgeBootstrapResponse(
       blobServerPort: 64369,
-      protocolVersion: 1,
+      protocolVersion: 2,
       storagePath: "/tmp/peartube-native",
       snapshot: snapshot
     )
@@ -1406,6 +1574,57 @@ final class PearTubeDesktopTests: XCTestCase {
     XCTAssertEqual(resolved.state.activeIdentityName, "Native Identity")
     XCTAssertEqual(resolved.stats.homeCount, 0)
     XCTAssertEqual(resolved.stats.subscriptionCount, 0)
+  }
+
+  func testSnapshotForPersistenceKeepsCachedHomeWhenLiveRefreshIsEmpty() {
+    let cachedSnapshot = NativeBrowseSnapshot(
+      generatedAt: 1,
+      sections: NativeBrowseSections(
+        home: [
+          makeVideo(
+            id: "cached:video-1",
+            backendVideoID: "video-1",
+            channelKey: "cached-channel",
+            title: "Cached Video",
+            channelName: "Cached Channel",
+            sections: [.home]
+          )
+        ],
+        subscriptions: [],
+        library: [],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 1, subscriptionCount: 0, libraryCount: 0, channelCount: 1)
+    )
+
+    let liveSnapshot = NativeBrowseSnapshot(
+      generatedAt: 2,
+      sections: NativeBrowseSections(
+        home: [],
+        subscriptions: [],
+        library: [],
+        studio: [],
+        diagnostics: []
+      ),
+      stats: NativeBrowseStats(homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 0),
+      state: NativeBrowseState(
+        subscriptionChannelKeys: [],
+        identityChannelKeys: ["identity-channel"],
+        activeIdentityName: "Native Identity",
+        activeIdentityChannelKey: "identity-channel",
+        activeChannelPublished: true
+      )
+    )
+
+    let persisted = HostBridgeService.snapshotForPersistence(
+      liveSnapshot: liveSnapshot,
+      cachedSnapshot: cachedSnapshot
+    )
+
+    XCTAssertEqual(persisted.sections.home.map(\.id), ["cached:video-1"])
+    XCTAssertEqual(persisted.state.activeIdentityName, "Native Identity")
+    XCTAssertEqual(persisted.stats.homeCount, 1)
   }
 
   func testBrowseSnapshotCacheRoundTripsThroughDisk() throws {
@@ -1879,6 +2098,27 @@ final class PearTubeDesktopTests: XCTestCase {
     )
   }
 
+  func testAVPlayerReadinessAllowsCompleteLocalPlaybackWithoutPeers() {
+    let localCompleteStats = NativeBridgeVideoStatsResponse(
+      success: true,
+      status: "complete",
+      progress: 100,
+      totalBlocks: 128,
+      downloadedBlocks: 0,
+      totalBytes: 1024,
+      downloadedBytes: 0,
+      peerCount: 0,
+      swarmConnections: 0,
+      speedMBps: "0",
+      uploadSpeedMBps: nil,
+      elapsed: 1,
+      isComplete: false,
+      error: nil
+    )
+
+    XCTAssertTrue(HostBridgeService.isAVPlayerReadyForPlayback(localCompleteStats))
+  }
+
   func testDiagnosticsTransportLogFilterOnlySuppressesLowLevelIpcSpam() {
     XCTAssertTrue(
       HostBridgeService.shouldSuppressDiagnosticsTransportLog(
@@ -2020,6 +2260,249 @@ final class PearTubeDesktopTests: XCTestCase {
     XCTAssertTrue(HostBridgeService.shouldUseNativeMpvPlayback(for: mp4Video, environment: ["PEARTUBE_NATIVE_ENABLE_MPV": "1"]))
     XCTAssertTrue(HostBridgeService.shouldUseNativeMpvPlayback(for: publicFeedMp4Video, environment: ["PEARTUBE_NATIVE_ENABLE_MPV": "1"]))
     XCTAssertTrue(HostBridgeService.shouldUseNativeMpvPlayback(for: mp4Video, environment: ["PEARTUBE_NATIVE_ENABLE_MPV": "true"]))
+  }
+
+  func testNativePlaybackPrefersMpvForKnownIncompatibleFormats() {
+    let webmVideo = NativeVideo(
+      id: "channel-a:video-webm",
+      backendVideoID: "video-webm",
+      channelKey: "channel-a",
+      title: "WebM",
+      channelName: "Channel A",
+      durationText: "1:23",
+      summary: "Known incompatible format",
+      tags: ["test"],
+      accentHex: "#FF7A59",
+      sections: [.home],
+      path: "/videos/video-webm.webm",
+      mimeType: "video/webm"
+    )
+    let mkvVideo = NativeVideo(
+      id: "channel-a:video-mkv",
+      backendVideoID: "video-mkv",
+      channelKey: "channel-a",
+      title: "MKV",
+      channelName: "Channel A",
+      durationText: "1:23",
+      summary: "Known incompatible format",
+      tags: ["test"],
+      accentHex: "#FF7A59",
+      sections: [.home],
+      path: "/videos/video-mkv.mkv",
+      mimeType: "video/x-matroska"
+    )
+    let unknownVideo = NativeVideo(
+      id: "channel-a:video-unknown-default",
+      backendVideoID: "video-unknown-default",
+      channelKey: "channel-a",
+      title: "Unknown",
+      channelName: "Channel A",
+      durationText: "1:23",
+      summary: "Unknown format",
+      tags: ["test"],
+      accentHex: "#FF7A59",
+      sections: [.home]
+    )
+
+    XCTAssertTrue(HostBridgeService.prefersNativeMpvPlayback(for: webmVideo, environment: [:]))
+    XCTAssertTrue(HostBridgeService.prefersNativeMpvPlayback(for: mkvVideo, environment: [:]))
+    XCTAssertFalse(HostBridgeService.prefersNativeMpvPlayback(for: unknownVideo, environment: [:]))
+    XCTAssertFalse(HostBridgeService.prefersNativeMpvPlayback(for: webmVideo, environment: ["PEARTUBE_NATIVE_ENABLE_MPV": "0"]))
+    XCTAssertTrue(HostBridgeService.prefersNativeMpvPlayback(for: unknownVideo, environment: ["PEARTUBE_NATIVE_ENABLE_MPV": "1"]))
+    XCTAssertFalse(
+      HostBridgeService.prefersNativeMpvPlayback(
+        for: webmVideo,
+        environment: [
+          "PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSIONS": "1",
+          "PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSION_ROUTING": "1"
+        ]
+      )
+    )
+  }
+
+  func testNativePlaybackPrefersExperimentalFFmpegDecodeForKnownIncompatibleFormats() {
+    let webmVideo = NativeVideo(
+      id: "channel-a:video-webm-ffmpeg",
+      backendVideoID: "video-webm-ffmpeg",
+      channelKey: "channel-a",
+      title: "WebM",
+      channelName: "Channel A",
+      durationText: "1:23",
+      summary: "Known incompatible format",
+      tags: ["test"],
+      accentHex: "#FF7A59",
+      sections: [.home],
+      path: "/videos/video-webm.webm",
+      mimeType: "video/webm"
+    )
+    let unknownVideo = NativeVideo(
+      id: "channel-a:video-unknown-ffmpeg",
+      backendVideoID: "video-unknown-ffmpeg",
+      channelKey: "channel-a",
+      title: "Unknown",
+      channelName: "Channel A",
+      durationText: "1:23",
+      summary: "Unknown format",
+      tags: ["test"],
+      accentHex: "#FF7A59",
+      sections: [.home]
+    )
+
+    XCTAssertFalse(HostBridgeService.isExperimentalFFmpegDecodeEnabled(environment: [:]))
+    XCTAssertTrue(
+      HostBridgeService.isExperimentalFFmpegDecodeEnabled(
+        environment: ["PEARTUBE_NATIVE_ENABLE_FFMPEG_DECODE": "1"]
+      )
+    )
+    XCTAssertTrue(
+      HostBridgeService.prefersNativeFFmpegDecodePlayback(
+        for: webmVideo,
+        environment: ["PEARTUBE_NATIVE_ENABLE_FFMPEG_DECODE": "1"]
+      )
+    )
+    XCTAssertFalse(
+      HostBridgeService.prefersNativeFFmpegDecodePlayback(
+        for: unknownVideo,
+        environment: ["PEARTUBE_NATIVE_ENABLE_FFMPEG_DECODE": "1"]
+      )
+    )
+    XCTAssertFalse(
+      HostBridgeService.prefersNativeMpvPlayback(
+        for: webmVideo,
+        environment: ["PEARTUBE_NATIVE_ENABLE_FFMPEG_DECODE": "1"]
+      )
+    )
+    XCTAssertFalse(
+      HostBridgeService.prefersNativeFFmpegDecodePlayback(
+        for: webmVideo,
+        environment: [
+          "PEARTUBE_NATIVE_ENABLE_MPV": "0",
+          "PEARTUBE_NATIVE_ENABLE_FFMPEG_DECODE": "1"
+        ]
+      )
+    )
+    XCTAssertFalse(
+      HostBridgeService.prefersNativeFFmpegDecodePlayback(
+        for: webmVideo,
+        environment: [
+          "PEARTUBE_NATIVE_ENABLE_MPV": "1",
+          "PEARTUBE_NATIVE_ENABLE_FFMPEG_DECODE": "1"
+        ]
+      )
+    )
+  }
+
+  func testProfessionalVideoWorkflowExtensionsAreDisabledByDefault() {
+    XCTAssertFalse(ProfessionalVideoWorkflowExtensions.isEnabled(environment: [:]))
+    XCTAssertFalse(
+      ProfessionalVideoWorkflowExtensions.isEnabled(
+        environment: ["PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSIONS": "false"]
+      )
+    )
+    XCTAssertTrue(
+      ProfessionalVideoWorkflowExtensions.isEnabled(
+        environment: ["PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSIONS": "1"]
+      )
+    )
+  }
+
+  func testProfessionalVideoWorkflowRegistrationIsIdempotent() {
+    var formatReaderRegistrations = 0
+    var videoDecoderRegistrations = 0
+    var state = ProfessionalVideoWorkflowRegistrationState()
+    let environment = ["PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSIONS": "1"]
+
+    let firstRegistration = ProfessionalVideoWorkflowExtensions.registerIfNeeded(
+      environment: environment,
+      state: &state,
+      formatReaderRegistration: { formatReaderRegistrations += 1 },
+      videoDecoderRegistration: { videoDecoderRegistrations += 1 }
+    )
+    let secondRegistration = ProfessionalVideoWorkflowExtensions.registerIfNeeded(
+      environment: environment,
+      state: &state,
+      formatReaderRegistration: { formatReaderRegistrations += 1 },
+      videoDecoderRegistration: { videoDecoderRegistrations += 1 }
+    )
+
+    XCTAssertTrue(firstRegistration)
+    XCTAssertFalse(secondRegistration)
+    XCTAssertEqual(formatReaderRegistrations, 1)
+    XCTAssertEqual(videoDecoderRegistrations, 1)
+  }
+
+  func testProfessionalVideoWorkflowDiagnosticsReportDisabledStateWithoutBundledExtensions() {
+    let diagnostics = ProfessionalVideoWorkflowExtensions.diagnostics(
+      environment: [:],
+      pluginsDirectory: nil
+    )
+
+    XCTAssertFalse(diagnostics.isEnabled)
+    XCTAssertFalse(diagnostics.isRoutingEnabled)
+    XCTAssertEqual(diagnostics.statusTitle, "Disabled")
+    XCTAssertEqual(diagnostics.bundledExtensionsSummary, "No bundled MediaExtensions")
+    XCTAssertEqual(
+      diagnostics.reportLines,
+      [
+        "Media extensions: Disabled",
+        "Media extension routing: Disabled",
+        "Media extension plug-ins: Unavailable",
+        "Bundled MediaExtensions: none",
+      ]
+    )
+  }
+
+  func testProfessionalVideoWorkflowDiagnosticsEnumerateBundledMediaExtensions() throws {
+    let fileManager = FileManager.default
+    let rootURL = fileManager.temporaryDirectory
+      .appendingPathComponent("peartube-mediaextension-diagnostics-\(UUID().uuidString)", isDirectory: true)
+    let pluginsDirectory = rootURL.appendingPathComponent("PlugIns", isDirectory: true)
+
+    defer {
+      try? fileManager.removeItem(at: rootURL)
+    }
+
+    try fileManager.createDirectory(at: pluginsDirectory, withIntermediateDirectories: true)
+
+    try writeBundledMediaExtensionInfo(
+      at: pluginsDirectory.appendingPathComponent("PearTubeMediaFormatReader.appex", isDirectory: true),
+      bundleIdentifier: "com.peartube.desktop.native.media-format-reader",
+      bundleName: "PearTube Media Format Reader",
+      extensionIdentifier: "com.peartube.mediaextension.formatreader.experimental",
+      extensionPointIdentifier: "com.apple.mediaextension.formatreader"
+    )
+    try writeBundledMediaExtensionInfo(
+      at: pluginsDirectory.appendingPathComponent("PearTubeSupplementalVideoDecoder.appex", isDirectory: true),
+      bundleIdentifier: "com.peartube.desktop.native.supplemental-video-decoder",
+      bundleName: "PearTube Supplemental Video Decoder",
+      extensionIdentifier: "com.peartube.mediaextension.videodecoder.experimental",
+      extensionPointIdentifier: "com.apple.mediaextension.videodecoder"
+    )
+
+    let diagnostics = ProfessionalVideoWorkflowExtensions.diagnostics(
+      environment: [
+        "PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSIONS": "1",
+        "PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSION_ROUTING": "1"
+      ],
+      pluginsDirectory: pluginsDirectory
+    )
+
+    XCTAssertTrue(diagnostics.isEnabled)
+    XCTAssertTrue(diagnostics.isRoutingEnabled)
+    XCTAssertEqual(diagnostics.statusTitle, "Enabled + Routing")
+    XCTAssertEqual(diagnostics.bundledExtensions.count, 2)
+    XCTAssertEqual(diagnostics.bundledExtensionsSummary, "2 bundled MediaExtensions")
+    XCTAssertEqual(
+      diagnostics.bundledExtensions.map(\.extensionPointIdentifier),
+      ["com.apple.mediaextension.formatreader", "com.apple.mediaextension.videodecoder"]
+    )
+    XCTAssertEqual(
+      diagnostics.bundledExtensions.map(\.extensionIdentifier),
+      [
+        "com.peartube.mediaextension.formatreader.experimental",
+        "com.peartube.mediaextension.videodecoder.experimental"
+      ]
+    )
   }
 
   func testAVPlayerReadinessRequiresEitherBufferedDataOrPeers() {
@@ -2451,6 +2934,48 @@ final class PearTubeDesktopTests: XCTestCase {
         withIntermediateDirectories: true
       )
     }
+  }
+
+  private func writeBundledMediaExtensionInfo(
+    at bundleURL: URL,
+    bundleIdentifier: String,
+    bundleName: String,
+    extensionIdentifier: String,
+    extensionPointIdentifier: String
+  ) throws {
+    let fileManager = FileManager.default
+    let contentsURL = bundleURL.appendingPathComponent("Contents", isDirectory: true)
+    let infoPlistURL = contentsURL.appendingPathComponent("Info.plist")
+
+    try fileManager.createDirectory(at: contentsURL, withIntermediateDirectories: true)
+
+    let info: [String: Any] = [
+      "CFBundleIdentifier": bundleIdentifier,
+      "CFBundleDisplayName": bundleName,
+      "CFBundleName": bundleName,
+      "CFBundlePackageType": "XPC!",
+      "EXAppExtensionAttributes": [
+        "ClassImplementationID": extensionIdentifier,
+        "EXExtensionPointIdentifier": extensionPointIdentifier,
+      ]
+    ]
+
+    let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+    try data.write(to: infoPlistURL)
+  }
+
+  private func findSubview<T: NSView>(in view: NSView, ofType type: T.Type) -> T? {
+    if let typedView = view as? T {
+      return typedView
+    }
+
+    for subview in view.subviews {
+      if let typedView = findSubview(in: subview, ofType: type) {
+        return typedView
+      }
+    }
+
+    return nil
   }
 }
 

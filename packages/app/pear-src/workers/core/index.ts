@@ -547,13 +547,18 @@ B.getPublicFeed = async () => {
     entries: (r.entries || [])
       .map((e: any) => ({
         channelKey: e.channelKey || e.driveKey || '',
+        driveKey: e.driveKey || e.channelKey || '',
+        source: e.source || 'peer',
         publicBeeKey: e.publicBeeKey || null,
         channelName: e.channelName || e.name || null,
         videoCount: e.videoCount || 0,
         peerCount: e.peerCount || 0,
         lastSeen: e.lastSeen || 0,
+        manifestUpdatedAt: e.manifestUpdatedAt || 0,
+        previewVideos: Array.isArray(e.previewVideos) ? e.previewVideos : [],
       }))
-      .filter((e: any) => typeof e.channelKey === 'string' && e.channelKey.length > 0)
+      .filter((e: any) => typeof e.channelKey === 'string' && e.channelKey.length > 0),
+    stats: r.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
   }
 }
 B.refreshFeed = async () => { api.refreshFeed(); return { success: true } }

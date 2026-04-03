@@ -429,3 +429,50 @@ export async function buildSearchResults({
 
   return shapedResults
 }
+
+export function buildChannelWorkspaceVideos({
+  channelKey,
+  publicBeeKey = null,
+  channelMeta = {},
+  videos = [],
+  sourceKind = 'identity',
+  sections = ['studio', 'library'],
+}) {
+  if (!channelKey) return []
+
+  const normalizedSections = Array.from(new Set(
+    (Array.isArray(sections) ? sections : []).filter(Boolean)
+  ))
+  const primarySection = normalizedSections[0] || 'library'
+  const source = {
+    channelKey,
+    publicBeeKey,
+    channelName: channelMeta?.name || null,
+    sourceKind,
+  }
+
+  return (Array.isArray(videos) ? videos : []).flatMap((video) => {
+    if (!video?.id) return []
+
+    return [{
+      id: `${channelKey}:${video.id}`,
+      backendVideoID: video.id,
+      channelKey,
+      publicBeeKey: video.publicBeeKey || publicBeeKey,
+      title: video.title?.trim() || 'Untitled Video',
+      channelName: normalizeChannelName(source, channelMeta, video),
+      durationText: formatDuration(video.duration),
+      summary: normalizeSummary(channelMeta, video),
+      tags: normalizeTags(source, video, primarySection),
+      accentHex: pickAccentHex(channelKey),
+      sections: normalizedSections,
+      thumbnailURL: video.thumbnail || null,
+      path: video.path || null,
+      blobId: video.blobId || null,
+      blobsCoreKey: video.blobsCoreKey || null,
+      mimeType: video.mimeType || null,
+      width: Number.isFinite(video.width) && video.width > 0 ? video.width : null,
+      height: Number.isFinite(video.height) && video.height > 0 ? video.height : null,
+    }]
+  })
+}

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   buildBrowseSnapshot,
+  buildChannelWorkspaceVideos,
   buildIdentityMutationSnapshot,
   buildSearchResults,
   formatDuration,
@@ -341,4 +342,56 @@ test('buildSearchResults shapes global search hits into native videos', async ()
     width: 1080,
     height: 1920,
   })
+})
+
+test('buildChannelWorkspaceVideos shapes raw channel videos into native bridge records', () => {
+  const videos = buildChannelWorkspaceVideos({
+    channelKey: 'channel-owner',
+    publicBeeKey: null,
+    channelMeta: {
+      name: 'Owner Channel',
+      description: 'Owner profile description',
+    },
+    videos: [
+      {
+        id: 'video-1',
+        title: 'Workspace Video',
+        description: 'Studio-safe summary',
+        duration: 142,
+        thumbnail: 'https://example.com/workspace.jpg',
+        category: 'music',
+        path: '/videos/video-1.mp4',
+        blobId: '0:128:0:4096',
+        blobsCoreKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        mimeType: 'video/mp4',
+        width: 1080,
+        height: 1920,
+      },
+    ],
+    sourceKind: 'identity',
+    sections: ['studio', 'library'],
+  })
+
+  assert.deepEqual(videos, [
+    {
+      id: 'channel-owner:video-1',
+      backendVideoID: 'video-1',
+      channelKey: 'channel-owner',
+      publicBeeKey: null,
+      title: 'Workspace Video',
+      channelName: 'Owner Channel',
+      durationText: '2:22',
+      summary: 'Studio-safe summary',
+      tags: ['studio', 'identity', 'music'],
+      accentHex: pickAccentHex('channel-owner'),
+      sections: ['studio', 'library'],
+      thumbnailURL: 'https://example.com/workspace.jpg',
+      path: '/videos/video-1.mp4',
+      blobId: '0:128:0:4096',
+      blobsCoreKey: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      mimeType: 'video/mp4',
+      width: 1080,
+      height: 1920,
+    },
+  ])
 })

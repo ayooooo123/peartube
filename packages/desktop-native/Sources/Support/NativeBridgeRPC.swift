@@ -38,6 +38,7 @@ enum NativeBridgeCommand: UInt {
   case updateVideoMetadata = 34
   case deleteVideo = 35
   case setVideoThumbnailFromFile = 36
+  case ffmpegDecodeAvailable = 37
 }
 
 enum NativeBridgeEventCommand: UInt {
@@ -321,6 +322,11 @@ struct NativeBridgeUploadProgressEvent: Equatable {
 }
 
 struct NativeBridgeMpvAvailableResponse: Equatable {
+  let available: Bool
+  let error: String?
+}
+
+struct NativeBridgeFFmpegDecodeAvailableResponse: Equatable {
   let available: Bool
   let error: String?
 }
@@ -1891,6 +1897,30 @@ struct NativeBridgeUploadProgressEventCodec: Codec {
 
 struct NativeBridgeMpvAvailableResponseCodec: Codec {
   typealias Value = NativeBridgeMpvAvailableResponse
+
+  private let bool = Primitive.Bool()
+  private let optionalString = OptionalCodec(Primitive.UTF8())
+
+  func preencode(_ state: inout State, _ value: Value) {
+    bool.preencode(&state, value.available)
+    optionalString.preencode(&state, value.error)
+  }
+
+  func encode(_ state: inout State, _ value: Value) throws {
+    try bool.encode(&state, value.available)
+    try optionalString.encode(&state, value.error)
+  }
+
+  func decode(_ state: inout State) throws -> Value {
+    Value(
+      available: try bool.decode(&state),
+      error: try optionalString.decode(&state)
+    )
+  }
+}
+
+struct NativeBridgeFFmpegDecodeAvailableResponseCodec: Codec {
+  typealias Value = NativeBridgeFFmpegDecodeAvailableResponse
 
   private let bool = Primitive.Bool()
   private let optionalString = OptionalCodec(Primitive.UTF8())

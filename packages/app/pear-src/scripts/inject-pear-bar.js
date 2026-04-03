@@ -21,6 +21,7 @@ const PEAR_CSP = `<meta http-equiv="Content-Security-Policy" content="default-sr
 
 // Worker client script - ES module that has access to Pear's import resolution
 const WORKER_CLIENT_SCRIPT = `<script type="module" src="./worker-client.js"></script>`
+const EXPO_ENTRY_SCRIPT_PATTERN = /<script[^>]*src="\.\/_expo\/static\/js\/web\/[^"]+"[^>]*><\/script>/
 
 // React Native (Metro web) NativeModules shim.
 // Prevents "__fbBatchedBridgeConfig is not set" by providing a minimal `nativeModuleProxy`.
@@ -59,8 +60,13 @@ function processHtmlFile(filePath) {
   // Inject pear bar after <body>
   html = html.replace('<body>', `<body>\n${PEAR_BAR_HTML}\n${RN_NATIVE_MODULE_PROXY_SHIM}`)
 
-  // Inject worker client script before </body> (after other scripts load, unbundled for Pear require access)
-  html = html.replace('</body>', `${WORKER_CLIENT_SCRIPT}\n</body>`)
+  // Load worker-client before the Expo entry bundle so platform RPC can see
+  // window.PearWorkerClient during app bootstrap.
+  if (EXPO_ENTRY_SCRIPT_PATTERN.test(html)) {
+    html = html.replace(EXPO_ENTRY_SCRIPT_PATTERN, `${WORKER_CLIENT_SCRIPT}\n$&`)
+  } else {
+    html = html.replace('</body>', `${WORKER_CLIENT_SCRIPT}\n</body>`)
+  }
 
   writeFileSync(filePath, html)
   console.log(`  Processed ${filePath}`)

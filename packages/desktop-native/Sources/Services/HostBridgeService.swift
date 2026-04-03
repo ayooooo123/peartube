@@ -12,6 +12,7 @@ final class HostBridgeService {
   private static let supportedVideoUploadFileExtensions: Set<String> = [
     "mp4", "mov", "m4v", "mkv", "webm"
   ]
+  private static let uploadBridgeRequestTimeout: Duration = .seconds(1800)
 
   private final class WorkletSessionSink: @unchecked Sendable {
     var session: (any NativeHostSession)?
@@ -63,6 +64,8 @@ final class HostBridgeService {
   private(set) var activeMpvPlayerID: String?
   private(set) var activeMpvFrameServerPort: Int?
   private(set) var mpvAvailable = false
+  private(set) var ffmpegDecodeAvailable = false
+  private(set) var ffmpegDecodeAvailabilityError: String?
 
   @ObservationIgnored private var hostSession: (any NativeHostSession)?
   @ObservationIgnored private var rpcChannel: BridgeRPCChannel?
@@ -99,6 +102,39 @@ final class HostBridgeService {
 
   var diagnosticsLogPath: String {
     diagnosticsLogURL.path
+  }
+
+  var professionalVideoWorkflowDiagnostics: ProfessionalVideoWorkflowDiagnostics {
+    ProfessionalVideoWorkflowExtensions.diagnostics()
+  }
+
+  var activeMediaExtensionPlaybackSummary: String? {
+    guard #available(macOS 15.0, *),
+          let asset = activeAVPlayer?.currentItem?.asset as? AVURLAsset,
+          let properties = asset.mediaExtensionProperties else {
+      return nil
+    }
+
+    return "\(properties.extensionName) (\(properties.extensionIdentifier))"
+  }
+
+  var ffmpegDecodeDiagnosticsTitle: String {
+    guard Self.isExperimentalFFmpegDecodeEnabled() else { return "Disabled" }
+    return ffmpegDecodeAvailable ? "Enabled + Available" : "Enabled"
+  }
+
+  var ffmpegDecodeDiagnosticsCaption: String {
+    if ffmpegDecodeAvailable {
+      return "bare-ffmpeg decode engine available"
+    }
+
+    if let ffmpegDecodeAvailabilityError, !ffmpegDecodeAvailabilityError.isEmpty {
+      return ffmpegDecodeAvailabilityError
+    }
+
+    return Self.isExperimentalFFmpegDecodeEnabled()
+      ? "Experimental decode path is enabled but not yet probed"
+      : "Experimental decode path is off"
   }
 
   init() {
@@ -144,6 +180,16 @@ final class HostBridgeService {
     let storagePath = Self.preferredStoragePath()
     selectedStoragePath = storagePath
     let transportMode = Self.preferredNativeHostTransportMode()
+
+    if ProfessionalVideoWorkflowExtensions.isEnabled() {
+      let registered = ProfessionalVideoWorkflowExtensions.registerIfNeeded()
+      if registered {
+        appendLog("Registered experimental MediaExtension format readers and supplemental video decoders.")
+      } else {
+        appendLog("Experimental MediaExtension registration already active for this process.")
+      }
+    }
+
     appendLog("Launching \(transportMode.label).")
     appendLog("Using storage path \(storagePath).")
 
@@ -171,6 +217,9 @@ final class HostBridgeService {
       appState.applySnapshot(displaySnapshot)
       appState.settleAfterSuccessfulBootstrap()
       primeThumbnailCache(with: displaySnapshot)
+      if Self.isExperimentalFFmpegDecodeEnabled() {
+        _ = await refreshFFmpegDecodeAvailability()
+      }
       scheduleAutomaticFeedWarmupIfNeeded(
         snapshot: response.snapshot,
         appState: appState,
@@ -475,7 +524,8 @@ final class HostBridgeService {
         command: .uploadVideo,
         requestPayload: request,
         requestCodec: NativeBridgeUploadVideoRequestCodec(),
-        responseCodec: NativeBrowseSnapshotCodec()
+        responseCodec: NativeBrowseSnapshotCodec(),
+        timeout: Self.uploadBridgeRequestTimeout
       )
       let snapshot = Self.resolvedBrowseSnapshot(
         liveSnapshot: liveSnapshot,
@@ -867,7 +917,10 @@ final class HostBridgeService {
     activePlaybackVideoID = video.id
     startPlaybackStatsPolling(for: video)
 
-    guard Self.shouldUseNativeMpvPlayback(for: video) else {
+    let prefersFFmpegDecode = Self.prefersNativeFFmpegDecodePlayback(for: video)
+    let prefersMpv = Self.prefersNativeMpvPlayback(for: video)
+
+    guard prefersMpv || prefersFFmpegDecode else {
       mpvAvailable = false
       appendLog("Using AVPlayer for native playback.")
       return NativePlaybackSession(
@@ -879,6 +932,17 @@ final class HostBridgeService {
     }
 
     do {
+      if prefersFFmpegDecode {
+        let availability = await refreshFFmpegDecodeAvailability()
+        if availability?.available == true {
+          appendLog("Experimental bare-ffmpeg decode path selected for \(video.title), but the custom renderer is not wired yet. Falling back to bare-mpv.")
+        } else {
+          appendLog(
+            "Experimental bare-ffmpeg decode path requested for \(video.title), but bare-ffmpeg is unavailable: \(availability?.error ?? ffmpegDecodeAvailabilityError ?? "Unknown error"). Falling back to bare-mpv."
+          )
+        }
+      }
+
       if forceAVPlayerFallback {
         appendLog("Using AVPlayer fallback while bare-mpv is disabled for this native session.")
         return NativePlaybackSession(
@@ -1329,6 +1393,15 @@ final class HostBridgeService {
       "Persistent log: \(diagnosticsLogURL.path)",
     ]
 
+    let mediaExtensionDiagnostics = professionalVideoWorkflowDiagnostics
+    lines.append(contentsOf: mediaExtensionDiagnostics.reportLines)
+    lines.append("FFmpeg decode lab: \(ffmpegDecodeDiagnosticsTitle)")
+    lines.append("FFmpeg decode engine: \(ffmpegDecodeDiagnosticsCaption)")
+
+    if let activeMediaExtensionPlaybackSummary {
+      lines.append("Active playback MediaExtension: \(activeMediaExtensionPlaybackSummary)")
+    }
+
     if let errorMessage = appState?.lastErrorMessage, !errorMessage.isEmpty {
       lines.append("App error: \(errorMessage)")
     }
@@ -1499,8 +1572,12 @@ final class HostBridgeService {
   }
 
   private func persistBrowseSnapshotIfUseful(_ snapshot: NativeBrowseSnapshot) {
-    guard Self.shouldPersistBrowseSnapshot(snapshot) else { return }
-    Self.persistBrowseSnapshot(snapshot, to: snapshotCacheURL)
+    let persistedSnapshot = Self.snapshotForPersistence(
+      liveSnapshot: snapshot,
+      cachedSnapshot: Self.loadCachedBrowseSnapshot(from: snapshotCacheURL)
+    )
+    guard Self.shouldPersistBrowseSnapshot(persistedSnapshot) else { return }
+    Self.persistBrowseSnapshot(persistedSnapshot, to: snapshotCacheURL)
   }
 
   func startPlaybackTracking(for video: NativeVideo) {
@@ -2025,6 +2102,11 @@ final class HostBridgeService {
         from: event.data
       )
       phase = .ready(blobServerPort: payload?.blobServerPort)
+      if Self.isExperimentalFFmpegDecodeEnabled() {
+        Task { @MainActor [weak self] in
+          _ = await self?.refreshFFmpegDecodeAvailability()
+        }
+      }
     case .hostError:
       let payload = try? NativeBridgePayload.decodeIfPresent(
         NativeBridgeHostMessageEventCodec(),
@@ -2105,12 +2187,14 @@ final class HostBridgeService {
 
   private func sendRequest<ResponseCodec: Codec>(
     command: NativeBridgeCommand,
-    responseCodec: ResponseCodec
+    responseCodec: ResponseCodec,
+    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
   ) async throws -> ResponseCodec.Value {
     try await sendRequest(
       command: command,
       requestData: nil,
-      responseCodec: responseCodec
+      responseCodec: responseCodec,
+      timeout: timeout
     )
   }
 
@@ -2118,20 +2202,23 @@ final class HostBridgeService {
     command: NativeBridgeCommand,
     requestPayload: RequestCodec.Value,
     requestCodec: RequestCodec,
-    responseCodec: ResponseCodec
+    responseCodec: ResponseCodec,
+    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
   ) async throws -> ResponseCodec.Value {
     let requestData = try NativeBridgePayload.encode(requestCodec, value: requestPayload)
     return try await sendRequest(
       command: command,
       requestData: requestData,
-      responseCodec: responseCodec
+      responseCodec: responseCodec,
+      timeout: timeout
     )
   }
 
   private func sendRequest<ResponseCodec: Codec>(
     command: NativeBridgeCommand,
     requestData: Data?,
-    responseCodec: ResponseCodec
+    responseCodec: ResponseCodec,
+    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
   ) async throws -> ResponseCodec.Value {
     try await ensureBridgeRunning()
 
@@ -2140,7 +2227,11 @@ final class HostBridgeService {
         throw HostBridgeError.bridgeInputUnavailable
       }
 
-      let responseData = try await rpcChannel.request(command: command.rawValue, data: requestData)
+      let responseData = try await rpcChannel.request(
+        command: command.rawValue,
+        data: requestData,
+        timeout: timeout
+      )
 
       lastHeartbeat = Date()
       return try NativeBridgePayload.decode(responseCodec, from: responseData)
@@ -2460,6 +2551,60 @@ final class HostBridgeService {
     return false
   }
 
+  static func prefersNativeMpvPlayback(
+    for video: NativeVideo,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> Bool {
+    if let override = nativeMpvPlaybackOverride(environment: environment) {
+      return override
+    }
+
+    if prefersNativeFFmpegDecodePlayback(for: video, environment: environment) {
+      return false
+    }
+
+    if ProfessionalVideoWorkflowExtensions.isExperimentalRoutingEnabled(environment: environment),
+       !isLikelyAVPlayerCompatible(video: video),
+       hasKnownPlaybackFormat(video: video) {
+      return false
+    }
+
+    return !isLikelyAVPlayerCompatible(video: video) && hasKnownPlaybackFormat(video: video)
+  }
+
+  static func prefersNativeFFmpegDecodePlayback(
+    for video: NativeVideo,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> Bool {
+    if nativeMpvPlaybackOverride(environment: environment) != nil {
+      return false
+    }
+
+    guard isExperimentalFFmpegDecodeEnabled(environment: environment) else {
+      return false
+    }
+
+    return !isLikelyAVPlayerCompatible(video: video) && hasKnownPlaybackFormat(video: video)
+  }
+
+  static func isExperimentalFFmpegDecodeEnabled(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> Bool {
+    guard let rawValue = environment["PEARTUBE_NATIVE_ENABLE_FFMPEG_DECODE"]?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased(),
+      !rawValue.isEmpty else {
+      return false
+    }
+
+    switch rawValue {
+    case "1", "true", "yes", "on":
+      return true
+    default:
+      return false
+    }
+  }
+
   static func isAVPlayerReadyForPlayback(_ stats: NativeBridgeVideoStatsResponse) -> Bool {
     guard stats.success else { return false }
     if stats.isComplete { return true }
@@ -2472,8 +2617,15 @@ final class HostBridgeService {
       return false
     }
 
-    return ["ready", "playing", "buffering", "downloading", "cached", "complete"].contains(status)
-      && (stats.peerCount > 0 || stats.downloadedBlocks > 0 || stats.downloadedBytes > 0)
+    if ["ready", "playing", "cached", "complete"].contains(status) {
+      return true
+    }
+
+    if ["buffering", "downloading"].contains(status) {
+      return stats.peerCount > 0 || stats.downloadedBlocks > 0 || stats.downloadedBytes > 0
+    }
+
+    return false
   }
 
   private static func nativeMpvPlaybackOverride(
@@ -2491,6 +2643,26 @@ final class HostBridgeService {
     case "0", "false", "no", "off":
       return false
     default:
+      return nil
+    }
+  }
+
+  @discardableResult
+  func refreshFFmpegDecodeAvailability() async -> NativeBridgeFFmpegDecodeAvailableResponse? {
+    guard isReady else { return nil }
+
+    do {
+      let response = try await sendRequest(
+        command: .ffmpegDecodeAvailable,
+        responseCodec: NativeBridgeFFmpegDecodeAvailableResponseCodec()
+      )
+      ffmpegDecodeAvailable = response.available
+      ffmpegDecodeAvailabilityError = response.error
+      return response
+    } catch {
+      ffmpegDecodeAvailable = false
+      ffmpegDecodeAvailabilityError = error.localizedDescription
+      appendLog("bare-ffmpeg decode availability probe failed: \(error.localizedDescription)")
       return nil
     }
   }
@@ -2552,6 +2724,22 @@ final class HostBridgeService {
       if !pathExtension.isEmpty {
         return avExtensions.contains(pathExtension)
       }
+    }
+
+    return false
+  }
+
+  private static func hasKnownPlaybackFormat(video: NativeVideo) -> Bool {
+    if let mimeType = video.mimeType?
+      .trimmingCharacters(in: .whitespacesAndNewlines),
+       !mimeType.isEmpty {
+      return true
+    }
+
+    if let path = video.path?
+      .trimmingCharacters(in: .whitespacesAndNewlines),
+       !path.isEmpty {
+      return !URL(fileURLWithPath: path).pathExtension.isEmpty
     }
 
     return false
@@ -2644,6 +2832,13 @@ final class HostBridgeService {
       stats: mergedStats,
       state: liveSnapshot.state
     )
+  }
+
+  static func snapshotForPersistence(
+    liveSnapshot: NativeBrowseSnapshot,
+    cachedSnapshot: NativeBrowseSnapshot?
+  ) -> NativeBrowseSnapshot {
+    preferredBrowseSnapshot(liveSnapshot: liveSnapshot, cachedSnapshot: cachedSnapshot)
   }
 
   static func shouldPersistBrowseSnapshot(_ snapshot: NativeBrowseSnapshot) -> Bool {

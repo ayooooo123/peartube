@@ -51,6 +51,7 @@ const watchedExtensions = new Set(['.js', '.mjs', '.cjs', '.json'])
 const copyAsIsExtensions = new Set(['.json'])
 const skipFilePattern = /\.test\.(?:js|mjs|cjs)$/
 const relativeSpecifierPattern = /((?:from|import|require)\s*(?:\(\s*)?["'])(\.\.?\/[^"'()]+)\.(mjs|cjs)(["']\s*\)?)/g
+const appNodeModulesPath = path.join(repoRoot, 'packages', 'app', 'node_modules')
 
 function getNewestMtimeMs(filePath) {
   try {
@@ -233,10 +234,16 @@ function linkDirectory(sourcePath, targetPath) {
 
 function linkPackageNodeModules(tempRoot, packageName) {
   const sourcePath = path.join(repoRoot, 'packages', packageName, 'node_modules')
-  if (!fs.existsSync(sourcePath)) return
+  const fallbackSourcePath = appNodeModulesPath
+  const resolvedSourcePath = fs.existsSync(sourcePath)
+    ? sourcePath
+    : fs.existsSync(fallbackSourcePath)
+      ? fallbackSourcePath
+      : null
+  if (!resolvedSourcePath) return
 
   linkDirectory(
-    sourcePath,
+    resolvedSourcePath,
     path.join(tempRoot, 'packages', packageName, 'node_modules')
   )
 }

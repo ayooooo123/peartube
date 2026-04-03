@@ -29,6 +29,9 @@ const DIAGNOSTIC_READ_IDENTITY_KEY_FILE_COMMAND = 255
 let MpvPlayer = null
 let mpvLoadError = null
 let mpvLoadPromise = null
+let bareFFmpeg = null
+let ffmpegLoadError = null
+let ffmpegLoadPromise = null
 const mpvPlayers = new Map()
 let mpvPlayerIdCounter = 0
 let mpvFrameServer = null
@@ -61,6 +64,38 @@ async function loadBareMpv() {
   })()
 
   return mpvLoadPromise
+}
+
+async function loadBareFFmpeg() {
+  if (bareFFmpeg || ffmpegLoadError) return
+  if (ffmpegLoadPromise) return ffmpegLoadPromise
+
+  ffmpegLoadPromise = (async () => {
+    try {
+      let mod = null
+      if (typeof require === 'function') {
+        try {
+          mod = require('bare-ffmpeg')
+        } catch {}
+      }
+
+      if (!mod) {
+        mod = await import('bare-ffmpeg')
+      }
+
+      bareFFmpeg = mod?.default ?? mod ?? null
+      if (!bareFFmpeg) {
+        throw new Error('bare-ffmpeg export missing')
+      }
+
+      console.log('[native-host-worklet] bare-ffmpeg loaded')
+    } catch (error) {
+      ffmpegLoadError = error?.message || String(error)
+      console.warn('[native-host-worklet] bare-ffmpeg not available:', ffmpegLoadError)
+    }
+  })()
+
+  return ffmpegLoadPromise
 }
 
 if (!isMpvSupported) {
@@ -384,6 +419,7 @@ async function createNativeSidecarBackend(options = {}) {
   return createBackend({
     ...options,
     platform: 'desktop',
+    autoAttachSharedAppHandlers: true,
     disableStandalonePrimaryKeyFile: true,
   })
 }
@@ -511,6 +547,10 @@ function encodeResultPayload(command, result) {
 
   if (command === bridgeRPC.BRIDGE_COMMANDS.mpvAvailable) {
     return bridgeRPC.encodePayload(bridgeRPC.mpvAvailableResponseCodec, result)
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.ffmpegDecodeAvailable) {
+    return bridgeRPC.encodePayload(bridgeRPC.ffmpegDecodeAvailableResponseCodec, result)
   }
 
   if (command === bridgeRPC.BRIDGE_COMMANDS.mpvCreate) {
@@ -768,7 +808,7 @@ async function handleRequest(state, request, onError) {
 
     return {
       blobServerPort: ready?.blobServerPort ?? null,
-      protocolVersion: ready?.protocolVersion ?? 1,
+      protocolVersion: ready?.protocolVersion ?? 2,
       storagePath: state.currentStoragePath,
       snapshot,
     }
@@ -997,6 +1037,14 @@ async function handleRequest(state, request, onError) {
     return {
       available: MpvPlayer !== null,
       error: MpvPlayer ? null : (mpvLoadError || 'bare-mpv not available'),
+    }
+  }
+
+  if (command === bridgeRPC.BRIDGE_COMMANDS.ffmpegDecodeAvailable) {
+    await loadBareFFmpeg()
+    return {
+      available: bareFFmpeg !== null,
+      error: bareFFmpeg ? null : (ffmpegLoadError || 'bare-ffmpeg not available'),
     }
   }
 

@@ -17,6 +17,7 @@ import {
   encodeRequestFrame,
   getChannelMetaRequestCodec,
   getChannelMetaResponseCodec,
+  ffmpegDecodeAvailableResponseCodec,
   listChannelVideosRequestCodec,
   listChannelVideosResponseCodec,
   mpvAvailableResponseCodec,
@@ -108,7 +109,7 @@ test('bundled native host sidecar boots and responds to bootstrap', { timeout: 1
 
     const payload = decodePayload(bootstrapResponseCodec, response.data)
     assert.equal(payload.storagePath, storagePath)
-    assert.equal(payload.protocolVersion, 1)
+    assert.equal(payload.protocolVersion, 2)
     assert.ok(Array.isArray(payload.snapshot.sections.home))
 
     const searchFrame = encodeRequestFrame({
@@ -218,8 +219,26 @@ test('bundled native host sidecar boots and responds to bootstrap', { timeout: 1
       assert.equal(typeof mpvCreatePayload.playerId, 'string')
     }
 
-    const shutdownFrame = encodeRequestFrame({
+    const ffmpegAvailableFrame = encodeRequestFrame({
       id: 8,
+      command: BRIDGE_COMMANDS.ffmpegDecodeAvailable,
+      data: null,
+    })
+
+    child.stdin.write(ffmpegAvailableFrame)
+
+    const ffmpegAvailableResponse = await waitForResponse(child, 8)
+    assert.equal(ffmpegAvailableResponse.isError, false)
+
+    const ffmpegAvailablePayload = decodePayload(ffmpegDecodeAvailableResponseCodec, ffmpegAvailableResponse.data)
+    assert.equal(typeof ffmpegAvailablePayload.available, 'boolean')
+    assert.equal(
+      ffmpegAvailablePayload.available ? ffmpegAvailablePayload.error === null : typeof ffmpegAvailablePayload.error === 'string',
+      true
+    )
+
+    const shutdownFrame = encodeRequestFrame({
+      id: 9,
       command: BRIDGE_COMMANDS.shutdown,
       data: null,
     })

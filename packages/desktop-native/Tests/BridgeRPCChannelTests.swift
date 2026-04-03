@@ -76,4 +76,62 @@ final class BridgeRPCChannelTests: XCTestCase {
       XCTAssertEqual(responses.count, 40)
     }
   }
+
+  func testRequestHonorsCustomTimeout() async {
+    let client = BridgeRPCChannel(
+      onSend: { _ in },
+      onEvent: { _ in },
+      onError: { error in
+        XCTFail("Unexpected RPC error: \(error.localizedDescription)")
+      }
+    )
+
+    do {
+      _ = try await client.request(
+        command: 99,
+        data: nil,
+        timeout: .milliseconds(50)
+      )
+      XCTFail("Expected request to time out")
+    } catch let error as BridgeRPCChannelError {
+      XCTAssertEqual(error, .requestTimedOut(99))
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+  }
+
+  func testRequestCanDisableTimeoutForLongRunningOperations() async throws {
+    var client: BridgeRPCChannel!
+    client = BridgeRPCChannel(
+      onSend: { data in
+        guard let decoded = try? Messages.decodeFrame(data) else {
+          XCTFail("Failed to decode outbound RPC frame")
+          return
+        }
+
+        guard case .request(let request) = decoded else {
+          XCTFail("Expected an outbound request frame")
+          return
+        }
+
+        Task.detached {
+          try? await Task.sleep(for: .milliseconds(150))
+          await client.receive(Messages.encodeResponse(id: request.id, data: request.data))
+        }
+      },
+      onEvent: { _ in },
+      onError: { error in
+        XCTFail("Unexpected RPC error: \(error.localizedDescription)")
+      }
+    )
+
+    let payload = Data([0xAB, 0xCD])
+    let response = try await client.request(
+      command: 7,
+      data: payload,
+      timeout: nil
+    )
+
+    XCTAssertEqual(response, payload)
+  }
 }

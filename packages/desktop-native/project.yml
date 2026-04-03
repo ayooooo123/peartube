@@ -48,6 +48,8 @@ targets:
         product: BareRPC
       - package: CompactEncoding
         product: CompactEncoding
+      - sdk: MediaToolbox.framework
+      - sdk: VideoToolbox.framework
     info:
       path: Resources/Info.plist
       properties:
@@ -105,6 +107,142 @@ targets:
             rsync -a "$SRCROOT/Vendor/BareAddons/" "$DEST/BareAddons/"
           fi
 
+  PearTubeMediaExtensionLabApp:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - Sources
+    resources:
+      - Resources
+    entitlements:
+      path: Resources/PearTubeDesktop.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.security.files.user-selected.read-write: true
+    dependencies:
+      - package: BareRPC
+        product: BareRPC
+      - package: CompactEncoding
+        product: CompactEncoding
+      - sdk: MediaToolbox.framework
+      - sdk: VideoToolbox.framework
+      - target: PearTubeMediaFormatReader
+        embed: true
+        link: false
+        copy:
+          destination: plugins
+      - target: PearTubeSupplementalVideoDecoder
+        embed: true
+        link: false
+        copy:
+          destination: plugins
+    info:
+      path: Resources/MediaExtensionLab-Info.plist
+      properties:
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleDisplayName: PearTube MediaExtension Lab
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSApplicationCategoryType: public.app-category.entertainment
+        NSPrincipalClass: NSApplication
+        NSHighResolutionCapable: true
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            127.0.0.1:
+              NSExceptionAllowsInsecureHTTPLoads: true
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
+    settings:
+      base:
+        PRODUCT_NAME: PearTubeMediaExtensionLabApp
+        PRODUCT_BUNDLE_IDENTIFIER: com.peartube.desktop.native.media-extension-lab
+        ENABLE_HARDENED_RUNTIME: NO
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks"
+        SWIFT_STRICT_CONCURRENCY: complete
+    postBuildScripts:
+      - name: Copy Native Host Resources
+        script: |
+          set -euo pipefail
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          FRAMEWORK_DEST="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$DEST/Generated"
+          if [ -d "$SRCROOT/Resources/Generated" ]; then
+            rsync -a "$SRCROOT/Resources/Generated/" "$DEST/Generated/"
+          fi
+          if [ -d "$SRCROOT/Resources/Runtime" ]; then
+            mkdir -p "$DEST/Runtime"
+            rsync -a "$SRCROOT/Resources/Runtime/" "$DEST/Runtime/"
+            if [ -f "$DEST/Runtime/bare" ]; then
+              chmod +x "$DEST/Runtime/bare"
+            fi
+          fi
+          if [ -d "$SRCROOT/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework" ]; then
+            mkdir -p "$FRAMEWORK_DEST"
+            rm -rf "$FRAMEWORK_DEST/BareKit.framework"
+            rsync -a "$SRCROOT/Vendor/BareKit.xcframework/macos-arm64_x86_64/BareKit.framework" "$FRAMEWORK_DEST/"
+          fi
+          if [ -d "$SRCROOT/Vendor/BareAddons" ]; then
+            mkdir -p "$FRAMEWORK_DEST"
+            mkdir -p "$DEST/BareAddons"
+            find "$SRCROOT/Vendor/BareAddons" -maxdepth 1 -type d -name '*.framework' -exec basename {} \; | while read -r framework; do
+              rm -rf "$FRAMEWORK_DEST/$framework"
+              rm -rf "$DEST/BareAddons/$framework"
+            done
+            rsync -a "$SRCROOT/Vendor/BareAddons/" "$FRAMEWORK_DEST/"
+            rsync -a "$SRCROOT/Vendor/BareAddons/" "$DEST/BareAddons/"
+          fi
+
+  PearTubeMediaFormatReader:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Extensions/MediaFormatReader/Sources
+    entitlements:
+      path: Extensions/MediaFormatReader/Resources/PearTubeMediaFormatReader.entitlements
+    dependencies:
+      - sdk: MediaExtension.framework
+      - sdk: AVFoundation.framework
+    info:
+      path: Extensions/MediaFormatReader/Resources/Info.plist
+    settings:
+      base:
+        PRODUCT_NAME: PearTubeMediaFormatReader
+        PRODUCT_MODULE_NAME: PearTubeMediaFormatReader
+        PRODUCT_BUNDLE_IDENTIFIER: com.peartube.desktop.native.media-format-reader
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: NO
+
+  PearTubeSupplementalVideoDecoder:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Extensions/MediaVideoDecoder/Sources
+    entitlements:
+      path: Extensions/MediaVideoDecoder/Resources/PearTubeSupplementalVideoDecoder.entitlements
+    dependencies:
+      - sdk: MediaExtension.framework
+      - sdk: AVFoundation.framework
+      - sdk: VideoToolbox.framework
+    info:
+      path: Extensions/MediaVideoDecoder/Resources/Info.plist
+    settings:
+      base:
+        PRODUCT_NAME: PearTubeSupplementalVideoDecoder
+        PRODUCT_MODULE_NAME: PearTubeSupplementalVideoDecoder
+        PRODUCT_BUNDLE_IDENTIFIER: com.peartube.desktop.native.supplemental-video-decoder
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: NO
+
   PearTubeDesktopTests:
     type: bundle.unit-test
     platform: macOS
@@ -139,5 +277,26 @@ schemes:
       gatherCoverageData: true
       targets:
         - PearTubeDesktopTests
+    archive:
+      config: Release
+
+  PearTubeMediaExtensionLab:
+    build:
+      targets:
+        PearTubeMediaExtensionLabApp: all
+    run:
+      config: Debug
+      executable: PearTubeMediaExtensionLabApp
+      environmentVariables:
+        PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSIONS: "1"
+        PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSION_ROUTING: "1"
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - PearTubeDesktopTests
+      environmentVariables:
+        PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSIONS: "1"
+        PEARTUBE_NATIVE_ENABLE_MEDIA_EXTENSION_ROUTING: "1"
     archive:
       config: Release

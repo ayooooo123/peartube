@@ -14,6 +14,7 @@ import {
   getChannelMetaRequestCodec,
   getChannelMetaResponseCodec,
   feedUpdatedEventCodec,
+  ffmpegDecodeAvailableResponseCodec,
   listChannelVideosRequestCodec,
   listChannelVideosResponseCodec,
   mpvAvailableResponseCodec,
@@ -78,14 +79,14 @@ test('bootstrap payload roundtrips through compact encoding', () => {
 
   const encoded = encodePayload(bootstrapResponseCodec, {
     blobServerPort: 64369,
-    protocolVersion: 1,
+    protocolVersion: 2,
     storagePath: '/tmp/native',
     snapshot,
   })
 
   const decoded = decodePayload(bootstrapResponseCodec, encoded)
   assert.equal(decoded.blobServerPort, 64369)
-  assert.equal(decoded.protocolVersion, 1)
+  assert.equal(decoded.protocolVersion, 2)
   assert.equal(decoded.storagePath, '/tmp/native')
   assert.deepEqual(decoded.snapshot.sections.home, snapshot.sections.home)
   assert.deepEqual(decoded.snapshot.stats, snapshot.stats)
@@ -226,6 +227,22 @@ test('mpv payloads roundtrip through compact encoding', () => {
   )
   assert.deepEqual(
     decodePayload(mpvAvailableResponseCodec, encodePayload(mpvAvailableResponseCodec, availableResponse)),
+    availableResponse
+  )
+})
+
+test('ffmpeg decode availability payloads roundtrip through compact encoding', () => {
+  const availableResponse = {
+    available: true,
+    error: null,
+  }
+
+  assert.equal(BRIDGE_COMMANDS.ffmpegDecodeAvailable, 37)
+  assert.deepEqual(
+    decodePayload(
+      ffmpegDecodeAvailableResponseCodec,
+      encodePayload(ffmpegDecodeAvailableResponseCodec, availableResponse)
+    ),
     availableResponse
   )
 })

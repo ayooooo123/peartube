@@ -1,7 +1,7 @@
 @preconcurrency import BareRPC
 import Foundation
 
-enum BridgeRPCChannelError: LocalizedError {
+enum BridgeRPCChannelError: LocalizedError, Equatable {
   case unexpectedRequest(UInt)
   case requestTimedOut(UInt)
 
@@ -16,6 +16,8 @@ enum BridgeRPCChannelError: LocalizedError {
 }
 
 actor BridgeRPCChannel {
+  nonisolated static let defaultRequestTimeout: Duration = .seconds(8)
+
   private let frameParser = NativeSidecarFrameParser()
   private let onSend: @Sendable (Data) -> Void
   private let onEvent: @Sendable (NativeSidecarEvent) async -> Void
@@ -25,7 +27,7 @@ actor BridgeRPCChannel {
   private struct PendingRequest {
     let command: UInt
     let continuation: CheckedContinuation<Data?, Error>
-    let timeoutTask: Task<Void, Never>
+    let timeoutTask: Task<Void, Never>?
   }
 
   private var pending: [UInt: PendingRequest] = [:]
@@ -40,7 +42,11 @@ actor BridgeRPCChannel {
     self.onError = onError
   }
 
-  func request(command: UInt, data: Data? = nil) async throws -> Data? {
+  func request(
+    command: UInt,
+    data: Data? = nil,
+    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
+  ) async throws -> Data? {
     let requestID = nextRequestID
     nextRequestID = (nextRequestID % 0xFFFF_FFFE) + 1
 
@@ -51,9 +57,11 @@ actor BridgeRPCChannel {
     )
 
     return try await withCheckedThrowingContinuation { continuation in
-      let timeoutTask = Task { [weak self] in
-        try? await Task.sleep(for: .seconds(8))
-        await self?.timeoutRequest(id: requestID)
+      let timeoutTask = timeout.map { timeout in
+        Task { [weak self] in
+          try? await Task.sleep(for: timeout)
+          await self?.timeoutRequest(id: requestID)
+        }
       }
 
       pending[requestID] = PendingRequest(
@@ -87,14 +95,14 @@ actor BridgeRPCChannel {
     pending.removeAll()
 
     for pendingRequest in continuations {
-      pendingRequest.timeoutTask.cancel()
+      pendingRequest.timeoutTask?.cancel()
       pendingRequest.continuation.resume(throwing: error)
     }
   }
 
   private func timeoutRequest(id: UInt) {
     guard let pendingRequest = pending.removeValue(forKey: id) else { return }
-    pendingRequest.timeoutTask.cancel()
+    pendingRequest.timeoutTask?.cancel()
     pendingRequest.continuation.resume(throwing: BridgeRPCChannelError.requestTimedOut(pendingRequest.command))
   }
 
@@ -110,7 +118,7 @@ actor BridgeRPCChannel {
       guard let pendingRequest = pending.removeValue(forKey: response.id) else {
         return
       }
-      pendingRequest.timeoutTask.cancel()
+      pendingRequest.timeoutTask?.cancel()
 
       switch response.result {
       case .success(let data):

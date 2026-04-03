@@ -37,6 +37,7 @@ export const BRIDGE_COMMANDS = Object.freeze({
   updateVideoMetadata: 34,
   deleteVideo: 35,
   setVideoThumbnailFromFile: 36,
+  ffmpegDecodeAvailable: 37,
 })
 
 export const BRIDGE_EVENTS = Object.freeze({
@@ -452,6 +453,11 @@ export const uploadProgressEventCodec = objectCodec([
 ])
 
 export const mpvAvailableResponseCodec = objectCodec([
+  field('available', c.bool, false),
+  field('error', optionalStringCodec, null),
+])
+
+export const ffmpegDecodeAvailableResponseCodec = objectCodec([
   field('available', c.bool, false),
   field('error', optionalStringCodec, null),
 ])

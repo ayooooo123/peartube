@@ -258,7 +258,7 @@ private struct FloatingMiniPlayer: View {
           .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
       } else if hostBridge.activePlaybackVideoID == video.id,
                 let player = hostBridge.activeAVPlayer {
-        NativeAVPlayerView(player: player)
+        NativeAVPlayerView(player: player, hidesControls: true)
           .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
       } else if let thumbnailURL = hostBridge.thumbnailURL(for: video) {
         AsyncImage(url: thumbnailURL) { phase in
@@ -664,6 +664,7 @@ private struct StudioDashboardView: View {
                         )
                         if updated {
                           isEditingChannel = false
+                          await hostBridge.loadStudioWorkspace(into: appState)
                         }
                       }
                     }
@@ -787,7 +788,7 @@ private struct StudioDashboardView: View {
             isUploadDropTargeted = isTargeted
           }
 
-          if let job = appState.activeStudioUploadJob {
+          if let job = appState.presentedStudioUploadJob {
             NativeSurfaceCard(spacing: 14) {
               HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -889,6 +890,7 @@ private struct StudioDashboardView: View {
           if removed {
             pendingDeletion = nil
             appState.removeOwnedVideo(video)
+            await hostBridge.loadStudioWorkspace(into: appState)
           }
         }
       }
@@ -1006,6 +1008,7 @@ private struct StudioDashboardView: View {
                 )
                 if updated {
                   appState.upsertOwnedVideo(locallyUpdatedStudioVideo(from: video))
+                  await hostBridge.loadStudioWorkspace(into: appState)
                 }
               }
             }
@@ -1191,6 +1194,7 @@ private struct ChannelPageView: View {
                         )
                         if updated {
                           isEditingChannel = false
+                          await refreshChannelPage(for: appState.channelPageProfile ?? profile)
                         }
                       }
                     }
@@ -1366,6 +1370,7 @@ private struct ChannelPageView: View {
           if removed {
             pendingDeletion = nil
             appState.removeOwnedVideo(video)
+            await refreshOwnerChannelAfterMutation(for: video)
           }
         }
       }
@@ -1421,6 +1426,7 @@ private struct ChannelPageView: View {
                 )
                 if updated {
                   appState.upsertOwnedVideo(locallyUpdatedVideo(from: video))
+                  await refreshOwnerChannelAfterMutation(for: video)
                 }
               }
             }
@@ -1490,6 +1496,11 @@ private struct ChannelPageView: View {
       publicBeeKey: profile.publicBeeKey,
       into: appState
     )
+  }
+
+  private func refreshOwnerChannelAfterMutation(for video: NativeVideo) async {
+    guard let profile = appState.channelPageProfile, profile.channelKey == video.channelKey else { return }
+    await refreshChannelPage(for: profile)
   }
 }
 
@@ -1620,6 +1631,17 @@ private struct DiagnosticsMetricGrid: View {
         title: "Persistent Log",
         value: hostBridge.diagnosticsLogPath,
         caption: "Bridge session log"
+      )
+      DiagnosticsMetricCard(
+        title: "Media Extensions",
+        value: hostBridge.professionalVideoWorkflowDiagnostics.statusTitle,
+        caption: hostBridge.activeMediaExtensionPlaybackSummary
+          ?? hostBridge.professionalVideoWorkflowDiagnostics.bundledExtensionsSummary
+      )
+      DiagnosticsMetricCard(
+        title: "FFmpeg Decode",
+        value: hostBridge.ffmpegDecodeDiagnosticsTitle,
+        caption: hostBridge.ffmpegDecodeDiagnosticsCaption
       )
     }
   }

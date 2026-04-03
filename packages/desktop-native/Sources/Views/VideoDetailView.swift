@@ -61,7 +61,7 @@ struct VideoDetailView: View {
               .clipShape(RoundedRectangle(cornerRadius: 22))
           } else if hostBridge.activePlaybackVideoID == video.id,
                     let player = hostBridge.activeAVPlayer {
-            NativeAVPlayerView(player: player)
+            NativeAVPlayerView(player: player, hidesControls: false)
               .clipShape(RoundedRectangle(cornerRadius: 22))
           } else {
             watchPlaceholder(for: video)
@@ -379,7 +379,7 @@ struct VideoDetailView: View {
       }
 
       hostBridge.recordPlaybackUIEvent("Starting new playback session for \(video.id).")
-      if !HostBridgeService.shouldUseNativeMpvPlayback(for: video) {
+      if !HostBridgeService.prefersNativeMpvPlayback(for: video) {
         hostBridge.recordPlaybackUIEvent("Using direct AVPlayer startup path for \(video.id).")
         if let url = await hostBridge.prepareAVPlayerURL(for: video) {
           hostBridge.recordPlaybackUIEvent("Playback session resolved to AVPlayer for \(video.id).")
@@ -511,20 +511,26 @@ struct WatchPlaybackLayout {
 
 struct NativeAVPlayerView: NSViewRepresentable {
   let player: AVPlayer
+  var hidesControls = false
 
   func makeNSView(context: Context) -> AVPlayerView {
     let view = AVPlayerView()
-    view.controlsStyle = .floating
-    view.showsFullScreenToggleButton = true
+    applyConfiguration(to: view)
     view.videoGravity = .resizeAspect
     view.player = player
     return view
   }
 
   func updateNSView(_ nsView: AVPlayerView, context: Context) {
+    applyConfiguration(to: nsView)
     if nsView.player !== player {
       nsView.player = player
     }
+  }
+
+  private func applyConfiguration(to view: AVPlayerView) {
+    view.controlsStyle = hidesControls ? .none : .default
+    view.showsFullScreenToggleButton = !hidesControls
   }
 }
 

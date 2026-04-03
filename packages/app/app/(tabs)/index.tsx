@@ -174,6 +174,12 @@ export default function HomeScreen() {
       const result = await Promise.race([feedPromise, timeoutPromise])
 
       if (result?.entries) {
+        console.log('[Home] getPublicFeed entries:', result.entries.map((e: any) => ({
+          channelKey: e.channelKey || e.driveKey,
+          source: e.source,
+          peerCount: e.peerCount,
+          hasBee: !!e.publicBeeKey,
+        })))
         setFeedEntries(result.entries)
         for (const request of getMissingChannelMetaRequests(result.entries, channelMetaRef.current, 15)) {
           loadChannelMeta(request.channelKey, request.publicBeeKey)
@@ -313,12 +319,22 @@ export default function HomeScreen() {
       const publicBeeKey = entry.publicBeeKey || undefined
       if (!channelKey) return [] as VideoData[]
 
+      console.log('[Home] loadEntry start', {
+        channelKey,
+        source: entry?.source,
+        peerCount: entry?.peerCount,
+        hasBee: !!publicBeeKey,
+        identityDriveKey: identity?.driveKey,
+        localVideos: videos?.length || 0,
+      })
+
       // Fast path for the local published channel: reuse already-loaded local videos
       // instead of waiting on public-bee/channel hydration APIs.
       // Do not rely on `source` here — persisted/restored feed entries can lose or
       // rewrite that classification, but channelKey matching the active identity is
       // enough to know we already own the videos locally.
       if (identity?.driveKey && channelKey === identity.driveKey) {
+        console.log('[Home] loadEntry using local fast path', { channelKey, localVideos: videos?.length || 0 })
         return (videos || []).map((v: any) => ({
           ...v,
           channelKey,
@@ -385,6 +401,25 @@ export default function HomeScreen() {
       if (feedLoadRunIdRef.current === runId) setLoadingFeedVideos(false)
     }
   }, [rpc, feedEntries, swarmStatus, fetchThumbnailsForVideos, videos, identity?.driveKey])
+
+  // Seed Discover immediately from local videos when the active identity's
+  // channel appears in the feed. This avoids an empty Discover section while
+  // remote/public-bee hydration is still catching up.
+  useEffect(() => {
+    if (!identity?.driveKey) return
+    if (!Array.isArray(videos) || videos.length === 0) return
+    const hasOwnFeedEntry = feedEntries.some((e) => (e.channelKey || e.driveKey) === identity.driveKey)
+    if (!hasOwnFeedEntry) return
+
+    setFeedVideos((prev) => {
+      if (prev.length > 0) return prev
+      return videos.map((v: any) => ({
+        ...v,
+        channelKey: identity.driveKey,
+        channel: { name: channelMetaRef.current[identity.driveKey]?.name || 'Your channel' },
+      }))
+    })
+  }, [feedEntries, videos, identity?.driveKey])
 
   // Load feed videos when feed entries change
   useEffect(() => {

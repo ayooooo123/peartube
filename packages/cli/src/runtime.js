@@ -2,59 +2,20 @@ export async function createRelayRuntime({ config, logger }) {
   const [
     { initializeStorage, loadChannel, loadPublicBee },
     { PublicFeedManager },
-    { CacheManager },
-    { loadBareOrNodeFsModule, loadBareOrNodePathModule }
+    { CacheManager }
   ] = await Promise.all([
     import('@peartube/backend/storage'),
     import('@peartube/backend/public-feed'),
-    import('./cache-manager.js'),
-    import('../../backend/src/runtime-modules.js')
+    import('./cache-manager.js')
   ])
 
-  const fs = await loadBareOrNodeFsModule()
-  const path = await loadBareOrNodePathModule()
-
   const storageRoot = config.storage.path
-  const legacyNestedCorestorePath = config?.paths?.corestore || path.join(storageRoot, 'corestore')
 
-  // Normalize old relay layouts that nested backend storage under <root>/corestore.
-  // Backend storage expects the top-level storage root and derives sibling files like
-  // CORESTORE, primary-key, swarm-key.json, db/, etc from that root.
-  try {
-    const nestedMarker = path.join(legacyNestedCorestorePath, 'CORESTORE')
-    const rootMarker = path.join(storageRoot, 'CORESTORE')
-    const nestedExists = await fs.access(nestedMarker).then(() => true).catch(() => false)
-    const rootExists = await fs.access(rootMarker).then(() => true).catch(() => false)
-
-    if (nestedExists && !rootExists) {
-      logger.runtime?.warn('Migrating legacy nested relay corestore layout into storage root', {
-        from: legacyNestedCorestorePath,
-        to: storageRoot,
-      })
-      const entries = await fs.readdir(legacyNestedCorestorePath)
-      for (const entry of entries) {
-        const from = path.join(legacyNestedCorestorePath, entry)
-        const to = path.join(storageRoot, entry)
-        const alreadyExists = await fs.access(to).then(() => true).catch(() => false)
-        if (alreadyExists) continue
-        await fs.rename(from, to).catch(async () => {
-          const stat = await fs.stat(from)
-          if (stat.isDirectory()) {
-            await fs.cp(from, to, { recursive: true, force: false })
-          } else {
-            await fs.copyFile(from, to)
-          }
-        })
-      }
-    }
-  } catch (err) {
-    logger.runtime?.warn('Legacy relay storage normalization skipped', {
-      error: err?.message || String(err),
-      storageRoot,
-      legacyNestedCorestorePath,
-    })
-  }
-
+  // IMPORTANT: backend storage expects the top-level relay storage root here.
+  // The nested `<root>/corestore` directory is part of the normal on-disk layout
+  // created by hypercore-storage, so do NOT try to migrate/move it on restart.
+  // Doing so corrupts the device-file metadata and causes:
+  //   Error: Invalid device file, was modified
   const ctx = await initializeStorage({
     storagePath: storageRoot,
     wrapTimeout: true

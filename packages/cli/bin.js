@@ -62,9 +62,37 @@ async function runCommand(flags) {
   const goodbye = goodbyeModule?.default || (() => {})
   const relay = await startRelay({ config })
 
+  let shuttingDown = false
+  const closeRelay = async (signal = 'unknown') => {
+    if (shuttingDown) return
+    shuttingDown = true
+    try {
+      writeLine(`[relay] shutting down on ${signal}\n`)
+      await relay.close()
+    } catch (err) {
+      writeLine(`[relay] shutdown failed: ${err?.message || String(err)}\n`, 'stderr')
+    }
+  }
+
   goodbye(async () => {
-    await relay.close()
+    await closeRelay('graceful-goodbye')
   })
+
+  // Standalone containers can stop/start without invoking graceful-goodbye in time.
+  // Install explicit signal handlers so Corestore/RocksDB closes cleanly before exit.
+  if (typeof process?.on === 'function') {
+    process.on('SIGTERM', async () => {
+      await closeRelay('SIGTERM')
+      process.exit?.(0)
+    })
+    process.on('SIGINT', async () => {
+      await closeRelay('SIGINT')
+      process.exit?.(0)
+    })
+    process.on('beforeExit', async () => {
+      await closeRelay('beforeExit')
+    })
+  }
 }
 
 async function validateCommand(flags) {

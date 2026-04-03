@@ -10,7 +10,7 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel, loadPublicBee, pairDevice as pairChannelDevice, retainSwarmDiscovery, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, retainSwarmDiscovery, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
@@ -34,7 +34,14 @@ import { NETWORK_TOPIC_STRING } from './types.js'
  * @param {import('./video-stats.js').VideoStatsTracker} [deps.videoStats] - Video stats tracker
  * @returns {Object}
  */
-export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
+export function createApi({
+  ctx,
+  publicFeed,
+  seedingManager,
+  videoStats,
+  loadChannel = storageLoadChannel,
+  loadPublicBee = storageLoadPublicBee,
+}) {
   async function isMultiWriterChannelKey(channelKey) {
     try {
       const res = await ctx.metaDb.get(`mw-channel:${channelKey}`)
@@ -672,6 +679,18 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
             const publicBee = await loadPublicBee(ctx, publicBeeKey)
             const videos = await publicBee.listVideos()
             console.log('[API] LIST_VIDEOS: PublicBee returned', videos?.length, 'videos')
+            if ((videos?.length || 0) === 0) {
+              console.log('[API] LIST_VIDEOS: PublicBee returned no videos, trying channel fallback')
+              const channel = await loadChannel(ctx, driveKey)
+              const fallbackVideos = await channel.listVideos()
+              console.log('[API] LIST_VIDEOS: channel fallback returned', fallbackVideos?.length, 'videos')
+              const fallbackResult = (fallbackVideos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
+              const fallbackEnriched = await enrichMissingBlobMeta(fallbackResult, (id) => channel.getVideo(id))
+              const fallbackWithAvailability = await attachVideoAvailability(fallbackEnriched)
+              listVideosCache.set(driveKey, { ts: Date.now(), value: fallbackWithAvailability })
+              backgroundIndexVideos(fallbackWithAvailability, driveKey)
+              return cloneArrayOfObjects(fallbackWithAvailability)
+            }
             const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
             const enriched = await enrichMissingBlobMeta(result, (id) => publicBee.getVideo(id))
             const withAvailability = await attachVideoAvailability(enriched)
@@ -808,6 +827,8 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
         throw new Error('Video blob not accessible (not synced yet)')
       }
 
+      const blobsKeyHex = b4a.toString(blobEntry.blobsKey, 'hex')
+
       // Join swarm for blobs core to ensure we can download from peers
       if (ctx.swarm && blobEntry.blobsKey) {
         try {
@@ -817,8 +838,6 @@ export function createApi({ ctx, publicFeed, seedingManager, videoStats }) {
           })
         } catch {}
       }
-
-      const blobsKeyHex = b4a.toString(blobEntry.blobsKey, 'hex')
       console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
       return getVideoUrlFromBlob(ctx, blobsKeyHex, blobEntry.blobId, { mimeType: meta.mimeType })
     },

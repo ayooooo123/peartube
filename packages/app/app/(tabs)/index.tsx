@@ -315,7 +315,10 @@ export default function HomeScreen() {
 
       // Fast path for the local published channel: reuse already-loaded local videos
       // instead of waiting on public-bee/channel hydration APIs.
-      if (entry?.source === 'local' && identity?.driveKey && channelKey === identity.driveKey) {
+      // Do not rely on `source` here — persisted/restored feed entries can lose or
+      // rewrite that classification, but channelKey matching the active identity is
+      // enough to know we already own the videos locally.
+      if (identity?.driveKey && channelKey === identity.driveKey) {
         return (videos || []).map((v: any) => ({
           ...v,
           channelKey,

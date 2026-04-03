@@ -378,14 +378,10 @@ object PipBridge {
     fun notifyPipBoundsChanged(activity: Activity, newConfig: Configuration) {
         android.util.Log.d("PipBridge", "notifyPipBoundsChanged: ${newConfig.screenWidthDp}x${newConfig.screenHeightDp}dp")
         notifyPipModeChanged(activity, true, newConfig)
-        moduleInstance?.refreshPipParams(activity)
     }
 
     fun notifyPipUiStateChanged(activity: Activity, pipState: android.app.PictureInPictureUiState) {
         android.util.Log.d("PipBridge", "notifyPipUiStateChanged: isStashed=${pipState.isStashed} transitioningToPip=${pipState.isTransitioningToPip}")
-        if (activity.isInPictureInPictureMode) {
-            moduleInstance?.refreshPipParams(activity)
-        }
     }
 
     fun isPipHostActivity(activity: Activity): Boolean {
@@ -668,6 +664,7 @@ class MediaSessionModule : Module() {
     private var previousSystemUiFlags: Int? = null
     private var lastIsPlaying: Boolean? = null
     private var currentIsPlaying: Boolean = false
+    private var currentIsBuffering: Boolean = false
     private var isAutoPipEnabled: Boolean = false
     private var pipAspectRatioWidth: Int = 16
     private var pipAspectRatioHeight: Int = 9
@@ -681,6 +678,7 @@ class MediaSessionModule : Module() {
             "onAudioInterruption",
             "onAudioRouteChange",
             "onPictureInPictureChanged",
+            "onPictureInPictureAction",
             "onPlayerLaunchPayload"
         )
 
@@ -713,6 +711,17 @@ class MediaSessionModule : Module() {
                     promise.resolve(null)
                 } catch (e: Exception) {
                     promise.reject("MEDIA_SESSION_ERROR", e.message ?: "Failed to update playback state", e)
+                }
+            }
+        }
+
+        AsyncFunction("setPictureInPicturePlaybackState") { state: Map<String, Any?>, promise: Promise ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    updatePictureInPicturePlaybackState(state)
+                    promise.resolve(null)
+                } catch (e: Exception) {
+                    promise.reject("PIP_ERROR", e.message ?: "Failed to update PiP playback state", e)
                 }
             }
         }
@@ -1045,6 +1054,7 @@ class MediaSessionModule : Module() {
 
     private fun updatePlaybackState(state: Map<String, Any?>) {
         val isPlaying = state["isPlaying"] as? Boolean ?: false
+        val isBuffering = state["isBuffering"] as? Boolean ?: currentIsBuffering
         val position = ((state["position"] as? Number)?.toDouble() ?: 0.0) * 1000
         val rate = (state["rate"] as? Number)?.toFloat() ?: 1.0f
         val duration = ((state["duration"] as? Number)?.toDouble() ?: 0.0) * 1000
@@ -1089,6 +1099,7 @@ class MediaSessionModule : Module() {
 
         val playStateChanged = currentIsPlaying != isPlaying
         currentIsPlaying = isPlaying
+        currentIsBuffering = isBuffering
 
         mediaSession?.setPlaybackState(currentPlaybackState.build())
         mediaSession?.setMetadata(currentMetadata.build())
@@ -1103,6 +1114,15 @@ class MediaSessionModule : Module() {
                 refreshPipParams(activity)
             }
         }
+    }
+
+    private fun updatePictureInPicturePlaybackState(state: Map<String, Any?>) {
+        val isPlaying = state["isPlaying"] as? Boolean ?: false
+        currentIsBuffering = state["isBuffering"] as? Boolean ?: currentIsBuffering
+        if (isPlaying) {
+            PipBridge.setPreferCustomPlayActionsWhilePausedInPip(false)
+        }
+        updatePipPlayState(isPlaying)
     }
 
     private fun clearNowPlayingInfo() {
@@ -1395,8 +1415,10 @@ class MediaSessionModule : Module() {
     internal fun canEnterPipFromActivePlayback(): Boolean {
         // Native-first fallback used when JS-side pipEnabled gets stale after
         // in-app transitions (mini/fullscreen) but the same active playback
-        // session is still running and should be PiP-eligible.
-        return isSessionActive && currentIsPlaying
+        // session is still running and should be PiP-eligible. Peer-backed blob
+        // playback can transiently rebuffer during leave-hint/background handoff,
+        // so treat buffering as active enough to keep PiP entry alive.
+        return isSessionActive && (currentIsPlaying || currentIsBuffering)
     }
 
     private fun openPlayerActivity(payload: Map<String, Any?>? = null): Boolean {
@@ -1738,7 +1760,7 @@ class MediaSessionModule : Module() {
         PipBridge.setPreferCustomPlayActionsWhilePausedInPip(false)
         updatePipPlayState(true)
         if (PlaybackHostBridge.dispatchPlay()) return
-        sendEvent("onRemoteCommand", mapOf("command" to "play"))
+        sendEvent("onPictureInPictureAction", mapOf("action" to "playPause", "isPlaying" to true))
     }
 
     internal fun handlePipPause() {
@@ -1748,7 +1770,7 @@ class MediaSessionModule : Module() {
         }
         updatePipPlayState(false)
         if (PlaybackHostBridge.dispatchPause()) return
-        sendEvent("onRemoteCommand", mapOf("command" to "pause"))
+        sendEvent("onPictureInPictureAction", mapOf("action" to "playPause", "isPlaying" to false))
     }
 
     internal fun handlePipStop() {
@@ -1760,7 +1782,7 @@ class MediaSessionModule : Module() {
     internal fun handlePipBackgroundAudio() {
         android.util.Log.d("MediaSession", "handlePipBackgroundAudio")
         if (PlaybackHostBridge.dispatchEnterBackgroundAudio()) return
-        sendEvent("onRemoteCommand", mapOf("command" to "backgroundAudio"))
+        sendEvent("onPictureInPictureAction", mapOf("action" to "backgroundAudio"))
     }
 
     internal fun handlePipRewind() {

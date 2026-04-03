@@ -38,6 +38,7 @@
     "build:eas:ios": "npm run bundle:backend:ensure && eas build --platform ios --profile preview",
     "build:eas:android": "npm run bundle:backend:ensure && eas build --platform android --profile preview",
     "build:eas:all": "npm run bundle:backend:ensure && eas build --platform all --profile preview",
+    "test:android:pip:repro": "bash ./scripts/maestro-android-pip-repro.sh",
     "eas-build-post-install": "npm run bundle:backend:ensure"
   },
   "author": "PearTube",

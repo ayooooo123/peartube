@@ -2880,7 +2880,7 @@ export function VideoPlayerOverlay() {
 
       {playerMode === 'fullscreen' && showControls && !isLandscapeFullscreen && !isInPipMode && (
         <Animated.View style={[styles.minimizeButton, fullscreenButtonsOpacityStyle, minimizeButtonStyle]}>
-          <Pressable onPress={minimizePlayer} style={styles.minimizeButtonInner}>
+          <Pressable testID="player-minimize-button" onPress={minimizePlayer} style={styles.minimizeButtonInner}>
             <Feather name="chevron-down" color="#fff" size={28} />
           </Pressable>
         </Animated.View>

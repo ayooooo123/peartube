@@ -7,8 +7,8 @@ import expo.modules.core.interfaces.ReactActivityLifecycleListener
 /**
  * Expo Package for MediaSession module.
  *
- * Note: PiP callbacks are now handled directly in MainActivity via the
- * withMainActivityPiPCallback config plugin, so no lifecycle listener is needed.
+ * Note: Android PiP callbacks are handled directly in MainActivity, so no
+ * lifecycle listener wiring is needed here.
  */
 class MediaSessionPackage : Package {
     override fun createReactActivityLifecycleListeners(activityContext: Context?): List<ReactActivityLifecycleListener> {

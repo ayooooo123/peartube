@@ -17,6 +17,11 @@ export interface PlaybackState {
   rate: number // playback rate (1 = normal)
 }
 
+export interface PictureInPicturePlaybackState {
+  isPlaying: boolean
+  isBuffering?: boolean
+}
+
 export type RemoteCommandType = 
   | 'play'
   | 'pause'
@@ -52,6 +57,13 @@ export interface AudioRouteChangeEvent {
   reason: 'newDeviceAvailable' | 'oldDeviceUnavailable' | 'categoryChange' | 'override' | 'wakeFromSleep' | 'noSuitableRouteForCategory' | 'routeConfigurationChange' | 'unknown'
 }
 
+export type PictureInPictureActionType = 'playPause' | 'backgroundAudio'
+
+export interface PictureInPictureActionEvent {
+  action: PictureInPictureActionType
+  isPlaying?: boolean
+}
+
 
 // Native module interface
 interface MediaSessionModuleInterface {
@@ -63,6 +75,9 @@ interface MediaSessionModuleInterface {
   
   // Update playback state (position, duration, rate, playing/paused)
   setPlaybackState(state: PlaybackState): Promise<void>
+
+  // Android only: update the custom PiP action row playback state
+  setPictureInPicturePlaybackState?(state: PictureInPicturePlaybackState): Promise<void>
   
   // Clear Now Playing info
   clearNowPlaying(): Promise<void>
@@ -72,6 +87,9 @@ interface MediaSessionModuleInterface {
   
   // Android only: check if PiP is supported
   isPictureInPictureSupported?(): Promise<boolean>
+
+  // Android only: tell native to spend one immediate PiP attempt in the next leave-hint
+  armImmediatePipOnNextLeaveHint?(): Promise<void>
 
   // Android only: dismiss PiP into background-audio mode while keeping session alive
   enterBackgroundAudioMode?(): Promise<void>
@@ -83,6 +101,7 @@ interface MediaSessionModuleInterface {
   isInPlayerActivity?(): Promise<boolean>
   consumePendingPlayerLaunchPayload?(): Promise<any | null>
   clearPendingPlayerLaunchPayload?(): Promise<void>
+  primePlayerActivityPayload?(payload?: any): Promise<void>
 }
 
 const mediaSessionFallback: MediaSessionModuleInterface = {
@@ -150,6 +169,13 @@ export async function setPlaybackState(state: PlaybackState): Promise<void> {
   return getMediaSessionNative().setPlaybackState(state)
 }
 
+export async function setPictureInPicturePlaybackState(state: PictureInPicturePlaybackState): Promise<void> {
+  if (Platform.OS !== 'android') return
+  const native = getMediaSessionNative()
+  if (!native.setPictureInPicturePlaybackState) return
+  return native.setPictureInPicturePlaybackState(state)
+}
+
 /**
  * Clear Now Playing info.
  * Call this when playback stops completely.
@@ -186,6 +212,17 @@ export async function setAutoPictureInPicture(enabled: boolean): Promise<void> {
     await native.setAutoPictureInPicture(enabled)
   } catch (err) {
     console.error('[MediaSession] setAutoPictureInPicture failed:', err)
+  }
+}
+
+export async function armImmediatePipOnNextLeaveHint(): Promise<void> {
+  if (Platform.OS !== 'android') return
+  const native = getMediaSessionNative() as any
+  if (!native.armImmediatePipOnNextLeaveHint) return
+  try {
+    await native.armImmediatePipOnNextLeaveHint()
+  } catch (err) {
+    console.error('[MediaSession] armImmediatePipOnNextLeaveHint failed:', err)
   }
 }
 
@@ -342,7 +379,7 @@ export interface PictureInPictureEvent {
   isPreparing?: boolean
   width?: number
   height?: number
-  // Android only: current playback state as known by MediaSession
+  // Android only: current playback state as known by the PiP bridge
   isPlaying?: boolean
 }
 
@@ -360,6 +397,16 @@ export function addPictureInPictureListener(
     return { remove: () => {} }
   }
   return (emitter as any).addListener('onPictureInPictureChanged', listener)
+}
+
+export function addPictureInPictureActionListener(
+  listener: (event: PictureInPictureActionEvent) => void
+): Subscription {
+  const emitter = getMediaSessionEmitter()
+  if (!emitter) {
+    return { remove: () => {} }
+  }
+  return (emitter as any).addListener('onPictureInPictureAction', listener)
 }
 
 // Phase 1 PlayerActivity shell helpers. Most callers remain gated off for now,
@@ -384,7 +431,11 @@ export async function clearPendingPlayerLaunchPayload(): Promise<void> {
   return native.clearPendingPlayerLaunchPayload()
 }
 export async function getPlaybackSnapshot(): Promise<null> { return null }
-export async function primePlayerActivityPayload(_payload?: any): Promise<void> {}
+export async function primePlayerActivityPayload(payload?: any): Promise<void> {
+  const native = getMediaSessionNative() as any
+  if (!native.primePlayerActivityPayload) return
+  return native.primePlayerActivityPayload(payload ?? null)
+}
 export async function launchPrimedPipPlayerActivity(): Promise<boolean> { return false }
 export async function isInPlayerActivity(): Promise<boolean> {
   const native = getMediaSessionNative() as any
@@ -402,6 +453,7 @@ export default {
   setActive,
   setNowPlaying,
   setPlaybackState,
+  setPictureInPicturePlaybackState,
   clearNowPlaying,
   enterPictureInPicture,
   isPictureInPictureSupported,
@@ -415,6 +467,7 @@ export default {
   addAudioInterruptionListener,
   addAudioRouteChangeListener,
   addPictureInPictureListener,
+  addPictureInPictureActionListener,
   openPlayerActivity,
   consumePendingPlayerLaunchPayload,
   clearPendingPlayerLaunchPayload,

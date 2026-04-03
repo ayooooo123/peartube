@@ -204,6 +204,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const currentTimeRef = useRef(0)
   const durationRef = useRef(0)
   const isPlayingRef = useRef(false)
+  const isBufferingRef = useRef(false)
   const playbackRateRef = useRef(1)
   
   // Throttled UI state update interval (ms) - ~4fps for seek bar updates
@@ -296,8 +297,16 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const mediaSessionActiveRef = useRef(false)
+  const syncPictureInPicturePlaybackState = useCallback((nextIsPlaying: boolean, nextIsBuffering = isBufferingRef.current) => {
+    if (Platform.OS !== 'android') return
+    MediaSession.setPictureInPicturePlaybackState({
+      isPlaying: nextIsPlaying,
+      isBuffering: nextIsBuffering,
+    }).catch(() => {})
+  }, [])
+
   const syncMediaSessionPlaybackState = useCallback((nextIsPlaying: boolean) => {
-    if (Platform.OS === 'web') return
+    if (Platform.OS !== 'ios') return
     if (!mediaSessionActiveRef.current) return
     MediaSession.setPlaybackState({
       isPlaying: nextIsPlaying,
@@ -307,13 +316,18 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }).catch(() => {})
   }, [])
 
+  const syncPlatformPlaybackState = useCallback((nextIsPlaying: boolean) => {
+    syncPictureInPicturePlaybackState(nextIsPlaying)
+    syncMediaSessionPlaybackState(nextIsPlaying)
+  }, [syncMediaSessionPlaybackState, syncPictureInPicturePlaybackState])
+
   const setDesiredPlaying = useCallback((nextIsPlaying: boolean) => {
     setIsPlaying(nextIsPlaying)
-    syncMediaSessionPlaybackState(nextIsPlaying)
-  }, [syncMediaSessionPlaybackState])
+    syncPlatformPlaybackState(nextIsPlaying)
+  }, [syncPlatformPlaybackState])
 
   const setMediaSessionActive = useCallback((active: boolean) => {
-    if (Platform.OS === 'web') return
+    if (Platform.OS !== 'ios') return
     if (mediaSessionActiveRef.current === active) return
     mediaSessionActiveRef.current = active
     if (active) {
@@ -551,14 +565,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Activate media session while a video is loaded (keeps lock screen controls visible)
   useEffect(() => {
-    if (Platform.OS === 'web') return
+    if (Platform.OS !== 'ios') return
     const shouldBeActive = currentVideo !== null
     setMediaSessionActive(shouldBeActive)
   }, [currentVideo, setMediaSessionActive])
 
   // Keep Now Playing metadata up to date for lock screen/notification
   useEffect(() => {
-    if (Platform.OS === 'web') return
+    if (Platform.OS !== 'ios') return
     if (!currentVideo) return
     MediaSession.setNowPlaying({
       title: currentVideo.title || 'Video',
@@ -599,14 +613,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   useEffect(() => {
     if (Platform.OS === 'web') return
-    if (!mediaSessionActiveRef.current) return
-    MediaSession.setPlaybackState({
-      isPlaying,
-      position: currentTimeRef.current,
-      duration: durationRef.current,
-      rate: playbackRateRef.current,
-    }).catch(() => {})
-  }, [isPlaying])
+    syncPlatformPlaybackState(isPlaying)
+  }, [isPlaying, syncPlatformPlaybackState])
 
   useEffect(() => {
     const previousMode = previousStateModeRef.current
@@ -635,7 +643,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       setVideoStats(null)
       setVideoAspectRatio(null)
       setIsLoading(false)
-      if (Platform.OS !== 'web') {
+      if (Platform.OS === 'ios') {
         MediaSession.clearNowPlaying().catch(() => {})
         setMediaSessionActive(false)
       }
@@ -644,13 +652,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }
 
     if (nextMode === 'fullscreen') {
-      if (Platform.OS !== 'web' && mediaSessionActiveRef.current) {
-        MediaSession.setPlaybackState({
-          isPlaying: isPlayingRef.current,
-          position: currentTimeRef.current,
-          duration: durationRef.current,
-          rate: playbackRateRef.current,
-        }).catch(() => {})
+      if (Platform.OS !== 'web') {
+        syncPlatformPlaybackState(isPlayingRef.current)
       }
       if (pipExitShouldResumeRef.current) {
         pipExitShouldResumeRef.current = false
@@ -785,8 +788,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [isPrimaryController, playerMode, isInPipMode])
 
 // MediaSession remote command listener (mobile only)
-useEffect(() => {
-    if (Platform.OS === 'web') return
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return
     if (!isPrimaryController) return
 
     const subscription = MediaSession.addRemoteCommandListener((event) => {
@@ -925,6 +928,35 @@ useEffect(() => {
 
     return () => subscription.remove()
   }, [closeSession, dispatch, enterBackgroundAudio, isPrimaryController, restoreLastClosedVideo, reassertNativePlayAfterPipExit])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    if (!isPrimaryController) return
+
+    const subscription = MediaSession.addPictureInPictureActionListener((event) => {
+      switch (event.action) {
+        case 'playPause':
+          if (event.isPlaying) {
+            if (!currentVideoRef.current) {
+              restoreLastClosedVideo('pip-play')
+              return
+            }
+            setDesiredPlaying(true)
+            try { playerRef.current?.play?.() } catch {}
+            return
+          }
+          setDesiredPlaying(false)
+          try { playerRef.current?.pause?.() } catch {}
+          return
+        case 'backgroundAudio':
+          enterBackgroundAudio()
+          MediaSession.enterBackgroundAudioMode?.().catch(() => {})
+          return
+      }
+    })
+
+    return () => subscription.remove()
+  }, [enterBackgroundAudio, isPrimaryController, restoreLastClosedVideo, setDesiredPlaying])
 
   // Audio interruption listener (iOS only) - Android relies on remote commands from AudioFocus
   useEffect(() => {
@@ -1487,36 +1519,34 @@ useEffect(() => {
       }
     }
     
-    const shouldUpdateMediaSession = Platform.OS !== 'web' && 
-      mediaSessionActiveRef.current && 
+    const shouldUpdateMediaSession = Platform.OS !== 'web' &&
+      (Platform.OS === 'android' || mediaSessionActiveRef.current) &&
       now - lastMediaSessionUpdateRef.current > 1000
     if (shouldUpdateMediaSession) {
       lastMediaSessionUpdateRef.current = now
-      MediaSession.setPlaybackState({
-        isPlaying: isPlayingRef.current,
-        position: timeS,
-        duration: durationS,
-        rate: playbackRateRef.current,
-      }).catch(() => {})
+      if (Platform.OS === 'android') {
+        syncPictureInPicturePlaybackState(isPlayingRef.current)
+      } else {
+        MediaSession.setPlaybackState({
+          isPlaying: isPlayingRef.current,
+          position: timeS,
+          duration: durationS,
+          rate: playbackRateRef.current,
+        }).catch(() => {})
+      }
     }
-  }, [])
+  }, [syncPictureInPicturePlaybackState])
 
   const onPlaying = useCallback(() => {
     console.log('[VideoPlayerContext] Player playing')
     if (Platform.OS === 'ios') {
       iosIgnorePausedUntilRef.current = 0
     }
+    isBufferingRef.current = false
     setIsLoading(false)
     tryApplyPendingSeek()
-    if (Platform.OS !== 'web') {
-      MediaSession.setPlaybackState({
-        isPlaying: true,
-        position: currentTimeRef.current,
-        duration: durationRef.current,
-        rate: playbackRateRef.current,
-      }).catch(() => {})
-    }
-  }, [tryApplyPendingSeek])
+    syncPlatformPlaybackState(true)
+  }, [syncPlatformPlaybackState, tryApplyPendingSeek])
 
   const onPaused = useCallback(() => {
     if (Platform.OS === 'ios' && Date.now() < iosIgnorePausedUntilRef.current) {
@@ -1533,19 +1563,14 @@ useEffect(() => {
       pipExitExpectedPlayingRef.current = false
     }
     console.log('[VideoPlayerContext] Player paused')
-    if (Platform.OS !== 'web') {
-      MediaSession.setPlaybackState({
-        isPlaying: false,
-        position: currentTimeRef.current,
-        duration: durationRef.current,
-        rate: playbackRateRef.current,
-      }).catch(() => {})
-    }
-  }, [reassertNativePlayAfterPipExit])
+    syncPlatformPlaybackState(false)
+  }, [reassertNativePlayAfterPipExit, syncPlatformPlaybackState])
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
     console.log('[VideoPlayerContext] Player buffering:', data?.isBuffering)
     if (data?.isBuffering === undefined) return
+    isBufferingRef.current = Boolean(data.isBuffering)
+    syncPictureInPicturePlaybackState(isPlayingRef.current, isBufferingRef.current)
 
     // During an active seek, native players often emit a brief buffering event.
     // Don't show the "connecting P2P" loading overlay for that — it feels like
@@ -1564,20 +1589,14 @@ useEffect(() => {
     }
 
     setIsLoading(data.isBuffering)
-  }, [])
+  }, [syncPictureInPicturePlaybackState])
 
   const onEnded = useCallback(() => {
     console.log('[VideoPlayerContext] Player ended')
+    isBufferingRef.current = false
     setDesiredPlaying(false)
-    if (Platform.OS !== 'web') {
-      MediaSession.setPlaybackState({
-        isPlaying: false,
-        position: durationRef.current,
-        duration: durationRef.current,
-        rate: playbackRateRef.current,
-      }).catch(() => {})
-    }
-  }, [setDesiredPlaying])
+    syncPlatformPlaybackState(false)
+  }, [setDesiredPlaying, syncPlatformPlaybackState])
 
   const onError = useCallback((error: any) => {
     const currentUrl = videoUrlRef.current

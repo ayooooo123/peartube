@@ -228,14 +228,15 @@ class MediaPlaybackService : Service() {
     }
     
     private fun buildNotification(): Notification {
-        val contentIntent = packageManager.getLaunchIntentForPackage(packageName)?.let { intent ->
-            PendingIntent.getActivity(
-                this,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        }
+        val contentIntent = PlaybackHostBridge.buildPlayerActivityPendingIntent(this)
+            ?: packageManager.getLaunchIntentForPackage(packageName)?.let { intent ->
+                PendingIntent.getActivity(
+                    this,
+                    0,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            }
 
         if (isCastMode) {
             val castBuilder = NotificationCompat.Builder(this, CHANNEL_ID)

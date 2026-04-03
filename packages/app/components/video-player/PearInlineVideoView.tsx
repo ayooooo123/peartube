@@ -1,5 +1,5 @@
 import { memo, ReactNode, RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native'
+import { AppState, AppStateStatus, Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native'
 import Video, {
   type OnLoadData,
   type OnProgressData,
@@ -75,6 +75,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   isPlaying,
   playbackRate,
   seekPosition,
+  isInPipMode,
   onLoad,
   onProgress,
   onPlaying,
@@ -96,6 +97,8 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const hasAdvancedRef = useRef(false)
   const hasRenderedFrameRef = useRef(false)
   const reloadAttemptRef = useRef(0)
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState)
+  const suppressStuckPlaybackRecoveryUntilRef = useRef(0)
   const MAX_RELOAD_ATTEMPTS = 2
   const STUCK_THRESHOLD_MS = 4000
   const NO_RENDER_THRESHOLD_MS = 3000
@@ -108,6 +111,27 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     reloadAttemptRef.current = 0
     setSourceKey(0)
   }, [videoUrl])
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      appStateRef.current = nextState
+      if (nextState !== 'active') {
+        // Peer-backed blob streams can legitimately stall for a few seconds while
+        // Android backgrounds or enters PiP. Treat that as a transition, not a
+        // fatal stuck-playback signal that should remount the player.
+        suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
+      }
+    })
+    return () => subscription.remove()
+  }, [])
+
+  const shouldSuppressStuckPlaybackRecovery = useCallback(() => {
+    if (Platform.OS !== 'android') return false
+    if (isInPipMode) return true
+    if (appStateRef.current !== 'active') return true
+    return Date.now() <= suppressStuckPlaybackRecoveryUntilRef.current
+  }, [isInPipMode])
 
   const applyPendingSeek = useCallback(async (nextSeekPosition: number | undefined, durationMsOverride?: number) => {
     if (nextSeekPosition === undefined) {
@@ -206,12 +230,18 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       durationMsRef.current = durationMs
     }
 
+    const suppressStuckRecovery = shouldSuppressStuckPlaybackRecovery()
+    if (suppressStuckRecovery && playbackStartedAtRef.current !== null) {
+      playbackStartedAtRef.current = Date.now()
+    }
+
     // Stuck playback detection is only needed on the react-native-video path.
     if (Number(data?.currentTime) > 0.1) {
       if (!hasAdvancedRef.current) {
         hasAdvancedRef.current = true
       }
       if (
+        !suppressStuckRecovery &&
         !hasRenderedFrameRef.current &&
         playbackStartedAtRef.current !== null &&
         reloadAttemptRef.current < MAX_RELOAD_ATTEMPTS
@@ -229,7 +259,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
           return
         }
       }
-    } else if (playbackStartedAtRef.current !== null && !hasAdvancedRef.current) {
+    } else if (!suppressStuckRecovery && playbackStartedAtRef.current !== null && !hasAdvancedRef.current) {
       const stuckDuration = Date.now() - playbackStartedAtRef.current
       if (stuckDuration > STUCK_THRESHOLD_MS && reloadAttemptRef.current < MAX_RELOAD_ATTEMPTS) {
         console.warn('[PearInlineVideoView] Stuck playback detected — reloading', {
@@ -247,7 +277,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       currentTime: Math.max(0, Math.round(Number(data?.currentTime || 0) * 1000)),
       duration: durationMs,
     })
-  }, [onProgress])
+  }, [onProgress, shouldSuppressStuckPlaybackRecovery])
 
   const handleBuffer = useCallback((data: OnBufferData | any) => {
     onBuffering?.({ isBuffering: Boolean(data?.isBuffering) })
@@ -282,6 +312,9 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   }, [onError])
 
   const handlePictureInPictureStatusChanged = useCallback((e: { isActive: boolean }) => {
+    if (Platform.OS === 'android') {
+      suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
+    }
     onPictureInPictureChanged?.({
       isInPictureInPicture: e.isActive,
       width: 0,

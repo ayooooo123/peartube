@@ -758,7 +758,7 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       const startupState = platformRPC.getStartupState?.() || 'idle'
       const shouldReinitialize = !platformRPC.isInitialized()
         && !nativeInitInFlightRef.current
-        && (startupState === 'idle' || startupState === 'error')
+        && startupState === 'idle'
 
       if (shouldReinitialize) {
         console.log('[App] Backend not initialized, reinitializing...')

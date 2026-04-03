@@ -126,6 +126,22 @@ test('feed channel open sends HAVE_FEED immediately', () => {
   }
 })
 
+test('getFeed keeps cached peer entries with publicBeeKey even when peerCount is zero', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    manager.addEntry(DRIVE_KEY, 'peer', PUBLIC_BEE_KEY)
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].driveKey, DRIVE_KEY)
+    assert.equal(feed[0].publicBeeKey, PUBLIC_BEE_KEY)
+    assert.equal(feed[0].peerCount, 0)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('availability hint request is answered on the existing feed channel', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

@@ -820,7 +820,17 @@ export class PublicFeedManager {
           ? Math.max(1, this.entryPeerCounts.get(entry.driveKey) || 0)
           : (this.entryPeerCounts.get(entry.driveKey) || 0)
       }))
-      .filter((entry) => entry.source === 'local' || (entry.peerCount || 0) > 0)
+      .filter((entry) => {
+        // Local channels always stay visible.
+        if (entry.source === 'local') return true
+        // Peer-discovered channels with live peers are visible.
+        if ((entry.peerCount || 0) > 0) return true
+        // IMPORTANT: keep cached peer-discovered channels visible if they carry
+        // a valid publicBeeKey. This is what allows the app to hydrate/feed-load
+        // instantly on restart instead of coming up empty until a live gossip peer
+        // is connected again.
+        return typeof entry.publicBeeKey === 'string' && /^[a-f0-9]{64}$/i.test(entry.publicBeeKey)
+      })
       .sort((a, b) => b.addedAt - a.addedAt);
   }
 

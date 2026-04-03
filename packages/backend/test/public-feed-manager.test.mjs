@@ -187,6 +187,34 @@ test('availability hint request is answered on the existing feed channel', async
   }
 })
 
+test('requestFeedsFromPeers sends NEED_FEED so peers reply with their feed', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+  const sent = []
+
+  const originalFrom = Protomux.from
+  Protomux.from = () => ({
+    pair() {},
+    createChannel() {
+      return {
+        messages: [{ send(msg) { sent.push(msg) } }],
+        open() {},
+      }
+    }
+  })
+
+  try {
+    manager.handleConnection(conn, {})
+    const count = manager.requestFeedsFromPeers()
+    assert.equal(count, 1)
+    assert.deepEqual(sent[sent.length - 1], { type: 'NEED_FEED' })
+  } finally {
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
 test('requestAvailabilityHints merges playable responses from feed peers (including relayed peers on same channel)', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

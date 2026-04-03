@@ -788,11 +788,17 @@ export class PublicFeedManager {
   requestFeedsFromPeers() {
     console.log('[PublicFeed] ===== REQUESTING FEEDS FROM PEERS =====');
     let sent = 0;
-    for (const [conn] of this.peerChannels) {
-      this.sendHaveFeed(conn);
-      sent++;
+    for (const [conn, channel] of this.peerChannels) {
+      try {
+        // Request the peer's current feed snapshot. Re-sending our own HAVE_FEED
+        // here does not make the peer reply; NEED_FEED does.
+        channel.messages[0].send({ type: 'NEED_FEED' })
+        sent++;
+      } catch (err) {
+        console.log('[PublicFeed] NEED_FEED request failed:', err?.message)
+      }
     }
-    console.log('[PublicFeed] Sent HAVE_FEED to', sent, 'peers');
+    console.log('[PublicFeed] Sent NEED_FEED to', sent, 'peers');
     return sent;
   }
 

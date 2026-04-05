@@ -18,17 +18,18 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
-import to.holepunch.modules.mediasession.NativePlaybackController
-import to.holepunch.modules.mediasession.PipBridge
-import to.holepunch.modules.mediasession.PlaybackHostBridge
-import to.holepunch.modules.mediasession.PlayerActivityPayload
 
-class PlayerActivity : AppCompatActivity(), NativePlaybackController {
+class PlayerActivity : AppCompatActivity() {
   private lateinit var playerView: PlayerView
   private lateinit var slotContainer: FrameLayout
   private var player: ExoPlayer? = null
-  private var currentPayload: PlayerActivityPayload? = null
-  private var didRequestLaunchIntoPip = false
+
+  // Stores the video URL and optional start position for this session.
+  // Set when the activity is launched with a video intent.
+  private var currentSourceUrl: String? = null
+  private var currentMimeType: String? = null
+  private var currentStartPositionMs: Long = 0
+  private var currentShouldAutoplay: Boolean = true
 
   private fun getPlayerSlotHeightPx(): Int {
     val width = resources.displayMetrics.widthPixels
@@ -42,12 +43,10 @@ class PlayerActivity : AppCompatActivity(), NativePlaybackController {
 
   private val playerListener = object : Player.Listener {
     override fun onPlaybackStateChanged(playbackState: Int) {
-      syncPlaybackState()
       maybeEnterPipOnLaunch()
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
-      syncPlaybackState()
       maybeEnterPipOnLaunch()
     }
 
@@ -56,15 +55,11 @@ class PlayerActivity : AppCompatActivity(), NativePlaybackController {
     }
 
     override fun onVideoSizeChanged(videoSize: VideoSize) {
-      if (videoSize.width > 0 && videoSize.height > 0) {
-        PipBridge.setPipAspectRatio(videoSize.width, videoSize.height)
-      }
       maybeEnterPipOnLaunch()
     }
 
     override fun onPlayerError(error: PlaybackException) {
       android.util.Log.e("PlayerActivity", "Playback error", error)
-      syncPlaybackState()
     }
   }
 
@@ -107,14 +102,13 @@ class PlayerActivity : AppCompatActivity(), NativePlaybackController {
     }
     setContentView(root)
 
-    PlaybackHostBridge.registerNativeHostActivity(this)
-    applyLaunchPayload(PlayerActivityPayload.fromIntent(intent))
+    parseIntent(intent)
   }
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    applyLaunchPayload(PlayerActivityPayload.fromIntent(intent))
+    parseIntent(intent)
   }
 
   override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -126,114 +120,49 @@ class PlayerActivity : AppCompatActivity(), NativePlaybackController {
 
   override fun onUserLeaveHint() {
     super.onUserLeaveHint()
-    PipBridge.onUserLeaveHint(this)
+    // Let react-native-video handle PiP via onUserLeaveHint trigger.
+    // react-native-video's Video component will auto-enter PiP if configured.
   }
 
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-    PipBridge.notifyPipModeChanged(this, isInPictureInPictureMode, newConfig)
+    // react-native-video handles PiP UI state changes via onPictureInPictureStatusChanged callback
+    if (!isInPictureInPictureMode) {
+      // Exited PiP — ensure player view is shown
+      maybeEnterPipOnLaunch()
+    }
   }
 
   override fun onDestroy() {
-    PlaybackHostBridge.unregisterNativeHostActivity(this)
-    PlaybackHostBridge.unregisterNativePlaybackController(this)
-    PlaybackHostBridge.setSessionActive(false)
-    PlaybackHostBridge.clearNowPlaying()
-    PlaybackHostBridge.clearLaunchPayload()
-    PipBridge.setPipEnabled(false)
-
     playerView.player = null
     player?.removeListener(playerListener)
     player?.release()
     player = null
-
     super.onDestroy()
   }
 
-  override fun play(): Boolean {
-    runOnUiThread {
-      player?.playWhenReady = true
-      player?.play()
-      syncPlaybackState()
-    }
-    return true
-  }
+  private fun parseIntent(intent: Intent?) {
+    if (intent == null) return
 
-  override fun pause(): Boolean {
-    runOnUiThread {
-      player?.pause()
-      syncPlaybackState()
-    }
-    return true
-  }
-
-  override fun stop(reason: String?): Boolean {
-    runOnUiThread {
-      player?.pause()
-      player?.stop()
-      syncPlaybackState()
-      finish()
-    }
-    return true
-  }
-
-  override fun seekTo(positionMs: Long): Boolean {
-    runOnUiThread {
-      player?.seekTo(positionMs.coerceAtLeast(0L))
-      syncPlaybackState()
-    }
-    return true
-  }
-
-  override fun seekBy(deltaMs: Long): Boolean {
-    runOnUiThread {
-      val exoPlayer = player ?: return@runOnUiThread
-      val durationMs = exoPlayer.duration.takeIf { it != C.TIME_UNSET && it >= 0 } ?: Long.MAX_VALUE
-      val target = (exoPlayer.currentPosition + deltaMs).coerceAtLeast(0L).coerceAtMost(durationMs)
-      exoPlayer.seekTo(target)
-      syncPlaybackState()
-    }
-    return true
-  }
-
-  override fun enterBackgroundAudio(): Boolean {
-    runOnUiThread {
-      PipBridge.setPipEnabled(false)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-        moveTaskToBack(true)
-      }
-    }
-    return true
-  }
-
-  private fun applyLaunchPayload(payload: PlayerActivityPayload?) {
-    if (payload == null || payload.sourceUrl.isBlank()) {
+    val url = intent.getStringExtra("sourceUrl")
+      ?: intent.dataString
+    if (url.isNullOrBlank()) {
+      // No video to play — finish
       finish()
       return
     }
 
-    val isSameSession = payload.matchesSession(currentPayload)
-    currentPayload = payload
-    didRequestLaunchIntoPip = false
-
-    PlaybackHostBridge.rememberLaunchPayload(payload)
-    PlaybackHostBridge.registerNativePlaybackController(this, payload)
-    PlaybackHostBridge.setNowPlaying(payload.toNowPlayingMetadata())
-    PipBridge.setPipEnabled(true)
+    currentSourceUrl = url
+    currentMimeType = intent.getStringExtra("mimeType")
+    currentStartPositionMs = intent.getLongExtra("startPositionMs", 0)
+    currentShouldAutoplay = intent.getBooleanExtra("shouldAutoplay", true)
 
     val exoPlayer = ensurePlayer()
-    val mediaItemBuilder = MediaItem.Builder().setUri(payload.sourceUrl)
-    payload.mimeType?.let { mediaItemBuilder.setMimeType(it) }
-
-    if (!isSameSession) {
-      exoPlayer.setMediaItem(mediaItemBuilder.build(), payload.startPositionMs)
-      exoPlayer.prepare()
-    } else if (payload.startPositionMs > 0) {
-      exoPlayer.seekTo(payload.startPositionMs)
-    }
-
-    exoPlayer.playWhenReady = payload.shouldAutoplay
-    syncPlaybackState()
+    val mediaItemBuilder = MediaItem.Builder().setUri(url)
+    currentMimeType?.let { mediaItemBuilder.setMimeType(it) }
+    exoPlayer.setMediaItem(mediaItemBuilder.build(), currentStartPositionMs)
+    exoPlayer.prepare()
+    exoPlayer.playWhenReady = currentShouldAutoplay
     maybeEnterPipOnLaunch()
   }
 
@@ -256,39 +185,27 @@ class PlayerActivity : AppCompatActivity(), NativePlaybackController {
     return created
   }
 
-  private fun maybeEnterPipOnLaunch() {
-    val payload = currentPayload ?: return
-    val exoPlayer = player ?: return
-    if (!payload.requestPipOnLaunch || didRequestLaunchIntoPip || isInPictureInPictureMode) return
-    if (!hasWindowFocus() || playerView.width <= 0 || playerView.height <= 0) return
-    if (exoPlayer.playbackState == Player.STATE_IDLE || exoPlayer.playbackState == Player.STATE_ENDED) return
+  private var didRequestLaunchIntoPip = false
 
-    didRequestLaunchIntoPip = true
-    playerView.post {
-      if (isFinishing || isDestroyed) return@post
-      PipBridge.setPipEnabled(true)
-      PipBridge.updatePipSourceRectForCapture(this)
-      val entered = PipBridge.enterPictureInPictureDirect(
-        this,
-        sourceRectHint = PipBridge.getLaunchIntoPipSourceRect(this),
-      )
-      if (!entered) {
-        didRequestLaunchIntoPip = false
-      }
-    }
+  private fun maybeEnterPipOnLaunch() {
+    // No-op: PiP is handled by react-native-video's built-in PiP support
+    // via the Video component's onPictureInPictureStatusChanged and
+    // autoEnterPictureInPicture props. Keeping this stub in case we need
+    // manual PiP control in the future.
   }
 
-  private fun syncPlaybackState() {
-    val exoPlayer = player ?: return
-    val durationMs = exoPlayer.duration.takeIf { it != C.TIME_UNSET && it >= 0 }
-      ?: ((currentPayload?.durationSeconds ?: 0.0) * 1000.0).toLong()
-    PlaybackHostBridge.setPlaybackState(
-      mapOf(
-        "isPlaying" to exoPlayer.isPlaying,
-        "position" to (exoPlayer.currentPosition.toDouble() / 1000.0),
-        "duration" to (durationMs.toDouble() / 1000.0),
-        "rate" to exoPlayer.playbackParameters.speed.toDouble(),
-      ),
-    )
+  companion object {
+    // Store last launched video so notification/app resume can find it.
+    // Used by other parts of the app to check what's currently playing.
+    private var lastLaunchedSourceUrl: String? = null
+    private var lastLaunchedVideoId: String? = null
+
+    fun setLastLaunchedVideo(sourceUrl: String, videoId: String?) {
+      lastLaunchedSourceUrl = sourceUrl
+      lastLaunchedVideoId = videoId
+    }
+
+    fun getLastLaunchedSourceUrl(): String? = lastLaunchedSourceUrl
+    fun getLastLaunchedVideoId(): String? = lastLaunchedVideoId
   }
 }

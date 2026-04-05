@@ -8,7 +8,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { Alert, Platform } from 'react-native'
 import { useApp } from '@/lib/AppContext'
-import * as MediaSession from '../../modules/expo-media-session/src'
 
 export interface CastDevice {
   id: string
@@ -205,29 +204,14 @@ export function useCast(options: UseCastOptions = {}): UseCastReturn {
   const mountedRef = useRef(true)
   const castKeepaliveActiveRef = useRef(false)
 
-  const startCastKeepalive = useCallback(async (title: string, deviceName: string) => {
-    if (Platform.OS !== 'android') return
-    try {
-      if (castKeepaliveActiveRef.current) {
-        await MediaSession.updateCastForegroundService(title || 'PearTube', `Casting to ${deviceName}`)
-      } else {
-        await MediaSession.startCastForegroundService(title || 'PearTube', `Casting to ${deviceName}`)
-        castKeepaliveActiveRef.current = true
-      }
-    } catch (err) {
-      console.warn('[useCast] Failed to start cast keepalive service:', err)
-    }
+  const startCastKeepalive = useCallback(async (_title: string, _deviceName: string) => {
+    // Cast keepalive - no longer using MediaSession foreground service
+    // react-native-video handles playback natively
   }, [])
 
   const stopCastKeepalive = useCallback(async () => {
-    if (Platform.OS !== 'android' || !castKeepaliveActiveRef.current) return
-    try {
-      await MediaSession.stopCastForegroundService()
-    } catch (err) {
-      console.warn('[useCast] Failed to stop cast keepalive service:', err)
-    } finally {
-      castKeepaliveActiveRef.current = false
-    }
+    // Cast keepalive - no longer using MediaSession foreground service
+    castKeepaliveActiveRef.current = false
   }, [])
 
   // Serialize cast commands that are known to be crash-prone when fired rapidly

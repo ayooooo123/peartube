@@ -5,7 +5,7 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "npm run bundle:backend:ensure && expo start",
-    "android:prebuild": "(cat android/local.properties 2>/dev/null > /tmp/local.properties.bak || true) && expo prebuild --platform android --clean && (if [ -s /tmp/local.properties.bak ]; then cat /tmp/local.properties.bak > android/local.properties; else echo \"sdk.dir=${ANDROID_HOME:-$HOME/Library/Android/sdk}\" > android/local.properties; fi)",
+    "android:prebuild": "node ./scripts/patch-react-native-video-pip.js && (cat android/local.properties 2>/dev/null > /tmp/local.properties.bak || true) && expo prebuild --platform android --clean && (if [ -s /tmp/local.properties.bak ]; then cat /tmp/local.properties.bak > android/local.properties; else echo \"sdk.dir=${ANDROID_HOME:-$HOME/Library/Android/sdk}\" > android/local.properties; fi)",
     "android": "npm run bundle:backend:ensure && npm run android:prebuild && expo run:android",
     "setup:android": "bash ./scripts/setup-android.sh",
     "ios:prepare": "bash ./scripts/create-xcframeworks.sh",
@@ -39,7 +39,7 @@
     "build:eas:android": "npm run bundle:backend:ensure && eas build --platform android --profile preview",
     "build:eas:all": "npm run bundle:backend:ensure && eas build --platform all --profile preview",
     "test:android:pip:repro": "bash ./scripts/maestro-android-pip-repro.sh",
-    "eas-build-post-install": "npm run bundle:backend:ensure"
+    "eas-build-post-install": "node ./scripts/patch-react-native-video-pip.js && npm run bundle:backend:ensure"
   },
   "author": "PearTube",
   "license": "Apache-2.0",
@@ -89,7 +89,6 @@
     "expo-linear-gradient": "^55.0.9",
     "expo-linking": "~55.0.7",
     "expo-media-library": "~55.0.9",
-    "expo-media-session": "file:./modules/expo-media-session",
     "expo-router": "~55.0.3",
     "expo-screen-orientation": "~55.0.8",
     "expo-sharing": "~55.0.11",

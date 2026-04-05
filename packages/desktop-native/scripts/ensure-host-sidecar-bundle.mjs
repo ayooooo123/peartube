@@ -19,7 +19,7 @@ const appNodeModulesPath = path.join(repoRoot, 'packages', 'app', 'node_modules'
 const sourceRoots = [
   path.join(packageRoot, 'Bridge'),
   path.join(repoRoot, 'packages', 'app', 'backend'),
-  path.join(repoRoot, 'packages', 'host', 'src'),
+  path.join(repoRoot, 'packages', 'host'),
   path.join(repoRoot, 'packages', 'protocol', 'src'),
   path.join(repoRoot, 'packages', 'backend', 'src'),
   path.join(repoRoot, 'packages', 'spec', 'spec'),

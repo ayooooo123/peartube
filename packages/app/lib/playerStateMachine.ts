@@ -162,6 +162,7 @@ type TransitionMap = {
     CLOSE_VIDEO: 'hidden'
     MINIMIZE: 'mini' | 'pip_entering'
     MAXIMIZE: 'fullscreen'
+    ENTER_BACKGROUND_AUDIO: 'background_audio'
     APP_BACKGROUND: 'fullscreen'
     APP_FOREGROUND: 'fullscreen'
     REMOTE_PLAY: 'fullscreen'

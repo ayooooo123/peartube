@@ -51,6 +51,12 @@
       [
         "expo-router"
       ],
+      [
+        "react-native-video",
+        {
+          "enableNotificationControls": true
+        }
+      ],
       "./plugins/withEnsureBackendBundles.js",
       [
         "expo-build-properties",
@@ -70,8 +76,7 @@
         }
       ],
       "./plugins/withAndroidPiP.js",
-      "./plugins/withMainActivityPiPCallback.js",
-      "./plugins/withAndroidMediaSessionServices.js",
+      "./plugins/withPipBackgroundAudio.js",
       "./plugins/withExoplayerKeepResources.js",
       "./plugins/withAndroidAbiSplits.js",
       "./plugins/withVectorIconFonts.js",

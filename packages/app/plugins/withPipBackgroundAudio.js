@@ -1,0 +1,32 @@
+const fs = require('node:fs')
+const path = require('node:path')
+const { withDangerousMod } = require('@expo/config-plugins')
+
+const HEADPHONES_DRAWABLE = `<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+  <path
+      android:fillColor="@android:color/white"
+      android:pathData="M12,1C7.03,1 3,5.03 3,10v6c0,1.66 1.34,3 3,3h1c0.55,0 1,-0.45 1,-1v-5c0,-0.55 -0.45,-1 -1,-1H4v-2c0,-4.42 3.58,-8 8,-8s8,3.58 8,8v2h-3c-0.55,0 -1,0.45 -1,1v5c0,0.55 0.45,1 1,1h1c1.66,0 3,-1.34 3,-3v-6c0,-4.97 -4.03,-9 -9,-9z"/>
+</vector>
+`
+
+function withPipBackgroundAudio(config) {
+  return withDangerousMod(config, [
+    'android',
+    (config) => {
+      const drawableDir = path.join(
+        config.modRequest.platformProjectRoot, 'app', 'src', 'main', 'res', 'drawable',
+      )
+      fs.mkdirSync(drawableDir, { recursive: true })
+      fs.writeFileSync(path.join(drawableDir, 'ic_pip_headphones.xml'), HEADPHONES_DRAWABLE)
+      console.log('[withPipBackgroundAudio] Wrote ic_pip_headphones.xml')
+      return config
+    },
+  ])
+}
+
+module.exports = withPipBackgroundAudio

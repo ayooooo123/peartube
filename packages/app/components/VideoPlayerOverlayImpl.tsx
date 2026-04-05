@@ -28,7 +28,6 @@ import { useCurrentDownloadStatus } from '@/hooks/useCurrentDownloadStatus'
 import { useSocial } from '@/lib/SocialContext'
 import { colors } from '@/lib/colors'
 import { getPlayerPageVideoHeight } from '@/lib/video-layout'
-import * as MediaSession from '../modules/expo-media-session/src'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
@@ -751,24 +750,13 @@ export function VideoPlayerOverlay() {
 
   useEffect(() => {
     if (Platform.OS === 'web') return
-    let cancelled = false
-    console.log('[VideoPlayerOverlay] Checking PiP support...')
-    MediaSession.isPictureInPictureSupported?.()
-      .then((supported) => {
-        console.log('[VideoPlayerOverlay] PiP supported:', supported)
-        if (!cancelled) setPipSupported(supported)
-      })
-      .catch((err) => {
-        console.log('[VideoPlayerOverlay] PiP support check failed:', err)
-        if (!cancelled) setPipSupported(false)
-      })
-    return () => {
-      cancelled = true
-    }
+    // PiP support is now handled natively by react-native-video
+    // showNotificationControls=true means PiP is available on Android
+    setPipSupported(true)
   }, [])
 
   // PiP source rect is computed natively from the actual SurfaceView/TextureView
-  // position (see getVideoSourceRect in MediaSessionModule.kt). No JS-side rect needed.
+  // position. No JS-side rect needed.
 
   // Native overlay disabled - testing simple padding approach
 
@@ -785,21 +773,15 @@ export function VideoPlayerOverlay() {
 
   const handlePipStatusChanged = useCallback((event: { isInPictureInPicture: boolean; width: number; height: number }) => {
     console.log('[VideoPlayerOverlay] PiP status changed:', event.isInPictureInPicture, event.width, event.height)
-    if (Platform.OS !== 'android') {
-      setIsInPipMode(event.isInPictureInPicture)
-    }
+    setIsInPipMode(event.isInPictureInPicture)
     if (event.isInPictureInPicture && event.width > 0 && event.height > 0) {
       setPipWindowSize({ width: event.width, height: event.height })
     } else if (!event.isInPictureInPicture) {
       setPipWindowSize(null)
 
-      // Android PiP exit recovery is handled in VideoPlayerContext via the
-      // reducer/state machine. Calling maximizePlayer() here can produce
-      // invalid transitions during repeated PiP cycles.
       if (Platform.OS !== 'android' && AppState.currentState === 'active') {
         maximizePlayer('overlay-pip-exit-ios')
       }
-
     }
   }, [setIsInPipMode, setPipWindowSize, maximizePlayer, pipSupported, currentVideo, isCasting])
 
@@ -808,12 +790,7 @@ export function VideoPlayerOverlay() {
     const width = info?.videoSize?.width
     const height = info?.videoSize?.height
     console.log('[VideoPlayerOverlay] Video loaded with dimensions:', width, 'x', height)
-
-    // Update Android PiP aspect ratio to match video dimensions
-    // This prevents zoom/stretch when entering PiP mode
-    if (Platform.OS === 'android' && width && height && width > 0 && height > 0) {
-      MediaSession.setPictureInPictureAspectRatio(width, height)
-    }
+    // PiP aspect ratio is handled natively by react-native-video
   }, [])
 
    // Animation progress: 0 = mini, 1 = fullscreen
@@ -1201,8 +1178,9 @@ export function VideoPlayerOverlay() {
       controlsTimeoutRef.current = null
     }
     cancelAnimation(animProgress)
+    pauseVideo()
     closeVideo()
-  }, [closeVideo, animProgress])
+  }, [closeVideo, pauseVideo, animProgress])
 
   const handleVideoTap = useCallback(() => {
     if (isInPipMode) return
@@ -2150,18 +2128,10 @@ export function VideoPlayerOverlay() {
     }
   }, [playerMode, isLandscapeFullscreen, pendingLandscapeExit])
 
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    // The inline Android watch player now uses the shared Media3 PlayerView host.
-    // Translating its underlying SurfaceView down clips the fixed 16:9 player slot,
-    // so keep the inline surface flush and let layout/insets be handled above it.
-    MediaSession.setSurfaceViewInset(0).catch(() => {})
-  }, [playerMode, isInPipMode, isLandscapeFullscreen])
+  // PiP and surface inset handling is now done natively by react-native-video
+  // setSurfaceViewInset and setAutoPictureInPicture are no longer needed
 
-  // Unified PiP arming effect.
-  // On Android single-host playback, PiP must remain armed whenever a fullscreen
-  // video is active; otherwise onUserLeaveHint sees pipEnabled=false and the app
-  // backgrounds without entering PiP, which then surfaces the reconnect/loading overlay.
+  // Unified PiP arming effect - now handled natively by react-native-video
   useEffect(() => {
     if (Platform.OS === 'web') return
     if (isInPipMode) return
@@ -2172,7 +2142,7 @@ export function VideoPlayerOverlay() {
         currentVideo !== null &&
         !isCasting
       autoPipEnabledRef.current = shouldEnable
-      MediaSession.setAutoPictureInPicture(shouldEnable)
+      // PiP arming is now handled natively by react-native-video's showNotificationControls
       return
     } else if (Platform.OS === 'ios') {
       const shouldEnable =
@@ -2981,6 +2951,9 @@ export function VideoPlayerOverlay() {
             isInPipMode={isInPipMode}
             pipWindowSize={pipWindowSize}
             pipEnabled={iosPipEnabled}
+            videoTitle={currentVideo?.title}
+            channelName={currentVideo?.channel?.name}
+            thumbnailUrl={currentVideo?.thumbnailUrl}
             onLoad={handleVideoLoad}
             onPictureInPictureChanged={handlePipStatusChanged}
             onProgress={onProgress}

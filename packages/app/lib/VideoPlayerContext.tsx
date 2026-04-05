@@ -7,10 +7,9 @@
  */
 
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react'
-import { Platform, AppState, AppStateStatus } from 'react-native'
+import { Platform, AppState, AppStateStatus, DeviceEventEmitter } from 'react-native'
 import type { VideoData, VideoStats } from '@peartube/core'
 import type { PlayerMode } from './video-player'
-import * as MediaSession from '../modules/expo-media-session/src'
 import { usePlayerStateMachine } from './playerStateMachine'
 import type { ModeBeforePip, PlayerState } from './playerStateMachine'
 
@@ -174,6 +173,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const pipExitShouldResumeRef = useRef(false)
   const pipExitExpectedPlayingRef = useRef(false)
   const pipExitResumeUntilRef = useRef(0)
+  // Suppress the "Connecting to P2P..." loading overlay during transitions where
+  // the player was already playing (PiP exit, background-audio return). ExoPlayer
+  // emits brief buffering events during surface reattach that are not real stalls.
+  // Set true on transition, cleared by the next onPlaying event.
+  const suppressTransientBufferingRef = useRef(false)
   const pipExitReassertLoggedAtRef = useRef(0)
   const iosIgnorePausedUntilRef = useRef(0)
   const pendingSeekSecondsRef = useRef<number | null>(null)
@@ -193,11 +197,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const wasPlayingWhenBackgroundedRef = useRef(state.wasPlayingWhenBackgrounded)
   const isBackgroundedRef = useRef(false)
   const isInPipModeRef = useRef(false)
-  const wasPlayingWhenPipEnteredRef = useRef(state.wasPlayingWhenPipEntered)
+  const lastPipEventTimeRef = useRef(0)
   const modeBeforePipRef = useRef<ModeBeforePip>(state.modeBeforePip)
+  const wasPlayingWhenPipEnteredRef = useRef(state.wasPlayingWhenPipEntered)
   const playerModeRef = useRef<PlayerMode>(playerMode)  // Sync ref for PiP handler
   const maximizedForPipRef = useRef(false)  // True when we expanded mini→fullscreen for PiP
-  const lastPipEventTimeRef = useRef(0)
+  // Set to true when closing session for background-audio so the hidden-mode useEffect
+  // knows NOT to clear the session (the PiP window continues playing with notification).
+  const isClosingForBackgroundAudioRef = useRef(false)
   const pipTransitionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const pipTransitionInFlightRef = useRef(false)  // True during PiP exit→fullscreen transition window
   const previousStateModeRef = useRef(state.mode)
@@ -216,13 +223,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     let cancelled = false
 
     const tryAcquireController = async () => {
-      let shouldPreferThisController = false
-
-      if (Platform.OS === 'android' && ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-        try {
-          shouldPreferThisController = await MediaSession.isInPlayerActivity()
-        } catch {}
-      }
+      // MediaSession.isInPlayerActivity() removed - using react-native-video native PiP
+      const shouldPreferThisController = false
 
       if (cancelled) return
 
@@ -296,48 +298,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }
   }, [])
 
-  const mediaSessionActiveRef = useRef(false)
-  const syncPictureInPicturePlaybackState = useCallback((nextIsPlaying: boolean, nextIsBuffering = isBufferingRef.current) => {
-    if (Platform.OS !== 'android') return
-    MediaSession.setPictureInPicturePlaybackState({
-      isPlaying: nextIsPlaying,
-      isBuffering: nextIsBuffering,
-    }).catch(() => {})
-  }, [])
-
-  const syncMediaSessionPlaybackState = useCallback((nextIsPlaying: boolean) => {
-    if (Platform.OS !== 'ios') return
-    if (!mediaSessionActiveRef.current) return
-    MediaSession.setPlaybackState({
-      isPlaying: nextIsPlaying,
-      position: currentTimeRef.current,
-      duration: durationRef.current,
-      rate: playbackRateRef.current,
-    }).catch(() => {})
-  }, [])
-
-  const syncPlatformPlaybackState = useCallback((nextIsPlaying: boolean) => {
-    syncPictureInPicturePlaybackState(nextIsPlaying)
-    syncMediaSessionPlaybackState(nextIsPlaying)
-  }, [syncMediaSessionPlaybackState, syncPictureInPicturePlaybackState])
-
   const setDesiredPlaying = useCallback((nextIsPlaying: boolean) => {
     setIsPlaying(nextIsPlaying)
-    syncPlatformPlaybackState(nextIsPlaying)
-  }, [syncPlatformPlaybackState])
-
-  const setMediaSessionActive = useCallback((active: boolean) => {
-    if (Platform.OS !== 'ios') return
-    if (mediaSessionActiveRef.current === active) return
-    mediaSessionActiveRef.current = active
-    if (active) {
-      console.log('[VideoPlayerContext] Activating media session')
-    } else {
-      console.log('[VideoPlayerContext] Deactivating media session')
-    }
-    MediaSession.setActive(active).catch((e) => {
-      console.warn('[VideoPlayerContext] Failed to set media session active:', e)
-    })
   }, [])
 
   const restoreLastClosedVideo = useCallback((reason: string) => {
@@ -392,7 +354,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setTimeout(() => setSeekPosition(undefined), 200)
   }, [])
 
-  const closeSession = useCallback((reason: 'user' | 'remote-stop' | 'android-minimize-close' | 'pip-close' = 'user') => {
+  const closeSession = useCallback((
+    reason: 'user' | 'remote-stop' | 'android-minimize-close' | 'pip-close' | 'background-audio' = 'user',
+    opts?: { preserveLastClosed?: boolean },
+  ) => {
     console.log('[VideoPlayerContext] Closing session:', reason)
 
     const preserveNativeSession =
@@ -418,14 +383,17 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     seekConfirmRef.current = null
 
     pipExitShouldResumeRef.current = false
-    pipExitExpectedPlayingRef.current = false
     pipExitResumeUntilRef.current = 0
     pipTransitionInFlightRef.current = false
 
-    try {
-      playerRef.current?.stop?.()
-      playerRef.current?.pause?.()
-    } catch {}
+    // For background-audio mode, do NOT stop/pause the native player (ExoPlayer).
+    // The PiP window continues playing natively and we must not interfere with it.
+    if (reason !== 'background-audio') {
+      try {
+        playerRef.current?.stop?.()
+        playerRef.current?.pause?.()
+      } catch {}
+    }
 
     suppressForegroundRestoreRef.current = true
     const suppressUntil = Date.now() + 2000
@@ -433,13 +401,24 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       suppressForegroundRestoreUntilRef.current = suppressUntil
     }
 
-    lastClosedVideoRef.current = null
-    lastClosedUrlRef.current = null
-    lastClosedTimeRef.current = null
+    // When closing for background-audio, preserve the last-closed video so the
+    // user can seamlessly return to it when the app reopens.
+    if (opts?.preserveLastClosed) {
+      // keep lastClosedVideoRef, lastClosedUrlRef, lastClosedTimeRef as-is
+    } else {
+      lastClosedVideoRef.current = null
+      lastClosedUrlRef.current = null
+      lastClosedTimeRef.current = null
+    }
     currentVideoRef.current = null
     videoUrlRef.current = null
 
-    setDesiredPlaying(false)
+    // When entering background-audio mode, do NOT stop the desired playing state —
+    // the PiP window's ExoPlayer is still playing and we need to stay in sync.
+    if (reason !== 'background-audio') {
+      setDesiredPlaying(false)
+    }
+    isClosingForBackgroundAudioRef.current = reason === 'background-audio'
     dispatch({
       type: 'CLOSE_VIDEO',
       source:
@@ -454,19 +433,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setVideoStats(null)
     setCurrentTime(0)
     setDuration(0)
-    if (Platform.OS !== 'web') {
-      if (preserveNativeSession) {
-        console.log('[VideoPlayerContext] Preserving native PlayerActivity session during inline detach')
-      } else {
-        MediaSession.clearNowPlaying().catch(() => {})
-        MediaSession.clearPendingPlayerLaunchPayload().catch(() => {})
-        setMediaSessionActive(false)
-        mediaSessionActiveRef.current = false
-      }
-    } else {
-      mediaSessionActiveRef.current = false
-    }
-  }, [dispatch, setDesiredPlaying, setMediaSessionActive])
+
+    // Reset the closing flag so foreground restore attempts (e.g. after
+    // background-audio close) can proceed.  The flag was set above to prevent
+    // a transient APP_FOREGROUND (fired during the same close) from
+    // incorrectly restoring before the close is committed.
+    closingVideoRef.current = false
+  }, [dispatch, setDesiredPlaying])
 
   const closeVideo = useCallback(() => {
     closeSession('user')
@@ -475,6 +448,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   const enterBackgroundAudio = useCallback(() => {
     if (!currentVideoRef.current || !videoUrlRef.current) return
     console.log('[VideoPlayerContext] Entering background audio mode')
+    // Transition to background_audio mode WITHOUT unmounting the Video component.
+    // This keeps state.video and state.url intact so ExoPlayer continues playing
+    // via VideoPlaybackService. When the app returns to foreground, the state machine
+    // transitions background_audio → fullscreen via APP_FOREGROUND, and the player
+    // resumes seamlessly from the current position (no remount, no seek).
     dispatch({ type: 'ENTER_BACKGROUND_AUDIO', source: 'enterBackgroundAudio' })
   }, [dispatch])
 
@@ -496,125 +474,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     lastClosedTimeRef.current = null
   }, [])
 
-  const launchSplitPlayerActivity = useCallback((requestPipOnLaunch: boolean, source: 'background' | 'minimize') => {
-    if (Platform.OS !== 'android' || !ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-      return Promise.resolve(false)
-    }
-
-    const currentVideo = currentVideoRef.current
-    const currentUrl = videoUrlRef.current
-    if (!currentVideo || !currentUrl) {
-      console.log('[VideoPlayerContext] No active video for split-player launch:', source)
-      return Promise.resolve(false)
-    }
-
-    if (splitPlayerLaunchInFlightRef.current) {
-      console.log('[VideoPlayerContext] Split-player launch already in flight:', source)
-      return Promise.resolve(false)
-    }
-
-    queuedPlaybackStartRef.current = null
-    playbackStartInFlightRef.current = false
-    playbackStartCooldownUntilRef.current = 0
-    pendingAndroidMinimizeCloseRef.current = false
-    if (playbackStartDrainTimerRef.current) {
-      clearTimeout(playbackStartDrainTimerRef.current)
-      playbackStartDrainTimerRef.current = null
-    }
-
-    const videoId = currentVideo.id || currentVideo.path || ''
-    const sessionId = `${Date.now()}-${videoId || 'video'}`
-    const startPositionMs = Math.max(0, Math.floor(currentTimeRef.current * 1000))
-    const wasPlaying = isPlayingRef.current
-
-    splitPlayerLaunchInFlightRef.current = true
-    return MediaSession.openPlayerActivity({
-      sessionId,
-      videoId,
-      sourceUrl: currentUrl,
-      startPositionMs,
-      shouldAutoplay: wasPlaying,
-      title: currentVideo.title,
-      description: currentVideo.description,
-      path: currentVideo.path,
-      size: currentVideo.size,
-      uploadedAt: currentVideo.uploadedAt,
-      channelKey: currentVideo.channelKey,
-      mimeType: currentVideo.mimeType,
-      duration: currentVideo.duration,
-      thumbnail: currentVideo.thumbnail,
-      requestPipOnLaunch,
-    })
-      .then((opened) => {
-        splitPlayerLaunchInFlightRef.current = false
-        if (!opened) {
-          pendingAndroidMinimizeCloseRef.current = false
-          console.log('[VideoPlayerContext] Split-player handoff failed to open PlayerActivity:', source)
-          return false
-        }
-        pendingAndroidMinimizeCloseRef.current = true
-        return true
-      })
-      .catch((err) => {
-        splitPlayerLaunchInFlightRef.current = false
-        pendingAndroidMinimizeCloseRef.current = false
-        console.log('[VideoPlayerContext] Split-player handoff failed:', source, err)
-        return false
-      })
-  }, [])
+  // launchSplitPlayerActivity - Removed. Using react-native-video native PiP support instead.
+  // The split PlayerActivity architecture is no longer needed with react-native-video's built-in PiP.
 
   // Activate media session while a video is loaded (keeps lock screen controls visible)
   useEffect(() => {
-    if (Platform.OS !== 'ios') return
-    const shouldBeActive = currentVideo !== null
-    setMediaSessionActive(shouldBeActive)
-  }, [currentVideo, setMediaSessionActive])
-
-  // Keep Now Playing metadata up to date for lock screen/notification
-  useEffect(() => {
-    if (Platform.OS !== 'ios') return
-    if (!currentVideo) return
-    MediaSession.setNowPlaying({
-      title: currentVideo.title || 'Video',
-      artist: currentVideo.channel?.name || 'PearTube',
-      duration,
-      artworkUrl: currentVideo.thumbnailUrl ?? undefined,
-    }).catch(() => {})
-  }, [currentVideo, duration])
-
-  // Keep PlayerActivity launch payload primed while inline playback is active on Android.
-  // This lets MainActivity hand off to the PiP-capable PlayerActivity on leave-hint.
-  const pipLaunchPrimeBucket = Math.floor(currentTime / 5)
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    if (!currentVideo || !videoUrl) {
-      MediaSession.clearPendingPlayerLaunchPayload().catch(() => {})
-      return
-    }
-
-    MediaSession.primePlayerActivityPayload({
-      sessionId: `inline-${currentVideo.id || currentVideo.path || 'video'}`,
-      videoId: currentVideo.id || currentVideo.path || '',
-      sourceUrl: videoUrl,
-      startPositionMs: Math.max(0, Math.floor(currentTime * 1000)),
-      shouldAutoplay: isPlayingRef.current,
-      title: currentVideo.title,
-      description: currentVideo.description,
-      path: currentVideo.path,
-      size: currentVideo.size,
-      uploadedAt: currentVideo.uploadedAt,
-      channelKey: currentVideo.channelKey,
-      mimeType: currentVideo.mimeType,
-      duration: currentVideo.duration,
-      thumbnail: currentVideo.thumbnail,
-      requestPipOnLaunch: false,
-    }).catch(() => {})
-  }, [currentVideo, videoUrl, pipLaunchPrimeBucket])
-
-  useEffect(() => {
-    if (Platform.OS === 'web') return
-    syncPlatformPlaybackState(isPlaying)
-  }, [isPlaying, syncPlatformPlaybackState])
+    // react-native-video's VideoPlaybackService handles MediaSession natively
+  }, [currentVideo])
 
   useEffect(() => {
     const previousMode = previousStateModeRef.current
@@ -643,17 +509,17 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       setVideoStats(null)
       setVideoAspectRatio(null)
       setIsLoading(false)
-      if (Platform.OS === 'ios') {
-        MediaSession.clearNowPlaying().catch(() => {})
-        setMediaSessionActive(false)
-      }
-      mediaSessionActiveRef.current = false
+      isClosingForBackgroundAudioRef.current = false
       return
     }
 
     if (nextMode === 'fullscreen') {
-      if (Platform.OS !== 'web') {
-        syncPlatformPlaybackState(isPlayingRef.current)
+      // Suppress transient buffering overlay when resuming from PiP or background audio.
+      // ExoPlayer re-attaches its surface and may emit brief buffering events that
+      // are not real P2P stalls.
+      if (previousMode === 'pip_active' || previousMode === 'pip_exiting' || previousMode === 'background_audio') {
+        suppressTransientBufferingRef.current = true
+        setIsLoading(false)
       }
       if (pipExitShouldResumeRef.current) {
         pipExitShouldResumeRef.current = false
@@ -667,7 +533,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         reassertNativePlayAfterPipExit('pip-active-exit-transition')
       }
     }
-  }, [reassertNativePlayAfterPipExit, setMediaSessionActive, state.mode, state.wasPlayingWhenPipEntered])
+  }, [reassertNativePlayAfterPipExit, state.mode, state.wasPlayingWhenPipEntered])
 
    // AppState listener for background/foreground transitions (mobile only)
    useEffect(() => {
@@ -687,11 +553,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         const skipAppBackgroundDispatchForPip =
           Platform.OS === 'android' && (isInPipModeRef.current || pipTransitionInFlightRef.current)
 
-        if (skipLifecycleDispatchForSplitAndroid && !skipAppBackgroundDispatchForPip && currentVideoRef.current && videoUrlRef.current) {
-          void launchSplitPlayerActivity(true, 'background')
-        }
-
-        if (!skipLifecycleDispatchForSplitAndroid && !skipAppBackgroundDispatchForPip) {
+        if (!skipAppBackgroundDispatchForPip) {
           dispatch({
             type: 'APP_BACKGROUND',
             source: 'appStateBackgroundMiniAutoMaximizeForPip',
@@ -711,6 +573,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
          isBackgroundedRef.current = false
          maximizedForPipRef.current = false
           const wasInPip = isInPipModeRef.current || pipTransitionInFlightRef.current
+          // Suppress transient buffering overlay when returning from background.
+          // The player was already running — any buffering is surface reattach, not a real stall.
+          suppressTransientBufferingRef.current = true
+          setIsLoading(false)
           console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current, 'wasInPiP:', wasInPip, 'pipInFlight:', pipTransitionInFlightRef.current)
 
          // IMPORTANT: Don't clear PiP state on foreground if we were in PiP.
@@ -741,7 +607,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         // When PiP silently fails (wasInPip=false but video is still playing),
         // dispatching APP_FOREGROUND can transition playerMode to 'hidden' which
         // tears down the video unnecessarily.
-        const skipForActivePlayback = Platform.OS === 'android' && state.mode !== 'background_audio' && !wasInPip && currentVideoRef.current && wasPlayingWhenBackgroundedRef.current
+        const skipForActivePlayback =
+          Platform.OS === 'android' &&
+          state.mode === 'fullscreen' &&
+          !wasInPip &&
+          currentVideoRef.current &&
+          wasPlayingWhenBackgroundedRef.current
         if (!skipLifecycleDispatchForSplitAndroid && !skipAppForegroundDispatchForPip && !skipForActivePlayback) {
           dispatch({
             type: 'APP_FOREGROUND',
@@ -780,344 +651,19 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
      return () => subscription.remove()
     }, [dispatch, forceReloadPlayback, isPrimaryController, restoreLastClosedVideo, state.mode])
 
+  // Listen for native PiP close event (Android) — sync JS pause state
   useEffect(() => {
     if (Platform.OS !== 'android') return
-    if (!isPrimaryController) return
-    const shouldAvoidCutout = playerMode === 'fullscreen' && !isInPipMode
-    MediaSession.setStatusBarOverlayEnabled(shouldAvoidCutout).catch(() => {})
-  }, [isPrimaryController, playerMode, isInPipMode])
-
-// MediaSession remote command listener (mobile only)
-  useEffect(() => {
-    if (Platform.OS !== 'ios') return
-    if (!isPrimaryController) return
-
-    const subscription = MediaSession.addRemoteCommandListener((event) => {
-      console.log('[VideoPlayerContext] Remote command received:', event.command)
-      const resumeFromRemote = () => {
-        if (!currentVideoRef.current) {
-          if (!restoreLastClosedVideo('remote-play')) {
-            return
-          }
-        } else if (playerModeRef.current === 'hidden' && currentVideoRef.current) {
-          console.log('[VideoPlayerContext] Remote play while hidden, restoring fullscreen')
-          const platform = Platform.OS === 'ios' ? 'ios' : 'android'
-          dispatch({
-            type: 'REMOTE_PLAY',
-            source: 'remoteCommandHiddenRestore',
-            isBackgrounded: isBackgroundedRef.current,
-            platform,
-          })
-        }
-        if (Platform.OS === 'ios' && durationRef.current > 0) {
-          const seekValue = currentTimeRef.current / durationRef.current
-          setSeekPosition(seekValue)
-          setTimeout(() => {
-            setSeekPosition(undefined)
-            setDesiredPlaying(true)
-          }, 100)
-        } else {
-          setDesiredPlaying(true)
-        }
-      }
-      switch (event.command) {
-        case 'play':
-          console.log('[VideoPlayerContext] Setting isPlaying = true')
-          if (isBackgroundedRef.current || isInPipModeRef.current) {
-            if (currentVideoRef.current) {
-              setDesiredPlaying(true)
-              try { playerRef.current?.play?.() } catch {}
-            } else {
-              remotePlayWhileBackgroundedRef.current = true
-              return
-            }
-            break
-          }
-          resumeFromRemote()
-          break
-        case 'pause':
-          console.log('[VideoPlayerContext] Setting isPlaying = false')
-          if (
-            Platform.OS === 'android' &&
-            !isInPipModeRef.current &&
-            pipExitExpectedPlayingRef.current &&
-            Date.now() <= pipExitResumeUntilRef.current
-          ) {
-            reassertNativePlayAfterPipExit('remote-pause-during-pip-exit')
-            return
-          }
-          setDesiredPlaying(false)
-          if (isBackgroundedRef.current || isInPipModeRef.current) {
-            try { playerRef.current?.pause?.() } catch {}
-          }
-          break
-        case 'backgroundAudio':
-          console.log('[VideoPlayerContext] Entering background audio from native control')
-          enterBackgroundAudio()
-          if (Platform.OS === 'android') {
-            MediaSession.enterBackgroundAudioMode?.().catch(() => {})
-          }
-          break
-        case 'stop': {
-          const isPipDismissed = event.reason === 'pip-dismissed'
-
-          // True PiP dismissal should close the session explicitly.
-          if (isPipDismissed) {
-            console.log('[VideoPlayerContext] PiP dismissed — closing session')
-            remotePlayWhileBackgroundedRef.current = false
-            closeSession('pip-close')
-            break
-          }
-
-          // On Android, backgrounding and PiP transitions can emit transient
-          // remote stop commands. Ignore them whenever the app is backgrounded,
-          // in PiP, transitioning PiP, or still in the PiP exit resume window.
-          if (
-            Platform.OS === 'android' &&
-            currentVideoRef.current &&
-            (isBackgroundedRef.current || isInPipModeRef.current || pipTransitionInFlightRef.current || pipExitExpectedPlayingRef.current)
-          ) {
-            console.log('[VideoPlayerContext] Ignoring remote stop during Android background/PiP handoff')
-            break
-          }
-
-          console.log('[VideoPlayerContext] Stopping playback')
-          remotePlayWhileBackgroundedRef.current = false
-          closeSession('remote-stop')
-          break
-        }
-        case 'togglePlayPause':
-          console.log('[VideoPlayerContext] Toggling play/pause')
-          if (isPlayingRef.current) {
-            setDesiredPlaying(false)
-            if (isBackgroundedRef.current || isInPipModeRef.current) {
-              try { playerRef.current?.pause?.() } catch {}
-            }
-          } else if (isBackgroundedRef.current && currentVideoRef.current) {
-            setDesiredPlaying(true)
-            try { playerRef.current?.play?.() } catch {}
-          } else {
-            resumeFromRemote()
-          }
-          break
-        case 'skipForward':
-          if (durationRef.current > 0) {
-            const newTime = Math.min(currentTimeRef.current + 10, durationRef.current)
-            setSeekPosition(newTime / durationRef.current)
-            setCurrentTime(newTime)
-            setTimeout(() => setSeekPosition(undefined), 100)
-          }
-          break
-        case 'skipBackward':
-          if (durationRef.current > 0) {
-            const newTime = Math.max(currentTimeRef.current - 10, 0)
-            setSeekPosition(newTime / durationRef.current)
-            setCurrentTime(newTime)
-            setTimeout(() => setSeekPosition(undefined), 100)
-          }
-          break
-        case 'seekTo':
-          if (event.position !== undefined && durationRef.current > 0) {
-            setSeekPosition(event.position / durationRef.current)
-            setCurrentTime(event.position)
-            setTimeout(() => setSeekPosition(undefined), 100)
-          }
-          break
-      }
+    const closeSub = DeviceEventEmitter.addListener('onPipClosed', () => {
+      console.log('[VideoPlayerContext] PiP closed (X button) — pausing')
+      setDesiredPlaying(false)
     })
+    return () => closeSub.remove()
+  }, [setDesiredPlaying])
 
-    return () => subscription.remove()
-  }, [closeSession, dispatch, enterBackgroundAudio, isPrimaryController, restoreLastClosedVideo, reassertNativePlayAfterPipExit])
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    if (!isPrimaryController) return
-
-    const subscription = MediaSession.addPictureInPictureActionListener((event) => {
-      switch (event.action) {
-        case 'playPause':
-          if (event.isPlaying) {
-            if (!currentVideoRef.current) {
-              restoreLastClosedVideo('pip-play')
-              return
-            }
-            setDesiredPlaying(true)
-            try { playerRef.current?.play?.() } catch {}
-            return
-          }
-          setDesiredPlaying(false)
-          try { playerRef.current?.pause?.() } catch {}
-          return
-        case 'backgroundAudio':
-          enterBackgroundAudio()
-          MediaSession.enterBackgroundAudioMode?.().catch(() => {})
-          return
-      }
-    })
-
-    return () => subscription.remove()
-  }, [enterBackgroundAudio, isPrimaryController, restoreLastClosedVideo, setDesiredPlaying])
-
-  // Audio interruption listener (iOS only) - Android relies on remote commands from AudioFocus
-  useEffect(() => {
-    if (Platform.OS !== 'ios') return
-    if (!isPrimaryController) return
-
-    const subscription = MediaSession.addAudioInterruptionListener((event) => {
-      if (event.type === 'began') {
-        dispatch({
-          type: 'APP_BACKGROUND',
-          source: 'appStateBackgroundMiniAutoMaximizeForPip',
-          appState: 'inactive',
-          isPlaying: isPlayingRef.current,
-        })
-        setDesiredPlaying(false)
-      } else if (event.type === 'ended' && event.shouldResume) {
-        if (wasPlayingWhenBackgroundedRef.current) {
-          setDesiredPlaying(true)
-        }
-      }
-    })
-
-    return () => subscription.remove()
-  }, [dispatch, isPrimaryController, setDesiredPlaying])
-
-  // Route change listener (headphone unplug) - mobile only
-  useEffect(() => {
-    if (Platform.OS === 'web') return
-    if (!isPrimaryController) return
-
-    const subscription = MediaSession.addAudioRouteChangeListener((event: MediaSession.AudioRouteChangeEvent) => {
-      if (event.reason === 'oldDeviceUnavailable') {
-        setDesiredPlaying(false)
-      }
-    })
-
-    return () => subscription.remove()
-  }, [isPrimaryController, setDesiredPlaying])
-
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    if (!isPrimaryController) return
-
-    const subscription = MediaSession.addPictureInPictureListener((event: MediaSession.PictureInPictureEvent & {
-      currentTimeMs?: number
-      durationMs?: number
-      isPlaying?: boolean
-    }) => {
-      if (closingVideoRef.current) {
-        isInPipModeRef.current = event.isInPictureInPicture
-        if (!event.isInPictureInPicture) {
-          setPipWindowSize(null)
-          pipTransitionInFlightRef.current = false
-        }
-        return
-      }
-      const now = Date.now()
-      const wasInPip = isInPipModeRef.current
-
-      // IMPORTANT: Mark PiP exit transition immediately.
-      // PiP window is closed, BEFORE our debounced/timeout PiP handler runs. If we let
-      // that pause flip `isPlaying=false`, the native player will pause briefly and
-      // you hear a gap. Precomputing expectedPlaying here lets us ignore those pauses.
-      if (!event.isInPictureInPicture && wasInPip) {
-        const expectedPlaying = Boolean(event.isPlaying ?? wasPlayingWhenPipEnteredRef.current ?? isPlayingRef.current)
-        pipExitExpectedPlayingRef.current = expectedPlaying
-        pipExitShouldResumeRef.current = expectedPlaying
-        pipExitResumeUntilRef.current = expectedPlaying ? (Date.now() + 2000) : 0
-        pipTransitionInFlightRef.current = true
-
-      }
-
-      // Only debounce if BOTH boolean AND dimensions are identical
-      // This ensures dimension changes are always processed, even if boolean is the same
-      const sameState = event.isInPictureInPicture === wasInPip
-      const sameDimensions = event.width === pipWindowSizeRef.current?.width && event.height === pipWindowSizeRef.current?.height
-      const tooSoon = now - lastPipEventTimeRef.current < 50
-
-      if (sameState && sameDimensions && tooSoon) {
-        return
-      }
-      lastPipEventTimeRef.current = now
-
-      // Update ref immediately to prevent race conditions
-      isInPipModeRef.current = event.isInPictureInPicture
-
-      // Update state immediately - RAF doesn't fire in PiP/background mode
-      if (event.isInPictureInPicture) {
-        if (pendingAndroidMinimizeCloseRef.current) {
-          closeSession('android-minimize-close')
-        }
-        dispatch({
-          type: 'PIP_ENTERED_ANDROID',
-          source: 'androidPipExitRestorePreviousMode',
-          platform: 'android',
-          dimensions:
-            event.width && event.height
-              ? { width: event.width, height: event.height }
-              : undefined,
-          isPlaying: event.isPlaying,
-        })
-      }
-      if (event.isInPictureInPicture && event.width && event.height) {
-        setPipWindowSize({ width: event.width, height: event.height })
-      } else if (!event.isInPictureInPicture) {
-        setPipWindowSize(null)
-      }
-
-      if (!event.isInPictureInPicture && wasInPip) {
-        const shouldResume = event.isPlaying ?? wasPlayingWhenPipEnteredRef.current
-        pipExitShouldResumeRef.current = shouldResume
-        pipExitExpectedPlayingRef.current = Boolean(shouldResume)
-        pipExitResumeUntilRef.current = shouldResume ? Math.max(pipExitResumeUntilRef.current, Date.now() + 2000) : 0
-        dispatch({
-          type: 'PIP_EXITED_ANDROID',
-          source: 'androidPipExitRestorePreviousMode',
-          platform: 'android',
-          wasInPip,
-          shouldResume,
-          restoreMode: ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY ? 'fullscreen' : modeBeforePipRef.current,
-          dimensions:
-            event.width && event.height
-              ? { width: event.width, height: event.height }
-              : undefined,
-        })
-        setDesiredPlaying(shouldResume)
-      }
-
-      // Use setTimeout instead of RAF - RAF doesn't fire in PiP/background mode
-      if (pipTransitionTimeoutRef.current) {
-        clearTimeout(pipTransitionTimeoutRef.current)
-      }
-      pipTransitionTimeoutRef.current = setTimeout(() => {
-        if (event.isInPictureInPicture !== isInPipModeRef.current) {
-          pipTransitionInFlightRef.current = false
-          return
-        }
-
-        if (!event.isInPictureInPicture && wasInPip) {
-          const shouldResume = event.isPlaying ?? wasPlayingWhenPipEnteredRef.current
-          if (shouldResume && !ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-            // Proactively reassert play during the first few frames after PiP exit.
-            // This is a no-op on healthy devices but prevents short silent gaps on others.
-            reassertNativePlayAfterPipExit('pip-exit-immediate')
-            setTimeout(() => reassertNativePlayAfterPipExit('pip-exit+120ms'), 120)
-            setTimeout(() => reassertNativePlayAfterPipExit('pip-exit+320ms'), 320)
-          }
-
-          // Auto-PiP re-arm is handled immediately on exit detection above
-          // (before the debounce). No need to duplicate it here.
-        }
-        pipTransitionInFlightRef.current = false
-      })
-    })
-
-    return () => {
-      subscription.remove()
-    }
-  }, [closeSession, dispatch, isPrimaryController, reassertNativePlayAfterPipExit])
-
-  // Subscribe to video stats events from backend
+  // MediaSession listeners - removed
+  // react-native-video handles PiP, remote commands, and audio interruptions natively via showNotificationControls=true
+  // PiP state is now managed via react-native-video's onPictureInPictureStatusChanged callback
   useEffect(() => {
      if (!isPrimaryController) return
      const unsubscribe = _videoStatsEventEmitter.subscribe((driveKey, videoPath, stats) => {
@@ -1186,13 +732,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       playerRef.current?.pause?.()
     } catch {}
     pendingAndroidMinimizeCloseRef.current = false
-    if (Platform.OS !== 'web') {
-      MediaSession.clearPendingPlayerLaunchPayload().catch(() => {})
-    }
+    // MediaSession.clearPendingPlayerLaunchPayload removed - using react-native-video native PiP
     closingVideoRef.current = false
     pipExitShouldResumeRef.current = false
     pipExitExpectedPlayingRef.current = false
     pipExitResumeUntilRef.current = 0
+    suppressTransientBufferingRef.current = false
     pipTransitionInFlightRef.current = false
     isInPipModeRef.current = false
     setPlaybackSession((prev) => prev + 1)
@@ -1335,11 +880,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         return
       }
 
-      if (ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY) {
-        void launchSplitPlayerActivity(true, 'minimize')
-        return
-      }
-
+      // Using react-native-video native PiP - no longer using split PlayerActivity
       console.log('[VideoPlayerContext] Minimizing to in-app mini player')
       dispatch({
         type: 'MINIMIZE',
@@ -1370,17 +911,34 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }
 
     const wasInPip = isInPipModeRef.current
-    isInPipModeRef.current = value
+    const wasPlaying = isPlayingRef.current
 
     if (value) {
+      isInPipModeRef.current = true
       dispatch({
         type: 'PIP_ENTERED_ANDROID',
         source: 'androidPipExitRestorePreviousMode',
         platform: 'android',
         dimensions: pipWindowSizeRef.current ?? undefined,
-        isPlaying: isPlayingRef.current,
+        isPlaying: wasPlaying,
       })
       return
+    }
+
+    // PiP exit: delay clearing the ref so the AppState listener still sees
+    // isInPipModeRef=true during the PiP exit animation. Android briefly
+    // reports background/inactive state during this animation — if the ref
+    // is already false, the AppState handler would pause playback.
+    if (wasInPip) {
+      setTimeout(() => { isInPipModeRef.current = false }, 500)
+    } else {
+      isInPipModeRef.current = false
+    }
+
+    if (wasInPip && wasPlaying) {
+      pipExitExpectedPlayingRef.current = true
+      pipExitResumeUntilRef.current = Date.now() + 3000
+      try { playerRef.current?.play?.() } catch {}
     }
 
     dispatch({
@@ -1388,7 +946,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       source: 'androidPipExitRestorePreviousMode',
       platform: 'android',
       wasInPip,
-      shouldResume: isPlayingRef.current,
+      shouldResume: wasPlaying,
       restoreMode: ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY ? 'fullscreen' : modeBeforePipRef.current,
       dimensions: pipWindowSizeRef.current ?? undefined,
     })
@@ -1465,7 +1023,6 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setPlaybackRateState(rate)
   }, [])
 
-  const lastMediaSessionUpdateRef = useRef(0)
   const onProgress = useCallback((data: { currentTime: number; duration: number }) => {
     if (Platform.OS === 'android' && pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
       console.log('[VideoPlayerContext] PiP exit resume confirmed via progress')
@@ -1518,24 +1075,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
         setDuration(durationS)
       }
     }
-    
-    const shouldUpdateMediaSession = Platform.OS !== 'web' &&
-      (Platform.OS === 'android' || mediaSessionActiveRef.current) &&
-      now - lastMediaSessionUpdateRef.current > 1000
-    if (shouldUpdateMediaSession) {
-      lastMediaSessionUpdateRef.current = now
-      if (Platform.OS === 'android') {
-        syncPictureInPicturePlaybackState(isPlayingRef.current)
-      } else {
-        MediaSession.setPlaybackState({
-          isPlaying: isPlayingRef.current,
-          position: timeS,
-          duration: durationS,
-          rate: playbackRateRef.current,
-        }).catch(() => {})
-      }
-    }
-  }, [syncPictureInPicturePlaybackState])
+    // MediaSession playback state updates removed - react-native-video handles this natively
+  }, [])
 
   const onPlaying = useCallback(() => {
     console.log('[VideoPlayerContext] Player playing')
@@ -1543,10 +1084,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       iosIgnorePausedUntilRef.current = 0
     }
     isBufferingRef.current = false
+    suppressTransientBufferingRef.current = false
     setIsLoading(false)
+    // Sync JS state — playback may have been started by external controls
+    // (PiP play button, notification controls, headset button)
+    setIsPlaying(true)
     tryApplyPendingSeek()
-    syncPlatformPlaybackState(true)
-  }, [syncPlatformPlaybackState, tryApplyPendingSeek])
+  }, [tryApplyPendingSeek])
 
   const onPaused = useCallback(() => {
     if (Platform.OS === 'ios' && Date.now() < iosIgnorePausedUntilRef.current) {
@@ -1563,19 +1107,34 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       pipExitExpectedPlayingRef.current = false
     }
     console.log('[VideoPlayerContext] Player paused')
-    syncPlatformPlaybackState(false)
-  }, [reassertNativePlayAfterPipExit, syncPlatformPlaybackState])
+    // Sync JS state for deliberate external pauses (PiP button, notification
+    // pause, audio focus loss). Skip if the player is buffering — that's a
+    // transient pause (e.g. after notification seek on uncached content) and
+    // the player will auto-resume when data arrives. Setting isPlaying=false
+    // during buffering would send paused={true} to the component, preventing
+    // ExoPlayer from resuming.
+    if (!isBufferingRef.current) {
+      setIsPlaying(false)
+    }
+  }, [reassertNativePlayAfterPipExit])
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
     console.log('[VideoPlayerContext] Player buffering:', data?.isBuffering)
     if (data?.isBuffering === undefined) return
     isBufferingRef.current = Boolean(data.isBuffering)
-    syncPictureInPicturePlaybackState(isPlayingRef.current, isBufferingRef.current)
 
     // During an active seek, native players often emit a brief buffering event.
     // Don't show the "connecting P2P" loading overlay for that — it feels like
     // a network reload instead of a seek.
     if (seekConfirmRef.current) {
+      if (!data.isBuffering) setIsLoading(false)
+      return
+    }
+
+    // Suppress transient buffering after returning from PiP or background audio.
+    // ExoPlayer re-attaches its surface and fires brief buffering events.
+    // Cleared by the next onPlaying event confirming real playback resumed.
+    if (suppressTransientBufferingRef.current) {
       if (!data.isBuffering) setIsLoading(false)
       return
     }
@@ -1589,14 +1148,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     }
 
     setIsLoading(data.isBuffering)
-  }, [syncPictureInPicturePlaybackState])
+  }, [])
 
   const onEnded = useCallback(() => {
     console.log('[VideoPlayerContext] Player ended')
     isBufferingRef.current = false
     setDesiredPlaying(false)
-    syncPlatformPlaybackState(false)
-  }, [setDesiredPlaying, syncPlatformPlaybackState])
+  }, [setDesiredPlaying])
 
   const onError = useCallback((error: any) => {
     const currentUrl = videoUrlRef.current
@@ -1615,9 +1173,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       const aspectRatio = data.mVideoWidth / data.mVideoHeight
       console.log('[VideoPlayerContext] Video dimensions:', data.mVideoWidth, 'x', data.mVideoHeight, '- aspect ratio:', aspectRatio.toFixed(3))
       setVideoAspectRatio(aspectRatio)
-      if (Platform.OS === 'android') {
-        MediaSession.setPictureInPictureAspectRatio(data.mVideoWidth, data.mVideoHeight).catch(() => {})
-      }
+      // PiP aspect ratio is handled natively by react-native-video
     }
   }, [])
 

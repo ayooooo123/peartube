@@ -20,6 +20,9 @@ type PearInlineVideoViewProps = {
   isInPipMode?: boolean
   pipWindowSize?: { width: number; height: number } | null
   pipEnabled?: boolean
+  videoTitle?: string
+  channelName?: string
+  thumbnailUrl?: string | null
   onLoad?: (data: any) => void
   onProgress?: (data: any) => void
   onPlaying?: () => void
@@ -85,6 +88,9 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   onError,
   onVideoStateChange,
   onPictureInPictureChanged,
+  videoTitle,
+  channelName,
+  thumbnailUrl,
   children,
 }: PearInlineVideoViewProps) {
   const videoRef = useRef<VideoRef>(null)
@@ -179,7 +185,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         }
       },
       enterPip: () => {
-        videoRef.current?.enterPictureInPicture()
+        void videoRef.current?.enterPictureInPicture?.()
       },
     }),
     [],
@@ -279,7 +285,17 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     })
   }, [onProgress, shouldSuppressStuckPlaybackRecovery])
 
+  // Track previous PiP state to detect exit transitions.
+  // Suppresses transient pause/buffer events from ExoPlayer surface reattach.
+  const wasInPipRef = useRef(isInPipMode)
+  const pipExitPlayingRef = useRef(false)
+  if (wasInPipRef.current && !isInPipMode) {
+    pipExitPlayingRef.current = true
+  }
+  wasInPipRef.current = isInPipMode
+
   const handleBuffer = useCallback((data: OnBufferData | any) => {
+    if (pipExitPlayingRef.current && data?.isBuffering) return
     onBuffering?.({ isBuffering: Boolean(data?.isBuffering) })
   }, [onBuffering])
 
@@ -293,10 +309,17 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       playbackStartedAtRef.current = Date.now()
     }
     if (state.isPlaying) {
+      pipExitPlayingRef.current = false
       onPlaying?.()
     } else if (!state.isSeeking) {
+      if (pipExitPlayingRef.current) {
+        return
+      }
       onPaused?.()
     }
+    // When seeking (e.g. from notification controls), ExoPlayer briefly pauses
+    // to rebuffer. Don't propagate this as onPaused — it would flip isPlaying
+    // to false and the paused={true} prop would keep the player stuck.
   }, [onPlaying, onPaused])
 
   const handleEnd = useCallback(() => {
@@ -331,7 +354,14 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       <Video
         key={`rnv-${playbackSession}:${currentVideoKey || ''}:${sourceKey}`}
         ref={videoRef}
-        source={{ uri: videoUrl }}
+        source={{
+          uri: videoUrl,
+          metadata: {
+            title: videoTitle || undefined,
+            artist: channelName || undefined,
+            imageUri: thumbnailUrl || undefined,
+          },
+        }}
         style={StyleSheet.absoluteFill}
         onVideoSize={(data: any) => {
           const videoSize = getEventVideoSize(data)
@@ -346,9 +376,11 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         rate={playbackRate}
         controls={false}
         resizeMode="contain"
+        poster={thumbnailUrl ? { source: { uri: thumbnailUrl }, resizeMode: 'contain' } : undefined}
         progressUpdateInterval={500}
-        // TextureView for proper resizeMode support on Android
-        useTextureView={Platform.OS === 'android'}
+        // SurfaceView: surface survives reparenting during PiP enter/exit,
+        // preventing the audio/video freeze that TextureView causes.
+        useTextureView={false}
         // Callbacks
         onLoad={handleLoad}
         onProgress={handleProgress}
@@ -362,10 +394,10 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         // Background & PiP support
         playInBackground={true}
         playWhenInactive={true}
-        // showNotificationControls MUST be false — PearTube has its own
-        // MediaSession via expo-media-session. Enabling this creates a second
-        // MediaSession that fights with ours (play/pause loop).
-        showNotificationControls={false}
+        // showNotificationControls: react-native-video handles notification controls natively
+        showNotificationControls={true}
+        // Auto-enter PiP when user presses home / leaves the app
+        enterPictureInPictureOnLeave={true}
         // Buffer config for Android ExoPlayer
         bufferConfig={Platform.OS === 'android' ? ANDROID_BUFFER_CONFIG : undefined}
         // Suppress HLS "LIVE" indicator (PearTube uses HLS for VOD)

@@ -246,7 +246,15 @@ function videoToRecord(source, meta, video, section) {
   }
 }
 
-async function resolveSectionRecords(section, sources, config, fetchChannelData) {
+function isVideoViewable(video, source, identityChannelKeys) {
+  // Own channel videos are always viewable
+  if (identityChannelKeys.has(source.channelKey)) return true
+  if (source.sourceKind === 'identity') return true
+  // Remote videos must have availability === 'playable'
+  return video?.availability === 'playable'
+}
+
+async function resolveSectionRecords(section, sources, config, fetchChannelData, identityChannelKeys) {
   if (!config.sourceLimit || !config.videosPerChannel) return []
 
   const selectedSources = sources.slice(0, config.sourceLimit)
@@ -259,6 +267,7 @@ async function resolveSectionRecords(section, sources, config, fetchChannelData)
   for (const source of selectedSources) {
     if (source.previewVideos.length > 0) {
       for (const video of source.previewVideos.slice(0, config.videosPerChannel)) {
+        if (!isVideoViewable(video, source, identityChannelKeys)) continue
         const record = videoToRecord(source, {}, video, section)
         if (record) records.push(record)
       }
@@ -280,6 +289,7 @@ async function resolveSectionRecords(section, sources, config, fetchChannelData)
       const meta = result?.channelMeta || {}
       const videos = Array.isArray(result?.videos) ? result.videos.slice(0, config.videosPerChannel) : []
       for (const video of videos) {
+        if (!isVideoViewable(video, source, identityChannelKeys)) continue
         const record = videoToRecord(source, meta, video, section)
         if (record) records.push(record)
       }
@@ -312,18 +322,18 @@ export async function buildBrowseSnapshot({
   const subscriptionSources = uniqueSources(subscriptions, 'subscription')
   const identitySources = uniqueSources(identities, 'identity')
   const activeIdentity = identities.find((identity) => identity?.isActive) || null
-  const identityChannelKeys = Array.from(new Set(
+  const identityChannelKeys = new Set(
     identities.map((identity) => identity?.channelKey || identity?.driveKey).filter(Boolean)
-  ))
+  )
   const subscriptionChannelKeys = Array.from(new Set(
     subscriptions.map((entry) => entry?.channelKey || entry?.driveKey).filter(Boolean)
   ))
 
   const resolvedSections = await Promise.all([
-    resolveSectionRecords('home', homeSources, SECTION_CONFIG.home, fetchChannelData),
-    resolveSectionRecords('subscriptions', subscriptionSources, SECTION_CONFIG.subscriptions, fetchChannelData),
-    resolveSectionRecords('library', identitySources, SECTION_CONFIG.library, fetchChannelData),
-    resolveSectionRecords('studio', identitySources, SECTION_CONFIG.studio, fetchChannelData),
+    resolveSectionRecords('home', homeSources, SECTION_CONFIG.home, fetchChannelData, identityChannelKeys),
+    resolveSectionRecords('subscriptions', subscriptionSources, SECTION_CONFIG.subscriptions, fetchChannelData, identityChannelKeys),
+    resolveSectionRecords('library', identitySources, SECTION_CONFIG.library, fetchChannelData, identityChannelKeys),
+    resolveSectionRecords('studio', identitySources, SECTION_CONFIG.studio, fetchChannelData, identityChannelKeys),
   ])
 
   for (const [section, records] of [
@@ -367,7 +377,7 @@ export async function buildBrowseSnapshot({
     },
     state: {
       subscriptionChannelKeys,
-      identityChannelKeys,
+      identityChannelKeys: Array.from(identityChannelKeys),
       activeIdentityName: activeIdentity?.name?.trim() || null,
       activeIdentityChannelKey: activeIdentity?.channelKey || activeIdentity?.driveKey || null,
       activeChannelPublished: Boolean(activeChannelPublished),

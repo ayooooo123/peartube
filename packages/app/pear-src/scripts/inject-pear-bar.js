@@ -47,10 +47,13 @@ function processHtmlFile(filePath) {
   // Handle external module scripts (with src attribute)
   html = html.replace(/<script type="module"(\s+src="[^"]*")>/g, '<script$1>')
 
-  // Convert relative paths to absolute — the Electron HTTP server serves from root,
-  // so /_expo/... resolves correctly even on sub-routes like /video/xyz.
-  html = html.replace(/href="\.\/_expo\//g, 'href="/_expo/')
-  html = html.replace(/src="\.\/_expo\//g, 'src="/_expo/')
+  // Convert relative paths to absolute for HTTP-based serving (Electron static server).
+  // Electrobun's views:// protocol resolves relative paths correctly, so skip this
+  // when PEARTUBE_ABSOLUTE_PATHS=false.
+  if (process.env.PEARTUBE_ABSOLUTE_PATHS !== 'false') {
+    html = html.replace(/href="\.\/_expo\//g, 'href="/_expo/')
+    html = html.replace(/src="\.\/_expo\//g, 'src="/_expo/')
+  }
 
   // Inject CSP after <head>
   html = html.replace('<head>', `<head>\n${PEAR_CSP}`)

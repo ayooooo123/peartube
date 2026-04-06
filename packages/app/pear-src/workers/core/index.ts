@@ -469,13 +469,31 @@ B.updateChannel = async (r: any) => { const a = identityManager.getActiveIdentit
 B.updateVideoMetadata = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }; return api.updateVideoMetadata(r.channelKey || a.driveKey, r.videoId, { title: r.title, description: r.description, category: r.category }) }
 B.updateChannelAvatar = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }; const buf = fs.readFileSync(r.filePath); return api.updateChannelAvatar(a.driveKey, buf, r.mimeType || 'image/jpeg') }
 B.listVideos = async (r: any) => {
-  const videos = await api.listVideos(r.channelKey || '', r.publicBeeKey)
-  const enriched = await Promise.all(videos.map(async (v: any) => {
-    let thumbnailUrl = ''; const ck = v.channelKey || r.channelKey
-    if ((v.thumbnail || v.id) && ck) { try { const t = await Promise.race([api.getVideoThumbnail(ck, v.id || ''), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))]) as any; if (t?.exists && t.url) thumbnailUrl = t.url } catch {} }
-    return { id: v.id || '', title: v.title || 'Untitled', description: v.description || '', path: v.path || '', duration: v.duration || 0, thumbnail: thumbnailUrl, channelKey: ck, channelName: v.channelName || '', createdAt: v.uploadedAt || v.createdAt || 0, views: v.views || 0, category: v.category || 'Other' }
-  }))
-  return { videos: enriched }
+  const ck = r?.channelKey || ''; if (!ck) return { videos: [] }
+  let raw: any[] = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch { return { videos: [] } }
+  return { videos: (raw || []).map((v: any) => {
+    const id = v?.id ? String(v.id) : ''; if (!id) return null
+    return {
+      id,
+      title: v?.title ? String(v.title) : 'Untitled',
+      description: v?.description ? String(v.description) : '',
+      path: v?.path ? String(v.path) : '',
+      duration: Number(v?.duration) || 0,
+      thumbnail: v?.thumbnail ? String(v.thumbnail) : '',
+      channelKey: ck,
+      channelName: v?.channelName ? String(v.channelName) : '',
+      createdAt: Number(v?.uploadedAt || v?.createdAt) || 0,
+      views: Number(v?.views) || 0,
+      category: v?.category ? String(v.category) : '',
+      blobId: v?.blobId ? String(v.blobId) : null,
+      blobsCoreKey: v?.blobsCoreKey ? String(v.blobsCoreKey) : null,
+      mimeType: v?.mimeType ? String(v.mimeType) : null,
+      availability: v?.availability ? String(v.availability) : null,
+      publicBeeKey: v?.publicBeeKey ? String(v.publicBeeKey) : null,
+      width: Number(v?.width) || 0,
+      height: Number(v?.height) || 0,
+    }
+  }).filter(Boolean) }
 }
 B.getVideoUrl = async (r: any) => {
   const res = await api.getVideoUrl(

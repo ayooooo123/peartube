@@ -266,8 +266,10 @@ async function resolveSectionRecords(section, sources, config, fetchChannelData,
   const sourcesNeedingFetch = []
   for (const source of selectedSources) {
     if (source.previewVideos.length > 0) {
+      // Preview videos from the P2P feed don't have availability set —
+      // they are pre-screened by the publisher. Skip availability filtering
+      // for previews; the full fetch path checks availability via the backend.
       for (const video of source.previewVideos.slice(0, config.videosPerChannel)) {
-        if (!isVideoViewable(video, source, identityChannelKeys)) continue
         const record = videoToRecord(source, {}, video, section)
         if (record) records.push(record)
       }

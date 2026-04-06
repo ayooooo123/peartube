@@ -161,6 +161,14 @@ const RECEIVER_INTENT_REPLACEMENT = [
   '    fun getPipActionIntent(isPaused: Boolean): PendingIntent {',
 ].join('\n')
 
+// ─── Patch 5: Enable extension renderers for NextLib FFmpeg decoders ──────────
+
+const EXOPLAYER_VIEW_PATH = path.join(RNV_DIR, 'exoplayer', 'ReactExoplayerView.java')
+
+const RENDERER_MODE_TARGET = '.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)'
+
+const RENDERER_MODE_REPLACEMENT = `.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER) // ${MARKER}`
+
 // ─── Apply ────────────────────────────────────────────────────────────────────
 
 function applyPatch(filePath, target, replacement, label) {
@@ -186,6 +194,7 @@ function applyAllPatches() {
   changed = applyPatch(PIP_UTIL_PATH, PIP_CLOSE_TARGET, PIP_CLOSE_REPLACEMENT, 'PiP close pause') || changed
   changed = applyPatch(PIP_RECEIVER_PATH, RECEIVER_TARGET, RECEIVER_REPLACEMENT, 'PiP receiver') || changed
   changed = applyPatch(PIP_RECEIVER_PATH, RECEIVER_INTENT_TARGET, RECEIVER_INTENT_REPLACEMENT, 'PiP receiver intent') || changed
+  changed = applyPatch(EXOPLAYER_VIEW_PATH, RENDERER_MODE_TARGET, RENDERER_MODE_REPLACEMENT, 'Extension renderers') || changed
   return changed
 }
 

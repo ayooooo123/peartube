@@ -383,6 +383,14 @@ class HRPC {
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
+      if (!command) {
+        console.error('[HRPC] Unknown command index:', req.command, '- no method mapping found')
+        return
+      }
+      if (typeof this._handlers[command] !== 'function') {
+        console.error('[HRPC] No handler registered for:', command, '(index:', req.command, ')')
+        return
+      }
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
       if (this._requestIsSend(command)) {

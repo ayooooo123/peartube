@@ -88,6 +88,13 @@ function normalizeSearchTags(metadata) {
   return tags.filter(Boolean)
 }
 
+function getFeedEntryPriority(entry) {
+  if (entry?.source === 'local') return 0
+  if ((entry?.peerCount ?? 0) > 0) return 1
+  if (entry?.publicBeeKey) return 2
+  return 3
+}
+
 function normalizeSource(entry, sourceKind) {
   const channelKey = entry?.channelKey || entry?.driveKey
   if (!channelKey) return null
@@ -97,6 +104,9 @@ function normalizeSource(entry, sourceKind) {
     publicBeeKey: entry?.publicBeeKey || null,
     channelName: entry?.channelName || entry?.name || null,
     sourceKind,
+    peerCount: entry?.peerCount ?? 0,
+    source: entry?.source || null,
+    previewVideos: Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
   }
 }
 
@@ -112,6 +122,13 @@ function uniqueSources(entries, sourceKind) {
     seen.add(key)
     result.push(source)
   }
+
+  // Sort by priority: local > peer-seeded > publicBeeKey > fallback
+  result.sort((a, b) => {
+    const pa = getFeedEntryPriority(a)
+    const pb = getFeedEntryPriority(b)
+    return pa - pb
+  })
 
   return result
 }
@@ -204,46 +221,68 @@ export function mergeVideoMetadata(video = {}, metadata = {}) {
   }
 }
 
+function videoToRecord(source, meta, video, section) {
+  if (!video?.id) return null
+  const videoKey = `${source.channelKey}:${video.id}`
+  return {
+    videoKey,
+    id: videoKey,
+    backendVideoID: video.id,
+    channelKey: source.channelKey,
+    publicBeeKey: source.publicBeeKey,
+    title: video.title?.trim() || 'Untitled Video',
+    channelName: normalizeChannelName(source, meta, video),
+    durationText: formatDuration(video.duration),
+    summary: normalizeSummary(meta, video),
+    tags: normalizeTags(source, video, section),
+    accentHex: pickAccentHex(source.channelKey),
+    thumbnailURL: video.thumbnail || null,
+    path: video.path || null,
+    blobId: video.blobId || null,
+    blobsCoreKey: video.blobsCoreKey || null,
+    mimeType: video.mimeType || null,
+    width: Number.isFinite(video.width) && video.width > 0 ? video.width : null,
+    height: Number.isFinite(video.height) && video.height > 0 ? video.height : null,
+  }
+}
+
 async function resolveSectionRecords(section, sources, config, fetchChannelData) {
-  if (!config.sourceLimit || !config.videosPerChannel) return
+  if (!config.sourceLimit || !config.videosPerChannel) return []
 
-  const resolvedSources = await Promise.all(
-    sources.slice(0, config.sourceLimit).map(async (source) => ({
-      source,
-      result: await fetchChannelData(source),
-    }))
-  )
-
+  const selectedSources = sources.slice(0, config.sourceLimit)
   const records = []
 
-  for (const { source, result } of resolvedSources) {
-    const meta = result?.channelMeta || {}
-    const videos = Array.isArray(result?.videos) ? result.videos.slice(0, config.videosPerChannel) : []
+  // Fast path: use preview videos from feed entries when available.
+  // This avoids a fetchChannelData round-trip for sources that already
+  // include preview video data from the P2P gossip feed.
+  const sourcesNeedingFetch = []
+  for (const source of selectedSources) {
+    if (source.previewVideos.length > 0) {
+      for (const video of source.previewVideos.slice(0, config.videosPerChannel)) {
+        const record = videoToRecord(source, {}, video, section)
+        if (record) records.push(record)
+      }
+    } else {
+      sourcesNeedingFetch.push(source)
+    }
+  }
 
-    for (const video of videos) {
-      if (!video?.id) continue
+  // Fetch remaining sources that didn't have preview data
+  if (sourcesNeedingFetch.length > 0) {
+    const resolvedSources = await Promise.all(
+      sourcesNeedingFetch.map(async (source) => ({
+        source,
+        result: await fetchChannelData(source),
+      }))
+    )
 
-      const videoKey = `${source.channelKey}:${video.id}`
-      records.push({
-        videoKey,
-        id: videoKey,
-        backendVideoID: video.id,
-        channelKey: source.channelKey,
-        publicBeeKey: source.publicBeeKey,
-        title: video.title?.trim() || 'Untitled Video',
-        channelName: normalizeChannelName(source, meta, video),
-        durationText: formatDuration(video.duration),
-        summary: normalizeSummary(meta, video),
-        tags: normalizeTags(source, video, section),
-        accentHex: pickAccentHex(source.channelKey),
-        thumbnailURL: video.thumbnail || null,
-        path: video.path || null,
-        blobId: video.blobId || null,
-        blobsCoreKey: video.blobsCoreKey || null,
-        mimeType: video.mimeType || null,
-        width: Number.isFinite(video.width) && video.width > 0 ? video.width : null,
-        height: Number.isFinite(video.height) && video.height > 0 ? video.height : null,
-      })
+    for (const { source, result } of resolvedSources) {
+      const meta = result?.channelMeta || {}
+      const videos = Array.isArray(result?.videos) ? result.videos.slice(0, config.videosPerChannel) : []
+      for (const video of videos) {
+        const record = videoToRecord(source, meta, video, section)
+        if (record) records.push(record)
+      }
     }
   }
 

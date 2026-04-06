@@ -781,6 +781,7 @@ B.transcodeStatus = async (r: any) => { try { const s = transcoder.getStatus(r.s
 B.eventReady = () => {}
 B.eventError = (data: any) => { if (data?.message) console.error('[HRPC] Client error:', data.message) }
 B.eventUploadProgress = () => {}
+B.eventDownloadProgress = () => {}
 B.eventFeedUpdate = () => {}
 B.eventLog = () => {}
 B.eventVideoStats = () => {}

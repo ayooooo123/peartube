@@ -1463,9 +1463,18 @@ export class MultiWriterChannel extends ReadyResource {
     }
 
     await this.appendOp(videoMeta)
-    // Wait for the view to be updated with our new entry
-    await this._safeUpdate()
-    console.log('[Channel] addVideo appended and view updated')
+    // Wait for the view to be updated, but don't let a slow Autobase
+    // linearizer block the upload indefinitely. The view will catch up
+    // on the next update cycle even if this times out.
+    try {
+      await Promise.race([
+        this._safeUpdate(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('_safeUpdate timeout')), 15000))
+      ])
+      console.log('[Channel] addVideo appended and view updated')
+    } catch (err) {
+      console.log('[Channel] addVideo: view update timed out (non-fatal, video is appended):', err?.message)
+    }
 
     // Sync to public Hyperbee for instant public feed replication
     if (this.publicBee?.writable) {
@@ -1509,8 +1518,15 @@ export class MultiWriterChannel extends ReadyResource {
     }
 
     await this.appendOp(videoMeta)
-    await this._safeUpdate()
-    console.log('[Channel] updateVideo appended and view updated')
+    try {
+      await Promise.race([
+        this._safeUpdate(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('_safeUpdate timeout')), 15000))
+      ])
+      console.log('[Channel] updateVideo appended and view updated')
+    } catch (err) {
+      console.log('[Channel] updateVideo: view update timed out (non-fatal):', err?.message)
+    }
 
     // Sync to public Hyperbee
     if (this.publicBee?.writable) {
@@ -1539,9 +1555,15 @@ export class MultiWriterChannel extends ReadyResource {
       schemaVersion: CURRENT_SCHEMA_VERSION,
       id
     })
-    // Wait for the view to be updated with the deletion
-    await this._safeUpdate()
-    console.log('[Channel] deleteVideo appended and view updated')
+    try {
+      await Promise.race([
+        this._safeUpdate(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('_safeUpdate timeout')), 15000))
+      ])
+      console.log('[Channel] deleteVideo appended and view updated')
+    } catch (err) {
+      console.log('[Channel] deleteVideo: view update timed out (non-fatal):', err?.message)
+    }
 
     // Sync deletion to public Hyperbee
     if (this.publicBee?.writable) {

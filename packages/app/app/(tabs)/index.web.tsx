@@ -22,6 +22,7 @@ import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
+import { shouldRenderFeedVideo } from '@/lib/feed-hydration'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && (
@@ -2200,15 +2201,21 @@ export default function HomeScreen() {
     const results = await Promise.all(channelPromises)
     const allVideos: VideoData[] = results.flat()
 
+    // Filter out unwatchable videos (match Android behavior)
+    const watchableVideos = allVideos.filter((v: any) => shouldRenderFeedVideo({
+      video: v,
+      identityDriveKey: identity?.driveKey || null,
+    }))
+
     // Sort by upload time and take top 50
-    const sortedVideos = allVideos
+    const sortedVideos = watchableVideos
       .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
       .slice(0, 50)
 
     setFeedVideos(sortedVideos)
     feedCache.feedVideos = sortedVideos
     setFeedVideosLoading(false)
-  }, [rpc, feedEntries, channelMeta])
+  }, [rpc, feedEntries, channelMeta, identity?.driveKey])
 
   // Load feed videos when feedEntries change — skip if already have cached videos
   useEffect(() => {

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "id": 0,
@@ -1176,6 +1176,19 @@
         "stream": false
       },
       "version": 1
+    },
+    {
+      "id": 13,
+      "name": "@peartube/web-prepare-playback",
+      "request": {
+        "name": "@peartube/prepare-playback-request",
+        "stream": false
+      },
+      "response": {
+        "name": "@peartube/web-prepare-playback-response",
+        "stream": false
+      },
+      "version": 2
     }
   ]
 }

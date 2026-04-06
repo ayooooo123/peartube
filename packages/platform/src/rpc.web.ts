@@ -320,7 +320,13 @@ export const rpc = {
     const req = typeof channelKeyOrReq === 'string'
       ? { channelKey: channelKeyOrReq, videoId: videoId! }
       : channelKeyOrReq;
-    return ensureRPC().preparePlayback(req);
+    // Use webPreparePlayback which probes audio codecs and transcodes
+    // AC3/EAC3/DTS to AAC if needed. Falls back gracefully if unavailable.
+    const rpcInstance = ensureRPC();
+    if (typeof rpcInstance.webPreparePlayback === 'function') {
+      return rpcInstance.webPreparePlayback(req);
+    }
+    return rpcInstance.preparePlayback(req);
   },
 
   async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string }, videoId?: string) {

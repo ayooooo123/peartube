@@ -300,6 +300,19 @@ ns.register({
 })
 
 ns.register({
+  name: 'web-prepare-playback-response',
+  fields: [
+    { name: 'url', type: 'string', required: true },
+    { name: 'transcoded', type: 'bool', required: false },
+    { name: 'audioCodec', type: 'string', required: false },
+    { name: 'videoCodec', type: 'string', required: false },
+    { name: 'transcodeError', type: 'string', required: false },
+    { name: 'stats', type: '@peartube/video-stats', required: false },
+    { name: 'warmupStarted', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
   name: 'get-video-data-request',
   fields: [
     { name: 'channelKey', type: 'string', required: true },
@@ -1960,6 +1973,12 @@ rpcNs.register({
   name: 'prepare-playback',
   request: { name: '@peartube/prepare-playback-request', stream: false },
   response: { name: '@peartube/prepare-playback-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'web-prepare-playback',
+  request: { name: '@peartube/prepare-playback-request', stream: false },
+  response: { name: '@peartube/web-prepare-playback-response', stream: false }
 })
 
 rpcNs.register({

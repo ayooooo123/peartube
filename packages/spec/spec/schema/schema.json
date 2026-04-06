@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "schema": [
     {
       "name": "empty",
@@ -4834,6 +4834,56 @@
           "required": false,
           "type": "string",
           "version": 1
+        }
+      ]
+    },
+    {
+      "name": "web-prepare-playback-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "url",
+          "required": true,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "transcoded",
+          "required": false,
+          "type": "bool",
+          "version": 2
+        },
+        {
+          "name": "audioCodec",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "videoCodec",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "transcodeError",
+          "required": false,
+          "type": "string",
+          "version": 2
+        },
+        {
+          "name": "stats",
+          "required": false,
+          "type": "@peartube/video-stats",
+          "version": 2
+        },
+        {
+          "name": "warmupStarted",
+          "required": false,
+          "type": "bool",
+          "version": 2
         }
       ]
     }

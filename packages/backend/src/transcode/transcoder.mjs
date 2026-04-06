@@ -37,6 +37,9 @@ const HLS_MAX_SEGMENTS = 12
 const CHROMECAST_VIDEO_CODECS = ['h264', 'avc1', 'vp8', 'vp9', 'av1']
 const CHROMECAST_AUDIO_CODECS = ['aac']
 const CHROMECAST_CONTAINERS = ['mp4', 'mov', 'webm', 'mkv', 'matroska']
+
+// Chromium/Electron supported audio codecs (broader than Chromecast)
+const WEB_AUDIO_CODECS = ['aac', 'mp3', 'opus', 'vorbis', 'flac']
 const H264_UNSUPPORTED_PROFILES = [
   'high 10',
   'high10',
@@ -1245,6 +1248,42 @@ function checkTranscodeNeeded(result) {
     if (!result.needsVideoTranscode && !result.needsRemux) {
       result.needsRemux = true
       reasons.push(`Very large file (${Math.round(result.fileSize / 1024 / 1024)}MB) needs HLS for reliable streaming`)
+    }
+  }
+
+  result.needsTranscode = result.needsVideoTranscode || result.needsAudioTranscode
+  result.reason = reasons.join('; ') || 'Compatible'
+}
+
+/**
+ * Check if transcoding is needed for Chromium/Electron desktop playback.
+ * Chromium supports more audio codecs than Chromecast (MP3, Opus, Vorbis, FLAC)
+ * but still lacks AC3, EAC3, and DTS.
+ *
+ * @param {object} result - Probe result object to populate
+ */
+export function checkWebTranscodeNeeded(result) {
+  const reasons = []
+  result.needsVideoTranscode = false
+  result.needsAudioTranscode = false
+  result.needsRemux = false
+
+  // Video: Chromium supports H.264, VP8, VP9, AV1, HEVC (hardware only)
+  // For simplicity, pass through — if video doesn't play, it's a bigger problem
+  if (result.videoCodec) {
+    const videoSupported = ['h264', 'avc1', 'vp8', 'vp9', 'av1', 'hevc', 'h265'].includes(result.videoCodec)
+    if (!videoSupported) {
+      result.needsVideoTranscode = true
+      reasons.push(`Video codec ${result.videoCodec} not supported on web`)
+    }
+  }
+
+  // Audio: only AC3, EAC3, DTS need transcoding
+  if (result.audioCodec) {
+    const audioSupported = WEB_AUDIO_CODECS.includes(result.audioCodec)
+    if (!audioSupported) {
+      result.needsAudioTranscode = true
+      reasons.push(`Audio codec ${result.audioCodec} not supported on web`)
     }
   }
 

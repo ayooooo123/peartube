@@ -496,6 +496,67 @@ B.preparePlayback = async (r: any) => api.preparePlayback(
   r.blobsCoreKey,
   r.mimeType
 )
+
+// Desktop: prepare playback with audio codec probe + transcode fallback.
+// If audio codec (AC3/EAC3/DTS) isn't web-compatible, starts a transcode
+// session and returns the HLS URL instead of the raw blob URL.
+B.webPreparePlayback = async (r: any) => {
+  const result = await api.preparePlayback(
+    r.channelKey, r.videoId, r.publicBeeKey,
+    r.blobId, r.blobsCoreKey, r.mimeType
+  )
+  if (!result?.url) return result
+
+  try {
+    await transcoder.loadBareFfmpeg()
+    const probe = await transcoder.probeMedia(result.url)
+    transcoder.checkWebTranscodeNeeded(probe)
+
+    if (!probe.needsAudioTranscode && !probe.needsVideoTranscode) {
+      // Codecs are web-compatible — use direct blob URL
+      return { ...result, audioCodec: probe.audioCodec, videoCodec: probe.videoCodec }
+    }
+
+    console.log('[Worker] Web transcode needed:', probe.reason)
+    const sourceKey = `web:${r.channelKey}:${r.videoId}`
+    const transcode = await castTranscoder.startWebTranscode(result.url, {
+      sourceKey,
+      isVideoComplete: true,
+    })
+
+    if (!transcode.success) {
+      console.error('[Worker] Web transcode failed:', transcode.error)
+      // Fall back to raw URL — video may play without audio
+      return { ...result, audioCodec: probe.audioCodec, transcodeError: transcode.error }
+    }
+
+    // Wait for first segment(s) before returning HLS URL
+    const waitStart = Date.now()
+    while (Date.now() - waitStart < 15000) {
+      const st = castTranscoder.getCastStatus(transcode.sessionId)
+      if (st?.fragmentCount >= 1 || st?.status === 'error') break
+      await new Promise(resolve => setTimeout(resolve, 300))
+    }
+
+    const hlsUrl = castTranscoder.getCastHlsUrl(transcode.sessionId, '127.0.0.1')
+    if (!hlsUrl) {
+      return { ...result, audioCodec: probe.audioCodec, transcodeError: 'No HLS URL' }
+    }
+
+    console.log('[Worker] Web transcode HLS ready:', hlsUrl)
+    return {
+      url: hlsUrl,
+      transcoded: true,
+      audioCodec: probe.audioCodec,
+      videoCodec: probe.videoCodec,
+      stats: result.stats,
+    }
+  } catch (e: any) {
+    console.error('[Worker] Web probe/transcode error:', e?.message)
+    // Fall back to raw URL
+    return result
+  }
+}
 B.getVideoData = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey); return { video: v || { id: r.videoId, title: 'Unknown' } } }
 B.getVideoMetadata = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId); return { video: v || { id: r.videoId, title: 'Unknown' } } }
 B.downloadVideo = async (r: any) => { try { const res = await api.getVideoUrl(r.channelKey, r.videoId, r.publicBeeKey); if (!res?.url) return { success: false, error: 'Failed to get URL' }; const meta = await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey); let size = 0; if (meta?.blobId) { const p = meta.blobId.split(':').map(Number); if (p.length === 4) size = p[3] } return { success: true, filePath: res.url, size: size || meta?.size || 0 } } catch (e: any) { return { success: false, error: e?.message } } }

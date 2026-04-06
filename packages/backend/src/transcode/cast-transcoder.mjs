@@ -1,6 +1,6 @@
 import http from 'bare-http1'
 
-import { probeMedia, loadBareFfmpeg } from './transcoder.mjs'
+import { probeMedia, loadBareFfmpeg, checkWebTranscodeNeeded } from './transcoder.mjs'
 import { safeDestroy, safeUnref, copyCodecParameters } from './ffmpeg-utils.mjs'
 import { TempFileReader } from './temp-file-reader.mjs'
 import { getHttpFileSize } from './http-file-size.mjs'
@@ -1038,6 +1038,285 @@ async function runFullTranscodeCast(session, sourceUrl, { isVideoComplete = true
   }
 }
 
+/**
+ * Copy video stream + transcode audio to AAC.
+ * Much faster than full transcode — only audio is decoded/re-encoded.
+ * Used for desktop playback when audio codec (AC3/EAC3/DTS) isn't web-compatible.
+ */
+async function runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVideoComplete = true } = {}) {
+  let inputFormat = null
+  let outputIO = null
+  let outputFormat = null
+  let dict = null
+  let audioDecoder = null
+  let audioEncoder = null
+  let resampler = null
+  let audioFifo = null
+  let packet = null
+  let audioFrame = null
+  let resampledFrame = null
+  let outputPacket = null
+  let reader = null
+  let segmenter = null
+  let writePos = 0
+
+  try {
+    const fileSize = await getHttpFileSize(sourceUrl)
+    if (!fileSize) throw new Error('Could not determine source file size')
+
+    reader = new TempFileReader(sourceUrl, fileSize, {
+      waitForComplete: isVideoComplete,
+      ...(isVideoComplete ? {} : { initialBufferBytes: CAST_PROGRESSIVE_STARTUP_BUFFER_BYTES }),
+    })
+    await reader.startDownload()
+
+    const inputIO = reader.createIOContext(ffmpeg)
+    inputFormat = new ffmpeg.InputFormatContext(inputIO)
+    const videoStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.VIDEO)
+    const audioStream = inputFormat.getBestStream(ffmpeg.constants.mediaTypes.AUDIO)
+    if (!videoStream) throw new Error('No video stream found')
+
+    segmenter = new FMP4Segmenter(session.segmentStore, { targetDuration: 6 })
+    session.segmenter = segmenter
+
+    outputIO = new ffmpeg.IOContext(1024 * 1024, {
+      onwrite: (buf) => {
+        segmenter.write(Buffer.from(buf))
+        writePos += buf.length
+        return buf.length
+      },
+      onseek: (offset, whence) => {
+        const AVSEEK_SIZE = 0x10000
+        if (whence === AVSEEK_SIZE) return writePos
+        const safeOffset = Number.isFinite(offset) ? offset : 0
+        if (whence === 0) writePos = safeOffset
+        else if (whence === 1) writePos += safeOffset
+        else if (whence === 2) writePos += safeOffset
+        writePos = Math.max(0, writePos)
+        return writePos
+      },
+    })
+
+    outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
+
+    // Video: stream copy (no decode/encode)
+    const outVideo = outputFormat.createStream()
+    copyCodecParameters(outVideo.codecParameters, videoStream.codecParameters)
+    outVideo.timeBase = videoStream.timeBase
+
+    // Audio: decode + re-encode to AAC stereo
+    let outAudio = null
+    if (audioStream) {
+      outAudio = outputFormat.createStream()
+      outAudio.codecParameters.type = ffmpeg.constants.mediaTypes.AUDIO
+      outAudio.codecParameters.id = ffmpeg.constants.codecs.AAC
+      outAudio.timeBase = { numerator: 1, denominator: 48000 }
+
+      const audioDecoderSelection = selectDecoderForId(audioStream.codecParameters.id)
+      if (audioDecoderSelection) {
+        audioDecoder = new ffmpeg.CodecContext(audioDecoderSelection.decoder)
+        audioStream.codecParameters.toContext(audioDecoder)
+        audioDecoder.timeBase = audioStream.timeBase
+        audioDecoder.open()
+
+        const aacSelection = selectAacEncoder()
+        if (!aacSelection) throw new Error('AAC encoder not available')
+        audioEncoder = new ffmpeg.CodecContext(aacSelection.encoder)
+        audioEncoder.sampleRate = 48000
+        audioEncoder.channelLayout = ffmpeg.constants.channelLayouts.STEREO
+        audioEncoder.sampleFormat = ffmpeg.constants.sampleFormats.FLTP
+        audioEncoder.timeBase = outAudio.timeBase
+        audioEncoder.bitRate = 128000
+        audioEncoder.open()
+
+        resampler = new ffmpeg.Resampler(
+          audioDecoder.sampleRate,
+          audioDecoder.channelLayout,
+          audioDecoder.sampleFormat,
+          audioEncoder.sampleRate,
+          audioEncoder.channelLayout,
+          audioEncoder.sampleFormat,
+        )
+
+        audioFifo = new ffmpeg.AudioFIFO(
+          ffmpeg.constants.sampleFormats.FLTP,
+          2,
+          1024,
+        )
+      } else {
+        // Can't decode this audio — drop it, at least video will play
+        console.warn('[WebTranscode] No decoder for audio codec, dropping audio track')
+        outAudio = null
+      }
+    }
+
+    dict = ffmpeg.Dictionary.from({ movflags: 'frag_keyframe+empty_moov+default_base_moof' })
+    outputFormat.writeHeader(dict)
+    session.status = 'transcoding'
+
+    packet = new ffmpeg.Packet()
+    outputPacket = new ffmpeg.Packet()
+    audioFrame = new ffmpeg.Frame()
+    resampledFrame = new ffmpeg.Frame()
+
+    if (audioEncoder) {
+      resampledFrame.format = ffmpeg.constants.sampleFormats.FLTP
+      resampledFrame.channelLayout = ffmpeg.constants.channelLayouts.STEREO
+      resampledFrame.sampleRate = audioEncoder.sampleRate
+      resampledFrame.nbSamples = 1024
+      resampledFrame.alloc()
+    }
+
+    let packetCount = 0
+    const transcodeThrottle = { firstPtsMs: NaN, wallStartMs: NaN }
+
+    while (inputFormat.readFrame(packet)) {
+      if (session.cancelled) break
+
+      if (packet.streamIndex === videoStream.index) {
+        // Video: stream copy — just write the packet directly
+        await throttleTranscodeToSourcePace(transcodeThrottle, packet.pts, videoStream.timeBase)
+        packet.streamIndex = outVideo.index
+        outputFormat.writeFrame(packet)
+      } else if (audioStream && outAudio && audioDecoder && packet.streamIndex === audioStream.index) {
+        // Audio: decode → resample → FIFO → encode to AAC
+        audioDecoder.sendPacket(packet)
+        while (audioDecoder.receiveFrame(audioFrame)) {
+          resampler.convert(audioFrame, resampledFrame)
+          audioFifo.write(resampledFrame)
+          while (audioFifo.read(resampledFrame, 1024)) {
+            audioEncoder.sendFrame(resampledFrame)
+            while (audioEncoder.receivePacket(outputPacket)) {
+              outputPacket.streamIndex = outAudio.index
+              outputFormat.writeFrame(outputPacket)
+              safeUnref(outputPacket)
+            }
+          }
+          safeUnref(audioFrame)
+        }
+      }
+
+      safeUnref(packet)
+
+      if (onProgress && packetCount % 200 === 0) {
+        onProgress(Math.min(99, Math.round(packetCount / 10)))
+      }
+
+      packetCount++
+      if (packetCount % 50 === 0) {
+        await new Promise((r) => setImmediate(r))
+      }
+    }
+
+    // Flush audio encoder
+    if (audioEncoder && !session.cancelled) {
+      audioEncoder.sendFrame(null)
+      while (audioEncoder.receivePacket(outputPacket)) {
+        if (outAudio) outputPacket.streamIndex = outAudio.index
+        outputFormat.writeFrame(outputPacket)
+        safeUnref(outputPacket)
+      }
+    }
+
+    if (!session.cancelled) {
+      if (reader?.downloadUnderflow) {
+        throw new Error('Web transcode source underflowed before completion')
+      }
+      outputFormat.writeTrailer()
+      segmenter.finish()
+      session.isComplete = true
+      session.status = 'complete'
+    }
+  } finally {
+    const cleanup = () => {
+      safeDestroy(dict)
+      safeDestroy(packet)
+      safeDestroy(outputPacket)
+      safeDestroy(audioFrame)
+      safeDestroy(resampledFrame)
+      safeDestroy(audioFifo)
+      safeDestroy(resampler)
+      safeDestroy(audioEncoder)
+      safeDestroy(audioDecoder)
+      safeDestroy(outputFormat)
+      safeDestroy(outputIO)
+      safeDestroy(inputFormat)
+      if (reader) { try { reader.destroy() } catch {} reader = null }
+    }
+    session.ffmpegCleanup = cleanup
+    cleanup()
+    session.ffmpegCleanup = null
+  }
+}
+
+/**
+ * Start a web-optimized transcode session.
+ * Probes the source and only transcodes what's needed for Chromium playback.
+ * If only audio needs transcoding (AC3/EAC3/DTS → AAC), uses fast video-copy path.
+ */
+async function startWebTranscode(sourceUrl, options = {}) {
+  const { sourceKey = null, onProgress, isVideoComplete = true } = options
+
+  if (sourceKey) {
+    const existing = findSessionBySourceKey(sourceKey)
+    if (existing && existing.status !== 'error' && existing.status !== 'cancelled' && existing.status !== 'complete') {
+      return { success: true, sessionId: existing.id, reused: true }
+    }
+    if (existing && existing.status === 'complete') {
+      stopCastTranscode(existing.id, 'replaced')
+    }
+  }
+
+  const session = createCastSession(sourceUrl, sourceKey)
+
+  try {
+    await startCastFileServer()
+    await ensureFfmpegLoaded()
+    const probeResult = await probeMedia(sourceUrl)
+
+    // Use web-specific codec check (broader than Chromecast)
+    checkWebTranscodeNeeded(probeResult)
+    const needsVideoTranscode = !!probeResult.needsVideoTranscode
+    const needsAudioTranscode = !!probeResult.needsAudioTranscode
+
+    if (!needsVideoTranscode && !needsAudioTranscode) {
+      // No transcoding needed — shouldn't be called but handle gracefully
+      session.status = 'complete'
+      return { success: false, sessionId: session.id, reason: 'no-transcode-needed' }
+    }
+
+    console.log('[WebTranscode] Starting:', needsVideoTranscode ? 'full' : 'audio-only', '|', probeResult.reason)
+
+    ;(async () => {
+      try {
+        if (needsVideoTranscode) {
+          // Full transcode (rare for web — only exotic video codecs)
+          await runFullTranscodeCast(session, sourceUrl, { isVideoComplete })
+        } else {
+          // Audio-only transcode (common case: AC3/EAC3/DTS → AAC, video passthrough)
+          await runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVideoComplete })
+        }
+      } catch (err) {
+        if (session.cancelled) {
+          session.status = 'cancelled'
+          session.error = session.error || 'cancelled'
+        } else {
+          session.status = 'error'
+          session.error = err?.message || 'Web transcode failed'
+          console.error('[WebTranscode] Error:', err?.message || err)
+        }
+        try { session.segmentStore?.setFinished?.() } catch {}
+      }
+    })()
+
+    return { success: true, sessionId: session.id, reused: false }
+  } catch (err) {
+    session.status = 'error'
+    session.error = err?.message || 'Web transcode startup failed'
+    return { success: false, error: session.error, sessionId: session.id }
+  }
+}
+
 async function startCastTranscode(sourceUrl, options = {}) {
   const { sourceKey = null, onProgress, isVideoComplete = true } = options
 
@@ -1109,3 +1388,4 @@ export { startCastFileServer, stopCastFileServer, getCastServerPort }
 export { createCastSession, getCastSession, findSessionBySourceKey, getCastStatus, stopCastTranscode, getCastHlsUrl }
 export { generatePlaylist }
 export { startCastTranscode }
+export { startWebTranscode }

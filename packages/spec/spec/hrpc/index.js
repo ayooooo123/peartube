@@ -191,7 +191,9 @@ const methods = new Map([
   ['@peartube/get-video-recommendations', 91],
   [91, '@peartube/get-video-recommendations'],
   ['@peartube/update-video-metadata', 92],
-  [92, '@peartube/update-video-metadata']
+  [92, '@peartube/update-video-metadata'],
+  ['@peartube/web-prepare-playback', 93],
+  [93, '@peartube/web-prepare-playback']
 ])
 
 class HRPC {
@@ -291,7 +293,8 @@ class HRPC {
       ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-request')],
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-request')],
       ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-request')],
-      ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-request')]
+      ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-request')],
+      ['@peartube/web-prepare-playback', getEncoding('@peartube/prepare-playback-request')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -375,15 +378,13 @@ class HRPC {
       ['@peartube/index-video-vectors', getEncoding('@peartube/index-video-vectors-response')],
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-response')],
       ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-response')],
-      ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-response')]
+      ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-response')],
+      ['@peartube/web-prepare-playback', getEncoding('@peartube/web-prepare-playback-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
-      if (!command || typeof this._handlers[command] !== 'function') {
-        return
-      }
       if (this._requestIsSend(command)) {
         const request = req.data ? c.decode(requestEncoding, req.data) : null
         await this._handlers[command](request)
@@ -848,6 +849,10 @@ class HRPC {
     return this._call('@peartube/update-video-metadata', args)
   }
 
+  async webPreparePlayback(args) {
+    return this._call('@peartube/web-prepare-playback', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1218,6 +1223,10 @@ class HRPC {
 
   onUpdateVideoMetadata(responseFn) {
     this._handlers['@peartube/update-video-metadata'] = responseFn
+  }
+
+  onWebPreparePlayback(responseFn) {
+    this._handlers['@peartube/web-prepare-playback'] = responseFn
   }
 
   _requestIsStream(command) {

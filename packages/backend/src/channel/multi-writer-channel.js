@@ -1442,9 +1442,15 @@ export class MultiWriterChannel extends ReadyResource {
     if (!id) throw new Error('Video id required')
     console.log('[Channel] addVideo:', id, 'blobId:', meta.blobId, 'blobsCoreKey:', meta.blobsCoreKey?.slice(0, 16), 'keyLen:', meta.blobsCoreKey?.length)
 
-    // Get next logical clock
-    const videos = await this.listVideos().catch(() => [])
-    const maxClock = Math.max(...videos.map(v => v.logicalClock || 0), 0)
+    // Get next logical clock. Use a timeout to avoid hanging when the
+    // Autobase view has blocks from remote writers that aren't available locally.
+    const videos = await Promise.race([
+      this.listVideos().catch(() => []),
+      new Promise(resolve => setTimeout(() => resolve(null), 5000))
+    ])
+    const maxClock = videos
+      ? Math.max(...videos.map(v => v.logicalClock || 0), 0)
+      : Date.now()
     const nextClock = maxClock + 1
 
     const videoMeta = {
@@ -1481,9 +1487,15 @@ export class MultiWriterChannel extends ReadyResource {
     const existing = await this.getVideo(id)
     if (!existing) throw new Error('Video not found: ' + id)
 
-    // Get next logical clock
-    const videos = await this.listVideos().catch(() => [])
-    const maxClock = Math.max(...videos.map(v => v.logicalClock || 0), 0)
+    // Get next logical clock. Use a timeout to avoid hanging when the
+    // Autobase view has blocks from remote writers that aren't available locally.
+    const videos = await Promise.race([
+      this.listVideos().catch(() => []),
+      new Promise(resolve => setTimeout(() => resolve(null), 5000))
+    ])
+    const maxClock = videos
+      ? Math.max(...videos.map(v => v.logicalClock || 0), 0)
+      : Date.now()
     const nextClock = maxClock + 1
 
     const videoMeta = {

@@ -23,7 +23,7 @@ export { useApp } from '@/lib/AppContext'
 // We intentionally update shared values during render for PiP exit transitions
 // to ensure animated worklets see current values immediately
 // Guarded for SSR: only load on Pear runtime (not during static rendering)
-if (typeof window !== 'undefined' && (window as any).Pear) {
+if (typeof window !== 'undefined' && ((window as any).Pear || (window as any).bridge)) {
   try {
     const { configureReanimatedLogger, ReanimatedLogLevel } = require('react-native-reanimated')
     configureReanimatedLogger({
@@ -37,7 +37,10 @@ if (typeof window !== 'undefined' && (window as any).Pear) {
 export { colors }
 
 // Platform detection
-const isPear = typeof window !== 'undefined' && !!(window as any).Pear
+const isPear = typeof window !== 'undefined' && (
+  !!(window as any).Pear ||      // legacy pear run
+  !!(window as any).bridge        // standalone Electron with pear-runtime
+)
 
 // Types from shared package
 import type { Identity, Video } from '@peartube/core'

@@ -97,6 +97,12 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const durationMsRef = useRef(0)
   const lastAppliedSeekRef = useRef<number | null>(null)
 
+  // On web, react-native-video fires a 500ms autoplay-denial check that
+  // reports isPlaying=false before the blob server delivers data. Suppress
+  // this false positive until the first real playback event arrives.
+  const mountTimeRef = useRef(Date.now())
+  const hasReceivedPlayEventRef = useRef(false)
+
   // Stuck playback detection (from mediastorm reference)
   const [sourceKey, setSourceKey] = useState(0)
   const playbackStartedAtRef = useRef<number | null>(null)
@@ -241,41 +247,46 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       playbackStartedAtRef.current = Date.now()
     }
 
-    // Stuck playback detection is only needed on the react-native-video path.
-    if (Number(data?.currentTime) > 0.1) {
-      if (!hasAdvancedRef.current) {
-        hasAdvancedRef.current = true
-      }
-      if (
-        !suppressStuckRecovery &&
-        !hasRenderedFrameRef.current &&
-        playbackStartedAtRef.current !== null &&
-        reloadAttemptRef.current < MAX_RELOAD_ATTEMPTS
-      ) {
-        const playingDuration = Date.now() - playbackStartedAtRef.current
-        if (playingDuration > NO_RENDER_THRESHOLD_MS) {
-          console.warn('[PearInlineVideoView] No video render detected — reloading', {
+    // Stuck playback detection — skip entirely on web where the browser handles
+    // buffering natively. On web, onReadyForDisplay may not fire reliably and
+    // P2P blob streaming can legitimately keep currentTime at 0 for several seconds,
+    // causing false positives that remount the <video> element in a loop.
+    if (Platform.OS !== 'web') {
+      if (Number(data?.currentTime) > 0.1) {
+        if (!hasAdvancedRef.current) {
+          hasAdvancedRef.current = true
+        }
+        if (
+          !suppressStuckRecovery &&
+          !hasRenderedFrameRef.current &&
+          playbackStartedAtRef.current !== null &&
+          reloadAttemptRef.current < MAX_RELOAD_ATTEMPTS
+        ) {
+          const playingDuration = Date.now() - playbackStartedAtRef.current
+          if (playingDuration > NO_RENDER_THRESHOLD_MS) {
+            console.warn('[PearInlineVideoView] No video render detected — reloading', {
+              attempt: reloadAttemptRef.current + 1,
+            })
+            reloadAttemptRef.current += 1
+            playbackStartedAtRef.current = null
+            hasAdvancedRef.current = false
+            hasRenderedFrameRef.current = false
+            setSourceKey((prev) => prev + 1)
+            return
+          }
+        }
+      } else if (!suppressStuckRecovery && playbackStartedAtRef.current !== null && !hasAdvancedRef.current) {
+        const stuckDuration = Date.now() - playbackStartedAtRef.current
+        if (stuckDuration > STUCK_THRESHOLD_MS && reloadAttemptRef.current < MAX_RELOAD_ATTEMPTS) {
+          console.warn('[PearInlineVideoView] Stuck playback detected — reloading', {
             attempt: reloadAttemptRef.current + 1,
           })
           reloadAttemptRef.current += 1
           playbackStartedAtRef.current = null
-          hasAdvancedRef.current = false
           hasRenderedFrameRef.current = false
           setSourceKey((prev) => prev + 1)
           return
         }
-      }
-    } else if (!suppressStuckRecovery && playbackStartedAtRef.current !== null && !hasAdvancedRef.current) {
-      const stuckDuration = Date.now() - playbackStartedAtRef.current
-      if (stuckDuration > STUCK_THRESHOLD_MS && reloadAttemptRef.current < MAX_RELOAD_ATTEMPTS) {
-        console.warn('[PearInlineVideoView] Stuck playback detected — reloading', {
-          attempt: reloadAttemptRef.current + 1,
-        })
-        reloadAttemptRef.current += 1
-        playbackStartedAtRef.current = null
-        hasRenderedFrameRef.current = false
-        setSourceKey((prev) => prev + 1)
-        return
       }
     }
 
@@ -309,9 +320,16 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       playbackStartedAtRef.current = Date.now()
     }
     if (state.isPlaying) {
+      hasReceivedPlayEventRef.current = true
       pipExitPlayingRef.current = false
       onPlaying?.()
     } else if (!state.isSeeking) {
+      // On web, react-native-video fires a 500ms autoplay-denial check that
+      // falsely reports paused before the blob server delivers first bytes.
+      // Suppress this until we've received at least one real play event.
+      if (Platform.OS === 'web' && !hasReceivedPlayEventRef.current) {
+        return
+      }
       if (pipExitPlayingRef.current) {
         return
       }
@@ -344,10 +362,6 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       height: 0,
     })
   }, [onPictureInPictureChanged])
-
-  if (Platform.OS === 'web') {
-    return null
-  }
 
   return (
     <View style={[styles.container, style]}>

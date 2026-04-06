@@ -6,6 +6,9 @@
 import pipe from 'pear-pipe'
 import { createProtocolClient, PROTOCOL_EVENTS } from '@peartube/protocol'
 
+// Worker specifier — matches the path used by electron/main.js getWorker()
+const BACKEND_WORKER = '/pear/build/workers/core/index.js'
+
 const DOM_EVENT_NAMES = Object.freeze({
   [PROTOCOL_EVENTS.UPLOAD_PROGRESS]: 'pearUploadProgress',
   [PROTOCOL_EVENTS.FEED_UPDATED]: 'pearFeedUpdate',
@@ -44,14 +47,82 @@ class WorkerClient {
     return this._initPromise
   }
 
+  #createBridgePipe(specifier) {
+    // Virtual duplex stream over Electron IPC bridge.
+    // Implements the minimal interface HRPC/protomux needs.
+    const listeners = new Map()
+    let destroyed = false
+    let unsubscribe = null
+
+    const virtualPipe = {
+      write(data) {
+        if (destroyed) return false
+        window.bridge.writeWorkerIPC(specifier, data instanceof ArrayBuffer ? new Uint8Array(data) : data)
+        return true
+      },
+      on(event, cb) {
+        if (!listeners.has(event)) listeners.set(event, [])
+        listeners.get(event).push(cb)
+        return virtualPipe
+      },
+      removeListener(event, cb) {
+        const cbs = listeners.get(event)
+        if (cbs) { const idx = cbs.indexOf(cb); if (idx !== -1) cbs.splice(idx, 1) }
+        return virtualPipe
+      },
+      emit(event, ...args) {
+        const cbs = listeners.get(event)
+        if (cbs) for (const cb of [...cbs]) cb(...args)
+      },
+      destroy() {
+        if (destroyed) return
+        destroyed = true
+        virtualPipe.emit('end')
+        virtualPipe.emit('close')
+        listeners.clear()
+        if (unsubscribe) unsubscribe()
+      },
+      get destroyed() { return destroyed },
+      get writable() { return !destroyed },
+      get readable() { return !destroyed },
+    }
+
+    // Subscribe to incoming data from worker via main process relay
+    unsubscribe = window.bridge.onWorkerIPC(specifier, (data) => {
+      if (!destroyed) virtualPipe.emit('data', data)
+    })
+
+    // Log worker stdout/stderr
+    const offStdout = window.bridge.onWorkerStdout(specifier, (data) => {
+      console.log('[Worker stdout]', new TextDecoder().decode(data))
+    })
+    const offStderr = window.bridge.onWorkerStderr(specifier, (data) => {
+      console.error('[Worker stderr]', new TextDecoder().decode(data))
+    })
+    const offExit = window.bridge.onWorkerExit(specifier, (code) => {
+      console.log('[Worker] Exited with code:', code)
+      offStdout(); offStderr(); offExit()
+      if (!destroyed) virtualPipe.destroy()
+    })
+
+    return virtualPipe
+  }
+
   async _doInitialize() {
-    console.log('[WorkerClient] Connecting to main-process backend via pear-pipe...')
-    // Prefer Pear-provided pipe if available, otherwise fall back to pear-pipe().
-    // (Some Pear versions expose the runtime pipe on Pear.pipe().)
-    this.pipe = (typeof Pear !== 'undefined' && typeof Pear.pipe === 'function')
-      ? Pear.pipe()
-      : pipe()
-    if (!this.pipe) throw new Error('Failed to create pear pipe')
+    // New architecture: Electron bridge (per-specifier worker IPC)
+    if (typeof window !== 'undefined' && window.bridge?.startWorker) {
+      console.log('[WorkerClient] Using Electron bridge (pear-runtime)')
+      await window.bridge.startWorker(BACKEND_WORKER)
+      console.log('[WorkerClient] Worker started:', BACKEND_WORKER)
+      this.pipe = this.#createBridgePipe(BACKEND_WORKER)
+    } else {
+      // Legacy: pear run (direct pear-pipe)
+      console.log('[WorkerClient] Falling back to pear-pipe (legacy pear run)')
+      this.pipe = (typeof Pear !== 'undefined' && typeof Pear.pipe === 'function')
+        ? Pear.pipe()
+        : pipe()
+    }
+    if (!this.pipe) throw new Error('Failed to create pipe')
 
     // Create shared protocol client on top of the pipe.
     console.log('[WorkerClient] Creating shared protocol client...')

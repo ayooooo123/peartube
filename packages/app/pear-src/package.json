@@ -1,6 +1,8 @@
 {
   "name": "peartube",
+  "productName": "PearTube",
   "version": "0.1.0",
+  "upgrade": "pear://6bh4gwr49kfcrc4b1swu1x83eqx1xehcxkycj9yqdxyodrrzoxoy",
   "private": true,
   "type": "module",
   "main": "index.js",
@@ -30,7 +32,6 @@
     "bare-file-logger": "^1.2.1",
     "bare-fs": "^4.5.6",
     "bare-media": "^2.5.0",
-    "bare-mpv": "file:../../bare-mpv",
     "bare-http1": "^4.5.5",
     "bare-https": "^2.1.3",
     "bare-tcp": "^2.2.7",

@@ -49,7 +49,7 @@ export default function SettingsScreen() {
   const [pairInviteCode, setPairInviteCode] = useState('')
   const [pairDeviceName, setPairDeviceName] = useState('')
   const [pairing, setPairing] = useState(false)
-  const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
+  const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
   const canManageTranscodeSettings = isPear && typeof (rpc as any)?.getTranscodeSettings === 'function'
   const [transcodeSettings, setTranscodeSettings] = useState<TranscodeSettings | null>(null)
   const [transcodeSettingsLoading, setTranscodeSettingsLoading] = useState(false)

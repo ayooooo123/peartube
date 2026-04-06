@@ -2,17 +2,35 @@
  * RPC Client - Web (Pear Desktop)
  *
  * Unified platform RPC layer for Pear desktop apps.
- * Uses the shared runner/bridge contract on top of the PearWorkerClient
- * transport exposed by worker-client.js.
+ *
+ * Two transport paths:
+ * 1. Electron bridge (new): window.bridge from preload.js — virtual pipe over Electron IPC
+ * 2. PearWorkerClient (legacy pear run): worker-client.js loaded as unbundled script
  */
 
+import { createProtocolClient } from '@peartube/protocol';
 import { createPlatformRpcBridge } from './rpc.shared';
 import { createWebRunner } from './runner.web';
 import type { VideoStats } from './types';
 
-// PearWorkerClient is set on window by worker-client.js (unbundled)
+// Worker specifier for Electron bridge path
+const BACKEND_WORKER = '/pear/build/workers/core/index.js';
+
+// Electron bridge exposed by electron/preload.js
 declare global {
   interface Window {
+    bridge?: {
+      pkg(): any;
+      applyUpdate(): Promise<void>;
+      appRestart(): Promise<void>;
+      onPearEvent(name: string, listener: (...args: any[]) => void): () => void;
+      startWorker(specifier: string): Promise<boolean>;
+      writeWorkerIPC(specifier: string, data: any): Promise<boolean>;
+      onWorkerIPC(specifier: string, listener: (data: any) => void): () => void;
+      onWorkerStdout(specifier: string, listener: (data: any) => void): () => void;
+      onWorkerStderr(specifier: string, listener: (data: any) => void): () => void;
+      onWorkerExit(specifier: string, listener: (code: number) => void): () => void;
+    };
     PearWorkerClient?: {
       isConnected: boolean;
       blobServerPort: number | null;
@@ -24,51 +42,118 @@ declare global {
   }
 }
 
-// Module state
-let _blobServerPort: number | null = null;
-let _isInitialized = false;
+/**
+ * Create a virtual duplex pipe over Electron's bridge IPC.
+ * Implements the minimal stream interface that HRPC/protomux needs.
+ */
+function createBridgePipe(specifier: string) {
+  const bridge = window.bridge!;
+  const listeners = new Map<string, Array<(...args: any[]) => void>>();
+  let destroyed = false;
+  let unsubscribe: (() => void) | null = null;
 
-function getPearWorkerClient() {
-  if (typeof window === 'undefined') return null;
-  return window.PearWorkerClient ?? null;
+  const pipe: any = {
+    write(data: any) {
+      if (destroyed) return false;
+      bridge.writeWorkerIPC(specifier, data instanceof ArrayBuffer ? new Uint8Array(data) : data);
+      return true;
+    },
+    on(event: string, cb: (...args: any[]) => void) {
+      if (!listeners.has(event)) listeners.set(event, []);
+      listeners.get(event)!.push(cb);
+      return pipe;
+    },
+    removeListener(event: string, cb: (...args: any[]) => void) {
+      const cbs = listeners.get(event);
+      if (cbs) { const idx = cbs.indexOf(cb); if (idx !== -1) cbs.splice(idx, 1); }
+      return pipe;
+    },
+    emit(event: string, ...args: any[]) {
+      const cbs = listeners.get(event);
+      if (cbs) for (const cb of [...cbs]) cb(...args);
+    },
+    destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      pipe.emit('end');
+      pipe.emit('close');
+      listeners.clear();
+      if (unsubscribe) unsubscribe();
+    },
+    get destroyed() { return destroyed; },
+    get writable() { return !destroyed; },
+    get readable() { return !destroyed; },
+  };
+
+  // Subscribe to incoming data from worker via main process relay
+  unsubscribe = bridge.onWorkerIPC(specifier, (data: any) => {
+    if (!destroyed) pipe.emit('data', data);
+  });
+
+  // Log worker stdout/stderr
+  const offStdout = bridge.onWorkerStdout(specifier, (data: any) => {
+    console.log('[Worker stdout]', new TextDecoder().decode(data));
+  });
+  const offStderr = bridge.onWorkerStderr(specifier, (data: any) => {
+    console.error('[Worker stderr]', new TextDecoder().decode(data));
+  });
+  const offExit = bridge.onWorkerExit(specifier, (code: number) => {
+    console.log('[Worker] Exited with code:', code);
+    offStdout(); offStderr(); offExit();
+    if (!destroyed) pipe.destroy();
+  });
+
+  return pipe;
 }
 
-async function waitForPearWorkerClient(timeoutMs = 10000) {
-  const existingClient = getPearWorkerClient();
-  if (existingClient) return existingClient;
+/**
+ * Connect to backend via Electron bridge (new path) or PearWorkerClient (legacy).
+ */
+async function connectTransport() {
+  if (typeof window === 'undefined') {
+    throw new Error('Platform RPC can only be initialized in browser context');
+  }
+
+  // New path: Electron bridge from preload.js
+  if (window.bridge?.startWorker) {
+    console.log('[Platform RPC] Using Electron bridge transport');
+    await window.bridge.startWorker(BACKEND_WORKER);
+    console.log('[Platform RPC] Worker started:', BACKEND_WORKER);
+    const stream = createBridgePipe(BACKEND_WORKER);
+    const client = createProtocolClient({ stream });
+    return { stream, client, terminate: () => stream.destroy() };
+  }
+
+  // Legacy path: PearWorkerClient from worker-client.js (pear run)
+  console.log('[Platform RPC] Using PearWorkerClient transport (legacy)');
+  const workerClient = await waitForPearWorkerClient();
+  return workerClient.connect();
+}
+
+function waitForPearWorkerClient(timeoutMs = 10000) {
+  const existingClient = window.PearWorkerClient ?? null;
+  if (existingClient) return Promise.resolve(existingClient);
 
   const startedAt = Date.now();
-
-  return await new Promise<NonNullable<Window['PearWorkerClient']>>((resolve, reject) => {
+  return new Promise<NonNullable<Window['PearWorkerClient']>>((resolve, reject) => {
     const poll = () => {
-      const workerClient = getPearWorkerClient();
-      if (workerClient) {
-        resolve(workerClient);
-        return;
-      }
-
+      const wc = window.PearWorkerClient ?? null;
+      if (wc) { resolve(wc); return; }
       if (Date.now() - startedAt >= timeoutMs) {
-        reject(new Error('PearWorkerClient not available - ensure worker-client.js is loaded'));
+        reject(new Error('PearWorkerClient not available'));
         return;
       }
-
       setTimeout(poll, 25);
     };
-
     poll();
   });
 }
 
-const mainRunner = createWebRunner({
-  async connectTransport() {
-    if (typeof window === 'undefined') {
-      throw new Error('Platform RPC can only be initialized in browser context');
-    }
+// Module state
+let _blobServerPort: number | null = null;
+let _isInitialized = false;
 
-    const workerClient = await waitForPearWorkerClient();
-    return workerClient.connect();
-  }
-});
+const mainRunner = createWebRunner({ connectTransport });
 
 const mainBridge = createPlatformRpcBridge({
   platform: 'desktop',
@@ -109,9 +194,13 @@ export async function initPlatformRPC(): Promise<void> {
     throw new Error('Platform RPC can only be initialized in browser context');
   }
 
-  await waitForPearWorkerClient();
+  // Electron bridge path: window.bridge is set by preload.js — skip PearWorkerClient
+  // Legacy pear run path: wait for PearWorkerClient from worker-client.js
+  if (!window.bridge?.startWorker) {
+    await waitForPearWorkerClient();
+  }
 
-  console.log('[Platform RPC] Initializing via PearWorkerClient...');
+  console.log('[Platform RPC] Initializing...');
 
   try {
     await mainBridge.init();
@@ -455,43 +544,6 @@ export const rpc = {
       ? { query: queryOrReq, topK: topK || 20 }
       : queryOrReq;
     return ensureRPC().globalSearchVideos(req);
-  },
-
-  // MPV Player (Universal Codec Support)
-  async mpvAvailable(): Promise<{ available: boolean }> {
-    return ensureRPC().mpvAvailable({});
-  },
-
-  async mpvCreate(req: { width?: number; height?: number }): Promise<{ success: boolean; playerId?: string; frameServerPort?: number; error?: string }> {
-    return ensureRPC().mpvCreate(req);
-  },
-
-  async mpvLoadFile(req: { playerId: string; url: string }): Promise<{ success: boolean; error?: string }> {
-    return ensureRPC().mpvLoadFile(req);
-  },
-
-  async mpvPlay(req: { playerId: string }): Promise<{ success: boolean; error?: string }> {
-    return ensureRPC().mpvPlay(req);
-  },
-
-  async mpvPause(req: { playerId: string }): Promise<{ success: boolean; error?: string }> {
-    return ensureRPC().mpvPause(req);
-  },
-
-  async mpvSeek(req: { playerId: string; time: number }): Promise<{ success: boolean; error?: string }> {
-    return ensureRPC().mpvSeek(req);
-  },
-
-  async mpvGetState(req: { playerId: string }): Promise<{ success: boolean; currentTime?: number; duration?: number; paused?: boolean; error?: string }> {
-    return ensureRPC().mpvGetState(req);
-  },
-
-  async mpvRenderFrame(req: { playerId: string }): Promise<{ success: boolean; hasFrame?: boolean; width?: number; height?: number; frameData?: string; error?: string }> {
-    return ensureRPC().mpvRenderFrame(req);
-  },
-
-  async mpvDestroy(req: { playerId: string }): Promise<{ success: boolean; error?: string }> {
-    return ensureRPC().mpvDestroy(req);
   },
 
   // Casting (FCast/Chromecast)

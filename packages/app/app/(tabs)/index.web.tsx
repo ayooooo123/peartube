@@ -16,7 +16,7 @@ import { VideoData } from '../../components/video'
 import { VideoGrid } from '@/components/video/VideoGrid.web'
 import { VideoCardProps } from '@/components/video/VideoCard.web'
 import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/desktop/constants'
-import { MpvPlayer, MpvPlayerRef } from '@/components/MpvPlayer'
+import { PearInlineVideoView } from '@/components/video-player'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
@@ -24,7 +24,20 @@ import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
 
 // Check if running on Pear desktop
-const isPear = typeof window !== 'undefined' && !!(window as any).Pear
+const isPear = typeof window !== 'undefined' && (
+  !!(window as any).Pear ||
+  !!(window as any).bridge
+)
+
+// Module-level feed cache — survives component remounts on desktop navigation.
+// On mobile, Expo Router's <Tabs> keeps the component mounted so this is a no-op.
+const feedCache = {
+  feedEntries: [] as FeedEntry[],
+  feedVideos: [] as VideoData[],
+  channelMeta: {} as Record<string, ChannelMeta>,
+  peerCount: 0,
+  lastLoadedAt: 0,
+}
 
 // Icons as simple SVG components
 function GlobeIcon({ color, size }: { color: string; size: number }) {
@@ -222,9 +235,12 @@ function WatchPageView({
   const [error, setError] = useState<string | null>(null)
   const [channel, setChannel] = useState<ChannelMeta | null>(null)
   const [videoStats, setVideoStats] = useState<any>(null)
-  const videoRef = useRef<MpvPlayerRef>(null)
+  const videoRef = useRef<any>(null)
   const videoWrapperRef = useRef<HTMLDivElement | null>(null)
   const watchInstanceIdRef = useRef(`watch-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  // Stable playback session ID — only changes when the video changes, not on every render.
+  // Using Date.now() directly in JSX caused infinite remount loops via the <Video> key prop.
+  const playbackSession = useMemo(() => Date.now(), [channelKey, videoId])
   const [isActiveWatch, setIsActiveWatch] = useState(true)
   const [isPlaying, setIsPlaying] = useState(true)
   const [currentTime, setCurrentTime] = useState(0)
@@ -899,20 +915,28 @@ function WatchPageView({
                 </div>
               </div>
             ) : isActiveWatch && videoUrl ? (
-              <MpvPlayer
-                key={`${channelKey}:${video.id || videoId}`}
-                ref={videoRef}
-                url={videoUrl || ''}
-                autoPlay
-                onError={(err) => setError(err)}
+              <PearInlineVideoView
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+                playerRef={videoRef}
+                videoUrl={videoUrl || ''}
+                playbackSession={playbackSession}
+                currentVideoKey={`${channelKey}:${video?.id || videoId}`}
+                isPlaying={isPlaying}
+                playbackRate={1}
+                videoTitle={video?.title}
                 onPlaying={() => setIsPlaying(true)}
                 onPaused={() => setIsPlaying(false)}
-                onProgress={(data) => {
-                  setCurrentTime(data.currentTime)
-                  if (data.duration > 0) setDuration(data.duration)
+                onLoad={(data: any) => {
+                  if (data?.durationMs > 0) setDuration(data.durationMs / 1000)
+                  else if (data?.duration > 0) setDuration(data.duration)
+                  setIsLoading(false)
                 }}
-                onCanPlay={() => setIsLoading(false)}
-                style={watchStyles.video}
+                onProgress={(data: any) => {
+                  // PearInlineVideoView sends { currentTime: ms, duration: ms }
+                  if (data?.currentTime != null) setCurrentTime(data.currentTime / 1000)
+                  if (data?.duration > 0) setDuration(data.duration / 1000)
+                }}
+                onError={(err: any) => setError(err?.message || err?.error?.errorString || String(err))}
               />
             ) : (
               <div style={watchStyles.loadingOverlay}>
@@ -1955,14 +1979,14 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [refreshingMyVideos, setRefreshingMyVideos] = useState(false)
 
-  // Public feed state
-  const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([])
-  const [channelMeta, setChannelMeta] = useState<Record<string, ChannelMeta>>({})
+  // Public feed state — initialized from module-level cache to survive remounts
+  const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(feedCache.feedEntries)
+  const [channelMeta, setChannelMeta] = useState<Record<string, ChannelMeta>>(feedCache.channelMeta)
   const [feedLoading, setFeedLoading] = useState(false)
-  const [peerCount, setPeerCount] = useState(0)
+  const [peerCount, setPeerCount] = useState(feedCache.peerCount)
 
   // Aggregated feed videos from discovered channels
-  const [feedVideos, setFeedVideos] = useState<VideoData[]>([])
+  const [feedVideos, setFeedVideos] = useState<VideoData[]>(feedCache.feedVideos)
   const [feedVideosLoading, setFeedVideosLoading] = useState(false)
 
   // Category filter state
@@ -2070,9 +2094,13 @@ export default function HomeScreen() {
     uploadedAt: v.uploadedAt ? new Date(v.uploadedAt).toISOString() : undefined,
   })), [myVideosWithMeta])
 
-  // Load public feed on mount
+  // Load public feed on mount — skip if cache is fresh (loaded within 60s)
   useEffect(() => {
     if (ready) {
+      const cacheAge = Date.now() - feedCache.lastLoadedAt
+      if (feedCache.feedEntries.length > 0 && cacheAge < 60_000) {
+        return
+      }
       loadPublicFeed()
     }
   }, [ready])
@@ -2089,6 +2117,7 @@ export default function HomeScreen() {
 
       if (result?.entries) {
         setFeedEntries(result.entries)
+        feedCache.feedEntries = result.entries
         for (const entry of result.entries) {
           // Schema returns channelKey, not driveKey
           if (entry.channelKey && !channelMeta[entry.channelKey]) {
@@ -2098,7 +2127,9 @@ export default function HomeScreen() {
       }
       if (result?.stats) {
         setPeerCount(result.stats.peerCount || 0)
+        feedCache.peerCount = result.stats.peerCount || 0
       }
+      feedCache.lastLoadedAt = Date.now()
     } catch (err) {
       console.error('[Home] Failed to load public feed:', err)
     } finally {
@@ -2111,7 +2142,11 @@ export default function HomeScreen() {
     try {
       const result = await rpc.getChannelMeta({ channelKey: driveKey })
       if (result) {
-        setChannelMeta(prev => ({ ...prev, [driveKey]: result }))
+        setChannelMeta(prev => {
+          const next = { ...prev, [driveKey]: result }
+          feedCache.channelMeta = next
+          return next
+        })
       }
     } catch (err) {
       console.error('[Home] Failed to load channel meta:', err)
@@ -2171,15 +2206,16 @@ export default function HomeScreen() {
       .slice(0, 50)
 
     setFeedVideos(sortedVideos)
+    feedCache.feedVideos = sortedVideos
     setFeedVideosLoading(false)
   }, [rpc, feedEntries, channelMeta])
 
-  // Load feed videos when feedEntries change
+  // Load feed videos when feedEntries change — skip if already have cached videos
   useEffect(() => {
-    if (feedEntries.length > 0 && ready) {
+    if (feedEntries.length > 0 && ready && feedVideos.length === 0) {
       loadFeedVideos()
     }
-  }, [feedEntries, ready, loadFeedVideos])
+  }, [feedEntries, ready])
 
   const refreshFeed = useCallback(async () => {
     if (!rpc) return

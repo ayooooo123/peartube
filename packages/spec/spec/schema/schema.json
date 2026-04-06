@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 1,
   "schema": [
     {
       "name": "empty",
@@ -512,49 +512,49 @@
           "name": "blobId",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         },
         {
           "name": "blobsCoreKey",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         },
         {
           "name": "mimeType",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         },
         {
           "name": "availability",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         },
         {
           "name": "thumbnailBlobId",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         },
         {
           "name": "thumbnailBlobsCoreKey",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         },
         {
           "name": "thumbnailMimeType",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         },
         {
           "name": "publicBeeKey",
           "required": false,
           "type": "string",
-          "version": 5
+          "version": 1
         }
       ]
     },
@@ -632,19 +632,19 @@
           "name": "blobId",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         },
         {
           "name": "blobsCoreKey",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         },
         {
           "name": "mimeType",
           "required": false,
           "type": "string",
-          "version": 3
+          "version": 1
         }
       ]
     },
@@ -658,6 +658,76 @@
           "name": "url",
           "required": true,
           "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "prepare-playback-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobId",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mimeType",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "prepare-playback-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "url",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "stats",
+          "required": false,
+          "type": "@peartube/video-stats",
+          "version": 1
+        },
+        {
+          "name": "warmupStarted",
+          "required": false,
+          "type": "bool",
           "version": 1
         }
       ]
@@ -840,6 +910,64 @@
     },
     {
       "name": "delete-video-response",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 0,
+      "fields": [
+        {
+          "name": "success",
+          "required": false,
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "error",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "update-video-metadata-request",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "channelKey",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "description",
+          "required": false,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "category",
+          "required": false,
+          "type": "string",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "update-video-metadata-response",
       "namespace": "peartube",
       "compact": false,
       "flagsPosition": 0,
@@ -2158,377 +2286,6 @@
           "required": true,
           "array": true,
           "type": "@peartube/search-result",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-available-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": []
-    },
-    {
-      "name": "mpv-available-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "available",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-create-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "width",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "height",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-create-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "playerId",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "frameServerPort",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-load-file-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "playerId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "url",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-load-file-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-play-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "playerId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-play-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-pause-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "playerId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-pause-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-seek-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "playerId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "time",
-          "required": true,
-          "type": "uint",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-seek-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-get-state-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "playerId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-get-state-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "currentTime",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "duration",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "paused",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-render-frame-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "playerId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-render-frame-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "hasFrame",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "frameData",
-          "required": false,
-          "type": "string",
-          "version": 1
-        },
-        {
-          "name": "width",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "height",
-          "required": false,
-          "type": "uint",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-destroy-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": -1,
-      "fields": [
-        {
-          "name": "playerId",
-          "required": true,
-          "type": "string",
-          "version": 1
-        }
-      ]
-    },
-    {
-      "name": "mpv-destroy-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 1
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
           "version": 1
         }
       ]
@@ -5077,134 +4834,6 @@
           "required": false,
           "type": "string",
           "version": 1
-        }
-      ]
-    },
-    {
-      "name": "update-video-metadata-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 2,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "title",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "description",
-          "required": false,
-          "type": "string",
-          "version": 2
-        },
-        {
-          "name": "category",
-          "required": false,
-          "type": "string",
-          "version": 2
-        }
-      ]
-    },
-    {
-      "name": "update-video-metadata-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 0,
-      "fields": [
-        {
-          "name": "success",
-          "required": false,
-          "type": "bool",
-          "version": 2
-        },
-        {
-          "name": "error",
-          "required": false,
-          "type": "string",
-          "version": 2
-        }
-      ]
-    },
-    {
-      "name": "prepare-playback-request",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 2,
-      "fields": [
-        {
-          "name": "channelKey",
-          "required": true,
-          "type": "string",
-          "version": 4
-        },
-        {
-          "name": "videoId",
-          "required": true,
-          "type": "string",
-          "version": 4
-        },
-        {
-          "name": "publicBeeKey",
-          "required": false,
-          "type": "string",
-          "version": 4
-        },
-        {
-          "name": "blobId",
-          "required": false,
-          "type": "string",
-          "version": 4
-        },
-        {
-          "name": "blobsCoreKey",
-          "required": false,
-          "type": "string",
-          "version": 4
-        },
-        {
-          "name": "mimeType",
-          "required": false,
-          "type": "string",
-          "version": 4
-        }
-      ]
-    },
-    {
-      "name": "prepare-playback-response",
-      "namespace": "peartube",
-      "compact": false,
-      "flagsPosition": 1,
-      "fields": [
-        {
-          "name": "url",
-          "required": true,
-          "type": "string",
-          "version": 4
-        },
-        {
-          "name": "stats",
-          "required": false,
-          "type": "@peartube/video-stats",
-          "version": 4
-        },
-        {
-          "name": "warmupStarted",
-          "required": false,
-          "type": "bool",
-          "version": 4
         }
       ]
     }

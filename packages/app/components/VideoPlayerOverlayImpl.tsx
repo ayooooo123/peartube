@@ -7,8 +7,6 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from './desktop/constants'
 import { useApp } from '@/lib/AppContext'
 
-// MpvPlayer for Pear Desktop
-import { MpvPlayer } from './MpvPlayer'
 
 import Animated, {
   useSharedValue,
@@ -494,7 +492,7 @@ export function VideoPlayerOverlay() {
 
   useEffect(() => {
     if (!currentVideo || playerMode === 'hidden') return
-    const player = Platform.OS === 'web' ? (isPear ? 'mpv' : 'web') : 'react-native-video'
+    const player = Platform.OS === 'web' ? 'react-native-video-web' : 'react-native-video'
     const channelKey = currentVideo.channelKey || currentVideo.channel?.key || ''
     const logKey = `${player}:${channelKey}:${currentVideo.id || videoUrl || ''}`
     if (playerLogKeyRef.current === logKey) return
@@ -2330,21 +2328,26 @@ export function VideoPlayerOverlay() {
               <span style={{ fontSize: 12, color: colors.textMuted }}>Casting...</span>
             </div>
           ) : videoUrl ? (
-            <MpvPlayer
-              key={`mpv-mini:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-              ref={playerRef}
-              url={videoUrl}
-              autoPlay
-              onCanPlay={onPlaying}
-              onPaused={onPaused}
+            <PearInlineVideoView
+              style={StyleSheet.absoluteFill}
+              playerRef={playerRef}
+              videoUrl={videoUrl}
+              playbackSession={playbackSession}
+              currentVideoKey={`${currentVideo?.channelKey || ''}:${currentVideo?.id || ''}`}
+              isPlaying={isPlaying}
+              playbackRate={playbackRate}
+              seekPosition={playerSeekPosition}
+              videoTitle={currentVideo?.title}
+              channelName={currentVideo?.channel?.name}
+              thumbnailUrl={currentVideo?.thumbnailUrl}
+              onLoad={handleVideoLoad}
+              onProgress={onProgress}
               onPlaying={onPlaying}
+              onPaused={onPaused}
+              onBuffering={onBuffering}
               onEnded={onEnded}
-              onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-              onProgress={(data) => onProgress?.({
-                currentTime: data.currentTime * 1000,
-                duration: data.duration * 1000,
-              } as any)}
-              style={{ width: '100%', height: '100%' }}
+              onError={onError}
+              onVideoStateChange={onVideoStateChange}
             />
           ) : (
             <div style={{ ...desktopStyles.placeholder, height: DESKTOP_MINI_HEIGHT }}>
@@ -2548,21 +2551,26 @@ export function VideoPlayerOverlay() {
                   </div>
                 </div>
               ) : videoUrl ? (
-                <MpvPlayer
-                  key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-                  ref={playerRef}
-                  url={videoUrl}
-                  autoPlay
-                  onCanPlay={onPlaying}
-                  onPaused={onPaused}
+                <PearInlineVideoView
+                  style={{ ...StyleSheet.absoluteFillObject, borderRadius: 12 }}
+                  playerRef={playerRef}
+                  videoUrl={videoUrl}
+                  playbackSession={playbackSession}
+                  currentVideoKey={`${currentVideo?.channelKey || ''}:${currentVideo?.id || ''}`}
+                  isPlaying={isPlaying}
+                  playbackRate={playbackRate}
+                  seekPosition={playerSeekPosition}
+                  videoTitle={currentVideo?.title}
+                  channelName={currentVideo?.channel?.name}
+                  thumbnailUrl={currentVideo?.thumbnailUrl}
+                  onLoad={handleVideoLoad}
+                  onProgress={onProgress}
                   onPlaying={onPlaying}
+                  onPaused={onPaused}
+                  onBuffering={onBuffering}
                   onEnded={onEnded}
-                  onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-                  onProgress={(data) => onProgress?.({
-                    currentTime: data.currentTime * 1000,
-                    duration: data.duration * 1000,
-                  } as any)}
-                  style={{ width: '100%', height: '100%', borderRadius: 12 }}
+                  onError={onError}
+                  onVideoStateChange={onVideoStateChange}
                 />
               ) : (
                 <div style={desktopStyles.placeholder}>
@@ -2938,7 +2946,7 @@ export function VideoPlayerOverlay() {
 
     return (
       <>
-        {Platform.OS !== 'web' && videoUrl && (
+        {videoUrl && (
           <PearInlineVideoView
             style={StyleSheet.absoluteFill}
             playerRef={playerRef}
@@ -2963,24 +2971,6 @@ export function VideoPlayerOverlay() {
             onEnded={onEnded}
             onError={onError}
             onVideoStateChange={onVideoStateChange}
-          />
-        )}
-        {Platform.OS === 'web' && isPear && videoUrl && (
-          <MpvPlayer
-            key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-            ref={playerRef}
-            url={videoUrl}
-            autoPlay
-            onCanPlay={onPlaying}
-            onPaused={onPaused}
-            onPlaying={onPlaying}
-            onEnded={onEnded}
-            onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-            onProgress={(data) => onProgress?.({
-              currentTime: data.currentTime * 1000,
-              duration: data.duration * 1000,
-            } as any)}
-            style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
           />
         )}
         {!videoUrl && (

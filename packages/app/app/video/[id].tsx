@@ -15,7 +15,6 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { formatBytes as formatSize, formatTimeAgo, formatViews } from '@/lib/formatters'
 import { getPlayerPageVideoHeight } from '@/lib/video-layout'
 import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
-import { MpvPlayer } from '@/components/MpvPlayer'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
@@ -257,6 +256,18 @@ function ChannelInfo({ channelName, channelInitial, onChannelPress }: { channelN
 }
 
 export default function VideoPlayerScreen() {
+  const { isPear, isDesktop } = usePlatform()
+
+  // Desktop: the VideoPlayerOverlay handles the full YouTube-style layout.
+  // This route shouldn't render — the overlay is the video page on desktop.
+  if (Platform.OS === 'web' && isDesktop) {
+    return null
+  }
+
+  return <MobileVideoPlayerScreen />
+}
+
+function MobileVideoPlayerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const router = useRouter()
   const navigation = useNavigation()
@@ -554,41 +565,14 @@ export default function VideoPlayerScreen() {
               <Text style={styles.loadingText}>Connecting to P2P network...</Text>
             </View>
           ) : videoUrl ? (
-            Platform.OS === 'web' ? (
-              isPear ? (
-                isFocused ? (
-                  <MpvPlayer
-                    key={`mpv:${playbackSession}:${videoData?.channelKey || ''}:${videoData?.id || videoUrl}`}
-                    ref={playerRef}
-                    url={videoUrl || ''}
-                    autoPlay
-                    onCanPlay={onPlaying}
-                    onPaused={onPaused}
-                    onPlaying={onPlaying}
-                    onEnded={onEnded}
-                    onError={(err) => onError?.({ nativeEvent: { error: err } } as any)}
-                    onProgress={(data) => onProgress?.({
-                      currentTime: data.currentTime * 1000,
-                      duration: data.duration * 1000,
-                    } as any)}
-                    style={{ width: '100%', height: '100%', backgroundColor: '#000' }}
-                  />
-                ) : null
-              ) : (
-                <View style={styles.errorContainer}>
-                  <Text style={styles.errorText}>Pear Desktop is required for playback</Text>
-                </View>
-              )
-            ) : (
-              <View style={{ width: screenWidth, height: videoHeight }}>
-                {/* Video is rendered by VideoPlayerOverlay — this is just a spacer */}
-                <P2PStatsOverlay
-                  stats={localStats || videoStats}
-                  showDetails={showStats}
-                  onPress={() => setShowStats(!showStats)}
-                />
-              </View>
-            )
+            <View style={{ width: screenWidth, height: videoHeight }}>
+              {/* Video is rendered by VideoPlayerOverlay on all platforms */}
+              <P2PStatsOverlay
+                stats={localStats || videoStats}
+                showDetails={showStats}
+                onPress={() => setShowStats(!showStats)}
+              />
+            </View>
           ) : (
             <View style={styles.errorContainer}>
               <Text style={styles.errorText}>Failed to load video</Text>

@@ -9,7 +9,7 @@ import { memo } from 'react'
 import { ActivityIndicator, Text } from 'react-native'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
-import { MpvPlayer, MpvPlayerRef } from '../MpvPlayer'
+import { PearInlineVideoView } from './PearInlineVideoView'
 import { desktopStyles } from './desktopStyles'
 import {
   DESKTOP_MINI_WIDTH,
@@ -31,7 +31,7 @@ interface DesktopMiniPlayerProps {
     id?: string
   } | null
   playbackSession: number
-  playerRef: React.RefObject<MpvPlayerRef>
+  playerRef: React.RefObject<any>
   isPlaying: boolean
   progress: number
   isCasting: boolean
@@ -121,21 +121,19 @@ export const DesktopMiniPlayer = memo(function DesktopMiniPlayer({
             <span style={{ fontSize: 12, color: colors.textMuted }}>Casting...</span>
           </div>
         ) : videoUrl ? (
-          <MpvPlayer
-            key={`mpv-mini:${playbackSession}:${currentVideo.channelKey || ''}:${currentVideo.id || videoUrl}`}
-            ref={playerRef}
-            url={videoUrl}
-            autoPlay
-            onCanPlay={onPlaying}
-            onPaused={onPaused}
+          <PearInlineVideoView
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+            playerRef={playerRef}
+            videoUrl={videoUrl}
+            playbackSession={playbackSession}
+            currentVideoKey={`${currentVideo.channelKey || ''}:${currentVideo.id || ''}`}
+            isPlaying={isPlaying}
+            playbackRate={1}
+            onProgress={onProgress}
             onPlaying={onPlaying}
+            onPaused={onPaused}
             onEnded={onEnded}
-            onError={(err) => onError({ nativeEvent: { error: err } })}
-            onProgress={(data) => onProgress({
-              currentTime: data.currentTime * 1000,
-              duration: data.duration * 1000,
-            })}
-            style={{ width: '100%', height: '100%' }}
+            onError={onError}
           />
         ) : (
           <div style={{ ...desktopStyles.placeholder, height: DESKTOP_MINI_HEIGHT }}>

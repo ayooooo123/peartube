@@ -15,7 +15,7 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 
 // Detect Pear desktop vs mobile (must match index.web.tsx detection)
-const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
+const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
 
 function computeTextRelevance(query: string, title: string): number {
   const normalize = (s: string) => s.toLowerCase().replace(/[._\-\[\]\(\)]/g, ' ').replace(/\s+/g, ' ').trim()

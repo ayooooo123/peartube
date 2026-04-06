@@ -16,7 +16,7 @@ import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatBytes } from '@/lib/formatters'
 
 // Detect Pear desktop (must match index.web.tsx detection)
-const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).Pear
+const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
 
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp)

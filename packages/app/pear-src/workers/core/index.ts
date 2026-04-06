@@ -20,59 +20,8 @@ import * as castTranscoder from '@peartube/backend/transcode/cast-transcoder'
 import { generateAndStoreThumbnail } from '@peartube/backend/thumbnail'
 // @ts-ignore
 import { createBackend } from '@peartube/backend/src/backend-entry.js'
-// Platform detection
-const currentPlatform = os.platform()
-const isMpvSupported = currentPlatform === 'darwin' || currentPlatform === 'linux' || currentPlatform === 'win32'
-// MPV infrastructure
-let MpvPlayer: any = null
-let mpvLoadError: string | null = null
-let mpvLoadPromise: Promise<void> | null = null
-
-async function loadBareMpv(): Promise<void> {
-  if (MpvPlayer || mpvLoadError) return
-  if (mpvLoadPromise) return mpvLoadPromise
-  mpvLoadPromise = (async () => {
-    try {
-      if (typeof require === 'function') { const m = require('bare-mpv'); MpvPlayer = m?.MpvPlayer ?? m?.default?.MpvPlayer ?? m; if (MpvPlayer) return }
-      const m = await import('bare-mpv'); MpvPlayer = (m as any)?.MpvPlayer ?? (m as any)?.default?.MpvPlayer ?? (m as any)?.default ?? null
-      if (!MpvPlayer) throw new Error('bare-mpv export missing MpvPlayer')
-    } catch (err: any) { mpvLoadError = err?.message || 'Unknown error'; console.warn('[Worker] bare-mpv not available:', mpvLoadError) }
-  })()
-  return mpvLoadPromise
-}
-if (isMpvSupported) void loadBareMpv()
-else { mpvLoadError = `bare-mpv not available on ${currentPlatform}` }
-const mpvPlayers = new Map<string, any>()
-let mpvPlayerIdCounter = 0
-let mpvFrameServer: any = null
-let mpvFrameServerPort = 0
-let mpvFrameServerReady: Promise<number> | null = null
-function handleMpvFrameRequest(req: any, res: any) {
-  const cors = { 'Access-Control-Allow-Origin': '*' }
-  try {
-    if (req.method !== 'GET') { res.writeHead(405, cors); res.end(); return }
-    const parts = (req.url || '/').split('?')[0].split('/').filter(Boolean)
-    if (parts[0] !== 'frame' || !parts[1]) { res.writeHead(404, cors); res.end(); return }
-    const state = mpvPlayers.get(decodeURIComponent(parts[1]))
-    if (!state) { res.writeHead(404, cors); res.end(); return }
-    if (!state.player.needsRender()) { res.writeHead(204, cors); res.end(); return }
-    const frameData = state.player.renderFrame()
-    if (!frameData?.length) { res.writeHead(204, cors); res.end(); return }
-    const buf = Buffer.from(frameData)
-    res.writeHead(200, { ...cors, 'Content-Type': 'application/octet-stream', 'Content-Length': buf.byteLength, 'Cache-Control': 'no-store', 'X-Frame-Width': String(state.width), 'X-Frame-Height': String(state.height) })
-    res.end(buf)
-  } catch { try { res.writeHead(500, cors); res.end() } catch {} }
-}
-async function ensureMpvFrameServer(): Promise<number> {
-  if (mpvFrameServerPort) return mpvFrameServerPort
-  if (mpvFrameServerReady) return mpvFrameServerReady
-  mpvFrameServerReady = new Promise((resolve, reject) => {
-    mpvFrameServer = http1.createServer(handleMpvFrameRequest)
-    mpvFrameServer.on('error', (err: any) => reject(err))
-    mpvFrameServer.listen(0, '127.0.0.1', () => { mpvFrameServerPort = mpvFrameServer.address().port || 0; resolve(mpvFrameServerPort) })
-  })
-  return mpvFrameServerReady
-}
+// Bare runtime globals (available when spawned via pear.run())
+declare const Bare: { argv: string[]; IPC: any } | undefined
 // Cast proxy infrastructure
 let castProxyServer: any = null
 let castProxyPort = 0
@@ -446,15 +395,24 @@ async function pickImageFile(): Promise<any> {
 // Pipe + Storage + Backend Init
 declare const Pear: any
 console.log('[Worker] PearTube Desktop Worker starting...')
-const workerBaseDir = (typeof Pear?.config?.dir === 'string' && Pear.config.dir.trim()) ? Pear.config.dir : os.cwd()
-;(globalThis as any).__PEARTUBE_HYPERCORE_WORKER_PATH__ = path.join(workerBaseDir || '.', 'build/workers/hypercore-reader-worker.mjs')
+
+// Storage: Bare.argv[2] (from pear.run()), then Pear.config, then default
+const bareArgv = (typeof Bare !== 'undefined' && Array.isArray(Bare.argv)) ? Bare.argv : []
+const runtimeStorage = bareArgv[2] || null
 
 let storage: string
-if (Pear.config.storage) { storage = Pear.config.storage }
+if (runtimeStorage) { storage = runtimeStorage }
+else if (typeof Pear !== 'undefined' && Pear.config?.storage) { storage = Pear.config.storage }
 else { try { const dir = require('bare-storage'); storage = path.join(dir.persistent(), 'peartube') } catch { storage = path.join(os.homedir(), '.peartube') } }
 console.log('[Worker] Storage:', storage)
+
+const workerBaseDir = runtimeStorage || ((typeof Pear !== 'undefined' && typeof Pear?.config?.dir === 'string' && Pear.config.dir.trim()) ? Pear.config.dir : os.cwd())
+;(globalThis as any).__PEARTUBE_HYPERCORE_WORKER_PATH__ = path.join(workerBaseDir || '.', 'build/workers/hypercore-reader-worker.mjs')
+
+// Transport: Bare.IPC (new pear-runtime sidecar), then injected pipe, then pear-pipe
+const bareIPC = (typeof Bare !== 'undefined' && Bare.IPC) ? Bare.IPC : null
 const injectedPipe = (globalThis as any).__PEARTUBE_HRPC_PIPE__ as any
-const ipcPipe = injectedPipe || pipe()
+const ipcPipe = bareIPC || injectedPipe || pipe()
 if (!ipcPipe) throw new Error('No IPC pipe')
 
 let sawInvalidPipeChunk = false
@@ -473,6 +431,13 @@ if (originalPipeOn) {
 
 let rpc: any
 let isShuttingDown = false
+
+// When running as a Bare sidecar, the IPC stream is connected immediately.
+// The renderer may send getStatus before createBackend() finishes registering
+// handlers. Pause the stream to buffer incoming data until handlers are ready.
+if (bareIPC && typeof ipcPipe.pause === 'function') {
+  ipcPipe.pause()
+}
 
 const { rpc: _rpc, backend, destroy } = await createBackend({
   stream: ipcPipe,
@@ -686,24 +651,6 @@ B.uploadVideo = async (r: any) => {
 }
 B.pickVideoFile = async () => { const r = await pickVideoFile(); return { filePath: r.filePath || null, name: r.name || null, size: r.size || 0, cancelled: r.cancelled || false } }
 B.pickImageFile = async () => { const r = await pickImageFile(); return { filePath: r.filePath || null, name: r.name || null, size: r.size || 0, dataUrl: r.dataUrl || null, cancelled: r.cancelled || false } }
-B.mpvAvailable = async () => { await loadBareMpv(); return { available: MpvPlayer !== null, error: mpvLoadError } }
-B.mpvCreate = async (r: any) => {
-  await loadBareMpv(); if (!MpvPlayer) return { success: false, error: mpvLoadError || 'bare-mpv not available' }
-  try {
-    const port = await ensureMpvFrameServer(); const id = `mpv_${++mpvPlayerIdCounter}`; const player = new MpvPlayer()
-    if (player.initialize() !== 0) throw new Error('Failed to initialize mpv')
-    const w = r.width || 1280, h = r.height || 720; if (!player.initRender(w, h)) throw new Error('Failed to init renderer')
-    mpvPlayers.set(id, { player, width: w, height: h, lastFrameTime: 0 })
-    return { success: true, playerId: id, frameServerPort: port }
-  } catch (e: any) { return { success: false, error: e?.message } }
-}
-B.mpvLoadFile = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false, error: 'Player not found' }; try { s.player.loadFile(r.url); return { success: true, error: null } } catch (e: any) { return { success: false, error: e?.message } } }
-B.mpvPlay = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false }; try { s.player.play(); return { success: true } } catch { return { success: false } } }
-B.mpvPause = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false }; try { s.player.pause(); return { success: true } } catch { return { success: false } } }
-B.mpvSeek = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false }; try { s.player.seek(r.time); return { success: true } } catch { return { success: false } } }
-B.mpvGetState = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false, error: 'Player not found' }; try { return { success: true, currentTime: s.player.currentTime || 0, duration: s.player.duration || 0, paused: s.player.paused ?? true } } catch { return { success: false, error: 'Failed to read state' } } }
-B.mpvRenderFrame = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false, hasFrame: false, frameData: null, error: 'Player not found' }; try { if (!s.player.needsRender()) return { success: true, hasFrame: false, frameData: null }; const d = s.player.renderFrame(); if (!d?.length) return { success: true, hasFrame: false, frameData: null }; return { success: true, hasFrame: true, frameData: b4a.toString(d, 'base64'), width: s.width, height: s.height } } catch { return { success: false, hasFrame: false, frameData: null, error: 'render failed' } } }
-B.mpvDestroy = async (r: any) => { const s = mpvPlayers.get(r.playerId); if (!s) return { success: false }; try { s.player.destroy(); mpvPlayers.delete(r.playerId); return { success: true } } catch { mpvPlayers.delete(r.playerId); return { success: false } } }
 B.castAvailable = async () => { await loadCastContext(); return { available: CastContext !== null, error: castLoadError } }
 B.castStartDiscovery = async () => { await loadCastContext(); if (!CastContext) return { success: false, error: castLoadError || 'not available' }; try { await getCastContext().startDiscovery(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
 B.castStopDiscovery = async () => { if (!castContext) return { success: true }; try { castContext.stopDiscovery(); return { success: true } } catch (e: any) { return { success: false, error: e?.message } } }
@@ -781,19 +728,30 @@ B.eventCastDeviceLost = () => {}
 B.eventCastPlaybackState = () => {}
 B.eventCastTimeUpdate = () => {}
 B.eventTranscodeProgress = () => {}
+// Resume the stream now that all handlers are registered (sidecar mode)
+if (bareIPC && typeof ipcPipe.resume === 'function') {
+  ipcPipe.resume()
+}
 rpc.eventReady({ blobServerPort: getBlobPort() })
 console.log('[Worker] HRPC ready, all handlers attached')
 
 ipcPipe.on('error', (err: Error) => console.error('[Worker] Pipe error:', err))
-Pear.teardown(async () => {
+
+// Shutdown handler: Pear.teardown (pear run) or Bare.IPC close (sidecar)
+const shutdown = async () => {
+  if (isShuttingDown) return
   console.log('[Worker] Shutting down...')
   isShuttingDown = true
   await new Promise(resolve => setTimeout(resolve, 100))
-  for (const [id, state] of mpvPlayers) { try { state.player.destroy() } catch {} }
-  mpvPlayers.clear()
-  if (mpvFrameServer) { try { mpvFrameServer.close() } catch {}; mpvFrameServer = null; mpvFrameServerPort = 0; mpvFrameServerReady = null }
   if (castProxyServer) { try { castProxyServer.close() } catch {}; castProxyServer = null; castProxyPort = 0; castProxyReady = null; castProxySessions.clear() }
   cleanupTranscodeSessions()
   try { await ctx.blobServer?.close() } catch {}
   try { await ctx.swarm?.destroy() } catch {}
-})
+}
+
+if (typeof Pear !== 'undefined' && Pear.teardown) {
+  Pear.teardown(shutdown)
+} else if (typeof Bare !== 'undefined' && Bare.IPC) {
+  // Sidecar mode: shut down when IPC stream closes (Electron quit)
+  Bare.IPC.on('close', shutdown)
+}

@@ -1,9 +1,7 @@
 import { memo, forwardRef, RefObject } from 'react'
-import { View, Text, StyleSheet, Platform } from 'react-native'
+import { View, Text, StyleSheet } from 'react-native'
 import { Feather } from '@expo/vector-icons'
-import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
-import { MpvPlayer, MpvPlayerRef } from '../MpvPlayer'
 import { styles } from './styles'
 import { PearInlineVideoView } from './PearInlineVideoView'
 
@@ -82,8 +80,6 @@ export const VideoContainer = memo(
     },
     ref
   ) {
-    const { isPear } = usePlatform()
-
     // Casting placeholder
     if (isCasting) {
       return (
@@ -110,64 +106,29 @@ export const VideoContainer = memo(
       )
     }
 
-    if (Platform.OS !== 'web') {
-      return (
-        <PearInlineVideoView
-          style={style}
-          playerRef={playerRef}
-          videoUrl={videoUrl}
-          playbackSession={playbackSession}
-          currentVideoKey={`${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-          isPlaying={isPlaying}
-          playbackRate={playbackRate}
-          seekPosition={seekPosition}
-          isInPipMode={isInPipMode}
-          pipWindowSize={pipWindowSize}
-          pipEnabled={pipEnabled}
-          onLoad={onLoad}
-          onPictureInPictureChanged={onPictureInPictureChanged}
-          onProgress={onProgress}
-          onPlaying={onPlaying}
-          onPaused={onPaused}
-          onBuffering={onBuffering}
-          onEnded={onEnded}
-          onError={onError}
-          onVideoStateChange={onVideoStateChange}
-        />
-      )
-    }
-
-    // MPV Player for Pear Desktop
-    if (Platform.OS === 'web' && isPear) {
-      return (
-        <MpvPlayer
-          key={`mpv:${playbackSession}:${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
-          ref={playerRef as RefObject<MpvPlayerRef>}
-          url={videoUrl}
-          autoPlay
-          onCanPlay={onPlaying}
-          onPaused={onPaused}
-          onPlaying={onPlaying}
-          onEnded={onEnded}
-          onError={(err) => onError?.({ nativeEvent: { error: err } })}
-          onProgress={(data) =>
-            onProgress?.({
-              currentTime: data.currentTime * 1000,
-              duration: data.duration * 1000,
-            })
-          }
-          style={[{ width: '100%', height: '100%', backgroundColor: '#000' }, style]}
-        />
-      )
-    }
-
-    // Fallback for non-Pear web (shouldn't happen in production)
     return (
-      <View style={[styles.videoPlaceholder, style]}>
-        <Text style={styles.placeholderText}>
-          {currentVideo?.title?.charAt(0).toUpperCase() || '?'}
-        </Text>
-      </View>
+      <PearInlineVideoView
+        style={style}
+        playerRef={playerRef}
+        videoUrl={videoUrl}
+        playbackSession={playbackSession}
+        currentVideoKey={`${currentVideo?.channelKey || ''}:${currentVideo?.id || videoUrl}`}
+        isPlaying={isPlaying}
+        playbackRate={playbackRate}
+        seekPosition={seekPosition}
+        isInPipMode={isInPipMode}
+        pipWindowSize={pipWindowSize}
+        pipEnabled={pipEnabled}
+        onLoad={onLoad}
+        onPictureInPictureChanged={onPictureInPictureChanged}
+        onProgress={onProgress}
+        onPlaying={onPlaying}
+        onPaused={onPaused}
+        onBuffering={onBuffering}
+        onEnded={onEnded}
+        onError={onError}
+        onVideoStateChange={onVideoStateChange}
+      />
     )
   })
 )

@@ -9,15 +9,16 @@ import { join } from 'path'
 // Get target directory from args, default to current directory
 const WEB_DIR = process.argv[2] || '.'
 
-// Pear bar HTML to inject - contains the draggable title bar with window controls
-// The bar spans the full width and includes the sidebar area for proper traffic light positioning
-const PEAR_BAR_HTML = `<div id="pear-bar" style="background-color:#0e0e10;-webkit-app-region:drag;height:52px;position:fixed;top:0;left:0;width:240px;z-index:9999;display:flex;align-items:flex-start;padding-top:12px;padding-left:12px;box-sizing:border-box;"><pear-ctrl style="-webkit-app-region:no-drag;"></pear-ctrl></div><div id="pear-bar-right" style="background-color:#0e0e10;-webkit-app-region:drag;height:52px;position:fixed;top:0;left:240px;right:0;z-index:9998;"></div>`
+// Title bar drag region — works with Electron's hiddenInset titleBarStyle
+// macOS: traffic lights sit in the inset; this area is draggable
+// Windows: titleBarOverlay handles buttons natively
+const PEAR_BAR_HTML = `<div id="pear-bar" style="background-color:#0e0e10;-webkit-app-region:drag;height:52px;position:fixed;top:0;left:0;width:240px;z-index:9999;box-sizing:border-box;"></div><div id="pear-bar-right" style="background-color:#0e0e10;-webkit-app-region:drag;height:52px;position:fixed;top:0;left:240px;right:0;z-index:9998;"></div>`
 
 // CSS to position #root below the pear-bar title bar (52px for macOS traffic lights)
 const PEAR_BAR_CSS = `<style id="pear-bar-css">html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e0e10!important;}#root{position:fixed!important;top:52px!important;left:0!important;right:0!important;bottom:0!important;overflow:hidden;display:flex;flex-direction:column;}</style>`
 
-// CSP meta tag for Pear
-const PEAR_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' pear: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' pear:; style-src 'self' 'unsafe-inline'; connect-src 'self' pear: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*;">`
+// CSP meta tag — allows pear: and peartube-app: protocols
+const PEAR_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' pear: peartube-app: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' pear: peartube-app:; style-src 'self' 'unsafe-inline'; connect-src 'self' pear: peartube-app: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*;">`
 
 // Worker client script - ES module that has access to Pear's import resolution
 const WORKER_CLIENT_SCRIPT = `<script type="module" src="./worker-client.js"></script>`
@@ -46,10 +47,10 @@ function processHtmlFile(filePath) {
   // Handle external module scripts (with src attribute)
   html = html.replace(/<script type="module"(\s+src="[^"]*")>/g, '<script$1>')
 
-  // Convert absolute paths to relative paths for Pear compatibility
-  // Expo generates paths like "/_expo/..." which pear can't resolve
-  html = html.replace(/href="\/_expo\//g, 'href="./_expo/')
-  html = html.replace(/src="\/_expo\//g, 'src="./_expo/')
+  // Convert relative paths to absolute — the Electron HTTP server serves from root,
+  // so /_expo/... resolves correctly even on sub-routes like /video/xyz.
+  html = html.replace(/href="\.\/_expo\//g, 'href="/_expo/')
+  html = html.replace(/src="\.\/_expo\//g, 'src="/_expo/')
 
   // Inject CSP after <head>
   html = html.replace('<head>', `<head>\n${PEAR_CSP}`)
@@ -60,13 +61,11 @@ function processHtmlFile(filePath) {
   // Inject pear bar after <body>
   html = html.replace('<body>', `<body>\n${PEAR_BAR_HTML}\n${RN_NATIVE_MODULE_PROXY_SHIM}`)
 
-  // Load worker-client before the Expo entry bundle so platform RPC can see
-  // window.PearWorkerClient during app bootstrap.
-  if (EXPO_ENTRY_SCRIPT_PATTERN.test(html)) {
-    html = html.replace(EXPO_ENTRY_SCRIPT_PATTERN, `${WORKER_CLIENT_SCRIPT}\n$&`)
-  } else {
-    html = html.replace('</body>', `${WORKER_CLIENT_SCRIPT}\n</body>`)
-  }
+  // Worker-client.js is only needed for legacy pear run (uses pear-pipe bare imports
+  // that require pear-electron's module resolver). The Electron bridge path creates
+  // the protocol client inside the Metro bundle (rpc.web.ts) instead.
+  // Only inject if running under pear run (detected by absence of Electron bridge).
+  // For now, skip injection — Electron path handles RPC via window.bridge.
 
   writeFileSync(filePath, html)
   console.log(`  Processed ${filePath}`)

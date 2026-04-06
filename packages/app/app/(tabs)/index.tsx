@@ -67,7 +67,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
 }
 
 // Detect Pear desktop vs mobile
-const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && !!(window as any).PearWorkerClient
+const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).PearWorkerClient || !!(window as any).bridge)
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()

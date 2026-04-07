@@ -1424,13 +1424,13 @@ export function createApi({
                 blobId: video?.blobId ? String(video.blobId) : null,
                 blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
                 mimeType: video?.mimeType ? String(video.mimeType) : null,
-                availability: hint?.availability === 'playable' ? 'playable' : 'unavailable',
+                availability: hint?.availability || 'unknown',
                 thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
                 thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
                 thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
               }
             })
-            .filter((video) => video && video.availability === 'playable')
+            .filter(Boolean)
             .slice(0, limitPerChannel)
 
           return {

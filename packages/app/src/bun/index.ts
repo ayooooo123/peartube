@@ -26,13 +26,8 @@ const workerPids = new Set<number>()
 
 // ── Storage ─────────────────────────────────────────────────────────────
 function getStoragePath(): string {
-  const p = platform()
-  const base = p === 'darwin'
-    ? join(homedir(), 'Library', 'Application Support')
-    : p === 'win32'
-      ? join(homedir(), 'AppData', 'Local')
-      : join(homedir(), '.config')
-  return join(base, 'peartube')
+  // Use ~/.peartube for compatibility with existing Electron/pear-run data
+  return join(homedir(), '.peartube')
 }
 
 // ── Worker Management ───────────────────────────────────────────────────
@@ -68,8 +63,6 @@ function getWorker(specifier: string) {
     const text = d.toString().trim()
     if (text) {
       console.log('[worker]', text)
-      sendToRenderer('onWorkerStdout', { specifier, data: text })
-
       // Detect blob server port from worker output
       const portMatch = text.match(/blobServerPort:\s*(\d+)/)
       if (portMatch) blobServerPort = parseInt(portMatch[1], 10)
@@ -78,21 +71,18 @@ function getWorker(specifier: string) {
 
   worker.stderr.on('data', (d: Buffer) => {
     const text = d.toString().trim()
-    if (text) {
-      console.error('[worker:err]', text)
-      sendToRenderer('onWorkerStderr', { specifier, data: text })
-    }
+    if (text) console.error('[worker:err]', text)
   })
 
-  worker.on('data', (d: Buffer) => {
-    sendToRenderer('onWorkerIPC', { specifier, data: Array.from(d) })
-  })
+  // IPC data is piped to the WebSocket in the startIPCWebSocket handler
+  // (not here — the WebSocket handler sets up the worker.on('data') listener)
 
   worker.once('exit', (code: number) => {
     console.log('[main] Worker exited:', specifier, 'code:', code)
     if (pid) workerPids.delete(pid)
-    sendToRenderer('onWorkerExit', { specifier, code: code ?? 0 })
     workers.delete(specifier)
+    // Close WebSocket to signal the renderer
+    if (activeWs) { try { activeWs.close() } catch {} }
   })
 
   worker.on('error', (e: Error) => {
@@ -124,45 +114,93 @@ function destroyAllWorkers() {
   }
 }
 
-// ── Electrobun RPC ──────────────────────────────────────────────────────
+// ── IPC WebSocket Server ────────────────────────────────────────────────
+// Raw binary pipe between renderer and worker. The renderer's HRPC client
+// connects via WebSocket. Bun pipes binary frames directly to/from the
+// Bare worker IPC stream. No JSON serialization of binary data.
+let ipcWsPort = 0
+let activeWs: any = null
+
+function startIPCWebSocket() {
+  const BACKEND_WORKER = '/pear/build/workers/core/index.js'
+
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(req, server) {
+      if (server.upgrade(req)) return
+      return new Response('WebSocket only', { status: 426 })
+    },
+    websocket: {
+      open(ws) {
+        console.log('[main] IPC WebSocket connected')
+        activeWs = ws
+
+        // Spawn the worker when the renderer connects
+        const worker = getWorker(BACKEND_WORKER)
+
+        // Wait for HRPC ready, then signal the renderer
+        const onStdout = (d: Buffer) => {
+          const text = d.toString()
+          if (text.includes('HRPC ready')) {
+            worker.stdout.removeListener('data', onStdout)
+            // Send a signal frame so the renderer knows handlers are ready
+            // (The renderer's createBridgePipe will see this as IPC data,
+            // but the HRPC protocol ignores unknown frames gracefully)
+          }
+        }
+        worker.stdout.on('data', onStdout)
+        setTimeout(() => worker.stdout.removeListener('data', onStdout), 15000)
+
+        // Pipe: worker IPC → WebSocket → renderer
+        worker.on('data', (d: Buffer) => {
+          if (ws.readyState === 1) ws.sendBinary(d)
+        })
+      },
+      message(ws, message) {
+        // Pipe: renderer → WebSocket → worker IPC
+        const specifier = BACKEND_WORKER
+        const worker = workers.get(specifier)
+        if (worker) {
+          const buf = message instanceof ArrayBuffer
+            ? Buffer.from(message)
+            : Buffer.from(message as Uint8Array)
+          worker.write(buf)
+        }
+      },
+      close() {
+        console.log('[main] IPC WebSocket closed')
+        activeWs = null
+      },
+    },
+  })
+
+  ipcWsPort = server.port
+  console.log('[main] IPC WebSocket on ws://127.0.0.1:' + ipcWsPort)
+  return ipcWsPort
+}
+
+// ── Electrobun RPC (minimal — just for view lifecycle) ──────────────────
 const appRPC = BrowserView.defineRPC<PearTubeRPC>({
   maxRequestTime: 30000,
   handlers: {
     requests: {
-      startWorker: async ({ specifier }) => {
-        try {
-          getWorker(specifier)
-          return { ok: true }
-        } catch (e: any) {
-          console.error('[main] startWorker failed:', e.message)
-          return { ok: false }
-        }
+      startWorker: async () => {
+        // Worker is started when WebSocket connects — just return the WS port
+        return { ok: true }
       },
       viewReady: async () => {
         rendererReady = true
-        console.log('[main] Renderer ready, blobServerPort:', blobServerPort)
         return { blobServerPort }
       },
     },
     messages: {
-      workerWrite: ({ specifier, data }) => {
-        const worker = workers.get(specifier)
-        if (worker) {
-          worker.write(Buffer.from(data))
-        }
+      workerWrite: () => {
+        // No longer used — binary data goes through WebSocket
       },
     },
   },
 })
-
-// ── Send to Renderer ────────────────────────────────────────────────────
-function sendToRenderer(method: string, data: any) {
-  if (!mainWindow || !rendererReady) return
-  const view = mainWindow.webview
-  if (view?.rpc?.send?.[method]) {
-    view.rpc.send[method](data)
-  }
-}
 
 // ── Static File Server ──────────────────────────────────────────────────
 // Expo Router reads window.location.pathname to determine the route.
@@ -184,6 +222,14 @@ async function startStaticServer() {
     hostname: '127.0.0.1',
     fetch(req) {
       const url = new URL(req.url)
+
+      // IPC port discovery endpoint
+      if (url.pathname === '/__peartube_ipc_port') {
+        return new Response(JSON.stringify({ port: ipcWsPort }), {
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+
       let filePath = join(viewsDir, decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname))
 
       const file = Bun.file(filePath)
@@ -213,6 +259,7 @@ async function startStaticServer() {
 // ── Create Window ───────────────────────────────────────────────────────
 async function createWindow() {
   await startStaticServer()
+  startIPCWebSocket()
 
   mainWindow = new BrowserWindow({
     title: APP_NAME,

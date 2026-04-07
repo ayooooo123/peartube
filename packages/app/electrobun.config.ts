@@ -5,6 +5,7 @@ export default {
     version: '0.1.0',
   },
   build: {
+    bunVersion: '1.3.11',
     bun: {
       entrypoint: 'src/bun/index.ts',
     },

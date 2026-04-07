@@ -652,7 +652,7 @@ export function createApi({
             const id = extractVideoId(video)
             let availability = 'unknown'
             if (id && availabilityById.has(id)) {
-              availability = availabilityById.get(id) === 'playable' ? 'playable' : 'unavailable'
+              availability = availabilityById.get(id)
             } else if (!id) {
               availability = 'unavailable'
             }

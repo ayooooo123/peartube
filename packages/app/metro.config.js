@@ -71,6 +71,9 @@ config.resolver.extraNodeModules = {
   '@peartube/spec/messages': path.resolve(specRoot, 'spec/hrpc/messages.js'),
   '@peartube/spec/schema': path.resolve(specRoot, 'spec/schema/index.js'),
   'react': path.resolve(projectRoot, 'node_modules/react'),
+  // Browser polyfill for Node's events module — bare-events is native-only
+  // and resolves to an empty stub on web, crashing streamx/protomux/HRPC.
+  'events': path.resolve(projectRoot, 'node_modules/events'),
 }
 
 // Ensure web export never bundles native React Native.

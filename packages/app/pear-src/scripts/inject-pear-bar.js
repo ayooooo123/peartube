@@ -17,12 +17,24 @@ const PEAR_BAR_HTML = `<div id="pear-bar" style="background-color:#0e0e10;-webki
 // CSS to position #root below the pear-bar title bar (52px for macOS traffic lights)
 const PEAR_BAR_CSS = `<style id="pear-bar-css">html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0e0e10!important;}#root{position:fixed!important;top:52px!important;left:0!important;right:0!important;bottom:0!important;overflow:hidden;display:flex;flex-direction:column;}</style>`
 
-// CSP meta tag — allows pear: and peartube-app: protocols
-const PEAR_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' pear: peartube-app: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' pear: peartube-app:; style-src 'self' 'unsafe-inline'; connect-src 'self' pear: peartube-app: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*;">`
+// CSP meta tag — allows pear:, peartube-app:, and views: protocols
+const PEAR_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'self' pear: peartube-app: views: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' pear: peartube-app: views:; style-src 'self' 'unsafe-inline'; connect-src 'self' pear: peartube-app: views: http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; media-src 'self' blob: http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*;">`
 
 // Worker client script - ES module that has access to Pear's import resolution
 const WORKER_CLIENT_SCRIPT = `<script type="module" src="./worker-client.js"></script>`
+// Electrobun view entrypoint — sets up window.bridge via Electrobun RPC
+const ELECTROBUN_VIEW_SCRIPT = `<script src="views://app/index.js"></script>`
 const EXPO_ENTRY_SCRIPT_PATTERN = /<script[^>]*src="\.\/_expo\/static\/js\/web\/[^"]+"[^>]*><\/script>/
+
+// Node.js polyfills for modules that leak into the web bundle (streamx, bare-events, etc.)
+// These are needed because the Expo bundle includes some P2P code paths that depend on
+// Node.js builtins. In Electron these were available via Node integration; in Electrobun CEF
+// we need to provide minimal shims.
+const NODE_POLYFILLS_SHIM = `<script id="peartube-node-polyfills">(function(){
+if(typeof globalThis.process==='undefined'){globalThis.process={env:{},nextTick:function(fn){Promise.resolve().then(fn)},browser:true};}
+if(typeof globalThis.Buffer==='undefined'){globalThis.Buffer={isBuffer:function(){return false},from:function(a){return new Uint8Array(a)},alloc:function(n){return new Uint8Array(n)}};}
+if(typeof globalThis.global==='undefined'){globalThis.global=globalThis;}
+})();</script>`
 
 // React Native (Metro web) NativeModules shim.
 // Prevents "__fbBatchedBridgeConfig is not set" by providing a minimal `nativeModuleProxy`.
@@ -47,28 +59,39 @@ function processHtmlFile(filePath) {
   // Handle external module scripts (with src attribute)
   html = html.replace(/<script type="module"(\s+src="[^"]*")>/g, '<script$1>')
 
-  // Convert relative paths to absolute for HTTP-based serving (Electron static server).
-  // Electrobun's views:// protocol resolves relative paths correctly, so skip this
-  // when PEARTUBE_ABSOLUTE_PATHS=false.
-  if (process.env.PEARTUBE_ABSOLUTE_PATHS !== 'false') {
+  // Normalize asset paths based on serving mode.
+  // Electrobun (views://) needs relative paths (./_expo/).
+  // Electron HTTP server needs absolute paths (/_expo/).
+  if (process.env.PEARTUBE_ABSOLUTE_PATHS === 'false') {
+    // Ensure relative paths for views:// protocol
+    html = html.replace(/href="\/_expo\//g, 'href="./_expo/')
+    html = html.replace(/src="\/_expo\//g, 'src="./_expo/')
+  } else {
+    // Ensure absolute paths for HTTP server
     html = html.replace(/href="\.\/_expo\//g, 'href="/_expo/')
     html = html.replace(/src="\.\/_expo\//g, 'src="/_expo/')
   }
 
-  // Inject CSP after <head>
-  html = html.replace('<head>', `<head>\n${PEAR_CSP}`)
+  // Inject CSP after <head> (skip for Electrobun — local app doesn't need CSP)
+  if (process.env.PEARTUBE_ABSOLUTE_PATHS !== 'false') {
+    html = html.replace('<head>', `<head>\n${PEAR_CSP}`)
+  }
 
   // Inject CSS before </head>
   html = html.replace('</head>', `${PEAR_BAR_CSS}\n</head>`)
 
   // Inject pear bar after <body>
-  html = html.replace('<body>', `<body>\n${PEAR_BAR_HTML}\n${RN_NATIVE_MODULE_PROXY_SHIM}`)
+  html = html.replace('<body>', `<body>\n${PEAR_BAR_HTML}\n${NODE_POLYFILLS_SHIM}\n${RN_NATIVE_MODULE_PROXY_SHIM}`)
 
-  // Worker-client.js is only needed for legacy pear run (uses pear-pipe bare imports
-  // that require pear-electron's module resolver). The Electron bridge path creates
-  // the protocol client inside the Metro bundle (rpc.web.ts) instead.
-  // Only inject if running under pear run (detected by absence of Electron bridge).
-  // For now, skip injection — Electron path handles RPC via window.bridge.
+  // Electrobun view entrypoint — inject before Expo bundle so window.bridge is ready.
+  // Always inject for desktop builds (both HTTP and views:// serving).
+  // Remove any previous injection first
+  html = html.replace(/<script[^>]*src="views:\/\/[^"]*index\.js"[^>]*><\/script>\n?/g, '')
+  // Inject before the Expo entry script
+  html = html.replace(
+    /(<script[^>]*src="[^"]*_expo\/static\/js\/web\/[^"]*"[^>]*><\/script>)/,
+    `${ELECTROBUN_VIEW_SCRIPT}\n$1`
+  )
 
   writeFileSync(filePath, html)
   console.log(`  Processed ${filePath}`)

@@ -52,6 +52,10 @@ function getWorker(specifier: string) {
     const stripped = specifier.replace(/^\/pear\/build\//, '/')
     workerPath = join(appCodeDir, stripped.replace(/^\//, ''))
   }
+  // Try .mjs extension (bare-build output)
+  if (!existsSync(workerPath)) {
+    workerPath = workerPath.replace(/\.js$/, '.mjs')
+  }
 
   console.log('[main] Spawning Bare worker:', workerPath, 'storage:', storagePath)
   const worker = PearRuntime.run(workerPath, [storagePath])
@@ -160,14 +164,62 @@ function sendToRenderer(method: string, data: any) {
   }
 }
 
+// ── Static File Server ──────────────────────────────────────────────────
+// Expo Router reads window.location.pathname to determine the route.
+// views://app/index.html gives pathname "/app/index.html" which doesn't match.
+// A local HTTP server gives a clean "/" pathname that Expo Router expects.
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css',
+  '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff': 'font/woff',
+  '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.map': 'application/json',
+}
+
+let staticPort = 0
+
+async function startStaticServer() {
+  const viewsDir = join(appCodeDir, 'views', 'app')
+  const server = Bun.serve({
+    port: 0, // auto-assign
+    hostname: '127.0.0.1',
+    fetch(req) {
+      const url = new URL(req.url)
+      let filePath = join(viewsDir, decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname))
+
+      const file = Bun.file(filePath)
+      if (!file.size) {
+        // SPA fallback: serve index.html for navigation routes
+        const ext = filePath.split('.').pop() || ''
+        if (!ext || ext === 'html') {
+          return new Response(Bun.file(join(viewsDir, 'index.html')), {
+            headers: { 'Content-Type': 'text/html' },
+          })
+        }
+        return new Response('Not found', { status: 404 })
+      }
+
+      const ext = '.' + (filePath.split('.').pop() || '')
+      return new Response(file, {
+        headers: { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' },
+      })
+    },
+  })
+
+  staticPort = server.port
+  console.log('[main] Static server on http://127.0.0.1:' + staticPort)
+  return staticPort
+}
+
 // ── Create Window ───────────────────────────────────────────────────────
-function createWindow() {
+async function createWindow() {
+  await startStaticServer()
+
   mainWindow = new BrowserWindow({
     title: APP_NAME,
-    url: 'views://app/index.html',
+    url: `http://127.0.0.1:${staticPort}`,
     frame: { width: 1280, height: 800 },
     titleBarStyle: 'hiddenInset',
-    renderer: 'cef',
+    renderer: 'native',
     rpc: appRPC,
   })
 

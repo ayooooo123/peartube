@@ -13,13 +13,9 @@ export default {
         entrypoint: 'src/view/index.ts',
       },
     },
-    copy: {
-      // Expo web export
-      'pear': 'views/app',
-      // Bare worker (compiled by desktop:worker script)
-      'pear/build/workers': 'workers',
-      // Node modules needed by the Bare worker at runtime
-      'pear/node_modules': 'node_modules',
+    copy: {},
+    mac: {
+      defaultRenderer: 'native',
     },
   },
 }

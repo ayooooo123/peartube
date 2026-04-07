@@ -499,7 +499,9 @@ B.preparePlayback = async (r: any) => api.preparePlayback(
 // Called when the renderer gets MEDIA_ERR_SRC_NOT_SUPPORTED (code 4).
 // Uses startCastTranscode which safely downloads to temp file before probing
 // (avoids segfault from probing directly via HTTP blob URL).
-B.webPreparePlayback = async (r: any) => {
+// Register via rpc.onWebPreparePlayback (not B.xxx) because B's setter
+// only handles methods known to the backend. webPreparePlayback is desktop-only.
+rpc.onWebPreparePlayback(async (r: any) => {
   const result = await api.preparePlayback(
     r.channelKey, r.videoId, r.publicBeeKey,
     r.blobId, r.blobsCoreKey, r.mimeType
@@ -549,7 +551,7 @@ B.webPreparePlayback = async (r: any) => {
     console.error('[Worker] Transcode error:', e?.message)
     return result
   }
-}
+})
 B.getVideoData = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey); return { video: v || { id: r.videoId, title: 'Unknown' } } }
 B.getVideoMetadata = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId); return { video: v || { id: r.videoId, title: 'Unknown' } } }
 B.downloadVideo = async (r: any) => { try { const res = await api.getVideoUrl(r.channelKey, r.videoId, r.publicBeeKey); if (!res?.url) return { success: false, error: 'Failed to get URL' }; const meta = await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey); let size = 0; if (meta?.blobId) { const p = meta.blobId.split(':').map(Number); if (p.length === 4) size = p[3] } return { success: true, filePath: res.url, size: size || meta?.size || 0 } } catch (e: any) { return { success: false, error: e?.message } } }

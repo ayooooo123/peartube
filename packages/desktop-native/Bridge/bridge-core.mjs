@@ -247,11 +247,12 @@ function videoToRecord(source, meta, video, section) {
 }
 
 function isVideoViewable(video, source, identityChannelKeys) {
-  // Own channel videos are always viewable
   if (identityChannelKeys.has(source.channelKey)) return true
   if (source.sourceKind === 'identity') return true
-  // Remote videos must have availability === 'playable'
-  return video?.availability === 'playable'
+  // Only hide videos explicitly marked unavailable. Videos with unknown
+  // or missing availability haven't been probed yet — show them and let
+  // playback attempt resolve whether they're reachable.
+  return video?.availability !== 'unavailable'
 }
 
 async function resolveSectionRecords(section, sources, config, fetchChannelData, identityChannelKeys) {

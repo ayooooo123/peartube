@@ -535,10 +535,10 @@ async function loadBrowseSnapshot(state) {
   if (!client) throw new Error('Host client is not ready')
 
   const [feedResult, subscriptionsResult, identitiesResult, publishResult] = await Promise.all([
-    withTimeout(() => client.feed.getPublicFeed({}), { entries: [] }, 5000),
-    withTimeout(() => client.feed.getSubscriptions({}), { subscriptions: [] }, 5000),
-    withTimeout(() => client.identity.getIdentities({}), { identities: [] }, 5000),
-    withTimeout(() => client.feed.isChannelPublished({}), { published: false }, 5000),
+    withTimeout(() => client.feed.getPublicFeed({}), { entries: [] }),
+    withTimeout(() => client.feed.getSubscriptions({}), { subscriptions: [] }),
+    withTimeout(() => client.identity.getIdentities({}), { identities: [] }),
+    withTimeout(() => client.feed.isChannelPublished({}), { published: false }),
   ])
 
   const fetchChannelData = createChannelDataFetcher(client)
@@ -595,7 +595,7 @@ function createChannelDataFetcher(client) {
             videoId: videoRef,
           }),
           { video: null },
-          5000
+          3000
         ).then((response) => response?.video || response || null)
       )
     }
@@ -613,13 +613,13 @@ function createChannelDataFetcher(client) {
       withTimeout(() => client.channel.getChannelMeta({
         channelKey: source.channelKey,
         publicBeeKey: source.publicBeeKey || undefined,
-      }), {}, 5000),
+      }), {}),
       withTimeout(() => client.video.listVideos({
         channelKey: source.channelKey,
         publicBeeKey: source.publicBeeKey || undefined,
         limit,
         offset,
-      }), { videos: [] }, 8000),
+      }), { videos: [] }),
     ]).then(async ([channelMeta, videosResult]) => {
       const listedVideos = listFromResponse(videosResult, 'videos')
       const videos = await Promise.all(listedVideos.map(async (video) => {

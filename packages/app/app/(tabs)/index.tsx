@@ -306,10 +306,10 @@ export default function HomeScreen() {
     // Only merge in fresher results; do not blank the whole feed on every cycle.
 
     // Smaller initial tranche for fast first paint, then background-fill more.
-    const PER_CHANNEL_TIMEOUT = hydrationMode === 'network' ? 4000 : 4000
-    const FIRST_PASS_ATTEMPT_TIMEOUT = hydrationMode === 'network' ? 1200 : 3000
-    const LATER_PASS_ATTEMPT_TIMEOUT = hydrationMode === 'network' ? 1800 : 3000
-    const FIRST_PASS_ATTEMPTS = hydrationMode === 'network' ? 2 : 2
+    const PER_CHANNEL_TIMEOUT = hydrationMode === 'network' ? 4000 : 1500
+    const FIRST_PASS_ATTEMPT_TIMEOUT = hydrationMode === 'network' ? 1200 : 900
+    const LATER_PASS_ATTEMPT_TIMEOUT = hydrationMode === 'network' ? 1800 : 1200
+    const FIRST_PASS_ATTEMPTS = hydrationMode === 'network' ? 2 : 1
     const LATER_PASS_ATTEMPTS = hydrationMode === 'network' ? 1 : 1
     const LIST_RETRY_DELAY_MS = 500
     const entries = getFeedVideoLoadEntries(feedEntries, 15)

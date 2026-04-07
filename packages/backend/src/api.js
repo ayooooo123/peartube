@@ -1464,20 +1464,17 @@ export function createApi({
       const rawFeed = publicFeed.getFeed();
       const feed = rawFeed
         .map((entry) => {
-          const peerCount = entry?.peerCount || 0
-          const source = entry?.source || 'peer'
-          const canRenderPreviewVideos = source === 'local' || peerCount > 0
           return {
             driveKey: entry?.driveKey || entry?.channelKey || '',
             channelKey: entry?.channelKey || entry?.driveKey || '',
-            source,
+            source: entry?.source || 'peer',
             publicBeeKey: entry?.publicBeeKey || null,
             channelName: entry?.channelName || null,
             videoCount: entry?.videoCount || 0,
-            peerCount,
+            peerCount: entry?.peerCount || 0,
             lastSeen: entry?.lastSeen || entry?.addedAt || 0,
-            manifestUpdatedAt: canRenderPreviewVideos ? (entry?.manifestUpdatedAt || 0) : 0,
-            previewVideos: canRenderPreviewVideos && Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
+            manifestUpdatedAt: entry?.manifestUpdatedAt || 0,
+            previewVideos: Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
           }
         })
         .filter((entry) => typeof entry.channelKey === 'string' && entry.channelKey.length > 0)

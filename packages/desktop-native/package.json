@@ -9,6 +9,7 @@
     "ensure:barekit-corestore": "node ./scripts/ensure-barekit-corestore-bundle.mjs",
     "ensure:bare-runtime": "node ./scripts/ensure-bare-runtime-binary.mjs",
     "ensure:host-sidecar": "node ./scripts/ensure-host-sidecar-bundle.mjs",
+    "build:native-sidecar": "node ./scripts/build-native-sidecar.mjs",
     "ensure:host-worklet": "node ./scripts/ensure-host-worklet-bundle.mjs",
     "ensure:host-worklet-frameworks": "node ./scripts/ensure-host-sidecar-frameworks.mjs",
     "ensure:bare-mpv-prebuilds": "node ./scripts/ensure-bare-mpv-prebuilds.mjs",

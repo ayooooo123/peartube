@@ -397,82 +397,6 @@ declare const Pear: any
 declare const Bare: { argv: string[]; IPC: any } | undefined
 console.log('[Worker] PearTube Desktop Worker starting...')
 
-// ── Direct WebSocket server for browser → worker IPC ────────────────────
-// Eliminates the Bun relay. The browser connects directly to this WebSocket.
-// Binary HRPC frames flow untouched.
-let wsServerPort = 0
-async function startWorkerWebSocket(): Promise<{ port: number; stream: any }> {
-  const http = require('bare-http1')
-  const { WebSocketServer } = require('bare-ws')
-
-  return new Promise((resolve) => {
-    const httpServer = http.createServer()
-    const wss = new WebSocketServer({ server: httpServer })
-
-    wss.on('connection', (ws: any) => {
-      console.log('[Worker] Direct WebSocket connected from browser')
-
-      // Create a duplex-like stream from the WebSocket that HRPC can use
-      const listeners = new Map<string, Array<(...args: any[]) => void>>()
-      let destroyed = false
-
-      const wsStream: any = {
-        write(data: any) {
-          if (destroyed || ws.readyState !== 1) return false
-          try { ws.send(data) } catch {}
-          return true
-        },
-        on(event: string, cb: (...args: any[]) => void) {
-          if (!listeners.has(event)) listeners.set(event, [])
-          listeners.get(event)!.push(cb)
-          return wsStream
-        },
-        removeListener(event: string, cb: (...args: any[]) => void) {
-          const cbs = listeners.get(event)
-          if (cbs) { const idx = cbs.indexOf(cb); if (idx !== -1) cbs.splice(idx, 1) }
-          return wsStream
-        },
-        emit(event: string, ...args: any[]) {
-          const cbs = listeners.get(event)
-          if (cbs) for (const cb of [...cbs]) cb(...args)
-        },
-        destroy() {
-          if (destroyed) return
-          destroyed = true
-          wsStream.emit('end')
-          wsStream.emit('close')
-          listeners.clear()
-          try { ws.close() } catch {}
-        },
-        pause() {},
-        resume() {},
-        get destroyed() { return destroyed },
-        get writable() { return !destroyed },
-        get readable() { return !destroyed },
-      }
-
-      ws.on('message', (data: any) => {
-        if (!destroyed) wsStream.emit('data', data)
-      })
-      ws.on('close', () => {
-        if (!destroyed) wsStream.destroy()
-      })
-      ws.on('error', (err: any) => {
-        console.error('[Worker] WebSocket error:', err?.message)
-        if (!destroyed) wsStream.destroy()
-      })
-
-      resolve({ port: wsServerPort, stream: wsStream })
-    })
-
-    httpServer.listen(0, '127.0.0.1', () => {
-      wsServerPort = httpServer.address().port
-      // Print port so Bun can read it and pass to the renderer
-      console.log(`[Worker] PEARTUBE_WS_PORT=${wsServerPort}`)
-    })
-  })
-}
-
 // Storage: Bare.argv[2] (from pear.run()), then Pear.config, then default
 const bareArgv = (typeof Bare !== 'undefined' && Array.isArray(Bare.argv)) ? Bare.argv : []
 const runtimeStorage = bareArgv[2] || null
@@ -486,42 +410,10 @@ console.log('[Worker] Storage:', storage)
 const workerBaseDir = runtimeStorage || ((typeof Pear !== 'undefined' && typeof Pear?.config?.dir === 'string' && Pear.config.dir.trim()) ? Pear.config.dir : os.cwd())
 ;(globalThis as any).__PEARTUBE_HYPERCORE_WORKER_PATH__ = path.join(workerBaseDir || '.', 'build/workers/hypercore-reader-worker.mjs')
 
-// Transport selection:
-// 1. Start WebSocket server for direct browser connection (no Bun relay)
-// 2. Fall back to Bare.IPC / pear-pipe for legacy paths
-let ipcPipe: any
-
-// Try direct WebSocket first (Electrobun desktop path)
-let wsResult: { port: number; stream: any } | null = null
-try {
-  // Start the WS server — it resolves when a browser connects
-  const wsPromise = startWorkerWebSocket()
-
-  // Also set up legacy IPC in case WS doesn't connect
-  const bareIPC = (typeof Bare !== 'undefined' && (Bare as any).IPC) ? (Bare as any).IPC : null
-  const injectedPipe = (globalThis as any).__PEARTUBE_HRPC_PIPE__ as any
-  const legacyPipe = bareIPC || injectedPipe || pipe()
-
-  // Race: first browser WebSocket connection vs 15s timeout (falls back to IPC)
-  wsResult = await Promise.race([
-    wsPromise,
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), 15000))
-  ])
-
-  if (wsResult) {
-    console.log('[Worker] Using direct WebSocket transport (no relay)')
-    ipcPipe = wsResult.stream
-  } else {
-    console.log('[Worker] WebSocket timeout, falling back to IPC pipe')
-    ipcPipe = legacyPipe
-  }
-} catch {
-  const bareIPC = (typeof Bare !== 'undefined' && (Bare as any).IPC) ? (Bare as any).IPC : null
-  const injectedPipe = (globalThis as any).__PEARTUBE_HRPC_PIPE__ as any
-  ipcPipe = bareIPC || injectedPipe || pipe()
-  console.log('[Worker] WebSocket failed, using IPC pipe')
-}
-
+// Transport: Bare.IPC (pear-runtime sidecar), then injected pipe, then pear-pipe
+const bareIPC = (typeof Bare !== 'undefined' && (Bare as any).IPC) ? (Bare as any).IPC : null
+const injectedPipe = (globalThis as any).__PEARTUBE_HRPC_PIPE__ as any
+const ipcPipe = bareIPC || injectedPipe || pipe()
 if (!ipcPipe) throw new Error('No IPC pipe')
 
 let rpc: any

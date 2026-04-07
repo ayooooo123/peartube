@@ -19,7 +19,6 @@ const APP_NAME = 'PearTube'
 let mainWindow: any = null
 let rendererReady = false
 let blobServerPort: number | null = null
-let workerWsPort: number = 0  // Direct WebSocket port from the Bare worker
 
 // ── Worker State ────────────────────────────────────────────────────────
 const workers = new Map<string, any>()
@@ -67,9 +66,6 @@ function getWorker(specifier: string) {
       // Detect blob server port from worker output
       const portMatch = text.match(/blobServerPort:\s*(\d+)/)
       if (portMatch) blobServerPort = parseInt(portMatch[1], 10)
-      // Detect direct WebSocket port from worker output
-      const wsMatch = text.match(/PEARTUBE_WS_PORT=(\d+)/)
-      if (wsMatch) workerWsPort = parseInt(wsMatch[1], 10)
     }
   })
 
@@ -113,30 +109,48 @@ function destroyAllWorkers() {
   }
 }
 
-// ── Worker spawning ─────────────────────────────────────────────────────
-// The Bare worker runs its own WebSocket server. The browser connects
-// directly to the worker — no data flows through Bun. Bun just spawns
-// the worker and reads the WS port from stdout.
+// ── IPC WebSocket Relay ─────────────────────────────────────────────────
+// Binary pipe between renderer and worker. Bun relays WebSocket frames
+// to/from the Bare worker's IPC stream. No JSON serialization.
 const BACKEND_WORKER = '/pear/build/workers/core/index.js'
-let ipcWsPort = 0  // fallback, unused with direct WS
+let ipcWsPort = 0
 
-async function spawnWorkerAndGetPort(): Promise<number> {
-  const worker = getWorker(BACKEND_WORKER)
+function startIPCWebSocket() {
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(req, server) {
+      if (server.upgrade(req)) return
+      return new Response('WebSocket only', { status: 426 })
+    },
+    websocket: {
+      open(ws) {
+        console.log('[main] IPC WebSocket connected')
+        const worker = getWorker(BACKEND_WORKER)
 
-  // Wait for the worker to print its WebSocket port
-  return new Promise<number>((resolve) => {
-    const onData = (d: Buffer) => {
-      const text = d.toString()
-      const match = text.match(/PEARTUBE_WS_PORT=(\d+)/)
-      if (match) {
-        worker.stdout.removeListener('data', onData)
-        resolve(parseInt(match[1], 10))
-      }
-    }
-    worker.stdout.on('data', onData)
-    // Timeout: fall back to 0 (renderer will fail gracefully)
-    setTimeout(() => { worker.stdout.removeListener('data', onData); resolve(0) }, 15000)
+        // Pipe: worker IPC → WebSocket → renderer
+        worker.on('data', (d: Buffer) => {
+          if (ws.readyState === 1) ws.sendBinary(d)
+        })
+      },
+      message(ws, message) {
+        // Pipe: renderer → WebSocket → worker IPC
+        const worker = workers.get(BACKEND_WORKER)
+        if (worker) {
+          const buf = message instanceof ArrayBuffer
+            ? Buffer.from(message)
+            : Buffer.from(message as Uint8Array)
+          worker.write(buf)
+        }
+      },
+      close() {
+        console.log('[main] IPC WebSocket closed')
+      },
+    },
   })
+
+  ipcWsPort = server.port
+  console.log('[main] IPC WebSocket on ws://127.0.0.1:' + ipcWsPort)
 }
 
 // ── Electrobun RPC (minimal — just for view lifecycle) ──────────────────
@@ -179,21 +193,12 @@ async function startStaticServer() {
   const server = Bun.serve({
     port: 0, // auto-assign
     hostname: '127.0.0.1',
-    async fetch(req) {
+    fetch(req) {
       const url = new URL(req.url)
 
-      // IPC port discovery — returns the worker's direct WebSocket port
-      // Waits up to 15s for the worker to start its WS server
+      // IPC port discovery — returns the Bun WebSocket relay port
       if (url.pathname === '/__peartube_ipc_port') {
-        let port = workerWsPort
-        if (!port) {
-          // Worker hasn't printed its WS port yet — poll until it does
-          for (let i = 0; i < 150 && !workerWsPort; i++) {
-            await new Promise(r => setTimeout(r, 100))
-          }
-          port = workerWsPort
-        }
-        return new Response(JSON.stringify({ port }), {
+        return new Response(JSON.stringify({ port: ipcWsPort }), {
           headers: { 'Content-Type': 'application/json' },
         })
       }
@@ -227,10 +232,7 @@ async function startStaticServer() {
 // ── Create Window ───────────────────────────────────────────────────────
 async function createWindow() {
   await startStaticServer()
-  // Spawn the worker — it starts its own WebSocket server
-  // The renderer will discover the port via /__peartube_ipc_port
-  workerWsPort = await spawnWorkerAndGetPort()
-  console.log('[main] Worker direct WS port:', workerWsPort)
+  startIPCWebSocket()
 
   mainWindow = new BrowserWindow({
     title: APP_NAME,

@@ -527,7 +527,12 @@ B.webPreparePlayback = async (r: any) => {
 
   try {
     await transcoder.loadBareFfmpeg()
-    const probe = await transcoder.probeMedia(result.url)
+    console.log('[Worker] webPreparePlayback: probing', result.url?.substring(0, 80))
+    const probe = await Promise.race([
+      transcoder.probeMedia(result.url),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Probe timeout (30s)')), 30000))
+    ]) as any
+    console.log('[Worker] webPreparePlayback: probe result:', probe.audioCodec, probe.videoCodec, probe.container)
     transcoder.checkWebTranscodeNeeded(probe)
 
     if (!probe.needsAudioTranscode && !probe.needsVideoTranscode) {

@@ -1,13 +1,15 @@
 /**
- * Builds the native host sidecar as a standalone bare-native binary.
- * Replaces the bare-pack bundle + bare-runtime interpreter approach with
- * a single compiled executable that embeds the Bare runtime.
+ * Builds the native host sidecar as a .app bundle via bare-build.
+ * Native addons go into Frameworks/ inside the bundle and get codesigned
+ * with the app — no Gatekeeper issues.
  *
- * Output: Resources/Generated/peartube-host-sidecar (standalone Mach-O binary)
+ * Output: Resources/Generated/PearTubeHost.app
+ *
+ * The Swift app launches the .app's executable directly via Process().
  *
  * Usage:
  *   node scripts/build-native-sidecar.mjs
- *   PEARTUBE_SIDECAR_HOSTS=darwin-arm64,darwin-x64 node scripts/build-native-sidecar.mjs
+ *   PEARTUBE_SIDECAR_HOSTS=darwin-arm64 node scripts/build-native-sidecar.mjs
  */
 
 import fs from 'fs'
@@ -18,7 +20,8 @@ const packageRoot = path.resolve(import.meta.dirname, '..')
 const repoRoot = path.resolve(packageRoot, '..', '..')
 const entryFile = path.join(packageRoot, 'Bridge', 'native-host-sidecar.mjs')
 const outputDir = path.join(packageRoot, 'Resources', 'Generated')
-const outputName = 'peartube-host-sidecar'
+const appName = 'PearTubeHost'
+const identifier = 'com.peartube.host-sidecar'
 
 function getHosts() {
   if (process.env.PEARTUBE_SIDECAR_HOSTS) {
@@ -38,7 +41,7 @@ function findBareBuild() {
   for (const c of candidates) {
     if (fs.existsSync(c)) return c
   }
-  return 'bare-build' // hope it's in PATH
+  return 'bare-build'
 }
 
 function build() {
@@ -48,8 +51,8 @@ function build() {
   const bareBuild = findBareBuild()
 
   const args = [
-    '--standalone',
-    '--name', outputName,
+    '--name', appName,
+    '--identifier', identifier,
     '--out', outputDir,
   ]
 
@@ -59,9 +62,9 @@ function build() {
 
   args.push(entryFile)
 
-  console.log(`[build-native-sidecar] Building standalone sidecar for: ${hosts.join(', ')}`)
+  console.log(`[build-native-sidecar] Building .app bundle for: ${hosts.join(', ')}`)
   console.log(`[build-native-sidecar] Entry: ${entryFile}`)
-  console.log(`[build-native-sidecar] Output: ${outputDir}/${outputName}`)
+  console.log(`[build-native-sidecar] Output: ${outputDir}/${appName}.app`)
 
   const result = spawnSync(bareBuild, args, {
     cwd: repoRoot,
@@ -74,14 +77,15 @@ function build() {
     process.exit(result.status || 1)
   }
 
-  // Ad-hoc codesign so macOS Gatekeeper allows execution
+  // Ad-hoc codesign the .app bundle (signs all nested frameworks/addons)
   if (process.platform === 'darwin') {
-    const outputPath = path.join(outputDir, outputName)
-    const signResult = spawnSync('codesign', ['--force', '--sign', '-', outputPath], {
-      stdio: 'inherit',
-    })
+    const appPath = path.join(outputDir, `${appName}.app`)
+    const signResult = spawnSync('codesign', [
+      '--force', '--deep', '--sign', '-', appPath,
+    ], { stdio: 'inherit' })
+
     if (signResult.status === 0) {
-      console.log('[build-native-sidecar] Ad-hoc codesigned')
+      console.log('[build-native-sidecar] Ad-hoc codesigned .app bundle')
     } else {
       console.warn('[build-native-sidecar] codesign failed (non-fatal)')
     }

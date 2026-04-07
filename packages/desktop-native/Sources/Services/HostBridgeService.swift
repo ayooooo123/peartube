@@ -1976,10 +1976,10 @@ final class HostBridgeService {
   }
 
   private func ensureSidecarBridgeRunning() throws {
-    // bare-native standalone binary is available via `npm run build:native-sidecar`
-    // but currently blocked by Gatekeeper (self-extracted addons aren't codesigned).
-    // Fall back to bare-runtime + bundle for now.
-    let (runtimeURL, bundleURL): (URL, URL?) = (try resolveBareRuntimeURL(), try resolveSidecarBundleURL())
+    // Prefer bare-native .app bundle (addons in Frameworks/, properly codesigned)
+    let (runtimeURL, bundleURL) = resolveNativeSidecarBinary()
+      .map { ($0, nil as URL?) }
+      ?? (try resolveBareRuntimeURL(), try resolveSidecarBundleURL() as URL?)
     let sessionSink = WorkletSessionSink()
     let rpcChannel = makeRPCChannel(
       logPrefix: "Native host sidecar"
@@ -3113,9 +3113,17 @@ final class HostBridgeService {
     )
   }
 
-  /// Look for a standalone bare-native compiled sidecar binary.
-  /// Returns nil if not found (falls back to bare-runtime + bundle).
+  /// Look for a bare-native compiled sidecar .app bundle.
+  /// Returns the executable URL inside the .app, or nil if not found.
   private func resolveNativeSidecarBinary(fileManager: FileManager = .default) -> URL? {
+    let appName = "PearTubeHost.app"
+    let executablePath = "Contents/MacOS/PearTubeHost"
+
+    func executableInApp(_ appURL: URL) -> URL? {
+      let execURL = appURL.appendingPathComponent(executablePath)
+      return fileManager.fileExists(atPath: execURL.path) ? execURL : nil
+    }
+
     let environment = ProcessInfo.processInfo.environment
     if let override = environment["PEARTUBE_NATIVE_SIDECAR_BINARY"], !override.isEmpty {
       let url = URL(fileURLWithPath: override)
@@ -3125,15 +3133,15 @@ final class HostBridgeService {
     if let resourceURL = Bundle.main.resourceURL {
       let bundled = resourceURL
         .appendingPathComponent("Generated", isDirectory: true)
-        .appendingPathComponent("peartube-host-sidecar")
-      if fileManager.fileExists(atPath: bundled.path) { return bundled }
+        .appendingPathComponent(appName, isDirectory: true)
+      if let exec = executableInApp(bundled) { return exec }
     }
 
     if let workspaceRoot = try? Self.workspaceRootURL() {
       let workspace = workspaceRoot
         .appendingPathComponent("packages/desktop-native/Resources/Generated", isDirectory: true)
-        .appendingPathComponent("peartube-host-sidecar")
-      if fileManager.fileExists(atPath: workspace.path) { return workspace }
+        .appendingPathComponent(appName, isDirectory: true)
+      if let exec = executableInApp(workspace) { return exec }
     }
 
     return nil

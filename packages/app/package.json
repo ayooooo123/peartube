@@ -27,7 +27,7 @@
     "desktop:build": "npm run desktop:export && npm run desktop:merge && npm run desktop:copy && npm run desktop:install && npm run desktop:worker && npm run desktop:inject",
     "desktop:start": "build/dev-macos-arm64/PearTube-dev.app/Contents/MacOS/launcher",
     "desktop:ebuild": "electrobun build && npm run desktop:ecopy",
-    "desktop:ecopy": "rsync -a pear/_expo pear/assets pear/index.html pear/favicon.ico build/dev-macos-arm64/PearTube-dev.app/Contents/Resources/app/views/app/ && rsync -a pear/build/workers/core/index.mjs build/dev-macos-arm64/PearTube-dev.app/Contents/Resources/app/workers/core/ && rsync -aL pear/node_modules/ build/dev-macos-arm64/PearTube-dev.app/Contents/Resources/app/node_modules/",
+    "desktop:ecopy": "rsync -a pear/_expo pear/assets pear/index.html pear/favicon.ico build/dev-macos-arm64/PearTube-dev.app/Contents/Resources/app/views/app/ && rsync -a pear/build/workers/core/index.mjs build/dev-macos-arm64/PearTube-dev.app/Contents/Resources/app/workers/core/ && rsync -a --copy-dirlinks pear/node_modules/ build/dev-macos-arm64/PearTube-dev.app/Contents/Resources/app/node_modules/",
     "desktop:dev": "npm run desktop:build && npm run desktop:ebuild && npm run desktop:start",
     "desktop:stage": "npm run desktop:build && cd pear && pear stage .",
     "desktop:release": "npm run desktop:build && cd pear && pear release",

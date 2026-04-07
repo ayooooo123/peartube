@@ -99,9 +99,11 @@ if (metroResolve && process.env.PEARTUBE_WEB_EXPORT === '1') {
 const escapeForRegex = value => value.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')
 const rootSpecPath = path.resolve(monorepoRoot, 'node_modules/@peartube/spec')
 const pearBuildPath = path.resolve(projectRoot, 'pear')
+const electrobunBuildPath = path.resolve(projectRoot, 'build')
 config.resolver.blockList = [
   new RegExp(`${escapeForRegex(rootSpecPath)}\\/.*`),
   new RegExp(`${escapeForRegex(pearBuildPath)}\\/.*`),
+  new RegExp(`${escapeForRegex(electrobunBuildPath)}\\/.*`),
 ]
 
 // Add .bundle.js extension to source extensions so Metro can resolve it

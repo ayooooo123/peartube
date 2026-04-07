@@ -74,6 +74,19 @@ function build() {
     process.exit(result.status || 1)
   }
 
+  // Ad-hoc codesign so macOS Gatekeeper allows execution
+  if (process.platform === 'darwin') {
+    const outputPath = path.join(outputDir, outputName)
+    const signResult = spawnSync('codesign', ['--force', '--sign', '-', outputPath], {
+      stdio: 'inherit',
+    })
+    if (signResult.status === 0) {
+      console.log('[build-native-sidecar] Ad-hoc codesigned')
+    } else {
+      console.warn('[build-native-sidecar] codesign failed (non-fatal)')
+    }
+  }
+
   console.log('[build-native-sidecar] Done')
 }
 

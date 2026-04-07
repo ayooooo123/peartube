@@ -1976,10 +1976,10 @@ final class HostBridgeService {
   }
 
   private func ensureSidecarBridgeRunning() throws {
-    // Prefer standalone bare-native binary (no separate runtime + bundle needed)
-    let (runtimeURL, bundleURL) = try resolveNativeSidecarBinary()
-      .map { ($0, nil as URL?) }
-      ?? (try resolveBareRuntimeURL(), try resolveSidecarBundleURL() as URL?)
+    // bare-native standalone binary is available via `npm run build:native-sidecar`
+    // but currently blocked by Gatekeeper (self-extracted addons aren't codesigned).
+    // Fall back to bare-runtime + bundle for now.
+    let (runtimeURL, bundleURL): (URL, URL?) = (try resolveBareRuntimeURL(), try resolveSidecarBundleURL())
     let sessionSink = WorkletSessionSink()
     let rpcChannel = makeRPCChannel(
       logPrefix: "Native host sidecar"

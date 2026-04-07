@@ -957,7 +957,13 @@ function WatchPageView({
                       console.log('[WatchPage] hrpc:', !!hrpc, 'webPreparePlayback:', typeof hrpc?.webPreparePlayback)
                       if (hrpc?.webPreparePlayback) {
                         console.log('[WatchPage] Calling webPreparePlayback...')
-                        const result = await hrpc.webPreparePlayback({ channelKey, videoId })
+                        let result: any
+                        try {
+                          result = await hrpc.webPreparePlayback({ channelKey, videoId })
+                        } catch (rpcErr: any) {
+                          console.error('[WatchPage] webPreparePlayback RPC error:', rpcErr?.message, rpcErr?.name, rpcErr?.code)
+                          throw rpcErr
+                        }
                         console.log('[WatchPage] Transcode result:', JSON.stringify(result))
                         if (result?.url && result?.transcoded) {
                           console.log('[WatchPage] Switching to transcoded HLS:', result.url)

@@ -21,7 +21,7 @@ const sourceRoots = [
   path.join(repoRoot, 'packages', 'app', 'backend'),
   path.join(repoRoot, 'packages', 'host'),
   path.join(repoRoot, 'packages', 'protocol', 'src'),
-  path.join(repoRoot, 'packages', 'backend', 'src'),
+  path.join(repoRoot, 'packages', 'backend'),
   path.join(repoRoot, 'packages', 'spec', 'spec'),
   path.join(repoRoot, 'packages', 'bare-mpv'),
   ...getSidecarAddonRoots(repoRoot),
@@ -131,19 +131,78 @@ function stageDirectory(tempRoot, sourcePath) {
 }
 
 function linkPackageNodeModules(tempRoot, packageName) {
-  const sourcePath = path.join(repoRoot, 'packages', packageName, 'node_modules')
-  const fallbackSourcePath = appNodeModulesPath
-  const resolvedSourcePath = fs.existsSync(sourcePath)
-    ? sourcePath
-    : fs.existsSync(fallbackSourcePath)
-      ? fallbackSourcePath
-      : null
-  if (!resolvedSourcePath) return
+  const realNmPath = path.join(repoRoot, 'packages', packageName, 'node_modules')
+  const targetNmPath = path.join(tempRoot, 'packages', packageName, 'node_modules')
 
-  linkDirectory(
-    resolvedSourcePath,
-    path.join(tempRoot, 'packages', packageName, 'node_modules')
-  )
+  // Skip if target already exists and is usable
+  try {
+    if (fs.existsSync(targetNmPath)) {
+      fs.readdirSync(targetNmPath)
+      return
+    }
+  } catch {
+    // broken symlink — remove it
+    try { fs.unlinkSync(targetNmPath) } catch {}
+  }
+
+  // Check the real node_modules is usable
+  let realNmUsable = false
+  try {
+    if (fs.existsSync(realNmPath)) {
+      fs.readdirSync(realNmPath)
+      realNmUsable = true
+    }
+  } catch {}
+
+  if (!realNmUsable) {
+    // Fall back to app node_modules
+    if (fs.existsSync(appNodeModulesPath)) {
+      linkDirectory(appNodeModulesPath, targetNmPath)
+    }
+    return
+  }
+
+  // Instead of symlinking the entire node_modules (which contains file:
+  // relative symlinks that escape the temp root), create the directory
+  // and symlink each entry individually. For @peartube/* packages, point
+  // to the temp root's staged copies instead of the real filesystem.
+  fs.mkdirSync(targetNmPath, { recursive: true })
+
+  for (const entry of fs.readdirSync(realNmPath, { withFileTypes: true })) {
+    const entrySource = path.join(realNmPath, entry.name)
+    const entryTarget = path.join(targetNmPath, entry.name)
+
+    if (entry.name === '@peartube') {
+      // Recreate the @peartube scope with links pointing into the temp root
+      fs.mkdirSync(entryTarget, { recursive: true })
+      for (const scopeEntry of fs.readdirSync(entrySource, { withFileTypes: true })) {
+        const stagedPkg = path.join(tempRoot, 'packages', scopeEntry.name)
+        const scopeTarget = path.join(entryTarget, scopeEntry.name)
+        if (fs.existsSync(stagedPkg)) {
+          linkDirectory(stagedPkg, scopeTarget)
+        } else {
+          // Not staged — link to the real resolved path
+          try {
+            const realPath = fs.realpathSync(path.join(entrySource, scopeEntry.name))
+            linkDirectory(realPath, scopeTarget)
+          } catch {}
+        }
+      }
+    } else {
+      linkDirectory(entrySource, entryTarget)
+    }
+  }
+}
+
+function stagePackageJson(tempRoot, packageName) {
+  const source = path.join(repoRoot, 'packages', packageName, 'package.json')
+  if (!fs.existsSync(source)) return
+  const targetDir = path.join(tempRoot, 'packages', packageName)
+  fs.mkdirSync(targetDir, { recursive: true })
+  const target = path.join(targetDir, 'package.json')
+  if (!fs.existsSync(target)) {
+    fs.copyFileSync(source, target)
+  }
 }
 
 function createTempBundleRoot() {
@@ -152,6 +211,13 @@ function createTempBundleRoot() {
   for (const sourcePath of sourceRoots) {
     stageDirectory(tempRoot, sourcePath)
   }
+
+  // Stage package.json files so bare-pack can resolve file: dependencies
+  stagePackageJson(tempRoot, 'backend')
+  stagePackageJson(tempRoot, 'host')
+  stagePackageJson(tempRoot, 'protocol')
+  stagePackageJson(tempRoot, 'spec')
+  stagePackageJson(tempRoot, 'app')
 
   linkDirectory(findNodeModulesRoot(), path.join(tempRoot, 'node_modules'))
   linkPackageNodeModules(tempRoot, 'backend')

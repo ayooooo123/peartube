@@ -945,17 +945,26 @@ function WatchPageView({
                   const code = err?.error?.code || err?.code
                   // Error code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED (unsupported codec like EAC3/DTS)
                   // Try transcoding the audio to AAC and retry with the HLS URL
-                  if (code === 4 && !transcodeAttemptedRef.current && rpc) {
+                  if (code === 4 && !transcodeAttemptedRef.current) {
                     transcodeAttemptedRef.current = true
                     setIsTranscoding(true)
                     try {
                       console.log('[WatchPage] Codec unsupported, trying transcode...')
-                      const result = await rpc.webPreparePlayback({ channelKey, videoId })
-                      if (result?.url && result?.transcoded) {
-                        console.log('[WatchPage] Transcode ready, switching to HLS:', result.url)
-                        setVideoUrl(result.url)
-                        setIsTranscoding(false)
-                        return
+                      // Call the raw HRPC instance directly — the platform wrapper
+                      // may not expose webPreparePlayback
+                      const platformRPC = await import('@peartube/platform/rpc')
+                      const hrpc = platformRPC.getHRPCInstance?.()
+                      if (hrpc?.webPreparePlayback) {
+                        const result = await hrpc.webPreparePlayback({ channelKey, videoId })
+                        if (result?.url && result?.transcoded) {
+                          console.log('[WatchPage] Transcode ready, switching to HLS:', result.url)
+                          setVideoUrl(result.url)
+                          setIsTranscoding(false)
+                          return
+                        }
+                        console.log('[WatchPage] Transcode returned:', result)
+                      } else {
+                        console.warn('[WatchPage] webPreparePlayback not available on HRPC')
                       }
                     } catch (e: any) {
                       console.error('[WatchPage] Transcode fallback failed:', e?.message)

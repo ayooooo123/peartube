@@ -535,12 +535,22 @@ B.webPreparePlayback = async (r: any) => {
     console.log('[Worker] webPreparePlayback: probe result:', probe.audioCodec, probe.videoCodec, probe.container)
     transcoder.checkWebTranscodeNeeded(probe)
 
-    if (!probe.needsAudioTranscode && !probe.needsVideoTranscode) {
-      // Codecs are web-compatible — use direct blob URL
+    // Also check container — MKV needs remux even if codecs are fine
+    const needsRemux = probe.container && (
+      probe.container.includes('matroska') || probe.container.includes('mkv')
+    )
+
+    if (!probe.needsAudioTranscode && !probe.needsVideoTranscode && !needsRemux) {
       return { ...result, audioCodec: probe.audioCodec, videoCodec: probe.videoCodec }
     }
 
-    console.log('[Worker] Web transcode needed:', probe.reason)
+    const reason = probe.needsAudioTranscode
+      ? `audio transcode: ${probe.reason}`
+      : needsRemux
+        ? `remux from ${probe.container} to MP4`
+        : probe.reason
+    console.log('[Worker] Web processing needed:', reason)
+
     const sourceKey = `web:${r.channelKey}:${r.videoId}`
     const transcode = await castTranscoder.startWebTranscode(result.url, {
       sourceKey,

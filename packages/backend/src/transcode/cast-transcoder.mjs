@@ -1279,22 +1279,28 @@ async function startWebTranscode(sourceUrl, options = {}) {
     const needsVideoTranscode = !!probeResult.needsVideoTranscode
     const needsAudioTranscode = !!probeResult.needsAudioTranscode
 
-    if (!needsVideoTranscode && !needsAudioTranscode) {
-      // No transcoding needed — shouldn't be called but handle gracefully
+    // Also check container — MKV needs remux even if codecs are web-compatible
+    const needsRemux = probeResult.container && (
+      probeResult.container.includes('matroska') || probeResult.container.includes('mkv')
+    )
+
+    if (!needsVideoTranscode && !needsAudioTranscode && !needsRemux) {
       session.status = 'complete'
       return { success: false, sessionId: session.id, reason: 'no-transcode-needed' }
     }
 
-    console.log('[WebTranscode] Starting:', needsVideoTranscode ? 'full' : 'audio-only', '|', probeResult.reason)
+    const mode = needsVideoTranscode ? 'full' : needsAudioTranscode ? 'audio-only' : 'remux'
+    console.log('[WebTranscode] Starting:', mode, '|', probeResult.reason || `container: ${probeResult.container}`)
 
     ;(async () => {
       try {
         if (needsVideoTranscode) {
-          // Full transcode (rare for web — only exotic video codecs)
           await runFullTranscodeCast(session, sourceUrl, { isVideoComplete })
-        } else {
-          // Audio-only transcode (common case: AC3/EAC3/DTS → AAC, video passthrough)
+        } else if (needsAudioTranscode) {
           await runVideoCopyAudioTranscode(session, sourceUrl, onProgress, { isVideoComplete })
+        } else {
+          // Remux only (MKV → MP4, no re-encoding)
+          await runRemuxCast(session, sourceUrl, onProgress, { isVideoComplete })
         }
       } catch (err) {
         if (session.cancelled) {

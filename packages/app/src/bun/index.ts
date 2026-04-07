@@ -181,7 +181,7 @@ async function startStaticServer() {
   const server = Bun.serve({
     port: 0, // auto-assign
     hostname: '127.0.0.1',
-    fetch(req) {
+    async fetch(req) {
       const url = new URL(req.url)
 
       // IPC port discovery — returns the worker's direct WebSocket port

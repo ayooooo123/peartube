@@ -12,9 +12,29 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { homedir, platform } from 'os'
 import { existsSync } from 'fs'
+import { execSync } from 'child_process'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const APP_NAME = 'PearTube'
+
+// ── Kill stale workers holding the Corestore lock ───────────────────────
+// If a previous session crashed or was force-killed, the bare-sidecar
+// may still hold the fd lock. Find and kill it on startup.
+function killStaleLocks() {
+  const corestorePath = join(homedir(), '.peartube', 'CORESTORE')
+  if (!existsSync(corestorePath)) return
+  try {
+    const pids = execSync(`lsof -t "${corestorePath}" 2>/dev/null`, { encoding: 'utf-8' }).trim()
+    if (!pids) return
+    for (const pidStr of pids.split('\n')) {
+      const pid = parseInt(pidStr, 10)
+      if (!pid || pid === process.pid) continue
+      console.log('[main] Killing stale worker holding Corestore lock: PID', pid)
+      try { process.kill(pid, 'SIGKILL') } catch {}
+    }
+  } catch {}
+}
+killStaleLocks()
 
 let mainWindow: any = null
 let rendererReady = false

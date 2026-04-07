@@ -943,31 +943,33 @@ function WatchPageView({
                 }}
                 onError={async (err: any) => {
                   const code = err?.error?.code || err?.code
+                  console.log('[WatchPage] Video error, code:', code, 'type:', typeof code, 'attempted:', transcodeAttemptedRef.current, 'err:', JSON.stringify(err))
                   // Error code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED (unsupported codec like EAC3/DTS)
                   // Try transcoding the audio to AAC and retry with the HLS URL
-                  if (code === 4 && !transcodeAttemptedRef.current) {
+                  if (code == 4 && !transcodeAttemptedRef.current) {
                     transcodeAttemptedRef.current = true
                     setIsTranscoding(true)
+                    console.log('[WatchPage] Codec unsupported (code 4), trying transcode...')
                     try {
-                      console.log('[WatchPage] Codec unsupported, trying transcode...')
-                      // Call the raw HRPC instance directly — the platform wrapper
-                      // may not expose webPreparePlayback
                       const platformRPC = await import('@peartube/platform/rpc')
+                      console.log('[WatchPage] platformRPC imported, getHRPCInstance:', typeof platformRPC.getHRPCInstance)
                       const hrpc = platformRPC.getHRPCInstance?.()
+                      console.log('[WatchPage] hrpc:', !!hrpc, 'webPreparePlayback:', typeof hrpc?.webPreparePlayback)
                       if (hrpc?.webPreparePlayback) {
+                        console.log('[WatchPage] Calling webPreparePlayback...')
                         const result = await hrpc.webPreparePlayback({ channelKey, videoId })
+                        console.log('[WatchPage] Transcode result:', JSON.stringify(result))
                         if (result?.url && result?.transcoded) {
-                          console.log('[WatchPage] Transcode ready, switching to HLS:', result.url)
+                          console.log('[WatchPage] Switching to transcoded HLS:', result.url)
                           setVideoUrl(result.url)
                           setIsTranscoding(false)
                           return
                         }
-                        console.log('[WatchPage] Transcode returned:', result)
                       } else {
-                        console.warn('[WatchPage] webPreparePlayback not available on HRPC')
+                        console.warn('[WatchPage] webPreparePlayback not available on HRPC instance')
                       }
                     } catch (e: any) {
-                      console.error('[WatchPage] Transcode fallback failed:', e?.message)
+                      console.error('[WatchPage] Transcode fallback failed:', e?.message, e?.stack)
                     }
                     setIsTranscoding(false)
                   }

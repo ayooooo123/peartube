@@ -525,12 +525,17 @@ rpc.onWebPreparePlayback(async (r: any) => {
       return { ...result, transcodeError: transcode.error }
     }
 
-    // Wait for first segment(s)
+    // Wait for enough segments to be ready for HLS playback.
+    // Need at least 3 segments for the playlist to be valid,
+    // and the playlist.m3u8 returns 503 until segments exist.
     console.log('[Worker] Waiting for transcode segments...')
     const waitStart = Date.now()
-    while (Date.now() - waitStart < 30000) {
+    while (Date.now() - waitStart < 60000) {
       const st = castTranscoder.getCastStatus(transcode.sessionId)
-      if (st?.fragmentCount >= 1 || st?.status === 'error') break
+      if (st?.status === 'error') break
+      if (st?.fragmentCount >= 3) break
+      // Also check if transcode is complete (short videos may finish before 3 segments)
+      if (st?.status === 'complete' && st?.fragmentCount >= 1) break
       await new Promise(resolve => setTimeout(resolve, 500))
     }
 

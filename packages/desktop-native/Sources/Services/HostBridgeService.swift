@@ -1977,9 +1977,15 @@ final class HostBridgeService {
 
   private func ensureSidecarBridgeRunning() throws {
     // Prefer bare-native .app bundle (addons in Frameworks/, properly codesigned)
-    let (runtimeURL, bundleURL) = resolveNativeSidecarBinary()
-      .map { ($0, nil as URL?) }
-      ?? (try resolveBareRuntimeURL(), try resolveSidecarBundleURL() as URL?)
+    let runtimeURL: URL
+    let bundleURL: URL?
+    if let nativeBinary = resolveNativeSidecarBinary() {
+      runtimeURL = nativeBinary
+      bundleURL = nil
+    } else {
+      runtimeURL = try resolveBareRuntimeURL()
+      bundleURL = try resolveSidecarBundleURL()
+    }
     let sessionSink = WorkletSessionSink()
     let rpcChannel = makeRPCChannel(
       logPrefix: "Native host sidecar"

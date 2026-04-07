@@ -911,8 +911,8 @@ B.eventCastDeviceLost = () => {}
 B.eventCastPlaybackState = () => {}
 B.eventCastTimeUpdate = () => {}
 B.eventTranscodeProgress = () => {}
-// Resume the stream now that all handlers are registered (sidecar mode)
-if (bareIPC && typeof ipcPipe.resume === 'function') {
+// Resume the stream now that all handlers are registered
+if (typeof ipcPipe.resume === 'function') {
   ipcPipe.resume()
 }
 rpc.eventReady({ blobServerPort: getBlobPort() })

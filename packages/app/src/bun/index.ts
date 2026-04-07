@@ -82,8 +82,6 @@ function getWorker(specifier: string) {
     console.log('[main] Worker exited:', specifier, 'code:', code)
     if (pid) workerPids.delete(pid)
     workers.delete(specifier)
-    // Close WebSocket to signal the renderer
-    if (activeWs) { try { activeWs.close() } catch {} }
   })
 
   worker.on('error', (e: Error) => {

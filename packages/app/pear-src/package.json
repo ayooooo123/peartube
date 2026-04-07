@@ -34,6 +34,7 @@
     "bare-media": "^2.5.0",
     "bare-http1": "^4.5.5",
     "bare-https": "^2.1.3",
+    "bare-ws": "^2.0.4",
     "bare-tcp": "^2.2.7",
     "bare-os": "^3.8.4",
     "bare-path": "^3.0.0",

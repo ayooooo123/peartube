@@ -943,9 +943,9 @@ function WatchPageView({
                 }}
                 onError={async (err: any) => {
                   const code = err?.error?.code || err?.code
-                  console.log('[WatchPage] Video error, code:', code, 'type:', typeof code, 'attempted:', transcodeAttemptedRef.current, 'err:', JSON.stringify(err))
-                  // Error code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED (unsupported codec like EAC3/DTS)
-                  // Try transcoding the audio to AAC and retry with the HLS URL
+                  console.log('[WatchPage] Video error, code:', code, 'err:', JSON.stringify(err))
+                  // Remux proxy handles MKV→MP4 transparently at the blob server level.
+                  // If the video still fails, it's a codec issue WebKit can't handle.
                   if (code == 4 && !transcodeAttemptedRef.current) {
                     transcodeAttemptedRef.current = true
                     setIsTranscoding(true)

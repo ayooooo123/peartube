@@ -503,6 +503,8 @@ export async function initializeStorage(config) {
       const { createRemuxProxy } = await import('./remux-proxy.js')
       const proxy = await createRemuxProxy(rawBlobPort)
       blobServerPort = proxy.port  // Clients use the proxy port
+      // Override the blob server's port so URL generation uses the proxy
+      blobServer.port = proxy.port
       console.log('[Storage] Remux proxy on port:', blobServerPort, '→ blob server:', rawBlobPort)
     } catch (proxyErr) {
       console.warn('[Storage] Remux proxy failed, using raw blob server:', proxyErr.message)

@@ -493,10 +493,21 @@ export async function initializeStorage(config) {
     console.log('[Storage] Starting blob server listen...');
     await appendDebugLine('[storage] blob server listen start')
     await blobServer.listen();
-    blobServerPort = blobServer.port;
+    const rawBlobPort = blobServer.port;
     globalBlobServer = blobServer;
-    console.log('[Storage] Blob server listening on port:', blobServerPort);
-    await appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
+    console.log('[Storage] Blob server listening on port:', rawBlobPort);
+    await appendDebugLine(`[storage] blob server listening port=${rawBlobPort}`)
+
+    // Start remux proxy — transparently remuxes MKV to MP4 for web playback
+    try {
+      const { createRemuxProxy } = await import('./remux-proxy.js')
+      const proxy = await createRemuxProxy(rawBlobPort)
+      blobServerPort = proxy.port  // Clients use the proxy port
+      console.log('[Storage] Remux proxy on port:', blobServerPort, '→ blob server:', rawBlobPort)
+    } catch (proxyErr) {
+      console.warn('[Storage] Remux proxy failed, using raw blob server:', proxyErr.message)
+      blobServerPort = rawBlobPort  // Fall back to raw blob server
+    }
   } catch (err) {
     console.error('[Storage] Failed to initialize blob server:', err.message);
     await appendDebugLine(`[storage] blob server init failed ${err?.message || String(err)}`)

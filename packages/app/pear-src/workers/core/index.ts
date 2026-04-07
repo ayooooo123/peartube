@@ -495,9 +495,10 @@ B.preparePlayback = async (r: any) => api.preparePlayback(
   r.mimeType
 )
 
-// Desktop: prepare playback with audio codec probe + transcode fallback.
-// If audio codec (AC3/EAC3/DTS) isn't web-compatible, starts a transcode
-// session and returns the HLS URL instead of the raw blob URL.
+// Desktop: transcode fallback for videos WebKit can't play (MKV, EAC3, DTS).
+// Called when the renderer gets MEDIA_ERR_SRC_NOT_SUPPORTED (code 4).
+// Uses startCastTranscode which safely downloads to temp file before probing
+// (avoids segfault from probing directly via HTTP blob URL).
 B.webPreparePlayback = async (r: any) => {
   const result = await api.preparePlayback(
     r.channelKey, r.videoId, r.publicBeeKey,
@@ -506,67 +507,46 @@ B.webPreparePlayback = async (r: any) => {
   if (!result?.url) return result
 
   try {
-    await transcoder.loadBareFfmpeg()
-    console.log('[Worker] webPreparePlayback: probing', result.url?.substring(0, 80))
-    const probe = await Promise.race([
-      transcoder.probeMedia(result.url),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Probe timeout (30s)')), 30000))
-    ]) as any
-    console.log('[Worker] webPreparePlayback: probe result:', probe.audioCodec, probe.videoCodec, probe.container)
-    transcoder.checkWebTranscodeNeeded(probe)
-
-    // Also check container — MKV needs remux even if codecs are fine
-    const needsRemux = probe.container && (
-      probe.container.includes('matroska') || probe.container.includes('mkv')
-    )
-
-    if (!probe.needsAudioTranscode && !probe.needsVideoTranscode && !needsRemux) {
-      return { ...result, audioCodec: probe.audioCodec, videoCodec: probe.videoCodec }
-    }
-
-    const reason = probe.needsAudioTranscode
-      ? `audio transcode: ${probe.reason}`
-      : needsRemux
-        ? `remux from ${probe.container} to MP4`
-        : probe.reason
-    console.log('[Worker] Web processing needed:', reason)
-
+    console.log('[Worker] webPreparePlayback: starting transcode for', result.url?.substring(0, 80))
     const sourceKey = `web:${r.channelKey}:${r.videoId}`
-    const transcode = await castTranscoder.startWebTranscode(result.url, {
+
+    // Use startCastTranscode — it downloads to a temp file first, then probes
+    // and decides: remux (fast) or full transcode. Much safer than probing
+    // the HTTP blob URL directly.
+    const transcode = await castTranscoder.startCastTranscode(result.url, {
       sourceKey,
       isVideoComplete: true,
     })
 
     if (!transcode.success) {
-      console.error('[Worker] Web transcode failed:', transcode.error)
-      // Fall back to raw URL — video may play without audio
-      return { ...result, audioCodec: probe.audioCodec, transcodeError: transcode.error }
+      console.error('[Worker] Transcode failed:', transcode.error)
+      return { ...result, transcodeError: transcode.error }
     }
 
-    // Wait for first segment(s) before returning HLS URL
+    // Wait for first segment(s)
+    console.log('[Worker] Waiting for transcode segments...')
     const waitStart = Date.now()
-    while (Date.now() - waitStart < 15000) {
+    while (Date.now() - waitStart < 30000) {
       const st = castTranscoder.getCastStatus(transcode.sessionId)
       if (st?.fragmentCount >= 1 || st?.status === 'error') break
-      await new Promise(resolve => setTimeout(resolve, 300))
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
+
+    const st = castTranscoder.getCastStatus(transcode.sessionId)
+    if (st?.status === 'error') {
+      console.error('[Worker] Transcode error:', st.error)
+      return { ...result, transcodeError: st.error }
     }
 
     const hlsUrl = castTranscoder.getCastHlsUrl(transcode.sessionId, '127.0.0.1')
     if (!hlsUrl) {
-      return { ...result, audioCodec: probe.audioCodec, transcodeError: 'No HLS URL' }
+      return { ...result, transcodeError: 'No HLS URL' }
     }
 
-    console.log('[Worker] Web transcode HLS ready:', hlsUrl)
-    return {
-      url: hlsUrl,
-      transcoded: true,
-      audioCodec: probe.audioCodec,
-      videoCodec: probe.videoCodec,
-      stats: result.stats,
-    }
+    console.log('[Worker] Transcode HLS ready:', hlsUrl)
+    return { url: hlsUrl, transcoded: true, stats: result.stats }
   } catch (e: any) {
-    console.error('[Worker] Web probe/transcode error:', e?.message)
-    // Fall back to raw URL
+    console.error('[Worker] Transcode error:', e?.message)
     return result
   }
 }

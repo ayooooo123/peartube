@@ -244,6 +244,10 @@ function WatchPageView({
   const playbackSession = useMemo(() => Date.now(), [channelKey, videoId])
   const [isActiveWatch, setIsActiveWatch] = useState(true)
   const [isPlaying, setIsPlaying] = useState(true)
+  const [isTranscoding, setIsTranscoding] = useState(false)
+  const transcodeAttemptedRef = useRef(false)
+  // Reset transcode state when video changes
+  useEffect(() => { transcodeAttemptedRef.current = false; setIsTranscoding(false) }, [channelKey, videoId])
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [showControls, setShowControls] = useState(false)
@@ -937,7 +941,29 @@ function WatchPageView({
                   if (data?.currentTime != null) setCurrentTime(data.currentTime / 1000)
                   if (data?.duration > 0) setDuration(data.duration / 1000)
                 }}
-                onError={(err: any) => setError(err?.message || err?.error?.errorString || String(err))}
+                onError={async (err: any) => {
+                  const code = err?.error?.code || err?.code
+                  // Error code 4 = MEDIA_ERR_SRC_NOT_SUPPORTED (unsupported codec like EAC3/DTS)
+                  // Try transcoding the audio to AAC and retry with the HLS URL
+                  if (code === 4 && !transcodeAttemptedRef.current && rpc) {
+                    transcodeAttemptedRef.current = true
+                    setIsTranscoding(true)
+                    try {
+                      console.log('[WatchPage] Codec unsupported, trying transcode...')
+                      const result = await rpc.webPreparePlayback({ channelKey, videoId })
+                      if (result?.url && result?.transcoded) {
+                        console.log('[WatchPage] Transcode ready, switching to HLS:', result.url)
+                        setVideoUrl(result.url)
+                        setIsTranscoding(false)
+                        return
+                      }
+                    } catch (e: any) {
+                      console.error('[WatchPage] Transcode fallback failed:', e?.message)
+                    }
+                    setIsTranscoding(false)
+                  }
+                  setError(err?.message || err?.error?.errorString || String(err))
+                }}
               />
             ) : (
               <div style={watchStyles.loadingOverlay}>

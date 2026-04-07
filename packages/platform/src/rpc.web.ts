@@ -323,6 +323,15 @@ export const rpc = {
     return ensureRPC().preparePlayback(req);
   },
 
+  async webPreparePlayback(req: { channelKey: string; videoId: string }): Promise<{ url: string; transcoded?: boolean; audioCodec?: string; transcodeError?: string }> {
+    const rpcInstance = ensureRPC();
+    if (typeof rpcInstance.webPreparePlayback === 'function') {
+      return rpcInstance.webPreparePlayback(req);
+    }
+    // Fallback to regular preparePlayback if webPreparePlayback not available
+    return rpcInstance.preparePlayback(req);
+  },
+
   async prefetchVideo(channelKeyOrReq: string | { channelKey: string; videoId: string; publicBeeKey?: string }, videoId?: string) {
     const req = typeof channelKeyOrReq === 'string'
       ? { channelKey: channelKeyOrReq, videoId: videoId! }

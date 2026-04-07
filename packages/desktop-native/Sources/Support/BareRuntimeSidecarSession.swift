@@ -15,7 +15,7 @@ final class BareRuntimeSidecarSession: NativeHostSession {
 
   init(
     runtimeURL: URL,
-    bundleURL: URL,
+    bundleURL: URL? = nil,
     environment: [String: String],
     onData: @escaping @Sendable (Data) -> Void,
     onLog: @escaping @Sendable (String) -> Void,
@@ -26,7 +26,7 @@ final class BareRuntimeSidecarSession: NativeHostSession {
     self.onClosed = onClosed
 
     process.executableURL = runtimeURL
-    process.arguments = [bundleURL.path]
+    process.arguments = bundleURL.map { [$0.path] } ?? []
     process.environment = environment
     process.standardInput = standardInputPipe
     process.standardOutput = standardOutputPipe
@@ -45,7 +45,11 @@ final class BareRuntimeSidecarSession: NativeHostSession {
     }
 
     try process.run()
-    onLog("Native host sidecar launched from \(runtimeURL.path) with bundle \(bundleURL.path).")
+    if let bundleURL {
+      onLog("Native host sidecar launched from \(runtimeURL.path) with bundle \(bundleURL.path).")
+    } else {
+      onLog("Native host sidecar launched as standalone binary: \(runtimeURL.path)")
+    }
   }
 
   func write(_ data: Data) {

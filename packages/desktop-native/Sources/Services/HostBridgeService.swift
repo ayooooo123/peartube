@@ -1976,8 +1976,10 @@ final class HostBridgeService {
   }
 
   private func ensureSidecarBridgeRunning() throws {
-    let runtimeURL = try resolveBareRuntimeURL()
-    let bundleURL = try resolveSidecarBundleURL()
+    // Prefer standalone bare-native binary (no separate runtime + bundle needed)
+    let (runtimeURL, bundleURL) = try resolveNativeSidecarBinary()
+      .map { ($0, nil as URL?) }
+      ?? (try resolveBareRuntimeURL(), try resolveSidecarBundleURL() as URL?)
     let sessionSink = WorkletSessionSink()
     let rpcChannel = makeRPCChannel(
       logPrefix: "Native host sidecar"
@@ -2019,7 +2021,11 @@ final class HostBridgeService {
     self.rpcChannel = rpcChannel
     self.hostSession = session
     self.currentHostTransportMode = .sidecar
-    appendLog("Native host sidecar launched from \(runtimeURL.path) using \(bundleURL.path).")
+    if let bundleURL {
+      appendLog("Native host sidecar launched from \(runtimeURL.path) using \(bundleURL.path).")
+    } else {
+      appendLog("Native host sidecar launched as bare-native binary: \(runtimeURL.path)")
+    }
   }
 
   private func configureEmbeddedBareKitEnvironment() {
@@ -3105,6 +3111,32 @@ final class HostBridgeService {
     throw HostBridgeError.bridgeArtifactMissing(
       "Generated/native-host-sidecar.bundle"
     )
+  }
+
+  /// Look for a standalone bare-native compiled sidecar binary.
+  /// Returns nil if not found (falls back to bare-runtime + bundle).
+  private func resolveNativeSidecarBinary(fileManager: FileManager = .default) -> URL? {
+    let environment = ProcessInfo.processInfo.environment
+    if let override = environment["PEARTUBE_NATIVE_SIDECAR_BINARY"], !override.isEmpty {
+      let url = URL(fileURLWithPath: override)
+      if fileManager.fileExists(atPath: url.path) { return url }
+    }
+
+    if let resourceURL = Bundle.main.resourceURL {
+      let bundled = resourceURL
+        .appendingPathComponent("Generated", isDirectory: true)
+        .appendingPathComponent("peartube-host-sidecar")
+      if fileManager.fileExists(atPath: bundled.path) { return bundled }
+    }
+
+    if let workspaceRoot = try? Self.workspaceRootURL() {
+      let workspace = workspaceRoot
+        .appendingPathComponent("packages/desktop-native/Resources/Generated", isDirectory: true)
+        .appendingPathComponent("peartube-host-sidecar")
+      if fileManager.fileExists(atPath: workspace.path) { return workspace }
+    }
+
+    return nil
   }
 
   private func resolveBareRuntimeURL(fileManager: FileManager = .default) throws -> URL {

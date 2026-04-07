@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "schema": [
     {
       "name": "empty",
@@ -1164,6 +1164,24 @@
           "required": false,
           "type": "uint",
           "version": 1
+        },
+        {
+          "name": "source",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "manifestUpdatedAt",
+          "required": false,
+          "type": "uint",
+          "version": 3
+        },
+        {
+          "name": "previewVideos",
+          "array": true,
+          "type": "@peartube/feed-entry-preview-video",
+          "version": 3
         }
       ]
     },
@@ -4884,6 +4902,80 @@
           "required": false,
           "type": "bool",
           "version": 2
+        }
+      ]
+    },
+    {
+      "name": "feed-entry-preview-video",
+      "namespace": "peartube",
+      "compact": false,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "duration",
+          "required": false,
+          "type": "uint",
+          "version": 3
+        },
+        {
+          "name": "thumbnail",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "path",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "blobId",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "blobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "mimeType",
+          "required": false,
+          "type": "string",
+          "version": 3
+        },
+        {
+          "name": "uploadedAt",
+          "required": false,
+          "type": "uint",
+          "version": 3
+        },
+        {
+          "name": "width",
+          "required": false,
+          "type": "uint",
+          "version": 3
+        },
+        {
+          "name": "height",
+          "required": false,
+          "type": "uint",
+          "version": 3
         }
       ]
     }

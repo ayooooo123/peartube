@@ -474,14 +474,34 @@ ns.register({
 // ============================================
 
 ns.register({
+  name: 'feed-entry-preview-video',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'title', type: 'string', required: false },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'thumbnail', type: 'string', required: false },
+    { name: 'path', type: 'string', required: false },
+    { name: 'blobId', type: 'string', required: false },
+    { name: 'blobsCoreKey', type: 'string', required: false },
+    { name: 'mimeType', type: 'string', required: false },
+    { name: 'uploadedAt', type: 'uint', required: false },
+    { name: 'width', type: 'uint', required: false },
+    { name: 'height', type: 'uint', required: false },
+  ]
+})
+
+ns.register({
   name: 'feed-entry',
   fields: [
     { name: 'channelKey', type: 'string', required: true },
-    { name: 'publicBeeKey', type: 'string', required: false },  // Fast path key for viewers
+    { name: 'publicBeeKey', type: 'string', required: false },
     { name: 'channelName', type: 'string', required: false },
     { name: 'videoCount', type: 'uint', required: false },
     { name: 'peerCount', type: 'uint', required: false },
-    { name: 'lastSeen', type: 'uint', required: false }
+    { name: 'lastSeen', type: 'uint', required: false },
+    { name: 'source', type: 'string', required: false },
+    { name: 'manifestUpdatedAt', type: 'uint', required: false },
+    { name: 'previewVideos', type: '@peartube/feed-entry-preview-video', array: true }
   ]
 })
 

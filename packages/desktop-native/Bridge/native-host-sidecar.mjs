@@ -541,16 +541,32 @@ async function loadBrowseSnapshot(state) {
     withTimeout(() => client.feed.isChannelPublished({}), { published: false }),
   ])
 
-  const fetchChannelData = createChannelDataFetcher(client)
+  const feedEntries = listFromResponse(feedResult, 'entries')
+  const subscriptions = listFromResponse(subscriptionsResult, 'subscriptions')
   const identities = listFromResponse(identitiesResult, 'identities')
 
+  console.log(`[browse-snapshot] Feed: ${feedEntries.length} entries, Subs: ${subscriptions.length}, Identities: ${identities.length}`)
+  for (const e of feedEntries) {
+    console.log(`[browse-snapshot]   entry: ${(e.channelKey || e.driveKey || '').slice(0, 16)} source=${e.source} peers=${e.peerCount} bee=${!!e.publicBeeKey} previews=${(e.previewVideos || []).length}`)
+  }
+
+  const rawFetchChannelData = createChannelDataFetcher(client)
+  const fetchChannelData = async (source, options) => {
+    const result = await rawFetchChannelData(source, options)
+    const videos = result?.videos || []
+    console.log(`[browse-snapshot] fetchChannelData ${(source.channelKey || '').slice(0, 16)}: ${videos.length} videos, availability: [${videos.map(v => v?.availability || 'none').join(', ')}]`)
+    return result
+  }
+
   const snapshot = await buildBrowseSnapshot({
-    feedEntries: listFromResponse(feedResult, 'entries'),
-    subscriptions: listFromResponse(subscriptionsResult, 'subscriptions'),
+    feedEntries,
+    subscriptions,
     identities,
     fetchChannelData,
     activeChannelPublished: Boolean(publishResult?.published),
   })
+
+  console.log(`[browse-snapshot] Result: home=${snapshot.sections.home.length} subs=${snapshot.sections.subscriptions.length} lib=${snapshot.sections.library.length}`)
 
   state.lastBrowseSnapshot = snapshot
   return snapshot

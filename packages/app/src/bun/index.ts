@@ -185,9 +185,16 @@ async function startStaticServer() {
       const url = new URL(req.url)
 
       // IPC port discovery — returns the worker's direct WebSocket port
+      // Waits up to 15s for the worker to start its WS server
       if (url.pathname === '/__peartube_ipc_port') {
-        // Prefer the worker's direct WS port (no relay through Bun)
-        const port = workerWsPort || ipcWsPort
+        let port = workerWsPort
+        if (!port) {
+          // Worker hasn't printed its WS port yet — poll until it does
+          for (let i = 0; i < 150 && !workerWsPort; i++) {
+            await new Promise(r => setTimeout(r, 100))
+          }
+          port = workerWsPort
+        }
         return new Response(JSON.stringify({ port }), {
           headers: { 'Content-Type': 'application/json' },
         })

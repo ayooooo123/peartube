@@ -656,6 +656,12 @@ export function createApi({
             } else if (!id) {
               availability = 'unavailable'
             }
+            // If we have connected peers for this channel but couldn't confirm
+            // local cache, the video is likely streamable — mark as playable.
+            if (availability === 'unknown' && id && video?.blobsCoreKey && video?.blobId) {
+              const peerCount = ctx.swarm?.connections?.size || 0
+              if (peerCount > 0) availability = 'playable'
+            }
             return {
               ...video,
               availability,
@@ -1424,13 +1430,16 @@ export function createApi({
                 blobId: video?.blobId ? String(video.blobId) : null,
                 blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
                 mimeType: video?.mimeType ? String(video.mimeType) : null,
-                availability: hint?.availability || 'unknown',
+                availability: hint?.availability === 'playable' ? 'playable'
+                  : (hint?.availability || 'unknown') !== 'unknown' ? (hint?.availability || 'unknown')
+                  : (video?.blobsCoreKey && video?.blobId && (ctx.swarm?.connections?.size || 0) > 0) ? 'playable'
+                  : 'unknown',
                 thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
                 thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
                 thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
               }
             })
-            .filter(Boolean)
+            .filter((video) => video && video.availability === 'playable')
             .slice(0, limitPerChannel)
 
           return {

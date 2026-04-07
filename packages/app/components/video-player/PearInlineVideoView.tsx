@@ -348,6 +348,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     console.error('[PearInlineVideoView] error:', error)
     onError?.({
       message: error?.message || error?.error?.errorString || error?.error?.message || 'Unknown error',
+      code: error?.error?.code || error?.code,
       engine: error?.engine,
     })
   }, [onError])

@@ -201,7 +201,10 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
     }
   }, [videoUrl, onError, onReady])
 
+  const initStartedRef = useRef(false)
   useEffect(() => {
+    if (initStartedRef.current) return
+    initStartedRef.current = true
     initMse()
     return () => {
       conversionRef.current?.cancel?.()

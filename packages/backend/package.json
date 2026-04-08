@@ -21,6 +21,7 @@
     "./src/backend-entry.js": "./src/backend-entry.js",
     "./hrpc-handlers": "./src/hrpc-handlers.js",
     "./types": "./src/types.js",
+    "./remux-to-file": "./src/remux-to-file.mjs",
     "./transcode": "./src/transcode/index.js",
     "./transcode/transcoder": "./src/transcode/transcoder.mjs",
     "./transcode/cast-transcoder": "./src/transcode/cast-transcoder.mjs",

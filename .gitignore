@@ -92,3 +92,6 @@ logfile
 .sisyphus/
 .tmp-device-crashes/
 .evidence/
+
+# Artifacts
+**/.artifacts/

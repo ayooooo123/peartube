@@ -144,6 +144,12 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         if (ms.readyState === 'open') {
           try { ms.endOfStream() } catch {}
         }
+        // Update duration for seeking — now that all data is appended,
+        // the video element knows the full duration and seeking works
+        if (el.duration && isFinite(el.duration)) {
+          console.log('[MsePlayer] Final duration:', el.duration)
+          onLoad?.({ duration: el.duration, durationMs: Math.round(el.duration * 1000) })
+        }
       } catch (err: any) {
         console.error('[MsePlayer] Error:', err?.message)
         onError?.({ message: err?.message || 'MSE error' })

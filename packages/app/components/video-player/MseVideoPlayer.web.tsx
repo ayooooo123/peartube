@@ -187,17 +187,21 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
       ])
 
       // Get the codec MIME type from mediabunny
+      console.log('[MsePlayer] Getting MIME type...')
       const mimeType = await output.getMimeType()
       console.log('[MsePlayer] MIME type:', mimeType)
 
-      if (!MediaSource.isTypeSupported(mimeType)) {
-        console.error('[MsePlayer] MIME type not supported:', mimeType)
+      const supported = MediaSource.isTypeSupported(mimeType)
+      console.log('[MsePlayer] isTypeSupported:', supported)
+      if (!supported) {
         onError?.({ message: `Unsupported MIME: ${mimeType}` })
         return
       }
 
+      console.log('[MsePlayer] Adding source buffer...')
       const sourceBuffer = mediaSource.addSourceBuffer(mimeType)
       sourceBufferRef.current = sourceBuffer
+      console.log('[MsePlayer] Source buffer added')
 
       // Flush any chunks that arrived before sourceBuffer was ready
       for (const chunk of pendingChunks) {

@@ -246,12 +246,9 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
     if (initStartedRef.current) return
     initStartedRef.current = true
     initMse()
-    return () => {
-      conversionRef.current?.cancel?.()
-      if (mediaSourceRef.current?.readyState === 'open') {
-        try { mediaSourceRef.current.endOfStream() } catch {}
-      }
-    }
+    // Don't cancel conversion on cleanup — React re-renders can trigger
+    // unmount/remount cycles that kill the conversion prematurely.
+    // The conversion will naturally complete or error when the page changes.
   }, [initMse])
 
   return (

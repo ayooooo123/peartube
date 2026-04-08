@@ -496,6 +496,25 @@ export async function initializeStorage(config) {
     blobServerPort = blobServer.port;
     globalBlobServer = blobServer;
     console.log('[Storage] Blob server listening on port:', blobServerPort);
+
+    // Add CORS headers so the browser can fetch blobs cross-origin
+    // (mediabunny's UrlSource uses fetch() from a different port)
+    if (blobServer.server) {
+      const listeners = blobServer.server.listeners('request')
+      if (listeners.length > 0) {
+        const origHandler = listeners[0]
+        blobServer.server.removeAllListeners('request')
+        blobServer.server.on('request', (req, res) => {
+          res.setHeader('Access-Control-Allow-Origin', '*')
+          res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+          res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type')
+          res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
+          if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+          origHandler(req, res)
+        })
+        console.log('[Storage] CORS headers enabled on blob server')
+      }
+    }
     await appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
   } catch (err) {
     console.error('[Storage] Failed to initialize blob server:', err.message);

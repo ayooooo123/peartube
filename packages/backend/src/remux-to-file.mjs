@@ -224,15 +224,18 @@ export async function startRemuxToFile (sourceUrl, options = {}) {
     }
   })()
 
-  // Wait for the first few MB to be written before returning URL
+  // Wait for the remux to start writing before returning URL.
+  // The download can take 60+ seconds for large files, so wait up to 120s.
+  console.log('[RemuxFile] Waiting for remux to produce data...')
   const waitStart = Date.now()
-  while (Date.now() - waitStart < 30000) {
+  while (Date.now() - waitStart < 120000) {
     if (session.status === 'error') break
+    if (session.status === 'complete') break
     try {
       const stat = fs.statSync(tempPath)
-      if (stat.size > 1024 * 1024) break // 1MB written
+      if (stat.size > 1024 * 1024) break // 1MB written by the remux
     } catch {}
-    await new Promise(r => setTimeout(r, 200))
+    await new Promise(r => setTimeout(r, 500))
   }
 
   if (session.status === 'error') {

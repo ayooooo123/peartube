@@ -495,34 +495,13 @@ B.preparePlayback = async (r: any) => api.preparePlayback(
   r.mimeType
 )
 
-// Desktop: remux MKV→MP4 for videos WebKit can't play.
-// Called when the renderer gets MEDIA_ERR_SRC_NOT_SUPPORTED (code 4).
-// Remuxes to a temp MP4 file (stream copy, no re-encoding) and serves via HTTP.
-// Progressive: playback starts while remux is still running. Full seeking in remuxed portion.
+// Desktop: placeholder for webPreparePlayback.
+// MKV playback is handled client-side via mediabunny MSE player.
 rpc.onWebPreparePlayback(async (r: any) => {
-  const result = await api.preparePlayback(
+  return api.preparePlayback(
     r.channelKey, r.videoId, r.publicBeeKey,
     r.blobId, r.blobsCoreKey, r.mimeType
   )
-  if (!result?.url) return result
-
-  try {
-    console.log('[Worker] webPreparePlayback: remuxing to temp MP4 for', result.url?.substring(0, 80))
-    const { startRemuxToFile } = await import('@peartube/backend/remux-to-file')
-    const sourceKey = `${r.channelKey}-${r.videoId}`.replace(/[^a-zA-Z0-9]/g, '')
-
-    const remux = await startRemuxToFile(result.url, { sourceKey })
-    if (!remux.url) {
-      console.error('[Worker] Remux failed:', remux.error)
-      return { ...result, transcodeError: remux.error }
-    }
-
-    console.log('[Worker] Remux URL ready:', remux.url)
-    return { url: remux.url, transcoded: true, stats: result.stats }
-  } catch (e: any) {
-    console.error('[Worker] Remux error:', e?.message)
-    return result
-  }
 })
 B.getVideoData = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId, r.publicBeeKey); return { video: v || { id: r.videoId, title: 'Unknown' } } }
 B.getVideoMetadata = async (r: any) => { if (isShuttingDown) return { video: { id: r.videoId, title: 'Unknown' } }; const v = await api.getVideoData(r.channelKey, r.videoId); return { video: v || { id: r.videoId, title: 'Unknown' } } }

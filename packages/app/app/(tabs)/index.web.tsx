@@ -245,8 +245,8 @@ function WatchPageView({
   const playbackSession = useMemo(() => Date.now(), [channelKey, videoId])
   const [isActiveWatch, setIsActiveWatch] = useState(true)
   const [isPlaying, setIsPlaying] = useState(true)
-  const remuxAttemptedRef = useRef(false)
-  useEffect(() => { remuxAttemptedRef.current = false }, [channelKey, videoId])
+  const [useMsePlayer, setUseMsePlayer] = useState(false)
+  useEffect(() => { setUseMsePlayer(false) }, [channelKey, videoId])
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [showControls, setShowControls] = useState(false)
@@ -918,6 +918,26 @@ function WatchPageView({
                   <span style={watchStyles.castSubtitle}>{video?.title}</span>
                 </div>
               </div>
+            ) : isActiveWatch && videoUrl && useMsePlayer ? (
+              <MseVideoPlayer
+                videoUrl={videoUrl}
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+                playerRef={videoRef}
+                isPlaying={isPlaying}
+                onPlaying={() => setIsPlaying(true)}
+                onPaused={() => setIsPlaying(false)}
+                onLoad={(data: any) => {
+                  if (data?.durationMs > 0) setDuration(data.durationMs / 1000)
+                  else if (data?.duration > 0) setDuration(data.duration)
+                  setIsLoading(false)
+                }}
+                onProgress={(data: any) => {
+                  if (data?.currentTime != null) setCurrentTime(data.currentTime / 1000)
+                  if (data?.duration > 0) setDuration(data.duration / 1000)
+                }}
+                onEnded={() => {}}
+                onError={(err: any) => setError(err?.message || String(err))}
+              />
             ) : isActiveWatch && videoUrl ? (
               <PearInlineVideoView
                 style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
@@ -939,30 +959,12 @@ function WatchPageView({
                   if (data?.currentTime != null) setCurrentTime(data.currentTime / 1000)
                   if (data?.duration > 0) setDuration(data.duration / 1000)
                 }}
-                onError={async (err: any) => {
+                onError={(err: any) => {
                   const code = err?.error?.code || err?.code
-                  // Code 4 = SRC_NOT_SUPPORTED (MKV container, unsupported codec)
-                  // Remux to temp MP4 file and swap URL
-                  if (code == 4 && !remuxAttemptedRef.current) {
-                    remuxAttemptedRef.current = true
-                    console.log('[WatchPage] Native player failed (code 4), requesting remux...')
-                    setIsLoading(true)
-                    try {
-                      const platformRPC = await import('@peartube/platform/rpc')
-                      const hrpc = platformRPC.getHRPCInstance?.()
-                      if (hrpc?.webPreparePlayback) {
-                        const result = await hrpc.webPreparePlayback({ channelKey, videoId })
-                        if (result?.url && result?.transcoded) {
-                          console.log('[WatchPage] Remuxed URL:', result.url)
-                          setVideoUrl(result.url)
-                          setIsLoading(false)
-                          return
-                        }
-                      }
-                    } catch (e: any) {
-                      console.error('[WatchPage] Remux failed:', e?.message)
-                    }
-                    setIsLoading(false)
+                  if (code == 4) {
+                    console.log('[WatchPage] Native player failed (code 4), switching to MSE player')
+                    setUseMsePlayer(true)
+                    return
                   }
                   setError(err?.message || err?.error?.errorString || String(err))
                 }}

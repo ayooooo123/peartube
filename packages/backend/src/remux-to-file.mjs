@@ -164,13 +164,23 @@ export async function startRemuxToFile (sourceUrl, options = {}) {
       })
       const outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
 
-      // Copy all streams
+      // Copy video + audio streams only (skip subtitles — PGS/bitmap subs aren't MP4-compatible)
+      const streamMap = []
+      const VIDEO = ffmpeg.constants.mediaTypes.VIDEO
+      const AUDIO = ffmpeg.constants.mediaTypes.AUDIO
       for (let i = 0; i < inputFormat.streams.length; i++) {
         const inStream = inputFormat.streams[i]
+        const type = inStream.codecParameters.type
+        if (type !== VIDEO && type !== AUDIO) {
+          console.log('[RemuxFile] Skipping stream', i, '(not video/audio)')
+          continue
+        }
         const outStream = outputFormat.createStream()
         copyCodecParameters(outStream.codecParameters, inStream.codecParameters)
         outStream.timeBase = inStream.timeBase
+        streamMap.push({ inIndex: inStream.index, outIndex: outStream.index })
       }
+      console.log('[RemuxFile] Mapped', streamMap.length, 'streams (video+audio)')
 
       const dict = ffmpeg.Dictionary.from({ movflags: 'frag_keyframe+empty_moov+default_base_moof' })
       outputFormat.writeHeader(dict)
@@ -180,7 +190,11 @@ export async function startRemuxToFile (sourceUrl, options = {}) {
       const packet = new ffmpeg.Packet()
       let packetCount = 0
       while (inputFormat.readFrame(packet)) {
-        outputFormat.writeFrame(packet)
+        const mapping = streamMap.find(m => m.inIndex === packet.streamIndex)
+        if (mapping) {
+          packet.streamIndex = mapping.outIndex
+          outputFormat.writeFrame(packet)
+        }
         packet.unref()
         packetCount++
         if (packetCount % 5000 === 0) {

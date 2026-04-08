@@ -144,8 +144,25 @@ export async function startRemuxToFile (sourceUrl, options = {}) {
       const inputIO = reader.createIOContext(ffmpeg)
       const inputFormat = new ffmpeg.InputFormatContext(inputIO)
 
-      // Output to temp file
-      const outputFormat = new ffmpeg.OutputFormatContext('mp4', tempPath)
+      // Output via IOContext writing to file
+      const fd = fs.openSync(tempPath, 'w')
+      let writePos = 0
+      const outputIO = new ffmpeg.IOContext(1024 * 1024, {
+        onwrite: (buf) => {
+          fs.writeSync(fd, buf, 0, buf.length, writePos)
+          writePos += buf.length
+          return buf.length
+        },
+        onseek: (offset, whence) => {
+          const AVSEEK_SIZE = 0x10000
+          if (whence === AVSEEK_SIZE) return writePos
+          if (whence === 0) writePos = offset
+          else if (whence === 1) writePos += offset
+          else if (whence === 2) writePos += offset
+          return writePos
+        },
+      })
+      const outputFormat = new ffmpeg.OutputFormatContext('mp4', outputIO)
 
       // Copy all streams
       for (let i = 0; i < inputFormat.streams.length; i++) {
@@ -172,6 +189,7 @@ export async function startRemuxToFile (sourceUrl, options = {}) {
       }
 
       outputFormat.writeTrailer()
+      fs.closeSync(fd)
       session.status = 'complete'
 
       const finalSize = fs.statSync(tempPath).size
@@ -182,6 +200,7 @@ export async function startRemuxToFile (sourceUrl, options = {}) {
       try { dict.close?.() } catch {}
       try { packet.close?.() } catch {}
       try { outputFormat.close?.() } catch {}
+      try { outputIO.close?.() } catch {}
       try { inputFormat.close?.() } catch {}
       try { reader.destroy() } catch {}
     } catch (err) {

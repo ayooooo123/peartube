@@ -164,12 +164,27 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         return
       }
 
+      // Check if MSE is available
+      console.log('[MsePlayer] MediaSource available:', typeof MediaSource !== 'undefined')
+      console.log('[MsePlayer] MediaSource.isTypeSupported:', typeof MediaSource?.isTypeSupported)
+
+      if (typeof MediaSource === 'undefined') {
+        console.error('[MsePlayer] MediaSource API not available in this browser')
+        onError?.({ message: 'MediaSource API not available' })
+        return
+      }
+
       // Create MediaSource and wire it up
       const mediaSource = new MediaSource()
       mediaSourceRef.current = mediaSource
+      console.log('[MsePlayer] MediaSource created, state:', mediaSource.readyState)
       video.src = URL.createObjectURL(mediaSource)
+      console.log('[MsePlayer] video.src set, waiting for sourceopen...')
 
-      await new Promise<void>((resolve) => { mediaSource.onsourceopen = () => resolve() })
+      await Promise.race([
+        new Promise<void>((resolve) => { mediaSource.onsourceopen = () => { console.log('[MsePlayer] sourceopen fired!'); resolve() } }),
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('sourceopen timeout (5s)')), 5000))
+      ])
 
       // Get the codec MIME type from mediabunny
       const mimeType = await output.getMimeType()

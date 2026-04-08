@@ -27,7 +27,11 @@
     "./transcode/videotoolbox-settings": "./src/transcode/videotoolbox-settings.mjs",
     "./cast": "./src/cast/index.js",
     "./logger": "./src/logger.js",
-    "./thumbnail": "./src/thumbnail.js"
+    "./thumbnail": "./src/thumbnail.js",
+    "./runtime": "./src/runtime.js",
+    "./feed": "./src/feed.js",
+    "./media": "./src/media.js",
+    "./hash-utils": "./src/hash-utils.js"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

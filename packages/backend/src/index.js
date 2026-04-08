@@ -15,6 +15,12 @@ export {
 // Public Feed - P2P channel discovery
 export { PublicFeedManager } from './public-feed.js';
 
+// Modular facades for smaller backend surfaces
+export { createBackendRuntime } from './runtime.js';
+export * as feed from './feed.js';
+export * as media from './media.js';
+export * as swarm from './swarm.js';
+
 // Video Stats - P2P download progress tracking
 export { VideoStatsTracker } from './video-stats.js';
 

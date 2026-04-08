@@ -25,13 +25,60 @@ module.exports = {
     'react-hooks',
     '@typescript-eslint',
     'jsx-a11y',
+    'import',
   ],
   rules: {
-    'react/react-in-jsx-scope': 'off', // React 19 doesn't need this
-    'react/prop-types': 'off', // Using TypeScript
+    'react/react-in-jsx-scope': 'off',
+    'react/prop-types': 'off',
     '@typescript-eslint/no-explicit-any': 'warn',
     '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+    'import/no-cycle': ['warn', { ignoreExternal: true }],
   },
+  overrides: [
+    {
+      files: ['packages/backend/src/**/*.{js,mjs}'],
+      rules: {
+        'max-lines': ['warn', { max: 1200, skipBlankLines: true, skipComments: true }],
+      },
+    },
+    {
+      files: [
+        'packages/app/**/*.{js,jsx,ts,tsx}',
+        'packages/spec/**/*.{js,jsx,ts,tsx}',
+        'packages/desktop-native/**/*.{js,jsx,ts,tsx}',
+        'scripts/**/*.js',
+      ],
+      rules: {
+        'no-restricted-imports': ['error', {
+          patterns: [
+            {
+              group: [
+                'corestore',
+                'hyperbee',
+                'hypercore',
+                'hyperblobs',
+                'hypercore-blob-server',
+                'hyperswarm',
+                'protomux',
+                'protomux-wakeup',
+                'hypercore-crypto',
+                'b4a',
+                'bare-*',
+              ],
+              message: 'Import Holepunch primitives from backend runtime modules instead of directly.',
+            },
+          ],
+        }],
+      },
+    },
+    {
+      files: ['packages/backend/src/{runtime,swarm,feed,media,hash-utils}.js'],
+      rules: {
+        'import/no-cycle': 'error',
+        'max-lines': ['error', { max: 400, skipBlankLines: true, skipComments: true }],
+      },
+    },
+  ],
   settings: {
     react: {
       version: 'detect',

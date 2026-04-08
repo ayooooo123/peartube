@@ -17,6 +17,7 @@ import Protomux from 'protomux';
 import c from 'compact-encoding';
 import { PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
+import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
 
 const log = logger('PublicFeed')
 
@@ -143,12 +144,15 @@ export class PublicFeedManager {
     const serialized = {
       driveKey: entry.driveKey,
       publicBeeKey: entry.publicBeeKey || null,
+      version: Number(entry.version || 0) || 0,
     }
     if (entry.channelName) serialized.channelName = entry.channelName
     if (Number(entry.videoCount || 0) > 0) serialized.videoCount = Number(entry.videoCount || 0)
     if (Number(entry.manifestUpdatedAt || 0) > 0) serialized.manifestUpdatedAt = Number(entry.manifestUpdatedAt || 0)
     const previewVideos = this._sanitizePreviewVideos(entry.previewVideos)
     if (previewVideos.length > 0) serialized.previewVideos = previewVideos
+    const previewVideosHash = entry.previewVideosHash || hashPreviewVideos(previewVideos)
+    if (previewVideosHash) serialized.previewVideosHash = previewVideosHash
     return serialized
   }
 
@@ -184,10 +188,11 @@ export class PublicFeedManager {
       )
 
     if (canApplyManifest) {
-      const currentSerialized = JSON.stringify(this._sanitizePreviewVideos(entry.previewVideos))
-      const nextSerialized = JSON.stringify(incomingPreviewVideos)
-      if (currentSerialized !== nextSerialized) {
+      const currentPreviewVideosHash = entry.previewVideosHash || hashPreviewVideos(this._sanitizePreviewVideos(entry.previewVideos))
+      const nextPreviewVideosHash = hashPreviewVideos(incomingPreviewVideos)
+      if (currentPreviewVideosHash !== nextPreviewVideosHash) {
         entry.previewVideos = incomingPreviewVideos
+        entry.previewVideosHash = nextPreviewVideosHash
         changed = true
       }
       if (nextManifestUpdatedAt && nextManifestUpdatedAt !== Number(entry.manifestUpdatedAt || 0)) {
@@ -197,6 +202,10 @@ export class PublicFeedManager {
         entry.manifestUpdatedAt = Date.now()
         changed = true
       }
+    }
+
+    if (changed) {
+      entry.version = Number(entry.version || 0) + 1
     }
 
     return changed
@@ -608,11 +617,10 @@ export class PublicFeedManager {
     sendEntries(baseEntries)
     if (!this.feedSnapshotProvider) return
 
+    const baseEntriesHash = hashFeedEntries(baseEntries)
     void this._resolveFeedSnapshots(baseEntries, conn)
       .then((entries) => {
-        const baseSerialized = JSON.stringify(baseEntries)
-        const nextSerialized = JSON.stringify(entries)
-        if (nextSerialized !== baseSerialized) {
+        if (hashFeedEntries(entries) !== baseEntriesHash) {
           sendEntries(entries)
         }
       })

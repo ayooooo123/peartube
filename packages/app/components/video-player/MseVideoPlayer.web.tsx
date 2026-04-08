@@ -186,50 +186,35 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         new Promise<void>((_, reject) => setTimeout(() => reject(new Error('sourceopen timeout (5s)')), 5000))
       ])
 
-      // Get the codec MIME type from mediabunny (with timeout)
-      console.log('[MsePlayer] Getting MIME type...')
-      let mimeType: string
-      try {
-        mimeType = await Promise.race([
-          output.getMimeType(),
-          new Promise<string>((_, reject) => setTimeout(() => reject(new Error('getMimeType timeout')), 15000))
-        ])
-      } catch (e: any) {
-        console.warn('[MsePlayer] getMimeType failed/timeout:', e?.message, '— trying generic MIME')
-        // Fallback: try a generic fMP4 MIME that WebKit supports
-        mimeType = 'video/mp4; codecs="hev1.1.6.L150.B0"'
-      }
-      console.log('[MsePlayer] MIME type:', mimeType)
+      // Add SourceBuffer IMMEDIATELY after sourceopen — WebKit closes
+      // the MediaSource if no SourceBuffer is added promptly.
+      // Try MIME types until one works.
+      const mimeOptions = [
+        'video/mp4; codecs="hev1.1.6.L150.B0"',
+        'video/mp4; codecs="hvc1.1.6.L150.B0"',
+        'video/mp4; codecs="avc1.640032"',
+        'video/mp4',
+      ]
 
-      const supported = MediaSource.isTypeSupported(mimeType)
-      console.log('[MsePlayer] isTypeSupported:', supported)
-      if (!supported) {
-        // Try progressively simpler MIME types
-        const fallbacks = [
-          'video/mp4; codecs="hev1.1.6.L150.B0"',
-          'video/mp4; codecs="hvc1.1.6.L150.B0"',
-          'video/mp4; codecs="avc1.42c032"',
-          'video/mp4',
-        ]
-        let found = false
-        for (const fb of fallbacks) {
-          if (MediaSource.isTypeSupported(fb)) {
-            console.log('[MsePlayer] Using fallback MIME:', fb)
-            mimeType = fb
-            found = true
+      let sourceBuffer: SourceBuffer | null = null
+      for (const mime of mimeOptions) {
+        if (MediaSource.isTypeSupported(mime)) {
+          try {
+            console.log('[MsePlayer] Trying MIME:', mime)
+            sourceBuffer = mediaSource.addSourceBuffer(mime)
+            console.log('[MsePlayer] SourceBuffer added with:', mime)
             break
+          } catch (e: any) {
+            console.warn('[MsePlayer] addSourceBuffer failed for', mime, ':', e?.message)
           }
         }
-        if (!found) {
-          onError?.({ message: `No supported MIME type found` })
-          return
-        }
       }
 
-      console.log('[MsePlayer] Adding source buffer...')
-      const sourceBuffer = mediaSource.addSourceBuffer(mimeType)
+      if (!sourceBuffer) {
+        onError?.({ message: 'No supported MIME type for MSE' })
+        return
+      }
       sourceBufferRef.current = sourceBuffer
-      console.log('[MsePlayer] Source buffer added')
 
       // Flush any chunks that arrived before sourceBuffer was ready
       for (const chunk of pendingChunks) {

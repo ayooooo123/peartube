@@ -227,7 +227,9 @@ async function startStaticServer() {
       // mediabunny's UrlSource uses fetch() which enforces CORS.
       // Proxying through the static server avoids cross-origin issues.
       if (url.pathname === '/__blob') {
-        const blobUrl = `http://127.0.0.1:${blobServerPort}/?${url.searchParams.toString()}`
+        const port = url.searchParams.get('__port') || blobServerPort
+        url.searchParams.delete('__port')
+        const blobUrl = `http://127.0.0.1:${port}/?${url.searchParams.toString()}`
         const headers: Record<string, string> = {}
         const range = req.headers.get('range')
         if (range) headers['Range'] = range

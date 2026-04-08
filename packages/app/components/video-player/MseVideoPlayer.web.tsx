@@ -95,7 +95,8 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
       try {
         const blobUrlObj = new URL(videoUrl)
         const staticOrigin = window.location.origin
-        proxiedUrl = `${staticOrigin}/__blob?${blobUrlObj.searchParams.toString()}`
+        // Pass the blob server port so the proxy knows where to forward
+        proxiedUrl = `${staticOrigin}/__blob?__port=${blobUrlObj.port}&${blobUrlObj.searchParams.toString()}`
       } catch {}
       console.log('[MsePlayer] Initializing with mediabunny for:', proxiedUrl.substring(0, 100))
 

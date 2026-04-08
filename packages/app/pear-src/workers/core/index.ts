@@ -495,12 +495,10 @@ B.preparePlayback = async (r: any) => api.preparePlayback(
   r.mimeType
 )
 
-// Desktop: transcode fallback for videos WebKit can't play (MKV, EAC3, DTS).
+// Desktop: remux MKV→MP4 for videos WebKit can't play.
 // Called when the renderer gets MEDIA_ERR_SRC_NOT_SUPPORTED (code 4).
-// Uses startCastTranscode which safely downloads to temp file before probing
-// (avoids segfault from probing directly via HTTP blob URL).
-// Register via rpc.onWebPreparePlayback (not B.xxx) because B's setter
-// only handles methods known to the backend. webPreparePlayback is desktop-only.
+// Remuxes to a temp MP4 file (stream copy, no re-encoding) and serves via HTTP.
+// Progressive: playback starts while remux is still running. Full seeking in remuxed portion.
 rpc.onWebPreparePlayback(async (r: any) => {
   const result = await api.preparePlayback(
     r.channelKey, r.videoId, r.publicBeeKey,
@@ -509,51 +507,20 @@ rpc.onWebPreparePlayback(async (r: any) => {
   if (!result?.url) return result
 
   try {
-    console.log('[Worker] webPreparePlayback: starting transcode for', result.url?.substring(0, 80))
+    console.log('[Worker] webPreparePlayback: remuxing to temp MP4 for', result.url?.substring(0, 80))
+    const { startRemuxToFile } = await import('@peartube/backend/src/remux-to-file.mjs')
     const sourceKey = `web:${r.channelKey}:${r.videoId}`
 
-    // Use startCastTranscode — it downloads to a temp file first, then probes
-    // and decides: remux (fast) or full transcode. Much safer than probing
-    // the HTTP blob URL directly.
-    const transcode = await castTranscoder.startCastTranscode(result.url, {
-      sourceKey,
-      isVideoComplete: true,
-    })
-
-    if (!transcode.success) {
-      console.error('[Worker] Transcode failed:', transcode.error)
-      return { ...result, transcodeError: transcode.error }
+    const remux = await startRemuxToFile(result.url, { sourceKey })
+    if (!remux.url) {
+      console.error('[Worker] Remux failed:', remux.error)
+      return { ...result, transcodeError: remux.error }
     }
 
-    // Wait for enough segments to be ready for HLS playback.
-    // Need at least 3 segments for the playlist to be valid,
-    // and the playlist.m3u8 returns 503 until segments exist.
-    console.log('[Worker] Waiting for transcode segments...')
-    const waitStart = Date.now()
-    while (Date.now() - waitStart < 60000) {
-      const st = castTranscoder.getCastStatus(transcode.sessionId)
-      if (st?.status === 'error') break
-      if (st?.fragmentCount >= 3) break
-      // Also check if transcode is complete (short videos may finish before 3 segments)
-      if (st?.status === 'complete' && st?.fragmentCount >= 1) break
-      await new Promise(resolve => setTimeout(resolve, 500))
-    }
-
-    const st = castTranscoder.getCastStatus(transcode.sessionId)
-    if (st?.status === 'error') {
-      console.error('[Worker] Transcode error:', st.error)
-      return { ...result, transcodeError: st.error }
-    }
-
-    const hlsUrl = castTranscoder.getCastHlsUrl(transcode.sessionId, '127.0.0.1')
-    if (!hlsUrl) {
-      return { ...result, transcodeError: 'No HLS URL' }
-    }
-
-    console.log('[Worker] Transcode HLS ready:', hlsUrl)
-    return { url: hlsUrl, transcoded: true, stats: result.stats }
+    console.log('[Worker] Remux URL ready:', remux.url)
+    return { url: remux.url, transcoded: true, stats: result.stats }
   } catch (e: any) {
-    console.error('[Worker] Transcode error:', e?.message)
+    console.error('[Worker] Remux error:', e?.message)
     return result
   }
 })

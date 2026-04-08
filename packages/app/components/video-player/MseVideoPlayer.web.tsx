@@ -186,16 +186,44 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         new Promise<void>((_, reject) => setTimeout(() => reject(new Error('sourceopen timeout (5s)')), 5000))
       ])
 
-      // Get the codec MIME type from mediabunny
+      // Get the codec MIME type from mediabunny (with timeout)
       console.log('[MsePlayer] Getting MIME type...')
-      const mimeType = await output.getMimeType()
+      let mimeType: string
+      try {
+        mimeType = await Promise.race([
+          output.getMimeType(),
+          new Promise<string>((_, reject) => setTimeout(() => reject(new Error('getMimeType timeout')), 15000))
+        ])
+      } catch (e: any) {
+        console.warn('[MsePlayer] getMimeType failed/timeout:', e?.message, '— trying generic MIME')
+        // Fallback: try a generic fMP4 MIME that WebKit supports
+        mimeType = 'video/mp4; codecs="hev1.1.6.L150.B0"'
+      }
       console.log('[MsePlayer] MIME type:', mimeType)
 
       const supported = MediaSource.isTypeSupported(mimeType)
       console.log('[MsePlayer] isTypeSupported:', supported)
       if (!supported) {
-        onError?.({ message: `Unsupported MIME: ${mimeType}` })
-        return
+        // Try progressively simpler MIME types
+        const fallbacks = [
+          'video/mp4; codecs="hev1.1.6.L150.B0"',
+          'video/mp4; codecs="hvc1.1.6.L150.B0"',
+          'video/mp4; codecs="avc1.42c032"',
+          'video/mp4',
+        ]
+        let found = false
+        for (const fb of fallbacks) {
+          if (MediaSource.isTypeSupported(fb)) {
+            console.log('[MsePlayer] Using fallback MIME:', fb)
+            mimeType = fb
+            found = true
+            break
+          }
+        }
+        if (!found) {
+          onError?.({ message: `No supported MIME type found` })
+          return
+        }
       }
 
       console.log('[MsePlayer] Adding source buffer...')

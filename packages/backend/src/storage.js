@@ -490,6 +490,17 @@ export async function initializeStorage(config) {
       host: blobServerBindHost
     });
 
+    // Patch _onrequest to add CORS headers for mediabunny's UrlSource (fetch)
+    const origOnRequest = blobServer._onrequest.bind(blobServer)
+    blobServer._onrequest = async function (req, res) {
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'Range')
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
+      if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+      return origOnRequest(req, res)
+    }
+
     console.log('[Storage] Starting blob server listen...');
     await appendDebugLine('[storage] blob server listen start')
     await blobServer.listen();

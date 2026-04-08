@@ -66,19 +66,14 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
     // Start mediabunny conversion
     ;(async () => {
       try {
-        // Rewrite blob URL through same-origin proxy
-        let proxiedUrl = videoUrl
-        try {
-          const u = new URL(videoUrl)
-          proxiedUrl = `${window.location.origin}/__blob?__port=${u.port}&${u.searchParams.toString()}`
-        } catch {}
-        console.log('[MsePlayer] Init:', proxiedUrl.substring(0, 100))
+        // Use blob URL directly — CORS headers are patched on the blob server
+        console.log('[MsePlayer] Init:', videoUrl.substring(0, 100))
 
         const mb = await import('mediabunny')
         const { Input, Output, Conversion, UrlSource, Mp4OutputFormat, StreamTarget } = mb
         const ALL_FORMATS = mb.ALL_FORMATS || [mb.MatroskaInputFormat, mb.Mp4InputFormat].filter(Boolean)
 
-        const source = new UrlSource(proxiedUrl)
+        const source = new UrlSource(videoUrl)
         const input = new Input({ source, formats: ALL_FORMATS })
 
         // Buffer chunks until SourceBuffer is ready

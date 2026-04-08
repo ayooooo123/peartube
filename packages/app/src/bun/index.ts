@@ -213,14 +213,36 @@ async function startStaticServer() {
   const server = Bun.serve({
     port: 0, // auto-assign
     hostname: '127.0.0.1',
-    fetch(req) {
+    async fetch(req) {
       const url = new URL(req.url)
 
-      // IPC port discovery — returns the Bun WebSocket relay port
+      // IPC port discovery
       if (url.pathname === '/__peartube_ipc_port') {
         return new Response(JSON.stringify({ port: ipcWsPort }), {
           headers: { 'Content-Type': 'application/json' },
         })
+      }
+
+      // Blob proxy — same-origin proxy to the blob server.
+      // mediabunny's UrlSource uses fetch() which enforces CORS.
+      // Proxying through the static server avoids cross-origin issues.
+      if (url.pathname === '/__blob') {
+        const blobUrl = `http://127.0.0.1:${blobServerPort}/?${url.searchParams.toString()}`
+        const headers: Record<string, string> = {}
+        const range = req.headers.get('range')
+        if (range) headers['Range'] = range
+        try {
+          const blobRes = await fetch(blobUrl, { headers })
+          const respHeaders = new Headers(blobRes.headers)
+          respHeaders.set('Access-Control-Allow-Origin', '*')
+          respHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
+          return new Response(blobRes.body, {
+            status: blobRes.status,
+            headers: respHeaders,
+          })
+        } catch (err: any) {
+          return new Response('Blob proxy error: ' + err?.message, { status: 502 })
+        }
       }
 
       let filePath = join(viewsDir, decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname))

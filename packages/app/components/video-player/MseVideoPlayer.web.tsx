@@ -88,7 +88,16 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
     if (!video || !videoUrl) return
 
     try {
-      console.log('[MsePlayer] Initializing with mediabunny for:', videoUrl.substring(0, 80))
+      // Rewrite the blob URL to go through the same-origin proxy.
+      // The blob server runs on a different port → CORS blocked.
+      // The static server's /__blob endpoint proxies with CORS headers.
+      let proxiedUrl = videoUrl
+      try {
+        const blobUrlObj = new URL(videoUrl)
+        const staticOrigin = window.location.origin
+        proxiedUrl = `${staticOrigin}/__blob?${blobUrlObj.searchParams.toString()}`
+      } catch {}
+      console.log('[MsePlayer] Initializing with mediabunny for:', proxiedUrl.substring(0, 100))
 
       // Dynamic import — only loaded when needed (keeps bundle small for non-MKV videos)
       const mb = await import('mediabunny')
@@ -103,7 +112,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         mb.OggInputFormat, mb.WavInputFormat,
       ].filter(Boolean)
 
-      const source = new UrlSource(videoUrl)
+      const source = new UrlSource(proxiedUrl)
       const input = new Input({ source, formats: ALL_FORMATS })
 
       // Buffer chunks until MSE sourceBuffer is ready

@@ -64,10 +64,9 @@ function ensureHttpServer () {
         }
 
         const chunkSize = clampedEnd - start + 1
-        res.writeHead(206, {
-          'Content-Range': `bytes ${start}-${clampedEnd}/${totalSize}`,
-          'Content-Length': chunkSize,
-        })
+        res.statusCode = 206
+        res.setHeader('Content-Range', `bytes ${start}-${clampedEnd}/${totalSize}`)
+        res.setHeader('Content-Length', '' + chunkSize)
 
         if (req.method === 'HEAD') { res.end(); return }
 
@@ -78,7 +77,8 @@ function ensureHttpServer () {
       }
 
       // Full request
-      res.writeHead(200, { 'Content-Length': totalSize })
+      res.statusCode = 200
+      res.setHeader('Content-Length', '' + totalSize)
       if (req.method === 'HEAD') { res.end(); return }
 
       const stream = fs.createReadStream(session.tempPath)

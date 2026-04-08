@@ -17,6 +17,7 @@ import { VideoGrid } from '@/components/video/VideoGrid.web'
 import { VideoCardProps } from '@/components/video/VideoCard.web'
 import { useSidebar, SIDEBAR_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from '@/components/desktop/constants'
 import { PearInlineVideoView } from '@/components/video-player'
+import { MseVideoPlayer } from '@/components/video-player/MseVideoPlayer.web'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
@@ -244,10 +245,9 @@ function WatchPageView({
   const playbackSession = useMemo(() => Date.now(), [channelKey, videoId])
   const [isActiveWatch, setIsActiveWatch] = useState(true)
   const [isPlaying, setIsPlaying] = useState(true)
-  const [isTranscoding, setIsTranscoding] = useState(false)
-  const transcodeAttemptedRef = useRef(false)
-  // Reset transcode state when video changes
-  useEffect(() => { transcodeAttemptedRef.current = false; setIsTranscoding(false) }, [channelKey, videoId])
+  const [useMsePlayer, setUseMsePlayer] = useState(false)
+  // Reset MSE fallback when video changes
+  useEffect(() => { setUseMsePlayer(false) }, [channelKey, videoId])
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [showControls, setShowControls] = useState(false)
@@ -919,6 +919,26 @@ function WatchPageView({
                   <span style={watchStyles.castSubtitle}>{video?.title}</span>
                 </div>
               </div>
+            ) : isActiveWatch && videoUrl && useMsePlayer ? (
+              <MseVideoPlayer
+                videoUrl={videoUrl}
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+                playerRef={videoRef}
+                isPlaying={isPlaying}
+                onPlaying={() => setIsPlaying(true)}
+                onPaused={() => setIsPlaying(false)}
+                onLoad={(data: any) => {
+                  if (data?.durationMs > 0) setDuration(data.durationMs / 1000)
+                  else if (data?.duration > 0) setDuration(data.duration)
+                  setIsLoading(false)
+                }}
+                onProgress={(data: any) => {
+                  if (data?.currentTime != null) setCurrentTime(data.currentTime / 1000)
+                  if (data?.duration > 0) setDuration(data.duration / 1000)
+                }}
+                onEnded={() => {}}
+                onError={(err: any) => setError(err?.message || String(err))}
+              />
             ) : isActiveWatch && videoUrl ? (
               <PearInlineVideoView
                 style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
@@ -937,47 +957,17 @@ function WatchPageView({
                   setIsLoading(false)
                 }}
                 onProgress={(data: any) => {
-                  // PearInlineVideoView sends { currentTime: ms, duration: ms }
                   if (data?.currentTime != null) setCurrentTime(data.currentTime / 1000)
                   if (data?.duration > 0) setDuration(data.duration / 1000)
                 }}
-                onError={async (err: any) => {
+                onError={(err: any) => {
                   const code = err?.error?.code || err?.code
-                  console.log('[WatchPage] Video error, code:', code, 'err:', JSON.stringify(err))
-                  // Remux proxy handles MKV→MP4 transparently at the blob server level.
-                  // If the video still fails, it's a codec issue WebKit can't handle.
-                  if (code == 4 && !transcodeAttemptedRef.current) {
-                    transcodeAttemptedRef.current = true
-                    setIsTranscoding(true)
-                    console.log('[WatchPage] Codec unsupported (code 4), trying transcode...')
-                    try {
-                      const platformRPC = await import('@peartube/platform/rpc')
-                      console.log('[WatchPage] platformRPC imported, getHRPCInstance:', typeof platformRPC.getHRPCInstance)
-                      const hrpc = platformRPC.getHRPCInstance?.()
-                      console.log('[WatchPage] hrpc:', !!hrpc, 'webPreparePlayback:', typeof hrpc?.webPreparePlayback)
-                      if (hrpc?.webPreparePlayback) {
-                        console.log('[WatchPage] Calling webPreparePlayback...')
-                        let result: any
-                        try {
-                          result = await hrpc.webPreparePlayback({ channelKey, videoId })
-                        } catch (rpcErr: any) {
-                          console.error('[WatchPage] webPreparePlayback RPC error:', rpcErr?.message, rpcErr?.name, rpcErr?.code)
-                          throw rpcErr
-                        }
-                        console.log('[WatchPage] Transcode result:', JSON.stringify(result))
-                        if (result?.url && result?.transcoded) {
-                          console.log('[WatchPage] Switching to transcoded HLS:', result.url)
-                          setVideoUrl(result.url)
-                          setIsTranscoding(false)
-                          return
-                        }
-                      } else {
-                        console.warn('[WatchPage] webPreparePlayback not available on HRPC instance')
-                      }
-                    } catch (e: any) {
-                      console.error('[WatchPage] Transcode fallback failed:', e?.message, e?.stack)
-                    }
-                    setIsTranscoding(false)
+                  // Code 4 = SRC_NOT_SUPPORTED (MKV container, unsupported codec)
+                  // Fall back to MSE player with mediabunny client-side remux
+                  if (code == 4) {
+                    console.log('[WatchPage] Native player failed (code 4), switching to MSE player')
+                    setUseMsePlayer(true)
+                    return
                   }
                   setError(err?.message || err?.error?.errorString || String(err))
                 }}

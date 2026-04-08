@@ -100,21 +100,27 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
       } catch {}
       console.log('[MsePlayer] Initializing with mediabunny for:', proxiedUrl.substring(0, 100))
 
-      // Dynamic import — only loaded when needed (keeps bundle small for non-MKV videos)
+      // Dynamic import — only loaded when needed
+      console.log('[MsePlayer] Importing mediabunny...')
       const mb = await import('mediabunny')
+      console.log('[MsePlayer] mediabunny imported, exports:', Object.keys(mb).slice(0, 10).join(', '))
+
       const {
         Input, Output, Conversion,
         UrlSource, Mp4OutputFormat, StreamTarget,
       } = mb
 
-      // Dynamically import ALL_FORMATS
       const ALL_FORMATS = mb.ALL_FORMATS || [
         mb.MatroskaInputFormat, mb.Mp4InputFormat, mb.WebMInputFormat,
         mb.OggInputFormat, mb.WavInputFormat,
       ].filter(Boolean)
+      console.log('[MsePlayer] Formats:', ALL_FORMATS?.length || 0)
 
+      console.log('[MsePlayer] Creating UrlSource...')
       const source = new UrlSource(proxiedUrl)
+      console.log('[MsePlayer] Creating Input...')
       const input = new Input({ source, formats: ALL_FORMATS })
+      console.log('[MsePlayer] Input created')
 
       // Buffer chunks until MSE sourceBuffer is ready
       const pendingChunks: Uint8Array[] = []
@@ -146,7 +152,9 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         })),
       })
 
+      console.log('[MsePlayer] Calling Conversion.init()...')
       const conversion = await Conversion.init({ input, output })
+      console.log('[MsePlayer] Conversion initialized, valid:', conversion.isValid)
       conversionRef.current = conversion
 
       if (!conversion.isValid) {

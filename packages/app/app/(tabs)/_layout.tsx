@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react'
 import { Tabs, Slot } from 'expo-router'
 import { View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -8,14 +7,8 @@ import { PillTabBar } from '@/components/PillTabBar'
 import { colors } from '../_layout'
 
 export default function TabLayout() {
-  const { isDesktop: platformIsDesktop } = usePlatform()
+  const { isDesktop } = usePlatform()
   const safeInsets = useSafeAreaInsets()
-
-  const [isDesktop, setIsDesktop] = useState(false)
-
-  useEffect(() => {
-    setIsDesktop(platformIsDesktop)
-  }, [platformIsDesktop])
 
   if (isDesktop) {
     return (

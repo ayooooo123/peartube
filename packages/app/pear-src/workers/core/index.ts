@@ -509,7 +509,7 @@ rpc.onWebPreparePlayback(async (r: any) => {
   try {
     console.log('[Worker] webPreparePlayback: remuxing to temp MP4 for', result.url?.substring(0, 80))
     const { startRemuxToFile } = await import('@peartube/backend/remux-to-file')
-    const sourceKey = `web:${r.channelKey}:${r.videoId}`
+    const sourceKey = `${r.channelKey}-${r.videoId}`.replace(/[^a-zA-Z0-9]/g, '')
 
     const remux = await startRemuxToFile(result.url, { sourceKey })
     if (!remux.url) {

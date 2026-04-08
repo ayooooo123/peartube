@@ -34,7 +34,7 @@ const NODE_POLYFILLS_SHIM = `<script id="peartube-node-polyfills">(function(){
 if(typeof globalThis.process==='undefined'){globalThis.process={env:{},nextTick:function(fn){Promise.resolve().then(fn)},browser:true};}
 if(typeof globalThis.Buffer==='undefined'){globalThis.Buffer={isBuffer:function(){return false},from:function(a){return new Uint8Array(a)},alloc:function(n){return new Uint8Array(n)}};}
 if(typeof globalThis.global==='undefined'){globalThis.global=globalThis;}
-try{if(screen&&screen.orientation){if(!screen.orientation.lock)Object.defineProperty(screen.orientation,'lock',{value:function(){return Promise.resolve()},configurable:true});if(!screen.orientation.unlock)Object.defineProperty(screen.orientation,'unlock',{value:function(){},configurable:true});}}catch(e){}
+try{if(screen&&screen.orientation){var o=screen.orientation;var origLock=o.lock;var origUnlock=o.unlock;if(origLock)o.lock=function(){try{return origLock.apply(this,arguments)}catch(e){return Promise.resolve()}};if(origUnlock)o.unlock=function(){try{origUnlock.apply(this,arguments)}catch(e){}};}}catch(e){}
 })();</script>`
 
 // React Native (Metro web) NativeModules shim.

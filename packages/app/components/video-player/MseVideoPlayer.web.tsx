@@ -2,15 +2,23 @@
  * MseVideoPlayer — streaming MSE player with sliding buffer window.
  *
  * Uses mediabunny to remux MKV→fMP4 and feeds segments to MSE SourceBuffer.
- * Only keeps ~60s of data buffered ahead of playback position.
- * Removes old segments behind playback to stay within WebKit's memory limits.
+ * Only keeps a window of data buffered around the playback position:
+ *   - ~60s ahead of current position
+ *   - ~30s behind current position
+ * Removes old segments to stay within WebKit's SourceBuffer memory quota (~200MB).
+ * Supports seeking by clearing the buffer and re-appending from the target position.
  */
 
 import { memo, useCallback, useRef } from 'react'
 
 const BUFFER_AHEAD_SEC = 60   // Buffer 60s ahead of current position
 const BUFFER_BEHIND_SEC = 30  // Keep 30s behind current position
-const EVICT_CHECK_MS = 2000   // Check buffer every 2s
+const POLL_MS = 500           // Main loop poll interval
+
+interface Segment {
+  time: number       // Timestamp in seconds from mediabunny onMoof
+  data: Uint8Array   // moof+mdat combined
+}
 
 interface MseVideoPlayerProps {
   videoUrl: string
@@ -23,6 +31,23 @@ interface MseVideoPlayerProps {
   onEnded?: () => void
   onError?: (error: { message: string }) => void
   playerRef?: React.RefObject<any>
+}
+
+/** Binary search for the segment whose time is <= target */
+function findSegmentIndex(segments: Segment[], target: number): number {
+  let lo = 0
+  let hi = segments.length - 1
+  let result = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1
+    if (segments[mid].time <= target) {
+      result = mid
+      lo = mid + 1
+    } else {
+      hi = mid - 1
+    }
+  }
+  return result
 }
 
 export const MseVideoPlayer = memo(function MseVideoPlayer({
@@ -70,8 +95,6 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
     // Start pipeline
     ;(async () => {
       try {
-        console.log('[MsePlayer] Init:', videoUrl.substring(0, 100))
-
         const mb = await import('mediabunny')
         const { Input, Output, Conversion, UrlSource, Mp4OutputFormat, NullTarget } = mb
         const ALL_FORMATS = mb.ALL_FORMATS || [mb.MatroskaInputFormat, mb.Mp4InputFormat].filter(Boolean)
@@ -84,8 +107,9 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
 
         // Collect fMP4 segments (ftyp+moov init + moof+mdat pairs)
         let initSegment: Uint8Array | null = null
+        let moofTimestamp = 0
         let lastMoof: Uint8Array | null = null
-        const segments: { time: number; data: Uint8Array }[] = []
+        const segments: Segment[] = []
 
         const output = new Output({
           target: new NullTarget(),
@@ -95,7 +119,6 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
               initSegment = new Uint8Array(data)
             },
             onMoov: (data: Uint8Array) => {
-              // Combine ftyp + moov as the init segment
               if (initSegment) {
                 const combined = new Uint8Array(initSegment.length + data.length)
                 combined.set(initSegment, 0)
@@ -105,15 +128,14 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
             },
             onMoof: (data: Uint8Array, _pos: number, timestamp: number) => {
               lastMoof = new Uint8Array(data)
-              // timestamp is in seconds
+              moofTimestamp = timestamp // seconds from mediabunny
             },
             onMdat: (data: Uint8Array) => {
               if (!lastMoof) return
-              // Combine moof + mdat as one segment
               const segment = new Uint8Array(lastMoof.length + data.length)
               segment.set(lastMoof, 0)
               segment.set(data, lastMoof.length)
-              segments.push({ time: segments.length > 0 ? -1 : 0, data: segment })
+              segments.push({ time: moofTimestamp, data: segment })
               lastMoof = null
             },
           }),
@@ -130,7 +152,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         el.src = URL.createObjectURL(ms)
         await new Promise<void>(r => { ms.onsourceopen = () => r() })
 
-        // Add SourceBuffer with known MIME
+        // Add SourceBuffer
         const mimes = [
           'video/mp4; codecs="hev1.1.6.L150.B0"',
           'video/mp4; codecs="avc1.640032"',
@@ -139,29 +161,62 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         let sb: SourceBuffer | null = null
         for (const m of mimes) {
           if (MediaSource.isTypeSupported(m)) {
-            try { sb = ms.addSourceBuffer(m); console.log('[MsePlayer] SourceBuffer:', m); break }
+            try { sb = ms.addSourceBuffer(m); break }
             catch {}
           }
         }
         if (!sb) { onError?.({ message: 'No MSE MIME support' }); return }
 
-        // Append helper with queue
-        let appendQueue = Promise.resolve()
-        const appendBuffer = (data: Uint8Array) => {
-          appendQueue = appendQueue.then(() => new Promise<void>(r => {
-            try { sb!.appendBuffer(data); sb!.onupdateend = () => r() }
-            catch { r() }
-          }))
-          return appendQueue
+        // --- SourceBuffer append/remove helpers ---
+
+        /** Wait for sb.updating to become false */
+        const waitForUpdate = () => new Promise<void>(resolve => {
+          if (!sb!.updating) { resolve(); return }
+          sb!.addEventListener('updateend', () => resolve(), { once: true })
+        })
+
+        /** Safely append data, handling QuotaExceededError by evicting */
+        const safeAppend = async (data: Uint8Array): Promise<boolean> => {
+          try {
+            await waitForUpdate()
+            sb!.appendBuffer(data)
+            await waitForUpdate()
+            return true
+          } catch (err: any) {
+            if (err.name === 'QuotaExceededError') {
+              // Evict everything before current position and retry
+              console.warn('[MsePlayer] QuotaExceeded, evicting')
+              try {
+                await waitForUpdate()
+                sb!.remove(0, el.currentTime)
+                await waitForUpdate()
+                sb!.appendBuffer(data)
+                await waitForUpdate()
+                return true
+              } catch {
+                return false
+              }
+            }
+            return false
+          }
         }
 
-        // Start conversion in background — segments accumulate
+        /** Remove buffered range */
+        const removeRange = async (start: number, end: number) => {
+          try {
+            await waitForUpdate()
+            if (sb!.buffered.length > 0) {
+              sb!.remove(start, end)
+              await waitForUpdate()
+            }
+          } catch {}
+        }
+
+        // --- Conversion runs in background ---
         let conversionDone = false
         const conversionPromise = (async () => {
-          console.log('[MsePlayer] Converting...')
           await conversion.execute()
           conversionDone = true
-          console.log('[MsePlayer] Conversion done, segments:', segments.length)
         })()
 
         // Wait for init segment + first few media segments
@@ -174,68 +229,147 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         }
 
         // Append init segment
-        await appendBuffer(initSegment)
-        console.log('[MsePlayer] Init segment appended')
+        await safeAppend(initSegment)
 
-        // Append first segments to start playback
-        let appendedUpTo = 0
-        for (let i = 0; i < Math.min(10, segments.length); i++) {
-          await appendBuffer(segments[i].data)
-          appendedUpTo = i + 1
+        // --- State for sliding window ---
+        // Track which segments are currently in the SourceBuffer
+        let windowStart = 0  // Index of first segment currently appended
+        let windowEnd = 0    // Index past last segment appended (exclusive)
+        let seekGeneration = 0  // Increments on seek to abort stale appends
+
+        /** Append segments from `from` to cover up to `targetTime` seconds ahead */
+        const fillWindow = async (from: number, targetTime: number, gen: number): Promise<number> => {
+          let idx = from
+          while (idx < segments.length && segments[idx].time < targetTime) {
+            if (gen !== seekGeneration) return idx // Abort if seek happened
+            const ok = await safeAppend(segments[idx].data)
+            if (!ok) break // Quota still exceeded, stop
+            idx++
+          }
+          return idx
         }
+
+        // Append initial batch — enough to start playback
+        const initialEnd = Math.min(segments.length, 10)
+        for (let i = 0; i < initialEnd; i++) {
+          await safeAppend(segments[i].data)
+        }
+        windowStart = 0
+        windowEnd = initialEnd
 
         el.play().catch(() => {})
         onLoad?.({ duration: 0, durationMs: 0 })
 
-        // Streaming loop: append new segments as they arrive,
-        // evict old buffered data to stay within memory limits
+        // --- Seek handler ---
+        let seekPending = false
+
+        el.onseeking = async () => {
+          const target = el.currentTime
+
+          // Check if target is within the currently buffered range
+          if (sb!.buffered.length > 0) {
+            for (let i = 0; i < sb!.buffered.length; i++) {
+              if (target >= sb!.buffered.start(i) && target <= sb!.buffered.end(i)) {
+                return // Already buffered, nothing to do
+              }
+            }
+          }
+
+          // Target is outside buffered range — need to clear and re-fill
+          seekPending = true
+          const gen = ++seekGeneration
+
+          try {
+            // Abort any pending operation
+            if (sb!.updating) {
+              sb!.abort()
+            }
+
+            // Clear entire SourceBuffer
+            await removeRange(0, Infinity)
+
+            // Re-append init segment
+            await safeAppend(initSegment!)
+
+            // Find segment closest to seek target
+            const startIdx = findSegmentIndex(segments, Math.max(0, target - 1))
+            const endTime = target + BUFFER_AHEAD_SEC
+
+            windowStart = startIdx
+            windowEnd = await fillWindow(startIdx, endTime, gen)
+          } catch (err: any) {
+            console.warn('[MsePlayer] Seek error:', err?.message)
+          }
+
+          seekPending = false
+        }
+
+        // --- Main streaming loop ---
         const streamLoop = async () => {
           while (true) {
-            await new Promise(r => setTimeout(r, 500))
+            await new Promise(r => setTimeout(r, POLL_MS))
 
-            // Append new segments
-            while (appendedUpTo < segments.length) {
-              await appendBuffer(segments[appendedUpTo].data)
-              appendedUpTo++
-            }
+            // Skip if a seek is in progress
+            if (seekPending) continue
 
-            // Evict old buffer behind playback position
-            if (sb && !sb.updating && el.currentTime > BUFFER_BEHIND_SEC) {
-              const evictEnd = el.currentTime - BUFFER_BEHIND_SEC
-              try {
-                if (sb.buffered.length > 0 && sb.buffered.start(0) < evictEnd) {
-                  sb.remove(0, evictEnd)
-                  await new Promise<void>(r => { sb!.onupdateend = () => r() })
+            const currentGen = seekGeneration
+            const now = el.currentTime
+
+            // 1. Evict old buffer behind playback
+            if (now > BUFFER_BEHIND_SEC && sb!.buffered.length > 0) {
+              const evictEnd = now - BUFFER_BEHIND_SEC
+              if (sb!.buffered.start(0) < evictEnd) {
+                await removeRange(sb!.buffered.start(0), evictEnd)
+                // Update windowStart to reflect evicted segments
+                while (windowStart < windowEnd && segments[windowStart].time < evictEnd) {
+                  windowStart++
                 }
-              } catch {}
+              }
             }
 
-            // Update duration
+            // 2. Append ahead of playback (only within window)
+            if (currentGen === seekGeneration) {
+              const targetTime = now + BUFFER_AHEAD_SEC
+              if (windowEnd < segments.length && segments[windowEnd].time < targetTime) {
+                windowEnd = await fillWindow(windowEnd, targetTime, currentGen)
+              }
+            }
+
+            // 3. Report duration if available
             if (el.duration && isFinite(el.duration) && el.duration > 0) {
               onLoad?.({ duration: el.duration, durationMs: Math.round(el.duration * 1000) })
             }
 
-            // Check if done
-            if (conversionDone && appendedUpTo >= segments.length) {
-              // All segments appended
-              await appendQueue
-              if (sb?.updating) {
-                await new Promise<void>(r => { sb!.onupdateend = () => r() })
+            // 4. Set MediaSource duration once conversion is done
+            if (conversionDone && ms.readyState === 'open' && segments.length > 0) {
+              const lastSeg = segments[segments.length - 1]
+              // Estimate: last segment time + typical segment duration
+              const estDuration = lastSeg.time + (segments.length > 1
+                ? lastSeg.time - segments[segments.length - 2].time
+                : 4)
+              try {
+                await waitForUpdate()
+                ms.duration = estDuration
+              } catch {}
+              onLoad?.({ duration: estDuration, durationMs: Math.round(estDuration * 1000) })
+            }
+
+            // 5. End of stream when all segments have been seen
+            // (but only if playback is near the end — don't end prematurely)
+            if (conversionDone && windowEnd >= segments.length) {
+              const lastSegTime = segments[segments.length - 1]?.time ?? 0
+              if (now >= lastSegTime - 10) {
+                await waitForUpdate()
+                if (ms.readyState === 'open') {
+                  try { ms.endOfStream() } catch {}
+                }
+                break
               }
-              if (ms.readyState === 'open') {
-                try { ms.endOfStream() } catch {}
-              }
-              if (el.duration && isFinite(el.duration)) {
-                console.log('[MsePlayer] Final duration:', el.duration)
-                onLoad?.({ duration: el.duration, durationMs: Math.round(el.duration * 1000) })
-              }
-              break
             }
           }
         }
 
         await Promise.all([conversionPromise, streamLoop()])
-        console.log('[MsePlayer] Complete')
       } catch (err: any) {
         console.error('[MsePlayer] Error:', err?.message)
         onError?.({ message: err?.message || 'MSE error' })

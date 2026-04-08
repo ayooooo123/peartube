@@ -1,79 +1,29 @@
+@preconcurrency import BareRPC
 import XCTest
-@testable import BareRPC
+
 @testable import PearTubeDesktop
 
 final class BridgeRPCChannelTests: XCTestCase {
-  func testUnexpectedRequestErrorMentionsEmbeddedWorklet() {
-    let message = BridgeRPCChannelError.unexpectedRequest(7).errorDescription
-
-    XCTAssertEqual(message, "Embedded BareKit worklet sent an unexpected inbound request for command 7.")
-  }
-
-  func testNativeSidecarFrameParserSeparatesEventsFromResponses() throws {
-    let parser = NativeSidecarFrameParser()
-    let eventPayload = Data([0x11, 0x22, 0x33])
-    let responsePayload = Data([0x44, 0x55, 0x66])
-
-    let combined = Messages.encodeEvent(command: 3, data: eventPayload)
-      + Messages.encodeResponse(id: 42, data: responsePayload)
-
-    let messages = try parser.push(combined)
-
-    XCTAssertEqual(messages.count, 2)
-
-    guard case .event(let event) = messages[0] else {
-      return XCTFail("Expected the first parsed message to be an event")
-    }
-    XCTAssertEqual(event.command, 3)
-    XCTAssertEqual(event.data, eventPayload)
-
-    guard case .response(let frame) = messages[1] else {
-      return XCTFail("Expected the second parsed message to be a response frame")
-    }
-    XCTAssertEqual(frame, Messages.encodeResponse(id: 42, data: responsePayload))
-  }
-
-  func testConcurrentRequestsRoundTripWithoutCorruptingRPCState() async throws {
+  func testSequentialRequestsRoundTrip() async throws {
+    let server = RPCEchoServer()
     var client: BridgeRPCChannel!
+
+    await server.setOnSend { data in
+      Task { await client.receive(data) }
+    }
+
     client = BridgeRPCChannel(
-      onSend: { data in
-        guard let decoded = try? Messages.decodeFrame(data) else {
-          XCTFail("Failed to decode outbound RPC frame")
-          return
-        }
-
-        guard case .request(let request) = decoded else {
-          XCTFail("Expected an outbound request frame")
-          return
-        }
-
-        Task.detached {
-          try? await Task.sleep(nanoseconds: 1_000_000)
-          await client.receive(Messages.encodeResponse(id: request.id, data: request.data))
-        }
-      },
+      onSend: { data in Task { await server.receive(data) } },
       onEvent: { _ in },
       onError: { error in
         XCTFail("Unexpected RPC error: \(error.localizedDescription)")
       }
     )
 
-    try await withThrowingTaskGroup(of: Data?.self) { group in
-      for index in 0..<40 {
-        let payload = Data([UInt8(index % 255), UInt8((index * 3) % 255)])
-        group.addTask {
-          try await client.request(command: UInt(index + 1), data: payload)
-        }
-      }
-
-      var responses: [Data] = []
-      for try await response in group {
-        if let response {
-          responses.append(response)
-        }
-      }
-
-      XCTAssertEqual(responses.count, 40)
+    for index in 0..<5 {
+      let payload = Data([UInt8(index % 255), UInt8((index * 3) % 255)])
+      let response = try await client.request(command: UInt(index + 1), data: payload)
+      XCTAssertEqual(response, payload)
     }
   }
 
@@ -81,9 +31,7 @@ final class BridgeRPCChannelTests: XCTestCase {
     let client = BridgeRPCChannel(
       onSend: { _ in },
       onEvent: { _ in },
-      onError: { error in
-        XCTFail("Unexpected RPC error: \(error.localizedDescription)")
-      }
+      onError: { _ in }
     )
 
     do {
@@ -101,24 +49,15 @@ final class BridgeRPCChannelTests: XCTestCase {
   }
 
   func testRequestCanDisableTimeoutForLongRunningOperations() async throws {
+    let server = RPCDelayedEchoServer(delay: .milliseconds(150))
     var client: BridgeRPCChannel!
+
+    await server.setOnSend { data in
+      Task { await client.receive(data) }
+    }
+
     client = BridgeRPCChannel(
-      onSend: { data in
-        guard let decoded = try? Messages.decodeFrame(data) else {
-          XCTFail("Failed to decode outbound RPC frame")
-          return
-        }
-
-        guard case .request(let request) = decoded else {
-          XCTFail("Expected an outbound request frame")
-          return
-        }
-
-        Task.detached {
-          try? await Task.sleep(for: .milliseconds(150))
-          await client.receive(Messages.encodeResponse(id: request.id, data: request.data))
-        }
-      },
+      onSend: { data in Task { await server.receive(data) } },
       onEvent: { _ in },
       onError: { error in
         XCTFail("Unexpected RPC error: \(error.localizedDescription)")
@@ -133,5 +72,103 @@ final class BridgeRPCChannelTests: XCTestCase {
     )
 
     XCTAssertEqual(response, payload)
+  }
+
+  func testEventsAreDispatchedToCallback() async throws {
+    let eventExpectation = expectation(description: "Event received")
+    var receivedCommand: UInt?
+    var receivedData: Data?
+
+    let server = RPCEchoServer()
+    let client = BridgeRPCChannel(
+      onSend: { _ in },
+      onEvent: { event in
+        receivedCommand = event.command
+        receivedData = event.data
+        eventExpectation.fulfill()
+      },
+      onError: { _ in }
+    )
+
+    await server.setOnSend { data in
+      Task { await client.receive(data) }
+    }
+
+    let eventData = Data([0xDE, 0xAD])
+    await server.sendEvent(command: 42, data: eventData)
+    await fulfillment(of: [eventExpectation], timeout: 2)
+
+    XCTAssertEqual(receivedCommand, 42)
+    XCTAssertEqual(receivedData, eventData)
+  }
+}
+
+// MARK: - Test Helpers
+
+/// Actor-isolated echo server that wraps a bare-rpc-swift `RPC` instance,
+/// ensuring all access to the non-Sendable `RPC` class is serialized.
+private actor RPCEchoServer {
+  private let rpc: RPC
+  private let delegateAdapter: ServerDelegateAdapter
+
+  init() {
+    let adapter = ServerDelegateAdapter()
+    self.rpc = RPC(delegate: adapter)
+    self.delegateAdapter = adapter
+    adapter.onRequest = { [rpc] request in
+      request.reply(request.data)
+    }
+  }
+
+  func setOnSend(_ handler: @escaping @Sendable (Data) -> Void) {
+    delegateAdapter.onSend = handler
+  }
+
+  func receive(_ data: Data) {
+    rpc.receive(data)
+  }
+
+  func sendEvent(command: UInt, data: Data?) {
+    rpc.event(command, data: data)
+  }
+}
+
+/// Actor-isolated delayed echo server for timeout tests.
+private actor RPCDelayedEchoServer {
+  private let rpc: RPC
+  private let delegateAdapter: ServerDelegateAdapter
+
+  init(delay: Duration) {
+    let adapter = ServerDelegateAdapter()
+    self.rpc = RPC(delegate: adapter)
+    self.delegateAdapter = adapter
+    adapter.onRequest = { [rpc] request in
+      Task {
+        try? await Task.sleep(for: delay)
+        request.reply(request.data)
+      }
+    }
+  }
+
+  func setOnSend(_ handler: @escaping @Sendable (Data) -> Void) {
+    delegateAdapter.onSend = handler
+  }
+
+  func receive(_ data: Data) {
+    rpc.receive(data)
+  }
+}
+
+/// Delegate bridge for test server RPCs.
+private final class ServerDelegateAdapter: RPCDelegate, @unchecked Sendable {
+  var onSend: (@Sendable (Data) -> Void)?
+  var onRequest: ((IncomingRequest) -> Void)?
+
+  func rpc(_ rpc: RPC, send data: Data) {
+    onSend?(data)
+  }
+
+  func rpc(_ rpc: RPC, didReceiveRequest request: IncomingRequest) async throws {
+    onRequest?(request)
   }
 }

@@ -1,3 +1,4 @@
+@preconcurrency import BareRPC
 import XCTest
 @testable import PearTubeDesktop
 
@@ -698,7 +699,7 @@ final class BareKitIntegrationTests: XCTestCase {
   @MainActor
   private func makeEmbeddedHostSession(
     logPrefix: String,
-    onEvent: (@Sendable (NativeSidecarEvent) async -> Void)? = nil
+    onEvent: (@Sendable (IncomingEvent) async -> Void)? = nil
   ) throws -> (EmbeddedBareKitSession, BridgeRPCChannel) {
     let entryURL = try nativeHostWorkletURL()
     var session: EmbeddedBareKitSession?

@@ -2,39 +2,135 @@
 import Foundation
 
 enum BridgeRPCChannelError: LocalizedError, Equatable {
-  case unexpectedRequest(UInt)
   case requestTimedOut(UInt)
 
   var errorDescription: String? {
     switch self {
-    case .unexpectedRequest(let command):
-      return "Embedded BareKit worklet sent an unexpected inbound request for command \(command)."
     case .requestTimedOut(let command):
       return "Native host bridge request timed out while waiting for command \(command)."
     }
   }
 }
 
+/// Wraps bare-rpc-swift's ``RPC`` class in an actor for thread-safe request/response
+/// and stream communication with the native host process.
 actor BridgeRPCChannel {
   nonisolated static let defaultRequestTimeout: Duration = .seconds(8)
 
-  private let frameParser = NativeSidecarFrameParser()
-  private let onSend: @Sendable (Data) -> Void
-  private let onEvent: @Sendable (NativeSidecarEvent) async -> Void
-  private let onError: @Sendable (Error) -> Void
-
-  private var nextRequestID: UInt = 1
-  private struct PendingRequest {
-    let command: UInt
-    let continuation: CheckedContinuation<Data?, Error>
-    let timeoutTask: Task<Void, Never>?
-  }
-
-  private var pending: [UInt: PendingRequest] = [:]
+  private let rpc: RPC
+  private let delegateAdapter: RPCBridgeDelegateAdapter
 
   init(
     onSend: @escaping @Sendable (Data) -> Void,
-    onEvent: @escaping @Sendable (NativeSidecarEvent) async -> Void,
+    onEvent: @escaping @Sendable (IncomingEvent) async -> Void,
+    onError: @escaping @Sendable (Error) -> Void
+  ) {
+    let adapter = RPCBridgeDelegateAdapter(
+      onSend: onSend,
+      onEvent: onEvent,
+      onError: onError
+    )
+    self.rpc = RPC(delegate: adapter)
+    self.delegateAdapter = adapter
+  }
+
+  // MARK: - Request / Response
+
+  func request(
+    command: UInt,
+    data: Data? = nil,
+    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
+  ) async throws -> Data? {
+    guard let timeout else {
+      return try await rpc.request(command, data: data)
+    }
+
+    // Race the RPC against a deadline. The rpc.request() call runs directly
+    // on this actor (keeping RPC's non-Sendable state safe). A separate Task
+    // fires after the deadline and cancels the RPC task if it hasn't completed.
+    let rpcTask = Task { try await self.rpc.request(command, data: data) }
+
+    let timeoutTask = Task {
+      try? await Task.sleep(for: timeout)
+      rpcTask.cancel()
+    }
+
+    do {
+      let result = try await rpcTask.value
+      timeoutTask.cancel()
+      return result
+    } catch is CancellationError {
+      throw BridgeRPCChannelError.requestTimedOut(command)
+    } catch {
+      timeoutTask.cancel()
+      throw error
+    }
+  }
+
+  // MARK: - Response Streams
+
+  /// Send a request and receive a stream of response chunks.
+  ///
+  /// The returned ``AsyncThrowingStream`` yields each chunk the responder
+  /// writes and finishes when the responder calls ``end()``.
+  func requestStream(
+    command: UInt,
+    data: Data? = nil,
+    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
+  ) async throws -> AsyncThrowingStream<Data, Error> {
+    let incoming: IncomingStream
+    if let timeout {
+      let rpcTask = Task { try await self.rpc.requestWithResponseStream(command: command, data: data) }
+
+      let timeoutTask = Task {
+        try? await Task.sleep(for: timeout)
+        rpcTask.cancel()
+      }
+
+      do {
+        incoming = try await rpcTask.value
+        timeoutTask.cancel()
+      } catch is CancellationError {
+        throw BridgeRPCChannelError.requestTimedOut(command)
+      } catch {
+        timeoutTask.cancel()
+        throw error
+      }
+    } else {
+      incoming = try await rpc.requestWithResponseStream(command: command, data: data)
+    }
+    return incoming.stream
+  }
+
+  // MARK: - Transport
+
+  func receive(_ data: Data) {
+    rpc.receive(data)
+  }
+
+  /// Best-effort notification that the transport has disconnected.
+  ///
+  /// bare-rpc-swift does not expose a ``failPending`` API, so in-flight
+  /// requests will time out naturally via their configured deadline.
+  func failPending(_ error: Error) {
+    delegateAdapter.onError(error)
+  }
+}
+
+// MARK: - RPCDelegate Adapter
+
+/// Bridges ``RPCDelegate`` callbacks to the closures expected by ``BridgeRPCChannel``.
+///
+/// All delegate methods are invoked synchronously from within ``RPC.receive(_:)``
+/// which is called on the owning actor, so access is effectively serialized.
+private final class RPCBridgeDelegateAdapter: RPCDelegate, @unchecked Sendable {
+  let onSend: @Sendable (Data) -> Void
+  let onEvent: @Sendable (IncomingEvent) async -> Void
+  let onError: @Sendable (Error) -> Void
+
+  init(
+    onSend: @escaping @Sendable (Data) -> Void,
+    onEvent: @escaping @Sendable (IncomingEvent) async -> Void,
     onError: @escaping @Sendable (Error) -> Void
   ) {
     self.onSend = onSend
@@ -42,90 +138,15 @@ actor BridgeRPCChannel {
     self.onError = onError
   }
 
-  func request(
-    command: UInt,
-    data: Data? = nil,
-    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
-  ) async throws -> Data? {
-    let requestID = nextRequestID
-    nextRequestID = (nextRequestID % 0xFFFF_FFFE) + 1
-
-    let frame = try NativeSidecarRPCWire.encodeRequestFrame(
-      id: requestID,
-      command: command,
-      data: data
-    )
-
-    return try await withCheckedThrowingContinuation { continuation in
-      let timeoutTask = timeout.map { timeout in
-        Task { [weak self] in
-          try? await Task.sleep(for: timeout)
-          await self?.timeoutRequest(id: requestID)
-        }
-      }
-
-      pending[requestID] = PendingRequest(
-        command: command,
-        continuation: continuation,
-        timeoutTask: timeoutTask
-      )
-      onSend(frame)
-    }
+  func rpc(_ rpc: RPC, send data: Data) {
+    onSend(data)
   }
 
-  func receive(_ data: Data) async {
-    do {
-      let frames = try frameParser.push(data)
-
-      for frame in frames {
-        switch frame {
-        case .event(let event):
-          await onEvent(event)
-        case .response(let rawFrame):
-          try handleResponseFrame(rawFrame)
-        }
-      }
-    } catch {
-      onError(error)
-    }
+  func rpc(_ rpc: RPC, didReceiveEvent event: IncomingEvent) async {
+    await onEvent(event)
   }
 
-  func failPending(_ error: Error) {
-    let continuations = pending.values
-    pending.removeAll()
-
-    for pendingRequest in continuations {
-      pendingRequest.timeoutTask?.cancel()
-      pendingRequest.continuation.resume(throwing: error)
-    }
-  }
-
-  private func timeoutRequest(id: UInt) {
-    guard let pendingRequest = pending.removeValue(forKey: id) else { return }
-    pendingRequest.timeoutTask?.cancel()
-    pendingRequest.continuation.resume(throwing: BridgeRPCChannelError.requestTimedOut(pendingRequest.command))
-  }
-
-  private func handleResponseFrame(_ rawFrame: Data) throws {
-    guard let message = try NativeSidecarRPCWire.decodeFrame(rawFrame) else {
-      return
-    }
-
-    switch message {
-    case .request(let request):
-      throw BridgeRPCChannelError.unexpectedRequest(request.command)
-    case .response(let response):
-      guard let pendingRequest = pending.removeValue(forKey: response.id) else {
-        return
-      }
-      pendingRequest.timeoutTask?.cancel()
-
-      switch response.result {
-      case .success(let data):
-        pendingRequest.continuation.resume(returning: data)
-      case .remoteError(let message, let code, let errno):
-        pendingRequest.continuation.resume(throwing: RPCRemoteError(message: message, code: code, errno: errno))
-      }
-    }
+  func rpc(_ rpc: RPC, didFailWith error: Error) {
+    onError(error)
   }
 }

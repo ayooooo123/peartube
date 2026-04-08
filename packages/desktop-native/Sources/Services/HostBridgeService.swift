@@ -2104,7 +2104,7 @@ final class HostBridgeService {
     appendLog(disconnectError.localizedDescription)
   }
 
-  private func handleRPCEvent(_ event: NativeSidecarEvent) {
+  private func handleRPCEvent(_ event: IncomingEvent) {
     lastHeartbeat = Date()
 
     switch NativeBridgeEventCommand(rawValue: event.command) {

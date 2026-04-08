@@ -73,8 +73,11 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         const { Input, Output, Conversion, UrlSource, Mp4OutputFormat, StreamTarget } = mb
         const ALL_FORMATS = mb.ALL_FORMATS || [mb.MatroskaInputFormat, mb.Mp4InputFormat].filter(Boolean)
 
-        const source = new UrlSource(videoUrl)
-        const input = new Input({ source, formats: ALL_FORMATS })
+        const source = new UrlSource(videoUrl, {
+          maxCacheSize: 256 * 1024 * 1024, // 256 MiB (default 64 MiB)
+          parallelism: 4,                   // 4 parallel range requests (default 2)
+        })
+        const input = new Input({ source, formats: ALL_FORMATS, prefetchProfile: 'network' })
 
         // Buffer chunks until SourceBuffer is ready
         const pending: Uint8Array[] = []
@@ -134,7 +137,13 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
         await conversion.execute()
         console.log('[MsePlayer] Done')
         await queue
-        if (ms.readyState === 'open') ms.endOfStream()
+        // Wait for SourceBuffer to finish before ending stream
+        if (sbRef?.updating) {
+          await new Promise<void>(r => { sbRef!.onupdateend = () => r() })
+        }
+        if (ms.readyState === 'open') {
+          try { ms.endOfStream() } catch {}
+        }
       } catch (err: any) {
         console.error('[MsePlayer] Error:', err?.message)
         onError?.({ message: err?.message || 'MSE error' })

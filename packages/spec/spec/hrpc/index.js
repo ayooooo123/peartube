@@ -193,7 +193,43 @@ const methods = new Map([
   ['@peartube/update-video-metadata', 92],
   [92, '@peartube/update-video-metadata'],
   ['@peartube/web-prepare-playback', 93],
-  [93, '@peartube/web-prepare-playback']
+  [93, '@peartube/web-prepare-playback'],
+  ['@peartube/desktop-bootstrap', 94],
+  [94, '@peartube/desktop-bootstrap'],
+  ['@peartube/desktop-shutdown', 95],
+  [95, '@peartube/desktop-shutdown'],
+  ['@peartube/desktop-refresh-browse', 96],
+  [96, '@peartube/desktop-refresh-browse'],
+  ['@peartube/mpv-available', 97],
+  [97, '@peartube/mpv-available'],
+  ['@peartube/mpv-create', 98],
+  [98, '@peartube/mpv-create'],
+  ['@peartube/mpv-load-file', 99],
+  [99, '@peartube/mpv-load-file'],
+  ['@peartube/mpv-play', 100],
+  [100, '@peartube/mpv-play'],
+  ['@peartube/mpv-pause', 101],
+  [101, '@peartube/mpv-pause'],
+  ['@peartube/mpv-seek', 102],
+  [102, '@peartube/mpv-seek'],
+  ['@peartube/mpv-get-state', 103],
+  [103, '@peartube/mpv-get-state'],
+  ['@peartube/mpv-render-frame', 104],
+  [104, '@peartube/mpv-render-frame'],
+  ['@peartube/mpv-destroy', 105],
+  [105, '@peartube/mpv-destroy'],
+  ['@peartube/ffmpeg-decode-available', 106],
+  [106, '@peartube/ffmpeg-decode-available'],
+  ['@peartube/update-channel-avatar', 107],
+  [107, '@peartube/update-channel-avatar'],
+  ['@peartube/transcode-start', 108],
+  [108, '@peartube/transcode-start'],
+  ['@peartube/transcode-stop', 109],
+  [109, '@peartube/transcode-stop'],
+  ['@peartube/transcode-status', 110],
+  [110, '@peartube/transcode-status'],
+  ['@peartube/event-transcode-progress', 111],
+  [111, '@peartube/event-transcode-progress']
 ])
 
 class HRPC {
@@ -294,7 +330,25 @@ class HRPC {
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-request')],
       ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-request')],
       ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-request')],
-      ['@peartube/web-prepare-playback', getEncoding('@peartube/prepare-playback-request')]
+      ['@peartube/web-prepare-playback', getEncoding('@peartube/prepare-playback-request')],
+      ['@peartube/desktop-bootstrap', getEncoding('@peartube/desktop-bootstrap-request')],
+      ['@peartube/desktop-shutdown', getEncoding('@peartube/desktop-shutdown-request')],
+      ['@peartube/desktop-refresh-browse', getEncoding('@peartube/desktop-refresh-browse-request')],
+      ['@peartube/mpv-available', getEncoding('@peartube/mpv-available-request')],
+      ['@peartube/mpv-create', getEncoding('@peartube/mpv-create-request')],
+      ['@peartube/mpv-load-file', getEncoding('@peartube/mpv-load-file-request')],
+      ['@peartube/mpv-play', getEncoding('@peartube/mpv-player-request')],
+      ['@peartube/mpv-pause', getEncoding('@peartube/mpv-player-request')],
+      ['@peartube/mpv-seek', getEncoding('@peartube/mpv-seek-request')],
+      ['@peartube/mpv-get-state', getEncoding('@peartube/mpv-player-request')],
+      ['@peartube/mpv-render-frame', getEncoding('@peartube/mpv-player-request')],
+      ['@peartube/mpv-destroy', getEncoding('@peartube/mpv-player-request')],
+      ['@peartube/ffmpeg-decode-available', getEncoding('@peartube/ffmpeg-decode-available-request')],
+      ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-request')],
+      ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-request')],
+      ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-request')],
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-request')],
+      ['@peartube/event-transcode-progress', getEncoding('@peartube/event-transcode-progress')]
     ])
     this._responseEncodings = new Map([
       ['@peartube/create-identity', getEncoding('@peartube/create-identity-response')],
@@ -379,18 +433,28 @@ class HRPC {
       ['@peartube/get-recommendations', getEncoding('@peartube/get-recommendations-response')],
       ['@peartube/get-video-recommendations', getEncoding('@peartube/get-video-recommendations-response')],
       ['@peartube/update-video-metadata', getEncoding('@peartube/update-video-metadata-response')],
-      ['@peartube/web-prepare-playback', getEncoding('@peartube/web-prepare-playback-response')]
+      ['@peartube/web-prepare-playback', getEncoding('@peartube/web-prepare-playback-response')],
+      ['@peartube/desktop-bootstrap', getEncoding('@peartube/desktop-bootstrap-response')],
+      ['@peartube/desktop-shutdown', getEncoding('@peartube/desktop-shutdown-response')],
+      ['@peartube/desktop-refresh-browse', getEncoding('@peartube/desktop-refresh-browse-response')],
+      ['@peartube/mpv-available', getEncoding('@peartube/mpv-available-response')],
+      ['@peartube/mpv-create', getEncoding('@peartube/mpv-create-response')],
+      ['@peartube/mpv-load-file', getEncoding('@peartube/mpv-player-response')],
+      ['@peartube/mpv-play', getEncoding('@peartube/mpv-player-response')],
+      ['@peartube/mpv-pause', getEncoding('@peartube/mpv-player-response')],
+      ['@peartube/mpv-seek', getEncoding('@peartube/mpv-player-response')],
+      ['@peartube/mpv-get-state', getEncoding('@peartube/mpv-state-response')],
+      ['@peartube/mpv-render-frame', getEncoding('@peartube/mpv-render-frame-response')],
+      ['@peartube/mpv-destroy', getEncoding('@peartube/mpv-player-response')],
+      ['@peartube/ffmpeg-decode-available', getEncoding('@peartube/ffmpeg-decode-available-response')],
+      ['@peartube/update-channel-avatar', getEncoding('@peartube/update-channel-avatar-response')],
+      ['@peartube/transcode-start', getEncoding('@peartube/transcode-start-response')],
+      ['@peartube/transcode-stop', getEncoding('@peartube/transcode-stop-response')],
+      ['@peartube/transcode-status', getEncoding('@peartube/transcode-status-response')]
     ])
     this._rpc = new RPC(stream, async (req) => {
       const command = methods.get(req.command)
-      if (!command) {
-        console.error('[HRPC] Unknown command index:', req.command, '- no method mapping found')
-        return
-      }
-      if (typeof this._handlers[command] !== 'function') {
-        console.error('[HRPC] No handler registered for:', command, '(index:', req.command, ')')
-        return
-      }
+      if (!command || typeof this._handlers[command] !== 'function') return
       const responseEncoding = this._responseEncodings.get(command)
       const requestEncoding = this._requestEncodings.get(command)
       if (this._requestIsSend(command)) {
@@ -861,6 +925,78 @@ class HRPC {
     return this._call('@peartube/web-prepare-playback', args)
   }
 
+  async desktopBootstrap(args) {
+    return this._call('@peartube/desktop-bootstrap', args)
+  }
+
+  async desktopShutdown(args) {
+    return this._call('@peartube/desktop-shutdown', args)
+  }
+
+  async desktopRefreshBrowse(args) {
+    return this._call('@peartube/desktop-refresh-browse', args)
+  }
+
+  async mpvAvailable(args) {
+    return this._call('@peartube/mpv-available', args)
+  }
+
+  async mpvCreate(args) {
+    return this._call('@peartube/mpv-create', args)
+  }
+
+  async mpvLoadFile(args) {
+    return this._call('@peartube/mpv-load-file', args)
+  }
+
+  async mpvPlay(args) {
+    return this._call('@peartube/mpv-play', args)
+  }
+
+  async mpvPause(args) {
+    return this._call('@peartube/mpv-pause', args)
+  }
+
+  async mpvSeek(args) {
+    return this._call('@peartube/mpv-seek', args)
+  }
+
+  async mpvGetState(args) {
+    return this._call('@peartube/mpv-get-state', args)
+  }
+
+  async mpvRenderFrame(args) {
+    return this._call('@peartube/mpv-render-frame', args)
+  }
+
+  async mpvDestroy(args) {
+    return this._call('@peartube/mpv-destroy', args)
+  }
+
+  async ffmpegDecodeAvailable(args) {
+    return this._call('@peartube/ffmpeg-decode-available', args)
+  }
+
+  async updateChannelAvatar(args) {
+    return this._call('@peartube/update-channel-avatar', args)
+  }
+
+  async transcodeStart(args) {
+    return this._call('@peartube/transcode-start', args)
+  }
+
+  async transcodeStop(args) {
+    return this._call('@peartube/transcode-stop', args)
+  }
+
+  async transcodeStatus(args) {
+    return this._call('@peartube/transcode-status', args)
+  }
+
+  eventTranscodeProgress(args) {
+    return this._callSync('@peartube/event-transcode-progress', args)
+  }
+
   onCreateIdentity(responseFn) {
     this._handlers['@peartube/create-identity'] = responseFn
   }
@@ -1237,6 +1373,78 @@ class HRPC {
     this._handlers['@peartube/web-prepare-playback'] = responseFn
   }
 
+  onDesktopBootstrap(responseFn) {
+    this._handlers['@peartube/desktop-bootstrap'] = responseFn
+  }
+
+  onDesktopShutdown(responseFn) {
+    this._handlers['@peartube/desktop-shutdown'] = responseFn
+  }
+
+  onDesktopRefreshBrowse(responseFn) {
+    this._handlers['@peartube/desktop-refresh-browse'] = responseFn
+  }
+
+  onMpvAvailable(responseFn) {
+    this._handlers['@peartube/mpv-available'] = responseFn
+  }
+
+  onMpvCreate(responseFn) {
+    this._handlers['@peartube/mpv-create'] = responseFn
+  }
+
+  onMpvLoadFile(responseFn) {
+    this._handlers['@peartube/mpv-load-file'] = responseFn
+  }
+
+  onMpvPlay(responseFn) {
+    this._handlers['@peartube/mpv-play'] = responseFn
+  }
+
+  onMpvPause(responseFn) {
+    this._handlers['@peartube/mpv-pause'] = responseFn
+  }
+
+  onMpvSeek(responseFn) {
+    this._handlers['@peartube/mpv-seek'] = responseFn
+  }
+
+  onMpvGetState(responseFn) {
+    this._handlers['@peartube/mpv-get-state'] = responseFn
+  }
+
+  onMpvRenderFrame(responseFn) {
+    this._handlers['@peartube/mpv-render-frame'] = responseFn
+  }
+
+  onMpvDestroy(responseFn) {
+    this._handlers['@peartube/mpv-destroy'] = responseFn
+  }
+
+  onFfmpegDecodeAvailable(responseFn) {
+    this._handlers['@peartube/ffmpeg-decode-available'] = responseFn
+  }
+
+  onUpdateChannelAvatar(responseFn) {
+    this._handlers['@peartube/update-channel-avatar'] = responseFn
+  }
+
+  onTranscodeStart(responseFn) {
+    this._handlers['@peartube/transcode-start'] = responseFn
+  }
+
+  onTranscodeStop(responseFn) {
+    this._handlers['@peartube/transcode-stop'] = responseFn
+  }
+
+  onTranscodeStatus(responseFn) {
+    this._handlers['@peartube/transcode-status'] = responseFn
+  }
+
+  onEventTranscodeProgress(responseFn) {
+    this._handlers['@peartube/event-transcode-progress'] = responseFn
+  }
+
   _requestIsStream(command) {
     return [
     ].includes(command)
@@ -1261,7 +1469,8 @@ class HRPC {
       '@peartube/event-cast-device-found',
       '@peartube/event-cast-device-lost',
       '@peartube/event-cast-playback-state',
-      '@peartube/event-cast-time-update'
+      '@peartube/event-cast-time-update',
+      '@peartube/event-transcode-progress'
     ].includes(command)
   }
 }

@@ -8,22 +8,36 @@ import { StyleSheet } from 'react-native'
 import { colors } from '@/lib/colors'
 import { MINI_PIP_WIDTH, MINI_PIP_HEIGHT } from './constants'
 
+const PLAYER_COLORS = {
+  brandPurple: '#9147ff',
+  brandPurpleAlpha35: 'rgba(145, 71, 255, 0.35)',
+  whiteAlpha15: 'rgba(255, 255, 255, 0.15)',
+  black: '#000',
+  blackShadow: '#000000',
+} as const;
+
+const PLAYER_Z_INDEX = {
+  overlay: 9999,
+  controls: 15,
+  base: 10,
+} as const;
+
 export const styles = StyleSheet.create({
   container: {
     // Use black background to ensure PiP shows black (not grey) for any offset areas
     // This makes the video look properly letterboxed rather than broken
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
     overflow: 'hidden',
   },
   // Landscape fullscreen styles
   landscapeContainer: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
-    zIndex: 9999,
+    backgroundColor: PLAYER_COLORS.black,
+    zIndex: PLAYER_Z_INDEX.overlay,
   },
   landscapeAnimatedContainer: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
   },
   landscapeExitButton: {
     position: 'absolute',
@@ -59,19 +73,19 @@ export const styles = StyleSheet.create({
   landscapeVideoWrapper: {
     ...StyleSheet.absoluteFillObject,
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
   },
   videoWrapper: {
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
     overflow: 'hidden',
   },
   videoBackground: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
   },
   landscapeVideoBackground: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
   },
   videoPlaceholder: {
     flex: 1,
@@ -180,7 +194,7 @@ export const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
+    zIndex: PLAYER_Z_INDEX.base,
   },
   seekFeedbackLeft: {
     left: '15%',
@@ -197,7 +211,7 @@ export const styles = StyleSheet.create({
   minimizeButton: {
     position: 'absolute',
     left: 12,
-    zIndex: 10,
+    zIndex: PLAYER_Z_INDEX.base,
   },
   minimizeButtonInner: {
     width: 40,
@@ -210,7 +224,7 @@ export const styles = StyleSheet.create({
   speedButton: {
     position: 'absolute',
     right: 12,
-    zIndex: 10,
+    zIndex: PLAYER_Z_INDEX.base,
   },
   speedButtonInner: {
     minWidth: 50,
@@ -229,7 +243,7 @@ export const styles = StyleSheet.create({
   castButton: {
     position: 'absolute',
     right: 60,
-    zIndex: 10,
+    zIndex: PLAYER_Z_INDEX.base,
     elevation: 10,
   },
   castButtonInner: {
@@ -243,7 +257,7 @@ export const styles = StyleSheet.create({
   fullscreenButton: {
     position: 'absolute',
     right: 12,
-    zIndex: 10,
+    zIndex: PLAYER_Z_INDEX.base,
     elevation: 10,
   },
   fullscreenButtonLandscape: {
@@ -270,7 +284,7 @@ export const styles = StyleSheet.create({
     top: 0,
     height: 4,
     borderRadius: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: PLAYER_COLORS.whiteAlpha15,
   },
   scrubberBufferFill: {
     position: 'absolute',
@@ -278,7 +292,7 @@ export const styles = StyleSheet.create({
     top: 0,
     height: 4,
     borderRadius: 2,
-    backgroundColor: 'rgba(145, 71, 255, 0.35)',
+    backgroundColor: PLAYER_COLORS.brandPurpleAlpha35,
   },
   scrubberPlayedFill: {
     position: 'absolute',
@@ -286,7 +300,7 @@ export const styles = StyleSheet.create({
     top: 0,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#9147ff',
+    backgroundColor: PLAYER_COLORS.brandPurple,
   },
   // ── Scrubber: Handle (spec §3) ───────────────────────────────────────
   scrubberHandleNew: {
@@ -296,7 +310,7 @@ export const styles = StyleSheet.create({
     height: 12,
     borderRadius: 6,
     backgroundColor: '#FFFFFF',
-    shadowColor: '#000000',
+    shadowColor: PLAYER_COLORS.blackShadow,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.40,
     shadowRadius: 3,
@@ -315,7 +329,7 @@ export const styles = StyleSheet.create({
     paddingVertical: 6,
     borderWidth: 1,
     borderColor: 'rgba(48, 48, 53, 0.8)',
-    shadowColor: '#000000',
+    shadowColor: PLAYER_COLORS.blackShadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.50,
     shadowRadius: 6,
@@ -385,7 +399,7 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    zIndex: 10,
+    zIndex: PLAYER_Z_INDEX.base,
   },
   fullscreenProgressBar: {
     flex: 1,
@@ -540,15 +554,15 @@ export const styles = StyleSheet.create({
   fullscreenContent: {
     // Position is set by animated style (absolute with top: videoHeight)
     // No flex needed since we use explicit positioning
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
   },
   scrollContent: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
   },
   videoInfo: {
     padding: 16,
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
   },
   videoTitle: {
     color: colors.text,
@@ -565,7 +579,7 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     paddingVertical: 12,
-    backgroundColor: '#000',
+    backgroundColor: PLAYER_COLORS.black,
     paddingHorizontal: 8,
     borderTopWidth: 1,
     borderBottomWidth: 1,
@@ -896,7 +910,7 @@ export const styles = StyleSheet.create({
   progressBarBg: {
     marginTop: 10,
     height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: PLAYER_COLORS.whiteAlpha15,
     borderRadius: 2,
     overflow: 'hidden',
   },

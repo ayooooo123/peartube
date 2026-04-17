@@ -31,9 +31,8 @@ export function isBare() {
  * @returns {boolean}
  */
 export function isPear() {
-  // Pear global (legacy pear run) or window.bridge (Electrobun / standalone desktop)
-  return typeof globalThis.Pear !== 'undefined' ||
-         (typeof window !== 'undefined' && typeof window.bridge !== 'undefined');
+  // pear-runtime v2: desktop shell sets window.bridge before the app bundle loads
+  return typeof window !== 'undefined' && typeof window.bridge !== 'undefined';
 }
 
 /**

@@ -49,20 +49,9 @@ export function isPearRuntime(): boolean {
     return false // Don't cache during SSR, re-check on client
   }
 
-  // Check for Pear-specific indicators
-  // 1. Pear global (may be present)
-  // 2. pear-ctrl custom element (injected in HTML)
-  // 3. pear-bar element (injected in HTML)
-  // 4. PearWorkerClient (set up by worker-client.js)
-  // 5. User agent containing 'pear' or 'electron' (Pear uses Electron)
-  const hasPearGlobal = !!(window as any).Pear
-  const hasPearCtrl = !!document.querySelector('pear-ctrl')
-  const hasPearBar = !!document.getElementById('pear-bar')
-  const hasPearWorkerClient = !!(window as any).PearWorkerClient
-  const userAgent = navigator?.userAgent?.toLowerCase() || ''
-  const isPearUserAgent = userAgent.includes('pear') || userAgent.includes('electron')
-
-  const detected = hasPearGlobal || hasPearCtrl || hasPearBar || hasPearWorkerClient || isPearUserAgent
+  // pear-runtime v2: the desktop shell (Electrobun) sets window.bridge
+  // before the Expo bundle loads. This is the canonical desktop detection.
+  const detected = !!(window as any).bridge
   if (detected) _isPearCached = true
   else if (_isPearCached === null) _isPearCached = false
 

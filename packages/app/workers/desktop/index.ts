@@ -8,7 +8,6 @@
 import fs from 'bare-fs'
 import path from 'bare-path'
 import os from 'bare-os'
-import pipe from 'pear-pipe'
 import { spawn } from 'bare-subprocess'
 import b4a from 'b4a'
 import http1 from 'bare-http1'
@@ -392,29 +391,27 @@ async function pickImageFile(): Promise<any> {
   const mimeType = { png: 'image/png', webp: 'image/webp', gif: 'image/gif', jpg: 'image/jpeg', jpeg: 'image/jpeg' }[ext] || 'image/jpeg'
   return { filePath, name: filePath.split('/').pop() || 'image', size: stat.size, dataUrl: `data:${mimeType};base64,${buf.toString('base64')}` }
 }
-// Pipe + Storage + Backend Init
-declare const Pear: any
+// Storage + Transport + Backend Init
 declare const Bare: { argv: string[]; IPC: any } | undefined
 console.log('[Worker] PearTube Desktop Worker starting...')
 
-// Storage: Bare.argv[2] (from pear.run()), then Pear.config, then default
+// Storage: Bare.argv[2] (from Electrobun/pear-runtime), then default
 const bareArgv = (typeof Bare !== 'undefined' && Array.isArray(Bare.argv)) ? Bare.argv : []
 const runtimeStorage = bareArgv[2] || null
 
 let storage: string
 if (runtimeStorage) { storage = runtimeStorage }
-else if (typeof Pear !== 'undefined' && Pear.config?.storage) { storage = Pear.config.storage }
 else { try { const dir = require('bare-storage'); storage = path.join(dir.persistent(), 'peartube') } catch { storage = path.join(os.homedir(), '.peartube') } }
 console.log('[Worker] Storage:', storage)
 
-const workerBaseDir = runtimeStorage || ((typeof Pear !== 'undefined' && typeof Pear?.config?.dir === 'string' && Pear.config.dir.trim()) ? Pear.config.dir : os.cwd())
+const workerBaseDir = runtimeStorage || os.cwd()
 ;(globalThis as any).__PEARTUBE_HYPERCORE_WORKER_PATH__ = path.join(workerBaseDir || '.', 'build/workers/hypercore-reader-worker.mjs')
 
-// Transport: Bare.IPC (pear-runtime sidecar), then injected pipe, then pear-pipe
+// Transport: Bare.IPC (Electrobun sidecar), then injected pipe
 const bareIPC = (typeof Bare !== 'undefined' && (Bare as any).IPC) ? (Bare as any).IPC : null
 const injectedPipe = (globalThis as any).__PEARTUBE_HRPC_PIPE__ as any
-const ipcPipe = bareIPC || injectedPipe || pipe()
-if (!ipcPipe) throw new Error('No IPC pipe')
+const ipcPipe = bareIPC || injectedPipe
+if (!ipcPipe) throw new Error('No IPC pipe — Bare.IPC or __PEARTUBE_HRPC_PIPE__ required')
 
 let rpc: any
 let isShuttingDown = false
@@ -745,7 +742,7 @@ console.log('[Worker] HRPC ready, all handlers attached')
 
 ipcPipe.on('error', (err: Error) => console.error('[Worker] Pipe error:', err))
 
-// Shutdown handler: Pear.teardown (pear run) or Bare.IPC close (sidecar)
+// Shutdown handler: Bare.IPC close (sidecar mode — Electrobun quit)
 const shutdown = async () => {
   if (isShuttingDown) return
   console.log('[Worker] Shutting down...')
@@ -757,9 +754,6 @@ const shutdown = async () => {
   try { await ctx.swarm?.destroy() } catch {}
 }
 
-if (typeof Pear !== 'undefined' && Pear.teardown) {
-  Pear.teardown(shutdown)
-} else if (typeof Bare !== 'undefined' && Bare.IPC) {
-  // Sidecar mode: shut down when IPC stream closes (Electron quit)
+if (typeof Bare !== 'undefined' && Bare.IPC) {
   Bare.IPC.on('close', shutdown)
 }

@@ -32,6 +32,36 @@ function getIdentityCount(backend) {
 
 function buildSharedSystemHandlers(backend) {
   return {
+    async DesktopBootstrap(req) {
+      const emptySnapshot = {
+        generatedAt: Date.now(),
+        sections: { home: [], subscriptions: [], library: [], studio: [], diagnostics: [] },
+        stats: { homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 0 },
+        state: { subscriptionChannelKeys: [], identityChannelKeys: [], activeIdentityName: '', activeIdentityChannelKey: '', activeChannelPublished: false }
+      }
+      return {
+        blobServerPort: getBlobServerPort(backend),
+        protocolVersion: PROTOCOL_VERSION,
+        storagePath: req?.storagePath || '',
+        snapshot: emptySnapshot
+      }
+    },
+    async DesktopShutdown() {
+      return { success: true }
+    },
+    async DesktopRefreshBrowse() {
+      return {
+        snapshot: {
+          generatedAt: Date.now(),
+          sections: { home: [], subscriptions: [], library: [], studio: [], diagnostics: [] },
+          stats: { homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 0 },
+          state: { subscriptionChannelKeys: [], identityChannelKeys: [], activeIdentityName: '', activeIdentityChannelKey: '', activeChannelPublished: false }
+        }
+      }
+    },
+    async FfmpegDecodeAvailable() {
+      return { available: false, error: 'Not supported on this platform' }
+    },
     async GetStatus() {
       return {
         status: {

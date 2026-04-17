@@ -1,10 +1,10 @@
 import AppKit
 import AVFoundation
 @preconcurrency import BareRPC
-import CompactEncoding
 import Darwin
 import Foundation
 import Observation
+// HRPC and Schema types are compiled in the same module (GeneratedHRPC.swift, GeneratedSchema.swift)
 
 @MainActor
 @Observable
@@ -57,7 +57,7 @@ final class HostBridgeService {
   private(set) var resolvedPlaybackURL: URL?
   private(set) var isResolvingPlayback = false
   private(set) var lastPlaybackErrorMessage: String?
-  private(set) var playbackStats: NativeBridgeVideoStatsResponse?
+  private(set) var playbackStats: NativeVideoStats?
   private(set) var thumbnailURLs: [NativeVideo.ID: URL] = [:]
   private(set) var thumbnailRefreshTokens: [NativeVideo.ID: Int] = [:]
   private(set) var activeAVPlayer: AVPlayer?
@@ -68,7 +68,9 @@ final class HostBridgeService {
   private(set) var ffmpegDecodeAvailabilityError: String?
 
   @ObservationIgnored private var hostSession: (any NativeHostSession)?
-  @ObservationIgnored private var rpcChannel: BridgeRPCChannel?
+  @ObservationIgnored private var hrpc: HRPC?
+  @ObservationIgnored private var hrpcDelegate: HostBridgeRPCDelegate?
+  @ObservationIgnored private let rpcGate = RPCGate()
   @ObservationIgnored private var inFlightThumbnailIDs = Set<NativeVideo.ID>()
   @ObservationIgnored private let logLimit = 120
   @ObservationIgnored private(set) var selectedStoragePath: String?
@@ -194,23 +196,23 @@ final class HostBridgeService {
     appendLog("Using storage path \(storagePath).")
 
     do {
-      try await ensureBridgeRunning()
       appendLog("Bridge established. Requesting bootstrap snapshot.")
-      let response = try await sendRequest(
-        command: .bootstrap,
-        requestPayload: NativeBridgeBootstrapRequest(storagePath: storagePath),
-        requestCodec: NativeBridgeBootstrapRequestCodec(),
-        responseCodec: NativeBridgeBootstrapResponseCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.desktopBootstrap(
+          DesktopBootstrapRequest(storagePath: storagePath)
+        )
+      }
 
       appendLog("Bootstrap snapshot received from shared host.")
-      phase = .ready(blobServerPort: response.blobServerPort)
+      let blobPort = response.blobServerPort.flatMap { $0 > 0 ? Int($0) : nil }
+      phase = .ready(blobServerPort: blobPort)
       lastHeartbeat = Date()
+      let responseSnapshot = NativeBrowseSnapshot(schema: response.snapshot)
       let displaySnapshot = Self.preferredBrowseSnapshot(
-        liveSnapshot: response.snapshot,
+        liveSnapshot: responseSnapshot,
         cachedSnapshot: Self.loadCachedBrowseSnapshot(from: snapshotCacheURL)
       )
-      if displaySnapshot != response.snapshot {
+      if displaySnapshot != responseSnapshot {
         appendLog("Using cached browse snapshot while the live public feed is still empty.")
       }
       persistBrowseSnapshotIfUseful(displaySnapshot)
@@ -221,9 +223,9 @@ final class HostBridgeService {
         _ = await refreshFFmpegDecodeAvailability()
       }
       scheduleAutomaticFeedWarmupIfNeeded(
-        snapshot: response.snapshot,
+        snapshot: responseSnapshot,
         appState: appState,
-        keepRefreshingWhileShowingCachedFeed: displaySnapshot != response.snapshot
+        keepRefreshingWhileShowingCachedFeed: displaySnapshot != responseSnapshot
       )
       appendLog("Shared host ready. Loaded \(displaySnapshot.stats.homeCount) home videos across \(displaySnapshot.stats.channelCount) channels.")
     } catch {
@@ -337,10 +339,10 @@ final class HostBridgeService {
     appendLog("Refreshing browse snapshot from shared host.")
 
     do {
-      let liveSnapshot = try await sendRequest(
-        command: .refreshBrowse,
-        responseCodec: NativeBrowseSnapshotCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.desktopRefreshBrowse(DesktopRefreshBrowseRequest())
+      }
+      let liveSnapshot = NativeBrowseSnapshot(schema: response.snapshot)
       let snapshot = Self.preferredBrowseSnapshot(
         liveSnapshot: liveSnapshot,
         cachedSnapshot: Self.loadCachedBrowseSnapshot(from: snapshotCacheURL)
@@ -379,17 +381,17 @@ final class HostBridgeService {
     appendLog("Running global search for \(trimmedQuery).")
 
     do {
-      let response = try await sendRequest(
-        command: .searchVideos,
-        requestPayload: NativeBridgeSearchRequest(query: trimmedQuery, topK: topK),
-        requestCodec: NativeBridgeSearchRequestCodec(),
-        responseCodec: NativeBridgeSearchResponseCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.globalSearchVideos(
+          GlobalSearchVideosRequest(query: trimmedQuery, topK: UInt(topK))
+        )
+      }
 
-      appState.applySearchResults(query: response.query, videos: response.results)
-      primeThumbnailCache(with: response.results)
+      // TODO: HRPC globalSearchVideos returns SearchResult { id, score, metadata }, not full NativeVideo objects.
+      // The appState.applySearchResults API expects [NativeVideo]. For now, pass empty results.
+      appState.applySearchResults(query: trimmedQuery, videos: [])
       lastHeartbeat = Date()
-      appendLog("Global search returned \(response.results.count) results.")
+      appendLog("Global search returned \(response.results.count) results (search result conversion pending).")
     } catch {
       appState.setError(error.localizedDescription)
       appState.selectSection(.diagnostics)
@@ -405,61 +407,64 @@ final class HostBridgeService {
 
     guard await ensureReady(into: appState) else { return }
 
-    await performSnapshotMutation(
+    await performSnapshotMutationViaHRPC(
       into: appState,
       logMessage: "Creating native identity \(identityName).",
-      command: .createIdentity,
-      requestPayload: NativeBridgeCreateIdentityRequest(name: identityName),
-      requestCodec: NativeBridgeCreateIdentityRequestCodec(),
       afterApply: { appState in
         appState.selectSection(.studio)
       }
-    )
+    ) { hrpc in
+      _ = try await hrpc.createIdentity(CreateIdentityRequest(name: identityName, avatar: ""))
+    }
   }
 
   func refreshPublicFeed(into appState: AppState) async {
     guard await ensureReady(into: appState) else { return }
 
-    await performSnapshotMutation(
+    await performSnapshotMutationViaHRPC(
       into: appState,
       logMessage: "Refreshing public feed from native shell.",
-      command: .refreshFeed,
       allowCachedFeedFallback: false,
       afterApply: { appState in
         appState.selectSection(.home)
       }
-    )
+    ) { hrpc in
+      _ = try await hrpc.refreshFeed(RefreshFeedRequest())
+    }
   }
 
   func publishActiveChannel(into appState: AppState) async {
     guard await ensureReady(into: appState) else { return }
 
-    await performSnapshotMutation(
+    await performSnapshotMutationViaHRPC(
       into: appState,
       logMessage: "Publishing active channel to the public feed.",
-      command: .publishActiveChannel,
       afterApply: { appState in
         appState.selectSection(.studio)
       }
-    )
+    ) { hrpc in
+      _ = try await hrpc.submitToFeed(SubmitToFeedRequest())
+    }
   }
 
   func toggleSubscription(channelKey: String, channelName: String, into appState: AppState) async {
     guard await ensureReady(into: appState) else { return }
 
     let isSubscribed = appState.isSubscribed(to: channelKey)
-    let command: NativeBridgeCommand = isSubscribed ? .unsubscribeChannel : .subscribeChannel
     let logMessage = isSubscribed
       ? "Unsubscribing from \(channelName)."
       : "Subscribing to \(channelName)."
 
-    await performSnapshotMutation(
+    await performSnapshotMutationViaHRPC(
       into: appState,
-      logMessage: logMessage,
-      command: command,
-      requestPayload: NativeBridgeSubscribeRequest(channelKey: channelKey),
-      requestCodec: NativeBridgeSubscribeRequestCodec()
-    )
+      logMessage: logMessage
+    ) { hrpc in
+      if isSubscribed {
+        _ = try await hrpc.unsubscribeChannel(UnsubscribeChannelRequest(channelKey: channelKey))
+      } else {
+        _ = try await hrpc.subscribeChannel(SubscribeChannelRequest(channelKey: channelKey))
+      }
+    }
   }
 
   func toggleSubscription(for video: NativeVideo, into appState: AppState) async {
@@ -503,12 +508,6 @@ final class HostBridgeService {
       .replacingOccurrences(of: "-", with: " ")
       .trimmingCharacters(in: .whitespacesAndNewlines)
     let resolvedTitle = title.isEmpty ? "Untitled Upload" : title
-    let request = NativeBridgeUploadVideoRequest(
-      filePath: fileURL.path,
-      title: resolvedTitle,
-      description: "",
-      category: nil
-    )
 
     appState.beginStudioUpload(
       fileName: fileURL.lastPathComponent,
@@ -520,13 +519,20 @@ final class HostBridgeService {
     appendLog("Uploading \(fileURL.lastPathComponent) from native shell.")
 
     do {
-      let liveSnapshot = try await sendRequest(
-        command: .uploadVideo,
-        requestPayload: request,
-        requestCodec: NativeBridgeUploadVideoRequestCodec(),
-        responseCodec: NativeBrowseSnapshotCodec(),
-        timeout: Self.uploadBridgeRequestTimeout
-      )
+      let refreshResponse = try await gatedRPC { hrpc in
+        _ = try await hrpc.uploadVideo(
+          UploadVideoRequest(
+            filePath: fileURL.path,
+            title: resolvedTitle,
+            description: "",
+            category: "",
+            skipThumbnailGeneration: false
+          )
+        )
+        // After upload, refresh the browse snapshot to get updated sections
+        return try await hrpc.desktopRefreshBrowse(DesktopRefreshBrowseRequest())
+      }
+      let liveSnapshot = NativeBrowseSnapshot(schema: refreshResponse.snapshot)
       let snapshot = Self.resolvedBrowseSnapshot(
         liveSnapshot: liveSnapshot,
         cachedSnapshot: Self.loadCachedBrowseSnapshot(from: snapshotCacheURL),
@@ -650,17 +656,14 @@ final class HostBridgeService {
     defer { appState.setLoading(false) }
 
     do {
-      let response = try await sendRequest(
-        command: .updateChannel,
-        requestPayload: NativeBridgeUpdateChannelRequest(
-          name: name?.trimmingCharacters(in: .whitespacesAndNewlines),
-          description: description?.trimmingCharacters(in: .whitespacesAndNewlines)
-        ),
-        requestCodec: NativeBridgeUpdateChannelRequestCodec(),
-        responseCodec: NativeBridgeMutationResponseCodec()
-      )
-      guard response.success else {
-        throw HostBridgeError.bridgeResponse(response.error ?? "Failed to update channel metadata.")
+      _ = try await gatedRPC { hrpc in
+        try await hrpc.updateChannel(
+          UpdateChannelRequest(
+            name: name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            description: description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            avatar: ""
+          )
+        )
       }
 
       if let profile = appState.channelPageProfile {
@@ -711,17 +714,13 @@ final class HostBridgeService {
 
     do {
       let mimeType = Self.mimeType(forImageURL: fileURL)
-      let response = try await sendRequest(
-        command: .updateChannelAvatar,
-        requestPayload: NativeBridgeUpdateChannelAvatarRequest(
-          filePath: fileURL.path,
-          mimeType: mimeType
-        ),
-        requestCodec: NativeBridgeUpdateChannelAvatarRequestCodec(),
-        responseCodec: NativeBridgeMutationResponseCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.updateChannelAvatar(
+          UpdateChannelAvatarRequest(filePath: fileURL.path, imageData: "", mimeType: mimeType)
+        )
+      }
       guard response.success else {
-        throw HostBridgeError.bridgeResponse(response.error ?? "Failed to update channel avatar.")
+        throw HostBridgeError.bridgeResponse(response.error?.isEmpty == false ? response.error! : "Failed to update channel avatar.")
       }
       lastHeartbeat = Date()
       appendLog("Native channel avatar updated.")
@@ -749,20 +748,19 @@ final class HostBridgeService {
     defer { appState.setLoading(false) }
 
     do {
-      let response = try await sendRequest(
-        command: .updateVideoMetadata,
-        requestPayload: NativeBridgeUpdateVideoMetadataRequest(
-          channelKey: video.channelKey,
-          videoId: video.backendVideoID,
-          title: title?.trimmingCharacters(in: .whitespacesAndNewlines),
-          description: description?.trimmingCharacters(in: .whitespacesAndNewlines),
-          category: category?.trimmingCharacters(in: .whitespacesAndNewlines)
-        ),
-        requestCodec: NativeBridgeUpdateVideoMetadataRequestCodec(),
-        responseCodec: NativeBridgeMutationResponseCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.updateVideoMetadata(
+          UpdateVideoMetadataRequest(
+            channelKey: video.channelKey,
+            videoId: video.backendVideoID,
+            title: title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            description: description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            category: category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+          )
+        )
+      }
       guard response.success else {
-        throw HostBridgeError.bridgeResponse(response.error ?? "Failed to update video metadata.")
+        throw HostBridgeError.bridgeResponse(response.error?.isEmpty == false ? response.error! : "Failed to update video metadata.")
       }
       lastHeartbeat = Date()
       appendLog("Video metadata updated for \(video.title).")
@@ -784,17 +782,13 @@ final class HostBridgeService {
     defer { appState.setLoading(false) }
 
     do {
-      let response = try await sendRequest(
-        command: .deleteVideo,
-        requestPayload: NativeBridgeDeleteVideoRequest(
-          channelKey: video.channelKey,
-          videoId: video.backendVideoID
-        ),
-        requestCodec: NativeBridgeDeleteVideoRequestCodec(),
-        responseCodec: NativeBridgeMutationResponseCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.deleteVideo(
+          DeleteVideoRequest(videoId: video.backendVideoID)
+        )
+      }
       guard response.success else {
-        throw HostBridgeError.bridgeResponse(response.error ?? "Failed to delete video.")
+        throw HostBridgeError.bridgeResponse(response.error?.isEmpty == false ? response.error! : "Failed to delete video.")
       }
       lastHeartbeat = Date()
       appendLog("Deleted \(video.title) from the active channel.")
@@ -820,17 +814,13 @@ final class HostBridgeService {
     defer { appState.setLoading(false) }
 
     do {
-      let response = try await sendRequest(
-        command: .setVideoThumbnailFromFile,
-        requestPayload: NativeBridgeSetVideoThumbnailFromFileRequest(
-          videoId: video.backendVideoID,
-          filePath: fileURL.path
-        ),
-        requestCodec: NativeBridgeSetVideoThumbnailFromFileRequestCodec(),
-        responseCodec: NativeBridgeMutationResponseCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.setVideoThumbnailFromFile(
+          SetVideoThumbnailFromFileRequest(videoId: video.backendVideoID, filePath: fileURL.path)
+        )
+      }
       guard response.success else {
-        throw HostBridgeError.bridgeResponse(response.error ?? "Failed to set video thumbnail.")
+        throw HostBridgeError.bridgeResponse("Failed to set video thumbnail.")
       }
       lastHeartbeat = Date()
       appendLog("Updated thumbnail for \(video.title).")
@@ -857,20 +847,18 @@ final class HostBridgeService {
     }
 
     do {
-      let response = try await sendRequest(
-        command: .resolvePlayback,
-        requestPayload: NativeBridgeResolvePlaybackRequest(
-          channelKey: video.channelKey,
-          publicBeeKey: video.publicBeeKey,
-          videoId: video.backendVideoID,
-          videoPath: video.path,
-          blobId: video.blobId,
-          blobsCoreKey: video.blobsCoreKey,
-          mimeType: video.mimeType
-        ),
-        requestCodec: NativeBridgeResolvePlaybackRequestCodec(),
-        responseCodec: NativeBridgeResolvePlaybackResponseCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.preparePlayback(
+          PreparePlaybackRequest(
+            channelKey: video.channelKey,
+            videoId: video.backendVideoID,
+            publicBeeKey: video.publicBeeKey ?? "",
+            blobId: video.blobId ?? "",
+            blobsCoreKey: video.blobsCoreKey ?? "",
+            mimeType: video.mimeType ?? ""
+          )
+        )
+      }
 
       let url = URL(string: response.url)
       resolvedPlaybackURL = url
@@ -953,13 +941,49 @@ final class HostBridgeService {
         )
       }
 
-      let availability = try await sendRequest(
-        command: .mpvAvailable,
-        responseCodec: NativeBridgeMpvAvailableResponseCodec()
-      )
-      mpvAvailable = availability.available
+      let (availability, createResponse, playerId) = try await gatedRPC { hrpc -> (MpvAvailableResponse, MpvCreateResponse?, String?) in
+        let availability = try await hrpc.mpvAvailable(MpvAvailableRequest())
 
-      guard availability.available else {
+        var createResponse: MpvCreateResponse?
+        var playerId: String?
+
+        if availability.available {
+          let response = try await hrpc.mpvCreate(
+            MpvCreateRequest(
+              width: UInt(normalizedSize.width),
+              height: UInt(normalizedSize.height)
+            )
+          )
+          createResponse = response
+
+          if response.success, response.playerId?.isEmpty == false {
+            let pid = response.playerId!
+
+            let loadResponse = try await hrpc.mpvLoadFile(
+              MpvLoadFileRequest(playerId: pid, url: url.absoluteString)
+            )
+
+            if loadResponse.success {
+              let playResponse = try await hrpc.mpvPlay(MpvPlayerRequest(playerId: pid))
+
+              if playResponse.success {
+                playerId = pid
+              } else {
+                self.appendLog("bare-mpv play failed: \(playResponse.error?.isEmpty == false ? playResponse.error! : "Unknown error"). Falling back to AVPlayer.")
+                _ = try? await hrpc.mpvDestroy(MpvPlayerRequest(playerId: pid))
+              }
+            } else {
+              self.appendLog("bare-mpv load failed: \(loadResponse.error?.isEmpty == false ? loadResponse.error! : "Unknown error"). Falling back to AVPlayer.")
+              _ = try? await hrpc.mpvDestroy(MpvPlayerRequest(playerId: pid))
+            }
+          }
+        }
+
+        return (availability, createResponse, playerId)
+      }
+      self.mpvAvailable = availability.available
+
+      guard let createResponse else {
         appendLog("bare-mpv unavailable. Falling back to AVPlayer.")
         return NativePlaybackSession(
           mode: .avPlayer,
@@ -969,64 +993,12 @@ final class HostBridgeService {
         )
       }
 
-      let createResponse = try await sendRequest(
-        command: .mpvCreate,
-        requestPayload: NativeBridgeMpvCreateRequest(
-          width: Int(normalizedSize.width),
-          height: Int(normalizedSize.height)
-        ),
-        requestCodec: NativeBridgeMpvCreateRequestCodec(),
-        responseCodec: NativeBridgeMpvCreateResponseCodec()
-      )
-
-      guard createResponse.success, let playerId = createResponse.playerId else {
-        appendLog("bare-mpv create failed: \(createResponse.error ?? "Unknown error"). Falling back to AVPlayer.")
-        return NativePlaybackSession(
-          mode: .avPlayer,
-          url: url,
-          playerId: nil,
-          frameServerPort: nil
-        )
-      }
-
-      let loadResponse = try await sendRequest(
-        command: .mpvLoadFile,
-        requestPayload: NativeBridgeMpvLoadFileRequest(playerId: playerId, url: url.absoluteString),
-        requestCodec: NativeBridgeMpvLoadFileRequestCodec(),
-        responseCodec: NativeBridgeMpvPlayerResponseCodec()
-      )
-
-      guard loadResponse.success else {
-        appendLog("bare-mpv load failed: \(loadResponse.error ?? "Unknown error"). Falling back to AVPlayer.")
-        _ = try? await sendRequest(
-          command: .mpvDestroy,
-          requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-          requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-          responseCodec: NativeBridgeMpvPlayerResponseCodec()
-        )
-        return NativePlaybackSession(
-          mode: .avPlayer,
-          url: url,
-          playerId: nil,
-          frameServerPort: nil
-        )
-      }
-
-      let playResponse = try await sendRequest(
-        command: .mpvPlay,
-        requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-        requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-        responseCodec: NativeBridgeMpvPlayerResponseCodec()
-      )
-
-      guard playResponse.success else {
-        appendLog("bare-mpv play failed: \(playResponse.error ?? "Unknown error"). Falling back to AVPlayer.")
-        _ = try? await sendRequest(
-          command: .mpvDestroy,
-          requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-          requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-          responseCodec: NativeBridgeMpvPlayerResponseCodec()
-        )
+      guard let playerId else {
+        if createResponse.playerId?.isEmpty == false {
+          // load or play failed — already logged above
+        } else {
+          appendLog("bare-mpv create failed: \(createResponse.error?.isEmpty == false ? createResponse.error! : "Unknown error"). Falling back to AVPlayer.")
+        }
         return NativePlaybackSession(
           mode: .avPlayer,
           url: url,
@@ -1037,7 +1009,7 @@ final class HostBridgeService {
 
       activePlaybackVideoID = video.id
       activeMpvPlayerID = playerId
-      activeMpvFrameServerPort = createResponse.frameServerPort
+      activeMpvFrameServerPort = createResponse.frameServerPort.map { Int($0) }
       appendLog("bare-mpv playback session started for \(video.title).")
 
       Task { @MainActor [weak self] in
@@ -1057,7 +1029,7 @@ final class HostBridgeService {
         mode: .mpv,
         url: url,
         playerId: playerId,
-        frameServerPort: createResponse.frameServerPort
+        frameServerPort: createResponse.frameServerPort.map { Int($0) }
       )
     } catch {
       appendLog("bare-mpv session failed: \(error.localizedDescription). Falling back to AVPlayer.")
@@ -1075,12 +1047,9 @@ final class HostBridgeService {
     guard let playerId = activeMpvPlayerID else { return }
 
     do {
-      _ = try await sendRequest(
-        command: .mpvPause,
-        requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-        requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-        responseCodec: NativeBridgeMpvPlayerResponseCodec()
-      )
+      _ = try await gatedRPC { hrpc in
+        try await hrpc.mpvPause(MpvPlayerRequest(playerId: playerId))
+      }
     } catch {
       appendLog("bare-mpv pause failed: \(error.localizedDescription)")
     }
@@ -1090,12 +1059,9 @@ final class HostBridgeService {
     guard let playerId = activeMpvPlayerID else { return }
 
     do {
-      _ = try await sendRequest(
-        command: .mpvPlay,
-        requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-        requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-        responseCodec: NativeBridgeMpvPlayerResponseCodec()
-      )
+      _ = try await gatedRPC { hrpc in
+        try await hrpc.mpvPlay(MpvPlayerRequest(playerId: playerId))
+      }
     } catch {
       appendLog("bare-mpv resume failed: \(error.localizedDescription)")
     }
@@ -1105,43 +1071,36 @@ final class HostBridgeService {
     guard let playerId = activeMpvPlayerID else { return }
 
     do {
-      _ = try await sendRequest(
-        command: .mpvSeek,
-        requestPayload: NativeBridgeMpvSeekRequest(playerId: playerId, time: time),
-        requestCodec: NativeBridgeMpvSeekRequestCodec(),
-        responseCodec: NativeBridgeMpvPlayerResponseCodec()
-      )
+      _ = try await gatedRPC { hrpc in
+        try await hrpc.mpvSeek(MpvSeekRequest(playerId: playerId, time: String(time)))
+      }
     } catch {
       appendLog("bare-mpv seek failed: \(error.localizedDescription)")
     }
   }
 
-  func activePlaybackState() async -> NativeBridgeMpvStateResponse? {
+  func activePlaybackState() async -> NativeMpvState? {
     guard let playerId = activeMpvPlayerID else { return nil }
 
     do {
-      return try await sendRequest(
-        command: .mpvGetState,
-        requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-        requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-        responseCodec: NativeBridgeMpvStateResponseCodec()
-      )
+      return try await gatedRPC { hrpc in
+        let response = try await hrpc.mpvGetState(MpvPlayerRequest(playerId: playerId))
+        return NativeMpvState(schema: response)
+      }
     } catch {
       appendLog("bare-mpv state polling failed: \(error.localizedDescription)")
       return nil
     }
   }
 
-  func activePlaybackFrame() async -> NativeBridgeMpvRenderFrameResponse? {
+  func activePlaybackFrame() async -> NativeMpvRenderFrame? {
     guard let playerId = activeMpvPlayerID else { return nil }
 
     do {
-      return try await sendRequest(
-        command: .mpvRenderFrame,
-        requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-        requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-        responseCodec: NativeBridgeMpvRenderFrameResponseCodec()
-      )
+      return try await gatedRPC { hrpc in
+        let response = try await hrpc.mpvRenderFrame(MpvPlayerRequest(playerId: playerId))
+        return NativeMpvRenderFrame(schema: response)
+      }
     } catch {
       appendLog("bare-mpv frame fetch failed: \(error.localizedDescription)")
       return nil
@@ -1229,19 +1188,16 @@ final class HostBridgeService {
     defer { inFlightThumbnailIDs.remove(video.id) }
 
     do {
-      let response = try await sendRequest(
-        command: .resolveThumbnail,
-        requestPayload: NativeBridgeResolveThumbnailRequest(
-          channelKey: video.channelKey,
-          publicBeeKey: video.publicBeeKey,
-          videoId: video.backendVideoID,
-          videoPath: video.path
-        ),
-        requestCodec: NativeBridgeResolveThumbnailRequestCodec(),
-        responseCodec: NativeBridgeResolveThumbnailResponseCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.getVideoThumbnail(
+          GetVideoThumbnailRequest(
+            channelKey: video.channelKey,
+            videoId: video.backendVideoID
+          )
+        )
+      }
 
-      if response.exists, let urlString = response.url, let url = URL(string: urlString) {
+      if response.exists, let urlString = response.url, !urlString.isEmpty, let url = URL(string: urlString) {
         thumbnailURLs[video.id] = url
       }
     } catch {
@@ -1253,19 +1209,18 @@ final class HostBridgeService {
     for video: NativeVideo,
     page: Int = 0,
     limit: Int = 50
-  ) async throws -> NativeBridgeListCommentsResponse {
-    try await sendRequest(
-      command: .listComments,
-      requestPayload: NativeBridgeListCommentsRequest(
-        channelKey: video.channelKey,
-        videoId: video.backendVideoID,
-        page: page,
-        limit: limit,
-        publicBeeKey: video.publicBeeKey
-      ),
-      requestCodec: NativeBridgeListCommentsRequestCodec(),
-      responseCodec: NativeBridgeListCommentsResponseCodec()
-    )
+  ) async throws -> NativeListCommentsResponse {
+    return try await gatedRPC { hrpc in
+      try await hrpc.listComments(
+        ListCommentsRequest(
+          channelKey: video.channelKey,
+          videoId: video.backendVideoID,
+          page: UInt(page),
+          limit: UInt(limit),
+          publicBeeKey: video.publicBeeKey ?? ""
+        )
+      )
+    }
   }
 
   func addComment(
@@ -1273,111 +1228,104 @@ final class HostBridgeService {
     to video: NativeVideo,
     parentId: String? = nil,
     authorChannelKey: String? = nil
-  ) async throws -> NativeBridgeAddCommentResponse {
-    try await sendRequest(
-      command: .addComment,
-      requestPayload: NativeBridgeAddCommentRequest(
-        channelKey: video.channelKey,
-        videoId: video.backendVideoID,
-        text: text,
-        parentId: parentId,
-        authorChannelKey: authorChannelKey,
-        publicBeeKey: video.publicBeeKey
-      ),
-      requestCodec: NativeBridgeAddCommentRequestCodec(),
-      responseCodec: NativeBridgeAddCommentResponseCodec()
-    )
+  ) async throws -> NativeAddCommentResponse {
+    return try await gatedRPC { hrpc in
+      try await hrpc.addComment(
+        AddCommentRequest(
+          channelKey: video.channelKey,
+          videoId: video.backendVideoID,
+          text: text,
+          parentId: parentId ?? "",
+          authorChannelKey: authorChannelKey ?? "",
+          publicBeeKey: video.publicBeeKey ?? ""
+        )
+      )
+    }
   }
 
   func hideComment(
-    _ comment: NativeBridgeComment,
+    _ comment: NativeComment,
     on video: NativeVideo,
     authorChannelKey: String? = nil
-  ) async throws -> NativeBridgeHideCommentResponse {
-    try await sendRequest(
-      command: .hideComment,
-      requestPayload: NativeBridgeCommentModerationRequest(
-        channelKey: video.channelKey,
-        videoId: video.backendVideoID,
-        commentId: comment.commentId,
-        authorChannelKey: authorChannelKey,
-        publicBeeKey: video.publicBeeKey
-      ),
-      requestCodec: NativeBridgeCommentModerationRequestCodec(),
-      responseCodec: NativeBridgeHideCommentResponseCodec()
-    )
+  ) async throws -> NativeHideCommentResponse {
+    return try await gatedRPC { hrpc in
+      try await hrpc.hideComment(
+        HideCommentRequest(
+          channelKey: video.channelKey,
+          videoId: video.backendVideoID,
+          commentId: comment.commentId,
+          publicBeeKey: video.publicBeeKey ?? ""
+        )
+      )
+    }
   }
 
   func removeComment(
-    _ comment: NativeBridgeComment,
+    _ comment: NativeComment,
     on video: NativeVideo,
     authorChannelKey: String? = nil
-  ) async throws -> NativeBridgeRemoveCommentResponse {
-    try await sendRequest(
-      command: .removeComment,
-      requestPayload: NativeBridgeCommentModerationRequest(
-        channelKey: video.channelKey,
-        videoId: video.backendVideoID,
-        commentId: comment.commentId,
-        authorChannelKey: authorChannelKey,
-        publicBeeKey: video.publicBeeKey
-      ),
-      requestCodec: NativeBridgeCommentModerationRequestCodec(),
-      responseCodec: NativeBridgeRemoveCommentResponseCodec()
-    )
+  ) async throws -> NativeRemoveCommentResponse {
+    return try await gatedRPC { hrpc in
+      try await hrpc.removeComment(
+        RemoveCommentRequest(
+          channelKey: video.channelKey,
+          videoId: video.backendVideoID,
+          commentId: comment.commentId,
+          authorChannelKey: authorChannelKey ?? "",
+          publicBeeKey: video.publicBeeKey ?? ""
+        )
+      )
+    }
   }
 
   func addReaction(
     _ reactionType: String,
     to video: NativeVideo,
     authorChannelKey: String? = nil
-  ) async throws -> NativeBridgeReactionMutationResponse {
-    try await sendRequest(
-      command: .addReaction,
-      requestPayload: NativeBridgeAddReactionRequest(
-        channelKey: video.channelKey,
-        videoId: video.backendVideoID,
-        reactionType: reactionType,
-        authorChannelKey: authorChannelKey,
-        publicBeeKey: video.publicBeeKey
-      ),
-      requestCodec: NativeBridgeAddReactionRequestCodec(),
-      responseCodec: NativeBridgeReactionMutationResponseCodec()
-    )
+  ) async throws -> NativeAddReactionResponse {
+    return try await gatedRPC { hrpc in
+      try await hrpc.addReaction(
+        AddReactionRequest(
+          channelKey: video.channelKey,
+          videoId: video.backendVideoID,
+          reactionType: reactionType,
+          authorChannelKey: authorChannelKey ?? "",
+          publicBeeKey: video.publicBeeKey ?? ""
+        )
+      )
+    }
   }
 
   func removeReaction(
     from video: NativeVideo,
     authorChannelKey: String? = nil
-  ) async throws -> NativeBridgeReactionMutationResponse {
-    try await sendRequest(
-      command: .removeReaction,
-      requestPayload: NativeBridgeReactionRequest(
-        channelKey: video.channelKey,
-        videoId: video.backendVideoID,
-        authorChannelKey: authorChannelKey,
-        publicBeeKey: video.publicBeeKey
-      ),
-      requestCodec: NativeBridgeReactionRequestCodec(),
-      responseCodec: NativeBridgeReactionMutationResponseCodec()
-    )
+  ) async throws -> NativeRemoveReactionResponse {
+    return try await gatedRPC { hrpc in
+      try await hrpc.removeReaction(
+        RemoveReactionRequest(
+          channelKey: video.channelKey,
+          videoId: video.backendVideoID,
+          authorChannelKey: authorChannelKey ?? "",
+          publicBeeKey: video.publicBeeKey ?? ""
+        )
+      )
+    }
   }
 
   func getReactions(
     for video: NativeVideo,
     authorChannelKey: String? = nil
-  ) async throws -> NativeBridgeGetReactionsResponse {
-    try await sendRequest(
-      command: .getReactions,
-      requestPayload: NativeBridgeReactionRequest(
-        channelKey: video.channelKey,
-        videoId: video.backendVideoID,
-        authorChannelKey: authorChannelKey,
-        publicBeeKey: video.publicBeeKey
-      ),
-      requestCodec: NativeBridgeReactionRequestCodec(),
-      responseCodec: NativeBridgeGetReactionsResponseCodec()
-    )
+  ) async throws -> NativeGetReactionsResponse {
+    return try await gatedRPC { hrpc in
+      try await hrpc.getReactions(
+        GetReactionsRequest(
+          channelKey: video.channelKey,
+          videoId: video.backendVideoID,
+          authorChannelKey: authorChannelKey ?? "",
+          publicBeeKey: video.publicBeeKey ?? ""
+        )
+      )
+    }
   }
 
   func diagnosticsReport(appState: AppState? = nil) -> String {
@@ -1430,16 +1378,8 @@ final class HostBridgeService {
         guard self.activePlaybackVideoID == video.id else { return }
 
         do {
-          let stats = try await self.sendRequest(
-            command: .getVideoStats,
-            requestPayload: NativeBridgeVideoStatsRequest(
-              channelKey: video.channelKey,
-              videoId: video.backendVideoID,
-              videoPath: video.path
-            ),
-            requestCodec: NativeBridgeVideoStatsRequestCodec(),
-            responseCodec: NativeBridgeVideoStatsResponseCodec()
-          )
+          let stats = try await self.fetchVideoStats(for: video)
+          guard !Task.isCancelled else { return }
 
           self.playbackStats = stats
           if let error = stats.error, !error.isEmpty {
@@ -1454,31 +1394,34 @@ final class HostBridgeService {
     }
   }
 
-  private func fetchVideoStats(for video: NativeVideo) async throws -> NativeBridgeVideoStatsResponse {
-    try await sendRequest(
-      command: .getVideoStats,
-      requestPayload: NativeBridgeVideoStatsRequest(
-        channelKey: video.channelKey,
-        videoId: video.backendVideoID,
-        videoPath: video.path
-      ),
-      requestCodec: NativeBridgeVideoStatsRequestCodec(),
-      responseCodec: NativeBridgeVideoStatsResponseCodec()
-    )
+  private func fetchVideoStats(for video: NativeVideo) async throws -> NativeVideoStats {
+    let response = try await gatedRPC { hrpc in
+      try await hrpc.getVideoStats(
+        GetVideoStatsRequest(
+          channelKey: video.channelKey,
+          videoId: video.backendVideoID
+        )
+      )
+    }
+    guard let stats = response.stats else {
+      return NativeVideoStats(error: "No stats returned")
+    }
+    return NativeVideoStats(schema: stats)
   }
 
   private func waitForAVPlayerReadiness(
     for video: NativeVideo,
     maxAttempts: Int = 12,
     delay: Duration = .milliseconds(500)
-  ) async -> NativeBridgeVideoStatsResponse? {
-    var lastStats: NativeBridgeVideoStatsResponse?
+  ) async -> NativeVideoStats? {
+    var lastStats: NativeVideoStats?
 
     for attempt in 0..<maxAttempts {
       guard activePlaybackVideoID == video.id else { return nil }
 
       do {
         let stats = try await fetchVideoStats(for: video)
+        guard !Task.isCancelled else { return nil }
         playbackStats = stats
         lastStats = stats
 
@@ -1605,6 +1548,7 @@ final class HostBridgeService {
   }
 
   func clearPlayback() {
+    rpcGate.flush() // Cancel queued RPC calls (stale thumbnails, stats)
     stopPlaybackStatsPolling()
     releaseAVPlayer()
     let playerId = activeMpvPlayerID
@@ -1660,35 +1604,33 @@ final class HostBridgeService {
     publicBeeKey: String?,
     appState: AppState
   ) async throws -> (profile: NativeChannelProfile, videos: [NativeVideo]) {
-    async let metaResponse = sendRequest(
-      command: .getChannelMeta,
-      requestPayload: NativeBridgeGetChannelMetaRequest(
-        channelKey: channelKey,
-        publicBeeKey: publicBeeKey
-      ),
-      requestCodec: NativeBridgeGetChannelMetaRequestCodec(),
-      responseCodec: NativeBridgeGetChannelMetaResponseCodec()
-    )
-    async let videosResponse = sendRequest(
-      command: .listChannelVideos,
-      requestPayload: NativeBridgeListChannelVideosRequest(
-        channelKey: channelKey,
-        publicBeeKey: publicBeeKey
-      ),
-      requestCodec: NativeBridgeListChannelVideosRequestCodec(),
-      responseCodec: NativeBridgeListChannelVideosResponseCodec()
-    )
-
-    let (meta, videos) = try await (metaResponse, videosResponse)
+    let (meta, videos) = try await gatedRPC { hrpc in
+      async let metaResponse = hrpc.getChannelMeta(
+        GetChannelMetaRequest(
+          channelKey: channelKey,
+          publicBeeKey: publicBeeKey ?? ""
+        )
+      )
+      async let videosResponse = hrpc.listVideos(
+        ListVideosRequest(
+          channelKey: channelKey,
+          publicBeeKey: publicBeeKey ?? "",
+          limit: 0,
+          offset: 0
+        )
+      )
+      return try await (metaResponse, videosResponse)
+    }
     let profile = appState.makeChannelProfile(
-      channelKey: meta.channelKey,
-      publicBeeKey: meta.publicBeeKey,
-      avatarURL: meta.avatarURL,
-      name: meta.name,
-      description: meta.description,
-      videoCount: meta.videoCount
+      channelKey: channelKey,
+      publicBeeKey: publicBeeKey,
+      avatarURL: nil,
+      name: meta.name?.isEmpty == false ? meta.name : nil,
+      description: meta.description?.isEmpty == false ? meta.description : nil,
+      videoCount: meta.videoCount.flatMap { $0 > 0 ? Int($0) : nil }
     )
-    return (profile, videos.videos)
+    let nativeVideos = (videos.videos ?? []).map { NativeVideo(video: $0, channelKey: channelKey) }
+    return (profile, nativeVideos)
   }
 
   private func destroyActiveMpvPlayer() async {
@@ -1706,12 +1648,9 @@ final class HostBridgeService {
     }
 
     do {
-      _ = try await sendRequest(
-        command: .mpvDestroy,
-        requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-        requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-        responseCodec: NativeBridgeMpvPlayerResponseCodec()
-      )
+      _ = try await gatedRPC { hrpc in
+        try await hrpc.mpvDestroy(MpvPlayerRequest(playerId: playerId))
+      }
     } catch {
       appendLog("bare-mpv destroy failed: \(error.localizedDescription)")
     }
@@ -1723,19 +1662,23 @@ final class HostBridgeService {
     for _ in 0..<maxAttempts {
       guard !Task.isCancelled else { return false }
 
-      let state = try? await sendRequest(
-        command: .mpvGetState,
-        requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-        requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-        responseCodec: NativeBridgeMpvStateResponseCodec()
-      )
+      var state: NativeMpvState?
+      var frame: NativeMpvRenderFrame?
 
-      let frame = try? await sendRequest(
-        command: .mpvRenderFrame,
-        requestPayload: NativeBridgeMpvPlayerRequest(playerId: playerId),
-        requestCodec: NativeBridgeMpvPlayerRequestCodec(),
-        responseCodec: NativeBridgeMpvRenderFrameResponseCodec()
-      )
+      if let responses = try? await gatedRPC({ hrpc in
+        let stateResponse = try? await hrpc.mpvGetState(MpvPlayerRequest(playerId: playerId))
+        let frameResponse = try? await hrpc.mpvRenderFrame(MpvPlayerRequest(playerId: playerId))
+        return (stateResponse, frameResponse)
+      }) {
+        if let stateResponse = responses.0 {
+          state = NativeMpvState(schema: stateResponse)
+        }
+        if let frameResponse = responses.1 {
+          frame = NativeMpvRenderFrame(schema: frameResponse)
+        }
+      }
+
+      guard !Task.isCancelled else { return false }
 
       if Self.mpvSessionHasPlaybackSignal(state: state, frame: frame) {
         return true
@@ -1754,86 +1697,7 @@ final class HostBridgeService {
     return isReady
   }
 
-  private func performSnapshotMutation(
-    into appState: AppState,
-    logMessage: String,
-    command: NativeBridgeCommand,
-    allowCachedFeedFallback: Bool = true,
-    afterApply: ((AppState) -> Void)? = nil
-  ) async {
-    await performSnapshotMutation(
-      into: appState,
-      logMessage: logMessage,
-      command: command,
-      requestData: nil,
-      allowCachedFeedFallback: allowCachedFeedFallback,
-      afterApply: afterApply
-    )
-  }
-
-  private func performSnapshotMutation<RequestCodec: Codec>(
-    into appState: AppState,
-    logMessage: String,
-    command: NativeBridgeCommand,
-    requestPayload: RequestCodec.Value,
-    requestCodec: RequestCodec,
-    allowCachedFeedFallback: Bool = true,
-    afterApply: ((AppState) -> Void)? = nil
-  ) async {
-    do {
-      let requestData = try NativeBridgePayload.encode(requestCodec, value: requestPayload)
-      await performSnapshotMutation(
-        into: appState,
-        logMessage: logMessage,
-        command: command,
-        requestData: requestData,
-        allowCachedFeedFallback: allowCachedFeedFallback,
-        afterApply: afterApply
-      )
-    } catch {
-      appState.setError(error.localizedDescription)
-      appendLog("Native mutation encoding failed: \(error.localizedDescription)")
-    }
-  }
-
-  private func performSnapshotMutation(
-    into appState: AppState,
-    logMessage: String,
-    command: NativeBridgeCommand,
-    requestData: Data?,
-    allowCachedFeedFallback: Bool = true,
-    afterApply: ((AppState) -> Void)? = nil
-  ) async {
-    appState.setLoading(true)
-    appState.setError(nil)
-    appendLog(logMessage)
-
-    do {
-      let liveSnapshot = try await sendRequest(
-        command: command,
-        requestData: requestData,
-        responseCodec: NativeBrowseSnapshotCodec()
-      )
-      let snapshot = Self.resolvedBrowseSnapshot(
-        liveSnapshot: liveSnapshot,
-        cachedSnapshot: Self.loadCachedBrowseSnapshot(from: snapshotCacheURL),
-        allowCachedFeedFallback: allowCachedFeedFallback
-      )
-      if allowCachedFeedFallback, snapshot != liveSnapshot {
-        appendLog("Retaining cached browse snapshot because the live public feed is still empty.")
-      }
-      persistBrowseSnapshotIfUseful(snapshot)
-      appState.applySnapshot(snapshot)
-      afterApply?(appState)
-      lastHeartbeat = Date()
-      appendLog("Native host mutation completed. Home now has \(appState.videoCount(for: .home)) videos.")
-    } catch {
-      appState.setError(error.localizedDescription)
-      appendLog("Native host mutation failed: \(error.localizedDescription)")
-    }
-
-    appState.setLoading(false)
-  }
+  // Old performSnapshotMutation overloads removed — use performSnapshotMutationViaHRPC instead.
 
   func resetBridgeState() async {
     feedWarmupTask?.cancel()
@@ -1848,17 +1712,10 @@ final class HostBridgeService {
   }
 
   private func requestBridgeShutdownIfNeeded() async {
-    guard let rpcChannel else { return }
+    guard let hrpc else { return }
 
     do {
-      let responseData = try await rpcChannel.request(
-        command: NativeBridgeCommand.shutdown.rawValue,
-        data: nil
-      )
-      _ = try NativeBridgePayload.decode(
-        NativeBridgeShutdownResponseCodec(),
-        from: responseData
-      )
+      _ = try await hrpc.desktopShutdown(DesktopShutdownRequest())
       appendLog("Native host shutdown acknowledged.")
     } catch {
       appendLog("Native host shutdown request failed: \(error.localizedDescription)")
@@ -1892,7 +1749,7 @@ final class HostBridgeService {
   }
 
   private func ensureBridgeRunning() async throws {
-    if hostSession != nil, rpcChannel != nil {
+    if hostSession != nil, hrpc != nil {
       return
     }
 
@@ -1910,7 +1767,8 @@ final class HostBridgeService {
     hostSession?.terminate()
     hostSession = nil
     currentHostTransportMode = nil
-    rpcChannel = nil
+    hrpc = nil
+    hrpcDelegate = nil
     inFlightThumbnailIDs.removeAll()
     thumbnailURLs.removeAll()
     stopPlaybackStatsPolling()
@@ -1920,30 +1778,88 @@ final class HostBridgeService {
     activeMpvFrameServerPort = nil
   }
 
-  private func makeRPCChannel(
+  private func makeHRPC(
     logPrefix: String,
     onSend: @escaping @Sendable (Data) -> Void
-  ) -> BridgeRPCChannel {
-    BridgeRPCChannel(
-      onSend: onSend,
-      onEvent: { [weak self] event in
-        await MainActor.run { [weak self] in
-          self?.handleRPCEvent(event)
-        }
-      },
-      onError: { [weak self] error in
+  ) -> HRPC {
+    let delegate = HostBridgeRPCDelegate(
+      send: onSend,
+      logError: { [weak self] error in
         Task { @MainActor [weak self] in
           self?.appendLog("\(logPrefix) RPC decode failed: \(error.localizedDescription)")
         }
       }
     )
+    self.hrpcDelegate = delegate
+    let hrpc = HRPC(delegate: delegate)
+    registerEventHandlers(on: hrpc)
+    return hrpc
+  }
+
+  private func registerEventHandlers(on hrpc: HRPC) {
+    hrpc.onEventReady { [weak self] event in
+      await MainActor.run { [weak self] in
+        self?.lastHeartbeat = Date()
+        let port = event.blobServerPort.flatMap { $0 > 0 ? Int($0) : nil }
+        self?.phase = .ready(blobServerPort: port)
+        if Self.isExperimentalFFmpegDecodeEnabled() {
+          Task { @MainActor [weak self] in
+            _ = await self?.refreshFFmpegDecodeAvailability()
+          }
+        }
+      }
+    }
+
+    hrpc.onEventError { [weak self] event in
+      await MainActor.run { [weak self] in
+        self?.lastHeartbeat = Date()
+        let message = event.message.isEmpty ? "Unknown host error" : event.message
+        if case .failed(let existingMessage) = self?.phase,
+           Self.isInProcessRelaunchRequiredMessage(existingMessage) {
+          self?.appendLog("Host error arrived after relaunch-required state was already set: \(message)")
+          return
+        }
+        self?.phase = .failed(message)
+        self?.appendLog("Host error: \(message)")
+      }
+    }
+
+    hrpc.onEventLog { [weak self] event in
+      await MainActor.run { [weak self] in
+        self?.lastHeartbeat = Date()
+        if !event.message.isEmpty {
+          self?.appendLog(event.message)
+        }
+      }
+    }
+
+    hrpc.onEventFeedUpdate { [weak self] event in
+      await MainActor.run { [weak self] in
+        self?.lastHeartbeat = Date()
+        let channelKey = event.channelKey.isEmpty ? "feed" : event.channelKey
+        let action = event.action.isEmpty ? "update" : event.action
+        self?.appendLog("Embedded host reported a feed update (\(action)) for \(channelKey).")
+        self?.scheduleAutomaticFeedRefresh()
+      }
+    }
+
+    hrpc.onEventUploadProgress { [weak self] event in
+      await MainActor.run { [weak self] in
+        self?.lastHeartbeat = Date()
+        let nativeEvent = NativeUploadProgressEvent(schema: event)
+        if let appState = self?.observedAppState {
+          self?.applyUploadProgressEvent(nativeEvent, to: appState)
+          self?.appendLog("Upload progress \(nativeEvent.progress)% for \(nativeEvent.videoId.isEmpty ? "active upload" : nativeEvent.videoId).")
+        }
+      }
+    }
   }
 
   private func ensureWorkletBridgeRunning() async throws {
     configureEmbeddedBareKitEnvironment()
     let bundleURL = try resolveWorkletBundleURL()
     let sessionSink = WorkletSessionSink()
-    let rpcChannel = makeRPCChannel(
+    let hrpc = makeHRPC(
       logPrefix: "Embedded BareKit"
     ) { frame in
       sessionSink.write(frame)
@@ -1952,8 +1868,8 @@ final class HostBridgeService {
       bundleURL: bundleURL,
       assetsPath: Bundle.main.resourceURL?.path,
       onData: { [weak self] data in
-        Task { @MainActor [weak self] in
-          await self?.handleBridgeOutputData(data)
+        DispatchQueue.main.async { [weak self] in
+          self?.handleBridgeOutputData(data)
         }
       },
       onLog: { [weak self] message in
@@ -1969,7 +1885,7 @@ final class HostBridgeService {
     )
 
     sessionSink.session = session
-    self.rpcChannel = rpcChannel
+    self.hrpc = hrpc
     self.hostSession = session
     self.currentHostTransportMode = .embedded
     appendLog("Embedded BareKit worklet launched from \(bundleURL.path).")
@@ -1987,7 +1903,7 @@ final class HostBridgeService {
       bundleURL = try resolveSidecarBundleURL()
     }
     let sessionSink = WorkletSessionSink()
-    let rpcChannel = makeRPCChannel(
+    let hrpc = makeHRPC(
       logPrefix: "Native host sidecar"
     ) { frame in
       sessionSink.write(frame)
@@ -2007,8 +1923,8 @@ final class HostBridgeService {
       bundleURL: bundleURL,
       environment: environment,
       onData: { [weak self] data in
-        Task { @MainActor [weak self] in
-          await self?.handleBridgeOutputData(data)
+        DispatchQueue.main.async { [weak self] in
+          self?.handleBridgeOutputData(data)
         }
       },
       onLog: { [weak self] message in
@@ -2024,7 +1940,7 @@ final class HostBridgeService {
     )
 
     sessionSink.session = session
-    self.rpcChannel = rpcChannel
+    self.hrpc = hrpc
     self.hostSession = session
     self.currentHostTransportMode = .sidecar
     if let bundleURL {
@@ -2070,106 +1986,35 @@ final class HostBridgeService {
     return nil
   }
 
-  private func handleBridgeOutputData(_ data: Data) async {
+  private func handleBridgeOutputData(_ data: Data) {
     guard !data.isEmpty else { return }
-
-    guard let rpcChannel else { return }
-    await rpcChannel.receive(data)
+    hrpc?.receive(data)
   }
 
   private func handleHostSessionTermination() {
     guard hostSession != nil else { return }
 
     let disconnectError = HostBridgeError.bridgeDisconnected
-    let rpcChannel = self.rpcChannel
     let transportMode = currentHostTransportMode
     feedUpdateRefreshTask?.cancel()
     feedUpdateRefreshTask = nil
     hostSession = nil
     currentHostTransportMode = nil
-    self.rpcChannel = nil
+    hrpc = nil
+    hrpcDelegate = nil
     stopPlaybackStatsPolling()
 
     if case .booting = phase {
       phase = .failed(disconnectError.localizedDescription)
     }
 
-    if let rpcChannel {
-      Task {
-        await rpcChannel.failPending(disconnectError)
-      }
-    }
-
     appendLog("\(transportMode?.label ?? "Native host bridge") closed.")
     appendLog(disconnectError.localizedDescription)
   }
 
-  private func handleRPCEvent(_ event: IncomingEvent) {
-    lastHeartbeat = Date()
+  // Event handling is now registered via registerEventHandlers(on:) in makeHRPC().
 
-    switch NativeBridgeEventCommand(rawValue: event.command) {
-    case .hostReady:
-      let payload = try? NativeBridgePayload.decodeIfPresent(
-        NativeBridgeHostReadyEventCodec(),
-        from: event.data
-      )
-      phase = .ready(blobServerPort: payload?.blobServerPort)
-      if Self.isExperimentalFFmpegDecodeEnabled() {
-        Task { @MainActor [weak self] in
-          _ = await self?.refreshFFmpegDecodeAvailability()
-        }
-      }
-    case .hostError:
-      let payload = try? NativeBridgePayload.decodeIfPresent(
-        NativeBridgeHostMessageEventCodec(),
-        from: event.data
-      )
-      let message = payload?.message ?? "Unknown host error"
-      if case .failed(let existingMessage) = phase,
-         Self.isInProcessRelaunchRequiredMessage(existingMessage) {
-        appendLog("Host error arrived after relaunch-required state was already set: \(message)")
-        return
-      }
-      phase = .failed(message)
-      appendLog("Host error: \(message)")
-    case .hostLog:
-      let payload = try? NativeBridgePayload.decodeIfPresent(
-        NativeBridgeHostMessageEventCodec(),
-        from: event.data
-      )
-      if let message = payload?.message {
-        appendLog(message)
-      }
-    case .workletReady:
-      let payload = try? NativeBridgePayload.decodeIfPresent(
-        NativeBridgeWorkletReadyEventCodec(),
-        from: event.data
-      )
-      let stage = payload?.stage ?? "unknown"
-      appendLog("Embedded BareKit worklet is ready (\(stage)).")
-    case .feedUpdated:
-      let payload =
-        (try? NativeBridgePayload.decodeIfPresent(
-          NativeBridgeFeedUpdatedEventCodec(),
-          from: event.data
-        )) ?? NativeBridgeFeedUpdatedEvent(channelKey: "feed", action: "update")
-      appendLog("Embedded host reported a feed update (\(payload.action)) for \(payload.channelKey).")
-      scheduleAutomaticFeedRefresh()
-    case .uploadProgress:
-      let payload = try? NativeBridgePayload.decodeIfPresent(
-        NativeBridgeUploadProgressEventCodec(),
-        from: event.data
-      )
-      if let payload, let appState = observedAppState {
-        applyUploadProgressEvent(payload, to: appState)
-        appendLog("Upload progress \(payload.progress)% for \(payload.videoId.isEmpty ? "active upload" : payload.videoId).")
-      }
-    case .none:
-      appendLog("Bridge emitted an unknown RPC event command \(event.command).")
-    }
-  }
-
-  func applyUploadProgressEvent(_ payload: NativeBridgeUploadProgressEvent, to appState: AppState) {
+  func applyUploadProgressEvent(_ payload: NativeUploadProgressEvent, to appState: AppState) {
     appState.applyUploadProgress(payload)
   }
 
@@ -2197,89 +2042,76 @@ final class HostBridgeService {
     }
   }
 
-  private func sendRequest<ResponseCodec: Codec>(
-    command: NativeBridgeCommand,
-    responseCodec: ResponseCodec,
-    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
-  ) async throws -> ResponseCodec.Value {
-    try await sendRequest(
-      command: command,
-      requestData: nil,
-      responseCodec: responseCodec,
-      timeout: timeout
-    )
-  }
-
-  private func sendRequest<RequestCodec: Codec, ResponseCodec: Codec>(
-    command: NativeBridgeCommand,
-    requestPayload: RequestCodec.Value,
-    requestCodec: RequestCodec,
-    responseCodec: ResponseCodec,
-    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
-  ) async throws -> ResponseCodec.Value {
-    let requestData = try NativeBridgePayload.encode(requestCodec, value: requestPayload)
-    return try await sendRequest(
-      command: command,
-      requestData: requestData,
-      responseCodec: responseCodec,
-      timeout: timeout
-    )
-  }
-
-  private func sendRequest<ResponseCodec: Codec>(
-    command: NativeBridgeCommand,
-    requestData: Data?,
-    responseCodec: ResponseCodec,
-    timeout: Duration? = BridgeRPCChannel.defaultRequestTimeout
-  ) async throws -> ResponseCodec.Value {
+  /// Ensures the bridge is running and returns the HRPC instance, or throws.
+  private func ensureHRPC() async throws -> HRPC {
     try await ensureBridgeRunning()
+    guard let hrpc else {
+      throw HostBridgeError.bridgeInputUnavailable
+    }
+    return hrpc
+  }
 
-    do {
-      guard let rpcChannel else {
-        throw HostBridgeError.bridgeInputUnavailable
-      }
-
-      let responseData = try await rpcChannel.request(
-        command: command.rawValue,
-        data: requestData,
-        timeout: timeout
-      )
-
-      lastHeartbeat = Date()
-      return try NativeBridgePayload.decode(responseCodec, from: responseData)
-    } catch let error as RPCRemoteError {
-      throw HostBridgeError.bridgeResponse(error.message)
+  /// Executes an RPC call through a serial gate to prevent concurrent access
+  /// to bare-rpc-swift's non-thread-safe RPC internals.
+  private func gatedRPC<T>(_ body: (HRPC) async throws -> T) async throws -> T {
+    let hrpc = try await ensureHRPC()
+    return try await rpcGate.withGate {
+      try await body(hrpc)
     }
   }
 
+  /// Performs any HRPC call, then refreshes the browse snapshot afterward.
+  private func performSnapshotMutationViaHRPC(
+    into appState: AppState,
+    logMessage: String,
+    allowCachedFeedFallback: Bool = true,
+    afterApply: ((AppState) -> Void)? = nil,
+    call: (HRPC) async throws -> Void
+  ) async {
+    appState.setLoading(true)
+    appState.setError(nil)
+    appendLog(logMessage)
+
+    do {
+      let response = try await gatedRPC { hrpc in
+        // Execute the mutation command
+        try await call(hrpc)
+        // Then refresh the browse snapshot
+        return try await hrpc.desktopRefreshBrowse(DesktopRefreshBrowseRequest())
+      }
+      let liveSnapshot = NativeBrowseSnapshot(schema: response.snapshot)
+      let snapshot = Self.resolvedBrowseSnapshot(
+        liveSnapshot: liveSnapshot,
+        cachedSnapshot: Self.loadCachedBrowseSnapshot(from: snapshotCacheURL),
+        allowCachedFeedFallback: allowCachedFeedFallback
+      )
+      if allowCachedFeedFallback, snapshot != liveSnapshot {
+        appendLog("Retaining cached browse snapshot because the live public feed is still empty.")
+      }
+      persistBrowseSnapshotIfUseful(snapshot)
+      appState.applySnapshot(snapshot)
+      afterApply?(appState)
+      lastHeartbeat = Date()
+      appendLog("Native host mutation completed. Home now has \(appState.videoCount(for: .home)) videos.")
+    } catch {
+      appState.setError(error.localizedDescription)
+      appendLog("Native host mutation failed: \(error.localizedDescription)")
+    }
+
+    appState.setLoading(false)
+  }
+
+  // Unified storage path: both desktop apps (Electrobun + native Swift) use
+  // ~/.peartube so their corestores, identity, and cache state stay in sync.
+  // Never run both apps simultaneously — corestore is not multi-process safe.
   static func preferredStoragePath(
     environment: [String: String] = ProcessInfo.processInfo.environment,
-    fileManager: FileManager = .default,
-    homeDirectory: URL = realUserHomeDirectory(environment: ProcessInfo.processInfo.environment),
-    appSupportDirectory: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    homeDirectory: URL = realUserHomeDirectory(environment: ProcessInfo.processInfo.environment)
   ) -> String {
     if let override = environment["PEARTUBE_NATIVE_STORAGE_PATH"], !override.isEmpty {
       return override
     }
-
-    let legacyStore = homeDirectory.appendingPathComponent(".peartube", isDirectory: true)
-    let legacyMarkers = [
-      legacyStore.appendingPathComponent("identity-key").path,
-      legacyStore.appendingPathComponent("db/identity-key").path,
-      legacyStore.appendingPathComponent("CORESTORE").path,
-      legacyStore.appendingPathComponent("db/IDENTITY").path,
-    ]
-
-    if isTruthyEnvironmentFlag(environment["PEARTUBE_NATIVE_USE_LEGACY_STORE"]),
-       legacyMarkers.contains(where: { fileManager.fileExists(atPath: $0) }) {
-      return legacyStore.path
-    }
-
-    let appSupport = appSupportDirectory ?? homeDirectory
-    return appSupport
-      .appendingPathComponent("PearTubeDesktopNative", isDirectory: true)
-      .appendingPathComponent("host-storage", isDirectory: true)
-      .path
+    return homeDirectory.appendingPathComponent(".peartube", isDirectory: true).path
   }
 
   static func realUserHomeDirectory(
@@ -2294,17 +2126,6 @@ final class HostBridgeService {
     }
 
     return FileManager.default.homeDirectoryForCurrentUser
-  }
-
-  static func defaultNativeAppSupportStoragePath(
-    homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
-    appSupportDirectory: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-  ) -> String {
-    let appSupport = appSupportDirectory ?? homeDirectory
-    return appSupport
-      .appendingPathComponent("PearTubeDesktopNative", isDirectory: true)
-      .appendingPathComponent("host-storage", isDirectory: true)
-      .path
   }
 
   static func archiveNativeStoreIfRecoverable(
@@ -2376,29 +2197,13 @@ final class HostBridgeService {
     }
   }
 
-  static func isRecoverableNativeStoragePath(
-    _ storagePath: String,
-    homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
-    appSupportDirectory: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-  ) -> Bool {
-    let normalizedStoragePath = URL(fileURLWithPath: storagePath, isDirectory: true)
+  // Auto-recovery (archive-on-empty-identity) only fires for the legacy
+  // App-Support container path (PearTubeDesktopNative/host-storage). The
+  // unified ~/.peartube store is shared with the Electrobun app and must
+  // never be auto-archived — hence the strict structural check.
+  static func isRecoverableNativeStoragePath(_ storagePath: String) -> Bool {
+    let storageURL = URL(fileURLWithPath: storagePath, isDirectory: true)
       .standardizedFileURL
-      .path
-    let normalizedDefaultPath = URL(
-      fileURLWithPath: defaultNativeAppSupportStoragePath(
-        homeDirectory: homeDirectory,
-        appSupportDirectory: appSupportDirectory
-      ),
-      isDirectory: true
-    )
-    .standardizedFileURL
-    .path
-
-    if normalizedStoragePath == normalizedDefaultPath {
-      return true
-    }
-
-    let storageURL = URL(fileURLWithPath: normalizedStoragePath, isDirectory: true)
     return storageURL.lastPathComponent == "host-storage"
       && storageURL.deletingLastPathComponent().lastPathComponent == "PearTubeDesktopNative"
   }
@@ -2461,19 +2266,10 @@ final class HostBridgeService {
   static func shouldAutoRecoverIdentitylessBootstrapFailure(
     storagePath: String,
     message: String,
-    fileManager: FileManager = .default,
-    homeDirectory: URL = URL(fileURLWithPath: NSHomeDirectory()),
-    appSupportDirectory: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    fileManager: FileManager = .default
   ) -> Bool {
     guard recoverableBootstrapErrorCode(from: message) == 3 else { return false }
-    guard isRecoverableNativeStoragePath(
-      storagePath,
-      homeDirectory: homeDirectory,
-      appSupportDirectory: appSupportDirectory
-    ) else {
-      return false
-    }
-
+    guard isRecoverableNativeStoragePath(storagePath) else { return false }
     return nativeStoreHasNoIdentity(at: storagePath, fileManager: fileManager)
       && fileManager.fileExists(atPath: storagePath)
   }
@@ -2521,19 +2317,14 @@ final class HostBridgeService {
   }
 
   static func isEmbeddedBridgeTimeout(_ error: Error) -> Bool {
-    guard let bridgeError = error as? BridgeRPCChannelError else { return false }
-
-    switch bridgeError {
-    case .requestTimedOut:
-      return true
-    default:
-      return false
-    }
+    // Check for BareRPC timeout or generic timeout patterns
+    let message = error.localizedDescription.lowercased()
+    return message.contains("timed out") || message.contains("timeout")
   }
 
   static func mpvSessionHasPlaybackSignal(
-    state: NativeBridgeMpvStateResponse?,
-    frame: NativeBridgeMpvRenderFrameResponse?
+    state: NativeMpvState?,
+    frame: NativeMpvRenderFrame?
   ) -> Bool {
     if let frame, frame.success, frame.hasFrame {
       return true
@@ -2617,7 +2408,7 @@ final class HostBridgeService {
     }
   }
 
-  static func isAVPlayerReadyForPlayback(_ stats: NativeBridgeVideoStatsResponse) -> Bool {
+  static func isAVPlayerReadyForPlayback(_ stats: NativeVideoStats) -> Bool {
     guard stats.success else { return false }
     if stats.isComplete { return true }
     if stats.downloadedBlocks > 0 || stats.downloadedBytes > 0 { return true }
@@ -2660,16 +2451,15 @@ final class HostBridgeService {
   }
 
   @discardableResult
-  func refreshFFmpegDecodeAvailability() async -> NativeBridgeFFmpegDecodeAvailableResponse? {
+  func refreshFFmpegDecodeAvailability() async -> FfmpegDecodeAvailableResponse? {
     guard isReady else { return nil }
 
     do {
-      let response = try await sendRequest(
-        command: .ffmpegDecodeAvailable,
-        responseCodec: NativeBridgeFFmpegDecodeAvailableResponseCodec()
-      )
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.ffmpegDecodeAvailable(FfmpegDecodeAvailableRequest())
+      }
       ffmpegDecodeAvailable = response.available
-      ffmpegDecodeAvailabilityError = response.error
+      ffmpegDecodeAvailabilityError = response.error?.isEmpty == false ? response.error : nil
       return response
     } catch {
       ffmpegDecodeAvailable = false

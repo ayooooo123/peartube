@@ -1,5 +1,6 @@
 import bareProcess from 'bare-process'
-import * as bridgeRPC from './native-rpc.mjs'
+import os from 'bare-os'
+import HRPC from '../../spec/spec/hrpc/index.js'
 import { startHost } from '../../host/src/start-host.js'
 import { createBackend } from '../../backend/src/backend-entry.js'
 import { createProtocolClient } from '../../protocol/src/create-client.js'
@@ -369,7 +370,9 @@ function createBridgeState() {
 }
 
 function defaultStoragePath() {
-  return process?.env?.PEARTUBE_NATIVE_STORAGE_PATH || '.peartube-native'
+  const override = process?.env?.PEARTUBE_NATIVE_STORAGE_PATH
+  if (override && override.length > 0) return override
+  return `${os.homedir()}/.peartube`
 }
 
 function writeStderr(line) {
@@ -378,14 +381,7 @@ function writeStderr(line) {
   } catch {}
 }
 
-function writeBridgeFrame(frame) {
-  const output = process.stdout
-  if (!output?.write) {
-    throw new Error('Native host sidecar stdout is unavailable')
-  }
-
-  output.write(frame)
-}
+let hrpc = null
 
 function listFromResponse(value, key) {
   if (Array.isArray(value)) return value
@@ -393,14 +389,26 @@ function listFromResponse(value, key) {
   return []
 }
 
-function emitBridgeEvent(command, codec, payload, onError) {
+function emitBridgeEvent(eventName, payload, onError) {
   try {
-    writeBridgeFrame(
-      bridgeRPC.encodeEventFrame({
-        command,
-        data: bridgeRPC.encodePayload(codec, payload),
-      })
-    )
+    if (!hrpc) return
+    switch (eventName) {
+      case 'ready':
+        hrpc.eventReady(payload)
+        break
+      case 'error':
+        hrpc.eventError(payload)
+        break
+      case 'log':
+        hrpc.eventLog(payload)
+        break
+      case 'feedUpdate':
+        hrpc.eventFeedUpdate(payload)
+        break
+      case 'uploadProgress':
+        hrpc.eventUploadProgress(payload)
+        break
+    }
   } catch (error) {
     onError?.(`Bridge event write failed: ${formatError(error)}`)
   }
@@ -472,55 +480,30 @@ async function ensureHostBooted(state, storagePath, onError) {
       state.feedUpdateCount += 1
       state.lastFeedUpdateAt = Date.now()
       console.log(`[${runtimeLabel}] feed updated count=${state.feedUpdateCount}`)
-      emitBridgeEvent(
-        bridgeRPC.BRIDGE_EVENTS.feedUpdated,
-        bridgeRPC.feedUpdatedEventCodec,
-        { channelKey: 'feed', action: 'update' },
-        onError
-      )
+      emitBridgeEvent('feedUpdate', { channelKey: 'feed', action: 'update' }, onError)
     },
   })
 
   const client = createProtocolClient({ stream: clientStream })
 
   client.events.on(PROTOCOL_EVENTS.LOG, (payload) => {
-    emitBridgeEvent(
-      bridgeRPC.BRIDGE_EVENTS.hostLog,
-      bridgeRPC.hostLogEventCodec,
-      { message: payload?.message || 'Host log event' },
-      onError
-    )
+    emitBridgeEvent('log', { level: 'info', message: payload?.message || 'Host log event', timestamp: 0 }, onError)
   })
   client.events.on(PROTOCOL_EVENTS.HOST_READY, (payload) => {
-    emitBridgeEvent(
-      bridgeRPC.BRIDGE_EVENTS.hostReady,
-      bridgeRPC.hostReadyEventCodec,
-      { blobServerPort: payload?.blobServerPort ?? null },
-      onError
-    )
+    emitBridgeEvent('ready', { blobServerPort: payload?.blobServerPort ?? 0 }, onError)
   })
   client.events.on(PROTOCOL_EVENTS.HOST_ERROR, (payload) => {
-    emitBridgeEvent(
-      bridgeRPC.BRIDGE_EVENTS.hostError,
-      bridgeRPC.hostErrorEventCodec,
-      { message: payload?.message || 'Unknown host error' },
-      onError
-    )
+    emitBridgeEvent('error', { code: 0, message: payload?.message || 'Unknown host error' }, onError)
   })
   client.events.on(PROTOCOL_EVENTS.UPLOAD_PROGRESS, (payload) => {
-    emitBridgeEvent(
-      bridgeRPC.BRIDGE_EVENTS.uploadProgress,
-      bridgeRPC.uploadProgressEventCodec,
-      {
-        videoId: payload?.videoId || '',
-        progress: payload?.progress ?? 0,
-        bytesUploaded: payload?.bytesUploaded ?? null,
-        totalBytes: payload?.totalBytes ?? null,
-        speed: payload?.speed ?? null,
-        eta: payload?.eta ?? null,
-      },
-      onError
-    )
+    emitBridgeEvent('uploadProgress', {
+      videoId: payload?.videoId || '',
+      progress: payload?.progress ?? 0,
+      bytesUploaded: payload?.bytesUploaded ?? 0,
+      totalBytes: payload?.totalBytes ?? 0,
+      speed: payload?.speed ?? '',
+      eta: payload?.eta ?? '',
+    }, onError)
   })
 
   state.hostSession = hostSession
@@ -720,37 +703,91 @@ function normalizeMutationResponse(response, { includeQueued = true } = {}) {
   }
 }
 
-async function handleRequest(state, request, onError) {
-  const { command, data = null } = request || {}
+// Map bridge-core video objects to HRPC desktop-browse-video schema field names
+function toSchemaVideo(v) {
+  return {
+    id: v.id || '',
+    backendVideoId: v.backendVideoID || v.backendVideoId || v.id || '',
+    channelKey: v.channelKey || '',
+    publicBeeKey: v.publicBeeKey || '',
+    title: v.title || '',
+    channelName: v.channelName || '',
+    durationText: v.durationText || '',
+    summary: v.summary || '',
+    tags: Array.isArray(v.tags) ? v.tags : [],
+    accentHex: v.accentHex || '',
+    sections: Array.isArray(v.sections) ? v.sections : [],
+    thumbnailUrl: v.thumbnailURL || v.thumbnailUrl || '',
+    path: v.path || '',
+    blobId: v.blobId || '',
+    blobsCoreKey: v.blobsCoreKey || '',
+    mimeType: v.mimeType || '',
+    width: v.width || 0,
+    height: v.height || 0,
+  }
+}
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.bootstrap) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.bootstrapRequestCodec, data)
+function toSchemaSnapshot(snapshot) {
+  if (!snapshot) return createEmptyBrowseSnapshot()
+  const s = snapshot.sections || {}
+  const mapVideos = (arr) => (Array.isArray(arr) ? arr : []).map(toSchemaVideo)
+  return {
+    generatedAt: snapshot.generatedAt || Date.now(),
+    sections: {
+      home: mapVideos(s.home),
+      subscriptions: mapVideos(s.subscriptions),
+      library: mapVideos(s.library),
+      studio: mapVideos(s.studio),
+      diagnostics: mapVideos(s.diagnostics),
+    },
+    stats: {
+      homeCount: snapshot.stats?.homeCount || 0,
+      subscriptionCount: snapshot.stats?.subscriptionCount || 0,
+      libraryCount: snapshot.stats?.libraryCount || 0,
+      channelCount: snapshot.stats?.channelCount || 0,
+    },
+    state: {
+      subscriptionChannelKeys: snapshot.state?.subscriptionChannelKeys || [],
+      identityChannelKeys: snapshot.state?.identityChannelKeys || [],
+      activeIdentityName: snapshot.state?.activeIdentityName || '',
+      activeIdentityChannelKey: snapshot.state?.activeIdentityChannelKey || '',
+      activeChannelPublished: Boolean(snapshot.state?.activeChannelPublished),
+    },
+  }
+}
+
+function registerHandlers(hrpcInstance, state, reportFatal) {
+  hrpcInstance.onDesktopBootstrap(async (req) => {
     const ready = await ensureHostBooted(
       state,
-      params.storagePath || defaultStoragePath(),
-      onError
+      req.storagePath || defaultStoragePath(),
+      reportFatal
     )
     const snapshot = await loadBrowseSnapshot(state)
 
     return {
-      blobServerPort: ready?.blobServerPort ?? null,
+      blobServerPort: ready?.blobServerPort ?? 0,
       protocolVersion: ready?.protocolVersion ?? 2,
-      storagePath: state.currentStoragePath,
-      snapshot,
+      storagePath: state.currentStoragePath || '',
+      snapshot: toSchemaSnapshot(snapshot),
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.refreshBrowse) {
+  hrpcInstance.onDesktopRefreshBrowse(async () => {
     const snapshot = await loadBrowseSnapshot(state)
-    return { snapshot }
-  }
+    return { snapshot: toSchemaSnapshot(snapshot) }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.searchVideos) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.searchRequestCodec, data)
+  hrpcInstance.onDesktopShutdown(async () => {
+    await shutdownBridge(state)
+    return { success: true }
+  })
+
+  hrpcInstance.onGlobalSearchVideos(async (req) => {
     const rawResponse = await withTimeout(
       () => state.client?.search.globalSearchVideos({
-        query: params.query,
-        topK: params.topK,
+        query: req.query,
+        topK: req.topK,
       }),
       { results: [] },
       5000
@@ -762,66 +799,66 @@ async function handleRequest(state, request, onError) {
     })
 
     return {
-      query: params.query,
       results,
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.createIdentity) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.createIdentityRequestCodec, data)
-    return mutateAndReload(
+  hrpcInstance.onCreateIdentity(async (req) => {
+    const snapshot = await mutateAndReload(
       state,
       async (client) => {
-        await client.identity.createIdentity({ name: params.name })
+        await client.identity.createIdentity({ name: req.name })
       },
       { responseBuilder: loadIdentityMutationSnapshot }
     )
-  }
+    return { identity: snapshot }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.refreshFeed) {
-    return mutateAndReload(state, async (client) => {
+  hrpcInstance.onRefreshFeed(async () => {
+    await mutateAndReload(state, async (client) => {
       await client.feed.refreshFeed({})
     })
-  }
+    return { success: true }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.publishActiveChannel) {
-    return mutateAndReload(state, async (client) => {
+  hrpcInstance.onSubmitToFeed(async () => {
+    await mutateAndReload(state, async (client) => {
       await client.feed.submitToFeed({})
     })
-  }
+    return { success: true }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.subscribeChannel) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.subscribeChannelRequestCodec, data)
-    return mutateAndReload(state, async (client) => {
-      await client.feed.subscribeChannel({ channelKey: params.channelKey })
+  hrpcInstance.onSubscribeChannel(async (req) => {
+    await mutateAndReload(state, async (client) => {
+      await client.feed.subscribeChannel({ channelKey: req.channelKey })
     })
-  }
+    return { success: true }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.unsubscribeChannel) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.subscribeChannelRequestCodec, data)
-    return mutateAndReload(state, async (client) => {
-      await client.feed.unsubscribeChannel({ channelKey: params.channelKey })
+  hrpcInstance.onUnsubscribeChannel(async (req) => {
+    await mutateAndReload(state, async (client) => {
+      await client.feed.unsubscribeChannel({ channelKey: req.channelKey })
     })
-  }
+    return { success: true }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.uploadVideo) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.uploadVideoRequestCodec, data)
-    return mutateAndReload(state, async (client) => {
+  hrpcInstance.onUploadVideo(async (req) => {
+    await mutateAndReload(state, async (client) => {
       await client.transfer.uploadVideo({
-        filePath: params.filePath,
-        title: params.title,
-        description: params.description || '',
-        category: params.category || '',
+        filePath: req.filePath,
+        title: req.title,
+        description: req.description || '',
+        category: req.category || '',
       })
     })
-  }
+    return { video: {} }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.getChannelMeta) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.getChannelMetaRequestCodec, data)
+  hrpcInstance.onGetChannelMeta(async (req) => {
     const fetchChannelData = createChannelDataFetcher(state.client)
     const result = await fetchChannelData({
-      channelKey: params.channelKey,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      publicBeeKey: req.publicBeeKey || undefined,
     }, {
       limit: 0,
       offset: 0,
@@ -829,371 +866,360 @@ async function handleRequest(state, request, onError) {
     const channelMeta = result?.channelMeta || {}
 
     return {
-      channelKey: params.channelKey,
-      publicBeeKey: params.publicBeeKey || null,
-      avatarURL: channelMeta?.avatar || null,
-      name: channelMeta?.name || null,
-      description: channelMeta?.description || null,
-      videoCount: channelMeta?.videoCount ?? null,
+      channelKey: req.channelKey,
+      publicBeeKey: req.publicBeeKey || '',
+      avatarURL: channelMeta?.avatar || '',
+      name: channelMeta?.name || '',
+      description: channelMeta?.description || '',
+      videoCount: channelMeta?.videoCount ?? 0,
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.listChannelVideos) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.listChannelVideosRequestCodec, data)
+  hrpcInstance.onListVideos(async (req) => {
     const fetchChannelData = createChannelDataFetcher(state.client)
     const result = await fetchChannelData({
-      channelKey: params.channelKey,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      publicBeeKey: req.publicBeeKey || undefined,
     }, {
-      limit: 100,
-      offset: 0,
+      limit: req.limit || 100,
+      offset: req.offset || 0,
     })
     const nativeVideos = buildChannelWorkspaceVideos({
-      channelKey: params.channelKey,
-      publicBeeKey: params.publicBeeKey || null,
+      channelKey: req.channelKey,
+      publicBeeKey: req.publicBeeKey || null,
       channelMeta: result?.channelMeta || {},
       videos: Array.isArray(result?.videos) ? result.videos : [],
-      sourceKind: params.publicBeeKey ? 'channel' : 'identity',
-      sections: params.publicBeeKey ? ['library'] : ['studio', 'library'],
+      sourceKind: req.publicBeeKey ? 'channel' : 'identity',
+      sections: req.publicBeeKey ? ['library'] : ['studio', 'library'],
     })
 
     return {
-      channelKey: params.channelKey,
       videos: nativeVideos,
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.updateChannel) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.updateChannelRequestCodec, data)
+  hrpcInstance.onUpdateChannel(async (req) => {
     const response = await state.client?.channel.updateChannel({
-      name: params.name || undefined,
-      description: params.description || undefined,
+      name: req.name || undefined,
+      description: req.description || undefined,
     })
     return normalizeMutationResponse(response, { includeQueued: false })
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.updateChannelAvatar) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.updateChannelAvatarRequestCodec, data)
+  hrpcInstance.onUpdateChannelAvatar(async (req) => {
     const response = await state.client?.channel.updateChannelAvatar({
-      filePath: params.filePath,
-      mimeType: params.mimeType || undefined,
+      filePath: req.filePath,
+      mimeType: req.mimeType || undefined,
     })
     return normalizeMutationResponse(response, { includeQueued: false })
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.updateVideoMetadata) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.updateVideoMetadataRequestCodec, data)
+  hrpcInstance.onUpdateVideoMetadata(async (req) => {
     const response = await state.client?.video.updateVideoMetadata({
-      channelKey: params.channelKey,
-      videoId: params.videoId,
-      title: params.title || undefined,
-      description: params.description || undefined,
-      category: params.category || undefined,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
+      title: req.title || undefined,
+      description: req.description || undefined,
+      category: req.category || undefined,
     })
     return normalizeMutationResponse(response, { includeQueued: false })
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.deleteVideo) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.deleteVideoRequestCodec, data)
+  hrpcInstance.onDeleteVideo(async (req) => {
     const response = await state.client?.video.deleteVideo({
-      channelKey: params.channelKey,
-      videoId: params.videoId,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
     })
     return normalizeMutationResponse(response, { includeQueued: false })
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.setVideoThumbnailFromFile) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.setVideoThumbnailFromFileRequestCodec, data)
+  hrpcInstance.onSetVideoThumbnailFromFile(async (req) => {
     const response = await state.client?.video.setVideoThumbnailFromFile({
-      videoId: params.videoId,
-      filePath: params.filePath,
+      videoId: req.videoId,
+      filePath: req.filePath,
     })
     return normalizeMutationResponse(response, { includeQueued: false })
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.resolvePlayback) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.resolvePlaybackRequestCodec, data)
+  hrpcInstance.onPreparePlayback(async (req) => {
     return resolvePlaybackViaClient({
       client: state.client,
-      params,
+      params: req,
       log: (message) => console.log(`[${runtimeLabel}] ${message}`),
       prefetchTimeoutMs: 7000,
     })
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.getVideoStats) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.videoStatsRequestCodec, data)
-    const videoRef = params.videoPath || params.videoId
-    const stats = await state.client?.video.getVideoStats({
-      channelKey: params.channelKey,
+  hrpcInstance.onGetVideoStats(async (req) => {
+    const videoRef = req.videoId
+    const raw = await state.client?.video.getVideoStats({
+      channelKey: req.channelKey,
       videoId: videoRef,
     })
+    const s = raw?.stats ?? raw ?? {}
 
     return {
-      success: true,
-      status: stats?.stats?.status ?? stats?.status ?? 'unknown',
-      progress: stats?.stats?.progress ?? stats?.progress ?? 0,
-      totalBlocks: stats?.stats?.totalBlocks ?? stats?.totalBlocks ?? 0,
-      downloadedBlocks: stats?.stats?.downloadedBlocks ?? stats?.downloadedBlocks ?? 0,
-      totalBytes: stats?.stats?.totalBytes ?? stats?.totalBytes ?? 0,
-      downloadedBytes: stats?.stats?.downloadedBytes ?? stats?.downloadedBytes ?? 0,
-      peerCount: stats?.stats?.peerCount ?? stats?.peerCount ?? 0,
-      swarmConnections: stats?.stats?.swarmConnections ?? stats?.swarmConnections ?? 0,
-      speedMBps: String(stats?.stats?.speedMBps ?? stats?.speedMBps ?? '0'),
-      uploadSpeedMBps: stats?.stats?.uploadSpeedMBps ?? stats?.uploadSpeedMBps ?? null,
-      elapsed: stats?.stats?.elapsed ?? stats?.elapsed ?? 0,
-      isComplete: Boolean(stats?.stats?.isComplete ?? stats?.isComplete),
-      error: stats?.stats?.error ?? stats?.error ?? null,
+      stats: {
+        videoId: videoRef || '',
+        channelKey: req.channelKey || '',
+        status: s.status ?? 'unknown',
+        progress: s.progress ?? 0,
+        totalBlocks: s.totalBlocks ?? 0,
+        downloadedBlocks: s.downloadedBlocks ?? 0,
+        totalBytes: s.totalBytes ?? 0,
+        downloadedBytes: s.downloadedBytes ?? 0,
+        peerCount: s.peerCount ?? 0,
+        speedMBps: String(s.speedMBps ?? '0'),
+        uploadSpeedMBps: s.uploadSpeedMBps ?? '',
+        elapsed: s.elapsed ?? 0,
+        isComplete: Boolean(s.isComplete),
+      },
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.addComment) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.addCommentRequestCodec, data)
+  hrpcInstance.onAddComment(async (req) => {
     const response = await state.client?.video.addComment({
-      channelKey: params.channelKey,
-      videoId: params.videoId,
-      text: params.text,
-      parentId: params.parentId || undefined,
-      authorChannelKey: params.authorChannelKey || undefined,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
+      text: req.text,
+      parentId: req.parentId || undefined,
+      authorChannelKey: req.authorChannelKey || undefined,
+      publicBeeKey: req.publicBeeKey || undefined,
     })
 
     return normalizeMutationResponse(response)
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.listComments) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.listCommentsRequestCodec, data)
+  hrpcInstance.onListComments(async (req) => {
     const response = await state.client?.video.listComments({
-      channelKey: params.channelKey,
-      videoId: params.videoId,
-      page: params.page,
-      limit: params.limit,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
+      page: req.page,
+      limit: req.limit,
+      publicBeeKey: req.publicBeeKey || undefined,
     })
 
-    return normalizeCommentsResponse(response, params.videoId)
-  }
+    return normalizeCommentsResponse(response, req.videoId)
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.hideComment) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.commentModerationRequestCodec, data)
+  hrpcInstance.onHideComment(async (req) => {
     const response = await state.client?.video.hideComment({
-      channelKey: params.channelKey,
-      videoId: params.videoId,
-      commentId: params.commentId,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
+      commentId: req.commentId,
+      publicBeeKey: req.publicBeeKey || undefined,
     })
 
     return {
       success: Boolean(response?.success),
-      error: response?.error || null,
+      error: response?.error || '',
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.removeComment) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.commentModerationRequestCodec, data)
+  hrpcInstance.onRemoveComment(async (req) => {
     const response = await state.client?.video.removeComment({
-      channelKey: params.channelKey,
-      videoId: params.videoId,
-      commentId: params.commentId,
-      authorChannelKey: params.authorChannelKey || undefined,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
+      commentId: req.commentId,
+      authorChannelKey: req.authorChannelKey || undefined,
+      publicBeeKey: req.publicBeeKey || undefined,
     })
 
     return normalizeMutationResponse(response)
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.addReaction) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.addReactionRequestCodec, data)
+  hrpcInstance.onAddReaction(async (req) => {
     const response = await state.client?.video.addReaction({
-      channelKey: params.channelKey,
-      videoId: params.videoId,
-      reactionType: params.reactionType,
-      authorChannelKey: params.authorChannelKey || undefined,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
+      reactionType: req.reactionType,
+      authorChannelKey: req.authorChannelKey || undefined,
+      publicBeeKey: req.publicBeeKey || undefined,
     })
 
     return normalizeMutationResponse(response)
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.removeReaction) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.reactionRequestCodec, data)
+  hrpcInstance.onRemoveReaction(async (req) => {
     const response = await state.client?.video.removeReaction({
-      channelKey: params.channelKey,
-      videoId: params.videoId,
-      authorChannelKey: params.authorChannelKey || undefined,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
+      authorChannelKey: req.authorChannelKey || undefined,
+      publicBeeKey: req.publicBeeKey || undefined,
     })
 
     return normalizeMutationResponse(response)
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.getReactions) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.reactionRequestCodec, data)
+  hrpcInstance.onGetReactions(async (req) => {
     const response = await state.client?.video.getReactions({
-      channelKey: params.channelKey,
-      videoId: params.videoId,
-      authorChannelKey: params.authorChannelKey || undefined,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
+      authorChannelKey: req.authorChannelKey || undefined,
+      publicBeeKey: req.publicBeeKey || undefined,
     })
 
     return {
       success: Boolean(response?.success),
       counts: normalizeReactionCounts(response?.counts),
-      userReaction: response?.userReaction || null,
-      error: response?.error || null,
+      userReaction: response?.userReaction || '',
+      error: response?.error || '',
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.resolveThumbnail) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.resolveThumbnailRequestCodec, data)
+  hrpcInstance.onGetVideoThumbnail(async (req) => {
     const response = await state.client?.video.getVideoThumbnail({
-      channelKey: params.channelKey,
-      videoId: params.videoPath || params.videoId,
-      publicBeeKey: params.publicBeeKey || undefined,
+      channelKey: req.channelKey,
+      videoId: req.videoId,
+      publicBeeKey: req.publicBeeKey || undefined,
     })
 
     return {
-      videoId: params.videoId,
-      url: response?.dataUrl || response?.url || null,
+      url: response?.url || '',
+      dataUrl: response?.dataUrl || '',
       exists: Boolean(response?.exists && (response?.dataUrl || response?.url)),
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvAvailable) {
+  hrpcInstance.onMpvAvailable(async () => {
     await loadBareMpv()
     return {
       available: MpvPlayer !== null,
-      error: MpvPlayer ? null : (mpvLoadError || 'bare-mpv not available'),
+      error: MpvPlayer ? '' : (mpvLoadError || 'bare-mpv not available'),
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.ffmpegDecodeAvailable) {
+  hrpcInstance.onFfmpegDecodeAvailable(async () => {
     await loadBareFFmpeg()
     return {
       available: bareFFmpeg !== null,
-      error: bareFFmpeg ? null : (ffmpegLoadError || 'bare-ffmpeg not available'),
+      error: bareFFmpeg ? '' : (ffmpegLoadError || 'bare-ffmpeg not available'),
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvCreate) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvCreateRequestCodec, data)
+  hrpcInstance.onMpvCreate(async (req) => {
     await loadBareMpv()
 
     if (!MpvPlayer) {
       return {
         success: false,
-        playerId: null,
-        frameServerPort: null,
+        playerId: '',
+        frameServerPort: 0,
         error: mpvLoadError || 'bare-mpv not available',
       }
     }
 
     try {
-      const width = Math.max(defaultMpvWidth, params.width || defaultMpvWidth)
-      const height = Math.max(defaultMpvHeight, params.height || defaultMpvHeight)
+      const width = Math.max(defaultMpvWidth, req.width || defaultMpvWidth)
+      const height = Math.max(defaultMpvHeight, req.height || defaultMpvHeight)
       const frameServerPort = await ensureMpvFrameServer()
       const playerId = `mpv_${++mpvPlayerIdCounter}`
       const player = new MpvPlayer()
       if (player.initialize() !== 0) {
         throw new Error('Failed to initialize mpv')
       }
+
+      // Enable streaming mode — play as data arrives from peers instead of
+      // buffering the entire file. The blob server streams Hypercore data
+      // over HTTP; without these settings mpv tries to determine file size
+      // by seeking to the end, which blocks on incomplete downloads.
+      player.setProperty('cache', 'yes')
+      player.setProperty('cache-secs', 10)
+      player.setProperty('demuxer-max-bytes', '50MiB')
+      player.setProperty('demuxer-readahead-secs', 10)
+      player.setProperty('force-seekable', 'yes')
+
       player.initRender(width, height)
       mpvPlayers.set(playerId, { player, width, height })
-      return { success: true, playerId, frameServerPort, error: null }
+      return { success: true, playerId, frameServerPort, error: '' }
     } catch (error) {
       return {
         success: false,
-        playerId: null,
-        frameServerPort: null,
+        playerId: '',
+        frameServerPort: 0,
         error: error?.message || String(error),
       }
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvLoadFile) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvLoadFileRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
+  hrpcInstance.onMpvLoadFile(async (req) => {
+    const stateEntry = mpvPlayers.get(req.playerId)
     if (!stateEntry) {
       return { success: false, error: 'Player not found' }
     }
 
     try {
-      stateEntry.player.loadFile(params.url)
-      return { success: true, error: null }
+      stateEntry.player.loadFile(req.url)
+      return { success: true, error: '' }
     } catch (error) {
       return { success: false, error: error?.message || String(error) }
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvPlay) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
+  hrpcInstance.onMpvPlay(async (req) => {
+    const stateEntry = mpvPlayers.get(req.playerId)
     if (!stateEntry) return { success: false, error: 'Player not found' }
 
     try {
       stateEntry.player.play()
-      return { success: true, error: null }
+      return { success: true, error: '' }
     } catch (error) {
       return { success: false, error: error?.message || String(error) }
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvPause) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
+  hrpcInstance.onMpvPause(async (req) => {
+    const stateEntry = mpvPlayers.get(req.playerId)
     if (!stateEntry) return { success: false, error: 'Player not found' }
 
     try {
       stateEntry.player.pause()
-      return { success: true, error: null }
+      return { success: true, error: '' }
     } catch (error) {
       return { success: false, error: error?.message || String(error) }
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvSeek) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvSeekRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
+  hrpcInstance.onMpvSeek(async (req) => {
+    const stateEntry = mpvPlayers.get(req.playerId)
     if (!stateEntry) return { success: false, error: 'Player not found' }
 
     try {
-      stateEntry.player.seek(params.time)
-      return { success: true, error: null }
+      stateEntry.player.seek(parseFloat(req.time) || 0)
+      return { success: true, error: '' }
     } catch (error) {
       return { success: false, error: error?.message || String(error) }
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvGetState) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
+  hrpcInstance.onMpvGetState(async (req) => {
+    const stateEntry = mpvPlayers.get(req.playerId)
     if (!stateEntry) {
-      return { success: false, currentTime: 0, duration: 0, paused: true, error: 'Player not found' }
+      return { success: false, currentTime: '0', duration: '0', paused: true, error: 'Player not found' }
     }
 
     try {
       return {
         success: true,
-        currentTime: stateEntry.player.currentTime || 0,
-        duration: stateEntry.player.duration || 0,
+        currentTime: String(stateEntry.player.currentTime || 0),
+        duration: String(stateEntry.player.duration || 0),
         paused: stateEntry.player.paused ?? true,
-        error: null,
+        error: '',
       }
     } catch {
-      return { success: false, currentTime: 0, duration: 0, paused: true, error: 'Failed to read state' }
+      return { success: false, currentTime: '0', duration: '0', paused: true, error: 'Failed to read state' }
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvRenderFrame) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
+  hrpcInstance.onMpvRenderFrame(async (req) => {
+    const stateEntry = mpvPlayers.get(req.playerId)
     if (!stateEntry) {
       return {
         success: false,
         hasFrame: false,
         width: 0,
         height: 0,
-        frameData: null,
+        frameData: Buffer.alloc(0),
         error: 'Player not found',
       }
     }
@@ -1205,8 +1231,8 @@ async function handleRequest(state, request, onError) {
           hasFrame: false,
           width: stateEntry.width,
           height: stateEntry.height,
-          frameData: null,
-          error: null,
+          frameData: Buffer.alloc(0),
+          error: '',
         }
       }
 
@@ -1217,8 +1243,8 @@ async function handleRequest(state, request, onError) {
           hasFrame: false,
           width: stateEntry.width,
           height: stateEntry.height,
-          frameData: null,
-          error: null,
+          frameData: Buffer.alloc(0),
+          error: '',
         }
       }
 
@@ -1228,7 +1254,7 @@ async function handleRequest(state, request, onError) {
         width: stateEntry.width,
         height: stateEntry.height,
         frameData: Buffer.from(frameData),
-        error: null,
+        error: '',
       }
     } catch {
       return {
@@ -1236,45 +1262,66 @@ async function handleRequest(state, request, onError) {
         hasFrame: false,
         width: stateEntry.width,
         height: stateEntry.height,
-        frameData: null,
+        frameData: Buffer.alloc(0),
         error: 'render failed',
       }
     }
-  }
+  })
 
-  if (command === bridgeRPC.BRIDGE_COMMANDS.mpvDestroy) {
-    const params = bridgeRPC.decodePayload(bridgeRPC.mpvPlayerCommandRequestCodec, data)
-    const stateEntry = mpvPlayers.get(params.playerId)
+  hrpcInstance.onMpvDestroy(async (req) => {
+    const stateEntry = mpvPlayers.get(req.playerId)
     if (!stateEntry) return { success: false, error: 'Player not found' }
 
     try {
       stateEntry.player.destroy()
     } catch {}
-    mpvPlayers.delete(params.playerId)
-    return { success: true, error: null }
-  }
-
-  if (command === bridgeRPC.BRIDGE_COMMANDS.shutdown) {
-    await shutdownBridge(state)
-    return { success: true }
-  }
-
-  throw new Error(`Unsupported native bridge command: ${command}`)
+    mpvPlayers.delete(req.playerId)
+    return { success: true, error: '' }
+  })
 }
 
 async function main() {
   const state = createBridgeState()
-  const parser = bridgeRPC.createRPCFrameParser()
   const keepAliveTimer = setInterval(() => {}, 1 << 30)
+
+  // bare-rpc expects a duplex stream with on('data'), on('error'), on('drain'), write(), destroy()
+  const stream = {
+    write(data) { return process.stdout.write(data) },
+    destroy(err) {
+      process.stdin?.destroy?.(err)
+      process.stdout?.destroy?.(err)
+    },
+    on(event, cb) {
+      if (event === 'drain') {
+        process.stdout?.on?.(event, cb)
+      } else {
+        process.stdin?.on?.(event, cb)
+      }
+      return stream
+    },
+    once(event, cb) {
+      if (event === 'drain') {
+        process.stdout?.once?.(event, cb)
+      } else {
+        process.stdin?.once?.(event, cb)
+      }
+      return stream
+    },
+    removeListener(event, cb) {
+      if (event === 'drain') {
+        process.stdout?.removeListener?.(event, cb)
+      } else {
+        process.stdin?.removeListener?.(event, cb)
+      }
+      return stream
+    },
+  }
+
+  hrpc = new HRPC(stream)
 
   const reportFatal = (label, error) => {
     const message = `${label}: ${formatError(error)}`
-
-    emitBridgeEvent(
-      bridgeRPC.BRIDGE_EVENTS.hostError,
-      bridgeRPC.hostErrorEventCodec,
-      { message }
-    )
+    emitBridgeEvent('error', { code: 0, message })
     writeStderr(`[${runtimeLabel}] ${message}`)
   }
 
@@ -1290,107 +1337,9 @@ async function main() {
     })
   }
 
+  registerHandlers(hrpc, state, reportFatal)
+
   process.stdin?.resume?.()
-
-  process.stdin?.on?.('data', async (chunk) => {
-    let messages
-
-    try {
-      messages = parser.push(chunk)
-    } catch (error) {
-      reportFatal('RPC frame parse failed', error)
-      return
-    }
-
-    for (const message of messages) {
-      if (message.kind !== 'request') continue
-
-      try {
-        const result = await handleRequest(state, message, reportFatal)
-        let payload = null
-
-        if (message.command === bridgeRPC.BRIDGE_COMMANDS.bootstrap) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.bootstrapResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.refreshBrowse) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.browseSnapshotCodec, result.snapshot)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.searchVideos) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.searchResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.getChannelMeta) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.getChannelMetaResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.listChannelVideos) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.listChannelVideosResponseCodec, result)
-        } else if (
-          message.command === bridgeRPC.BRIDGE_COMMANDS.createIdentity ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.refreshFeed ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.publishActiveChannel ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.subscribeChannel ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.unsubscribeChannel ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.uploadVideo
-        ) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.browseSnapshotCodec, result)
-        } else if (
-          message.command === bridgeRPC.BRIDGE_COMMANDS.updateChannel ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.updateChannelAvatar ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.updateVideoMetadata ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.deleteVideo ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.setVideoThumbnailFromFile
-        ) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.mutationResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.addComment) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.addCommentResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.listComments) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.listCommentsResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.hideComment) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.hideCommentResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.removeComment) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.removeCommentResponseCodec, result)
-        } else if (
-          message.command === bridgeRPC.BRIDGE_COMMANDS.addReaction ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.removeReaction
-        ) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.reactionMutationResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.getReactions) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.getReactionsResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.resolvePlayback) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.resolvePlaybackResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.resolveThumbnail) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.resolveThumbnailResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.getVideoStats) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.videoStatsResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.mpvAvailable) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.mpvAvailableResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.ffmpegDecodeAvailable) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.ffmpegDecodeAvailableResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.mpvCreate) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.mpvCreateResponseCodec, result)
-        } else if (
-          message.command === bridgeRPC.BRIDGE_COMMANDS.mpvLoadFile ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.mpvPlay ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.mpvPause ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.mpvSeek ||
-          message.command === bridgeRPC.BRIDGE_COMMANDS.mpvDestroy
-        ) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.mpvPlayerCommandResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.mpvGetState) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.mpvGetStateResponseCodec, result)
-        } else if (message.command === bridgeRPC.BRIDGE_COMMANDS.mpvRenderFrame) {
-          payload = bridgeRPC.encodePayload(bridgeRPC.mpvRenderFrameResponseCodec, result)
-        }
-
-        writeBridgeFrame(bridgeRPC.encodeResponseFrame({
-          id: message.id,
-          data: payload,
-        }))
-      } catch (error) {
-        writeBridgeFrame(bridgeRPC.encodeErrorResponseFrame({
-          id: message.id,
-          message: error?.message ?? String(error),
-          code: 'BRIDGE_REQUEST_FAILED',
-          errno: 0,
-        }))
-      }
-    }
-  })
 
   process.stdin?.on?.('end', () => {
     clearInterval(keepAliveTimer)

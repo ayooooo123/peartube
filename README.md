@@ -1,45 +1,52 @@
-# 🚨🚨🚨 HIGHLY EXPERIMENTAL 🚨🚨🚨
 # PearTube
 
-A decentralized P2P video streaming platform built on the Pear runtime and Hypercore Protocol.
+A decentralized P2P video streaming platform built on Hypercore Protocol. Runs on iOS, Android, and macOS from a unified codebase.
 
 ## Features
 
-- **Decentralized**: No central servers, pure P2P architecture
-- **Self-sovereign**: Creators own their channels via cryptographic keypairs
-- **Cross-platform**: iOS, Android, and Desktop (Pear) from a single codebase
-- **Scalable**: Popular content automatically gets more seeders
-- **Efficient**: Sparse replication - only download chunks you watch
-- **Censorship-resistant**: No single point of control
+- **Decentralized** -- No central servers, pure P2P architecture
+- **Self-sovereign** -- Creators own their channels via cryptographic keypairs
+- **Cross-platform** -- iOS, Android, macOS (Electrobun + experimental native SwiftUI) from shared code
+- **Scalable** -- Popular content automatically gets more seeders
+- **Efficient** -- Sparse replication, only download chunks you watch
+- **Censorship-resistant** -- No single point of control
 
 ## Architecture
 
-PearTube is a monorepo with a unified app that serves both mobile and desktop:
-
 ```
-peartube/
-├── packages/
-│   ├── app/              # Unified app (iOS, Android, Pear Desktop)
-│   │   ├── app/          # Expo Router screens
-│   │   ├── backend/      # Mobile BareKit worklet
-│   │   ├── components/   # React Native components
-│   │   └── pear-src/     # Desktop Pear worker & assets
-│   ├── backend/          # Backend business logic (storage, API, P2P)
-│   ├── core/             # Shared types and utilities
-│   ├── platform/         # Platform abstraction layer
-│   └── spec/             # HRPC schema definitions
-└── package.json
+packages/
+├── app/                # Unified app (iOS, Android, Electrobun Desktop)
+│   ├── app/            # Expo Router screens
+│   ├── backend/        # Mobile BareKit worklet
+│   ├── components/     # React Native components
+│   └── workers/        # Desktop worker (workers/desktop/index.ts)
+├── backend/            # P2P backend (storage, API, swarm, orchestrator)
+├── desktop-native/     # Experimental native macOS app (SwiftUI + bare-native sidecar)
+│   ├── Bridge/         # JS sidecar entry (HRPC over stdin/stdout)
+│   ├── Sources/        # Swift app, services, views
+│   └── scripts/        # Build tooling (sidecar, addons, prebuilds)
+├── host/               # Shared host bootstrap for desktop backends
+├── platform/           # Platform abstraction layer (RPC)
+├── spec/               # HRPC schema -- single source of truth for JS + Swift
+│   ├── schema.cjs      # Schema definition + codegen
+│   └── lib/            # Custom Swift codegen (wire-compatible compact-encoding)
+└── bare-*/             # Native addon submodules (bare-mpv, bare-ffmpeg, bare-tls)
 ```
 
 ### Tech Stack
 
-- **React Native + Expo**: Cross-platform mobile development
-- **Pear Runtime**: Desktop application framework
-- **BareKit**: Native P2P runtime for mobile
-- **HRPC**: Type-safe RPC over binary streams
-- **Hyperswarm**: P2P networking and peer discovery
-- **Hyperdrive**: Distributed file system for video storage
-- **Hyperbee**: Key-value database for metadata
+| Layer | Technology |
+|-------|-----------|
+| Mobile UI | React Native + Expo Router |
+| Desktop UI (Electrobun) | Expo web export + Electrobun |
+| Desktop UI (native) | SwiftUI (macOS 14+, experimental) |
+| Mobile P2P runtime | BareKit worklet |
+| Desktop P2P runtime | bare-native sidecar (PearTubeHost.app) |
+| RPC | HRPC -- typed binary RPC over compact-encoding |
+| Networking | Hyperswarm (P2P discovery + connections) |
+| Video storage | Hyperdrive (distributed filesystem) |
+| Metadata | Hyperbee (key-value database) |
+| Video playback | AVPlayer, bare-mpv (libmpv), react-native-video |
 
 ## Quick Start
 
@@ -48,7 +55,8 @@ peartube/
 - Node.js 18+
 - For iOS: Xcode 15+, CocoaPods
 - For Android: Android Studio, JDK 17
-- For Desktop: Pear CLI (`npm install -g pear`)
+- For Electrobun Desktop: Electrobun CLI
+- For Native Desktop (experimental): Xcode 15+, git submodules initialized
 
 ### Setup
 
@@ -56,76 +64,118 @@ peartube/
 # Install all dependencies
 npm run install:all
 
-# Run iOS app
-npm run ios
-
-# Run Android app
-npm run android
-
-# Run Pear desktop app
-npm run pear
-
-# Build Android APK
-npm run build:android:apk
+# Initialize submodules (bare-mpv, bare-ffmpeg)
+git submodule update --init --recursive
 ```
 
-## Development Commands
+### Run
 
 ```bash
-# Mobile
-npm run ios          # Run iOS app
-npm run android      # Run Android app
-npm start            # Start Expo dev server
+# iOS
+npm run ios
 
-# Desktop
-npm run pear         # Build and run Pear desktop app
-npm run pear:build   # Build Pear desktop only
-npm run pear:dev     # Same as npm run pear from root
+# Android
+npm run android
 
-# Android release artifacts
-npm run build:android:apk
-npm run build:android:aab
+# Electrobun desktop (main)
+npm run desktop
 
-# Backend bundles
-npm run bundle:backend   # Bundle mobile backend + downloader worker
+# Native macOS desktop (experimental)
+npm run desktop:native:build
+open packages/desktop-native/build/Build/Products/Debug/PearTubeDesktop.app
+```
 
-# Quality
-npm run typecheck    # Run TypeScript checks
-npm run lint         # Run ESLint
-npm run lint:fix     # Fix linting issues
+## Development
+
+### Mobile
+
+```bash
+npm run ios              # Run iOS app
+npm run android          # Run Android app
+npm start                # Start Expo dev server
+npm run bundle:backend   # Bundle mobile backend worklet
+```
+
+### Electrobun Desktop
+
+```bash
+npm run desktop          # Build and run Electrobun desktop app
+```
+
+### Native macOS Desktop (experimental)
+
+```bash
+cd packages/desktop-native
+
+# Full build (sidecar + addons + Xcode)
+npm run build
+
+# Rebuild just the JS sidecar (after changing Bridge/*.mjs)
+node scripts/build-native-sidecar.mjs
+
+# Rebuild just the Swift app (after changing Sources/*.swift)
+xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop \
+  -configuration Debug -derivedDataPath build build
+
+# Run
+open build/Build/Products/Debug/PearTubeDesktop.app
+```
+
+### HRPC Schema Changes
+
+The HRPC schema is defined once in `packages/spec/schema.cjs` and generates both JS and Swift code:
+
+```bash
+cd packages/spec && node schema.cjs
+
+# Copy generated Swift into the desktop-native app
+cp spec/swift-schema/Sources/Schema.swift \
+   ../desktop-native/Sources/Support/GeneratedSchema.swift
+cp spec/swift-hrpc/Sources/HRPC.swift \
+   ../desktop-native/Sources/Support/GeneratedHRPC.swift
+
+# Then rebuild the sidecar + Xcode app
+```
+
+### Quality
+
+```bash
+npm run typecheck        # TypeScript checks
+npm run lint             # ESLint
+npm run lint:fix         # Fix linting issues
 ```
 
 ## How It Works
 
 ### Platform Architecture
 
-- **Mobile (iOS/Android)**: React Native app with BareKit worklet running P2P backend
-- **Desktop (Pear)**: Expo web export served by Pear runtime with pear-run worker
-- **Desktop Dev CLI**: `pear run --dev` (the old `pear dev` command is removed)
+| Platform | UI | P2P Backend | RPC Transport |
+|----------|-----|-------------|---------------|
+| iOS/Android | React Native | BareKit worklet | HRPC over BareKit IPC |
+| Electrobun Desktop | Expo web export | Electrobun worker | HRPC over pipe |
+| Native macOS (experimental) | SwiftUI | bare-native sidecar | HRPC over stdin/stdout |
 
-Both platforms share:
-- The same React components
+All platforms share:
 - The same backend business logic (`@peartube/backend`)
 - The same HRPC schema (`@peartube/spec`)
+- The same Hypercore Protocol stack
 
-### Video Storage
+### Video Storage & Streaming
 - Each channel has a **Hyperdrive** for storing video files
-- Videos are stored as MP4/WebM with thumbnail images
-- Sparse replication: only download chunks you watch
+- Videos stored as MP4/MKV/WebM with thumbnail images
+- **Sparse replication** -- only download chunks you watch
+- **Streaming playback** -- bare-mpv configured for progressive streaming from peers
 
 ### P2P Networking
-- **Hyperswarm** manages peer connections
-- Channels are discovered via a shared public feed
-- Multiple peers can serve the same video
-
-### Runtime Notes
-- Desktop backend request handlers are registered via shared HRPC handler wiring in `@peartube/backend`.
-- Mobile startup treats downloader worker bundle as optional; missing worker no longer blocks backend boot.
+- **Hyperswarm** manages peer connections via a distributed hash table
+- Channels discovered via a shared public feed topic
+- Multiple peers can serve the same video simultaneously
 
 ### Identity
-- Self-sovereign keypairs
-- Channels are tied to Hyperdrive keys
-- Data stored locally at `~/.peartube`
+- Self-sovereign Ed25519 keypairs
+- Channels tied to Hyperdrive keys
+- Multi-device pairing via invite codes
+- Data stored locally (`~/Library/Application Support/PearTubeDesktopNative/` on macOS)
 
 ## License
 

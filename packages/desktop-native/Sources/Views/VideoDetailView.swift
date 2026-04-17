@@ -597,7 +597,7 @@ private struct FlowTags: View {
 }
 
 private struct PlaybackStatusCard: View {
-  let stats: NativeBridgeVideoStatsResponse
+  let stats: NativeVideoStats
   let errorMessage: String?
 
   private var statusLabel: String {
@@ -681,42 +681,42 @@ protocol VideoCommentsBridge: AnyObject {
     for video: NativeVideo,
     page: Int,
     limit: Int
-  ) async throws -> NativeBridgeListCommentsResponse
+  ) async throws -> NativeListCommentsResponse
 
   func addComment(
     text: String,
     to video: NativeVideo,
     parentId: String?,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeAddCommentResponse
+  ) async throws -> NativeAddCommentResponse
 
   func hideComment(
-    _ comment: NativeBridgeComment,
+    _ comment: NativeComment,
     on video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeHideCommentResponse
+  ) async throws -> NativeHideCommentResponse
 
   func removeComment(
-    _ comment: NativeBridgeComment,
+    _ comment: NativeComment,
     on video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeRemoveCommentResponse
+  ) async throws -> NativeRemoveCommentResponse
 
   func addReaction(
     _ reactionType: String,
     to video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeReactionMutationResponse
+  ) async throws -> NativeAddReactionResponse
 
   func removeReaction(
     from video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeReactionMutationResponse
+  ) async throws -> NativeRemoveReactionResponse
 
   func getReactions(
     for video: NativeVideo,
     authorChannelKey: String?
-  ) async throws -> NativeBridgeGetReactionsResponse
+  ) async throws -> NativeGetReactionsResponse
 }
 
 extension HostBridgeService: VideoCommentsBridge {}
@@ -803,13 +803,13 @@ struct VideoCommentItem: Identifiable, Equatable {
     self.replies = replies
   }
 
-  init(bridgeComment: NativeBridgeComment) {
+  init(bridgeComment: NativeComment) {
     self.init(
       commentId: bridgeComment.commentId,
       text: bridgeComment.text,
       authorKeyHex: bridgeComment.authorKeyHex,
-      timestamp: bridgeComment.timestamp,
-      parentId: bridgeComment.parentId,
+      timestamp: Int(bridgeComment.timestamp ?? 0),
+      parentId: bridgeComment.parentId?.isEmpty == false ? bridgeComment.parentId : nil,
       isAdmin: bridgeComment.isAdmin
     )
   }
@@ -1168,9 +1168,9 @@ final class VideoCommentsViewModel {
       if let reactionsResponse {
         if reactionsResponse.success {
           reactionCounts = Dictionary(
-            uniqueKeysWithValues: reactionsResponse.counts.map { ($0.reactionType, $0.count) }
+            uniqueKeysWithValues: reactionsResponse.counts.map { ($0.reactionType, Int($0.count)) }
           )
-          userReaction = reactionsResponse.userReaction
+          userReaction = reactionsResponse.userReaction?.isEmpty == false ? reactionsResponse.userReaction : nil
         } else {
           reactionCounts = [:]
           userReaction = nil
@@ -1225,14 +1225,14 @@ final class VideoCommentsViewModel {
     }
   }
 
-  private func bridgeComment(for comment: VideoCommentItem, in video: NativeVideo) -> NativeBridgeComment {
-    NativeBridgeComment(
+  private func bridgeComment(for comment: VideoCommentItem, in video: NativeVideo) -> NativeComment {
+    NativeComment(
       videoId: video.backendVideoID,
       commentId: comment.commentId,
       text: comment.text,
       authorKeyHex: comment.authorKeyHex,
-      timestamp: comment.timestamp,
-      parentId: comment.parentId,
+      timestamp: UInt(max(0, comment.timestamp)),
+      parentId: comment.parentId ?? "",
       isAdmin: comment.isAdmin
     )
   }

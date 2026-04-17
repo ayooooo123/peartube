@@ -915,6 +915,300 @@ ns.register({
 // Desktop-specific Types
 // ============================================
 
+// --- Desktop Browse Snapshot (bootstrap) ---
+
+ns.register({
+  name: 'desktop-browse-video',
+  fields: [
+    { name: 'id', type: 'string', required: true },
+    { name: 'backendVideoId', type: 'string', required: true },
+    { name: 'channelKey', type: 'string', required: true },
+    { name: 'publicBeeKey', type: 'string', required: false },
+    { name: 'title', type: 'string', required: true },
+    { name: 'channelName', type: 'string', required: true },
+    { name: 'durationText', type: 'string', required: false },
+    { name: 'summary', type: 'string', required: false },
+    { name: 'tags', type: 'string', array: true },
+    { name: 'accentHex', type: 'string', required: false },
+    { name: 'sections', type: 'string', array: true },
+    { name: 'thumbnailUrl', type: 'string', required: false },
+    { name: 'path', type: 'string', required: false },
+    { name: 'blobId', type: 'string', required: false },
+    { name: 'blobsCoreKey', type: 'string', required: false },
+    { name: 'mimeType', type: 'string', required: false },
+    { name: 'width', type: 'uint', required: false },
+    { name: 'height', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'desktop-browse-sections',
+  fields: [
+    { name: 'home', type: '@peartube/desktop-browse-video', array: true },
+    { name: 'subscriptions', type: '@peartube/desktop-browse-video', array: true },
+    { name: 'library', type: '@peartube/desktop-browse-video', array: true },
+    { name: 'studio', type: '@peartube/desktop-browse-video', array: true },
+    { name: 'diagnostics', type: '@peartube/desktop-browse-video', array: true }
+  ]
+})
+
+ns.register({
+  name: 'desktop-browse-stats',
+  fields: [
+    { name: 'homeCount', type: 'uint', required: false },
+    { name: 'subscriptionCount', type: 'uint', required: false },
+    { name: 'libraryCount', type: 'uint', required: false },
+    { name: 'channelCount', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'desktop-browse-state',
+  fields: [
+    { name: 'subscriptionChannelKeys', type: 'string', array: true },
+    { name: 'identityChannelKeys', type: 'string', array: true },
+    { name: 'activeIdentityName', type: 'string', required: false },
+    { name: 'activeIdentityChannelKey', type: 'string', required: false },
+    { name: 'activeChannelPublished', type: 'bool', required: false }
+  ]
+})
+
+ns.register({
+  name: 'desktop-browse-snapshot',
+  fields: [
+    { name: 'generatedAt', type: 'uint', required: false },
+    { name: 'sections', type: '@peartube/desktop-browse-sections', required: true },
+    { name: 'stats', type: '@peartube/desktop-browse-stats', required: true },
+    { name: 'state', type: '@peartube/desktop-browse-state', required: true }
+  ]
+})
+
+ns.register({
+  name: 'desktop-bootstrap-request',
+  fields: [
+    { name: 'storagePath', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'desktop-bootstrap-response',
+  fields: [
+    { name: 'blobServerPort', type: 'uint', required: false },
+    { name: 'protocolVersion', type: 'uint', required: false },
+    { name: 'storagePath', type: 'string', required: false },
+    { name: 'snapshot', type: '@peartube/desktop-browse-snapshot', required: true }
+  ]
+})
+
+ns.register({
+  name: 'desktop-shutdown-request',
+  fields: []
+})
+
+ns.register({
+  name: 'desktop-shutdown-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true }
+  ]
+})
+
+ns.register({
+  name: 'desktop-refresh-browse-request',
+  fields: []
+})
+
+ns.register({
+  name: 'desktop-refresh-browse-response',
+  fields: [
+    { name: 'snapshot', type: '@peartube/desktop-browse-snapshot', required: true }
+  ]
+})
+
+// --- MPV Player ---
+
+ns.register({
+  name: 'mpv-available-request',
+  fields: []
+})
+
+ns.register({
+  name: 'mpv-available-response',
+  fields: [
+    { name: 'available', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-create-request',
+  fields: [
+    { name: 'width', type: 'uint', required: true },
+    { name: 'height', type: 'uint', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-create-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'playerId', type: 'string', required: false },
+    { name: 'frameServerPort', type: 'uint', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-load-file-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true },
+    { name: 'url', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-player-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'mpv-player-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-seek-request',
+  fields: [
+    { name: 'playerId', type: 'string', required: true },
+    { name: 'time', type: 'string', required: true }  // seconds as decimal string (e.g. "123.456")
+  ]
+})
+
+ns.register({
+  name: 'mpv-state-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'currentTime', type: 'string', required: false },  // seconds as decimal string
+    { name: 'duration', type: 'string', required: false },      // seconds as decimal string
+    { name: 'paused', type: 'bool', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'mpv-render-frame-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'hasFrame', type: 'bool', required: false },
+    { name: 'width', type: 'uint', required: false },
+    { name: 'height', type: 'uint', required: false },
+    { name: 'frameData', type: 'buffer', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// --- FFmpeg Decode ---
+
+ns.register({
+  name: 'ffmpeg-decode-available-request',
+  fields: []
+})
+
+ns.register({
+  name: 'ffmpeg-decode-available-response',
+  fields: [
+    { name: 'available', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// --- Update Channel Avatar ---
+
+ns.register({
+  name: 'update-channel-avatar-request',
+  fields: [
+    { name: 'filePath', type: 'string', required: false },
+    { name: 'imageData', type: 'string', required: false },
+    { name: 'mimeType', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'update-channel-avatar-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// --- Transcode Operations ---
+
+ns.register({
+  name: 'transcode-start-request',
+  fields: [
+    { name: 'sourceUrl', type: 'string', required: true },
+    { name: 'duration', type: 'uint', required: false },
+    { name: 'title', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'transcode-start-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'sessionId', type: 'string', required: false },
+    { name: 'transcodeUrl', type: 'string', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'transcode-stop-request',
+  fields: [
+    { name: 'sessionId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'transcode-stop-response',
+  fields: [
+    { name: 'success', type: 'bool', required: true },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+ns.register({
+  name: 'transcode-status-request',
+  fields: [
+    { name: 'sessionId', type: 'string', required: true }
+  ]
+})
+
+ns.register({
+  name: 'transcode-status-response',
+  fields: [
+    { name: 'status', type: 'string', required: false },
+    { name: 'progress', type: 'uint', required: false },
+    { name: 'bytesWritten', type: 'uint', required: false },
+    { name: 'error', type: 'string', required: false }
+  ]
+})
+
+// --- Transcode Progress Event ---
+
+ns.register({
+  name: 'event-transcode-progress',
+  fields: [
+    { name: 'sessionId', type: 'string', required: true },
+    { name: 'percent', type: 'uint', required: false },
+    { name: 'bytesWritten', type: 'uint', required: false }
+  ]
+})
+
 ns.register({
   name: 'status',
   fields: [
@@ -1557,7 +1851,7 @@ ns.register({
     { name: 'name', type: 'string', required: true },
     { name: 'host', type: 'string', required: true },
     { name: 'port', type: 'uint', required: true },
-    { name: 'protocol', type: 'string', required: true }
+    { name: 'castProtocol', type: 'string', required: true }
   ]
 })
 
@@ -1615,7 +1909,7 @@ ns.register({
     { name: 'name', type: 'string', required: true },
     { name: 'host', type: 'string', required: true },
     { name: 'port', type: 'uint', required: false },
-    { name: 'protocol', type: 'string', required: false }
+    { name: 'castProtocol', type: 'string', required: false }
   ]
 })
 
@@ -2486,7 +2780,270 @@ rpcNs.register({
   response: { name: '@peartube/update-video-metadata-response', stream: false }
 })
 
+// Desktop lifecycle commands
+rpcNs.register({
+  name: 'desktop-bootstrap',
+  request: { name: '@peartube/desktop-bootstrap-request', stream: false },
+  response: { name: '@peartube/desktop-bootstrap-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'desktop-shutdown',
+  request: { name: '@peartube/desktop-shutdown-request', stream: false },
+  response: { name: '@peartube/desktop-shutdown-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'desktop-refresh-browse',
+  request: { name: '@peartube/desktop-refresh-browse-request', stream: false },
+  response: { name: '@peartube/desktop-refresh-browse-response', stream: false }
+})
+
+// MPV player commands
+rpcNs.register({
+  name: 'mpv-available',
+  request: { name: '@peartube/mpv-available-request', stream: false },
+  response: { name: '@peartube/mpv-available-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-create',
+  request: { name: '@peartube/mpv-create-request', stream: false },
+  response: { name: '@peartube/mpv-create-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-load-file',
+  request: { name: '@peartube/mpv-load-file-request', stream: false },
+  response: { name: '@peartube/mpv-player-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-play',
+  request: { name: '@peartube/mpv-player-request', stream: false },
+  response: { name: '@peartube/mpv-player-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-pause',
+  request: { name: '@peartube/mpv-player-request', stream: false },
+  response: { name: '@peartube/mpv-player-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-seek',
+  request: { name: '@peartube/mpv-seek-request', stream: false },
+  response: { name: '@peartube/mpv-player-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-get-state',
+  request: { name: '@peartube/mpv-player-request', stream: false },
+  response: { name: '@peartube/mpv-state-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-render-frame',
+  request: { name: '@peartube/mpv-player-request', stream: false },
+  response: { name: '@peartube/mpv-render-frame-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'mpv-destroy',
+  request: { name: '@peartube/mpv-player-request', stream: false },
+  response: { name: '@peartube/mpv-player-response', stream: false }
+})
+
+// FFmpeg decode availability
+rpcNs.register({
+  name: 'ffmpeg-decode-available',
+  request: { name: '@peartube/ffmpeg-decode-available-request', stream: false },
+  response: { name: '@peartube/ffmpeg-decode-available-response', stream: false }
+})
+
+// Channel avatar update
+rpcNs.register({
+  name: 'update-channel-avatar',
+  request: { name: '@peartube/update-channel-avatar-request', stream: false },
+  response: { name: '@peartube/update-channel-avatar-response', stream: false }
+})
+
+// Transcode operations
+rpcNs.register({
+  name: 'transcode-start',
+  request: { name: '@peartube/transcode-start-request', stream: false },
+  response: { name: '@peartube/transcode-start-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'transcode-stop',
+  request: { name: '@peartube/transcode-stop-request', stream: false },
+  response: { name: '@peartube/transcode-stop-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'transcode-status',
+  request: { name: '@peartube/transcode-status-request', stream: false },
+  response: { name: '@peartube/transcode-status-response', stream: false }
+})
+
+// Transcode progress event
+rpcNs.register({
+  name: 'event-transcode-progress',
+  request: { name: '@peartube/event-transcode-progress', stream: false, send: true }
+})
+
 // Save HRPC interface to disk
 HRPCBuilder.toDisk(builder)
 
 console.log('HRPC interface generated in', HRPC_DIR)
+
+// Post-process: inject missing-handler guard into the dispatch loop.
+// The RPC stream is hot from the moment the HRPC constructor runs, but
+// handler registration is async — without the guard, any request that
+// arrives before handlers are attached crashes with "is not a function".
+{
+  const fsPost = require('fs')
+  const pathPost = require('path')
+  const hrpcJsPath = pathPost.join(HRPC_DIR, 'index.js')
+  let hrpcJs = fsPost.readFileSync(hrpcJsPath, 'utf-8')
+  const guardLine = `      if (!command || typeof this._handlers[command] !== 'function') return\n`
+  if (!hrpcJs.includes(guardLine)) {
+    hrpcJs = hrpcJs.replace(
+      '      const command = methods.get(req.command)\n      const responseEncoding',
+      '      const command = methods.get(req.command)\n' + guardLine + '      const responseEncoding'
+    )
+    fsPost.writeFileSync(hrpcJsPath, hrpcJs)
+  }
+}
+
+// ============================================
+// Swift Code Generation (hrpc-swift)
+// ============================================
+
+const fs = require('fs')
+const path = require('path')
+const { generateWireCompatibleSwiftSchema } = require('./lib/swift-codegen.cjs')
+const SwiftHRPC = require('hrpc-swift')
+
+const SWIFT_SCHEMA_DIR = './spec/swift-schema'
+const SWIFT_HRPC_DIR = './spec/swift-hrpc'
+
+// Generate wire-compatible Swift schema codecs (matches JS compact-encoding format)
+const swiftSchemaCode = generateWireCompatibleSwiftSchema(SCHEMA_DIR)
+const schemaSourcesDir = path.join(SWIFT_SCHEMA_DIR, 'Sources')
+fs.mkdirSync(schemaSourcesDir, { recursive: true })
+fs.writeFileSync(path.join(schemaSourcesDir, 'Schema.swift'), swiftSchemaCode)
+// Write Package.swift for the schema package
+fs.writeFileSync(path.join(SWIFT_SCHEMA_DIR, 'Package.swift'), `// swift-tools-version: 5.10
+import PackageDescription
+
+let package = Package(
+  name: "Schema",
+  platforms: [.macOS(.v11), .iOS(.v14)],
+  products: [
+    .library(name: "Schema", targets: ["Schema"])
+  ],
+  dependencies: [
+    .package(url: "https://github.com/holepunchto/compact-encoding-swift", branch: "main")
+  ],
+  targets: [
+    .target(
+      name: "Schema",
+      dependencies: [.product(name: "CompactEncoding", package: "compact-encoding-swift")],
+      path: "Sources"
+    )
+  ]
+)
+`)
+console.log('Swift schema generated in', SWIFT_SCHEMA_DIR)
+
+SwiftHRPC.toDisk(builder, SWIFT_HRPC_DIR, {
+  schemaPackagePath: '../swift-schema',
+  schemaPackageName: 'Schema',
+  schemaPackageId: 'swift-schema'
+})
+console.log('Swift HRPC generated in', SWIFT_HRPC_DIR)
+
+// Post-process: fix HRPC.swift for bare-rpc-swift compatibility
+// 1. Use RPCDelegate pattern instead of onRequest/onEvent closures
+// 2. Add missing codec instance declarations
+// 3. Fix _rpc.onError calls
+const hrpcSwiftPath = path.join(SWIFT_HRPC_DIR, 'Sources/HRPC.swift')
+let hrpcSwift = fs.readFileSync(hrpcSwiftPath, 'utf-8')
+
+// Fix 1: RPCDelegate pattern
+hrpcSwift = hrpcSwift.replace(
+  `public class HRPC {
+  private let _rpc: RPC
+  private var _handlers: [String: Any] = [:]
+
+  public init(delegate: RPCDelegate) {
+    self._rpc = RPC(delegate: delegate)
+    self._rpc.onRequest = { [weak self] req in
+      await self?._dispatchRequest(req)
+    }
+    self._rpc.onEvent = { [weak self] event in
+      await self?._dispatchEvent(event)
+    }
+  }`,
+  `public class HRPC: RPCDelegate {
+  private let _rpc: RPC
+  private var _handlers: [String: Any] = [:]
+  private weak var _outerDelegate: RPCDelegate?
+
+  public init(delegate: RPCDelegate) {
+    self._outerDelegate = delegate
+    self._rpc = RPC()
+    self._rpc.delegate = self
+  }
+
+  // RPCDelegate — forward send/error to outer delegate, dispatch request/event internally
+  public func rpc(_ rpc: RPC, send data: Data) {
+    _outerDelegate?.rpc(rpc, send: data)
+  }
+
+  public func rpc(_ rpc: RPC, didReceiveRequest request: IncomingRequest) async throws {
+    await _dispatchRequest(request)
+  }
+
+  public func rpc(_ rpc: RPC, didReceiveEvent event: IncomingEvent) async {
+    await _dispatchEvent(event)
+  }
+
+  public func rpc(_ rpc: RPC, didFailWith error: Error) {
+    _outerDelegate?.rpc(rpc, didFailWith: error)
+  }`
+)
+
+// Fix 2: Extract all codec variable names and inject lazy declarations
+const codecNames = new Set()
+const codecRe = /(?:_encode|_decode)\(([a-zA-Z]+),/g
+let match
+while ((match = codecRe.exec(hrpcSwift)) !== null) {
+  codecNames.add(match[1])
+}
+
+// Generate codec instance declarations
+const codecDecls = []
+for (const name of [...codecNames].sort()) {
+  // Convert camelCase to PascalCase and append Codec
+  const pascalCase = name[0].toUpperCase() + name.slice(1)
+  codecDecls.push(`  private let ${name} = ${pascalCase}Codec()`)
+}
+
+// Insert after the _outerDelegate declaration
+const insertAfter = '  private weak var _outerDelegate: RPCDelegate?\n'
+hrpcSwift = hrpcSwift.replace(insertAfter, insertAfter + '\n' + codecDecls.join('\n') + '\n')
+
+// Fix 3: Replace _rpc.onError?(error) with delegate call
+hrpcSwift = hrpcSwift.replace(/_rpc\.onError\?\(error\)/g, '_outerDelegate?.rpc(_rpc, didFailWith: error)')
+
+// Fix 4: Schema.Error shadows Swift.Error — qualify the delegate method parameter
+hrpcSwift = hrpcSwift.replace(
+  'public func rpc(_ rpc: RPC, didFailWith error: Error) {',
+  'public func rpc(_ rpc: RPC, didFailWith error: Swift.Error) {'
+)
+
+fs.writeFileSync(hrpcSwiftPath, hrpcSwift)
+console.log('Swift HRPC post-processed for RPCDelegate compatibility (' + codecNames.size + ' codec instances injected)')

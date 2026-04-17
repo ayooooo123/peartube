@@ -334,7 +334,9 @@ function createBridgeState() {
 }
 
 function defaultStoragePath() {
-  return process?.env?.PEARTUBE_NATIVE_STORAGE_PATH || '.peartube-native'
+  const override = process?.env?.PEARTUBE_NATIVE_STORAGE_PATH
+  if (override && override.length > 0) return override
+  return `${os.homedir()}/.peartube`
 }
 
 if (process?.env) {

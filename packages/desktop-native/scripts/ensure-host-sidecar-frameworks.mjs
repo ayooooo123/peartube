@@ -91,6 +91,7 @@ function toAbsoluteBundlePath(bundlePath) {
 
 function collectLinkedAddonPackages(header) {
   const packages = new Map()
+  const seenNames = new Set()
 
   for (const imports of Object.values(header?.resolutions || {})) {
     if (!imports || typeof imports !== 'object') continue
@@ -106,12 +107,20 @@ function collectLinkedAddonPackages(header) {
     const packageDir = path.dirname(packageManifestPath)
     if (packages.has(packageDir)) continue
 
+    let packageName
     try {
       const manifest = JSON.parse(fs.readFileSync(packageManifestPath, 'utf8'))
-      packages.set(packageDir, manifest.name || path.basename(packageDir))
+      packageName = manifest.name || path.basename(packageDir)
     } catch {
-      packages.set(packageDir, path.basename(packageDir))
+      packageName = path.basename(packageDir)
     }
+
+    // Dedup by package name — the same native addon may appear at multiple
+    // node_modules paths due to diamond dependencies. Only link once.
+    if (seenNames.has(packageName)) continue
+    seenNames.add(packageName)
+
+    packages.set(packageDir, packageName)
   }
 
   return [...packages.entries()].sort((left, right) => left[1].localeCompare(right[1]))

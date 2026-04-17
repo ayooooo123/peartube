@@ -1660,69 +1660,46 @@ final class PearTubeDesktopTests: XCTestCase {
     try? FileManager.default.removeItem(at: root)
   }
 
-  func testPreferredStoragePathDefaultsToNativeAppSupportEvenWhenLegacyPearTubeStoreExists() throws {
-    let fileManager = FileManager.default
+  func testPreferredStoragePathDefaultsToUnifiedHomeStore() {
     let homeRoot = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
-    let legacyStore = homeRoot.appendingPathComponent(".peartube", isDirectory: true)
-    let appSupportRoot = homeRoot.appendingPathComponent("Library/Application Support", isDirectory: true)
-
-    try fileManager.createDirectory(at: legacyStore.appendingPathComponent("db", isDirectory: true), withIntermediateDirectories: true)
-    try Data().write(to: legacyStore.appendingPathComponent("CORESTORE"))
 
     let resolved = HostBridgeService.preferredStoragePath(
       environment: [:],
-      fileManager: fileManager,
-      homeDirectory: homeRoot,
-      appSupportDirectory: appSupportRoot
+      homeDirectory: homeRoot
     )
 
-    XCTAssertEqual(
-      resolved,
-      appSupportRoot
-        .appendingPathComponent("PearTubeDesktopNative", isDirectory: true)
-        .appendingPathComponent("host-storage", isDirectory: true)
-        .path
-    )
-
-    try? fileManager.removeItem(at: homeRoot)
+    XCTAssertEqual(resolved, homeRoot.appendingPathComponent(".peartube", isDirectory: true).path)
   }
 
-  func testPreferredStoragePathCanOptIntoLegacyPearTubeStore() throws {
-    let fileManager = FileManager.default
+  func testPreferredStoragePathHonorsExplicitEnvironmentOverride() {
     let homeRoot = URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
-    let legacyStore = homeRoot.appendingPathComponent(".peartube", isDirectory: true)
-    let appSupportRoot = homeRoot.appendingPathComponent("Library/Application Support", isDirectory: true)
-
-    try fileManager.createDirectory(at: legacyStore.appendingPathComponent("db", isDirectory: true), withIntermediateDirectories: true)
-    try Data().write(to: legacyStore.appendingPathComponent("CORESTORE"))
+    let override = "/tmp/peartube-explicit-override"
 
     let resolved = HostBridgeService.preferredStoragePath(
-      environment: ["PEARTUBE_NATIVE_USE_LEGACY_STORE": "1"],
-      fileManager: fileManager,
-      homeDirectory: homeRoot,
-      appSupportDirectory: appSupportRoot
+      environment: ["PEARTUBE_NATIVE_STORAGE_PATH": override],
+      homeDirectory: homeRoot
     )
 
-    XCTAssertEqual(resolved, legacyStore.path)
-
-    try? fileManager.removeItem(at: homeRoot)
+    XCTAssertEqual(resolved, override)
   }
 
   func testRecoverableNativeStoragePathMatchesContainerizedAppStore() {
     let homeRoot = URL(fileURLWithPath: "/Users/jd", isDirectory: true)
-    let appSupportRoot = homeRoot.appendingPathComponent("Library/Application Support", isDirectory: true)
     let containerizedStore = homeRoot
       .appendingPathComponent("Library/Containers/com.peartube.desktop.native/Data/Library/Application Support/PearTubeDesktopNative/host-storage", isDirectory: true)
 
     XCTAssertTrue(
-      HostBridgeService.isRecoverableNativeStoragePath(
-        containerizedStore.path,
-        homeDirectory: homeRoot,
-        appSupportDirectory: appSupportRoot
-      )
+      HostBridgeService.isRecoverableNativeStoragePath(containerizedStore.path)
     )
+  }
+
+  func testRecoverableNativeStoragePathRejectsUnifiedHomeStore() {
+    // ~/.peartube is shared with the Electrobun app — recovery must never
+    // auto-archive it, even though it's now the default for the native app.
+    let homeStore = URL(fileURLWithPath: "/Users/jd/.peartube", isDirectory: true)
+    XCTAssertFalse(HostBridgeService.isRecoverableNativeStoragePath(homeStore.path))
   }
 
   func testNativeStoreRecoveryIsDisabledByDefault() {
@@ -1751,9 +1728,7 @@ final class PearTubeDesktopTests: XCTestCase {
       HostBridgeService.shouldAutoRecoverIdentitylessBootstrapFailure(
         storagePath: storage.path,
         message: "3",
-        fileManager: fileManager,
-        homeDirectory: root,
-        appSupportDirectory: root
+        fileManager: fileManager
       )
     )
 
@@ -1776,9 +1751,7 @@ final class PearTubeDesktopTests: XCTestCase {
       HostBridgeService.shouldAutoRecoverIdentitylessBootstrapFailure(
         storagePath: storage.path,
         message: "3",
-        fileManager: fileManager,
-        homeDirectory: root,
-        appSupportDirectory: root
+        fileManager: fileManager
       )
     )
 

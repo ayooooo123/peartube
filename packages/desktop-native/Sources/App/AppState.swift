@@ -598,7 +598,7 @@ final class AppState {
     selectedStudioVideoID = nil
   }
 
-  func applyUploadProgress(_ event: NativeBridgeUploadProgressEvent) {
+  func applyUploadProgress(_ event: NativeUploadProgressEvent) {
     if studioUploadJobs.isEmpty {
       let fallbackTitle = event.videoId.isEmpty ? "Uploading Video" : event.videoId
       beginStudioUpload(fileName: fallbackTitle, title: fallbackTitle)

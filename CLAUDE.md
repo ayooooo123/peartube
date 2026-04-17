@@ -17,18 +17,27 @@ npm run ios                    # Build + run iOS app
 npm run android                # Build + run Android app
 npm run bundle:backend         # Bundle mobile BareKit worklet
 
-# Desktop development (Pear)
-npm run pear                   # Build and run Pear desktop app
-npm run pear:build             # Build Pear desktop only
-cd packages/app/pear && pear run --dev --store=$HOME/.peartube .  # Run without rebuilding
+# Electrobun desktop (main desktop app)
+npm run desktop                # Build and run Electrobun desktop app
+
+# Native macOS desktop (experimental)
+npm run desktop:native:build   # Full generate + build (sidecar + Xcode)
+cd packages/desktop-native && node scripts/build-native-sidecar.mjs  # Rebuild sidecar only
+cd packages/desktop-native && xcodebuild -project PearTubeDesktop.xcodeproj -scheme PearTubeDesktop -configuration Debug -derivedDataPath build build  # Rebuild Xcode only
+open packages/desktop-native/build/Build/Products/Debug/PearTubeDesktop.app  # Run
+
+# Regenerate HRPC schema (JS + Swift)
+cd packages/spec && node schema.cjs
+# Then copy generated Swift into the desktop-native app:
+cp packages/spec/spec/swift-schema/Sources/Schema.swift packages/desktop-native/Sources/Support/GeneratedSchema.swift
+cp packages/spec/spec/swift-hrpc/Sources/HRPC.swift packages/desktop-native/Sources/Support/GeneratedHRPC.swift
+# Fix imports (remove `import Schema`, add `@preconcurrency` to BareRPC import)
+# Then rebuild sidecar: cd packages/desktop-native && node scripts/build-native-sidecar.mjs
 
 # Quality checks
 npm run typecheck              # TypeScript validation (runs in packages/platform)
 npm run lint                   # ESLint
 npm run lint:fix               # Fix linting issues
-
-# Regenerate HRPC schema
-cd packages/spec && node schema.cjs
 ```
 
 ## Architecture
@@ -37,18 +46,28 @@ cd packages/spec && node schema.cjs
 
 ```
 packages/
-├── app/              # Unified app (iOS, Android, Pear Desktop)
+├── app/              # Unified app (iOS, Android, Electrobun Desktop)
 │   ├── app/          # Expo Router screens (tabs/, video/, etc.)
 │   ├── backend/      # Mobile BareKit worklet source (index.mjs)
 │   ├── components/   # React Native components
 │   ├── lib/          # App utilities (VideoPlayerContext, colors, etc.)
-│   ├── pear-src/     # Desktop Pear source files
-│   └── pear/         # Built Pear output (generated)
+│   └── workers/      # Desktop worker (workers/desktop/index.ts)
 ├── backend/          # P2P backend business logic (orchestrator, storage, swarm, api)
 ├── core/             # Shared types and utilities
+├── desktop-native/   # Native macOS SwiftUI shell (PearTubeDesktop.app)
+│   ├── Bridge/       # JS sidecar entry + RPC bridge (native-host-sidecar.mjs)
+│   ├── Sources/      # Swift app, services, views, models, support
+│   └── scripts/      # Build scripts (sidecar, worklet, addons, prebuilds)
+├── host/             # Shared host bootstrap (startHost, sidecar-entry)
 ├── platform/         # Platform abstraction layer (RPC, detection)
-├── spec/             # HRPC schema definitions (schema.cjs generates spec/hrpc/)
-└── bare-*/           # Native addon packages (bare-mpv, bare-tls, bare-ffmpeg)
+├── spec/             # HRPC schema definitions + Swift/JS codegen
+│   ├── schema.cjs    # Single source of truth — generates everything below
+│   ├── lib/          # Custom Swift codegen (wire-compatible with JS compact-encoding)
+│   ├── spec/hrpc/    # Generated JS HRPC (index.js, messages.js)
+│   ├── spec/schema/  # Generated JS schema encodings
+│   ├── spec/swift-hrpc/    # Generated Swift HRPC class
+│   └── spec/swift-schema/  # Generated Swift struct/codec definitions
+└── bare-*/           # Native addon submodules (bare-mpv, bare-tls, bare-ffmpeg)
 ```
 
 ### Platform Architecture
@@ -58,16 +77,23 @@ packages/
 - BareKit worklet runs P2P backend in native Bare runtime
 - HRPC over BareKit IPC (`packages/platform/src/rpc.native.ts`)
 
-**Desktop (Pear):**
-- Expo web export served by pear-electron
-- pear-run worker for P2P backend
+**Desktop (Electrobun — main):**
+- Expo web export served by Electrobun
+- Worker for P2P backend
 - HRPC over pipe (`packages/platform/src/rpc.web.ts`)
+
+**Desktop (Swift native — experimental):**
+- SwiftUI app shell (`packages/desktop-native/`)
+- bare-native sidecar process (PearTubeHost.app) runs P2P backend
+- HRPC over stdin/stdout pipe between Swift app and JS sidecar
+- Swift codegen from shared schema (`spec/schema.cjs` → `GeneratedSchema.swift` + `GeneratedHRPC.swift`)
+- Uses `compact-encoding-swift` + custom wire-compatible codegen (NOT `hyperschema-swift` — incompatible format)
 
 ### Key Design Patterns
 
 1. **Platform-specific files**: Metro resolves `.web.tsx` for desktop, `.tsx` for mobile. When debugging desktop issues, check for `.web.tsx` variants.
 
-2. **HRPC RPC**: Type-safe RPC via `@peartube/spec`. Schema defined in `packages/spec/schema.cjs`, generates `spec/hrpc/` and `spec/schema/`.
+2. **HRPC RPC**: Type-safe RPC via `@peartube/spec`. Schema defined in `packages/spec/schema.cjs`, generates JS (`spec/hrpc/`, `spec/schema/`) and Swift (`spec/swift-hrpc/`, `spec/swift-schema/`) from a single source of truth. The Swift codegen uses a custom wire-compatible generator (`lib/swift-codegen.cjs`) — NOT `hyperschema-swift` (which produces an incompatible binary format).
 
 3. **Hypercore Protocol stack**: Videos stored in Hyperdrive, metadata in Hyperbee, P2P via Hyperswarm. Channels discovered via gossip on topic `peartube-public-feed-v1`.
 
@@ -80,13 +106,18 @@ packages/
 npm run bundle:backend  # bare-pack → backend.bundle.js
 ```
 
-**Pear Desktop Build (pear:build):**
-1. `pear:export` - Expo web export to `.pear-build/`
-2. `pear:merge` - Copy to `pear/`
-3. `pear:copy` - Copy pear-src files
-4. `pear:install` - npm install in pear/
-5. `pear:worker` - SWC compile worker
-6. `pear:inject` - Inject Pear bar into HTML
+**Electrobun Desktop Build (desktop:build):**
+1. `desktop:export` - Expo web export to `.desktop-export/`
+2. `desktop:merge` - Copy to `desktop-build/`
+3. `desktop:worker` - SWC compile `workers/desktop/index.ts`
+
+**Native Desktop Build (desktop:native:build):**
+1. `ensure:host-sidecar` - Bundle JS sidecar via bare-pack
+2. `build:native-sidecar` - Build PearTubeHost.app via bare-build (codesigned)
+3. `ensure:host-worklet` - Bundle BareKit worklet
+4. `ensure:host-worklet-frameworks` - Link native addon frameworks (deduped by package name)
+5. `ensure:bare-mpv-prebuilds` - Copy bare-mpv prebuilds (skips gracefully if unavailable)
+6. Xcode build → PearTubeDesktop.app
 
 ## Key Files
 
@@ -95,13 +126,20 @@ npm run bundle:backend  # bare-pack → backend.bundle.js
 | `packages/app/app/_layout.tsx` | Root layout + backend initialization |
 | `packages/app/components/VideoPlayerOverlay.tsx` | Global video player |
 | `packages/app/lib/VideoPlayerContext.tsx` | Video player state |
-| `packages/app/pear-src/workers/core/index.ts` | Desktop P2P backend worker |
+| `packages/app/workers/desktop/index.ts` | Desktop P2P backend worker (Electrobun) |
 | `packages/app/backend/index.mjs` | Mobile P2P backend entry |
 | `packages/backend/src/orchestrator.js` | Backend lifecycle management |
 | `packages/backend/src/api.js` | RPC request handlers |
 | `packages/platform/src/rpc.native.ts` | Mobile RPC (BareKit IPC) |
 | `packages/platform/src/rpc.web.ts` | Desktop RPC (Pear pipe) |
-| `packages/spec/schema.cjs` | HRPC schema definition |
+| `packages/spec/schema.cjs` | HRPC schema definition (single source of truth for JS + Swift) |
+| `packages/spec/lib/swift-codegen.cjs` | Custom Swift codegen (wire-compatible with JS compact-encoding) |
+| `packages/desktop-native/Sources/Support/GeneratedSchema.swift` | Generated Swift structs + codecs (do not edit) |
+| `packages/desktop-native/Sources/Support/GeneratedHRPC.swift` | Generated Swift HRPC class (do not edit) |
+| `packages/desktop-native/Sources/Support/HRPCBridgeAdapter.swift` | RPCDelegate adapter + type conversions + RPCGate |
+| `packages/desktop-native/Sources/Services/HostBridgeService.swift` | Main Swift service — orchestrates sidecar, playback, thumbnails |
+| `packages/desktop-native/Bridge/native-host-sidecar.mjs` | JS sidecar entry — HRPC handler registration |
+| `packages/host/src/start-host.js` | Shared host bootstrap (used by sidecar + embedded BareKit) |
 
 ## Dependencies
 
@@ -112,7 +150,12 @@ This project uses the Holepunch stack:
 - **hyperswarm** - P2P networking and discovery
 - **corestore** - Storage management
 
-Mobile uses **react-native-bare-kit** for running native P2P code. Desktop uses **Pear Runtime** (pear-electron + pear-run).
+Mobile uses **react-native-bare-kit** for running native P2P code. Desktop uses **Pear Runtime** (pear-electron + pear-run) or the **Swift native shell** (SwiftUI + bare-native sidecar).
+
+Native addon submodules:
+- **bare-mpv** - libmpv video player (fork at `ayooooo123/bare-mpv`, git submodule)
+- **bare-ffmpeg** - FFmpeg decode engine (fork at `ayooooo123/bare-ffmpeg`, git submodule)
+- **bare-tls** - TLS support
 
 ## Troubleshooting
 
@@ -128,3 +171,15 @@ cd packages/app/ios && rm -rf Pods Podfile.lock && pod install --repo-update
 **Desktop "No handler registered" errors:** Rebuild and relaunch Pear (`npm run pear:build && npm run pear`). Shared HRPC handlers are wired through `packages/backend/src/backend-entry.js`.
 
 **"Cannot find module" in Pear:** Ensure relative paths in HTML (`./_expo/` not `/_expo/`). Rebuild with `npm run pear:build`.
+
+**Native Desktop "Unsupported native bridge command: N":** The sidecar binary is stale. Rebuild: `cd packages/desktop-native && node scripts/build-native-sidecar.mjs`.
+
+**Native Desktop crashes on video load (doesNotRecognizeSelector in RPC.request):** The `RPCGate` serializes bare-rpc-swift calls because `RPC` is not thread-safe. If you removed or weakened the gate, restore `maxConcurrent: 1`.
+
+**Native Desktop "No stats returned":** The sidecar handler response shape doesn't match the HRPC schema. Check that nested fields are wrapped correctly (e.g., `{ stats: { ... } }` not flat).
+
+**Native Desktop CompactEncoding.DecodingError:** Wire format mismatch between JS and Swift codecs. Ensure `lib/swift-codegen.cjs` is used (NOT `hyperschema-swift`). The `FrameCodec` must use varint length prefix (not uint32). Regenerate with `node schema.cjs`.
+
+**bare-mpv prebuilds missing:** Run `git submodule update --init packages/bare-mpv`. The prebuilds live in the submodule repo.
+
+**Duplicate addon linking during build:** Normal — `bare-pack` traces the full dependency graph. The `ensure-host-sidecar-frameworks.mjs` script deduplicates by package name.

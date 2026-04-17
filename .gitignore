@@ -10,6 +10,8 @@ dist/
 *.bundle.js
 packages/app/pear/
 packages/app/.pear-build/
+packages/app/desktop-build/
+packages/app/.desktop-export/
 
 # Expo
 .expo/

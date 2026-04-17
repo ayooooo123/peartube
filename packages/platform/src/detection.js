@@ -31,7 +31,9 @@ export function isBare() {
  * @returns {boolean}
  */
 export function isPear() {
-  return typeof globalThis.Pear !== 'undefined';
+  // Pear global (legacy pear run) or window.bridge (Electrobun / standalone desktop)
+  return typeof globalThis.Pear !== 'undefined' ||
+         (typeof window !== 'undefined' && typeof window.bridge !== 'undefined');
 }
 
 /**

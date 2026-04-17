@@ -2260,10 +2260,23 @@ export default function HomeScreen() {
     })
 
     const results = await Promise.all(channelPromises)
-    const allVideos: VideoData[] = results.flat()
+    const backfilledVideos: VideoData[] = results.flat()
 
-    // Merge: use backfilled data if available, otherwise keep preview data
-    const merged = allVideos.length > 0 ? allVideos : previewVideos
+    // Merge: backfilled data has richer metadata but preview data has blob refs
+    // for fast thumbnail resolution. Carry over blob refs from previews.
+    const previewsByKey = new Map(previewVideos.map((v: any) => [`${v.channelKey}:${v.id}`, v]))
+    const merged = backfilledVideos.length > 0
+      ? backfilledVideos.map((v: any) => {
+          const preview = previewsByKey.get(`${v.channelKey}:${v.id}`)
+          return {
+            ...v,
+            thumbnailBlobId: v.thumbnailBlobId || preview?.thumbnailBlobId || null,
+            thumbnailBlobsCoreKey: v.thumbnailBlobsCoreKey || preview?.thumbnailBlobsCoreKey || null,
+            // Don't use v.thumbnail directly — it's from the remote peer's blob server
+            thumbnailUrl: null,
+          }
+        })
+      : previewVideos
 
     // Filter out unwatchable videos (match Android behavior)
     const watchableVideos = merged.filter((v: any) => shouldRenderFeedVideo({
@@ -2291,26 +2304,31 @@ export default function HomeScreen() {
   // Lazily resolve thumbnail URLs for feed videos that have blob references
   // but no thumbnailUrl yet. Uses the fast path (thumbnailBlobId/thumbnailBlobsCoreKey)
   // which skips loadChannel entirely.
+  // Retrigger whenever feedVideos changes identity (not just length).
+  const thumbResolveKey = useMemo(
+    () => feedVideos.map((v: any) => `${v.id}:${v.thumbnailUrl ? '1' : '0'}`).join(','),
+    [feedVideos]
+  )
+
   useEffect(() => {
     if (!rpc || feedVideos.length === 0) return
+    const pending = feedVideos.filter((v: any) => !v.thumbnailUrl && v.thumbnailBlobId && v.thumbnailBlobsCoreKey)
+    if (pending.length === 0) return
+
     let cancelled = false
 
     const resolveAll = async () => {
       const updates = new Map<string, string>()
 
-      for (const video of feedVideos) {
+      for (const video of pending) {
         if (cancelled) break
-        if ((video as any).thumbnailUrl) continue
-        const tbId = (video as any).thumbnailBlobId
-        const tbKey = (video as any).thumbnailBlobsCoreKey
-        if (!tbId || !tbKey) continue
 
         try {
           const result = await rpc.getVideoThumbnail({
             channelKey: (video as any).channelKey || '',
             videoId: video.id,
-            thumbnailBlobId: tbId,
-            thumbnailBlobsCoreKey: tbKey,
+            thumbnailBlobId: (video as any).thumbnailBlobId,
+            thumbnailBlobsCoreKey: (video as any).thumbnailBlobsCoreKey,
           })
           if (result?.url && result.exists) {
             updates.set(video.id, result.url)
@@ -2328,7 +2346,7 @@ export default function HomeScreen() {
 
     resolveAll()
     return () => { cancelled = true }
-  }, [rpc, feedVideos.length])
+  }, [rpc, thumbResolveKey])
 
   const refreshFeed = useCallback(async () => {
     if (!rpc) return

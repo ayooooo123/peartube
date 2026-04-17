@@ -6,7 +6,8 @@
 import { createContext, useContext } from 'react'
 
 // Layout constants
-export const PEAR_BAR_HEIGHT = 52
+export const TITLEBAR_INSET = 28 // macOS traffic light clearance
+export const PEAR_BAR_HEIGHT = 52 // legacy — kept for compat
 export const HEADER_HEIGHT = 56
 export const SIDEBAR_WIDTH = 240
 export const SIDEBAR_COLLAPSED_WIDTH = 72

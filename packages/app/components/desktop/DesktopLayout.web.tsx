@@ -12,6 +12,7 @@ import { DesktopHeader } from './DesktopHeader.web'
 import { DesktopSidebar } from './DesktopSidebar.web'
 import { colors } from '@/lib/colors'
 import {
+  TITLEBAR_INSET,
   SIDEBAR_WIDTH,
   SIDEBAR_COLLAPSED_WIDTH,
   SidebarContext,
@@ -19,6 +20,7 @@ import {
 
 // Re-export constants for convenience
 export {
+  TITLEBAR_INSET,
   PEAR_BAR_HEIGHT,
   HEADER_HEIGHT,
   SIDEBAR_WIDTH,
@@ -70,6 +72,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100vh',
+    paddingTop: TITLEBAR_INSET,
     backgroundColor: colors.bg,
     overflow: 'hidden',
   },

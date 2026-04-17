@@ -254,15 +254,30 @@ async function startStaticServer() {
         // SPA fallback: serve index.html for navigation routes
         const ext = filePath.split('.').pop() || ''
         if (!ext || ext === 'html') {
-          return new Response(Bun.file(join(viewsDir, 'index.html')), {
-            headers: { 'Content-Type': 'text/html' },
-          })
+          filePath = join(viewsDir, 'index.html')
+        } else {
+          return new Response('Not found', { status: 404 })
         }
-        return new Response('Not found', { status: 404 })
       }
 
       const ext = '.' + (filePath.split('.').pop() || '')
-      return new Response(file, {
+
+      // Inject Electrobun view script into HTML at serve time.
+      // This replaces the build-time inject-desktop-shell.js script — no
+      // post-processing of files on disk, no fragile regex replacements.
+      if (ext === '.html') {
+        let html = await Bun.file(filePath).text()
+        // Inject view entrypoint before the Expo bundle so window.bridge is ready
+        if (!html.includes('views://app/index.js')) {
+          html = html.replace(
+            /(<script[^>]*src="[^"]*_expo\/static\/js\/web\/[^"]*"[^>]*><\/script>)/,
+            '<script src="views://app/index.js"></script>\n$1'
+          )
+        }
+        return new Response(html, { headers: { 'Content-Type': 'text/html' } })
+      }
+
+      return new Response(Bun.file(filePath), {
         headers: { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' },
       })
     },

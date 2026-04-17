@@ -852,7 +852,9 @@ ns.register({
   name: 'get-video-thumbnail-request',
   fields: [
     { name: 'channelKey', type: 'string', required: true },
-    { name: 'videoId', type: 'string', required: true }
+    { name: 'videoId', type: 'string', required: true },
+    { name: 'thumbnailBlobId', type: 'string', required: false },
+    { name: 'thumbnailBlobsCoreKey', type: 'string', required: false }
   ]
 })
 
@@ -2972,7 +2974,11 @@ console.log('Swift HRPC generated in', SWIFT_HRPC_DIR)
 const hrpcSwiftPath = path.join(SWIFT_HRPC_DIR, 'Sources/HRPC.swift')
 let hrpcSwift = fs.readFileSync(hrpcSwiftPath, 'utf-8')
 
-// Fix 1: RPCDelegate pattern
+// Fix 1: RPCDelegate pattern. The vendored bare-rpc-swift fork has RPC as an
+// actor, so delegate binding goes through an async setDelegate(_:) call. The
+// @unchecked Sendable conformance satisfies RPCDelegate's Sendable requirement
+// (HRPC holds mutable _handlers/_outerDelegate but is only touched from
+// well-defined contexts).
 hrpcSwift = hrpcSwift.replace(
   `public class HRPC {
   private let _rpc: RPC
@@ -2987,7 +2993,7 @@ hrpcSwift = hrpcSwift.replace(
       await self?._dispatchEvent(event)
     }
   }`,
-  `public class HRPC: RPCDelegate {
+  `public class HRPC: RPCDelegate, @unchecked Sendable {
   private let _rpc: RPC
   private var _handlers: [String: Any] = [:]
   private weak var _outerDelegate: RPCDelegate?
@@ -2995,7 +3001,11 @@ hrpcSwift = hrpcSwift.replace(
   public init(delegate: RPCDelegate) {
     self._outerDelegate = delegate
     self._rpc = RPC()
-    self._rpc.delegate = self
+    // RPC is an actor: delegate binding goes through its isolated setter.
+    // Safe against early request()/receive() because actor FIFO ordering
+    // ensures setDelegate runs before any later call enqueues behind it.
+    let rpc = self._rpc
+    Task { await rpc.setDelegate(self) }
   }
 
   // RPCDelegate — forward send/error to outer delegate, dispatch request/event internally
@@ -3015,6 +3025,23 @@ hrpcSwift = hrpcSwift.replace(
     _outerDelegate?.rpc(rpc, didFailWith: error)
   }`
 )
+
+// Fix 1b: receive() wraps the actor hop in a Task so callers can stay sync.
+// Without this, _rpc.receive(data) wouldn't compile because RPC is an actor.
+hrpcSwift = hrpcSwift.replace(
+  `  public func receive(_ data: Data) {
+    _rpc.receive(data)
+  }`,
+  `  public func receive(_ data: Data) {
+    let rpc = _rpc
+    Task { await rpc.receive(data) }
+  }`
+)
+
+// Fix 1c: Schema types are compiled into the desktop-native target directly
+// (see GeneratedSchema.swift), so the generated `import Schema` references a
+// module that doesn't exist in the consumer project. Drop it.
+hrpcSwift = hrpcSwift.replace(/^import Schema\n/m, '')
 
 // Fix 2: Extract all codec variable names and inject lazy declarations
 const codecNames = new Set()

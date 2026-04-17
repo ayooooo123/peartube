@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "schema": [
     {
       "name": "empty",
@@ -1945,7 +1945,7 @@
       "name": "get-video-thumbnail-request",
       "namespace": "peartube",
       "compact": false,
-      "flagsPosition": -1,
+      "flagsPosition": 2,
       "fields": [
         {
           "name": "channelKey",
@@ -1958,6 +1958,18 @@
           "required": true,
           "type": "string",
           "version": 1
+        },
+        {
+          "name": "thumbnailBlobId",
+          "required": false,
+          "type": "string",
+          "version": 6
+        },
+        {
+          "name": "thumbnailBlobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 6
         }
       ]
     },

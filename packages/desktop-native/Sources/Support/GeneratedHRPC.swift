@@ -4,8 +4,7 @@
 import CompactEncoding
 import Foundation
 
-
-public class HRPC: RPCDelegate {
+public class HRPC: RPCDelegate, @unchecked Sendable {
   private let _rpc: RPC
   private var _handlers: [String: Any] = [:]
   private weak var _outerDelegate: RPCDelegate?
@@ -217,7 +216,11 @@ public class HRPC: RPCDelegate {
   public init(delegate: RPCDelegate) {
     self._outerDelegate = delegate
     self._rpc = RPC()
-    self._rpc.delegate = self
+    // RPC is an actor: delegate binding goes through its isolated setter.
+    // Safe against early request()/receive() because actor FIFO ordering
+    // ensures setDelegate runs before any later call enqueues behind it.
+    let rpc = self._rpc
+    Task { await rpc.setDelegate(self) }
   }
 
   // RPCDelegate — forward send/error to outer delegate, dispatch request/event internally
@@ -238,7 +241,8 @@ public class HRPC: RPCDelegate {
   }
 
   public func receive(_ data: Data) {
-    _rpc.receive(data)
+    let rpc = _rpc
+    Task { await rpc.receive(data) }
   }
 
   // Request/response — client

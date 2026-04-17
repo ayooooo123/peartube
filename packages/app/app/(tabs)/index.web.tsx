@@ -2184,15 +2184,15 @@ export default function HomeScreen() {
     }
   }, [rpc])
 
-  // Build feed videos from previewVideos (fast — no per-channel RPC calls).
-  // The public feed already includes preview data with thumbnails, durations, and
-  // blob references. Using previewVideos avoids calling listVideos for each channel,
-  // which triggers loadChannel/loadPublicBee timeouts on slow P2P connections.
+  // Load feed videos: instant render from previewVideos, then backfill with listVideos.
+  // previewVideos come from peer gossip and are available immediately.
+  // listVideos fetches full channel data which may timeout on slow P2P connections.
   const loadFeedVideos = useCallback(async () => {
     if (!rpc || feedEntries.length === 0) return
     setFeedVideosLoading(true)
 
-    const allVideos: VideoData[] = feedEntries.slice(0, 15).flatMap((entry: any) => {
+    // Phase 1: instant render from previewVideos (no RPC calls)
+    const previewVideos: VideoData[] = feedEntries.slice(0, 15).flatMap((entry: any) => {
       const channelKey = entry.channelKey || entry.driveKey
       const publicBeeKey = entry.publicBeeKey
       if (!channelKey) return []
@@ -2203,7 +2203,7 @@ export default function HomeScreen() {
         title: v.title || 'Untitled',
         duration: v.duration || 0,
         thumbnail: v.thumbnail || null,
-        thumbnailUrl: v.thumbnail || null,
+        thumbnailUrl: null, // resolved lazily via getVideoThumbnail with blob refs
         path: v.path || null,
         blobId: v.blobId || null,
         blobsCoreKey: v.blobsCoreKey || null,
@@ -2215,11 +2215,58 @@ export default function HomeScreen() {
         channel: { name: channelMeta[channelKey]?.name || entry.channelName || 'Unknown' },
         channelName: channelMeta[channelKey]?.name || entry.channelName || 'Unknown',
         createdAt: v.uploadedAt || 0,
+        // Blob references for fast thumbnail resolution (skips loadChannel)
+        thumbnailBlobId: v.thumbnailBlobId || null,
+        thumbnailBlobsCoreKey: v.thumbnailBlobsCoreKey || null,
       }))
     })
 
+    if (previewVideos.length > 0) {
+      setFeedVideos(previewVideos)
+      feedCache.feedVideos = previewVideos
+      setFeedVideosLoading(false)
+    }
+
+    // Phase 2: backfill with full channel data (lazy, per-channel with timeout)
+    const PER_CHANNEL_TIMEOUT = 8000
+    const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+      Promise.race([
+        promise,
+        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))
+      ])
+
+    const channelPromises = feedEntries.slice(0, 15).map(async (entry: any) => {
+      const channelKey = entry.channelKey || entry.driveKey
+      const publicBeeKey = entry.publicBeeKey
+      if (!channelKey) return []
+
+      try {
+        const result = await withTimeout(rpc.listVideos({ channelKey, publicBeeKey }), PER_CHANNEL_TIMEOUT, { videos: [] })
+        const videoList = result?.videos || []
+        if (Array.isArray(videoList)) {
+          return videoList.map((v: any) => ({
+            ...v,
+            channelKey,
+            publicBeeKey,
+            channel: { name: channelMeta[channelKey]?.name || entry.channelName || 'Unknown' },
+            channelName: channelMeta[channelKey]?.name || entry.channelName || 'Unknown',
+            thumbnailUrl: v.thumbnail || v.thumbnailUrl || null,
+          }))
+        }
+        return []
+      } catch {
+        return []
+      }
+    })
+
+    const results = await Promise.all(channelPromises)
+    const allVideos: VideoData[] = results.flat()
+
+    // Merge: use backfilled data if available, otherwise keep preview data
+    const merged = allVideos.length > 0 ? allVideos : previewVideos
+
     // Filter out unwatchable videos (match Android behavior)
-    const watchableVideos = allVideos.filter((v: any) => shouldRenderFeedVideo({
+    const watchableVideos = merged.filter((v: any) => shouldRenderFeedVideo({
       video: v,
       identityDriveKey: identity?.driveKey || null,
     }))
@@ -2240,6 +2287,48 @@ export default function HomeScreen() {
       loadFeedVideos()
     }
   }, [feedEntries, ready])
+
+  // Lazily resolve thumbnail URLs for feed videos that have blob references
+  // but no thumbnailUrl yet. Uses the fast path (thumbnailBlobId/thumbnailBlobsCoreKey)
+  // which skips loadChannel entirely.
+  useEffect(() => {
+    if (!rpc || feedVideos.length === 0) return
+    let cancelled = false
+
+    const resolveAll = async () => {
+      const updates = new Map<string, string>()
+
+      for (const video of feedVideos) {
+        if (cancelled) break
+        if ((video as any).thumbnailUrl) continue
+        const tbId = (video as any).thumbnailBlobId
+        const tbKey = (video as any).thumbnailBlobsCoreKey
+        if (!tbId || !tbKey) continue
+
+        try {
+          const result = await rpc.getVideoThumbnail({
+            channelKey: (video as any).channelKey || '',
+            videoId: video.id,
+            thumbnailBlobId: tbId,
+            thumbnailBlobsCoreKey: tbKey,
+          })
+          if (result?.url && result.exists) {
+            updates.set(video.id, result.url)
+          }
+        } catch {}
+      }
+
+      if (!cancelled && updates.size > 0) {
+        setFeedVideos(prev => prev.map(v => {
+          const url = updates.get(v.id)
+          return url ? { ...v, thumbnailUrl: url, thumbnail: url } as any : v
+        }))
+      }
+    }
+
+    resolveAll()
+    return () => { cancelled = true }
+  }, [rpc, feedVideos.length])
 
   const refreshFeed = useCallback(async () => {
     if (!rpc) return

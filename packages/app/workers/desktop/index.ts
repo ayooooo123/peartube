@@ -555,10 +555,21 @@ B.clearCache = async () => api.clearCache()
 B.getVideoThumbnail = async (r: any) => {
   if (isShuttingDown) return { url: null, exists: false }
   try {
-    const video = await api.getVideoData(r.channelKey, r.videoId)
-    if (!video?.thumbnailBlobId || !video.thumbnailBlobsCoreKey) return { url: null, exists: false }
-    const blobsCore = ctx.store.get(b4a.from(video.thumbnailBlobsCoreKey, 'hex')); await blobsCore.ready()
-    const parts = video.thumbnailBlobId.split(':').map(Number)
+    // Fast path: if caller provides blob references (from feed previewVideos),
+    // skip loadChannel/getVideoData and resolve the URL directly.
+    let thumbnailBlobId = r.thumbnailBlobId || null
+    let thumbnailBlobsCoreKey = r.thumbnailBlobsCoreKey || null
+
+    if (!thumbnailBlobId || !thumbnailBlobsCoreKey) {
+      // Slow path: load full video data from channel (triggers loadChannel)
+      const video = await api.getVideoData(r.channelKey, r.videoId)
+      thumbnailBlobId = video?.thumbnailBlobId
+      thumbnailBlobsCoreKey = video?.thumbnailBlobsCoreKey
+    }
+
+    if (!thumbnailBlobId || !thumbnailBlobsCoreKey) return { url: null, exists: false }
+    const blobsCore = ctx.store.get(b4a.from(thumbnailBlobsCoreKey, 'hex')); await blobsCore.ready()
+    const parts = thumbnailBlobId.split(':').map(Number)
     const url = ctx.blobServer.getLink(blobsCore.key, { blob: { blockOffset: parts[0], blockLength: parts[1], byteOffset: parts[2], byteLength: parts[3] }, type: 'image/jpeg', host: ctx.blobServerHost || '127.0.0.1', port: ctx.blobServer?.port || ctx.blobServerPort })
     return { url, exists: true }
   } catch { return { url: null, exists: false } }

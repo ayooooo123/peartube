@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "schema": [
     {
       "name": "empty",
@@ -4988,6 +4988,24 @@
           "required": false,
           "type": "uint",
           "version": 3
+        },
+        {
+          "name": "thumbnailBlobId",
+          "required": false,
+          "type": "string",
+          "version": 7
+        },
+        {
+          "name": "thumbnailBlobsCoreKey",
+          "required": false,
+          "type": "string",
+          "version": 7
+        },
+        {
+          "name": "thumbnailMimeType",
+          "required": false,
+          "type": "string",
+          "version": 7
         }
       ]
     },

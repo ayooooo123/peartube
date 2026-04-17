@@ -487,6 +487,9 @@ ns.register({
     { name: 'uploadedAt', type: 'uint', required: false },
     { name: 'width', type: 'uint', required: false },
     { name: 'height', type: 'uint', required: false },
+    { name: 'thumbnailBlobId', type: 'string', required: false },
+    { name: 'thumbnailBlobsCoreKey', type: 'string', required: false },
+    { name: 'thumbnailMimeType', type: 'string', required: false },
   ]
 })
 

@@ -46,15 +46,15 @@
   },
   "dependencies": {
     "bare-net": "^2.3.1",
-    "bare-stream": "^2.11.0"
+    "bare-stream": "^2.13.0"
   },
   "devDependencies": {
     "bare-events": "^2.8.2",
-    "bare-fs": "^4.5.6",
+    "bare-fs": "^4.7.1",
     "bare-make": "^1.7.2",
     "brittle": "^3.1.1",
-    "cmake-bare": "^1.1.6",
-    "cmake-fetch": "^1.0.0",
+    "cmake-bare": "^1.7.7",
+    "cmake-fetch": "^1.5.1",
     "prettier": "^3.4.1",
     "prettier-config-standard": "^7.0.0"
   }

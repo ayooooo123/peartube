@@ -32,18 +32,18 @@
   },
   "dependencies": {
     "@peartube/backend": "file:../backend",
-    "b4a": "^1.6.7",
-    "bare-process": "^4.4.0",
+    "b4a": "^1.8.0",
+    "bare-process": "^4.4.1",
     "compact-encoding": "^2.19.2",
     "graceful-goodbye": "^1.3.3",
     "hypercore-crypto": "^3.6.1",
     "hypercore-id-encoding": "^1.3.0",
     "paparam": "^1.10.0",
-    "safety-catch": "^1.0.2",
+    "safety-catch": "^1.0.3",
     "tiny-byte-size": "^1.1.0"
   },
   "devDependencies": {
-    "bare-build": "^0.4.6",
+    "bare-build": "^0.5.3",
     "brittle": "^3.19.1"
   }
 }

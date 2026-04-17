@@ -56,10 +56,10 @@
     "node": ">=18.0.0 <23"
   },
   "dependencies": {
-    "bare-build": "^0.5.0",
+    "bare-build": "^0.5.3",
     "bare-ffmpeg": "file:packages/bare-ffmpeg",
     "bare-ipc": "^1.1.1",
-    "bare-runtime": "^1.28.1",
+    "bare-runtime": "^1.28.4",
     "bare-worker": "^4.1.6",
     "expo": "~55.0.4",
     "hrpc": "^4.3.0",

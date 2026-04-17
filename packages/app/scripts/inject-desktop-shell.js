@@ -15,11 +15,11 @@ const WEB_DIR = process.argv[2] || '.'
 // Electrobun view entrypoint — sets up window.bridge, must load before Expo bundle
 const VIEW_SCRIPT = `<script src="views://app/index.js"></script>`
 
-// Node.js polyfills — Expo bundle references Node builtins that don't exist in CEF
-const NODE_POLYFILLS = `<script id="peartube-node-polyfills">(function(){
-if(typeof globalThis.process==='undefined'){globalThis.process={env:{},nextTick:function(fn){Promise.resolve().then(fn)},browser:true};}
-if(typeof globalThis.Buffer==='undefined'){globalThis.Buffer={isBuffer:function(){return false},from:function(a){return new Uint8Array(a)},alloc:function(n){return new Uint8Array(n)}};}
-if(typeof globalThis.global==='undefined'){globalThis.global=globalThis;}
+// Minimal pre-view polyfills — the real Buffer/process polyfills are set up
+// by the Electrobun view entry (src/view/index.ts) which loads before the
+// Expo bundle via the views://app/index.js script tag below.
+// This shim only handles screen.orientation.lock() which can throw in CEF.
+const ORIENTATION_SHIM = `<script id="peartube-orientation-shim">(function(){
 try{if(screen&&screen.orientation){var o=screen.orientation;var origLock=o.lock;var origUnlock=o.unlock;if(origLock)o.lock=function(){try{return origLock.apply(this,arguments)}catch(e){return Promise.resolve()}};if(origUnlock)o.unlock=function(){try{origUnlock.apply(this,arguments)}catch(e){}};}}catch(e){}
 })();</script>`
 
@@ -32,6 +32,7 @@ function processHtmlFile(filePath) {
   // Clean previous injections
   html = html.replace(/<script[^>]*src="views:\/\/[^"]*index\.js"[^>]*><\/script>\n?/g, '')
   html = html.replace(/<script id="peartube-node-polyfills">[\s\S]*?<\/script>\n?/g, '')
+  html = html.replace(/<script id="peartube-orientation-shim">[\s\S]*?<\/script>\n?/g, '')
   html = html.replace(/<script id="peartube-rn-shim">[\s\S]*?<\/script>\n?/g, '')
 
   // Convert ES module scripts to regular scripts (CEF compatibility)
@@ -42,8 +43,8 @@ function processHtmlFile(filePath) {
   html = html.replace(/href="\/_expo\//g, 'href="./_expo/')
   html = html.replace(/src="\/_expo\//g, 'src="./_expo/')
 
-  // Inject polyfills after <body>
-  html = html.replace('<body>', `<body>\n${NODE_POLYFILLS}\n${RN_SHIM}`)
+  // Inject shims after <body>
+  html = html.replace('<body>', `<body>\n${ORIENTATION_SHIM}\n${RN_SHIM}`)
 
   // Inject view script before Expo entry bundle (so window.bridge is ready)
   html = html.replace(

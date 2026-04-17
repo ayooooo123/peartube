@@ -8,6 +8,20 @@
  * Loaded as the Electrobun view entrypoint — runs before the Expo bundle.
  */
 import { Electroview } from 'electrobun/view'
+import { Buffer } from 'buffer'
+
+// ── Node.js polyfills for CEF ───────────────────────────────────────────
+// The Expo bundle includes P2P code that references Node builtins.
+// Electrobun's CEF renderer doesn't provide Node integration.
+// Buffer must be the real `buffer` package (not a minimal shim) because
+// bare-rpc / b4a call Buffer.byteLength, Buffer.concat, Buffer.alloc etc.
+;(globalThis as any).Buffer = Buffer
+if (typeof (globalThis as any).process === 'undefined') {
+  ;(globalThis as any).process = { env: {}, nextTick: (fn: Function) => Promise.resolve().then(() => fn()), browser: true }
+}
+if (typeof (globalThis as any).global === 'undefined') {
+  ;(globalThis as any).global = globalThis
+}
 
 // ── Electrobun RPC (minimal — just for lifecycle) ───────────────────────
 const rpc = Electroview.defineRPC({

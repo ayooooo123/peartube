@@ -11,6 +11,7 @@ import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
+import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
 
@@ -50,14 +51,7 @@ export default function SearchTab() {
     }
   }, [params.q])
 
-  const getGridColumns = () => {
-    if (!isDesktop) return 1
-    if (screenWidth >= 1400) return 4
-    if (screenWidth >= 1100) return 3
-    if (screenWidth >= 800) return 2
-    return 1
-  }
-  const gridColumns = getGridColumns()
+  const gridColumns = getDesktopVideoGridColumns(isDesktop, screenWidth)
 
   const [searching, setSearching] = useState(false)
   const [results, setResults] = useState<VideoData[]>([])

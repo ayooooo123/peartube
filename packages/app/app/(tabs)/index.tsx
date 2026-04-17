@@ -15,6 +15,7 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 import {
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
@@ -77,15 +78,7 @@ export default function HomeScreen() {
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
 
-  // Calculate video grid columns for desktop
-  const getGridColumns = () => {
-    if (!isDesktop) return 1
-    if (screenWidth >= 1400) return 4
-    if (screenWidth >= 1100) return 3
-    if (screenWidth >= 800) return 2
-    return 1
-  }
-  const gridColumns = getGridColumns()
+  const gridColumns = getDesktopVideoGridColumns(isDesktop, screenWidth)
 
   // UI state
   const [refreshing, setRefreshing] = useState(false)

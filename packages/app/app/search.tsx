@@ -13,6 +13,7 @@ import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
+import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 
 // Detect Pear desktop vs mobile (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
@@ -43,15 +44,7 @@ export default function SearchScreen() {
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
 
-  // Calculate video grid columns for desktop
-  const getGridColumns = () => {
-    if (!isDesktop) return 1
-    if (screenWidth >= 1400) return 4
-    if (screenWidth >= 1100) return 3
-    if (screenWidth >= 800) return 2
-    return 1
-  }
-  const gridColumns = getGridColumns()
+  const gridColumns = getDesktopVideoGridColumns(isDesktop, screenWidth)
 
   // State
   const [searching, setSearching] = useState(false)

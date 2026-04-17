@@ -420,10 +420,7 @@ async function createNativeSidecarBackend(options = {}) {
     pathModule,
     fsModule,
   ] = await Promise.all([
-    createBackend({
-      ...options,
-      disableStandalonePrimaryKeyFile: true,
-    }),
+    createBackend(options),
     import('bare-path'),
     import('bare-fs'),
   ])

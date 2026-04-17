@@ -422,7 +422,6 @@ async function createNativeSidecarBackend(options = {}) {
     ...options,
     platform: 'desktop',
     autoAttachSharedAppHandlers: true,
-    disableStandalonePrimaryKeyFile: true,
   })
 }
 

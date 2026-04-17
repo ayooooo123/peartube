@@ -742,18 +742,39 @@ console.log('[Worker] HRPC ready, all handlers attached')
 
 ipcPipe.on('error', (err: Error) => console.error('[Worker] Pipe error:', err))
 
-// Shutdown handler: Bare.IPC close (sidecar mode — Electrobun quit)
-const shutdown = async () => {
+// Shutdown triggers: Bare.IPC close (Electrobun quit), SIGTERM/SIGINT/SIGHUP
+// (kill, parent-death on well-behaved launchers), fallback process signals.
+// Corestore holds an exclusive flock() on db/LOCK that only releases when
+// store.close() runs (via destroy() → shutdownBackend), so a shutdown that
+// skips destroy() leaves ~/.peartube unusable until the orphan is killed.
+const shutdown = async (reason: string) => {
   if (isShuttingDown) return
-  console.log('[Worker] Shutting down...')
+  console.log(`[Worker] Shutting down (${reason})...`)
   isShuttingDown = true
-  await new Promise(resolve => setTimeout(resolve, 100))
-  if (castProxyServer) { try { castProxyServer.close() } catch {}; castProxyServer = null; castProxyPort = 0; castProxyReady = null; castProxySessions.clear() }
-  cleanupTranscodeSessions()
-  try { await ctx.blobServer?.close() } catch {}
-  try { await ctx.swarm?.destroy() } catch {}
+
+  const exitProcess = () => {
+    try { (globalThis as any).Bare?.exit?.(0) } catch {}
+    try { (globalThis as any).process?.exit?.(0) } catch {}
+  }
+
+  const cleanup = (async () => {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    if (castProxyServer) { try { castProxyServer.close() } catch {}; castProxyServer = null; castProxyPort = 0; castProxyReady = null; castProxySessions.clear() }
+    cleanupTranscodeSessions()
+    try { await destroy() } catch (err) { console.error('[Worker] destroy() failed:', err) }
+  })()
+
+  const timeout = new Promise(resolve => setTimeout(resolve, 3000))
+  await Promise.race([cleanup, timeout])
+  exitProcess()
 }
 
 if (typeof Bare !== 'undefined' && Bare.IPC) {
-  Bare.IPC.on('close', shutdown)
+  Bare.IPC.on('close', () => shutdown('IPC close'))
 }
+try {
+  const proc = (globalThis as any).process
+  proc?.on?.('SIGTERM', () => shutdown('SIGTERM'))
+  proc?.on?.('SIGINT', () => shutdown('SIGINT'))
+  proc?.on?.('SIGHUP', () => shutdown('SIGHUP'))
+} catch {}

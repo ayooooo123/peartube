@@ -2184,52 +2184,39 @@ export default function HomeScreen() {
     }
   }, [rpc])
 
-  // Load videos from all discovered channels
+  // Build feed videos from previewVideos (fast — no per-channel RPC calls).
+  // The public feed already includes preview data with thumbnails, durations, and
+  // blob references. Using previewVideos avoids calling listVideos for each channel,
+  // which triggers loadChannel/loadPublicBee timeouts on slow P2P connections.
   const loadFeedVideos = useCallback(async () => {
     if (!rpc || feedEntries.length === 0) return
     setFeedVideosLoading(true)
 
-    // Helper: wrap a promise with a timeout so one hung channel doesn't block the whole feed
-    const withTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
-      Promise.race([
-        promise,
-        new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))
-      ])
-
-    // Fetch videos from channels IN PARALLEL with per-channel timeout (8s each)
-    const PER_CHANNEL_TIMEOUT = 8000
-    const channelPromises = feedEntries.slice(0, 15).map(async (entry) => {
-      const channelKey = (entry as any).channelKey || entry.driveKey
-      const publicBeeKey = (entry as any).publicBeeKey
+    const allVideos: VideoData[] = feedEntries.slice(0, 15).flatMap((entry: any) => {
+      const channelKey = entry.channelKey || entry.driveKey
+      const publicBeeKey = entry.publicBeeKey
       if (!channelKey) return []
 
-      try {
-        // Pass publicBeeKey for fast viewer access via auto-replicating Hyperbee
-        const result = await withTimeout(rpc.listVideos({ channelKey, publicBeeKey }), PER_CHANNEL_TIMEOUT, { videos: [] })
-        const videoList = result?.videos || []
-        if (Array.isArray(videoList)) {
-          return videoList.map((v: any) => {
-            console.log('[Home.web] Feed video:', v.id, 'thumbnail:', v.thumbnail)
-            return {
-              ...v,
-              channelKey,
-              publicBeeKey,  // Attach publicBeeKey for fast path when playing
-              channel: { name: channelMeta[channelKey]?.name || 'Unknown' },
-              channelName: channelMeta[channelKey]?.name || 'Unknown',
-              thumbnailUrl: v.thumbnail || v.thumbnailUrl || null,
-            }
-          })
-        }
-        return []
-      } catch (err) {
-        // Silently skip failed channels
-        console.log('[Home] Could not fetch videos from channel:', channelKey)
-        return []
-      }
+      const previews = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
+      return previews.map((v: any) => ({
+        id: v.id,
+        title: v.title || 'Untitled',
+        duration: v.duration || 0,
+        thumbnail: v.thumbnail || null,
+        thumbnailUrl: v.thumbnail || null,
+        path: v.path || null,
+        blobId: v.blobId || null,
+        blobsCoreKey: v.blobsCoreKey || null,
+        mimeType: v.mimeType || null,
+        width: v.width || 0,
+        height: v.height || 0,
+        channelKey,
+        publicBeeKey,
+        channel: { name: channelMeta[channelKey]?.name || entry.channelName || 'Unknown' },
+        channelName: channelMeta[channelKey]?.name || entry.channelName || 'Unknown',
+        createdAt: v.uploadedAt || 0,
+      }))
     })
-
-    const results = await Promise.all(channelPromises)
-    const allVideos: VideoData[] = results.flat()
 
     // Filter out unwatchable videos (match Android behavior)
     const watchableVideos = allVideos.filter((v: any) => shouldRenderFeedVideo({

@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "schema": [
     {
       "name": "empty",
@@ -5006,6 +5006,12 @@
           "required": false,
           "type": "string",
           "version": 7
+        },
+        {
+          "name": "availability",
+          "required": false,
+          "type": "string",
+          "version": 8
         }
       ]
     },

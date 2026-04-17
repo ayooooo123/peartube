@@ -490,6 +490,7 @@ ns.register({
     { name: 'thumbnailBlobId', type: 'string', required: false },
     { name: 'thumbnailBlobsCoreKey', type: 'string', required: false },
     { name: 'thumbnailMimeType', type: 'string', required: false },
+    { name: 'availability', type: 'string', required: false },
   ]
 })
 

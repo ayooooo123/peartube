@@ -2218,12 +2218,19 @@ export default function HomeScreen() {
         // Blob references for fast thumbnail resolution (skips loadChannel)
         thumbnailBlobId: v.thumbnailBlobId || null,
         thumbnailBlobsCoreKey: v.thumbnailBlobsCoreKey || null,
+        availability: v.availability || null,
       }))
     })
 
-    if (previewVideos.length > 0) {
-      setFeedVideos(previewVideos)
-      feedCache.feedVideos = previewVideos
+    // Filter previews for availability before rendering (avoids flash of unavailable content)
+    const playablePreviews = previewVideos.filter((v: any) => shouldRenderFeedVideo({
+      video: v,
+      identityDriveKey: identity?.driveKey || null,
+    }))
+
+    if (playablePreviews.length > 0) {
+      setFeedVideos(playablePreviews)
+      feedCache.feedVideos = playablePreviews
       setFeedVideosLoading(false)
     }
 

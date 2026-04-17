@@ -559,20 +559,30 @@ B.getVideoThumbnail = async (r: any) => {
     // skip loadChannel/getVideoData and resolve the URL directly.
     let thumbnailBlobId = r.thumbnailBlobId || null
     let thumbnailBlobsCoreKey = r.thumbnailBlobsCoreKey || null
+    console.log('[Worker] getVideoThumbnail:', r.videoId?.slice(0, 16), 'blobId:', thumbnailBlobId?.slice(0, 16), 'blobsCoreKey:', thumbnailBlobsCoreKey?.slice(0, 16))
 
     if (!thumbnailBlobId || !thumbnailBlobsCoreKey) {
       // Slow path: load full video data from channel (triggers loadChannel)
+      console.log('[Worker] getVideoThumbnail: slow path (no blob refs), calling getVideoData')
       const video = await api.getVideoData(r.channelKey, r.videoId)
       thumbnailBlobId = video?.thumbnailBlobId
       thumbnailBlobsCoreKey = video?.thumbnailBlobsCoreKey
+      console.log('[Worker] getVideoThumbnail: getVideoData returned blobId:', thumbnailBlobId?.slice(0, 16))
     }
 
-    if (!thumbnailBlobId || !thumbnailBlobsCoreKey) return { url: null, exists: false }
+    if (!thumbnailBlobId || !thumbnailBlobsCoreKey) {
+      console.log('[Worker] getVideoThumbnail: no blob refs available, returning null')
+      return { url: null, exists: false }
+    }
     const blobsCore = ctx.store.get(b4a.from(thumbnailBlobsCoreKey, 'hex')); await blobsCore.ready()
     const parts = thumbnailBlobId.split(':').map(Number)
     const url = ctx.blobServer.getLink(blobsCore.key, { blob: { blockOffset: parts[0], blockLength: parts[1], byteOffset: parts[2], byteLength: parts[3] }, type: 'image/jpeg', host: ctx.blobServerHost || '127.0.0.1', port: ctx.blobServer?.port || ctx.blobServerPort })
+    console.log('[Worker] getVideoThumbnail: resolved URL:', url?.slice(0, 80))
     return { url, exists: true }
-  } catch { return { url: null, exists: false } }
+  } catch (err) {
+    console.error('[Worker] getVideoThumbnail error:', (err as any)?.message)
+    return { url: null, exists: false }
+  }
 }
 B.setVideoThumbnail = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(Buffer.from(r.imageData, 'base64')); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }
 B.setVideoThumbnailFromFile = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(fs.readFileSync(r.filePath)); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }

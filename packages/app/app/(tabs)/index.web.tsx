@@ -257,12 +257,17 @@ function WatchPageView({
 
   // Video editing
   const [editingVideo, setEditingVideo] = useState<any>(null)
-  const [videoRefreshData, setVideoRefreshData] = useState<any>(null)
+  const [refreshEntry, setRefreshEntry] = useState<{ channelKey: string; videoId: string | undefined; data: any } | null>(null)
   const isOwner = identity?.driveKey === channelKey
   const publicBeeKey = (video as any)?.publicBeeKey || undefined
 
-  // Reset refresh data when video changes
-  useEffect(() => { setVideoRefreshData(null) }, [video?.id, channelKey])
+  // Derive refreshed data scoped to the current video; stale entries from a
+  // previous video are ignored without needing an effect to clear them.
+  const videoRefreshData = refreshEntry
+    && refreshEntry.channelKey === channelKey
+    && refreshEntry.videoId === video?.id
+    ? refreshEntry.data
+    : null
 
   const refreshVideoData = useCallback(async () => {
     if (!rpc || !video) return
@@ -272,7 +277,7 @@ function WatchPageView({
         videoId: video.id || videoId,
         publicBeeKey,
       })
-      if (result) setVideoRefreshData(result)
+      if (result) setRefreshEntry({ channelKey, videoId: video.id, data: result })
     } catch (err) {
       console.error('[WatchPage] Failed to refresh video data:', err)
     }

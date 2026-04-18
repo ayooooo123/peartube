@@ -26,28 +26,32 @@ jobs:
         shell: bash
         run: |
           declare -A EXPECTED_URLS=(
-            [submodule.packages/bare-ffmpeg.url]=https://github.com/ayooooo123/bare-ffmpeg.git
-            [submodule.packages/app/vendor/react-native-vlc-media-player.url]=https://github.com/ayooooo123/react-native-vlc-media-player.git
-            [submodule.packages/bare-mpv.url]=https://github.com/ayooooo123/bare-mpv.git
+            [packages/bare-ffmpeg]=https://github.com/ayooooo123/bare-ffmpeg.git
+            [packages/bare-mpv]=https://github.com/ayooooo123/bare-mpv.git
           )
 
-          actual_count=$(git config -f .gitmodules --name-only --get-regexp '^submodule\..*\.url$' | wc -l | tr -d ' ')
-          if [ "$actual_count" != "3" ]; then
-            echo "::error::.gitmodules URL entry count changed unexpectedly"
-            git config -f .gitmodules --get-regexp '^submodule\..*\.url$' || true
+          mapfile -t SUBMODULE_PATHS < <(git ls-files --stage | awk '$1 == "160000" {print $4}')
+          if [ "${#SUBMODULE_PATHS[@]}" -eq 0 ]; then
+            echo "::error::No git submodules found in the checked-out tree"
             exit 1
           fi
 
-          for key in "${!EXPECTED_URLS[@]}"; do
-            actual=$(git config -f .gitmodules --get "$key" || true)
-            if [ "$actual" != "${EXPECTED_URLS[$key]}" ]; then
-              echo "::error::Unexpected submodule URL for $key: $actual"
+          for path in "${SUBMODULE_PATHS[@]}"; do
+            expected="${EXPECTED_URLS[$path]:-}"
+            if [ -z "$expected" ]; then
+              echo "::error::Unexpected git submodule path in repository tree: $path"
+              exit 1
+            fi
+
+            actual=$(git config -f .gitmodules --get "submodule.$path.url" || true)
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Unexpected submodule URL for $path: $actual"
               exit 1
             fi
           done
 
-          git submodule sync
-          git submodule update --init --depth 1 packages/bare-ffmpeg packages/bare-mpv packages/app/vendor/react-native-vlc-media-player
+          git submodule sync -- "${SUBMODULE_PATHS[@]}"
+          git submodule update --init --depth 1 -- "${SUBMODULE_PATHS[@]}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

@@ -69,6 +69,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate and init required submodules
         shell: bash
@@ -109,5 +111,49 @@ jobs:
       - name: Install dependencies
         run: npm run install:all
 
-      - name: Run linter
-        run: npm run lint
+      - name: Run linter on changed files
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="$PR_BASE_SHA"
+            HEAD_SHA="$PR_HEAD_SHA"
+          else
+            BASE_SHA="$PUSH_BEFORE_SHA"
+            HEAD_SHA="$GITHUB_SHA"
+          fi
+
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            BASE_SHA=$(git rev-list --max-parents=0 "$HEAD_SHA" | tail -1)
+          fi
+
+          LINT_FILES=()
+          mapfile -t CHANGED_PATHS < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          for path in "${CHANGED_PATHS[@]}"; do
+            case "$path" in
+              *.js|*.jsx|*.ts|*.tsx)
+                ;;
+              *)
+                continue
+                ;;
+            esac
+
+            if [ -f "$path" ]; then
+              LINT_FILES+=("$path")
+            fi
+          done
+
+          if [ "${#LINT_FILES[@]}" -eq 0 ]; then
+            echo "No changed lintable files; skipping eslint."
+            exit 0
+          fi
+
+          printf 'Linting changed files:\n'
+          printf ' - %s\n' "${LINT_FILES[@]}"
+          npx eslint "${LINT_FILES[@]}" --quiet

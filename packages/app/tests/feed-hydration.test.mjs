@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  applyConfirmedFeedVideoBatches,
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
   getVisibleSeededFeedEntries,
+  reconcilePreviewFeedVideos,
   shouldRenderFeedVideo,
 } from '../lib/feed-hydration.js'
 
@@ -158,4 +160,112 @@ test('shouldRenderFeedVideo only accepts proven-playable remote videos but keeps
     video: { channelKey: 'local', availability: 'unknown' },
     identityDriveKey: 'local',
   }), true)
+})
+
+test('applyConfirmedFeedVideoBatches removes stale videos when a channel is confirmed empty', () => {
+  const merged = applyConfirmedFeedVideoBatches([
+    {
+      id: 'stale-preview',
+      channelKey: 'remote',
+      uploadedAt: 10,
+      availability: 'playable',
+      _feedSource: 'preview',
+    },
+    {
+      id: 'other-video',
+      channelKey: 'other',
+      uploadedAt: 20,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+  ], [
+    {
+      channelKey: 'remote',
+      confirmed: true,
+      videos: [],
+    },
+  ])
+
+  assert.deepEqual(merged, [{
+    id: 'other-video',
+    channelKey: 'other',
+    uploadedAt: 20,
+    availability: 'playable',
+    _feedSource: 'hydrated',
+  }])
+})
+
+test('applyConfirmedFeedVideoBatches preserves stale videos for unconfirmed empty channel refreshes', () => {
+  const merged = applyConfirmedFeedVideoBatches([
+    {
+      id: 'stale-preview',
+      channelKey: 'remote',
+      uploadedAt: 10,
+      availability: 'playable',
+      _feedSource: 'preview',
+    },
+  ], [
+    {
+      channelKey: 'remote',
+      confirmed: false,
+      videos: [],
+    },
+  ])
+
+  assert.deepEqual(merged, [{
+    id: 'stale-preview',
+    channelKey: 'remote',
+    uploadedAt: 10,
+    availability: 'playable',
+    _feedSource: 'preview',
+  }])
+})
+
+test('reconcilePreviewFeedVideos replaces preview-derived cards for visible channels', () => {
+  const reconciled = reconcilePreviewFeedVideos([
+    {
+      id: 'stale-preview',
+      channelKey: 'remote',
+      uploadedAt: 10,
+      availability: 'playable',
+      _feedSource: 'preview',
+    },
+    {
+      id: 'hydrated-video',
+      channelKey: 'remote',
+      uploadedAt: 30,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+    {
+      id: 'other-preview',
+      channelKey: 'other',
+      uploadedAt: 15,
+      availability: 'playable',
+      _feedSource: 'preview',
+    },
+  ], [
+    {
+      channelKey: 'remote',
+      peerCount: 1,
+      previewVideos: [],
+    },
+  ], [])
+
+  assert.deepEqual(reconciled, [
+    {
+      id: 'hydrated-video',
+      channelKey: 'remote',
+      uploadedAt: 30,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+    {
+      id: 'other-preview',
+      channelKey: 'other',
+      uploadedAt: 15,
+      availability: 'playable',
+      _feedSource: 'preview',
+    },
+  ])
 })

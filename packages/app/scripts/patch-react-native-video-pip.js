@@ -1,4 +1,4 @@
-/* eslint-disable no-console */
+/* eslint-disable no-console, @typescript-eslint/no-require-imports */
 const fs = require('fs')
 const path = require('path')
 
@@ -169,6 +169,71 @@ const RENDERER_MODE_TARGET = '.setExtensionRendererMode(DefaultRenderersFactory.
 
 const RENDERER_MODE_REPLACEMENT = `.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER) // ${MARKER}`
 
+// ─── Patch 6: Guard seek callbacks during player teardown ─────────────────────
+
+const SEEK_BUFFER_TARGET = [
+  '        if (isPaused && isSeeking && !buffering) {',
+  '            eventEmitter.onVideoSeek.invoke(player.getCurrentPosition(), seekPosition);',
+  '            isSeeking = false;',
+  '        }',
+].join('\n')
+
+const SEEK_BUFFER_REPLACEMENT = [
+  `        // ${MARKER}: avoid seek callback crashes after native player teardown`,
+  '        if (isPaused && isSeeking && !buffering && player != null) {',
+  '            eventEmitter.onVideoSeek.invoke(player.getCurrentPosition(), seekPosition);',
+  '            isSeeking = false;',
+  '        }',
+].join('\n')
+
+const SEEK_PLAYING_TARGET = [
+  '        if (isPlaying && isSeeking) {',
+  '            eventEmitter.onVideoSeek.invoke(player.getCurrentPosition(), seekPosition);',
+  '        }',
+].join('\n')
+
+const SEEK_PLAYING_REPLACEMENT = [
+  `        // ${MARKER}: avoid seek callback crashes after native player teardown`,
+  '        if (isPlaying && isSeeking && player != null) {',
+  '            eventEmitter.onVideoSeek.invoke(player.getCurrentPosition(), seekPosition);',
+  '        }',
+].join('\n')
+
+const UPDATE_RESUME_TARGET = [
+  '    private void updateResumePosition() {',
+  '        resumeWindow = player.getCurrentMediaItemIndex();',
+  '        resumePosition = player.isCurrentMediaItemSeekable() ? Math.max(0, player.getCurrentPosition())',
+  '                : C.TIME_UNSET;',
+  '    }',
+].join('\n')
+
+const UPDATE_RESUME_REPLACEMENT = [
+  '    private void updateResumePosition() {',
+  `        // ${MARKER}: player callbacks can race release`,
+  '        if (player == null) {',
+  '            resumeWindow = C.INDEX_UNSET;',
+  '            resumePosition = C.TIME_UNSET;',
+  '            return;',
+  '        }',
+  '        resumeWindow = player.getCurrentMediaItemIndex();',
+  '        resumePosition = player.isCurrentMediaItemSeekable() ? Math.max(0, player.getCurrentPosition())',
+  '                : C.TIME_UNSET;',
+  '    }',
+].join('\n')
+
+const RELEASE_PLAYER_TARGET = [
+  '            updateResumePosition();',
+  '            player.release();',
+  '            player.removeListener(this);',
+].join('\n')
+
+const RELEASE_PLAYER_REPLACEMENT = [
+  '            updateResumePosition();',
+  `            // ${MARKER}: stop callbacks before the native player begins tearing down`,
+  '            player.removeListener(this);',
+  '            player.release();',
+].join('\n')
+
 // ─── Apply ────────────────────────────────────────────────────────────────────
 
 function applyPatch(filePath, target, replacement, label) {
@@ -195,6 +260,10 @@ function applyAllPatches() {
   changed = applyPatch(PIP_RECEIVER_PATH, RECEIVER_TARGET, RECEIVER_REPLACEMENT, 'PiP receiver') || changed
   changed = applyPatch(PIP_RECEIVER_PATH, RECEIVER_INTENT_TARGET, RECEIVER_INTENT_REPLACEMENT, 'PiP receiver intent') || changed
   changed = applyPatch(EXOPLAYER_VIEW_PATH, RENDERER_MODE_TARGET, RENDERER_MODE_REPLACEMENT, 'Extension renderers') || changed
+  changed = applyPatch(EXOPLAYER_VIEW_PATH, SEEK_BUFFER_TARGET, SEEK_BUFFER_REPLACEMENT, 'Seek buffer callback guard') || changed
+  changed = applyPatch(EXOPLAYER_VIEW_PATH, SEEK_PLAYING_TARGET, SEEK_PLAYING_REPLACEMENT, 'Seek playing callback guard') || changed
+  changed = applyPatch(EXOPLAYER_VIEW_PATH, UPDATE_RESUME_TARGET, UPDATE_RESUME_REPLACEMENT, 'Resume position guard') || changed
+  changed = applyPatch(EXOPLAYER_VIEW_PATH, RELEASE_PLAYER_TARGET, RELEASE_PLAYER_REPLACEMENT, 'Release listener ordering') || changed
   return changed
 }
 

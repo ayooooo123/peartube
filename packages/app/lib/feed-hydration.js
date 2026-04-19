@@ -5,6 +5,16 @@ function getFeedEntryPriority(entry) {
   return 3
 }
 
+function getVideoIdentityKey(video) {
+  return `${video?.channelKey || video?.driveKey || ''}:${video?.id || video?.path || ''}`
+}
+
+function sortFeedVideos(videos, limit = 50) {
+  return Array.from(videos)
+    .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
+    .slice(0, limit)
+}
+
 export function getMissingChannelMetaRequests(feedEntries, channelMeta, limit = Infinity) {
   const requests = []
   const seen = new Set()
@@ -88,13 +98,61 @@ export function getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey,
         driveKey: channelKey,
         publicBeeKey,
         channel: { name: channelName },
+        _feedSource: 'preview',
       })
     }
   }
 
-  return videos
-    .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
-    .slice(0, limit)
+  return sortFeedVideos(videos, limit)
+}
+
+export function applyConfirmedFeedVideoBatches(prevVideos, batches, limit = 50) {
+  const confirmedChannelKeys = new Set(
+    (batches || [])
+      .filter((batch) => batch?.confirmed && (batch?.channelKey || null))
+      .map((batch) => batch.channelKey),
+  )
+
+  const byKey = new Map()
+  for (const video of prevVideos || []) {
+    const channelKey = video?.channelKey || video?.driveKey || null
+    if (channelKey && confirmedChannelKeys.has(channelKey)) continue
+    byKey.set(getVideoIdentityKey(video), video)
+  }
+
+  for (const batch of batches || []) {
+    for (const video of batch?.videos || []) {
+      byKey.set(getVideoIdentityKey(video), video)
+    }
+  }
+
+  return sortFeedVideos(byKey.values(), limit)
+}
+
+export function reconcilePreviewFeedVideos(prevVideos, feedEntries, channelMeta, identityDriveKey, limit = 50) {
+  const previewChannelKeys = new Set(
+    getVisibleSeededFeedEntries(feedEntries, Infinity)
+      .filter((entry) => canUseFeedPreviewVideos(entry, identityDriveKey))
+      .map((entry) => entry?.channelKey || entry?.driveKey)
+      .filter(Boolean),
+  )
+
+  const previewVideos = getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey, limit)
+  const byKey = new Map()
+
+  for (const video of prevVideos || []) {
+    const channelKey = video?.channelKey || video?.driveKey || null
+    if (video?._feedSource === 'preview' && channelKey && previewChannelKeys.has(channelKey)) {
+      continue
+    }
+    byKey.set(getVideoIdentityKey(video), video)
+  }
+
+  for (const video of previewVideos) {
+    byKey.set(getVideoIdentityKey(video), video)
+  }
+
+  return sortFeedVideos(byKey.values(), limit)
 }
 
 export function getFeedVideoHydrationMode({ feedEntries, swarmStatus }) {

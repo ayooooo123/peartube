@@ -55,3 +55,23 @@ test('Expo build-properties config turns on persistent Android release size-savi
   assert.equal(androidConfig.enableShrinkResourcesInReleaseBuilds, true)
   assert.equal(androidConfig.useLegacyPackaging, true)
 })
+
+test('Unused Android experiment dependencies stay out of the mobile app config', () => {
+  const appPackageJson = JSON.parse(fs.readFileSync(appPackageJsonPath, 'utf8'))
+  const appConfig = JSON.parse(fs.readFileSync(appConfigPath, 'utf8'))
+
+  for (const dependencyName of [
+    'expo-video',
+    'expo-media-library',
+    'expo-sharing',
+    'expo-linear-gradient',
+    'react-native-mpv',
+  ]) {
+    assert.equal(appPackageJson.dependencies?.[dependencyName], undefined)
+  }
+
+  const hasMediaLibraryPlugin = appConfig.expo.plugins.some(
+    (entry) => Array.isArray(entry) && entry[0] === 'expo-media-library',
+  )
+  assert.equal(hasMediaLibraryPlugin, false)
+})

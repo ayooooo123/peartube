@@ -70,14 +70,6 @@
           }
         }
       ],
-      [
-        "expo-media-library",
-        {
-          "photosPermission": "Allow PearTube to save videos to your device.",
-          "savePhotosPermission": "Allow PearTube to save videos to your device.",
-          "isAccessMediaLocationEnabled": true
-        }
-      ],
       "./plugins/withAndroidPiP.js",
       "./plugins/withPipBackgroundAudio.js",
       "./plugins/withNextLib.js",

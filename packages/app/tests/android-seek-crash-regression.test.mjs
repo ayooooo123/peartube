@@ -71,3 +71,25 @@ test('PearInlineVideoView adapter catches async seek failures from react-native-
     'adapter seek should route through the hardened helper',
   )
 })
+
+test('react-native-video patch script avoids foreground-service starts for null or non-command intents', () => {
+  const source = readAppFile('scripts/patch-react-native-video-pip.js')
+
+  assert.match(
+    source,
+    /if \(intent == null\) \{[\s\S]*return START_NOT_STICKY[\s\S]*\}/,
+    'the service should bail out when Android restarts it with a null intent',
+  )
+
+  assert.match(
+    source,
+    /val actionCommand = it.getStringExtra\("ACTION"\)[\s\S]*if \(actionCommand == null\) \{[\s\S]*return START_NOT_STICKY/,
+    'the service should not try to foreground itself for non-command intents',
+  )
+
+  assert.match(
+    source,
+    /startForeground\(PLACEHOLDER_NOTIFICATION_ID, createPlaceholderNotification\(\)\)/,
+    'explicit media command intents should still be allowed to foreground the service',
+  )
+})

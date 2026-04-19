@@ -5,6 +5,7 @@ const path = require('path')
 const RNV_DIR = path.join(__dirname, '..', 'node_modules', 'react-native-video', 'android', 'src', 'main', 'java', 'com', 'brentvatne')
 const PIP_UTIL_PATH = path.join(RNV_DIR, 'exoplayer', 'PictureInPictureUtil.kt')
 const PIP_RECEIVER_PATH = path.join(RNV_DIR, 'receiver', 'PictureInPictureReceiver.kt')
+const VIDEO_PLAYBACK_SERVICE_PATH = path.join(RNV_DIR, 'exoplayer', 'VideoPlaybackService.kt')
 
 const MARKER = 'PearTube-patched'
 
@@ -234,6 +235,67 @@ const RELEASE_PLAYER_REPLACEMENT = [
   '            player.release();',
 ].join('\n')
 
+// ─── Patch 7: Guard VideoPlaybackService foreground starts on Android 15/16 ───
+
+const PLAYBACK_SERVICE_ON_START_TARGET = [
+  '    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {',
+  '        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {',
+  '            startForeground(PLACEHOLDER_NOTIFICATION_ID, createPlaceholderNotification())',
+  '        }',
+  '',
+  '        intent?.let {',
+  '            val playerId = it.getIntExtra("PLAYER_ID", -1)',
+  '            val actionCommand = it.getStringExtra("ACTION")',
+  '',
+  '            if (playerId < 0) {',
+  '                DebugLog.w(TAG, "Received Command without playerId")',
+  '                return super.onStartCommand(intent, flags, startId)',
+  '            }',
+  '',
+  '            if (actionCommand == null) {',
+  '                DebugLog.w(TAG, "Received Command without action command")',
+  '                return super.onStartCommand(intent, flags, startId)',
+  '            }',
+  '',
+  '            val session = mediaSessionsList.values.find { s -> s.player.hashCode() == playerId } ?: return super.onStartCommand(intent, flags, startId)',
+  '',
+  '            handleCommand(commandFromString(actionCommand), session)',
+  '        }',
+  '        return super.onStartCommand(intent, flags, startId)',
+  '    }',
+].join('\n')
+
+const PLAYBACK_SERVICE_ON_START_REPLACEMENT = [
+  '    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {',
+  `        // ${MARKER}: Android 15/16 can redeliver or restart the service with a null/non-command intent`,
+  '        if (intent == null) {',
+  '            DebugLog.w(TAG, "Ignoring null onStartCommand intent")',
+  '            return START_NOT_STICKY',
+  '        }',
+  '',
+  '        val playerId = intent.getIntExtra("PLAYER_ID", -1)',
+  '        val actionCommand = intent.getStringExtra("ACTION")',
+  '',
+  '        if (playerId < 0) {',
+  '            DebugLog.w(TAG, "Received Command without playerId")',
+  '            return START_NOT_STICKY',
+  '        }',
+  '',
+  '        if (actionCommand == null) {',
+  '            DebugLog.w(TAG, "Received Command without action command")',
+  '            return START_NOT_STICKY',
+  '        }',
+  '',
+  '        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {',
+  '            startForeground(PLACEHOLDER_NOTIFICATION_ID, createPlaceholderNotification())',
+  '        }',
+  '',
+  '        val session = mediaSessionsList.values.find { s -> s.player.hashCode() == playerId } ?: return START_NOT_STICKY',
+  '        handleCommand(commandFromString(actionCommand), session)',
+  '        return START_NOT_STICKY',
+  '    }',
+].join('\n')
+
 // ─── Apply ────────────────────────────────────────────────────────────────────
 
 function applyPatch(filePath, target, replacement, label) {
@@ -264,6 +326,7 @@ function applyAllPatches() {
   changed = applyPatch(EXOPLAYER_VIEW_PATH, SEEK_PLAYING_TARGET, SEEK_PLAYING_REPLACEMENT, 'Seek playing callback guard') || changed
   changed = applyPatch(EXOPLAYER_VIEW_PATH, UPDATE_RESUME_TARGET, UPDATE_RESUME_REPLACEMENT, 'Resume position guard') || changed
   changed = applyPatch(EXOPLAYER_VIEW_PATH, RELEASE_PLAYER_TARGET, RELEASE_PLAYER_REPLACEMENT, 'Release listener ordering') || changed
+  changed = applyPatch(VIDEO_PLAYBACK_SERVICE_PATH, PLAYBACK_SERVICE_ON_START_TARGET, PLAYBACK_SERVICE_ON_START_REPLACEMENT, 'Playback service foreground guard') || changed
   return changed
 }
 

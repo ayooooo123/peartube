@@ -422,6 +422,131 @@ test('listVideos revalidates cached remote availability on each read', async (t)
   t.is(requestCount, 2)
 })
 
+test('listVideos probes availability for videos beyond the first 12 entries', async (t) => {
+  const driveKey = '21'.repeat(32)
+  const publicBeeKey = '43'.repeat(32)
+  const blobsCoreKey = '65'.repeat(32)
+  const requestCalls = []
+  const rawVideos = Array.from({ length: 13 }, (_, index) => ({
+    id: `video-${index + 1}`,
+    title: `Video ${index + 1}`,
+    uploadedAt: index + 1,
+    blobId: '0:8:0:1024',
+    blobsCoreKey,
+  }))
+
+  const api = createApi({
+    ctx: {
+      store: {
+        get() {
+          return {
+            async ready() {},
+            async has() {
+              return false
+            },
+          }
+        },
+      },
+      semanticFinder: {
+        hasVideo() {
+          return true
+        },
+      },
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      async requestAvailabilityHints(requests) {
+        requestCalls.push(requests)
+        return [{
+          driveKey,
+          id: 'video-13',
+          availability: 'playable',
+          hasHeadBlock: true,
+          contiguousBlocks: 8,
+        }]
+      },
+    },
+    loadPublicBee: async () => ({
+      async listVideos() {
+        return rawVideos
+      },
+      async getVideo(id) {
+        return rawVideos.find((video) => video.id === id)
+      },
+    }),
+  })
+
+  const videos = await api.listVideos(driveKey, publicBeeKey)
+
+  t.ok(requestCalls[0]?.some((request) => request.id === 'video-13'))
+  t.is(videos.find((video) => video.id === 'video-13')?.availability, 'playable')
+})
+
+test('listVideos does not treat unknown remote videos as playable just because other swarm peers are connected', async (t) => {
+  const driveKey = '31'.repeat(32)
+  const publicBeeKey = '53'.repeat(32)
+  const blobsCoreKey = '75'.repeat(32)
+
+  const api = createApi({
+    ctx: {
+      swarm: {
+        connections: new Set(['some-other-peer']),
+      },
+      store: {
+        get() {
+          return {
+            async ready() {},
+            async has() {
+              return false
+            },
+          }
+        },
+      },
+      semanticFinder: {
+        hasVideo() {
+          return true
+        },
+      },
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      async requestAvailabilityHints() {
+        return []
+      },
+    },
+    loadPublicBee: async () => ({
+      async listVideos() {
+        return [{
+          id: 'video-unknown',
+          title: 'Unknown availability',
+          uploadedAt: 1,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }]
+      },
+      async getVideo(id) {
+        return {
+          id,
+          title: 'Unknown availability',
+          uploadedAt: 1,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }
+      },
+    }),
+  })
+
+  const videos = await api.listVideos(driveKey, publicBeeKey)
+
+  t.is(videos[0]?.availability, 'unavailable')
+})
+
 test('getFeedSnapshotEntries keeps manifestUpdatedAt stable for unchanged public bee content', async (t) => {
   const originalDateNow = Date.now
   let now = 1000

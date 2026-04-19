@@ -614,9 +614,7 @@ export function createApi({
 
         const attachVideoAvailability = async (videos) => {
           if (!Array.isArray(videos) || videos.length === 0) return []
-          const MAX_PROBES = 12
-          const sample = videos.slice(0, MAX_PROBES)
-          const idsToProbe = new Set(sample.map((video) => extractVideoId(video)).filter(Boolean))
+          const idsToProbe = new Set(videos.map((video) => extractVideoId(video)).filter(Boolean))
 
           const availabilityById = new Map()
           const unknownRequests = []
@@ -656,11 +654,8 @@ export function createApi({
             } else if (!id) {
               availability = 'unavailable'
             }
-            // If we have connected peers for this channel but couldn't confirm
-            // local cache, the video is likely streamable — mark as playable.
             if (availability === 'unknown' && id && video?.blobsCoreKey && video?.blobId) {
-              const peerCount = ctx.swarm?.connections?.size || 0
-              if (peerCount > 0) availability = 'playable'
+              availability = 'unavailable'
             }
             return {
               ...video,
@@ -1430,10 +1425,7 @@ export function createApi({
                 blobId: video?.blobId ? String(video.blobId) : null,
                 blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
                 mimeType: video?.mimeType ? String(video.mimeType) : null,
-                availability: hint?.availability === 'playable' ? 'playable'
-                  : (hint?.availability || 'unknown') !== 'unknown' ? (hint?.availability || 'unknown')
-                  : (video?.blobsCoreKey && video?.blobId && (ctx.swarm?.connections?.size || 0) > 0) ? 'playable'
-                  : 'unknown',
+                availability: hint?.availability === 'playable' ? 'playable' : 'unavailable',
                 thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
                 thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
                 thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,

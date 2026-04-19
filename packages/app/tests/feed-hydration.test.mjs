@@ -7,6 +7,8 @@ import {
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
   getVisibleSeededFeedEntries,
+  mergeHydratedFeedBatches,
+  mergeHydratedFeedVideos,
   shouldRenderFeedVideo,
 } from '../lib/feed-hydration.js'
 
@@ -158,4 +160,74 @@ test('shouldRenderFeedVideo only accepts proven-playable remote videos but keeps
     video: { channelKey: 'local', availability: 'unknown' },
     identityDriveKey: 'local',
   }), true)
+})
+
+test('mergeHydratedFeedVideos replaces stale channel cards when a refreshed channel no longer has watchable videos', () => {
+  const merged = mergeHydratedFeedVideos({
+    previousVideos: [
+      { id: 'stale-remote', channelKey: 'remote-a', uploadedAt: 30, availability: 'playable' },
+      { id: 'keep-remote', channelKey: 'remote-b', uploadedAt: 20, availability: 'playable' },
+    ],
+    incomingVideos: [],
+    refreshedChannelKeys: ['remote-a'],
+    identityDriveKey: 'local',
+    limit: 50,
+  })
+
+  assert.deepEqual(merged.map((video) => ({ id: video.id, channelKey: video.channelKey })), [
+    { id: 'keep-remote', channelKey: 'remote-b' },
+  ])
+})
+
+test('mergeHydratedFeedVideos keeps prior cards when a channel refresh fails and cannot prove a replacement set', () => {
+  const merged = mergeHydratedFeedVideos({
+    previousVideos: [
+      { id: 'stale-remote', channelKey: 'remote-a', uploadedAt: 30, availability: 'playable' },
+    ],
+    incomingVideos: [],
+    refreshedChannelKeys: [],
+    identityDriveKey: 'local',
+    limit: 50,
+  })
+
+  assert.deepEqual(merged.map((video) => ({ id: video.id, channelKey: video.channelKey })), [
+    { id: 'stale-remote', channelKey: 'remote-a' },
+  ])
+})
+
+test('mergeHydratedFeedBatches removes stale cards when a channel refresh is confirmed empty', () => {
+  const merged = mergeHydratedFeedBatches({
+    previousVideos: [
+      { id: 'stale-remote', channelKey: 'remote-a', uploadedAt: 30, availability: 'playable' },
+      { id: 'keep-remote', channelKey: 'remote-b', uploadedAt: 20, availability: 'playable' },
+    ],
+    incomingBatches: [
+      { channelKey: 'remote-a', confirmed: true, videos: [] },
+    ],
+    identityDriveKey: 'local',
+    limit: 50,
+  })
+
+  assert.deepEqual(merged.map((video) => ({ id: video.id, channelKey: video.channelKey })), [
+    { id: 'keep-remote', channelKey: 'remote-b' },
+  ])
+})
+
+test('mergeHydratedFeedBatches preserves stale cards when an empty refresh was not confirmed', () => {
+  const merged = mergeHydratedFeedBatches({
+    previousVideos: [
+      { id: 'stale-remote', channelKey: 'remote-a', uploadedAt: 30, availability: 'playable' },
+      { id: 'keep-remote', channelKey: 'remote-b', uploadedAt: 20, availability: 'playable' },
+    ],
+    incomingBatches: [
+      { channelKey: 'remote-a', confirmed: false, videos: [] },
+    ],
+    identityDriveKey: 'local',
+    limit: 50,
+  })
+
+  assert.deepEqual(merged.map((video) => ({ id: video.id, channelKey: video.channelKey })), [
+    { id: 'stale-remote', channelKey: 'remote-a' },
+    { id: 'keep-remote', channelKey: 'remote-b' },
+  ])
 })

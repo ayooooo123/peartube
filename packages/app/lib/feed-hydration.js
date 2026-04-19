@@ -1,3 +1,5 @@
+/** @typedef {import('@peartube/core').VideoData} VideoData */
+
 function getFeedEntryPriority(entry) {
   if (entry?.source === 'local') return 0
   if ((entry?.peerCount ?? 0) > 0) return 1
@@ -125,4 +127,88 @@ export function shouldRenderFeedVideo({ video, identityDriveKey }) {
   const channelKey = video?.channelKey || video?.driveKey || null
   if (identityDriveKey && channelKey === identityDriveKey) return true
   return video?.availability === 'playable'
+}
+
+/**
+ * @param {{
+ *   previousVideos?: VideoData[],
+ *   incomingVideos?: VideoData[],
+ *   refreshedChannelKeys?: string[],
+ *   identityDriveKey?: string | null,
+ *   limit?: number,
+ * }} params
+ * @returns {VideoData[]}
+ */
+export function mergeHydratedFeedVideos({
+  previousVideos = [],
+  incomingVideos = [],
+  refreshedChannelKeys = [],
+  identityDriveKey = null,
+  limit = 50,
+}) {
+  const refreshed = new Set((refreshedChannelKeys || []).filter(Boolean))
+  const byKey = new Map()
+
+  for (const video of previousVideos || []) {
+    if (!video) continue
+    const channelKey = video?.channelKey || video?.driveKey || null
+    if (channelKey && refreshed.has(channelKey)) continue
+    const identifier = video?.id || video?.path || ''
+    if (!identifier) continue
+    const key = `${channelKey || ''}:${identifier}`
+    byKey.set(key, video)
+  }
+
+  for (const video of incomingVideos || []) {
+    if (!video) continue
+    if (!shouldRenderFeedVideo({ video, identityDriveKey })) continue
+    const channelKey = video?.channelKey || video?.driveKey || null
+    const identifier = video?.id || video?.path || ''
+    if (!identifier) continue
+    const key = `${channelKey || ''}:${identifier}`
+    byKey.set(key, video)
+  }
+
+  return Array.from(byKey.values())
+    .filter(Boolean)
+    .sort((a, b) => (b?.uploadedAt || 0) - (a?.uploadedAt || 0))
+    .slice(0, limit)
+}
+
+/**
+ * @param {{
+ *   previousVideos?: VideoData[],
+ *   incomingBatches?: Array<{ channelKey?: string | null, confirmed?: boolean, videos?: VideoData[] }>,
+ *   identityDriveKey?: string | null,
+ *   limit?: number,
+ * }} params
+ * @returns {VideoData[]}
+ */
+export function mergeHydratedFeedBatches({
+  previousVideos = [],
+  incomingBatches = [],
+  identityDriveKey = null,
+  limit = 50,
+}) {
+  const refreshedChannelKeys = []
+  const incomingVideos = []
+
+  for (const batch of incomingBatches || []) {
+    if (!batch) continue
+    const channelKey = batch?.channelKey || null
+    if (batch?.confirmed && channelKey) {
+      refreshedChannelKeys.push(channelKey)
+    }
+    for (const video of batch?.videos || []) {
+      incomingVideos.push(video)
+    }
+  }
+
+  return mergeHydratedFeedVideos({
+    previousVideos,
+    incomingVideos,
+    refreshedChannelKeys,
+    identityDriveKey,
+    limit,
+  })
 }

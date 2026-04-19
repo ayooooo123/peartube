@@ -79,9 +79,9 @@ jobs:
         working-directory: packages/app
         run: npm run android:prebuild
 
-      - name: Build debug APK
+      - name: Build debug APK (arm64-v8a)
         working-directory: packages/app/android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug -PtargetAbis=arm64-v8a -PreactNativeArchitectures=arm64-v8a --no-daemon
 
       - name: Upload debug APKs
         uses: actions/upload-artifact@v4

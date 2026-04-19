@@ -9,11 +9,17 @@ function withAndroidAbiSplits(config) {
       return config;
     }
 
-    const splitsBlock = `    splits {
+    const splitsBlock = `    def configuredSplitAbis = (findProperty('targetAbis') ?: findProperty('reactNativeArchitectures') ?: 'armeabi-v7a,arm64-v8a,x86,x86_64')
+        .toString()
+        .split(',')
+        .collect { it.trim() }
+        .findAll { it }
+
+    splits {
         abi {
             reset()
             enable true
-            include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+            include(*configuredSplitAbis)
             universalApk false
         }
     }

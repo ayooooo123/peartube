@@ -17,18 +17,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate and init required submodules
+        shell: bash
+        run: |
+          declare -A EXPECTED_URLS=(
+            [packages/bare-ffmpeg]=https://github.com/ayooooo123/bare-ffmpeg.git
+            [packages/bare-mpv]=https://github.com/ayooooo123/bare-mpv.git
+          )
+
+          mapfile -t SUBMODULE_PATHS < <(git ls-files --stage | awk '$1 == "160000" {print $4}')
+          if [ "${#SUBMODULE_PATHS[@]}" -eq 0 ]; then
+            echo "::error::No git submodules found in the checked-out tree"
+            exit 1
+          fi
+
+          for path in "${SUBMODULE_PATHS[@]}"; do
+            expected="${EXPECTED_URLS[$path]:-}"
+            if [ -z "$expected" ]; then
+              echo "::error::Unexpected git submodule path in repository tree: $path"
+              exit 1
+            fi
+
+            actual=$(git config -f .gitmodules --get "submodule.$path.url" || true)
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Unexpected submodule URL for $path: $actual"
+              exit 1
+            fi
+          done
+
+          git submodule sync -- "${SUBMODULE_PATHS[@]}"
+          git submodule update --init --depth 1 -- "${SUBMODULE_PATHS[@]}"
+
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'npm'
 
-      - name: Install root dependencies
-        run: npm ci
-
-      - name: Install backend dependencies
-        run: npm ci
-        working-directory: packages/backend
+      - name: Install dependencies
+        run: npm run install:all
 
       - name: Run backend tests
         run: npm test
@@ -44,14 +70,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate and init required submodules
+        shell: bash
+        run: |
+          declare -A EXPECTED_URLS=(
+            [packages/bare-ffmpeg]=https://github.com/ayooooo123/bare-ffmpeg.git
+            [packages/bare-mpv]=https://github.com/ayooooo123/bare-mpv.git
+          )
+
+          mapfile -t SUBMODULE_PATHS < <(git ls-files --stage | awk '$1 == "160000" {print $4}')
+          if [ "${#SUBMODULE_PATHS[@]}" -eq 0 ]; then
+            echo "::error::No git submodules found in the checked-out tree"
+            exit 1
+          fi
+
+          for path in "${SUBMODULE_PATHS[@]}"; do
+            expected="${EXPECTED_URLS[$path]:-}"
+            if [ -z "$expected" ]; then
+              echo "::error::Unexpected git submodule path in repository tree: $path"
+              exit 1
+            fi
+
+            actual=$(git config -f .gitmodules --get "submodule.$path.url" || true)
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Unexpected submodule URL for $path: $actual"
+              exit 1
+            fi
+          done
+
+          git submodule sync -- "${SUBMODULE_PATHS[@]}"
+          git submodule update --init --depth 1 -- "${SUBMODULE_PATHS[@]}"
+
       - name: Use Node.js 22.x
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm run install:all
 
       - name: Run linter
         run: npm run lint

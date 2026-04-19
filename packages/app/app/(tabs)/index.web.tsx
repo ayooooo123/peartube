@@ -2044,7 +2044,10 @@ export default function HomeScreen() {
       const result = await rpc.listVideos({ channelKey: driveKey, publicBeeKey })
       const videoList = result?.videos || []
       if (Array.isArray(videoList)) {
-        const found = videoList.find((v: any) => v.id === videoId)
+        const found = videoList.find((v: any) => v.id === videoId && shouldRenderFeedVideo({
+          video: { ...v, channelKey: driveKey },
+          identityDriveKey: identity?.driveKey || null,
+        }))
         if (found) {
           setWatchVideo({ ...found, channelKey: driveKey, publicBeeKey: (found as any).publicBeeKey || publicBeeKey })
           return
@@ -2065,7 +2068,7 @@ export default function HomeScreen() {
     } catch (err) {
       console.error('[Home] Failed to load video info:', err)
     }
-  }, [rpc, feedEntries])
+  }, [rpc, feedEntries, identity?.driveKey])
 
   // Refs so the hashchange listener always sees current video arrays without
   // needing to re-register (which would re-process the hash on every update).
@@ -2402,14 +2405,18 @@ export default function HomeScreen() {
           publicBeeKey,  // Attach publicBeeKey for fast path when playing
           channel: channelMeta[driveKey] ? { name: channelMeta[driveKey].name } : undefined
         }))
-        setChannelVideos(videosWithChannel)
+        const watchableChannelVideos = videosWithChannel.filter((video: any) => shouldRenderFeedVideo({
+          video,
+          identityDriveKey: identity?.driveKey || null,
+        }))
+        setChannelVideos(watchableChannelVideos)
       }
     } catch (err) {
       console.error('[Home] Failed to load channel videos:', err)
     } finally {
       setLoadingChannel(false)
     }
-  }, [rpc, channelMeta])
+  }, [rpc, channelMeta, feedEntries, identity?.driveKey])
 
   const closeChannelView = useCallback(() => {
     setViewingChannel(null)

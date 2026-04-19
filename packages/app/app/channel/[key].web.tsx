@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator } from 'react-native'
 import { useApp, colors } from '../_layout'
 import { formatTimeAgo } from '@/lib/formatters'
+import { shouldRenderFeedVideo } from '@/lib/feed-hydration'
 
 type ChannelMeta = {
   name?: string
@@ -88,14 +89,19 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
         rpc.listVideos({ channelKey: resolvedChannelKey }),
       ])
 
+      const filteredVideos = (Array.isArray(videosResult?.videos) ? videosResult.videos : []).filter((video) => shouldRenderFeedVideo({
+        video: { ...video, channelKey: resolvedChannelKey },
+        identityDriveKey: identity?.driveKey || null,
+      }))
+
       setChannelMeta(metaResult || null)
-      setVideos(Array.isArray(videosResult?.videos) ? videosResult.videos : [])
+      setVideos(filteredVideos)
     } catch (err: any) {
       setError(err?.message || 'Failed to load channel')
     } finally {
       setLoading(false)
     }
-  }, [rpc, resolvedChannelKey])
+  }, [rpc, resolvedChannelKey, identity?.driveKey])
 
   useEffect(() => {
     loadChannelData()

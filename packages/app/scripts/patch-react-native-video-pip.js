@@ -235,7 +235,87 @@ const RELEASE_PLAYER_REPLACEMENT = [
   '            player.release();',
 ].join('\n')
 
-// ─── Patch 7: Guard VideoPlaybackService foreground starts on Android 15/16 ───
+// ─── Patch 7: Guard Android 13+ playback service startup paths ─────────────────
+
+const PLAYBACK_SERVICE_IMPORT_TARGET = 'import android.app.NotificationManager'
+
+const PLAYBACK_SERVICE_IMPORT_REPLACEMENT = [
+  'import android.app.NotificationManager',
+  'import android.app.ForegroundServiceStartNotAllowedException',
+].join('\n')
+
+const EXOPLAYER_SERVICE_START_TARGET = [
+  '        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {',
+  '            themedReactContext.startForegroundService(intent);',
+  '        } else {',
+  '            themedReactContext.startService(intent);',
+  '        }',
+].join('\n')
+
+const EXOPLAYER_SERVICE_START_REPLACEMENT = [
+  `        // ${MARKER}: Android 13+ can reject foreground-service startup during seek/media-session transitions`,
+  '        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {',
+  '            try {',
+  '                themedReactContext.startForegroundService(intent);',
+  '            } catch (RuntimeException e) {',
+  '                if (e instanceof android.app.ForegroundServiceStartNotAllowedException) {',
+  '                    DebugLog.w(TAG, "Could not start playback service in foreground: " + e.getMessage());',
+  '                } else {',
+  '                    throw e;',
+  '                }',
+  '            }',
+  '        } else {',
+  '            themedReactContext.startService(intent);',
+  '        }',
+].join('\n')
+
+const PLAYBACK_SERVICE_REGISTER_PLAYER_TARGET = [
+  '    fun registerPlayer(player: ExoPlayer, from: Class<Activity>) {',
+  '        if (mediaSessionsList.containsKey(player)) {',
+  '            return',
+  '        }',
+  '        sourceActivity = from',
+  '',
+  '        val mediaSession = MediaSession.Builder(this, player)',
+  '            .setId("RNVideoPlaybackService_" + player.hashCode())',
+  '            .setCallback(VideoPlaybackCallback())',
+  '            .setCustomLayout(immutableListOf(seekForwardBtn, seekBackwardBtn))',
+  '            .build()',
+  '',
+  '        mediaSessionsList[player] = mediaSession',
+  '        addSession(mediaSession)',
+  '',
+  '        val notificationId = player.hashCode()',
+  '        startForeground(notificationId, buildNotification(mediaSession))',
+  '    }',
+].join('\n')
+
+const PLAYBACK_SERVICE_REGISTER_PLAYER_REPLACEMENT = [
+  '    fun registerPlayer(player: ExoPlayer, from: Class<Activity>) {',
+  '        if (mediaSessionsList.containsKey(player)) {',
+  '            return',
+  '        }',
+  '        sourceActivity = from',
+  '',
+  '        val mediaSession = MediaSession.Builder(this, player)',
+  '            .setId("RNVideoPlaybackService_" + player.hashCode())',
+  '            .setCallback(VideoPlaybackCallback())',
+  '            .setCustomLayout(immutableListOf(seekForwardBtn, seekBackwardBtn))',
+  '            .build()',
+  '',
+  '        mediaSessionsList[player] = mediaSession',
+  '        addSession(mediaSession)',
+  '',
+  '        val notificationId = player.hashCode()',
+  '        try {',
+  '            startForeground(notificationId, buildNotification(mediaSession))',
+  '        } catch (e: ForegroundServiceStartNotAllowedException) {',
+  '            DebugLog.w(TAG, "Skipping foreground promotion for player " + player.hashCode() + ": " + e.message)',
+  '        }',
+  '    }',
+].join('\n')
+
+// ─── Patch 8: Guard VideoPlaybackService foreground starts on Android 15/16 ───
 
 const PLAYBACK_SERVICE_ON_START_TARGET = [
   '    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {',
@@ -326,6 +406,9 @@ function applyAllPatches() {
   changed = applyPatch(EXOPLAYER_VIEW_PATH, SEEK_PLAYING_TARGET, SEEK_PLAYING_REPLACEMENT, 'Seek playing callback guard') || changed
   changed = applyPatch(EXOPLAYER_VIEW_PATH, UPDATE_RESUME_TARGET, UPDATE_RESUME_REPLACEMENT, 'Resume position guard') || changed
   changed = applyPatch(EXOPLAYER_VIEW_PATH, RELEASE_PLAYER_TARGET, RELEASE_PLAYER_REPLACEMENT, 'Release listener ordering') || changed
+  changed = applyPatch(VIDEO_PLAYBACK_SERVICE_PATH, PLAYBACK_SERVICE_IMPORT_TARGET, PLAYBACK_SERVICE_IMPORT_REPLACEMENT, 'Playback service import guard') || changed
+  changed = applyPatch(EXOPLAYER_VIEW_PATH, EXOPLAYER_SERVICE_START_TARGET, EXOPLAYER_SERVICE_START_REPLACEMENT, 'Playback service startup guard') || changed
+  changed = applyPatch(VIDEO_PLAYBACK_SERVICE_PATH, PLAYBACK_SERVICE_REGISTER_PLAYER_TARGET, PLAYBACK_SERVICE_REGISTER_PLAYER_REPLACEMENT, 'Playback service register guard') || changed
   changed = applyPatch(VIDEO_PLAYBACK_SERVICE_PATH, PLAYBACK_SERVICE_ON_START_TARGET, PLAYBACK_SERVICE_ON_START_REPLACEMENT, 'Playback service foreground guard') || changed
   return changed
 }

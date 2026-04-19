@@ -83,7 +83,7 @@ test('react-native-video patch script avoids foreground-service starts for null 
 
   assert.match(
     source,
-    /val actionCommand = it.getStringExtra\("ACTION"\)[\s\S]*if \(actionCommand == null\) \{[\s\S]*return START_NOT_STICKY/,
+    /val actionCommand = intent.getStringExtra\("ACTION"\)[\s\S]*if \(actionCommand == null\) \{[\s\S]*return START_NOT_STICKY/,
     'the service should not try to foreground itself for non-command intents',
   )
 
@@ -91,5 +91,21 @@ test('react-native-video patch script avoids foreground-service starts for null 
     source,
     /startForeground\(PLACEHOLDER_NOTIFICATION_ID, createPlaceholderNotification\(\)\)/,
     'explicit media command intents should still be allowed to foreground the service',
+  )
+})
+
+test('react-native-video patch script guards Android 13+ playback service registration and startup', () => {
+  const source = readAppFile('scripts/patch-react-native-video-pip.js')
+
+  assert.match(
+    source,
+    /themedReactContext\.startForegroundService\(intent\)[\s\S]*catch \(RuntimeException e\)[\s\S]*ForegroundServiceStartNotAllowedException/,
+    'setupPlaybackService should catch Android foreground-service start denials',
+  )
+
+  assert.match(
+    source,
+    /fun registerPlayer\(player: ExoPlayer, from: Class<Activity>\) \{[\s\S]*try \{[\s\S]*startForeground\(notificationId, buildNotification\(mediaSession\)\)[\s\S]*catch \(e: ForegroundServiceStartNotAllowedException\)/,
+    'registerPlayer should catch Android 13+ foreground promotion failures',
   )
 })

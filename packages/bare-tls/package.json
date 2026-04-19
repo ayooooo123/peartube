@@ -1,6 +1,6 @@
 {
   "name": "bare-tls",
-  "version": "2.2.0-patched.1",
+  "version": "2.2.3",
   "description": "Transport Layer Security (TLS) streams for JavaScript",
   "exports": {
     ".": {

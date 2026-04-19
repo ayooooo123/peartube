@@ -152,6 +152,7 @@
   },
   "overrides": {
     "@peartube/spec": "file:../spec",
+    "bare-tls": "file:../bare-tls",
     "minipass": "^7.1.2",
     "tar": {
       "minipass": "^7.1.2"

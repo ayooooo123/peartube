@@ -111,7 +111,7 @@ jobs:
       - name: Install dependencies
         run: npm run install:all
 
-      - name: Run linter on changed files
+      - name: Run linter on changed lines
         shell: bash
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -132,28 +132,4 @@ jobs:
             BASE_SHA=$(git rev-list --max-parents=0 "$HEAD_SHA" | tail -1)
           fi
 
-          LINT_FILES=()
-          mapfile -t CHANGED_PATHS < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-
-          for path in "${CHANGED_PATHS[@]}"; do
-            case "$path" in
-              *.js|*.jsx|*.ts|*.tsx)
-                ;;
-              *)
-                continue
-                ;;
-            esac
-
-            if [ -f "$path" ]; then
-              LINT_FILES+=("$path")
-            fi
-          done
-
-          if [ "${#LINT_FILES[@]}" -eq 0 ]; then
-            echo "No changed lintable files; skipping eslint."
-            exit 0
-          fi
-
-          printf 'Linting changed files:\n'
-          printf ' - %s\n' "${LINT_FILES[@]}"
-          npx eslint "${LINT_FILES[@]}" --quiet
+          node ./scripts/ci-eslint-changed-lines.mjs "$BASE_SHA" "$HEAD_SHA"

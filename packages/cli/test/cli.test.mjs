@@ -55,7 +55,7 @@ test('package.json defines standalone relay build scripts', async (t) => {
   t.is(pkg.scripts['build:standalone:linux-x64'], 'RELAY_STANDALONE_HOST=linux-x64 node ./scripts/build-standalone.mjs')
   t.is(pkg.scripts['build:standalone:linux-arm64'], 'RELAY_STANDALONE_HOST=linux-arm64 node ./scripts/build-standalone.mjs')
   t.is(pkg.scripts['prepare:docker-artifacts'], 'node ./scripts/prepare-docker-artifacts.mjs')
-  t.is(pkg.devDependencies['bare-build'], '^0.4.6')
+  t.is(pkg.devDependencies['bare-build'], '^0.5.3')
 })
 
 test('standalone build script writes the relay executable into the host output directory', async (t) => {

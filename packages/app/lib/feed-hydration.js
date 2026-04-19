@@ -129,6 +129,40 @@ export function applyConfirmedFeedVideoBatches(prevVideos, batches, limit = 50) 
   return sortFeedVideos(byKey.values(), limit)
 }
 
+export function applyConfirmedFeedEntryBatches(prevEntries, batches) {
+  const confirmedByChannel = new Map(
+    (batches || [])
+      .filter((batch) => batch?.confirmed && (batch?.channelKey || null))
+      .map((batch) => [batch.channelKey, batch]),
+  )
+
+  if (confirmedByChannel.size === 0) return prevEntries || []
+
+  return (prevEntries || []).map((entry) => {
+    const channelKey = entry?.channelKey || entry?.driveKey || null
+    const batch = channelKey ? confirmedByChannel.get(channelKey) : null
+    if (!batch) return entry
+
+    return {
+      ...entry,
+      previewVideos: (batch.videos || []).map((video) => ({
+        id: video.id,
+        title: video.title,
+        uploadedAt: video.uploadedAt,
+        duration: video.duration,
+        thumbnail: video.thumbnail,
+        blobId: video.blobId,
+        blobsCoreKey: video.blobsCoreKey,
+        mimeType: video.mimeType,
+        availability: video.availability,
+        thumbnailBlobId: video.thumbnailBlobId,
+        thumbnailBlobsCoreKey: video.thumbnailBlobsCoreKey,
+        thumbnailMimeType: video.thumbnailMimeType,
+      })),
+    }
+  })
+}
+
 export function reconcilePreviewFeedVideos(prevVideos, feedEntries, channelMeta, identityDriveKey, limit = 50) {
   const previewChannelKeys = new Set(
     getVisibleSeededFeedEntries(feedEntries, Infinity)

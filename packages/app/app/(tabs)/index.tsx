@@ -17,6 +17,7 @@ import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 import {
+  applyConfirmedFeedEntryBatches,
   applyConfirmedFeedVideoBatches,
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
@@ -327,6 +328,7 @@ export default function HomeScreen() {
 
     const mergeVideos = (batches: FeedVideoBatch[]) => {
       if (feedLoadRunIdRef.current !== runId || !Array.isArray(batches) || batches.length === 0) return
+      setFeedEntries((prev) => applyConfirmedFeedEntryBatches(prev, batches))
       setFeedVideos((prev) => applyConfirmedFeedVideoBatches(prev, batches))
       const incoming = batches.flatMap((batch) => batch.videos || [])
       if (incoming.length > 0) {

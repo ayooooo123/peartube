@@ -43,3 +43,31 @@ test('react-native-video patch script detaches the ExoPlayer listener before rel
     'releasePlayer should remove listener callbacks before releasing the native player',
   )
 })
+
+test('PearInlineVideoView adapter catches async seek failures from react-native-video', () => {
+  const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
+
+  assert.match(
+    source,
+    /const safeSeek = useCallback\(\(timeSeconds: number\) => \{[\s\S]*Promise\.resolve\(videoRef\.current\?\.seek\(clamped\)\)[\s\S]*\.catch\(/,
+    'seek calls should consume async bridge failures instead of leaking unhandled rejections',
+  )
+
+  assert.match(
+    source,
+    /stop: async \(\) => \{[\s\S]*safeSeek\(0\)/,
+    'stop should reuse the hardened seek helper',
+  )
+
+  assert.match(
+    source,
+    /destroy: async \(\) => \{[\s\S]*safeSeek\(0\)/,
+    'destroy should reuse the hardened seek helper',
+  )
+
+  assert.match(
+    source,
+    /seek: async \(timeSeconds: number\) => \{[\s\S]*safeSeek\(timeSeconds\)/,
+    'adapter seek should route through the hardened helper',
+  )
+})

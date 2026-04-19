@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  applyConfirmedFeedEntryBatches,
   applyConfirmedFeedVideoBatches,
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
@@ -266,6 +267,55 @@ test('reconcilePreviewFeedVideos replaces preview-derived cards for visible chan
       uploadedAt: 15,
       availability: 'playable',
       _feedSource: 'preview',
+    },
+  ])
+})
+
+test('applyConfirmedFeedEntryBatches clears stale preview manifests once a channel is confirmed empty', () => {
+  const updated = applyConfirmedFeedEntryBatches([
+    {
+      channelKey: 'remote',
+      peerCount: 1,
+      previewVideos: [{
+        id: 'stale-preview',
+        title: 'Old preview',
+        uploadedAt: 10,
+        availability: 'playable',
+      }],
+    },
+    {
+      channelKey: 'other',
+      peerCount: 1,
+      previewVideos: [{
+        id: 'other-preview',
+        title: 'Other preview',
+        uploadedAt: 20,
+        availability: 'playable',
+      }],
+    },
+  ], [
+    {
+      channelKey: 'remote',
+      confirmed: true,
+      videos: [],
+    },
+  ])
+
+  assert.deepEqual(updated, [
+    {
+      channelKey: 'remote',
+      peerCount: 1,
+      previewVideos: [],
+    },
+    {
+      channelKey: 'other',
+      peerCount: 1,
+      previewVideos: [{
+        id: 'other-preview',
+        title: 'Other preview',
+        uploadedAt: 20,
+        availability: 'playable',
+      }],
     },
   ])
 })

@@ -145,6 +145,17 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     return Date.now() <= suppressStuckPlaybackRecoveryUntilRef.current
   }, [isInPipMode])
 
+  const safeSeek = useCallback((timeSeconds: number) => {
+    const clamped = Math.max(0, timeSeconds)
+    try {
+      void Promise.resolve(videoRef.current?.seek(clamped)).catch((error) => {
+        console.warn('[PearInlineVideoView] seek command failed:', error)
+      })
+    } catch (error) {
+      console.warn('[PearInlineVideoView] seek command threw:', error)
+    }
+  }, [])
+
   const applyPendingSeek = useCallback(async (nextSeekPosition: number | undefined, durationMsOverride?: number) => {
     if (nextSeekPosition === undefined) {
       lastAppliedSeekRef.current = null
@@ -161,8 +172,8 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
 
     lastAppliedSeekRef.current = targetMs
     // react-native-video seek takes seconds
-    videoRef.current?.seek(targetMs / 1000)
-  }, [])
+    safeSeek(targetMs / 1000)
+  }, [safeSeek])
 
   const adapter = useMemo(
     () => ({
@@ -174,14 +185,14 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       },
       stop: async () => {
         videoRef.current?.pause?.()
-        videoRef.current?.seek(0)
+        safeSeek(0)
       },
       destroy: async () => {
         videoRef.current?.pause?.()
-        videoRef.current?.seek(0)
+        safeSeek(0)
       },
       seek: async (timeSeconds: number) => {
-        videoRef.current?.seek(Math.max(0, timeSeconds))
+        safeSeek(timeSeconds)
       },
       resume: async (playing: boolean) => {
         if (playing) {
@@ -194,7 +205,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         void videoRef.current?.enterPictureInPicture?.()
       },
     }),
-    [],
+    [safeSeek],
   )
 
   useEffect(() => {

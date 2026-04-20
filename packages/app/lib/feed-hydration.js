@@ -61,6 +61,40 @@ export function getFeedVideoLoadEntries(feedEntries, limit = 15) {
   return getVisibleSeededFeedEntries(feedEntries, limit)
 }
 
+export function preserveRenderableFeedEntries(previousEntries = [], nextEntries = [], feedVideos = [], identityDriveKey = null) {
+  const merged = new Map()
+
+  for (const entry of nextEntries || []) {
+    const channelKey = entry?.channelKey || entry?.driveKey || null
+    if (!channelKey) continue
+    merged.set(channelKey, entry)
+  }
+
+  for (const entry of previousEntries || []) {
+    const channelKey = entry?.channelKey || entry?.driveKey || null
+    if (!channelKey || merged.has(channelKey)) continue
+
+    const hasRenderableCachedVideo = (feedVideos || []).some((video) => {
+      const videoChannelKey = video?.channelKey || video?.driveKey || null
+      if (videoChannelKey !== channelKey) return false
+      if (video?._feedSource === 'preview') return false
+      return shouldRenderFeedVideo({ video, identityDriveKey })
+    })
+
+    if (!hasRenderableCachedVideo) continue
+
+    merged.set(channelKey, {
+      ...entry,
+      channelKey,
+      driveKey: channelKey,
+      peerCount: 0,
+      previewVideos: [],
+    })
+  }
+
+  return Array.from(merged.values())
+}
+
 function canUseFeedPreviewVideos(entry, identityDriveKey) {
   const channelKey = entry?.channelKey || entry?.driveKey || null
   if (!channelKey) return false

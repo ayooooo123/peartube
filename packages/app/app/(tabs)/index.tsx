@@ -24,6 +24,7 @@ import {
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
   getVisibleSeededFeedEntries,
+  preserveRenderableFeedEntries,
   reconcilePreviewFeedVideos,
   shouldRenderFeedVideo,
   filterRenderableFeedVideos,
@@ -118,6 +119,8 @@ export default function HomeScreen() {
   // Aggregated feed videos from all discovered channels
   const [feedVideos, setFeedVideos] = useState<FeedVideoData[]>([])
   const [loadingFeedVideos, setLoadingFeedVideos] = useState(false)
+  const feedVideosRef = useRef(feedVideos)
+  feedVideosRef.current = feedVideos
 
   const feedLoadRunIdRef = useRef(0)
 
@@ -209,8 +212,14 @@ export default function HomeScreen() {
           peerCount: e.peerCount,
           hasBee: !!e.publicBeeKey,
         })))
-        setFeedEntries(result.entries)
-        for (const request of getMissingChannelMetaRequests(result.entries, channelMetaRef.current, 15)) {
+        const mergedEntries = preserveRenderableFeedEntries(
+          feedEntries,
+          result.entries,
+          feedVideosRef.current,
+          identity?.driveKey || null,
+        )
+        setFeedEntries(mergedEntries)
+        for (const request of getMissingChannelMetaRequests(mergedEntries, channelMetaRef.current, 15)) {
           loadChannelMeta(request.channelKey, request.publicBeeKey)
         }
       }
@@ -236,7 +245,7 @@ export default function HomeScreen() {
     } finally {
       setFeedLoading(false)
     }
-  }, [rpc, loadChannelMeta])
+  }, [rpc, loadChannelMeta, feedEntries, identity?.driveKey])
 
   const refreshFeed = useCallback(async () => {
     if (!rpc) return

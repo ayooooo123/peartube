@@ -9,6 +9,7 @@ import {
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
   getVisibleSeededFeedEntries,
+  preserveRenderableFeedEntries,
   reconcilePreviewFeedVideos,
   shouldRenderFeedVideo,
   filterRenderableFeedVideos,
@@ -221,6 +222,43 @@ test('applyConfirmedFeedVideoBatches preserves stale videos for unconfirmed empt
     availability: 'playable',
     _feedSource: 'preview',
   }])
+})
+
+test('preserveRenderableFeedEntries keeps zero-peer channels that still have cached playable hydrated videos', () => {
+  const merged = preserveRenderableFeedEntries(
+    [
+      {
+        driveKey: 'cached-remote',
+        channelKey: 'cached-remote',
+        peerCount: 2,
+        previewVideos: [{ id: 'stale-preview', availability: 'playable' }],
+      },
+      {
+        driveKey: 'drop-remote',
+        channelKey: 'drop-remote',
+        peerCount: 1,
+        previewVideos: [{ id: 'drop-preview', availability: 'playable' }],
+      },
+    ],
+    [
+      { driveKey: 'live-remote', channelKey: 'live-remote', peerCount: 1, previewVideos: [] },
+    ],
+    [
+      { id: 'cached-hydrated', channelKey: 'cached-remote', availability: 'playable', _feedSource: 'hydrated' },
+      { id: 'drop-preview', channelKey: 'drop-remote', availability: 'playable', _feedSource: 'preview' },
+    ],
+    'local',
+  )
+
+  assert.deepEqual(merged, [
+    { driveKey: 'live-remote', channelKey: 'live-remote', peerCount: 1, previewVideos: [] },
+    {
+      driveKey: 'cached-remote',
+      channelKey: 'cached-remote',
+      peerCount: 0,
+      previewVideos: [],
+    },
+  ])
 })
 
 test('reconcilePreviewFeedVideos drops stale preview cards when a channel loses live preview eligibility', () => {

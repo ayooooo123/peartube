@@ -23,7 +23,7 @@ import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
-import { filterRenderableFeedVideos, shouldRenderFeedVideo } from '@/lib/feed-hydration'
+import { filterRenderableFeedVideos, preserveRenderableFeedEntries, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && (
@@ -2156,9 +2156,15 @@ export default function HomeScreen() {
       const result = await Promise.race([feedPromise, timeoutPromise])
 
       if (result?.entries) {
-        setFeedEntries(result.entries)
-        feedCache.feedEntries = result.entries
-        for (const entry of result.entries) {
+        const mergedEntries = preserveRenderableFeedEntries(
+          feedCache.feedEntries,
+          result.entries,
+          feedVideosRef.current,
+          identity?.driveKey || null,
+        )
+        setFeedEntries(mergedEntries)
+        feedCache.feedEntries = mergedEntries
+        for (const entry of mergedEntries) {
           // Schema returns channelKey, not driveKey
           if (entry.channelKey && !channelMeta[entry.channelKey]) {
             loadChannelMeta(entry.channelKey)
@@ -2175,7 +2181,7 @@ export default function HomeScreen() {
     } finally {
       setFeedLoading(false)
     }
-  }, [rpc, channelMeta])
+  }, [rpc, channelMeta, identity?.driveKey])
 
   const loadChannelMeta = useCallback(async (driveKey: string) => {
     if (!rpc) return

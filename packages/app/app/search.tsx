@@ -32,12 +32,73 @@ function computeTextRelevance(query: string, title: string): number {
   return matchCount / qWords.length
 }
 
+function MobileSearchBar({
+  initialQuery,
+  searching,
+  onSubmit,
+}: {
+  initialQuery: string
+  searching: boolean
+  onSubmit: (query: string) => void
+}) {
+  const [queryInput, setQueryInput] = useState(initialQuery)
+
+  const handleSubmit = useCallback(() => {
+    onSubmit(queryInput)
+  }, [onSubmit, queryInput])
+
+  return (
+    <View style={{
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 16
+    }}>
+      <View style={{
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.bgSecondary,
+        borderRadius: 12,
+        paddingHorizontal: 12,
+        paddingVertical: Platform.OS === 'web' ? 8 : 10,
+      }}>
+        <Feather name="search" size={16} color={colors.textMuted} />
+        <TextInput
+          value={queryInput}
+          onChangeText={setQueryInput}
+          placeholder="Search videos..."
+          placeholderTextColor={colors.textMuted}
+          style={{ flex: 1, color: colors.text, marginLeft: 8 }}
+          autoCapitalize="none"
+          returnKeyType="search"
+          onSubmitEditing={handleSubmit}
+        />
+      </View>
+      <Pressable
+        onPress={handleSubmit}
+        disabled={!queryInput.trim() || searching}
+        style={{
+          paddingHorizontal: 14,
+          paddingVertical: 10,
+          borderRadius: 12,
+          backgroundColor: colors.primary,
+          opacity: (!queryInput.trim() || searching) ? 0.5 : 1,
+        }}
+      >
+        <Text style={{ color: '#fff', fontWeight: '600' }}>{searching ? '…' : 'Search'}</Text>
+      </Pressable>
+    </View>
+  )
+}
+
 export default function SearchScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const params = useLocalSearchParams<{ q?: string }>()
   const query = typeof params.q === 'string' ? params.q : ''
-  const [queryInput, setQueryInput] = useState(query)
 
   const { ready, rpc, platformEvents, blobServerPort } = useApp()
   const { loadAndPlayVideo, closeVideo } = useVideoPlayerContext()
@@ -65,15 +126,11 @@ export default function SearchScreen() {
     }
   }, [closeVideo])
 
-  useEffect(() => {
-    setQueryInput(query)
-  }, [query])
-
-  const submitSearch = useCallback(() => {
-    const nextQuery = queryInput.trim()
+  const submitSearch = useCallback((rawQuery: string) => {
+    const nextQuery = rawQuery.trim()
     if (!nextQuery) return
     router.replace({ pathname: '/search', params: { q: nextQuery } })
-  }, [queryInput, router])
+  }, [router])
 
   // Search when query changes
   useEffect(() => {
@@ -331,49 +388,12 @@ export default function SearchScreen() {
       >
         {/* Search input - hidden on desktop since DesktopHeader has search bar */}
         {!isDesktop && (
-          <View style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 8,
-            marginBottom: 16
-          }}>
-            <View style={{
-              flex: 1,
-              flexDirection: 'row',
-              alignItems: 'center',
-              borderWidth: 1,
-              borderColor: colors.border,
-              backgroundColor: colors.bgSecondary,
-              borderRadius: 12,
-              paddingHorizontal: 12,
-              paddingVertical: Platform.OS === 'web' ? 8 : 10,
-            }}>
-              <Feather name="search" size={16} color={colors.textMuted} />
-              <TextInput
-                value={queryInput}
-                onChangeText={setQueryInput}
-                placeholder="Search videos..."
-                placeholderTextColor={colors.textMuted}
-                style={{ flex: 1, color: colors.text, marginLeft: 8 }}
-                autoCapitalize="none"
-                returnKeyType="search"
-                onSubmitEditing={submitSearch}
-              />
-            </View>
-            <Pressable
-              onPress={submitSearch}
-              disabled={!queryInput.trim() || searching}
-              style={{
-                paddingHorizontal: 14,
-                paddingVertical: 10,
-                borderRadius: 12,
-                backgroundColor: colors.primary,
-                opacity: (!queryInput.trim() || searching) ? 0.5 : 1,
-              }}
-            >
-              <Text style={{ color: '#fff', fontWeight: '600' }}>{searching ? '…' : 'Search'}</Text>
-            </Pressable>
-          </View>
+          <MobileSearchBar
+            key={query}
+            initialQuery={query}
+            searching={searching}
+            onSubmit={submitSearch}
+          />
         )}
 
         {/* Loading state */}

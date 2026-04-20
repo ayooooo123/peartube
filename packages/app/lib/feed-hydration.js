@@ -188,6 +188,55 @@ export function applyConfirmedFeedVideoBatches(prevVideos, batches, limit = 50) 
   return sortFeedVideos(byKey.values(), limit)
 }
 
+export function applyHydratedFeedVideoBatches(
+  prevVideos,
+  batches,
+  feedEntries,
+  channelMeta,
+  identityDriveKey,
+  limit = 50,
+) {
+  const entryByChannel = new Map(
+    getVisibleSeededFeedEntries(feedEntries, Infinity)
+      .map((entry) => [entry?.channelKey || entry?.driveKey, entry])
+      .filter(([channelKey]) => Boolean(channelKey)),
+  )
+
+  const replaceChannelKeys = new Set(
+    (batches || [])
+      .filter((batch) => batch?.channelKey)
+      .filter((batch) => {
+        if (batch?.confirmed) return true
+        const entry = entryByChannel.get(batch.channelKey)
+        if (!entry) return false
+        if (!canUseFeedPreviewVideos(entry, identityDriveKey)) return false
+        return Array.isArray(batch?.videos) && batch.videos.length > 0
+      })
+      .map((batch) => batch.channelKey),
+  )
+
+  const byKey = new Map()
+  for (const video of prevVideos || []) {
+    const channelKey = video?.channelKey || video?.driveKey || null
+    if (channelKey && replaceChannelKeys.has(channelKey)) continue
+    byKey.set(getVideoIdentityKey(video), video)
+  }
+
+  for (const batch of batches || []) {
+    for (const video of batch?.videos || []) {
+      byKey.set(getVideoIdentityKey(video), video)
+    }
+  }
+
+  return reconcilePreviewFeedVideos(
+    Array.from(byKey.values()),
+    feedEntries,
+    channelMeta,
+    identityDriveKey,
+    limit,
+  )
+}
+
 export function applyConfirmedFeedEntryBatches(prevEntries, batches) {
   const confirmedByChannel = new Map(
     (batches || [])

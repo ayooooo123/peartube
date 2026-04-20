@@ -19,7 +19,7 @@ import { createInitialDiscoverFeedCacheState, snapshotDiscoverFeedCache } from '
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 import {
   applyConfirmedFeedEntryBatches,
-  applyConfirmedFeedVideoBatches,
+  applyHydratedFeedVideoBatches,
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
   getFeedVideoLoadEntries,
@@ -354,8 +354,17 @@ export default function HomeScreen() {
 
     const mergeVideos = (batches: FeedVideoBatch[]) => {
       if (feedLoadRunIdRef.current !== runId || !Array.isArray(batches) || batches.length === 0) return
-      setFeedEntries((prev) => applyConfirmedFeedEntryBatches(prev, batches))
-      setFeedVideos((prev) => applyConfirmedFeedVideoBatches(prev, batches))
+      const nextEntries = applyConfirmedFeedEntryBatches(feedEntriesRef.current, batches)
+      feedEntriesRef.current = nextEntries
+      setFeedEntries(nextEntries)
+      setFeedVideos((prev) => applyHydratedFeedVideoBatches(
+        prev,
+        batches,
+        nextEntries,
+        channelMetaRef.current,
+        identity?.driveKey || null,
+        50,
+      ))
       const incoming = batches.flatMap((batch) => batch.videos || [])
       if (incoming.length > 0) {
         fetchThumbnailsForVideos(incoming)

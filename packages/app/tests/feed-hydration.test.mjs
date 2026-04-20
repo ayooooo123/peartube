@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   applyConfirmedFeedEntryBatches,
   applyConfirmedFeedVideoBatches,
+  applyHydratedFeedVideoBatches,
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
   getFeedVideoLoadEntries,
@@ -222,6 +223,87 @@ test('applyConfirmedFeedVideoBatches preserves stale videos for unconfirmed empt
     availability: 'playable',
     _feedSource: 'preview',
   }])
+})
+
+test('applyHydratedFeedVideoBatches drops stale hydrated cards for live channels while preserving current previews', () => {
+  const merged = applyHydratedFeedVideoBatches([
+    {
+      id: 'stale-hydrated',
+      channelKey: 'live-remote',
+      uploadedAt: 40,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+    {
+      id: 'cached-zero-peer',
+      channelKey: 'cached-remote',
+      uploadedAt: 30,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+  ], [
+    {
+      channelKey: 'live-remote',
+      confirmed: false,
+      videos: [{
+        id: 'current-hydrated',
+        channelKey: 'live-remote',
+        uploadedAt: 20,
+        availability: 'playable',
+        _feedSource: 'hydrated',
+      }],
+    },
+  ], [
+    {
+      driveKey: 'live-remote',
+      channelKey: 'live-remote',
+      peerCount: 2,
+      publicBeeKey: 'bee-live',
+      previewVideos: [{
+        id: 'current-preview',
+        title: 'Current preview',
+        uploadedAt: 25,
+        availability: 'playable',
+      }],
+    },
+    {
+      driveKey: 'cached-remote',
+      channelKey: 'cached-remote',
+      peerCount: 0,
+      publicBeeKey: 'bee-cached',
+      previewVideos: [],
+    },
+  ], {
+    'live-remote': { name: 'Live Remote' },
+  }, 'local', 10)
+
+  assert.deepEqual(merged, [
+    {
+      id: 'cached-zero-peer',
+      channelKey: 'cached-remote',
+      uploadedAt: 30,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+    {
+      id: 'current-preview',
+      title: 'Current preview',
+      uploadedAt: 25,
+      availability: 'playable',
+      channelKey: 'live-remote',
+      driveKey: 'live-remote',
+      publicBeeKey: 'bee-live',
+      channel: { name: 'Live Remote' },
+      _feedSource: 'preview',
+    },
+    {
+      id: 'current-hydrated',
+      channelKey: 'live-remote',
+      uploadedAt: 20,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+  ])
 })
 
 test('preserveRenderableFeedEntries keeps zero-peer channels that still have cached playable hydrated videos', () => {

@@ -420,8 +420,10 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         // Background & PiP support
         playInBackground={true}
         playWhenInactive={true}
-        // showNotificationControls: react-native-video handles notification controls natively
-        showNotificationControls={true}
+        // Android 15/16 foreground-service hardening still crashes through react-native-video's
+        // notification/media-session path during seek. Keep PiP/background playback, but do not
+        // opt Android inline playback into notification controls.
+        showNotificationControls={Platform.OS !== 'android'}
         // Auto-enter PiP when user presses home / leaves the app
         enterPictureInPictureOnLeave={true}
         // Buffer config for Android ExoPlayer

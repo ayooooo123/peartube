@@ -748,8 +748,8 @@ export function VideoPlayerOverlay() {
 
   useEffect(() => {
     if (Platform.OS === 'web') return
-    // PiP support is now handled natively by react-native-video
-    // showNotificationControls=true means PiP is available on Android
+    // PiP support is provided by the native PiP capability plus
+    // enterPictureInPictureOnLeave, not by Android notification controls.
     setPipSupported(true)
   }, [])
 

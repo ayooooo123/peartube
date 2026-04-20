@@ -72,6 +72,28 @@ test('PearInlineVideoView adapter catches async seek failures from react-native-
   )
 })
 
+test('PearInlineVideoView does not opt Android inline playback into notification media-session controls', () => {
+  const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
+
+  assert.match(
+    source,
+    /showNotificationControls=\{Platform\.OS !== 'android'\}/,
+    'Android inline playback should not enable react-native-video notification controls, which trigger the foreground-service seek crash path',
+  )
+
+  assert.match(
+    source,
+    /playInBackground=\{true\}/,
+    'background playback support should remain enabled',
+  )
+
+  assert.match(
+    source,
+    /enterPictureInPictureOnLeave=\{true\}/,
+    'PiP support should remain enabled independently of notification controls',
+  )
+})
+
 test('react-native-video patch script avoids foreground-service starts for null or non-command intents', () => {
   const source = readAppFile('scripts/patch-react-native-video-pip.js')
 

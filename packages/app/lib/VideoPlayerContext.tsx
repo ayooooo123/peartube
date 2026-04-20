@@ -662,8 +662,9 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [setDesiredPlaying])
 
   // MediaSession listeners - removed
-  // react-native-video handles PiP, remote commands, and audio interruptions natively via showNotificationControls=true
-  // PiP state is now managed via react-native-video's onPictureInPictureStatusChanged callback
+  // PiP state is managed via react-native-video's onPictureInPictureStatusChanged callback.
+  // Android notification controls stay disabled for inline playback because their
+  // foreground-service path still crashes during seek on Android 15/16.
   useEffect(() => {
      if (!isPrimaryController) return
      const unsubscribe = _videoStatsEventEmitter.subscribe((driveKey, videoPath, stats) => {

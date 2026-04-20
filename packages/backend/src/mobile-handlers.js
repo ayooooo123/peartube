@@ -57,9 +57,9 @@ export function attachMobileHandlers(B, deps) {
   B.getChannelMeta = async (r) => { const m = await api.getChannelMeta(r.channelKey, r.publicBeeKey || null); return { name: m.name, description: m.description, videoCount: m.videoCount || 0 } }
 
   B.listVideos = async (r) => {
-    const ck = r?.channelKey || ''; if (!ck) return { videos: [] }
-    let raw = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch { return { videos: [] } }
-    return { videos: (raw || []).map((v) => {
+    const ck = r?.channelKey || ''; if (!ck) return { confirmed: false, videos: [] }
+    let raw = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch { return { confirmed: false, videos: [] } }
+    return { confirmed: false, videos: (raw || []).map((v) => {
       const id = v?.id ? String(v.id) : ''; if (!id) return null
       return {
         id,

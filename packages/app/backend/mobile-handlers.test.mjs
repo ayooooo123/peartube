@@ -109,6 +109,7 @@ test('listVideos forwards video availability metadata from backend api', async (
 
   const result = await backend.listVideos({ channelKey: 'channel-key', publicBeeKey: 'public-bee-key' })
   assert.deepEqual(result, {
+    confirmed: false,
     videos: [{
       id: 'video-1',
       title: 'Demo',

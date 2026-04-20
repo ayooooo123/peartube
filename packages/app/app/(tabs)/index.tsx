@@ -15,6 +15,7 @@ import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { createInitialDiscoverFeedCacheState, snapshotDiscoverFeedCache } from '@/lib/discover-feed-cache'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 import {
   applyConfirmedFeedEntryBatches,
@@ -94,18 +95,22 @@ export default function HomeScreen() {
   const { width: screenWidth } = useWindowDimensions()
 
   const gridColumns = getDesktopVideoGridColumns(isDesktop, screenWidth)
+  const initialDiscoverFeedStateRef = useRef(createInitialDiscoverFeedCacheState())
+  const initialDiscoverFeedState = initialDiscoverFeedStateRef.current
 
   // UI state
   const [refreshing, setRefreshing] = useState(false)
   const [refreshingMyVideos, setRefreshingMyVideos] = useState(false)
 
   // Public feed state
-  const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([])
-  const [channelMeta, setChannelMeta] = useState<Record<string, ChannelMeta>>({})
+  const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(initialDiscoverFeedState.feedEntries as FeedEntry[])
+  const [channelMeta, setChannelMeta] = useState<Record<string, ChannelMeta>>(initialDiscoverFeedState.channelMeta as Record<string, ChannelMeta>)
   const [feedLoading, setFeedLoading] = useState(false)
-  const [peerCount, setPeerCount] = useState(0)
-  const [lastFeedRefresh, setLastFeedRefresh] = useState<number | null>(null)
-  const [swarmStatus, setSwarmStatus] = useState<{ peers: number; feedConnections?: number; channels?: number } | null>(null)
+  const [peerCount, setPeerCount] = useState(initialDiscoverFeedState.peerCount)
+  const [lastFeedRefresh, setLastFeedRefresh] = useState<number | null>(initialDiscoverFeedState.lastFeedRefresh)
+  const [swarmStatus, setSwarmStatus] = useState<{ peers: number; feedConnections?: number; channels?: number } | null>(initialDiscoverFeedState.swarmStatus)
+  const feedEntriesRef = useRef(feedEntries)
+  feedEntriesRef.current = feedEntries
   const channelMetaRef = useRef(channelMeta)
   channelMetaRef.current = channelMeta
   const inflightChannelMetaLoads = useRef<Set<string>>(new Set())
@@ -117,7 +122,7 @@ export default function HomeScreen() {
   const [showingPublicFeed, setShowingPublicFeed] = useState(true)
 
   // Aggregated feed videos from all discovered channels
-  const [feedVideos, setFeedVideos] = useState<FeedVideoData[]>([])
+  const [feedVideos, setFeedVideos] = useState<FeedVideoData[]>(initialDiscoverFeedState.feedVideos as FeedVideoData[])
   const [loadingFeedVideos, setLoadingFeedVideos] = useState(false)
   const feedVideosRef = useRef(feedVideos)
   feedVideosRef.current = feedVideos
@@ -134,6 +139,17 @@ export default function HomeScreen() {
   thumbnailCacheRef.current = thumbnailCache
   const inflightThumbnailFetches = useRef<Set<string>>(new Set())
   const appState = useRef<AppStateStatus>(AppState.currentState)
+
+  useEffect(() => {
+    snapshotDiscoverFeedCache({
+      feedEntries,
+      feedVideos,
+      channelMeta,
+      peerCount,
+      lastFeedRefresh,
+      swarmStatus,
+    })
+  }, [feedEntries, feedVideos, channelMeta, peerCount, lastFeedRefresh, swarmStatus])
 
   // Fetch thumbnail for a video (non-blocking)
   const fetchThumbnail = useCallback(async (driveKey: string, videoId: string) => {
@@ -213,7 +229,7 @@ export default function HomeScreen() {
           hasBee: !!e.publicBeeKey,
         })))
         const mergedEntries = preserveRenderableFeedEntries(
-          feedEntries,
+          feedEntriesRef.current,
           result.entries,
           feedVideosRef.current,
           identity?.driveKey || null,
@@ -245,7 +261,7 @@ export default function HomeScreen() {
     } finally {
       setFeedLoading(false)
     }
-  }, [rpc, loadChannelMeta, feedEntries, identity?.driveKey])
+  }, [rpc, loadChannelMeta, identity?.driveKey])
 
   const refreshFeed = useCallback(async () => {
     if (!rpc) return

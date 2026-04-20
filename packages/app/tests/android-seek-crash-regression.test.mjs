@@ -108,4 +108,10 @@ test('react-native-video patch script guards Android 13+ playback service regist
     /fun registerPlayer\(player: ExoPlayer, from: Class<Activity>\) \{[\s\S]*try \{[\s\S]*startForeground\(notificationId, buildNotification\(mediaSession\)\)[\s\S]*catch \(e: ForegroundServiceStartNotAllowedException\)/,
     'registerPlayer should catch Android 13+ foreground promotion failures',
   )
+
+  assert.match(
+    source,
+    /if \(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O\) \{[\s\S]*try \{[\s\S]*startForeground\(PLACEHOLDER_NOTIFICATION_ID, createPlaceholderNotification\(\)\)[\s\S]*catch \(e: ForegroundServiceStartNotAllowedException\)/,
+    'onStartCommand should also catch foreground promotion failures for explicit media commands',
+  )
 })

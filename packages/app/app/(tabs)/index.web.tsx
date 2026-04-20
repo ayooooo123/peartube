@@ -23,7 +23,7 @@ import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
-import { shouldRenderFeedVideo } from '@/lib/feed-hydration'
+import { filterRenderableFeedVideos, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && (
@@ -2024,6 +2024,7 @@ export default function HomeScreen() {
   // Aggregated feed videos from discovered channels
   const [feedVideos, setFeedVideos] = useState<VideoData[]>(feedCache.feedVideos)
   const [feedVideosLoading, setFeedVideosLoading] = useState(false)
+  const renderableFeedVideos = filterRenderableFeedVideos(feedVideos, feedEntries, identity?.driveKey || null, 50)
 
   // Category filter state
   const categories = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
@@ -2609,12 +2610,12 @@ export default function HomeScreen() {
               ))}
             </div>
 
-            {(feedLoading || feedVideosLoading) && feedVideos.length === 0 ? (
+            {(feedLoading || feedVideosLoading) && renderableFeedVideos.length === 0 ? (
               <div style={styles.loadingSection}>
                 <ActivityIndicator color={colors.primary} />
                 <p style={styles.loadingText}>Discovering videos...</p>
               </div>
-            ) : feedVideos.length === 0 && feedEntries.length === 0 ? (
+            ) : renderableFeedVideos.length === 0 ? (
               <div style={styles.emptyDiscover}>
                 <GlobeIcon color={colors.textMuted} size={32} />
                 <p style={styles.emptyTitle}>No videos discovered yet</p>
@@ -2624,7 +2625,7 @@ export default function HomeScreen() {
               </div>
             ) : (
               <VideoGrid
-                videos={feedVideos
+                videos={renderableFeedVideos
                   .filter(v => activeCategory === 'All' || (v as any).category === activeCategory)
                   .map(v => ({
                     id: v.id,
@@ -2635,11 +2636,11 @@ export default function HomeScreen() {
                     uploadedAt: v.uploadedAt ? new Date(v.uploadedAt).toISOString() : undefined,
                   }))}
                 onVideoPress={(videoId) => {
-                  const video = feedVideos.find(v => v.id === videoId)
+                  const video = renderableFeedVideos.find(v => v.id === videoId)
                   if (video) playVideo(video)
                 }}
                 onChannelPress={(videoId) => {
-                  const video = feedVideos.find(v => v.id === videoId)
+                  const video = renderableFeedVideos.find(v => v.id === videoId)
                   if (video?.channelKey) { window.location.hash = '#/channel/' + video.channelKey }
                 }}
               />

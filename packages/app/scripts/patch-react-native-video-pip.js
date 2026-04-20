@@ -345,7 +345,7 @@ const PLAYBACK_SERVICE_ON_START_TARGET = [
   '    }',
 ].join('\n')
 
-const PLAYBACK_SERVICE_ON_START_REPLACEMENT = [
+const PLAYBACK_SERVICE_ON_START_LEGACY_REPLACEMENT = [
   '    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {',
   `        // ${MARKER}: Android 15/16 can redeliver or restart the service with a null/non-command intent`,
   '        if (intent == null) {',
@@ -376,9 +376,45 @@ const PLAYBACK_SERVICE_ON_START_REPLACEMENT = [
   '    }',
 ].join('\n')
 
+const PLAYBACK_SERVICE_ON_START_REPLACEMENT = [
+  '    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {',
+  `        // ${MARKER}: Android 15/16 can redeliver or restart the service with a null/non-command intent`,
+  '        if (intent == null) {',
+  '            DebugLog.w(TAG, "Ignoring null onStartCommand intent")',
+  '            return START_NOT_STICKY',
+  '        }',
+  '',
+  '        val playerId = intent.getIntExtra("PLAYER_ID", -1)',
+  '        val actionCommand = intent.getStringExtra("ACTION")',
+  '',
+  '        if (playerId < 0) {',
+  '            DebugLog.w(TAG, "Received Command without playerId")',
+  '            return START_NOT_STICKY',
+  '        }',
+  '',
+  '        if (actionCommand == null) {',
+  '            DebugLog.w(TAG, "Received Command without action command")',
+  '            return START_NOT_STICKY',
+  '        }',
+  '',
+  '        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {',
+  '            try {',
+  '                startForeground(PLACEHOLDER_NOTIFICATION_ID, createPlaceholderNotification())',
+  '            } catch (e: ForegroundServiceStartNotAllowedException) {',
+  '                DebugLog.w(TAG, "Skipping onStartCommand foreground promotion: " + e.message)',
+  '                return START_NOT_STICKY',
+  '            }',
+  '        }',
+  '',
+  '        val session = mediaSessionsList.values.find { s -> s.player.hashCode() == playerId } ?: return START_NOT_STICKY',
+  '        handleCommand(commandFromString(actionCommand), session)',
+  '        return START_NOT_STICKY',
+  '    }',
+].join('\n')
+
 // ─── Apply ────────────────────────────────────────────────────────────────────
 
-function applyPatch(filePath, target, replacement, label) {
+function applyPatch(filePath, target, replacement, label, alternatives = []) {
   if (!fs.existsSync(filePath)) {
     throw new Error(`${label}: file not found: ${filePath}`)
   }
@@ -387,10 +423,13 @@ function applyPatch(filePath, target, replacement, label) {
     console.log(`${label}: already patched.`)
     return false
   }
-  if (!source.includes(target)) {
+
+  const matchingTarget = [target, ...alternatives].find((candidate) => source.includes(candidate))
+  if (!matchingTarget) {
     throw new Error(`${label}: target block not found`)
   }
-  fs.writeFileSync(filePath, source.replace(target, replacement))
+
+  fs.writeFileSync(filePath, source.replace(matchingTarget, replacement))
   console.log(`${label}: patched.`)
   return true
 }
@@ -409,7 +448,7 @@ function applyAllPatches() {
   changed = applyPatch(VIDEO_PLAYBACK_SERVICE_PATH, PLAYBACK_SERVICE_IMPORT_TARGET, PLAYBACK_SERVICE_IMPORT_REPLACEMENT, 'Playback service import guard') || changed
   changed = applyPatch(EXOPLAYER_VIEW_PATH, EXOPLAYER_SERVICE_START_TARGET, EXOPLAYER_SERVICE_START_REPLACEMENT, 'Playback service startup guard') || changed
   changed = applyPatch(VIDEO_PLAYBACK_SERVICE_PATH, PLAYBACK_SERVICE_REGISTER_PLAYER_TARGET, PLAYBACK_SERVICE_REGISTER_PLAYER_REPLACEMENT, 'Playback service register guard') || changed
-  changed = applyPatch(VIDEO_PLAYBACK_SERVICE_PATH, PLAYBACK_SERVICE_ON_START_TARGET, PLAYBACK_SERVICE_ON_START_REPLACEMENT, 'Playback service foreground guard') || changed
+  changed = applyPatch(VIDEO_PLAYBACK_SERVICE_PATH, PLAYBACK_SERVICE_ON_START_TARGET, PLAYBACK_SERVICE_ON_START_REPLACEMENT, 'Playback service foreground guard', [PLAYBACK_SERVICE_ON_START_LEGACY_REPLACEMENT]) || changed
   return changed
 }
 

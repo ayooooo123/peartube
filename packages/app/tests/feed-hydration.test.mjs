@@ -11,6 +11,7 @@ import {
   getVisibleSeededFeedEntries,
   reconcilePreviewFeedVideos,
   shouldRenderFeedVideo,
+  filterRenderableFeedVideos,
 } from '../lib/feed-hydration.js'
 
 test('getMissingChannelMetaRequests dedupes channels and respects the visible-first limit', () => {
@@ -222,6 +223,89 @@ test('applyConfirmedFeedVideoBatches preserves stale videos for unconfirmed empt
   }])
 })
 
+test('reconcilePreviewFeedVideos drops stale preview cards when a channel loses live preview eligibility', () => {
+  const reconciled = reconcilePreviewFeedVideos([
+    {
+      id: 'stale-preview',
+      channelKey: 'remote',
+      uploadedAt: 10,
+      availability: 'playable',
+      _feedSource: 'preview',
+    },
+    {
+      id: 'hydrated-video',
+      channelKey: 'remote',
+      uploadedAt: 30,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+  ], [
+    {
+      channelKey: 'remote',
+      peerCount: 0,
+      publicBeeKey: 'bee-remote',
+      previewVideos: [],
+    },
+  ], [])
+
+  assert.deepEqual(reconciled, [
+    {
+      id: 'hydrated-video',
+      channelKey: 'remote',
+      uploadedAt: 30,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+  ])
+})
+
+test('filterRenderableFeedVideos drops remote cards once a channel no longer has live peer eligibility', () => {
+  const filtered = filterRenderableFeedVideos([
+    {
+      id: 'cached-hydrated',
+      channelKey: 'cached-remote',
+      uploadedAt: 10,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+    {
+      id: 'live-hydrated',
+      channelKey: 'live-remote',
+      uploadedAt: 20,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+    {
+      id: 'local-video',
+      channelKey: 'local',
+      uploadedAt: 30,
+      availability: 'unknown',
+      _feedSource: 'local-seed',
+    },
+  ], [
+    { driveKey: 'cached-remote', peerCount: 0, publicBeeKey: 'bee-cached' },
+    { driveKey: 'live-remote', peerCount: 2, publicBeeKey: 'bee-live' },
+    { driveKey: 'local', source: 'local', peerCount: 0, publicBeeKey: 'bee-local' },
+  ], 'local', 10)
+
+  assert.deepEqual(filtered, [
+    {
+      id: 'local-video',
+      channelKey: 'local',
+      uploadedAt: 30,
+      availability: 'unknown',
+      _feedSource: 'local-seed',
+    },
+    {
+      id: 'live-hydrated',
+      channelKey: 'live-remote',
+      uploadedAt: 20,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+  ])
+})
+
 test('reconcilePreviewFeedVideos replaces preview-derived cards for visible channels', () => {
   const reconciled = reconcilePreviewFeedVideos([
     {
@@ -260,13 +344,6 @@ test('reconcilePreviewFeedVideos replaces preview-derived cards for visible chan
       uploadedAt: 30,
       availability: 'playable',
       _feedSource: 'hydrated',
-    },
-    {
-      id: 'other-preview',
-      channelKey: 'other',
-      uploadedAt: 15,
-      availability: 'playable',
-      _feedSource: 'preview',
     },
   ])
 })

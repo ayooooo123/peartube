@@ -69,6 +69,25 @@ function canUseFeedPreviewVideos(entry, identityDriveKey) {
   return (entry?.peerCount ?? 0) > 0
 }
 
+export function filterRenderableFeedVideos(feedVideos, feedEntries, identityDriveKey, limit = 50) {
+  const entryByChannel = new Map(
+    getVisibleSeededFeedEntries(feedEntries, Infinity)
+      .map((entry) => [entry?.channelKey || entry?.driveKey, entry])
+      .filter(([channelKey]) => Boolean(channelKey)),
+  )
+
+  const filtered = (feedVideos || []).filter((video) => {
+    const channelKey = video?.channelKey || video?.driveKey || null
+    if (!channelKey) return false
+    if (!shouldRenderFeedVideo({ video, identityDriveKey })) return false
+    const entry = entryByChannel.get(channelKey)
+    if (!entry) return false
+    return canUseFeedPreviewVideos(entry, identityDriveKey)
+  })
+
+  return sortFeedVideos(filtered, limit)
+}
+
 export function getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey, limit = 15) {
   const videos = []
   const seen = new Set()
@@ -164,19 +183,12 @@ export function applyConfirmedFeedEntryBatches(prevEntries, batches) {
 }
 
 export function reconcilePreviewFeedVideos(prevVideos, feedEntries, channelMeta, identityDriveKey, limit = 50) {
-  const previewChannelKeys = new Set(
-    getVisibleSeededFeedEntries(feedEntries, Infinity)
-      .filter((entry) => canUseFeedPreviewVideos(entry, identityDriveKey))
-      .map((entry) => entry?.channelKey || entry?.driveKey)
-      .filter(Boolean),
-  )
-
   const previewVideos = getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey, limit)
   const byKey = new Map()
 
   for (const video of prevVideos || []) {
     const channelKey = video?.channelKey || video?.driveKey || null
-    if (video?._feedSource === 'preview' && channelKey && previewChannelKeys.has(channelKey)) {
+    if (video?._feedSource === 'preview' && channelKey) {
       continue
     }
     byKey.set(getVideoIdentityKey(video), video)

@@ -26,6 +26,7 @@ import {
   getVisibleSeededFeedEntries,
   reconcilePreviewFeedVideos,
   shouldRenderFeedVideo,
+  filterRenderableFeedVideos,
 } from '@/lib/feed-hydration'
 
 // Public feed types
@@ -687,18 +688,23 @@ export default function HomeScreen() {
   const visibleSeededFeedEntries = getVisibleSeededFeedEntries(feedEntries)
   const seededFeedChannelKeys = new Set(visibleSeededFeedEntries.map((entry) => entry.channelKey || entry.driveKey).filter(Boolean))
 
-  const feedVideosWithThumbs: VideoData[] = feedVideos
-    .filter(v => seededFeedChannelKeys.has(v.channelKey))
-    .map(v => {
-      const cacheKey = `${v.channelKey}:${v.id}`
-      return {
-        ...v,
-        channel: {
-          name: channelMeta[v.channelKey]?.name || v.channel?.name || 'Unknown'
-        },
-        thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
-      }
-    })
+  const feedVideosWithThumbs: VideoData[] = filterRenderableFeedVideos(
+    feedVideos
+      .filter(v => seededFeedChannelKeys.has(v.channelKey))
+      .map(v => {
+        const cacheKey = `${v.channelKey}:${v.id}`
+        return {
+          ...v,
+          channel: {
+            name: channelMeta[v.channelKey]?.name || v.channel?.name || 'Unknown'
+          },
+          thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
+        }
+      }),
+    feedEntries,
+    identity?.driveKey || null,
+    50,
+  )
 
   const backendConnecting = !ready
   const backendLoading = Boolean(loading)
@@ -913,7 +919,7 @@ export default function HomeScreen() {
               ))}
             </ScrollView>
 
-            {(feedLoading || loadingFeedVideos) && feedVideos.length === 0 ? (
+            {(feedLoading || loadingFeedVideos) && feedVideosWithThumbs.length === 0 ? (
               <View className="py-8 items-center">
                 <ActivityIndicator color={colors.primary} />
                 <Text className="text-caption text-pear-text-muted mt-2">Discovering videos...</Text>

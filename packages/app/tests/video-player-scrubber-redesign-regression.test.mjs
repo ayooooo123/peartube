@@ -37,8 +37,28 @@ test('Scrubber source keeps the redesign geometry aligned with the spec', () => 
   )
   assert.match(
     source,
-    /const verticalDistance = Math\.abs\(evt\.y - startY\)/,
-    'Scrubber should derive fine-scrubbing speed from the vertical drift distance',
+    /const startYSV = useSharedValue\(0\)/,
+    'Scrubber should store the gesture startY in a shared value so release worklets cannot lose the field on Android',
+  )
+  assert.match(
+    source,
+    /const dragOffsetSV = useSharedValue\(0\)/,
+    'Scrubber should store drag offset in a shared value instead of a plain closure var shared across worklets',
+  )
+  assert.match(
+    source,
+    /const verticalDistance = Math\.abs\(evt\.y - startYSV\.value\)/,
+    'Scrubber should derive fine-scrubbing speed from the vertical drift distance using the shared gesture startY',
+  )
+  assert.doesNotMatch(
+    source,
+    /let startY = 0/,
+    'Scrubber should not rely on a plain worklet closure var for startY because Hermes release builds can drop it',
+  )
+  assert.doesNotMatch(
+    source,
+    /let dragOffset = 0/,
+    'Scrubber should not rely on a plain worklet closure var for dragOffset because worklet callbacks do not reliably share mutable JS locals',
   )
   assert.match(
     source,
@@ -57,7 +77,7 @@ test('Scrubber source keeps the redesign geometry aligned with the spec', () => 
   )
   assert.match(
     source,
-    /<View style=\{styles\.scrubberTooltipBubble\}>[\s\S]*<View style=\{styles\.scrubberTooltipArrow\} \/>/,
+    /<View style=\{styles\.scrubberTooltipBubble\}[^>]*>[\s\S]*<View style=\{styles\.scrubberTooltipArrow\} \/>/,
     'Scrubber should render the tooltip arrow outside the pill body so the arrow looks like a pointer instead of extra bubble padding',
   )
 })

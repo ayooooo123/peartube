@@ -82,7 +82,13 @@ export function filterRenderableFeedVideos(feedVideos, feedEntries, identityDriv
     if (!shouldRenderFeedVideo({ video, identityDriveKey })) return false
     const entry = entryByChannel.get(channelKey)
     if (!entry) return false
-    return canUseFeedPreviewVideos(entry, identityDriveKey)
+    if (canUseFeedPreviewVideos(entry, identityDriveKey)) return true
+
+    // Cached/playable hydrated cards should remain visible even when the source
+    // channel currently has zero live peers. Only preview-only cards need the
+    // stricter live-peer gating, otherwise locally cached playable videos vanish
+    // from Discover between sessions.
+    return video?._feedSource !== 'preview'
   })
 
   return sortFeedVideos(filtered, limit)

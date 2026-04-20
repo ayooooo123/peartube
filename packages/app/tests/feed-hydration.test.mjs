@@ -259,7 +259,7 @@ test('reconcilePreviewFeedVideos drops stale preview cards when a channel loses 
   ])
 })
 
-test('filterRenderableFeedVideos drops remote cards once a channel no longer has live peer eligibility', () => {
+test('filterRenderableFeedVideos keeps cached playable hydrated videos while still dropping stale preview-only cards', () => {
   const filtered = filterRenderableFeedVideos([
     {
       id: 'cached-hydrated',
@@ -267,6 +267,13 @@ test('filterRenderableFeedVideos drops remote cards once a channel no longer has
       uploadedAt: 10,
       availability: 'playable',
       _feedSource: 'hydrated',
+    },
+    {
+      id: 'cached-preview',
+      channelKey: 'cached-remote',
+      uploadedAt: 9,
+      availability: 'playable',
+      _feedSource: 'preview',
     },
     {
       id: 'live-hydrated',
@@ -300,6 +307,13 @@ test('filterRenderableFeedVideos drops remote cards once a channel no longer has
       id: 'live-hydrated',
       channelKey: 'live-remote',
       uploadedAt: 20,
+      availability: 'playable',
+      _feedSource: 'hydrated',
+    },
+    {
+      id: 'cached-hydrated',
+      channelKey: 'cached-remote',
+      uploadedAt: 10,
       availability: 'playable',
       _feedSource: 'hydrated',
     },

@@ -195,7 +195,12 @@ export function reconcilePreviewFeedVideos(prevVideos, feedEntries, channelMeta,
   }
 
   for (const video of previewVideos) {
-    byKey.set(getVideoIdentityKey(video), video)
+    const key = getVideoIdentityKey(video)
+    const existing = byKey.get(key)
+    if (existing && existing?._feedSource !== 'preview') {
+      continue
+    }
+    byKey.set(key, video)
   }
 
   return sortFeedVideos(byKey.values(), limit)

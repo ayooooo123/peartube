@@ -348,6 +348,45 @@ test('reconcilePreviewFeedVideos replaces preview-derived cards for visible chan
   ])
 })
 
+test('reconcilePreviewFeedVideos keeps hydrated cards when refreshed preview data for the same video arrives later', () => {
+  const reconciled = reconcilePreviewFeedVideos([
+    {
+      id: 'same-video',
+      channelKey: 'remote',
+      uploadedAt: 30,
+      availability: 'playable',
+      title: 'Hydrated title',
+      blobId: 'blob-123',
+      thumbnailBlobId: 'thumb-123',
+      _feedSource: 'hydrated',
+    },
+  ], [
+    {
+      channelKey: 'remote',
+      peerCount: 1,
+      previewVideos: [{
+        id: 'same-video',
+        uploadedAt: 30,
+        availability: 'playable',
+        title: 'Preview title',
+      }],
+    },
+  ], [])
+
+  assert.deepEqual(reconciled, [
+    {
+      id: 'same-video',
+      channelKey: 'remote',
+      uploadedAt: 30,
+      availability: 'playable',
+      title: 'Hydrated title',
+      blobId: 'blob-123',
+      thumbnailBlobId: 'thumb-123',
+      _feedSource: 'hydrated',
+    },
+  ])
+})
+
 test('applyConfirmedFeedEntryBatches clears stale preview manifests once a channel is confirmed empty', () => {
   const updated = applyConfirmedFeedEntryBatches([
     {

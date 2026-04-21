@@ -62,6 +62,7 @@ import {
   DESKTOP_MINI_PADDING,
   DESKTOP_MINI_CONTROLS_HEIGHT,
   PLAYBACK_SPEEDS,
+  SEEK_STEP_SECONDS,
   // Formatters
   formatSize,
   formatTimeAgo,
@@ -2023,9 +2024,9 @@ export function VideoPlayerOverlay() {
     }
   }, [effectiveDuration, isSeeking, seekPosition, isCasting, cast, seekTo])
 
-  // Handle double-tap seek - 10s forward/backward
+  // Handle double-tap seek - ±SEEK_STEP_SECONDS forward/backward
   const handleDoubleTapSeek = useCallback((direction: 'left' | 'right') => {
-    const delta = direction === 'left' ? -10 : 10
+    const delta = direction === 'left' ? -SEEK_STEP_SECONDS : SEEK_STEP_SECONDS
     if (isCasting) {
       const nextTime = Math.max(0, Math.min(effectiveCurrentTime + delta, effectiveDuration || 0))
       cast.seek(nextTime)
@@ -2852,7 +2853,7 @@ export function VideoPlayerOverlay() {
           ) : (
             <Feather name="rotate-cw" color="#fff" size={32} />
           )}
-          <Text style={styles.seekFeedbackText}>10s</Text>
+          <Text style={styles.seekFeedbackText}>{`${SEEK_STEP_SECONDS}s`}</Text>
         </View>
       )}
 

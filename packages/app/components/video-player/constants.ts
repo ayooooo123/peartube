@@ -84,6 +84,9 @@ export const DESKTOP_MINI_HEIGHT = 180
 export const DESKTOP_MINI_PADDING = 24
 export const DESKTOP_MINI_CONTROLS_HEIGHT = 48
 
+// Double-tap / button seek step (seconds)
+export const SEEK_STEP_SECONDS = 10
+
 // Comments pagination
 export const COMMENTS_PER_PAGE = 25
 

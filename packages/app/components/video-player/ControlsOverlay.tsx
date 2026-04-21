@@ -10,6 +10,7 @@ import { Pressable, Text } from 'react-native'
 import Animated from 'react-native-reanimated'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import { styles } from './styles'
+import { SEEK_STEP_SECONDS } from './constants'
 
 interface ControlsOverlayProps {
   visible: boolean
@@ -35,7 +36,7 @@ export const ControlsOverlay = memo(function ControlsOverlay({
       {/* Seek backward button */}
       <Pressable style={styles.controlButton} onPress={onSeekBackward}>
         <Feather name="rotate-ccw" color="#fff" size={32} />
-        <Text style={styles.controlButtonText}>10s</Text>
+        <Text style={styles.controlButtonText}>{`${SEEK_STEP_SECONDS}s`}</Text>
       </Pressable>
 
       {/* Play/Pause button */}
@@ -50,7 +51,7 @@ export const ControlsOverlay = memo(function ControlsOverlay({
       {/* Seek forward button */}
       <Pressable style={styles.controlButton} onPress={onSeekForward}>
         <Feather name="rotate-cw" color="#fff" size={32} />
-        <Text style={styles.controlButtonText}>10s</Text>
+        <Text style={styles.controlButtonText}>{`${SEEK_STEP_SECONDS}s`}</Text>
       </Pressable>
     </Animated.View>
   )

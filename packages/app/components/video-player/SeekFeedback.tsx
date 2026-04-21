@@ -8,6 +8,7 @@ import { memo } from 'react'
 import { View, Text } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import { styles } from './styles'
+import { SEEK_STEP_SECONDS } from './constants'
 
 interface SeekFeedbackProps {
   direction: 'left' | 'right' | null
@@ -28,7 +29,7 @@ export const SeekFeedback = memo(function SeekFeedback({ direction }: SeekFeedba
       ) : (
         <Feather name="rotate-cw" color="#fff" size={32} />
       )}
-      <Text style={styles.seekFeedbackText}>10s</Text>
+      <Text style={styles.seekFeedbackText}>{`${SEEK_STEP_SECONDS}s`}</Text>
     </View>
   )
 })

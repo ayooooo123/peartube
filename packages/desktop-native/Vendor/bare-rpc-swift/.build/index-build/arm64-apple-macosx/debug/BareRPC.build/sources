@@ -1,9 +1,0 @@
-/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/CommandRouter.swift
-/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingEvent.swift
-/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingRequest.swift
-/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingStream.swift
-/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/Messages.swift
-/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/OutgoingStream.swift
-/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPC.swift
-/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPCError.swift
-/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/StreamConstants.swift

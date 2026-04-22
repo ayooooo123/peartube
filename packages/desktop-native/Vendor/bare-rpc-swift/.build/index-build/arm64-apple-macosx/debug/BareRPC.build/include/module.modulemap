@@ -1,3 +1,0 @@
-module BareRPC {
-    header "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/include/BareRPC-Swift.h"
-}

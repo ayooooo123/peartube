@@ -1,9 +1,0 @@
-# pack-refs with: peeled fully-peeled sorted 
-dc0fa2396035cb554eebbd2e0ebf71508e5f4b46 refs/heads/add-format-lint-to-github-workflow
-834cfe8d0037143d9549c88f44a0f78cba1bfdc7 refs/heads/main
-8f78907065315389b7588c62ca8dd80d32ba7ebc refs/pull/1/head
-f175af60a7f0c94ca9c6c3fcc8ca0bbe71c11d47 refs/pull/2/head
-d024d2038263b8666e34ba84061fd3c543a73ed5 refs/pull/3/head
-06c426a13bc7629cfdf20f2b17f60004ef35aab4 refs/pull/4/head
-dc0fa2396035cb554eebbd2e0ebf71508e5f4b46 refs/pull/5/head
-a56a9cc298f2b3a2436e941b561171792d791c71 refs/pull/6/head

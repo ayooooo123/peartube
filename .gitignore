@@ -97,3 +97,4 @@ logfile
 
 # Artifacts
 **/.artifacts/
+packages/desktop-native/Vendor/bare-rpc-swift/.build/

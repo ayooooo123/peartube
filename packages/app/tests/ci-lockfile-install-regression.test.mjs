@@ -14,6 +14,7 @@ function readFile(relativePath) {
 
 test('test workflow avoids root npm cache and npm ci because the repo has no root lockfile', () => {
   const workflow = readFile('.github/workflows/test.yml')
+  const rootPackage = JSON.parse(readFile('package.json'))
 
   assert.doesNotMatch(
     workflow,
@@ -29,5 +30,15 @@ test('test workflow avoids root npm cache and npm ci because the repo has no roo
     workflow,
     /npm run install:all/,
     'test workflow should install dependencies via the repo install:all script',
+  )
+  assert.match(
+    rootPackage.scripts['install:all'],
+    /packages\/spec/,
+    'install:all should install packages/spec so schema generation can require hrpc-swift in CI',
+  )
+  assert.match(
+    rootPackage.scripts['install:all'],
+    /packages\/platform/,
+    'install:all should install packages/platform so typecheck has its local deps in CI',
   )
 })

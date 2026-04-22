@@ -29,6 +29,7 @@ const sourceFiles = [
   path.join(repoRoot, 'packages', 'bare-tls', 'package.json'),
   path.join(repoRoot, 'packages', 'platform', 'package.json'),
   path.join(repoRoot, 'packages', 'spec', 'package.json'),
+  path.join(repoRoot, 'packages', 'spec', 'schema.cjs'),
 ]
 
 const watchedExtensions = new Set(['.js', '.mjs', '.cjs', '.ts', '.json'])
@@ -91,6 +92,18 @@ function bundlesAreFresh(sourceNewestMtimeMs) {
   })
 }
 
+function runSchema() {
+  const result = spawnSync('npm', ['run', 'schema'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: process.env,
+  })
+
+  if (result.status !== 0) {
+    process.exit(result.status || 1)
+  }
+}
+
 function runBundleBackend() {
   const result = spawnSync('npm', ['run', 'bundle:backend'], {
     cwd: projectRoot,
@@ -103,6 +116,11 @@ function runBundleBackend() {
   }
 }
 
+function runPrepareMobileBackend() {
+  runSchema()
+  runBundleBackend()
+}
+
 const forced = process.env.PEARTUBE_FORCE_BUNDLE === '1'
 const sourceNewest = getSourceNewestMtimeMs()
 const missingBundles = !hasAllBundles()
@@ -111,7 +129,7 @@ const staleBundles = !missingBundles && !bundlesAreFresh(sourceNewest)
 if (forced || missingBundles || staleBundles) {
   const reason = forced ? 'forced rebuild' : missingBundles ? 'missing bundles' : 'stale bundles'
   console.log(`[bundle:backend:ensure] Rebuilding (${reason})`)
-  runBundleBackend()
+  runPrepareMobileBackend()
 } else {
   console.log('[bundle:backend:ensure] Bundles are up to date')
 }

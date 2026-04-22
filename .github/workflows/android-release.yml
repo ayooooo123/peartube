@@ -49,9 +49,8 @@ jobs:
           cd packages/backend && npm ci && cd ../..
           cd packages/app && npm ci --legacy-peer-deps && cd ../..
 
-      - name: Bundle backend
-        working-directory: packages/app
-        run: npm run bundle:backend
+      - name: Generate HRPC spec and bundle backend
+        run: npm run prepare:mobile-backend
 
       - name: Expo prebuild (Android)
         working-directory: packages/app

@@ -18,6 +18,7 @@
     "desktop:native:test": "npm run test --prefix packages/desktop-native",
     "desktop:native:run": "npm run run --prefix packages/desktop-native",
     "schema": "cd packages/spec && rm -rf spec/hrpc spec/schema && node schema.cjs",
+    "prepare:mobile-backend": "npm run schema && npm run bundle:backend",
     "bundle:backend": "npm run bundle:backend --prefix packages/app",
     "build:ios": "npm run build:ios --prefix packages/app",
     "build:ios:device": "npm run build:ios:device --prefix packages/app",

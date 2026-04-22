@@ -22,11 +22,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate and init required submodules
+        shell: bash
+        run: |
+          declare -A EXPECTED_URLS=(
+            [packages/bare-ffmpeg]=https://github.com/ayooooo123/bare-ffmpeg.git
+            [packages/bare-mpv]=https://github.com/ayooooo123/bare-mpv.git
+          )
+
+          mapfile -t SUBMODULE_PATHS < <(git ls-files --stage | awk '$1 == "160000" {print $4}')
+          if [ "${#SUBMODULE_PATHS[@]}" -eq 0 ]; then
+            echo "::error::No git submodules found in the checked-out tree"
+            exit 1
+          fi
+
+          for path in "${SUBMODULE_PATHS[@]}"; do
+            expected="${EXPECTED_URLS[$path]:-}"
+            if [ -z "$expected" ]; then
+              echo "::error::Unexpected git submodule path in repository tree: $path"
+              exit 1
+            fi
+
+            actual=$(git config -f .gitmodules --get "submodule.$path.url" || true)
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::Unexpected submodule URL for $path: $actual"
+              exit 1
+            fi
+          done
+
+          git submodule sync -- "${SUBMODULE_PATHS[@]}"
+          git submodule update --init --depth 1 -- "${SUBMODULE_PATHS[@]}"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20.x
-          cache: 'npm'
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -39,10 +69,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install dependencies
-        run: |
-          npm ci
-          cd packages/backend && npm ci && cd ../..
-          cd packages/app && npm ci --legacy-peer-deps && cd ../..
+        run: npm run install:all
 
       - name: Generate HRPC spec and bundle backend
         run: npm run prepare:mobile-backend
@@ -55,9 +82,9 @@ jobs:
         working-directory: packages/app/android
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Upload debug APK
+      - name: Upload debug APKs
         uses: actions/upload-artifact@v4
         with:
           name: peartube-debug-apks
-          path: packages/app/android/app/build/outputs/apk/debug/*.apk
+          path: packages/app/android/app/build/outputs/apk/**/*.apk
           retention-days: 7

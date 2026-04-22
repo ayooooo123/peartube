@@ -26,6 +26,16 @@ test('Android GitHub workflows regenerate HRPC spec and backend bundles before A
       /npm run prepare:mobile-backend/,
       `${name} workflow should regenerate spec+bundle before Android packaging`,
     )
+    assert.doesNotMatch(
+      source,
+      /cache:\s*'npm'/,
+      `${name} workflow should not enable setup-node npm cache without a root lockfile`,
+    )
+    assert.match(
+      source,
+      /npm run install:all/,
+      `${name} workflow should use the repo install:all flow instead of root npm ci`,
+    )
   }
 })
 

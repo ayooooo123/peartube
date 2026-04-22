@@ -38,7 +38,7 @@ test('native root layout arms the backend startup timeout before awaiting initPl
   assert.ok(initIndex < fallbackIndex, 'fallback ready mark should happen after initPlatformRPC resolves')
 })
 
-test('mobile backend entry keeps cast and transcode modules out of the mandatory startup import batch', () => {
+test('mobile backend entry keeps cast, thumbnail, and native-lock modules out of the mandatory startup import batch', () => {
   const source = readAppFile('backend/index.mjs')
   const loadBackendModulesBody =
     source.match(/async function loadBackendModules\(\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
@@ -46,7 +46,13 @@ test('mobile backend entry keeps cast and transcode modules out of the mandatory
   assert.ok(loadBackendModulesBody, 'loadBackendModules should exist')
   assert.doesNotMatch(loadBackendModulesBody, /import\('\.\/transcoder\.mjs'\)/)
   assert.doesNotMatch(loadBackendModulesBody, /import\('@peartube\/backend\/transcode\/cast-transcoder'\)/)
+  assert.doesNotMatch(loadBackendModulesBody, /import\('@peartube\/backend\/thumbnail'\)/)
+  assert.doesNotMatch(loadBackendModulesBody, /import\('bare-http1'\)/)
+  assert.doesNotMatch(loadBackendModulesBody, /import\('fs-native-extensions'\)/)
   assert.match(source, /attachLazyCastHandlers/)
+  assert.match(source, /ensureBackendThumbnailModule/)
+  assert.match(source, /ensureHttpModule/)
+  assert.match(source, /ensureFsNativeExtensionsModule/)
 })
 
 test('backend orchestrator defers warm-up behind startup gates and does not force a boot-time feed sync request', () => {

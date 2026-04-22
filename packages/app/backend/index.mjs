@@ -27,28 +27,26 @@ let castTranscoder = null
 let fsNativeExtensions = null
 let transcoderPromise = null
 let castTranscoderPromise = null
+let thumbnailModule = null
+let thumbnailModulePromise = null
+let httpModulePromise = null
+let fsNativeExtensionsPromise = null
 
 async function loadBackendModules() {
   const [
     specMod,
     orchestratorMod,
     storageMod,
-    thumbnailMod,
     pathMod,
     fsMod,
-    b4aMod,
-    http1Mod,
-    fsNativeExtensionsMod
+    b4aMod
   ] = await Promise.all([
     import('@peartube/spec'),
     import('@peartube/backend/orchestrator'),
     import('@peartube/backend/storage'),
-    import('@peartube/backend/thumbnail'),
     import('bare-path'),
     import('bare-fs'),
-    import('b4a'),
-    import('bare-http1'),
-    import('fs-native-extensions')
+    import('b4a')
   ])
 
   HRPC = specMod?.default ?? specMod
@@ -58,12 +56,9 @@ async function loadBackendModules() {
   setCastActive = storageMod?.setCastActive
   isCastActive = storageMod?.isCastActive
   prefetchVideoForCast = storageMod?.prefetchVideoForCast
-  generateAndStoreThumbnail = thumbnailMod?.generateAndStoreThumbnail
   path = pathMod?.default ?? pathMod
   fs = fsMod?.default ?? fsMod
   b4a = b4aMod?.default ?? b4aMod
-  http1 = http1Mod?.default ?? http1Mod
-  fsNativeExtensions = fsNativeExtensionsMod?.default ?? fsNativeExtensionsMod
 
   const checks = {
     HRPC,
@@ -73,12 +68,9 @@ async function loadBackendModules() {
     setCastActive,
     isCastActive,
     prefetchVideoForCast,
-    generateAndStoreThumbnail,
     path,
     fs,
-    b4a,
-    http1,
-    fsNativeExtensions
+    b4a
   }
 
   const missing = Object.entries(checks)
@@ -88,6 +80,58 @@ async function loadBackendModules() {
   if (missing.length) {
     throw new Error(`Missing required backend modules: ${missing.join(', ')}`)
   }
+}
+
+async function ensureBackendThumbnailModule() {
+  if (thumbnailModule) return thumbnailModule
+  if (!thumbnailModulePromise) {
+    thumbnailModulePromise = import('@peartube/backend/thumbnail')
+      .then((module) => {
+        thumbnailModule = module
+        generateAndStoreThumbnail = module?.generateAndStoreThumbnail
+        return module
+      })
+      .catch((error) => {
+        thumbnailModulePromise = null
+        throw error
+      })
+  }
+
+  return thumbnailModulePromise
+}
+
+async function ensureHttpModule() {
+  if (http1) return http1
+  if (!httpModulePromise) {
+    httpModulePromise = import('bare-http1')
+      .then((module) => {
+        http1 = module?.default ?? module
+        return http1
+      })
+      .catch((error) => {
+        httpModulePromise = null
+        throw error
+      })
+  }
+
+  return httpModulePromise
+}
+
+async function ensureFsNativeExtensionsModule() {
+  if (fsNativeExtensions) return fsNativeExtensions
+  if (!fsNativeExtensionsPromise) {
+    fsNativeExtensionsPromise = import('fs-native-extensions')
+      .then((module) => {
+        fsNativeExtensions = module?.default ?? module
+        return fsNativeExtensions
+      })
+      .catch(() => {
+        fsNativeExtensions = null
+        return null
+      })
+  }
+
+  return fsNativeExtensionsPromise
 }
 
 async function ensureTranscoderModule() {
@@ -367,7 +411,8 @@ export async function createMobileRuntimeBackend(options = {}) {
   }
 
   async function acquireOwnerLock(storageDir) {
-    const tryLock = fsNativeExtensions?.tryLock
+    const extensions = await ensureFsNativeExtensionsModule()
+    const tryLock = extensions?.tryLock
     if (typeof tryLock !== 'function') return
 
     const lockPath = path.join(storageDir, 'backend-owner.lock')
@@ -536,7 +581,10 @@ export async function createMobileRuntimeBackend(options = {}) {
     rpc,
     fs,
     path,
-    generateAndStoreThumbnail,
+    generateAndStoreThumbnail: async (...args) => {
+      const module = await ensureBackendThumbnailModule()
+      return module.generateAndStoreThumbnail(...args)
+    },
     transcoder: lazyTranscoder,
     storagePath
   })
@@ -550,10 +598,12 @@ export async function createMobileRuntimeBackend(options = {}) {
           { attachCastHandlers },
           transcoderModule,
           castTranscoderModule,
+          httpModule,
         ] = await Promise.all([
           import('./mobile-cast.mjs'),
           ensureTranscoderModule(),
           ensureCastTranscoderModule(),
+          ensureHttpModule(),
         ])
 
         castCleanup = attachCastHandlers(backend, {
@@ -563,7 +613,7 @@ export async function createMobileRuntimeBackend(options = {}) {
           setCastActive,
           isCastActive,
           prefetchVideoForCast,
-          http1,
+          http1: httpModule,
           path,
           fs,
           transcoder: transcoderModule,
@@ -707,7 +757,10 @@ export async function createMobileRuntimeBackend(options = {}) {
       rpc,
       fs,
       path,
-      generateAndStoreThumbnail,
+      generateAndStoreThumbnail: async (...args) => {
+        const module = await ensureBackendThumbnailModule()
+        return module.generateAndStoreThumbnail(...args)
+      },
       transcoder: lazyTranscoder,
       storagePath
     },

@@ -468,48 +468,7 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
         return resolvedBundleSources
       }
 
-      await platformRPC.initPlatformRPC({
-        backendVersionKey: getNativeBackendVersionKey(),
-        loadBackendSource: async () => readBundleSources().backendSource,
-        loadDownloaderWorkerSource: async () => readBundleSources().downloaderWorkerSource ?? null,
-      })
-      startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
-
-      // Startup timeout: if eventReady hasn't fired within the timeout,
-      // something is stuck (stale Corestore lock, module load failure, etc.).
-      // Enter degraded mode so the user isn't stuck on "Connecting..." forever.
-      // If eventReady arrives later the onReady handler will overwrite with full state.
       if (!backendReadyRef.current) {
-        const probeStartedAt = Date.now()
-        startupProbeIntervalRef.current = setInterval(() => {
-          if (backendReadyRef.current) {
-            if (startupProbeIntervalRef.current) {
-              clearInterval(startupProbeIntervalRef.current)
-              startupProbeIntervalRef.current = null
-            }
-            return
-          }
-
-          const pollElapsed = Date.now() - probeStartedAt
-          if (pollElapsed >= BACKEND_STARTUP_TIMEOUT_MS - 1000) {
-            if (startupProbeIntervalRef.current) {
-              clearInterval(startupProbeIntervalRef.current)
-              startupProbeIntervalRef.current = null
-            }
-            return
-          }
-
-          platformRPC.rpc?.getStatus?.({})
-            .then(async () => {
-              if (backendReadyRef.current) return
-              console.log('[App] Backend status probe succeeded before eventReady')
-              const modulePort = platformRPC.getBlobServerPort?.()
-              const readyPort = typeof modulePort === 'number' ? modulePort : null
-              await markBackendReady('statusProbe', readyPort)
-            })
-            .catch(() => {})
-        }, 1000)
-
         startupTimerRef.current = setTimeout(() => {
           if (!backendReadyRef.current) {
             console.warn('[App] Backend startup timeout after', BACKEND_STARTUP_TIMEOUT_MS, 'ms — entering degraded mode')
@@ -519,6 +478,20 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
           }
           startupTimerRef.current = null
         }, BACKEND_STARTUP_TIMEOUT_MS)
+      }
+
+      await platformRPC.initPlatformRPC({
+        backendVersionKey: getNativeBackendVersionKey(),
+        loadBackendSource: async () => readBundleSources().backendSource,
+        loadDownloaderWorkerSource: async () => readBundleSources().downloaderWorkerSource ?? null,
+      })
+      startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
+
+      if (!backendReadyRef.current) {
+        console.log('[App] initPlatformRPC resolved before ready callback, marking backend ready directly')
+        const modulePort = platformRPC.getBlobServerPort?.()
+        const readyPort = typeof modulePort === 'number' ? modulePort : null
+        await markBackendReady('initPlatformRPC', readyPort)
       }
     } catch (err) {
       console.error('[App] Failed to initialize platform RPC:', err)

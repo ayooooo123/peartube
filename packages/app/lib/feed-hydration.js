@@ -126,3 +126,85 @@ export function shouldRenderFeedVideo({ video, identityDriveKey }) {
   if (identityDriveKey && channelKey === identityDriveKey) return true
   return video?.availability === 'playable'
 }
+
+export function isConfirmedFeedHydrationResult({ entry, resolved, videos = [] }) {
+  if (!resolved) return false
+  if (Array.isArray(videos) && videos.length > 0) return true
+  const previewVideos = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
+  const manifestUpdatedAt = Number(entry?.manifestUpdatedAt || 0) || 0
+  return manifestUpdatedAt > 0 && previewVideos.length === 0
+}
+
+export function mergeHydratedFeedVideos({
+  previousVideos = [],
+  incomingVideos = [],
+  refreshedChannelKeys = [],
+  identityDriveKey = null,
+  limit = 50,
+}) {
+  const refreshed = new Set((refreshedChannelKeys || []).filter(Boolean))
+  const byKey = new Map()
+
+  for (const video of previousVideos || []) {
+    if (!video) continue
+    const channelKey = video?.channelKey || video?.driveKey || null
+    if (channelKey && refreshed.has(channelKey)) continue
+    const identifier = video?.id || video?.path || ''
+    if (!identifier) continue
+    const key = `${channelKey || ''}:${identifier}`
+    byKey.set(key, video)
+  }
+
+  for (const video of incomingVideos || []) {
+    if (!video) continue
+    if (!shouldRenderFeedVideo({ video, identityDriveKey })) continue
+    const channelKey = video?.channelKey || video?.driveKey || null
+    const identifier = video?.id || video?.path || ''
+    if (!identifier) continue
+    const key = `${channelKey || ''}:${identifier}`
+    byKey.set(key, {
+      ...video,
+      __feedSource: video?.__feedSource === 'preview' ? 'preview' : 'hydrated',
+    })
+  }
+
+  return Array.from(byKey.values())
+    .filter(Boolean)
+    .sort((a, b) => (b?.uploadedAt || 0) - (a?.uploadedAt || 0))
+    .slice(0, limit)
+}
+
+export function mergePreviewFeedVideos({
+  previousVideos = [],
+  previewVideos = [],
+  limit = 50,
+}) {
+  const byKey = new Map()
+
+  for (const video of previousVideos || []) {
+    if (!video || video?.__feedSource === 'preview') continue
+    const channelKey = video?.channelKey || video?.driveKey || null
+    const identifier = video?.id || video?.path || ''
+    if (!identifier) continue
+    const key = `${channelKey || ''}:${identifier}`
+    byKey.set(key, video)
+  }
+
+  for (const video of previewVideos || []) {
+    if (!video) continue
+    const channelKey = video?.channelKey || video?.driveKey || null
+    const identifier = video?.id || video?.path || ''
+    if (!identifier) continue
+    const key = `${channelKey || ''}:${identifier}`
+    if (byKey.has(key)) continue
+    byKey.set(key, {
+      ...video,
+      __feedSource: 'preview',
+    })
+  }
+
+  return Array.from(byKey.values())
+    .filter(Boolean)
+    .sort((a, b) => (b?.uploadedAt || 0) - (a?.uploadedAt || 0))
+    .slice(0, limit)
+}

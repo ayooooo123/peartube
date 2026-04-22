@@ -7,6 +7,9 @@ import {
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
   getVisibleSeededFeedEntries,
+  isConfirmedFeedHydrationResult,
+  mergeHydratedFeedVideos,
+  mergePreviewFeedVideos,
   shouldRenderFeedVideo,
 } from '../lib/feed-hydration.js'
 
@@ -158,4 +161,85 @@ test('shouldRenderFeedVideo only accepts proven-playable remote videos but keeps
     video: { channelKey: 'local', availability: 'unknown' },
     identityDriveKey: 'local',
   }), true)
+})
+
+test('mergeHydratedFeedVideos replaces stale channel cards when a refreshed channel no longer has watchable videos', () => {
+  const merged = mergeHydratedFeedVideos({
+    previousVideos: [
+      { id: 'stale-remote', channelKey: 'remote-a', uploadedAt: 30, availability: 'playable' },
+      { id: 'keep-remote', channelKey: 'remote-b', uploadedAt: 20, availability: 'playable' },
+    ],
+    incomingVideos: [],
+    refreshedChannelKeys: ['remote-a'],
+    identityDriveKey: 'local',
+    limit: 50,
+  })
+
+  assert.deepEqual(merged.map((video) => ({ id: video.id, channelKey: video.channelKey })), [
+    { id: 'keep-remote', channelKey: 'remote-b' },
+  ])
+})
+
+test('isConfirmedFeedHydrationResult only treats empty results as authoritative when the feed manifest explicitly resolved empty', () => {
+  assert.equal(isConfirmedFeedHydrationResult({
+    entry: { manifestUpdatedAt: 0, previewVideos: [] },
+    resolved: true,
+    videos: [],
+  }), false)
+
+  assert.equal(isConfirmedFeedHydrationResult({
+    entry: { manifestUpdatedAt: 123, previewVideos: [] },
+    resolved: true,
+    videos: [],
+  }), true)
+
+  assert.equal(isConfirmedFeedHydrationResult({
+    entry: { manifestUpdatedAt: 123, previewVideos: [{ id: 'preview-a' }] },
+    resolved: true,
+    videos: [{ id: 'full-a' }],
+  }), true)
+
+  assert.equal(isConfirmedFeedHydrationResult({
+    entry: { manifestUpdatedAt: 123, previewVideos: [] },
+    resolved: false,
+    videos: [],
+  }), false)
+})
+
+test('mergePreviewFeedVideos clears stale preview-only cards when the latest preview manifest is empty', () => {
+  const merged = mergePreviewFeedVideos({
+    previousVideos: [
+      { id: 'stale-preview', channelKey: 'remote-a', uploadedAt: 30, availability: 'playable', __feedSource: 'preview' },
+      { id: 'hydrated-keep', channelKey: 'remote-b', uploadedAt: 20, availability: 'playable' },
+    ],
+    previewVideos: [],
+    limit: 50,
+  })
+
+  assert.deepEqual(merged.map((video) => ({ id: video.id, channelKey: video.channelKey })), [
+    { id: 'hydrated-keep', channelKey: 'remote-b' },
+  ])
+})
+
+test('mergePreviewFeedVideos does not overwrite hydrated cards with preview copies of the same video', () => {
+  const merged = mergePreviewFeedVideos({
+    previousVideos: [
+      { id: 'shared-video', channelKey: 'remote-a', uploadedAt: 30, availability: 'playable', title: 'Hydrated title' },
+    ],
+    previewVideos: [
+      { id: 'shared-video', channelKey: 'remote-a', uploadedAt: 10, availability: 'playable', title: 'Preview title' },
+      { id: 'preview-only', channelKey: 'remote-b', uploadedAt: 20, availability: 'playable', title: 'Preview only' },
+    ],
+    limit: 50,
+  })
+
+  assert.deepEqual(merged.map((video) => ({
+    id: video.id,
+    channelKey: video.channelKey,
+    title: video.title,
+    source: video.__feedSource || 'hydrated',
+  })), [
+    { id: 'shared-video', channelKey: 'remote-a', title: 'Hydrated title', source: 'hydrated' },
+    { id: 'preview-only', channelKey: 'remote-b', title: 'Preview only', source: 'preview' },
+  ])
 })

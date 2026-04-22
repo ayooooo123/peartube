@@ -168,6 +168,15 @@ function normalizeHostErrorPayload(payload) {
   )
 }
 
+function createTransportClosedError(reason) {
+  const suffix = reason ? `: ${reason}` : ''
+  return createHostError(
+    HOST_ERROR_CODES.TRANSPORT_DISCONNECTED,
+    `Transport closed before host became ready${suffix}`,
+    { retryable: true }
+  )
+}
+
 function createMethodCaller(rpc, ready, methodName) {
   return async (request = {}) => {
     await ready()
@@ -289,6 +298,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
         const cleanup = () => {
           offReady?.()
           offError?.()
+          offClosed?.()
         }
         const settleResolve = (value) => {
           if (settled) return
@@ -308,6 +318,9 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
         })
         const offError = events.on(PROTOCOL_EVENTS.HOST_ERROR, (payload) => {
           settleReject(normalizeHostErrorPayload(payload))
+        })
+        const offClosed = events.on(PROTOCOL_EVENTS.TRANSPORT_CLOSED, (payload) => {
+          settleReject(createTransportClosedError(payload?.reason))
         })
 
         ;(async () => {

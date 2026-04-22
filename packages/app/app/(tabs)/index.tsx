@@ -22,6 +22,9 @@ import {
   getFeedVideoLoadEntries,
   getMissingChannelMetaRequests,
   getVisibleSeededFeedEntries,
+  isConfirmedFeedHydrationResult,
+  mergeHydratedFeedVideos,
+  mergePreviewFeedVideos,
   shouldRenderFeedVideo,
 } from '@/lib/feed-hydration'
 
@@ -309,29 +312,24 @@ export default function HomeScreen() {
     const initialEntries = entries.slice(0, 6)
     const laterEntries = entries.slice(6)
 
-    const mergeVideos = (incoming: VideoData[]) => {
-      if (!incoming.length || feedLoadRunIdRef.current !== runId) return
-      setFeedVideos((prev) => {
-        const byKey = new Map<string, VideoData>()
-        for (const video of prev) {
-          const key = `${video.channelKey || ''}:${video.id || video.path || ''}`
-          byKey.set(key, video)
-        }
-        for (const video of incoming) {
-          const key = `${video.channelKey || ''}:${video.id || video.path || ''}`
-          byKey.set(key, video)
-        }
-        return Array.from(byKey.values())
-          .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
-          .slice(0, 50)
-      })
-      fetchThumbnailsForVideos(incoming)
+    const mergeVideos = (incoming: VideoData[], refreshedChannelKeys: string[] = []) => {
+      if (feedLoadRunIdRef.current !== runId) return
+      setFeedVideos((prev) => mergeHydratedFeedVideos({
+        previousVideos: prev,
+        incomingVideos: incoming,
+        refreshedChannelKeys,
+        identityDriveKey: identity?.driveKey || null,
+        limit: 50,
+      }))
+      if (incoming.length > 0) {
+        fetchThumbnailsForVideos(incoming)
+      }
     }
 
     const loadEntry = async (entry: any, { attemptTimeout, attempts }: { attemptTimeout: number, attempts: number }) => {
       const channelKey = entry.channelKey || entry.driveKey
       const publicBeeKey = entry.publicBeeKey || undefined
-      if (!channelKey) return [] as VideoData[]
+      if (!channelKey) return { channelKey: null, videos: [] as VideoData[], confirmed: false }
 
       console.log('[Home] loadEntry start', {
         channelKey,
@@ -349,12 +347,16 @@ export default function HomeScreen() {
       // enough to know we already own the videos locally.
       if (identity?.driveKey && channelKey === identity.driveKey) {
         console.log('[Home] loadEntry using local fast path', { channelKey, localVideos: videos?.length || 0 })
-        return (videos || []).map((v: any) => ({
-          ...v,
+        return {
           channelKey,
-          publicBeeKey: publicBeeKey || undefined,
-          channel: { name: channelMetaRef.current[channelKey]?.name || 'Your channel' }
-        }))
+          confirmed: !loading,
+          videos: (videos || []).map((v: any) => ({
+            ...v,
+            channelKey,
+            publicBeeKey: publicBeeKey || undefined,
+            channel: { name: channelMetaRef.current[channelKey]?.name || 'Your channel' }
+          })),
+        }
       }
 
       try {
@@ -362,30 +364,50 @@ export default function HomeScreen() {
           await withTimeout(rpc.joinChannel({ channelKey }), PER_CHANNEL_TIMEOUT, { success: false })
         }
 
-        let videos: any[] = []
+        let loadedVideos: any[] = []
+        let resolved = false
         for (let attempt = 0; attempt < attempts; attempt++) {
-          const result = await withTimeout(rpc.listVideos({ channelKey, publicBeeKey }), attemptTimeout, { videos: [] } as any)
-          videos = (result as any)?.videos || []
-          if (Array.isArray(videos) && videos.length > 0) break
+          const timeoutToken = Symbol('listVideosTimeout')
+          const result = await Promise.race([
+            rpc.listVideos({ channelKey, publicBeeKey }),
+            new Promise((resolve) => setTimeout(() => resolve(timeoutToken), attemptTimeout)),
+          ])
+          if (result !== timeoutToken) {
+            resolved = true
+            loadedVideos = (result as any)?.videos || []
+          } else {
+            loadedVideos = []
+          }
+          if (Array.isArray(loadedVideos) && loadedVideos.length > 0) break
           if (hydrationMode === 'network' && attempt < attempts - 1) {
             await new Promise((resolve) => setTimeout(resolve, LIST_RETRY_DELAY_MS))
           }
         }
 
-        return (videos || [])
+        const filteredVideos = (loadedVideos || [])
           .filter((v: any) => shouldRenderFeedVideo({
             video: { ...v, channelKey },
             identityDriveKey: identity?.driveKey || null,
           }))
           .map((v: any) => ({
-          ...v,
+            ...v,
+            channelKey,
+            publicBeeKey: publicBeeKey || undefined,
+            channel: { name: channelMetaRef.current[channelKey]?.name || 'Unknown' }
+          }))
+
+        return {
           channelKey,
-          publicBeeKey: publicBeeKey || undefined,
-          channel: { name: channelMetaRef.current[channelKey]?.name || 'Unknown' }
-        }))
+          videos: filteredVideos,
+          confirmed: isConfirmedFeedHydrationResult({
+            entry,
+            resolved,
+            videos: loadedVideos,
+          }),
+        }
       } catch (err: any) {
         console.log('[Home] Failed to load videos from channel:', channelKey, '-', err?.message || err)
-        return [] as VideoData[]
+        return { channelKey, videos: [] as VideoData[], confirmed: false }
       }
     }
 
@@ -395,18 +417,21 @@ export default function HomeScreen() {
         attempts: FIRST_PASS_ATTEMPTS,
       })))
       if (feedLoadRunIdRef.current === runId) {
-        mergeVideos(firstPassResults.flat())
+        mergeVideos(
+          firstPassResults.flatMap((result) => result.videos),
+          firstPassResults.filter((result) => result.confirmed).map((result) => result.channelKey).filter(Boolean)
+        )
       }
 
       // Background-fill the remaining channels without blocking first paint.
       void (async () => {
         for (const entry of laterEntries) {
           if (feedLoadRunIdRef.current !== runId) break
-          const videos = await loadEntry(entry, {
+          const result = await loadEntry(entry, {
             attemptTimeout: LATER_PASS_ATTEMPT_TIMEOUT,
             attempts: LATER_PASS_ATTEMPTS,
           })
-          mergeVideos(videos)
+          mergeVideos(result.videos, result.confirmed ? [result.channelKey].filter(Boolean) : [])
         }
         if (feedLoadRunIdRef.current === runId) setLoadingFeedVideos(false)
       })()
@@ -417,7 +442,7 @@ export default function HomeScreen() {
     } catch {
       if (feedLoadRunIdRef.current === runId) setLoadingFeedVideos(false)
     }
-  }, [rpc, feedEntries, swarmStatus, fetchThumbnailsForVideos, videos, identity?.driveKey])
+  }, [rpc, feedEntries, swarmStatus, fetchThumbnailsForVideos, videos, loading, identity?.driveKey])
 
   // Seed Discover immediately from local videos when the active identity's
   // channel appears in the feed. This avoids an empty Discover section while
@@ -447,24 +472,22 @@ export default function HomeScreen() {
       identity?.driveKey || null,
       18
     ) as VideoData[]
-    if (previewVideos.length === 0) return
+    const previewManifestResolved = feedEntries.some((entry) => (
+      Number(entry?.manifestUpdatedAt || 0) > 0 ||
+      (Array.isArray(entry?.previewVideos) && entry.previewVideos.length > 0)
+    ))
 
-    setFeedVideos((prev) => {
-      const byKey = new Map<string, VideoData>()
-      for (const video of prev) {
-        const key = `${video.channelKey || ''}:${video.id || video.path || ''}`
-        byKey.set(key, video)
-      }
-      for (const video of previewVideos) {
-        const key = `${video.channelKey || ''}:${video.id || video.path || ''}`
-        byKey.set(key, video)
-      }
-      return Array.from(byKey.values())
-        .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
-        .slice(0, 50)
-    })
+    if (previewVideos.length > 0 || previewManifestResolved) {
+      setFeedVideos((prev) => mergePreviewFeedVideos({
+        previousVideos: prev,
+        previewVideos,
+        limit: 50,
+      }))
+    }
 
-    fetchThumbnailsForVideos(previewVideos)
+    if (previewVideos.length > 0) {
+      fetchThumbnailsForVideos(previewVideos)
+    }
   }, [feedEntries, channelMeta, identity?.driveKey, fetchThumbnailsForVideos])
 
   // Load feed videos when feed entries change
@@ -673,6 +696,10 @@ export default function HomeScreen() {
 
   const feedVideosWithThumbs: VideoData[] = feedVideos
     .filter(v => seededFeedChannelKeys.has(v.channelKey))
+    .filter(v => shouldRenderFeedVideo({
+      video: v,
+      identityDriveKey: identity?.driveKey || null,
+    }))
     .map(v => {
       const cacheKey = `${v.channelKey}:${v.id}`
       return {

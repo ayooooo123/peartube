@@ -1,4 +1,5 @@
 import test from 'brittle'
+import { EventEmitter } from 'node:events'
 
 import { createProtocolClient, HOST_ERROR_CODES, PROTOCOL_EVENTS } from '../src/index.js'
 
@@ -139,4 +140,38 @@ test('createProtocolClient rejects ready once when host error event arrives', as
   t.is(hostErrors.length, 1)
   t.is(error.code, 'HOST_BOOT_FAILED')
   t.is(error.message, 'boom')
+})
+
+test('createProtocolClient rejects ready when the transport closes before host ready', async (t) => {
+  class PendingHRPC extends FakeHRPC {
+    getStatus() {
+      return new Promise(() => {})
+    }
+  }
+
+  const stream = new EventEmitter()
+  const transportClosed = []
+  const hostErrors = []
+  const client = createProtocolClient({
+    stream,
+    HRPCImpl: PendingHRPC
+  })
+
+  client.events.on(PROTOCOL_EVENTS.TRANSPORT_CLOSED, (payload) => {
+    transportClosed.push(payload)
+  })
+  client.events.on(PROTOCOL_EVENTS.HOST_ERROR, (payload) => {
+    hostErrors.push(payload)
+  })
+
+  const errorPromise = client.ready().catch((error) => error)
+  stream.emit('close')
+
+  const error = await errorPromise
+
+  t.alike(transportClosed, [{ reason: 'close' }])
+  t.is(hostErrors.length, 0)
+  t.is(error.code, HOST_ERROR_CODES.TRANSPORT_DISCONNECTED)
+  t.is(error.retryable, true)
+  t.is(error.message, 'Transport closed before host became ready: close')
 })

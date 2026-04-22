@@ -1,0 +1,75 @@
+{
+  "": {
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/primary.swiftdeps"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Array.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Array.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Array.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Array~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Array.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Array.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Bool.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Bool.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Bool.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Bool~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Bool.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Bool.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Buffer.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Buffer.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Buffer.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Buffer~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Buffer.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Buffer.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Codec.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Codec.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Codec.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Codec~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Codec.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Codec.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Float.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Float.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Float.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Float~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Float.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Float.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Integer.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Integer.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Integer.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Integer~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Integer.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Integer.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Primitive.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Primitive.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Primitive.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Primitive~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Primitive.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Primitive.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/State.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/State.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/State.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/State~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/State.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/State.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/String.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/String.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/String.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/String~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/String.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/String.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/ZigZag.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/ZigZag.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/ZigZag.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/ZigZag~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/ZigZag.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/ZigZag.dia"
+  }
+}

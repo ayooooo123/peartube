@@ -31,7 +31,8 @@ cd packages/spec && node schema.cjs
 # Then copy generated Swift into the desktop-native app:
 cp packages/spec/spec/swift-schema/Sources/Schema.swift packages/desktop-native/Sources/Support/GeneratedSchema.swift
 cp packages/spec/spec/swift-hrpc/Sources/HRPC.swift packages/desktop-native/Sources/Support/GeneratedHRPC.swift
-# Fix imports (remove `import Schema`, add `@preconcurrency` to BareRPC import)
+# (schema.cjs post-process already drops `import Schema` and wires the actor
+# setDelegate/receive pattern — no manual import fixups needed.)
 # Then rebuild sidecar: cd packages/desktop-native && node scripts/build-native-sidecar.mjs
 
 # Quality checks

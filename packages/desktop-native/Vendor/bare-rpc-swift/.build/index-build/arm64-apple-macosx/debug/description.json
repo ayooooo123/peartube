@@ -1,0 +1,600 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.BareRPC-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/sources",
+      "importPath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/CommandRouter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingEvent.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingRequest.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingStream.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/Messages.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/OutgoingStream.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPC.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPCError.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/StreamConstants.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/Modules/CompactEncoding.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "BareRPC",
+      "moduleOutputPath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/Modules/BareRPC.swiftmodule",
+      "objects" : [
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/CommandRouter.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingEvent.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingRequest.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingStream.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/Messages.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/OutgoingStream.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPC.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPCError.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/StreamConstants.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx14.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-Onone",
+        "-enable-testing",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/include/BareRPC-Swift.h",
+        "-swift-version",
+        "5",
+        "-Xfrontend",
+        "-experimental-lazy-typecheck",
+        "-Xfrontend",
+        "-experimental-skip-all-function-bodies",
+        "-Xfrontend",
+        "-experimental-allow-module-with-compiler-errors",
+        "-Xfrontend",
+        "-empty-abi-descriptor",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "bare_rpc_swift"
+      ],
+      "outputFileMapPath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/Modules/BareRPC.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : true,
+      "sources" : [
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/CommandRouter.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingEvent.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingRequest.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingStream.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/Messages.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/OutgoingStream.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPC.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPCError.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/StreamConstants.swift"
+      ],
+      "tempsPath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.CompactEncoding-arm64-apple-macosx-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/sources",
+      "importPath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Array.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Bool.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Buffer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Codec.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Float.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Integer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Primitive.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/State.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/String.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/ZigZag.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "CompactEncoding",
+      "moduleOutputPath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/Modules/CompactEncoding.swiftmodule",
+      "objects" : [
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Array.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Bool.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Buffer.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Codec.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Float.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Integer.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/Primitive.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/State.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/String.swift.o",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/ZigZag.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx11.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-Onone",
+        "-enable-testing",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/include/CompactEncoding-Swift.h",
+        "-swift-version",
+        "5",
+        "-Xfrontend",
+        "-experimental-lazy-typecheck",
+        "-Xfrontend",
+        "-experimental-skip-all-function-bodies",
+        "-Xfrontend",
+        "-experimental-allow-module-with-compiler-errors",
+        "-Xfrontend",
+        "-empty-abi-descriptor",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-suppress-warnings",
+        "-package-name",
+        "compact_encoding_swift"
+      ],
+      "outputFileMapPath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/Modules/CompactEncoding.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : true,
+      "sources" : [
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Array.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Bool.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Buffer.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Codec.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Float.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Integer.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Primitive.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/State.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/String.swift",
+        "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/ZigZag.swift"
+      ],
+      "tempsPath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "BareRPC" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "BareRPC",
+      "-package-name",
+      "bare_rpc_swift",
+      "-c",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/CommandRouter.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingEvent.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingRequest.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingStream.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/Messages.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/OutgoingStream.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPC.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPCError.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/StreamConstants.swift",
+      "-I",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx14.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-Onone",
+      "-enable-testing",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/include/BareRPC-Swift.h",
+      "-swift-version",
+      "5",
+      "-Xfrontend",
+      "-experimental-lazy-typecheck",
+      "-Xfrontend",
+      "-experimental-skip-all-function-bodies",
+      "-Xfrontend",
+      "-experimental-allow-module-with-compiler-errors",
+      "-Xfrontend",
+      "-empty-abi-descriptor",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "bare_rpc_swift",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "CompactEncoding" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "CompactEncoding",
+      "-package-name",
+      "compact_encoding_swift",
+      "-c",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Array.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Bool.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Buffer.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Codec.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Float.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Integer.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Primitive.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/State.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/String.swift",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/ZigZag.swift",
+      "-I",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx11.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-Onone",
+      "-enable-testing",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/include/CompactEncoding-Swift.h",
+      "-swift-version",
+      "5",
+      "-Xfrontend",
+      "-experimental-lazy-typecheck",
+      "-Xfrontend",
+      "-experimental-skip-all-function-bodies",
+      "-Xfrontend",
+      "-experimental-allow-module-with-compiler-errors",
+      "-Xfrontend",
+      "-empty-abi-descriptor",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.4.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-suppress-warnings",
+      "-package-name",
+      "compact_encoding_swift",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "BareRPC" : [
+      "CompactEncoding"
+    ],
+    "CompactEncoding" : [
+
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/CommandRouter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingEvent.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingRequest.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingStream.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/Messages.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/OutgoingStream.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPC.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPCError.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/StreamConstants.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/sources"
+    },
+    "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Array.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Bool.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Buffer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Codec.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Float.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Integer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/Primitive.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/State.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/String.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/checkouts/compact-encoding-swift/Sources/CompactEncoding/ZigZag.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/CompactEncoding.build/sources"
+    },
+    "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}

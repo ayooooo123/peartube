@@ -133,6 +133,7 @@
 		92A0958B42DE494024A90E2D /* MediaExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaExtension.framework; path = System/Library/Frameworks/MediaExtension.framework; sourceTree = SDKROOT; };
 		A6371626F67CB4A3CEE1DB14 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A77AF744D09EEDA796275141 /* FeedListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedListView.swift; sourceTree = "<group>"; };
+		A82F417D37E16298C8D624C9 /* bare-rpc-swift */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "bare-rpc-swift"; path = "Vendor/bare-rpc-swift"; sourceTree = SOURCE_ROOT; };
 		A839F3BF4C9BDA5A7D93017E /* VideoToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = VideoToolbox.framework; path = System/Library/Frameworks/VideoToolbox.framework; sourceTree = SDKROOT; };
 		AE1F2F95F9DEBD76DB721994 /* PearTubeDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PearTubeDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B639C8D5D0B0D05333697485 /* EmbeddedBareKitSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedBareKitSession.swift; sourceTree = "<group>"; };
@@ -196,6 +197,7 @@
 			isa = PBXGroup;
 			children = (
 				2115C97C12C614FC517B5FA6 /* Extensions */,
+				4FAD54E1C8904F5586D2582F /* Packages */,
 				50F5FF584C42CDEF23B2EEAE /* Sources */,
 				83142860037B1F9DCC24BB70 /* Tests */,
 				39B28F181583B66507EECFA4 /* Frameworks */,
@@ -256,6 +258,14 @@
 				B8716A90A1C4A3FE3A4CE8D4 /* PTMediaFormatReaderExtension.m */,
 			);
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		4FAD54E1C8904F5586D2582F /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				A82F417D37E16298C8D624C9 /* bare-rpc-swift */,
+			);
+			name = Packages;
 			sourceTree = "<group>";
 		};
 		50F5FF584C42CDEF23B2EEAE /* Sources */ = {
@@ -488,8 +498,8 @@
 			mainGroup = 05AD4381F4E025F8DF7FEAB0;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				B4B23DE8877AD53372496999 /* XCRemoteSwiftPackageReference "bare-rpc-swift" */,
 				E771DD3976E0738F522C0AC5 /* XCRemoteSwiftPackageReference "compact-encoding-swift" */,
+				CE2AD8CEFFD9AFEE7BA7F95D /* XCLocalSwiftPackageReference "Vendor/bare-rpc-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 15FD9EBBE7B0FF2282A6538C /* Products */;
@@ -1025,15 +1035,14 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		B4B23DE8877AD53372496999 /* XCRemoteSwiftPackageReference "bare-rpc-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/holepunchto/bare-rpc-swift";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		CE2AD8CEFFD9AFEE7BA7F95D /* XCLocalSwiftPackageReference "Vendor/bare-rpc-swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Vendor/bare-rpc-swift";
 		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
 		E771DD3976E0738F522C0AC5 /* XCRemoteSwiftPackageReference "compact-encoding-swift" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/holepunchto/compact-encoding-swift";
@@ -1052,7 +1061,6 @@
 		};
 		42CF9317D6CA4D6BA1F52342 /* BareRPC */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = B4B23DE8877AD53372496999 /* XCRemoteSwiftPackageReference "bare-rpc-swift" */;
 			productName = BareRPC;
 		};
 		9D0006F226472BC8AB5D5918 /* CompactEncoding */ = {
@@ -1062,7 +1070,6 @@
 		};
 		C67321BB6FD07DA684BAFCC8 /* BareRPC */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = B4B23DE8877AD53372496999 /* XCRemoteSwiftPackageReference "bare-rpc-swift" */;
 			productName = BareRPC;
 		};
 /* End XCSwiftPackageProductDependency section */

@@ -636,7 +636,14 @@ export function createApi({
             }
           }))
 
-          if (unknownRequests.length > 0 && publicFeed?.requestAvailabilityHints) {
+          // Per-video peer confirmation via the public-feed gossip layer. Once
+          // this has been consulted, its answer is authoritative — videos that
+          // came back 'unknown' stay 'unknown' and get hidden by client filters.
+          // The old "swarm has any peers → mark playable" fallback below is
+          // only reached when the hints method is unavailable, because the
+          // broad fallback was surfacing truly-unavailable videos as playable.
+          const hintsQueryable = unknownRequests.length > 0 && typeof publicFeed?.requestAvailabilityHints === 'function'
+          if (hintsQueryable) {
             try {
               const hinted = await publicFeed.requestAvailabilityHints(unknownRequests, { timeoutMs: 400, maxPeers: 6 })
               for (const hint of hinted || []) {
@@ -656,9 +663,7 @@ export function createApi({
             } else if (!id) {
               availability = 'unavailable'
             }
-            // If we have connected peers for this channel but couldn't confirm
-            // local cache, the video is likely streamable — mark as playable.
-            if (availability === 'unknown' && id && video?.blobsCoreKey && video?.blobId) {
+            if (!hintsQueryable && availability === 'unknown' && id && video?.blobsCoreKey && video?.blobId) {
               const peerCount = ctx.swarm?.connections?.size || 0
               if (peerCount > 0) availability = 'playable'
             }
@@ -1430,9 +1435,13 @@ export function createApi({
                 blobId: video?.blobId ? String(video.blobId) : null,
                 blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
                 mimeType: video?.mimeType ? String(video.mimeType) : null,
+                // Trust the per-video availability hint if present. Previously
+                // this fell back to "playable" whenever the swarm had any peer
+                // connection, which surfaced truly-unavailable videos. Now we
+                // only surface 'playable' if the hint system actually confirmed
+                // it — matching the stricter listVideos path.
                 availability: hint?.availability === 'playable' ? 'playable'
                   : (hint?.availability || 'unknown') !== 'unknown' ? (hint?.availability || 'unknown')
-                  : (video?.blobsCoreKey && video?.blobId && (ctx.swarm?.connections?.size || 0) > 0) ? 'playable'
                   : 'unknown',
                 thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
                 thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,

@@ -6,11 +6,16 @@ const SECTION_ORDER = Object.freeze([
   'diagnostics',
 ])
 
+// sourceLimit caps how many channels we probe per section. Channels beyond
+// the limit never get a listVideos probe, so their cached-but-unsurfaced
+// videos stay hidden even if they're locally playable. Bumping this keeps
+// small deployments (tens of channels) fully probed; larger deployments can
+// add pagination later.
 const SECTION_CONFIG = Object.freeze({
-  home: { sourceLimit: 8, videosPerChannel: 3 },
-  subscriptions: { sourceLimit: 8, videosPerChannel: 3 },
-  library: { sourceLimit: 4, videosPerChannel: 4 },
-  studio: { sourceLimit: 4, videosPerChannel: 4 },
+  home: { sourceLimit: 32, videosPerChannel: 3 },
+  subscriptions: { sourceLimit: 32, videosPerChannel: 3 },
+  library: { sourceLimit: 16, videosPerChannel: 4 },
+  studio: { sourceLimit: 16, videosPerChannel: 4 },
   diagnostics: { sourceLimit: 0, videosPerChannel: 0 },
 })
 
@@ -258,41 +263,29 @@ async function resolveSectionRecords(section, sources, config, fetchChannelData,
   const selectedSources = sources.slice(0, config.sourceLimit)
   const records = []
 
-  // Fast path: use preview videos from feed entries when available.
-  // This avoids a fetchChannelData round-trip for sources that already
-  // include preview video data from the P2P gossip feed.
-  const sourcesNeedingFetch = []
-  for (const source of selectedSources) {
-    if (source.previewVideos.length > 0) {
-      // Preview videos from the P2P feed don't have availability set —
-      // they are pre-screened by the publisher. Skip availability filtering
-      // for previews; the full fetch path checks availability via the backend.
-      for (const video of source.previewVideos.slice(0, config.videosPerChannel)) {
-        const record = videoToRecord(source, {}, video, section)
-        if (record) records.push(record)
-      }
-    } else {
-      sourcesNeedingFetch.push(source)
-    }
-  }
+  // Per-source fallback (matches Electrobun's index.web.tsx merge behavior):
+  // if listVideos returned anything for this source, trust it exclusively —
+  // its per-video availability is fresher than the preview entries from
+  // getPublicFeed. Only fall back to previews when listVideos came back
+  // empty (timeout, channel not yet loaded). Apply `isVideoViewable` in
+  // either case so non-'playable' entries never reach the snapshot.
+  const resolvedSources = await Promise.all(
+    selectedSources.map(async (source) => ({
+      source,
+      result: await fetchChannelData(source).catch(() => null),
+    }))
+  )
 
-  // Fetch remaining sources that didn't have preview data
-  if (sourcesNeedingFetch.length > 0) {
-    const resolvedSources = await Promise.all(
-      sourcesNeedingFetch.map(async (source) => ({
-        source,
-        result: await fetchChannelData(source),
-      }))
-    )
+  for (const { source, result } of resolvedSources) {
+    const meta = result?.channelMeta || {}
+    const listedVideos = Array.isArray(result?.videos) ? result.videos : []
+    const previewVideos = Array.isArray(source.previewVideos) ? source.previewVideos : []
+    const videos = listedVideos.length > 0 ? listedVideos : previewVideos
 
-    for (const { source, result } of resolvedSources) {
-      const meta = result?.channelMeta || {}
-      const videos = Array.isArray(result?.videos) ? result.videos.slice(0, config.videosPerChannel) : []
-      for (const video of videos) {
-        if (!isVideoViewable(video, source, identityChannelKeys)) continue
-        const record = videoToRecord(source, meta, video, section)
-        if (record) records.push(record)
-      }
+    for (const video of videos.slice(0, config.videosPerChannel)) {
+      if (!isVideoViewable(video, source, identityChannelKeys)) continue
+      const record = videoToRecord(source, meta, video, section)
+      if (record) records.push(record)
     }
   }
 

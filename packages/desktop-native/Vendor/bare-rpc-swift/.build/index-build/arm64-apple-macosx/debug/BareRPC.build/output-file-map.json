@@ -1,0 +1,68 @@
+{
+  "": {
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/primary.swiftdeps"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/CommandRouter.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/CommandRouter.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/CommandRouter.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/CommandRouter~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/CommandRouter.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/CommandRouter.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingEvent.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingEvent.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingEvent.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingEvent~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingEvent.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingEvent.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingRequest.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingRequest.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingRequest.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingRequest~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingRequest.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingRequest.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/IncomingStream.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingStream.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingStream.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingStream~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingStream.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/IncomingStream.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/Messages.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/Messages.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/Messages.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/Messages~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/Messages.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/Messages.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/OutgoingStream.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/OutgoingStream.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/OutgoingStream.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/OutgoingStream~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/OutgoingStream.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/OutgoingStream.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPC.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPC.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPC.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPC~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPC.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPC.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/RPCError.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPCError.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPCError.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPCError~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPCError.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/RPCError.dia"
+  },
+  "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/Sources/BareRPC/StreamConstants.swift": {
+    "dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/StreamConstants.d",
+    "object": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/StreamConstants.swift.o",
+    "swiftmodule": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/StreamConstants~partial.swiftmodule",
+    "swift-dependencies": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/StreamConstants.swiftdeps",
+    "diagnostics": "/Users/jd/projects/peartube/packages/desktop-native/Vendor/bare-rpc-swift/.build/index-build/arm64-apple-macosx/debug/BareRPC.build/StreamConstants.dia"
+  }
+}

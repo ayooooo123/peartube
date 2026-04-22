@@ -32,57 +32,6 @@ final class HostBridgeRPCDelegate: RPCDelegate, @unchecked Sendable {
 }
 
 
-// MARK: - RPC Request Gate
-
-/// Serializes RPC requests. bare-rpc-swift's ``RPC`` class is a plain (non-actor)
-/// class with no synchronization — ``pending`` dictionary is mutated from both
-/// ``request()`` (insert) and ``receive()`` → ``dispatchFrame()`` (remove/resume).
-/// Even on @MainActor, Swift's cooperative executor interleaves async tasks at
-/// suspension points, so concurrent ``request()`` calls race.
-///
-/// ``maxConcurrent`` controls throughput vs. safety. The dictionary race requires
-/// serialization (max 1), but we mitigate stalls by cancelling queued waiters
-/// when the user navigates away (e.g., closes a video).
-@MainActor
-final class RPCGate {
-  private var inFlight = false
-  private var waiters: [CheckedContinuation<Void, Never>] = []
-
-  func acquire() async {
-    if !inFlight {
-      inFlight = true
-      return
-    }
-    await withCheckedContinuation { continuation in
-      waiters.append(continuation)
-    }
-  }
-
-  func release() {
-    if let next = waiters.first {
-      waiters.removeFirst()
-      next.resume()
-    } else {
-      inFlight = false
-    }
-  }
-
-  /// Cancel all queued waiters. Call when the user action changes (new video,
-  /// navigation) so stale thumbnail/stats requests don't block fresh ones.
-  /// Resumed waiters should check ``Task.isCancelled``.
-  func flush() {
-    let stale = waiters
-    waiters.removeAll()
-    for w in stale { w.resume() }
-  }
-
-  func withGate<T>(_ body: () async throws -> T) async rethrows -> T {
-    await acquire()
-    defer { release() }
-    return try await body()
-  }
-}
-
 // MARK: - RPCRemoteError extension
 
 extension RPCRemoteError: @retroactive LocalizedError {

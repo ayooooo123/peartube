@@ -70,7 +70,9 @@ final class HostBridgeService {
   @ObservationIgnored private var hostSession: (any NativeHostSession)?
   @ObservationIgnored private var hrpc: HRPC?
   @ObservationIgnored private var hrpcDelegate: HostBridgeRPCDelegate?
-  @ObservationIgnored private let rpcGate = RPCGate()
+  // RPCGate retired — RPC is now an actor, so concurrency is handled inside
+  // BareRPC itself. `gatedRPC` remains a thin passthrough so its ~30 call
+  // sites don't need updating.
   @ObservationIgnored private var inFlightThumbnailIDs = Set<NativeVideo.ID>()
   @ObservationIgnored private let logLimit = 120
   @ObservationIgnored private(set) var selectedStoragePath: String?
@@ -1548,7 +1550,9 @@ final class HostBridgeService {
   }
 
   func clearPlayback() {
-    rpcGate.flush() // Cancel queued RPC calls (stale thumbnails, stats)
+    // RPC cancellation is now handled per-Task (Task.cancel()) rather than
+    // via a gate flush, because the actor model lets requests run in parallel
+    // instead of queueing serially.
     stopPlaybackStatsPolling()
     releaseAVPlayer()
     let playerId = activeMpvPlayerID
@@ -2051,13 +2055,13 @@ final class HostBridgeService {
     return hrpc
   }
 
-  /// Executes an RPC call through a serial gate to prevent concurrent access
-  /// to bare-rpc-swift's non-thread-safe RPC internals.
+  /// Passthrough wrapper around HRPC calls. Historically serialized through
+  /// `RPCGate`; now a no-op because `BareRPC.RPC` is an actor and handles
+  /// concurrent request/receive safely. Kept as a single entry point so
+  /// future cross-cutting concerns (retries, logging) have one place to land.
   private func gatedRPC<T>(_ body: (HRPC) async throws -> T) async throws -> T {
     let hrpc = try await ensureHRPC()
-    return try await rpcGate.withGate {
-      try await body(hrpc)
-    }
+    return try await body(hrpc)
   }
 
   /// Performs any HRPC call, then refreshes the browse snapshot afterward.

@@ -20,9 +20,11 @@ settings:
     DEVELOPMENT_TEAM: ""
 
 packages:
+  # Local vendored fork with RPC converted to an actor. Originally
+  # upstream: https://github.com/holepunchto/bare-rpc-swift
+  # See packages/desktop-native/Vendor/bare-rpc-swift/README-FORK.md.
   BareRPC:
-    url: https://github.com/holepunchto/bare-rpc-swift
-    branch: main
+    path: Vendor/bare-rpc-swift
   CompactEncoding:
     url: https://github.com/holepunchto/compact-encoding-swift
     branch: main

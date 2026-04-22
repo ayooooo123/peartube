@@ -24,6 +24,7 @@ import ChannelPageWeb from '../channel/[key].web'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
 import { shouldRenderFeedVideo } from '@/lib/feed-hydration'
+import { getWatchPageKey, shouldUseMsePlayerForWatch } from '@/lib/watch-page-player-mode.mjs'
 
 // Check if running on Pear desktop
 const isPear = typeof window !== 'undefined' && (
@@ -243,10 +244,11 @@ function WatchPageView({
   // Stable playback session ID — only changes when the video changes, not on every render.
   // Using Date.now() directly in JSX caused infinite remount loops via the <Video> key prop.
   const playbackSession = useMemo(() => Date.now(), [channelKey, videoId])
+  const watchPageKey = getWatchPageKey(channelKey, videoId)
   const [isActiveWatch, setIsActiveWatch] = useState(true)
   const [isPlaying, setIsPlaying] = useState(true)
-  const [useMsePlayer, setUseMsePlayer] = useState(false)
-  useEffect(() => { setUseMsePlayer(false) }, [channelKey, videoId])
+  const [msePlayerWatchKey, setMsePlayerWatchKey] = useState<string | null>(null)
+  const useMsePlayer = shouldUseMsePlayerForWatch(msePlayerWatchKey, watchPageKey)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [showControls, setShowControls] = useState(false)
@@ -968,7 +970,7 @@ function WatchPageView({
                   const code = err?.error?.code || err?.code
                   if (code == 4) {
                     console.log('[WatchPage] Native player failed (code 4), switching to MSE player')
-                    setUseMsePlayer(true)
+                    setMsePlayerWatchKey(watchPageKey)
                     return
                   }
                   setError(err?.message || err?.error?.errorString || String(err))

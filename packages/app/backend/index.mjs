@@ -437,12 +437,13 @@ export async function createMobileRuntimeBackend(options = {}) {
     ownerLockFd = fd
   }
 
-  function removeStaleLocks(storageDir) {
-    try { fs.unlinkSync(path.join(storageDir, 'CORESTORE')) } catch (error) { if (error.code !== 'ENOENT') console.log('[Backend] CORESTORE cleanup skipped:', error.message) }
-    try { fs.unlinkSync(path.join(storageDir, 'LOCK')) } catch (error) { if (error.code !== 'ENOENT') console.log('[Backend] LOCK cleanup skipped:', error.message) }
-    try { fs.unlinkSync(path.join(storageDir, 'primary', 'LOCK')) } catch (error) { if (error?.code !== 'ENOENT') {} }
+function removeStaleLocks(storageDir) {
+  try { fs.unlinkSync(path.join(storageDir, 'CORESTORE')) } catch (error) { if (error.code !== 'ENOENT') console.log('[Backend] CORESTORE cleanup skipped:', error.message) }
+  try { fs.unlinkSync(path.join(storageDir, 'LOCK')) } catch (error) { if (error.code !== 'ENOENT') console.log('[Backend] LOCK cleanup skipped:', error.message) }
+  try { fs.unlinkSync(path.join(storageDir, 'primary', 'LOCK')) } catch (error) { if (error?.code !== 'ENOENT') {} }
+  try { fs.unlinkSync(path.join(storageDir, 'db', 'LOCK')) } catch (error) { if (error?.code !== 'ENOENT') {} }
 
-    function removeDirRecursive(dir) {
+  function removeDirRecursive(dir) {
       try {
         for (const entry of fs.readdirSync(dir)) {
           const file = path.join(dir, entry)

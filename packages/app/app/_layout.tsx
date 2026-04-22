@@ -397,6 +397,10 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       platformRPC.events.onError((data: any) => {
         const message = String(data?.message || 'Backend error')
         console.error('[App] Backend error:', message)
+        if (startupTimerRef.current) {
+          clearTimeout(startupTimerRef.current)
+          startupTimerRef.current = null
+        }
         setBackendError(message)
       })
 
@@ -495,6 +499,10 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       }
     } catch (err) {
       console.error('[App] Failed to initialize platform RPC:', err)
+      if (startupTimerRef.current) {
+        clearTimeout(startupTimerRef.current)
+        startupTimerRef.current = null
+      }
       const message = err instanceof Error ? err.message : 'Failed to initialize backend'
       const isMissingBundle =
         message.includes('backend.bundle.js') ||

@@ -55,6 +55,28 @@ test('mobile backend entry keeps cast, thumbnail, and native-lock modules out of
   assert.match(source, /ensureFsNativeExtensionsModule/)
 })
 
+test('mobile backend startup lock cleanup removes db LOCK files before orchestrator init', () => {
+  const source = readAppFile('backend/index.mjs')
+  const removeLocksBody =
+    source.match(/function removeStaleLocks\(storageDir\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
+
+  assert.ok(removeLocksBody, 'removeStaleLocks should exist')
+  assert.match(removeLocksBody, /path\.join\(storageDir, 'db', 'LOCK'\)/)
+})
+
+test('native root layout clears the backend startup timeout when an explicit startup error arrives', () => {
+  const source = readAppFile('app/_layout.tsx')
+  const onErrorBlock = source.match(/platformRPC\.events\.onError\(\(data: any\) => \{([\s\S]*?)\n\s*\}\)/)?.[1] ?? ''
+  const catchBlock = source.match(/\} catch \(err\) \{([\s\S]*?)\n\s*\}\n\s*\}\)\(\)/)?.[1] ?? ''
+
+  assert.ok(onErrorBlock, 'native startup onError handler should exist')
+  assert.ok(catchBlock, 'native startup init catch block should exist')
+  assert.match(onErrorBlock, /clearTimeout\(startupTimerRef\.current\)/)
+  assert.match(onErrorBlock, /startupTimerRef\.current = null/)
+  assert.match(catchBlock, /clearTimeout\(startupTimerRef\.current\)/)
+  assert.match(catchBlock, /startupTimerRef\.current = null/)
+})
+
 test('backend orchestrator defers warm-up behind startup gates and does not force a boot-time feed sync request', () => {
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 

@@ -113,6 +113,16 @@ let path = null;
 let Hyperswarm = null;
 let http = null;
 
+async function ensureHttpModule() {
+  if (http) return http
+  try {
+    http = await loadBareOrNodeHttpModule()
+  } catch {
+    http = null
+  }
+  return http
+}
+
 async function initOptionalStorageDeps() {
   if (optionalStorageDepsReady) return optionalStorageDepsReady
 
@@ -151,7 +161,7 @@ async function initOptionalStorageDeps() {
 
 async function initStorageModules() {
   await initOptionalStorageDeps()
-  if (fs && path && Hyperswarm && http) return;
+  if (fs && path && Hyperswarm) return;
   fs = resolveBareOrNodeFsModuleSync()
   path = resolveBareOrNodePathModuleSync()
   if (!fs) {
@@ -162,9 +172,6 @@ async function initStorageModules() {
   }
   if (!Hyperswarm) {
     try { Hyperswarm = await loadHyperswarmModule(); } catch {}
-  }
-  if (!http) {
-    try { http = await loadBareOrNodeHttpModule(); } catch {}
   }
 }
 
@@ -1591,7 +1598,7 @@ export function isCastActive() {
 export function startBlobServerWatchdog() {
   if (watchdogTimer) return
   console.log('[CastDiag] BlobServer watchdog started')
-  watchdogTimer = setInterval(() => {
+  watchdogTimer = setInterval(async () => {
     if (!isCastActive()) {
       clearInterval(watchdogTimer)
       watchdogTimer = null
@@ -1605,7 +1612,13 @@ export function startBlobServerWatchdog() {
       return
     }
 
-    const req = http.request({
+    const httpModule = await ensureHttpModule()
+    if (!httpModule?.request) {
+      console.log('[CastDiag] BlobServer watchdog: HTTP module unavailable, skipping probe')
+      return
+    }
+
+    const req = httpModule.request({
       hostname: '127.0.0.1',
       port,
       path: '/',

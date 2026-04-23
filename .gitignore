@@ -8,6 +8,14 @@ bun.lock
 build/
 dist/
 *.bundle.js
+
+# Generated HRPC schema (regenerate with `npm run schema`)
+packages/spec/spec/hrpc/
+packages/spec/spec/schema/
+packages/spec/spec/swift-hrpc/
+packages/spec/spec/swift-schema/
+packages/desktop-native/Sources/Support/GeneratedSchema.swift
+packages/desktop-native/Sources/Support/GeneratedHRPC.swift
 packages/app/pear/
 packages/app/.pear-build/
 packages/app/desktop-build/

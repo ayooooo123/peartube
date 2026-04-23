@@ -110,11 +110,13 @@ test('buildBrowseSnapshot groups feed, subscriptions, and library content', asyn
             blobId: `0:10:0:${source.channelKey.length}`,
             blobsCoreKey: `${source.channelKey}`.padEnd(64, '0').slice(0, 64),
             mimeType: 'video/mp4',
+            availability: source.channelKey === 'own-1' ? undefined : 'playable',
           },
           {
             id: `${source.channelKey}-video-2`,
             title: `Video 2 for ${source.channelKey}`,
             duration: 180,
+            availability: source.channelKey === 'own-1' ? undefined : 'playable',
           },
         ],
       }
@@ -165,6 +167,7 @@ test('buildBrowseSnapshot falls back to subscriptions and identities when feed i
             id: `${source.channelKey}-video-1`,
             title: `Video 1 for ${source.channelKey}`,
             duration: 95,
+            availability: source.channelKey === 'own-1' ? undefined : 'playable',
           },
         ],
       }
@@ -209,6 +212,7 @@ test('buildBrowseSnapshot fetches channel data concurrently during bootstrap sha
             id: `${source.channelKey}-video-1`,
             title: `Video 1 for ${source.channelKey}`,
             duration: 95,
+            availability: source.channelKey === 'own-1' ? undefined : 'playable',
           },
         ],
       }
@@ -220,6 +224,54 @@ test('buildBrowseSnapshot fetches channel data concurrently during bootstrap sha
   assert.equal(snapshot.sections.subscriptions.length, 2)
   assert.ok(maxConcurrentFetches >= 3)
   assert.ok(elapsed < 140, `expected concurrent snapshot shaping, took ${elapsed}ms`)
+})
+
+test('buildBrowseSnapshot renders playable manifest previews without waiting for slow channel fetches', async () => {
+  const start = Date.now()
+
+  const snapshot = await buildBrowseSnapshot({
+    feedEntries: [{
+      channelKey: 'feed-preview',
+      channelName: 'Preview Channel',
+      peerCount: 2,
+      previewVideos: [
+        {
+          id: 'preview-playable',
+          title: 'Playable preview',
+          uploadedAt: 42,
+          duration: 95,
+          availability: 'playable',
+        },
+        {
+          id: 'preview-hidden',
+          title: 'Hidden preview',
+          uploadedAt: 41,
+          duration: 80,
+          availability: 'unknown',
+        },
+      ],
+    }],
+    subscriptions: [],
+    identities: [],
+    async fetchChannelData() {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      return {
+        channelMeta: { name: 'Slow metadata' },
+        videos: [{
+          id: 'backfilled-video',
+          title: 'Backfilled video',
+          duration: 120,
+          availability: 'playable',
+        }],
+      }
+    },
+  })
+
+  const elapsed = Date.now() - start
+
+  assert.equal(snapshot.sections.home.length, 1)
+  assert.equal(snapshot.sections.home[0]?.backendVideoID, 'preview-playable')
+  assert.ok(elapsed < 80, `expected preview fast path, took ${elapsed}ms`)
 })
 
 test('buildIdentityMutationSnapshot preserves existing feed sections while activating the new identity', () => {

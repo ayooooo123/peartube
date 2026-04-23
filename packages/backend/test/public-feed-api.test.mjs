@@ -349,6 +349,138 @@ test('listVideos marks videos unavailable when neither local cache nor peer hint
   t.is(videos[0]?.availability, 'unavailable')
 })
 
+test('listVideos falls back to connected peers when availability hint transport fails', async (t) => {
+  const driveKey = 'ab'.repeat(32)
+  const publicBeeKey = 'cd'.repeat(32)
+  const blobsCoreKey = 'ef'.repeat(32)
+
+  const api = createApi({
+    ctx: {
+      store: {
+        get() {
+          return {
+            async ready() {},
+            async has() {
+              return false
+            },
+          }
+        },
+      },
+      swarm: {
+        connections: new Set([{}]),
+      },
+      semanticFinder: {
+        hasVideo() {
+          return true
+        },
+      },
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      async requestAvailabilityHints() {
+        throw new Error('hint transport timeout')
+      },
+    },
+    loadPublicBee: async () => ({
+      async listVideos() {
+        return [{
+          id: 'video-fallback',
+          title: 'Fallback to swarm peers',
+          uploadedAt: 5,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }]
+      },
+      async getVideo(id) {
+        return {
+          id,
+          title: 'Fallback to swarm peers',
+          uploadedAt: 5,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }
+      },
+    }),
+  })
+
+  const videos = await api.listVideos(driveKey, publicBeeKey)
+
+  t.is(videos.length, 1)
+  t.is(videos[0]?.availability, 'playable')
+})
+
+test('listVideos respects authoritative unavailable hints even when peers are connected', async (t) => {
+  const driveKey = '98'.repeat(32)
+  const publicBeeKey = '76'.repeat(32)
+  const blobsCoreKey = '54'.repeat(32)
+
+  const api = createApi({
+    ctx: {
+      store: {
+        get() {
+          return {
+            async ready() {},
+            async has() {
+              return false
+            },
+          }
+        },
+      },
+      swarm: {
+        connections: new Set([{}, {}]),
+      },
+      semanticFinder: {
+        hasVideo() {
+          return true
+        },
+      },
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      async requestAvailabilityHints() {
+        return [{
+          driveKey,
+          id: 'video-unavailable',
+          availability: 'unavailable',
+          hasHeadBlock: false,
+          contiguousBlocks: 0,
+        }]
+      },
+    },
+    loadPublicBee: async () => ({
+      async listVideos() {
+        return [{
+          id: 'video-unavailable',
+          title: 'Unavailable by hint',
+          uploadedAt: 6,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }]
+      },
+      async getVideo(id) {
+        return {
+          id,
+          title: 'Unavailable by hint',
+          uploadedAt: 6,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }
+      },
+    }),
+  })
+
+  const videos = await api.listVideos(driveKey, publicBeeKey)
+
+  t.is(videos.length, 1)
+  t.is(videos[0]?.availability, 'unavailable')
+})
+
 test('listVideos revalidates cached remote availability on each read', async (t) => {
   const driveKey = '12'.repeat(32)
   const publicBeeKey = '34'.repeat(32)

@@ -24,6 +24,7 @@ import ChannelPageWeb from '../channel/[key].web'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
 import { shouldRenderFeedVideo } from '@/lib/feed-hydration'
+import { getFeedThumbnailResolveKey } from '@/lib/feed-thumbnail-resolve-key.mjs'
 import { getWatchPageKey, shouldUseMsePlayerForWatch } from '@/lib/watch-page-player-mode.mjs'
 
 // Check if running on Pear desktop
@@ -2318,11 +2319,8 @@ export default function HomeScreen() {
   // Lazily resolve thumbnail URLs for feed videos that have blob references
   // but no thumbnailUrl yet. Uses the fast path (thumbnailBlobId/thumbnailBlobsCoreKey)
   // which skips loadChannel entirely.
-  // Retrigger whenever feedVideos changes identity (not just length).
-  const thumbResolveKey = useMemo(
-    () => feedVideos.map((v: any) => `${v.id}:${v.thumbnailUrl ? '1' : '0'}`).join(','),
-    [feedVideos]
-  )
+  // Retrigger whenever thumbnail resolution inputs change, including blob refs.
+  const thumbResolveKey = useMemo(() => getFeedThumbnailResolveKey(feedVideos), [feedVideos])
 
   useEffect(() => {
     if (!rpc || feedVideos.length === 0) return

@@ -263,14 +263,34 @@ async function resolveSectionRecords(section, sources, config, fetchChannelData,
   const selectedSources = sources.slice(0, config.sourceLimit)
   const records = []
 
-  // Per-source fallback (matches Electrobun's index.web.tsx merge behavior):
-  // if listVideos returned anything for this source, trust it exclusively —
-  // its per-video availability is fresher than the preview entries from
-  // getPublicFeed. Only fall back to previews when listVideos came back
-  // empty (timeout, channel not yet loaded). Apply `isVideoViewable` in
-  // either case so non-'playable' entries never reach the snapshot.
+  // Preserve the preview fast path for sources that already expose playable
+  // manifest rows. Those previews are ready to render immediately, while the
+  // richer channel fetch path can stall for seconds behind host RPC timeouts.
+  // If none of a source's previews are currently viewable, fall back to the
+  // fetch path so we can still surface fresher data when available.
+  const sourcesNeedingFetch = []
+  for (const source of selectedSources) {
+    const previewVideos = Array.isArray(source.previewVideos) ? source.previewVideos : []
+    let usedPreview = false
+
+    for (const video of previewVideos.slice(0, config.videosPerChannel)) {
+      if (!isVideoViewable(video, source, identityChannelKeys)) continue
+      const record = videoToRecord(source, {}, video, section)
+      if (record) {
+        records.push(record)
+        usedPreview = true
+      }
+    }
+
+    if (!usedPreview) {
+      sourcesNeedingFetch.push(source)
+    }
+  }
+
+  if (sourcesNeedingFetch.length === 0) return records
+
   const resolvedSources = await Promise.all(
-    selectedSources.map(async (source) => ({
+    sourcesNeedingFetch.map(async (source) => ({
       source,
       result: await fetchChannelData(source).catch(() => null),
     }))
@@ -278,9 +298,7 @@ async function resolveSectionRecords(section, sources, config, fetchChannelData,
 
   for (const { source, result } of resolvedSources) {
     const meta = result?.channelMeta || {}
-    const listedVideos = Array.isArray(result?.videos) ? result.videos : []
-    const previewVideos = Array.isArray(source.previewVideos) ? source.previewVideos : []
-    const videos = listedVideos.length > 0 ? listedVideos : previewVideos
+    const videos = Array.isArray(result?.videos) ? result.videos : []
 
     for (const video of videos.slice(0, config.videosPerChannel)) {
       if (!isVideoViewable(video, source, identityChannelKeys)) continue

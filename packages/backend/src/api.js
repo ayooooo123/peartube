@@ -636,21 +636,19 @@ export function createApi({
             }
           }))
 
-          // Per-video peer confirmation via the public-feed gossip layer. Once
-          // this has been consulted, its answer is authoritative — videos that
-          // came back 'unknown' stay 'unknown' and get hidden by client filters.
-          // The old "swarm has any peers → mark playable" fallback below is
-          // only reached when the hints method is unavailable, because the
-          // broad fallback was surfacing truly-unavailable videos as playable.
+          // Per-video peer confirmation via the public-feed gossip layer.
+          // Treat returned hints as authoritative for that specific video id,
+          // but keep the older peer-count fallback when the transport itself
+          // fails to produce any answer for an id (timeout, mixed versions).
           const hintsQueryable = unknownRequests.length > 0 && typeof publicFeed?.requestAvailabilityHints === 'function'
+          const authoritativeHintIds = new Set()
           if (hintsQueryable) {
             try {
               const hinted = await publicFeed.requestAvailabilityHints(unknownRequests, { timeoutMs: 400, maxPeers: 6 })
               for (const hint of hinted || []) {
                 if (!hint?.id) continue
-                if (hint.availability === 'playable') {
-                  availabilityById.set(hint.id, 'playable')
-                }
+                authoritativeHintIds.add(hint.id)
+                availabilityById.set(hint.id, hint.availability || 'unknown')
               }
             } catch {}
           }
@@ -663,9 +661,11 @@ export function createApi({
             } else if (!id) {
               availability = 'unavailable'
             }
-            if (!hintsQueryable && availability === 'unknown' && id && video?.blobsCoreKey && video?.blobId) {
+            if (availability === 'unknown' && id && video?.blobsCoreKey && video?.blobId && !authoritativeHintIds.has(id)) {
               const peerCount = ctx.swarm?.connections?.size || 0
-              if (peerCount > 0) availability = 'playable'
+              availability = peerCount > 0 ? 'playable' : 'unavailable'
+            } else if (availability === 'unknown') {
+              availability = 'unavailable'
             }
             return {
               ...video,

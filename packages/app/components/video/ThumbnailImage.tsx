@@ -53,7 +53,7 @@ function ThumbnailImageComponent({
 
   const handleRecoverableError = useCallback(() => {
     if (retryAttempt < MAX_IMAGE_RETRIES) {
-      setRetryAttempt(retryAttempt + 1)
+      setRetryAttempt((prev) => prev + 1)
       setImageError(false)
       setImageLoading(true)
       return

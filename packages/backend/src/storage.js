@@ -510,11 +510,28 @@ export async function initializeStorage(config) {
 
     console.log('[Storage] Starting blob server listen...');
     await appendDebugLine('[storage] blob server listen start')
-    await blobServer.listen();
-    blobServerPort = blobServer.port;
     globalBlobServer = blobServer;
-    console.log('[Storage] Blob server listening on port:', blobServerPort);
-    await appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
+    blobServer._peartubeListenResolved = false
+    const blobServerListenPromise = blobServer.listen()
+
+    if (blobServerListenPromise && typeof blobServerListenPromise.then === 'function') {
+      blobServerListenPromise
+        .then(() => {
+          blobServer._peartubeListenResolved = true
+          blobServerPort = blobServer.port || 0
+          console.log('[Storage] Blob server listening on port:', blobServerPort)
+          void appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
+        })
+        .catch((err) => {
+          console.error('[Storage] Blob server listen failed:', err?.message)
+          void appendDebugLine(`[storage] blob server listen failed ${err?.message || String(err)}`)
+        })
+    } else {
+      blobServer._peartubeListenResolved = true
+      blobServerPort = blobServer.port || 0
+      console.log('[Storage] Blob server listening on port:', blobServerPort)
+      await appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
+    }
   } catch (err) {
     console.error('[Storage] Failed to initialize blob server:', err.message);
     await appendDebugLine(`[storage] blob server init failed ${err?.message || String(err)}`)

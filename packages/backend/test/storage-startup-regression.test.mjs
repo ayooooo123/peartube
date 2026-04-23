@@ -24,3 +24,13 @@ test('blob server watchdog lazily loads HTTP only when cast probing is needed', 
   assert.match(storageSource, /async function ensureHttpModule\(\)/)
   assert.match(watchdogBody, /await ensureHttpModule\(\)/)
 })
+
+test('blob server startup does not await listen before storage init can finish', () => {
+  const blobServerBody =
+    storageSource.match(/try \{\n    const desiredPort = blobServerPortOverride \|\| 0;([\s\S]*?)\n  \} catch \(err\) \{/ )?.[1] ?? ''
+
+  assert.ok(blobServerBody, 'blob server startup block should exist')
+  assert.doesNotMatch(blobServerBody, /await blobServer\.listen\(\)/)
+  assert.match(blobServerBody, /const blobServerListenPromise = blobServer\.listen\(\)/)
+  assert.match(blobServerBody, /blobServerListenPromise\s*\.then\(/)
+})

@@ -1,0 +1,25 @@
+name: Setup Node Workspace
+description: Set up Node.js and optionally install the repo workspace dependencies.
+
+inputs:
+  node-version:
+    description: Node.js version to install.
+    required: false
+    default: '22.x'
+  install:
+    description: Whether to run the repo install flow.
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install workspace dependencies
+      if: ${{ inputs.install == 'true' }}
+      shell: bash
+      run: npm run install:all

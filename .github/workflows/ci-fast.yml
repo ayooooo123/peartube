@@ -1,0 +1,76 @@
+name: Fast CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-fast-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'true'
+
+      - name: Run linter
+        run: npm run lint
+
+  backend-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'true'
+
+      - name: Run backend tests
+        run: npm test --prefix packages/backend
+
+  platform-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'true'
+
+      - name: Run platform typecheck
+        run: npm run typecheck --prefix packages/platform
+
+  workflow-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'false'
+
+      - name: Run workflow regression tests
+        run: |
+          node --test \
+            packages/app/tests/ci-lockfile-install-regression.test.mjs \
+            packages/app/tests/android-apk-build-pipeline-regression.test.mjs \
+            packages/app/tests/ci-workflow-split-regression.test.mjs

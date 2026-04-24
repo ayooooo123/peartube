@@ -1,0 +1,154 @@
+name: Release Relay
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build (for example v1.0.0). Leave empty to build from the current ref.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish-relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate release input
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "$REQUESTED_TAG" ]; then
+            case "$REQUESTED_TAG" in
+              v*) ;;
+              *)
+                echo "::error::workflow_dispatch tag must look like v1.2.3"
+                exit 1
+                ;;
+            esac
+
+            git fetch --force --tags origin
+            if ! git rev-parse -q --verify "refs/tags/$REQUESTED_TAG" >/dev/null; then
+              echo "::error::Tag '$REQUESTED_TAG' does not exist on origin"
+              exit 1
+            fi
+          fi
+
+      - name: Checkout requested release tag
+        if: ${{ github.event.inputs.tag != '' }}
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+        run: git checkout --detach "refs/tags/$REQUESTED_TAG"
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'false'
+
+      - name: Install backend dependencies
+        run: npm install --prefix packages/backend --ignore-scripts
+
+      - name: Install relay dependencies
+        run: npm install --prefix packages/cli --ignore-scripts
+
+      - name: Build relay standalone executable (x64)
+        run: npm run build:standalone:linux-x64 --prefix packages/cli
+
+      - name: Build relay standalone executable (arm64)
+        run: npm run build:standalone:linux-arm64 --prefix packages/cli
+
+      - name: Prepare relay docker artifacts
+        run: npm run prepare:docker-artifacts --prefix packages/cli
+
+      - name: Package standalone relay artifacts
+        id: package
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          RELEASE_TAG="$REQUESTED_TAG"
+          if [ -z "$RELEASE_TAG" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            RELEASE_TAG="$GITHUB_REF_NAME"
+          fi
+
+          if [ -n "$RELEASE_TAG" ]; then
+            VERSION="${RELEASE_TAG#v}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+
+          mkdir -p packages/cli/dist/release
+          for host in linux-x64 linux-arm64; do
+            cp "packages/cli/dist/standalone/$host/peartube-relay" "packages/cli/dist/release/peartube-relay-${VERSION}-${host}"
+            tar -C packages/cli/dist/release -czf "packages/cli/dist/release/peartube-relay-${VERSION}-${host}.tar.gz" "peartube-relay-${VERSION}-${host}"
+            rm "packages/cli/dist/release/peartube-relay-${VERSION}-${host}"
+          done
+
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload relay release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: peartube-relay-release
+          path: packages/cli/dist/release/*.tar.gz
+          retention-days: 30
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute Docker tags
+        id: meta
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.package.outputs.release_tag }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/peartube-relay"
+          {
+            echo "tags<<EOF"
+            if [ -n "$RELEASE_TAG" ]; then
+              echo "$IMAGE:$RELEASE_TAG"
+              echo "$IMAGE:latest"
+            fi
+            echo "$IMAGE:sha-${GITHUB_SHA::7}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/cli/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+      - name: Create GitHub Release
+        if: ${{ steps.package.outputs.release_tag != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.package.outputs.release_tag }}
+          files: packages/cli/dist/release/*.tar.gz
+          generate_release_notes: true
+          draft: false

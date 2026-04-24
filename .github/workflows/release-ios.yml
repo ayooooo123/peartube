@@ -1,0 +1,90 @@
+name: Release iOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build (for example v1.0.0). Leave empty to build from the current ref.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-ios-release-artifact:
+    runs-on: macos-14
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'true'
+
+      - uses: ./.github/actions/prepare-mobile-backend
+
+      - name: Prepare iOS frameworks
+        working-directory: packages/app
+        run: npm run ios:prepare
+
+      - name: Install CocoaPods dependencies
+        working-directory: packages/app
+        run: npx pod-install
+
+      - name: Build release simulator app
+        working-directory: packages/app/ios
+        run: |
+          xcodebuild \
+            -workspace PearTube.xcworkspace \
+            -scheme PearTube \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package iOS release artifact
+        working-directory: packages/app/ios
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          RELEASE_TAG="$REQUESTED_TAG"
+          if [ -z "$RELEASE_TAG" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            RELEASE_TAG="$GITHUB_REF_NAME"
+          fi
+
+          if [ -n "$RELEASE_TAG" ]; then
+            VERSION="${RELEASE_TAG#v}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/Build/Products/Release-iphonesimulator/PearTube.app \
+            build/PearTube-ios-simulator-${VERSION}.zip
+
+      - name: Upload iOS release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: peartube-ios-release-artifact
+          path: packages/app/ios/build/PearTube-ios-simulator-*.zip
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: packages/app/ios/build/PearTube-ios-simulator-*.zip
+          generate_release_notes: true
+          draft: false

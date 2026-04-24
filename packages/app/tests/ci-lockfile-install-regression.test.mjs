@@ -13,23 +13,29 @@ function readFile(relativePath) {
 }
 
 test('test workflow avoids root npm cache and npm ci because the repo has no root lockfile', () => {
-  const workflow = readFile('.github/workflows/test.yml')
+  const workflow = readFile('.github/workflows/ci-fast.yml')
+  const setupAction = readFile('.github/actions/setup-node-workspace/action.yml')
   const rootPackage = JSON.parse(readFile('package.json'))
 
-  assert.doesNotMatch(
-    workflow,
-    /cache:\s*'npm'/,
-    'test workflow should not enable setup-node npm cache without a root lockfile',
-  )
-  assert.doesNotMatch(
-    workflow,
-    /\bnpm ci\b/,
-    'test workflow should not use root npm ci in this monorepo',
-  )
   assert.match(
     workflow,
+    /uses:\s+\.\/\.github\/actions\/setup-node-workspace/,
+    'fast CI should use the shared Node workspace setup action',
+  )
+  assert.doesNotMatch(
+    setupAction,
+    /cache:\s*'npm'/,
+    'shared Node setup should not enable setup-node npm cache without a root lockfile strategy',
+  )
+  assert.doesNotMatch(
+    setupAction,
+    /\bnpm ci\b/,
+    'shared Node setup should not use root npm ci in this monorepo',
+  )
+  assert.match(
+    setupAction,
     /npm run install:all/,
-    'test workflow should install dependencies via the repo install:all script',
+    'shared Node setup should install dependencies via the repo install:all script',
   )
   assert.match(
     rootPackage.scripts['install:all'],

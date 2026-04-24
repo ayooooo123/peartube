@@ -1,0 +1,121 @@
+name: Build Relay
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/cli/**'
+      - 'packages/backend/**'
+      - 'packages/bare-ffmpeg/**'
+      - 'packages/spec/**'
+      - 'packages/cli/Dockerfile'
+      - '.dockerignore'
+      - '.github/actions/**'
+      - '.github/workflows/build-relay.yml'
+  push:
+    branches: [main]
+  schedule:
+    - cron: '47 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-relay-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relay-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'false'
+
+      - name: Install backend dependencies
+        run: npm install --prefix packages/backend --ignore-scripts
+
+      - name: Install relay dependencies
+        run: npm install --prefix packages/cli --ignore-scripts
+
+      - name: Run relay CLI tests
+        run: npm test --prefix packages/cli
+
+      - name: Run relay owner metadata regression
+        run: node packages/backend/test/public-channel-owner-metadata.test.mjs
+
+  relay-docker-build:
+    needs: relay-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'false'
+
+      - name: Install backend dependencies
+        run: npm install --prefix packages/backend --ignore-scripts
+
+      - name: Install relay dependencies
+        run: npm install --prefix packages/cli --ignore-scripts
+
+      - name: Build relay standalone executable (x64)
+        run: npm run build:standalone:linux-x64 --prefix packages/cli
+
+      - name: Prepare relay docker artifacts
+        run: npm run prepare:docker-artifacts --prefix packages/cli
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/cli/Dockerfile
+          platforms: linux/amd64
+          push: false
+
+  relay-standalone:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: relay-test
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [linux-x64, linux-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'false'
+
+      - name: Install backend dependencies
+        run: npm install --prefix packages/backend --ignore-scripts
+
+      - name: Install relay dependencies
+        run: npm install --prefix packages/cli --ignore-scripts
+
+      - name: Build relay standalone executable
+        run: npm run build:standalone:${{ matrix.host }} --prefix packages/cli
+
+      - name: Upload relay standalone artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: peartube-relay-${{ matrix.host }}
+          path: packages/cli/dist/standalone/${{ matrix.host }}/peartube-relay
+          retention-days: 14

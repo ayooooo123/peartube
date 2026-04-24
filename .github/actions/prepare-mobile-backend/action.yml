@@ -1,0 +1,9 @@
+name: Prepare Mobile Backend
+description: Regenerate the HRPC spec and backend bundles for mobile packaging.
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare mobile backend
+      shell: bash
+      run: npm run prepare:mobile-backend

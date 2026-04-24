@@ -14,29 +14,47 @@ function readFile(relativePath) {
 }
 
 test('Android GitHub workflows regenerate HRPC spec and backend bundles before APK builds', () => {
-  const buildWorkflow = readFile('.github/workflows/android-build.yml')
-  const releaseWorkflow = readFile('.github/workflows/android-release.yml')
+  const buildWorkflow = readFile('.github/workflows/build-mobile.yml')
+  const releaseWorkflow = readFile('.github/workflows/release-android.yml')
+  const prepareAction = readFile('.github/actions/prepare-mobile-backend/action.yml')
+  const setupAction = readFile('.github/actions/setup-node-workspace/action.yml')
 
   for (const [name, source] of [
-    ['android-build', buildWorkflow],
-    ['android-release', releaseWorkflow],
+    ['build-mobile', buildWorkflow],
+    ['release-android', releaseWorkflow],
   ]) {
     assert.match(
       source,
-      /npm run prepare:mobile-backend/,
-      `${name} workflow should regenerate spec+bundle before Android packaging`,
+      /prepare-mobile-backend/,
+      `${name} workflow should invoke the shared mobile backend preparation action before Android packaging`,
+    )
+    assert.match(
+      source,
+      /setup-node-workspace/,
+      `${name} workflow should use the shared Node workspace setup action`,
     )
     assert.doesNotMatch(
       source,
       /cache:\s*'npm'/,
-      `${name} workflow should not enable setup-node npm cache without a root lockfile`,
+      `${name} workflow should not inline setup-node npm caching without a root lockfile strategy`,
     )
     assert.match(
-      source,
+      setupAction,
       /npm run install:all/,
-      `${name} workflow should use the repo install:all flow instead of root npm ci`,
+      `${name} workflow family should use the repo install:all flow instead of root npm ci`,
     )
   }
+
+  assert.match(
+    prepareAction,
+    /npm run prepare:mobile-backend/,
+    'the shared prepare-mobile-backend action should regenerate spec+bundle before Android packaging',
+  )
+  assert.doesNotMatch(
+    setupAction,
+    /\bnpm ci\b/,
+    'the shared Node setup action should not use root npm ci',
+  )
 })
 
 test('bundle freshness guard watches schema changes and regenerates spec before bundling', () => {

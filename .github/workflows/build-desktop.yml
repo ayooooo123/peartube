@@ -1,0 +1,129 @@
+name: Build Desktop
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/app/**'
+      - 'packages/desktop-native/**'
+      - 'packages/backend/**'
+      - 'packages/core/**'
+      - 'packages/platform/**'
+      - 'packages/spec/**'
+      - 'packages/host/**'
+      - 'packages/protocol/**'
+      - 'packages/bare-mpv/**'
+      - '.github/actions/**'
+      - '.github/workflows/build-desktop.yml'
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-desktop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  electrobun-desktop-build:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'true'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Build desktop web/export assets
+        working-directory: packages/app
+        run: npm run desktop:build
+
+      - name: Build Electrobun desktop app
+        working-directory: packages/app
+        run: npm run desktop:ebuild
+
+      - name: Package Electrobun desktop app artifact
+        working-directory: packages/app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/dev-macos-arm64/PearTube-dev.app \
+            build/PearTube-electrobun-dev-macos-arm64.zip
+
+      - name: Upload Electrobun desktop app
+        uses: actions/upload-artifact@v4
+        with:
+          name: peartube-electrobun-desktop
+          path: packages/app/build/PearTube-electrobun-dev-macos-arm64.zip
+          retention-days: 7
+
+  native-desktop-test:
+    runs-on: macos-14
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'true'
+
+      - name: Install native desktop dependencies
+        run: npm install --prefix packages/desktop-native
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Run native desktop tests
+        run: npm run desktop:native:test
+
+  native-desktop-archive:
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-node-workspace
+        with:
+          node-version: 22.x
+          install: 'true'
+
+      - name: Install native desktop dependencies
+        run: npm install --prefix packages/desktop-native
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate native desktop project
+        working-directory: packages/desktop-native
+        run: npm run generate
+
+      - name: Archive native desktop release build
+        working-directory: packages/desktop-native
+        run: |
+          xcodebuild \
+            -project PearTubeDesktop.xcodeproj \
+            -scheme PearTubeDesktop \
+            -configuration Release \
+            -archivePath build/PearTubeDesktop.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            archive
+
+      - name: Upload native desktop archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: peartube-native-desktop-archive
+          path: packages/desktop-native/build/PearTubeDesktop.xcarchive
+          retention-days: 14

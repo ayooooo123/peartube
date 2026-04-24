@@ -349,7 +349,7 @@ test('listVideos marks videos unavailable when neither local cache nor peer hint
   t.is(videos[0]?.availability, 'unavailable')
 })
 
-test('listVideos falls back to connected peers when availability hint transport fails', async (t) => {
+test('listVideos does not mark remote videos playable from unrelated swarm peers alone', async (t) => {
   const driveKey = 'ab'.repeat(32)
   const publicBeeKey = 'cd'.repeat(32)
   const blobsCoreKey = 'ef'.repeat(32)
@@ -399,6 +399,66 @@ test('listVideos falls back to connected peers when availability hint transport 
           id,
           title: 'Fallback to swarm peers',
           uploadedAt: 5,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }
+      },
+    }),
+  })
+
+  const videos = await api.listVideos(driveKey, publicBeeKey)
+
+  t.is(videos.length, 1)
+  t.is(videos[0]?.availability, 'unavailable')
+})
+
+test('listVideos keeps the local head-block fast path explicitly playable', async (t) => {
+  const driveKey = 'de'.repeat(32)
+  const publicBeeKey = 'ad'.repeat(32)
+  const blobsCoreKey = 'be'.repeat(32)
+
+  const api = createApi({
+    ctx: {
+      store: {
+        get() {
+          return {
+            async ready() {},
+            async has(start, end) {
+              return start === 0 && end === 8
+            },
+          }
+        },
+      },
+      semanticFinder: {
+        hasVideo() {
+          return true
+        },
+      },
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      async requestAvailabilityHints() {
+        return []
+      },
+    },
+    loadPublicBee: async () => ({
+      async listVideos() {
+        return [{
+          id: 'video-local-fast-path',
+          title: 'Locally cached start blocks',
+          uploadedAt: 7,
+          blobId: '0:8:0:1024',
+          blobsCoreKey,
+        }]
+      },
+      async getVideo(id) {
+        return {
+          id,
+          title: 'Locally cached start blocks',
+          uploadedAt: 7,
           blobId: '0:8:0:1024',
           blobsCoreKey,
         }

@@ -612,21 +612,38 @@ export function createApi({
           return { availability, contiguousBlocks, hasHeadBlock }
         }
 
+        const isPlayableAvailabilityHint = (hint) => hint?.availability === 'playable'
+
+        const resolveExplicitVideoAvailability = ({ localHint, peerHint }) => {
+          // Fast path: if our local store already has the opening blocks, the
+          // video is immediately watchable without waiting on remote proof.
+          if (isPlayableAvailabilityHint(localHint)) return 'playable'
+
+          // Remote playability must be explicitly proven by a peer serving hint.
+          if (peerHint?.availability === 'playable') return 'playable'
+          if (peerHint?.availability && peerHint.availability !== 'unknown') {
+            return peerHint.availability
+          }
+
+          return 'unavailable'
+        }
+
         const attachVideoAvailability = async (videos) => {
           if (!Array.isArray(videos) || videos.length === 0) return []
           const MAX_PROBES = 12
           const sample = videos.slice(0, MAX_PROBES)
           const idsToProbe = new Set(sample.map((video) => extractVideoId(video)).filter(Boolean))
 
-          const availabilityById = new Map()
+          const localHintsById = new Map()
+          const peerHintsById = new Map()
           const unknownRequests = []
 
           await Promise.all(Array.from(idsToProbe).map(async (id) => {
             const video = videos.find((candidate) => extractVideoId(candidate) === id)
             if (!video) return
-            const hint = await getLocalVideoAvailabilityHint(video)
-            availabilityById.set(id, hint.availability)
-            if (hint.availability === 'unknown' && video?.blobsCoreKey && video?.blobId) {
+            const localHint = await getLocalVideoAvailabilityHint(video)
+            localHintsById.set(id, localHint)
+            if (!isPlayableAvailabilityHint(localHint) && video?.blobsCoreKey && video?.blobId) {
               unknownRequests.push({
                 driveKey,
                 id,
@@ -637,39 +654,29 @@ export function createApi({
           }))
 
           // Per-video peer confirmation via the public-feed gossip layer.
-          // Treat returned hints as authoritative for that specific video id,
-          // but keep the older peer-count fallback when the transport itself
-          // fails to produce any answer for an id (timeout, mixed versions).
+          // Feed/watchability gating now fails closed: remote videos only become
+          // playable when a peer explicitly proves it can currently serve them.
           const hintsQueryable = unknownRequests.length > 0 && typeof publicFeed?.requestAvailabilityHints === 'function'
-          const authoritativeHintIds = new Set()
           if (hintsQueryable) {
             try {
               const hinted = await publicFeed.requestAvailabilityHints(unknownRequests, { timeoutMs: 400, maxPeers: 6 })
               for (const hint of hinted || []) {
                 if (!hint?.id) continue
-                authoritativeHintIds.add(hint.id)
-                availabilityById.set(hint.id, hint.availability || 'unknown')
+                peerHintsById.set(hint.id, hint)
               }
             } catch {}
           }
 
           return videos.map((video) => {
             const id = extractVideoId(video)
-            let availability = 'unknown'
-            if (id && availabilityById.has(id)) {
-              availability = availabilityById.get(id)
-            } else if (!id) {
-              availability = 'unavailable'
-            }
-            if (availability === 'unknown' && id && video?.blobsCoreKey && video?.blobId && !authoritativeHintIds.has(id)) {
-              const peerCount = ctx.swarm?.connections?.size || 0
-              availability = peerCount > 0 ? 'playable' : 'unavailable'
-            } else if (availability === 'unknown') {
-              availability = 'unavailable'
-            }
             return {
               ...video,
-              availability,
+              availability: id
+                ? resolveExplicitVideoAvailability({
+                    localHint: localHintsById.get(id),
+                    peerHint: peerHintsById.get(id),
+                  })
+                : 'unavailable',
             }
           })
         }

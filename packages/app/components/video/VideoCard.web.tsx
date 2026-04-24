@@ -41,6 +41,17 @@ export function VideoCardDesktop({
   const [imageError, setImageError] = useState(false)
   const [channelHovered, setChannelHovered] = useState(false)
 
+  const channelInteractiveProps = onChannelPress
+    ? {
+        onClick: (e: React.MouseEvent) => {
+          e.stopPropagation()
+          onChannelPress()
+        },
+        onMouseEnter: () => setChannelHovered(true),
+        onMouseLeave: () => setChannelHovered(false),
+      }
+    : null
+
   console.log('[VideoCard.web] Rendering:', id, 'thumbnailUrl:', thumbnailUrl?.slice(0, 50))
 
   return (
@@ -104,9 +115,7 @@ export function VideoCardDesktop({
             transform: channelHovered && onChannelPress ? 'scale(0.92)' : 'scale(1)',
             transition: 'opacity 0.15s ease, transform 0.15s ease',
           }}
-          onClick={onChannelPress ? (e) => { e.stopPropagation(); onChannelPress() } : undefined}
-          onMouseEnter={() => onChannelPress && setChannelHovered(true)}
-          onMouseLeave={() => setChannelHovered(false)}
+          {...(channelInteractiveProps ?? {})}
         >
           {channelAvatarUrl ? (
             <img
@@ -130,9 +139,7 @@ export function VideoCardDesktop({
               cursor: onChannelPress ? 'pointer' : undefined,
               textDecoration: channelHovered && onChannelPress ? 'underline' : 'none',
             }}
-            onClick={onChannelPress ? (e) => { e.stopPropagation(); onChannelPress() } : undefined}
-            onMouseEnter={() => onChannelPress && setChannelHovered(true)}
-            onMouseLeave={() => setChannelHovered(false)}
+            {...(channelInteractiveProps ?? {})}
           >
             {channelName}
           </p>

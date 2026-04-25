@@ -16,6 +16,7 @@
     "corestore": "^7.9.2",
     "hypercore": "^11.28.1",
     "hypercore-blob-server": "^1.12.0",
-    "hyperdrive": "^13.3.2"
+    "hyperdrive": "^13.3.2",
+    "hyperswarm": "^4.17.0"
   }
 }

@@ -35,6 +35,7 @@
     "build:eas:all": "npm run build:eas:all --prefix packages/app",
     "typecheck": "npm run typecheck --prefix packages/platform",
     "test": "npm test --prefix packages/backend",
+    "test:engine": "npm test --prefix packages/engine",
     "test:watch": "npm run test:watch --prefix packages/backend",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx --quiet",
     "lint:fix": "npm run lint -- --fix",

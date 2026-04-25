@@ -16,9 +16,17 @@ export function createVideoRecord({
   channelKey,
   id,
   title,
+  description = '',
   filename = videoSourcePath(id),
   byteLength,
   mimeType = 'video/mp4',
+  category = '',
+  duration = 0,
+  width = 0,
+  height = 0,
+  thumbnail = null,
+  thumbnailMimeType = null,
+  thumbnailByteLength = 0,
   createdAt = Date.now()
 }) {
   return {
@@ -27,10 +35,20 @@ export function createVideoRecord({
     channelKey,
     id,
     title,
+    description,
     filename,
     byteLength,
+    size: byteLength,
     mimeType,
-    createdAt
+    category,
+    duration,
+    width,
+    height,
+    thumbnail,
+    thumbnailMimeType,
+    thumbnailByteLength,
+    createdAt,
+    uploadedAt: createdAt
   }
 }
 
@@ -51,10 +69,20 @@ export function validateVideoRecord(record) {
   if (!isNonEmptyString(record.channelKey)) return fail('video channelKey is required')
   if (!isSafeSegment(record.id)) return fail('video id is invalid')
   if (!isNonEmptyString(record.title)) return fail('video title is required')
+  if (typeof record.description !== 'string') return fail('video description is invalid')
   if (!isSafeVideoFilename(record.filename, record.id)) return fail('video filename is invalid')
   if (!Number.isSafeInteger(record.byteLength) || record.byteLength < 0) return fail('video byteLength is invalid')
+  if (!Number.isSafeInteger(record.size) || record.size !== record.byteLength) return fail('video size is invalid')
   if (!isNonEmptyString(record.mimeType)) return fail('video mimeType is required')
+  if (typeof record.category !== 'string') return fail('video category is invalid')
+  if (!isNonNegativeFiniteNumber(record.duration)) return fail('video duration is invalid')
+  if (!isNonNegativeFiniteNumber(record.width)) return fail('video width is invalid')
+  if (!isNonNegativeFiniteNumber(record.height)) return fail('video height is invalid')
+  if (record.thumbnail !== null && typeof record.thumbnail !== 'string') return fail('video thumbnail is invalid')
+  if (record.thumbnailMimeType !== null && typeof record.thumbnailMimeType !== 'string') return fail('video thumbnailMimeType is invalid')
+  if (!Number.isSafeInteger(record.thumbnailByteLength) || record.thumbnailByteLength < 0) return fail('video thumbnailByteLength is invalid')
   if (!isFiniteNumber(record.createdAt)) return fail('video createdAt is required')
+  if (record.uploadedAt !== record.createdAt) return fail('video uploadedAt is invalid')
   return ok()
 }
 
@@ -68,6 +96,11 @@ export function videoSourcePath(id) {
   return `/videos/${id}/source.mp4`
 }
 
+export function videoThumbnailPath(id) {
+  if (!isSafeSegment(id)) throw new Error('invalid video id')
+  return `/videos/${id}/thumbnail`
+}
+
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -78,6 +111,10 @@ function isNonEmptyString(value) {
 
 function isFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isNonNegativeFiniteNumber(value) {
+  return isFiniteNumber(value) && value >= 0
 }
 
 function isSafeSegment(value) {

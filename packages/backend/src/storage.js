@@ -1478,13 +1478,6 @@ export async function shutdownBackend(ctx) {
       ctx._swarmDiscoveryHandles.clear()
     }
 
-    if (ctx.engineAdapter) {
-      console.log('[Backend] Shutdown: closing engineAdapter...')
-      await runShutdownStep('engineAdapter close', async () => {
-        await ctx.engineAdapter.close()
-      }, 2000)
-    }
-
     if (ctx.blobServer) {
       console.log('[Backend] Shutdown: closing blobServer...')
       await runShutdownStep('blobServer close', async () => {

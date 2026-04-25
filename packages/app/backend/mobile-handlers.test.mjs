@@ -7,20 +7,18 @@ function createDeps(overrides = {}) {
   return {
     api: {},
     identityManager: {},
-    uploadManager: {},
     ctx: {},
     initializeIdentityFromMnemonic: async () => ({ needsRestart: false }),
     rpc: {},
     fs: {},
     path: {},
-    generateAndStoreThumbnail: async () => null,
     transcoder: {},
     storagePath: '/tmp/peartube-test',
     ...overrides,
   }
 }
 
-test('uploadVideo delegates to engine-backed api.uploadVideo before old upload manager', async () => {
+test('uploadVideo delegates to engine-backed api.uploadVideo', async () => {
   const backend = {}
   const calls = []
   const deps = createDeps({
@@ -40,11 +38,6 @@ test('uploadVideo delegates to engine-backed api.uploadVideo before old upload m
     },
     rpc: {
       eventUploadProgress() {}
-    },
-    uploadManager: {
-      async uploadFromPath() {
-        throw new Error('old upload manager should not be used')
-      }
     }
   })
 

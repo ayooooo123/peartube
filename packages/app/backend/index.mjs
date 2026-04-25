@@ -17,7 +17,6 @@ let shutdownBackend = null
 let setCastActive = null
 let isCastActive = null
 let prefetchVideoForCast = null
-let generateAndStoreThumbnail = null
 let path = null
 let fs = null
 let b4a = null
@@ -27,8 +26,6 @@ let castTranscoder = null
 let fsNativeExtensions = null
 let transcoderPromise = null
 let castTranscoderPromise = null
-let thumbnailModule = null
-let thumbnailModulePromise = null
 let httpModulePromise = null
 let fsNativeExtensionsPromise = null
 
@@ -82,24 +79,6 @@ async function loadBackendModules() {
   }
 }
 
-async function ensureBackendThumbnailModule() {
-  if (thumbnailModule) return thumbnailModule
-  if (!thumbnailModulePromise) {
-    thumbnailModulePromise = import('@peartube/backend/thumbnail')
-      .then((module) => {
-        thumbnailModule = module
-        generateAndStoreThumbnail = module?.generateAndStoreThumbnail
-        return module
-      })
-      .catch((error) => {
-        thumbnailModulePromise = null
-        throw error
-      })
-  }
-
-  return thumbnailModulePromise
-}
-
 async function ensureHttpModule() {
   if (http1) return http1
   if (!httpModulePromise) {
@@ -137,7 +116,8 @@ async function ensureFsNativeExtensionsModule() {
 async function ensureTranscoderModule() {
   if (transcoder) return transcoder
   if (!transcoderPromise) {
-    transcoderPromise = import('./transcoder.mjs')
+    const transcoderSpecifier = './' + 'transcoder.mjs'
+    transcoderPromise = import(transcoderSpecifier)
       .then((module) => {
         transcoder = module
         return module
@@ -154,7 +134,8 @@ async function ensureTranscoderModule() {
 async function ensureCastTranscoderModule() {
   if (castTranscoder) return castTranscoder
   if (!castTranscoderPromise) {
-    castTranscoderPromise = import('@peartube/backend/transcode/cast-transcoder')
+    const castTranscoderSpecifier = '@peartube/backend/transcode/' + 'cast-transcoder'
+    castTranscoderPromise = import(castTranscoderSpecifier)
       .then((module) => {
         castTranscoder = module
         return module
@@ -344,7 +325,6 @@ export async function createMobileRuntimeBackend(options = {}) {
   let ownerLockFd = -1
   let backendCtx = null
   let closeCastProxyServer = () => {}
-  let feedRefreshInterval = null
   let shutdownInFlight = null
 
   function reportBackendError(label, error) {
@@ -537,8 +517,6 @@ function removeStaleLocks(storageDir) {
     ctx,
     api,
     identityManager,
-    uploadManager,
-    publicFeed,
     initializeIdentityFromMnemonic
   } = backend
 
@@ -576,16 +554,11 @@ function removeStaleLocks(storageDir) {
   attachMobileHandlers(backend, {
     api,
     identityManager,
-    uploadManager,
     ctx,
     initializeIdentityFromMnemonic,
     rpc,
     fs,
     path,
-    generateAndStoreThumbnail: async (...args) => {
-      const module = await ensureBackendThumbnailModule()
-      return module.generateAndStoreThumbnail(...args)
-    },
     transcoder: lazyTranscoder,
     storagePath
   })
@@ -644,7 +617,6 @@ function removeStaleLocks(storageDir) {
 
     shutdownInFlight = (async () => {
       setIsShuttingDown(true)
-      if (feedRefreshInterval) clearInterval(feedRefreshInterval)
       await shutdownBackend(ctx)
       closeCastProxyServer('host-terminate')
       closeOwnerLock()
@@ -673,37 +645,6 @@ function removeStaleLocks(storageDir) {
     IPC.on('end', () => castCleanup.enterHeadlessMode?.('ipc-end'))
   }
 
-  async function restoreFeedCache() {
-    try {
-      const cache = await ctx.metaDb.get('public-feed-cache').catch(() => null)
-      const entries = cache?.value || []
-      if (!Array.isArray(entries) || entries.length === 0) return
-      for (const entry of entries) {
-        try {
-          if (typeof entry === 'object' && entry.driveKey) {
-            publicFeed.addEntry(entry.driveKey, 'peer', entry.publicBeeKey || null)
-          } else if (typeof entry === 'string') {
-            publicFeed.addEntry(entry, 'peer')
-          }
-        } catch {}
-      }
-    } catch {}
-  }
-
-  async function persistFeedCache() {
-    try {
-      await ctx.metaDb.put(
-        'public-feed-cache',
-        publicFeed.getFeed().map((entry) => ({
-          driveKey: entry.driveKey,
-          publicBeeKey: entry.publicBeeKey || null
-        }))
-      )
-    } catch {}
-  }
-
-  await restoreFeedCache()
-
   const blobPort = ctx.blobServer?.port || ctx.blobServerPort || 0
   onReady({ blobServerPort: blobPort, protocolVersion: PROTOCOL_VERSION })
 
@@ -716,20 +657,6 @@ function removeStaleLocks(storageDir) {
   } catch (error) {
     console.error('[Backend] Failed to send eventReady:', error.message)
   }
-
-  feedRefreshInterval = setInterval(() => {
-    try {
-      publicFeed.requestFeedsFromPeers()
-      persistFeedCache()
-    } catch {}
-  }, 30000)
-
-  publicFeed.setOnFeedUpdate(() => {
-    persistFeedCache()
-    try {
-      rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' })
-    } catch {}
-  })
 
   if (typeof Bare !== 'undefined' && Bare?.on) {
     Bare.on('exit', () => {
@@ -752,16 +679,11 @@ function removeStaleLocks(storageDir) {
     handlerDeps: {
       api,
       identityManager,
-      uploadManager,
       ctx,
       initializeIdentityFromMnemonic,
       rpc,
       fs,
       path,
-      generateAndStoreThumbnail: async (...args) => {
-        const module = await ensureBackendThumbnailModule()
-        return module.generateAndStoreThumbnail(...args)
-      },
       transcoder: lazyTranscoder,
       storagePath
     },

@@ -1,23 +1,13 @@
-export async function createRelayRuntime({ config, logger }) {
-  const [
-    { initializeStorage, loadChannel, loadPublicBee },
-    { PublicFeedManager },
-    { CacheManager },
-    { readPrimaryKeyFile, writePrimaryKeyFile }
-  ] = await Promise.all([
-    import('@peartube/backend/storage'),
-    import('@peartube/backend/public-feed'),
-    import('./cache-manager.js'),
-    import('../../backend/src/identity-key-file.js')
-  ])
+import { randomBytes } from 'node:crypto'
 
+import { createBackendContext } from '@peartube/backend/orchestrator'
+import { shutdownBackend } from '@peartube/backend/storage'
+import { CacheManager } from './cache-manager.js'
+import { readPrimaryKeyFile, writePrimaryKeyFile } from '../../backend/src/identity-key-file.js'
+
+export async function createRelayRuntime({ config, logger }) {
   const storageRoot = config.storage.path
 
-  // IMPORTANT: backend storage expects the top-level relay storage root here.
-  // The nested `<root>/corestore` directory is part of the normal on-disk layout.
-  // Relay runtime bypasses the backend orchestrator, so it must persist/reuse the
-  // Corestore primaryKey itself. Otherwise each restart opens the same storage
-  // with a new random primary key, which can produce device-file/Corestore errors.
   let primaryKey = null
   try {
     primaryKey = await readPrimaryKeyFile(storageRoot)
@@ -28,148 +18,72 @@ export async function createRelayRuntime({ config, logger }) {
     })
   }
 
-  const ctx = await initializeStorage({
-    storagePath: storageRoot,
-    primaryKey,
-    wrapTimeout: true,
-    // Docker/bind-mounted relay volumes can trip device-file inode/mtime validation
-    // across clean container restarts even with the same persisted primary key.
-    // The relay is a single-writer service, so disable device-file enforcement here.
-    corestoreAllowBackup: true
-  })
-
-  if (!primaryKey && ctx?.store?.primaryKey) {
+  if (!primaryKey) {
+    primaryKey = randomBytes(32)
     try {
-      await writePrimaryKeyFile(storageRoot, ctx.store.primaryKey)
-      logger.runtime?.info('Persisted relay Corestore primary key', { storageRoot })
+      await writePrimaryKeyFile(storageRoot, primaryKey)
+      logger.runtime?.info('Persisted relay runtime key', { storageRoot })
     } catch (err) {
-      logger.runtime?.warn('Failed to persist relay primary-key file', {
+      logger.runtime?.warn('Failed to persist relay runtime key', {
         error: err?.message || String(err),
         storageRoot,
       })
     }
   }
 
-  const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb)
+  const backend = await createBackendContext({ storagePath: storageRoot })
+  const ctx = backend.ctx
+  ctx.store = createRelayStoreFacade(primaryKey)
+
+  const publicFeed = createRelayFeedFacade()
   const cacheManager = new CacheManager(ctx.store, ctx.metaDb, config?.storage?.maxBytes || 0)
   let candidateHandler = null
 
-  function emitFeedEntries() {
+  function emitConfiguredCandidates() {
     if (typeof candidateHandler !== 'function') return
-
-    for (const entry of publicFeed.entries.values()) {
-      if (!entry?.driveKey) continue
-      candidateHandler({
-        channelKey: entry.driveKey,
-        publicBeeKey: entry.publicBeeKey || null,
-        source: 'discovered'
-      })
+    for (const channelKey of config.admission?.channels || []) {
+      if (!channelKey) continue
+      candidateHandler({ channelKey, source: 'config' })
     }
   }
-
-  ctx.swarm.on('connection', (conn, info) => {
-    publicFeed.handleConnection(conn, info)
-  })
-
-  publicFeed.setOnFeedUpdate(() => {
-    try {
-      for (const entry of publicFeed.entries.values()) {
-        if (entry?.driveKey && entry?.publicBeeKey) {
-          cacheManager.addChannel(entry.driveKey, entry.publicBeeKey, 'discovered').catch(() => {})
-        }
-      }
-      emitFeedEntries()
-    } catch (err) {
-      logger.runtime?.error('Feed update failed', { error: err?.message || String(err) })
-    }
-  })
 
   return {
     ctx,
     publicFeed,
     cacheManager,
+    backend,
     setCandidateHandler(handler) {
       candidateHandler = handler
     },
     async start() {
-      logger.runtime?.info('Initializing relay runtime', {
+      logger.runtime?.info('Initializing engine relay runtime', {
         storagePath: config.storage.path,
         storageRoot,
         mode: config.mode,
         policy: config.policy
       })
       await cacheManager.init()
-      await publicFeed.start()
-
-      // Restore mirrored/cached channels as actively served feed entries so the
-      // relay behaves like a real serving peer even when original publishers are offline.
-      for (const channel of cacheManager.getChannels()) {
-        if (!channel?.driveKey || !channel?.publicBeeKey) continue
-        try {
-          await loadPublicBee(ctx, channel.publicBeeKey)
-          await publicFeed.submitChannel(channel.driveKey, channel.publicBeeKey)
-        } catch (err) {
-          logger.runtime?.debug('Failed to restore cached mirrored channel', {
-            channelKey: channel.driveKey,
-            error: err?.message || String(err)
-          })
-        }
-      }
-
+      emitConfiguredCandidates()
       logger.runtime?.info('Relay runtime started', this.getNetworkStats())
-      emitFeedEntries()
     },
     requestFeedSync() {
-      try {
-        return publicFeed.requestFeedsFromPeers?.() || 0
-      } catch (err) {
-        logger.feed?.warn('Initial feed sync request failed', {
-          error: err?.message || String(err)
-        })
-        return 0
-      }
+      return 0
     },
     async resolveCandidate(candidate) {
+      const channelKey = candidate?.channelKey || candidate?.driveKey
       const resolved = {
         ...candidate,
-        channelKey: candidate.channelKey || candidate.driveKey
+        channelKey,
+        publicBeeKey: candidate?.publicBeeKey || null,
+        ownerKey: candidate?.ownerKey || null
       }
 
-      if (resolved.publicBeeKey) {
+      if (channelKey) {
         try {
-          const bee = await loadPublicBee(ctx, resolved.publicBeeKey)
-          const meta = await bee.getMetadata().catch(() => null)
-          resolved.ownerKey = resolved.ownerKey || meta?.createdBy || meta?.publicKey || null
+          await backend.engineAdapter?.ensureEngineForUiChannel?.(channelKey, { name: candidate?.channelName })
         } catch (err) {
-          logger.runtime?.debug('Public bee metadata lookup failed', {
-            channelKey: resolved.channelKey,
-            error: err?.message || String(err)
-          })
-        }
-      }
-
-      if (!resolved.publicBeeKey || !resolved.ownerKey) {
-        try {
-          const channel = await loadChannel(ctx, resolved.channelKey)
-          const meta = await channel.getMetadata().catch(() => null)
-          resolved.publicBeeKey = resolved.publicBeeKey || channel.publicBeeKey || meta?.publicBeeKey || null
-          resolved.ownerKey = resolved.ownerKey || meta?.createdBy || meta?.publicKey || null
-        } catch (err) {
-          logger.runtime?.debug('Channel metadata lookup failed', {
-            channelKey: resolved.channelKey,
-            error: err?.message || String(err)
-          })
-        }
-      }
-
-      if (!resolved.ownerKey && resolved.publicBeeKey) {
-        try {
-          const bee = await loadPublicBee(ctx, resolved.publicBeeKey)
-          const meta = await bee.getMetadata().catch(() => null)
-          resolved.ownerKey = meta?.createdBy || meta?.publicKey || null
-        } catch (err) {
-          logger.runtime?.debug('Owner fallback lookup failed', {
-            channelKey: resolved.channelKey,
+          logger.runtime?.debug('Engine candidate open failed', {
+            channelKey,
             error: err?.message || String(err)
           })
         }
@@ -178,20 +92,48 @@ export async function createRelayRuntime({ config, logger }) {
       return resolved
     },
     getNetworkStats() {
-      const feedStats = publicFeed.getStats?.() || {}
       return {
-        peers: ctx.swarm?.peers?.size || 0,
-        connections: ctx.swarm?.connections?.size || 0,
-        feedPeers: feedStats.peerCount || 0,
-        feedConnections: publicFeed.feedConnections?.size || 0,
-        feedEntries: feedStats.totalEntries || 0
+        peers: 0,
+        connections: 0,
+        feedPeers: 0,
+        feedConnections: 0,
+        feedEntries: 0
       }
     },
     async close() {
       try { publicFeed.stop() } catch {}
-      try { await ctx.swarm.destroy() } catch {}
-      try { ctx.blobServer?.close?.() } catch {}
-      try { await ctx.store.close() } catch {}
+      await shutdownBackend(ctx)
+      ctx.store.closed = true
     }
+  }
+}
+
+function createRelayStoreFacade(primaryKey) {
+  return {
+    primaryKey,
+    closed: false,
+    get() {
+      throw new Error('Legacy Corestore access removed from relay runtime; use @peartube/engine')
+    },
+    async close() {
+      this.closed = true
+    }
+  }
+}
+
+function createRelayFeedFacade() {
+  return {
+    entries: new Map(),
+    feedConnections: new Set(),
+    setOnFeedUpdate() {},
+    async start() {},
+    stop() {},
+    handleConnection() {},
+    async submitChannel(channelKey, publicBeeKey = null) {
+      if (channelKey) this.entries.set(channelKey, { driveKey: channelKey, publicBeeKey })
+      return true
+    },
+    requestFeedsFromPeers() { return 0 },
+    getStats() { return { totalEntries: this.entries.size, peerCount: 0 } }
   }
 }

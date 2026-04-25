@@ -86,12 +86,11 @@ function buildSharedSystemHandlers(backend) {
   }
 }
 
-async function attachSharedAppHandlers(options) {
+export async function attachSharedAppHandlers(options) {
   const {
     backend,
     api,
     identityManager,
-    uploadManager,
     ctx,
     rpc,
     storagePath,
@@ -107,7 +106,6 @@ async function attachSharedAppHandlers(options) {
   attachMobileHandlers(backend, {
     api,
     identityManager,
-    uploadManager,
     ctx,
     initializeIdentityFromMnemonic:
       typeof backend?.initializeIdentityFromMnemonic === 'function'
@@ -117,7 +115,6 @@ async function attachSharedAppHandlers(options) {
     fs: null,
     path: null,
     storagePath,
-    generateAndStoreThumbnail: async () => null,
     transcoder: {
       async startTranscode() {
         return { success: false, error: 'Transcoding is not wired in the embedded native host yet.' }
@@ -226,7 +223,6 @@ export function createBackendRuntime(opts = {}) {
           backend,
           api: backend.api,
           identityManager: backend.identityManager,
-          uploadManager: backend.uploadManager,
           ctx: backend.ctx,
           rpc,
           storagePath,
@@ -275,5 +271,6 @@ export function createBackendRuntime(opts = {}) {
 }
 
 export default {
-  createBackendRuntime
+  createBackendRuntime,
+  attachSharedAppHandlers
 }

@@ -15,7 +15,6 @@ import {
 } from './bridge-core.mjs'
 import { resolvePlaybackViaClient } from './playback-resolution.mjs'
 import * as mobileHandlersModule from '../../app/backend/mobile-handlers.mjs'
-import * as thumbnailModule from '../../backend/src/thumbnail.js'
 
 const defaultMpvWidth = 1280
 const defaultMpvHeight = 720
@@ -432,7 +431,6 @@ async function createNativeSidecarBackend(options = {}) {
   if (backend && rpc && typeof attachMobileHandlers === 'function') {
     const path = pathModule?.default ?? pathModule
     const fs = fsModule?.default ?? fsModule
-    const generateAndStoreThumbnail = thumbnailModule?.generateAndStoreThumbnail
     const transcoder = {
       startTranscode: async () => ({ success: false, error: 'Transcoding is not wired in the native sidecar yet.' }),
       stopTranscode: () => ({ success: false, error: 'Transcoding is not wired in the native sidecar yet.' }),
@@ -442,14 +440,12 @@ async function createNativeSidecarBackend(options = {}) {
     attachMobileHandlers(backend, {
       api: backend.api,
       identityManager: backend.identityManager,
-      uploadManager: backend.uploadManager,
       ctx: backend.ctx,
       initializeIdentityFromMnemonic: backend.initializeIdentityFromMnemonic?.bind?.(backend)
         ?? backend.initializeIdentityFromMnemonic,
       rpc,
       fs,
       path,
-      generateAndStoreThumbnail,
       transcoder,
       storagePath: options.storagePath,
     })

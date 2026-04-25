@@ -1,2 +1,3 @@
-export { PublicFeedManager } from './public-feed.js'
-export { hashFeedEntries, hashPreviewVideos, hashValue } from './hash-utils.js'
+export function createPublicFeedStub() {
+  return { getFeed: () => [], getStats: () => ({ totalEntries: 0, hiddenCount: 0, peerCount: 0 }) }
+}

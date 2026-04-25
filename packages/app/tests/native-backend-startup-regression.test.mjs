@@ -50,7 +50,8 @@ test('mobile backend entry keeps cast, thumbnail, and native-lock modules out of
   assert.doesNotMatch(loadBackendModulesBody, /import\('bare-http1'\)/)
   assert.doesNotMatch(loadBackendModulesBody, /import\('fs-native-extensions'\)/)
   assert.match(source, /attachLazyCastHandlers/)
-  assert.match(source, /ensureBackendThumbnailModule/)
+  assert.doesNotMatch(source, /ensureBackendThumbnailModule/)
+  assert.doesNotMatch(source, /@peartube\/backend\/thumbnail/)
   assert.match(source, /ensureHttpModule/)
   assert.match(source, /ensureFsNativeExtensionsModule/)
 })
@@ -77,10 +78,12 @@ test('native root layout clears the backend startup timeout when an explicit sta
   assert.match(catchBlock, /startupTimerRef\.current = null/)
 })
 
-test('backend orchestrator defers warm-up behind startup gates and does not force a boot-time feed sync request', () => {
+test('backend orchestrator is engine-first and does not force legacy boot-time feed sync', () => {
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 
-  assert.match(source, /createStartupGate/)
-  assert.match(source, /startupGate\.waitUntilOpen\(\)/)
+  assert.match(source, /createEngineAdapter/)
+  assert.match(source, /createPublicFeedStub/)
+  assert.doesNotMatch(source, /createStartupGate/)
+  assert.doesNotMatch(source, /startupGate\.waitUntilOpen\(\)/)
   assert.doesNotMatch(source, /publicFeed\.requestFeedsFromPeers\(\)/)
 })

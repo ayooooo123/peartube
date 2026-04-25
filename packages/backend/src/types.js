@@ -13,15 +13,12 @@
 
 /**
  * @typedef {Object} StorageContext
- * @property {import('corestore')} store - Corestore instance
- * @property {import('hyperbee')} metaDb - Metadata database (Hyperbee)
- * @property {import('hyperswarm')} swarm - Hyperswarm instance
- * @property {import('hypercore-blob-server')} blobServer - Blob server instance
- * @property {number} blobServerPort - Blob server port
+ * @property {string} storagePath - Backend storage directory
+ * @property {any} engineAdapter - Engine adapter owning Hyperdrive/Corestore lifecycle
+ * @property {any} identityManager - Lightweight identity manager
+ * @property {number} blobServerPort - Engine blob server port
  * @property {string} [blobServerHost] - Blob server host
  * @property {string} [blobServerBindHost] - Blob server bind host
- * @property {Map<string, any>} [channels] - Loaded multi-writer channels cache (keyed by channelKey hex)
- * @property {any} [wakeup] - Protomux wakeup instance for content announcements
  */
 
 /**

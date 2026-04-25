@@ -10,8 +10,8 @@
 
 export class CacheManager {
   /**
-   * @param {import('corestore')} store
-   * @param {import('hyperbee')} metaDb
+   * @param {unknown} store - Legacy constructor slot retained for CLI callers.
+   * @param {{ get(key: string): Promise<{ value?: unknown } | null | undefined>, put(key: string, value: unknown): Promise<void> }} metaDb
    * @param {number} maxBytes
    */
   constructor(store, metaDb, maxBytes) {

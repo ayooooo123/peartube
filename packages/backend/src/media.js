@@ -1,3 +1,3 @@
-export { createUploadManager } from './upload.js'
-export { generateThumbnail } from './thumbnail.js'
-export * as transcode from './transcode/index.js'
+export function createUploadManager() {
+  throw new Error('Old upload manager removed; use @peartube/engine through api.uploadVideo')
+}

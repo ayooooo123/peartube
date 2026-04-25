@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto'
 import b4a from 'b4a'
 import Corestore from 'corestore'
 import Hyperdrive from 'hyperdrive'
@@ -84,8 +83,7 @@ export class PearTubeEngine {
   }
 
   async writeVideoFile(filePath, options = {}) {
-    const { readFile } = await import('node:fs/promises')
-    const bytes = await readFile(filePath)
+    const bytes = await readFileBytes(filePath)
     return this.writeVideo({
       ...options,
       bytes,
@@ -216,7 +214,27 @@ async function readJsonFromDrive(drive, filename, opts) {
 }
 
 function createVideoId() {
-  return randomBytes(16).toString('hex')
+  const bytes = new Uint8Array(16)
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes)
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256)
+  }
+  return b4a.toString(bytes, 'hex')
+}
+
+async function readFileBytes(filePath) {
+  const bareFsName = 'bare-' + 'fs'
+  try {
+    const bareFsModule = await import(bareFsName)
+    const bareFs = bareFsModule.default || bareFsModule
+    if (typeof bareFs.readFileSync === 'function') return bareFs.readFileSync(filePath)
+    if (bareFs.promises?.readFile) return bareFs.promises.readFile(filePath)
+  } catch {}
+
+  const nodeFsPromisesName = 'node:' + 'fs/promises'
+  const { readFile } = await import(nodeFsPromisesName)
+  return readFile(filePath)
 }
 
 function detectMimeType(bytes) {

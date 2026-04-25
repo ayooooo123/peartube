@@ -1,70 +1,41 @@
-import { createBackendContext } from '@peartube/backend/orchestrator'
-import { shutdownBackend } from '@peartube/backend/storage'
+import { initializeStorage, loadPublicBee } from '@peartube/backend/storage'
+import { PublicFeedManager } from '@peartube/backend/public-feed'
 import { CacheManager } from './cache-manager.js'
 
 /**
- * Engine-first peer initializer kept for older CLI/service call sites.
- * PublicBee/Autobase discovery was removed; pinned channels now open engine state
- * and are tracked only in the relay cache metadata.
- *
  * @param {{ storagePath: string, maxBytes: number, pinnedChannels?: string[] }} options
+ * @returns {Promise<{ ctx: any, publicFeed: PublicFeedManager, cacheManager: CacheManager }>}
  */
 export async function initPeer ({ storagePath, maxBytes, pinnedChannels = [] }) {
-  const backend = await createBackendContext({ storagePath })
-  const ctx = backend.ctx
-  ctx.store = ctx.store || createStoreFacade()
-  const publicFeed = createPublicFeedFacade()
-  const cacheManager = new CacheManager(ctx.store, ctx.metaDb, maxBytes)
+  const ctx = await initializeStorage({ storagePath, wrapTimeout: true })
 
+  const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb)
+
+  const cacheManager = new CacheManager(ctx.store, ctx.metaDb, maxBytes)
   await cacheManager.init()
 
+  ctx.swarm.on('connection', (conn, info) => {
+    publicFeed.handleConnection(conn, info)
+  })
+
+  publicFeed.setOnFeedUpdate(() => {
+    for (const entry of publicFeed.entries.values()) {
+      if (entry.driveKey && entry.publicBeeKey) {
+        cacheManager.addChannel(entry.driveKey, entry.publicBeeKey, 'discovered').catch(() => {})
+      }
+    }
+  })
+
+  await publicFeed.start()
+
   for (const key of pinnedChannels) {
-    if (!key) continue
     try {
       await cacheManager.pinChannel(key, key)
-      await backend.engineAdapter?.ensureEngineForUiChannel?.(key)
+      await loadPublicBee(ctx, key)
     } catch (err) {
-      console.error('[initPeer] Failed to pin engine channel:', key.slice(0, 16), err?.message || err)
+      console.error('[initPeer] Failed to pin channel:', key.slice(0, 16), err.message)
     }
   }
 
-  return {
-    ctx,
-    backend,
-    publicFeed,
-    cacheManager,
-    async close() {
-      publicFeed.stop()
-      await shutdownBackend(ctx)
-    }
-  }
-}
-
-function createStoreFacade() {
-  return {
-    closed: false,
-    get() {
-      throw new Error('Legacy Corestore access removed from CLI init; use @peartube/engine')
-    },
-    async close() {
-      this.closed = true
-    }
-  }
-}
-
-function createPublicFeedFacade() {
-  return {
-    entries: new Map(),
-    feedConnections: new Set(),
-    setOnFeedUpdate() {},
-    async start() {},
-    stop() {},
-    handleConnection() {},
-    async submitChannel(channelKey, publicBeeKey = null) {
-      if (channelKey) this.entries.set(channelKey, { driveKey: channelKey, publicBeeKey })
-      return true
-    },
-    requestFeedsFromPeers() { return 0 },
-    getStats() { return { totalEntries: this.entries.size, peerCount: 0 } }
-  }
+  return { ctx, publicFeed, cacheManager }
 }

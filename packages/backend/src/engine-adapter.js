@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { createEngine } from '@peartube/engine'
 
 const ENGINE_MAPPING_PREFIX = 'engine-channel:'
@@ -106,10 +107,6 @@ export function createEngineAdapter({
       }
     },
 
-    adaptVideo(record, uiChannelKey) {
-      return adaptEngineVideoRecord(record, uiChannelKey)
-    },
-
     async close() {
       const closeTasks = []
       for (const engine of engines.values()) {
@@ -160,20 +157,9 @@ function mappingKey(uiChannelKey) {
 }
 
 function engineStoragePath(basePath, uiChannelKey) {
-  return joinPath(basePath, 'engine-channels', sanitizePathSegment(uiChannelKey))
+  return join(basePath, 'engine-channels', sanitizePathSegment(uiChannelKey))
 }
 
 function sanitizePathSegment(value) {
   return String(value || 'channel').replace(/[^a-zA-Z0-9._-]/g, '_')
-}
-
-function joinPath(...parts) {
-  return parts
-    .filter((part) => part !== null && part !== undefined && String(part).length > 0)
-    .map((part, index) => {
-      const value = String(part)
-      if (index === 0) return value.replace(/\/+$/g, '')
-      return value.replace(/^\/+|\/+$/g, '')
-    })
-    .join('/')
 }

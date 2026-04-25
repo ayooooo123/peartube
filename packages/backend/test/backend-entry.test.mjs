@@ -12,6 +12,7 @@ test('attachSharedAppHandlers skips loading shared app handlers unless requested
     rpc: {},
     api: {},
     identityManager: {},
+    uploadManager: {},
     ctx: {},
     storagePath: '/tmp/peartube-test',
     autoAttachSharedAppHandlers: false,
@@ -39,6 +40,7 @@ test('attachSharedAppHandlers loads shared app handlers when explicitly enabled'
   const rpc = {}
   const api = {}
   const identityManager = {}
+  const uploadManager = {}
   const ctx = {}
 
   const attached = await backendEntry.attachSharedAppHandlers({
@@ -46,6 +48,7 @@ test('attachSharedAppHandlers loads shared app handlers when explicitly enabled'
     rpc,
     api,
     identityManager,
+    uploadManager,
     ctx,
     storagePath: '/tmp/peartube-test',
     autoAttachSharedAppHandlers: true,
@@ -66,6 +69,7 @@ test('attachSharedAppHandlers loads shared app handlers when explicitly enabled'
   t.is(attachedDeps.rpc, rpc)
   t.is(attachedDeps.api, api)
   t.is(attachedDeps.identityManager, identityManager)
+  t.is(attachedDeps.uploadManager, uploadManager)
   t.is(attachedDeps.ctx, ctx)
   t.is(attachedDeps.storagePath, '/tmp/peartube-test')
 })

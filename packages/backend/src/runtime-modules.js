@@ -66,6 +66,13 @@ export async function loadBareOrNodePathModule() {
   return unwrapModule(await import(nodePathName))
 }
 
+export async function loadHyperswarmModule() {
+  const required = tryRequire('hyperswarm')
+  if (required) return required
+
+  return unwrapModule(await import('hyperswarm'))
+}
+
 export async function loadBareOrNodeHttpModule() {
   const required = tryRequire('bare-http1')
   if (required) return required

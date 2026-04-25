@@ -13,7 +13,7 @@
  * @param {Object} deps - Dependencies from the backend context
  */
 export function attachMobileHandlers(B, deps) {
-  const { api, identityManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, transcoder } = deps
+  const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder } = deps
 
   // --- Identity handlers ---
   B.createIdentity = async (r) => {
@@ -239,8 +239,18 @@ export function attachMobileHandlers(B, deps) {
     const onProgress = (progress, bytesWritten, totalBytes, stats) => {
       rpc.eventUploadProgress({ videoId: 'upload', progress, bytesUploaded: bytesWritten, totalBytes, speed: stats?.speed ? Math.max(0, Math.round(stats.speed)) : 0, eta: stats?.eta ? Math.max(0, Math.round(stats.eta)) : 0 })
     }
-    if (typeof api.uploadVideo !== 'function') throw new Error('Engine upload API unavailable')
-    return api.uploadVideo(active.driveKey, filePath, { title: r.title, description: r.description || '', mimeType, category: r.category || '', onProgress })
+    if (typeof api.uploadVideo === 'function') {
+      return api.uploadVideo(active.driveKey, filePath, { title: r.title, description: r.description || '', mimeType, category: r.category || '', onProgress })
+    }
+    const channel = await identityManager.getActiveChannel?.()
+    if (!channel?.blobs) throw new Error('Channel blobs not initialized')
+    const result = await uploadManager.uploadFromPath(channel, filePath, { title: r.title, description: r.description || '', mimeType, category: r.category || '' }, fs, onProgress)
+    if (!result?.success) throw new Error(result?.error || 'Upload failed')
+    try { api.invalidateChannelCaches?.(active.driveKey) } catch {}
+    if (result?.videoId && !r.skipThumbnailGeneration) {
+      try { const t = await generateAndStoreThumbnail(filePath, result.videoId, channel, { frameIndex: 300 }); if (t?.thumbnailBlobId) await channel.updateVideo(result.videoId, { thumbnailBlobId: t.thumbnailBlobId, thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey, thumbnailMimeType: t.thumbnailMimeType }) } catch {}
+    }
+    return { video: { id: result?.videoId || '', title: r.title, description: r.description || '', channelKey: active.driveKey } }
   }
 
   B.downloadVideo = async (r) => {
@@ -261,14 +271,16 @@ export function attachMobileHandlers(B, deps) {
 
   B.setVideoThumbnailFromFile = async (r) => {
     const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active identity' }
+    const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false, error: 'Channel blobs not initialized' }
     let fp = r.filePath; if (!fp) return { success: false, error: 'No file path provided' }
     if (fp.startsWith('file://')) fp = fp.slice(7)
-    const ext = path.extname(fp).toLowerCase()
-    const mime = ext === '.webp' ? 'image/webp' : (ext === '.png' ? 'image/png' : 'image/jpeg')
-    if (typeof api.setVideoThumbnailFromFile === 'function') {
-      return api.setVideoThumbnailFromFile(a.driveKey, r.videoId, fp, { fs, mimeType: mime })
-    }
-    return { success: false, error: 'Thumbnail update unavailable' }
+    try {
+      const buf = fs.readFileSync(fp); const ext = path.extname(fp).toLowerCase()
+      const mime = ext === '.webp' ? 'image/webp' : (ext === '.png' ? 'image/png' : 'image/jpeg')
+      const res = await uploadManager.setThumbnailFromBuffer(ch, r.videoId, buf, mime)
+      try { api.invalidateChannelCaches?.(a.driveKey) } catch {}
+      return { success: res.success, error: res.error }
+    } catch (err) { return { success: false, error: err?.message } }
   }
 
   // --- Transcode handlers ---

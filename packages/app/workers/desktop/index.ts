@@ -9,11 +9,14 @@ import fs from 'bare-fs'
 import path from 'bare-path'
 import os from 'bare-os'
 import { spawn } from 'bare-subprocess'
+import b4a from 'b4a'
 import http1 from 'bare-http1'
 // @ts-ignore
 import * as transcoder from '@peartube/backend/transcode/transcoder'
 // @ts-ignore
 import * as castTranscoder from '@peartube/backend/transcode/cast-transcoder'
+// @ts-ignore
+import { generateAndStoreThumbnail } from '@peartube/backend/thumbnail'
 // @ts-ignore
 import { createBackend } from '@peartube/backend/src/backend-entry.js'
 // Bare runtime globals (available when spawned via pear.run())
@@ -402,6 +405,7 @@ else { try { const dir = require('bare-storage'); storage = path.join(dir.persis
 console.log('[Worker] Storage:', storage)
 
 const workerBaseDir = runtimeStorage || os.cwd()
+;(globalThis as any).__PEARTUBE_HYPERCORE_WORKER_PATH__ = path.join(workerBaseDir || '.', 'build/workers/hypercore-reader-worker.mjs')
 
 // Transport: Bare.IPC (Electrobun sidecar), then injected pipe
 const bareIPC = (typeof Bare !== 'undefined' && (Bare as any).IPC) ? (Bare as any).IPC : null
@@ -425,7 +429,7 @@ const { rpc: _rpc, backend, destroy } = await createBackend({
   },
 })
 rpc = _rpc
-const { ctx, api, identityManager, initializeIdentityFromMnemonic } = backend as any
+const { ctx, api, identityManager, uploadManager, videoStats, initializeIdentityFromMnemonic } = backend as any
 const getBlobPort = () => (ctx.blobServer as any)?.port || ctx.blobServerPort || 0
 
 console.log('[Worker] Backend initialized, attaching desktop handler methods...')
@@ -551,16 +555,28 @@ B.clearCache = async () => api.clearCache()
 B.getVideoThumbnail = async (r: any) => {
   if (isShuttingDown) return { url: null, exists: false }
   try {
-    const res = await api.getVideoThumbnail(r.channelKey, r.videoId)
-    return { url: res?.url || null, exists: Boolean(res?.exists), dataUrl: null }
-  } catch {
-    return { url: null, exists: false, dataUrl: null }
-  }
+    // Fast path: if caller provides blob references (from feed previewVideos),
+    // skip loadChannel/getVideoData and resolve the URL directly.
+    let thumbnailBlobId = r.thumbnailBlobId || null
+    let thumbnailBlobsCoreKey = r.thumbnailBlobsCoreKey || null
+
+    if (!thumbnailBlobId || !thumbnailBlobsCoreKey) {
+      const video = await api.getVideoData(r.channelKey, r.videoId)
+      thumbnailBlobId = video?.thumbnailBlobId
+      thumbnailBlobsCoreKey = video?.thumbnailBlobsCoreKey
+    }
+
+    if (!thumbnailBlobId || !thumbnailBlobsCoreKey) return { url: null, exists: false }
+    const blobsCore = ctx.store.get(b4a.from(thumbnailBlobsCoreKey, 'hex')); await blobsCore.ready()
+    const parts = thumbnailBlobId.split(':').map(Number)
+    const url = ctx.blobServer.getLink(blobsCore.key, { blob: { blockOffset: parts[0], blockLength: parts[1], byteOffset: parts[2], byteLength: parts[3] }, type: 'image/jpeg', host: ctx.blobServerHost || '127.0.0.1', port: ctx.blobServer?.port || ctx.blobServerPort })
+    return { url, exists: true }
+  } catch { return { url: null, exists: false } }
 }
-B.setVideoThumbnail = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey || !api.setVideoThumbnailFromFile) return { success: false }; return { success: false, error: 'Use setVideoThumbnailFromFile with engine v0' } }
-B.setVideoThumbnailFromFile = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ext = path.extname(r.filePath || '').toLowerCase(); const mimeType = ext === '.webp' ? 'image/webp' : (ext === '.png' ? 'image/png' : 'image/jpeg'); return api.setVideoThumbnailFromFile(a.driveKey, r.videoId, r.filePath, { fs, mimeType }) }
+B.setVideoThumbnail = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(Buffer.from(r.imageData, 'base64')); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }
+B.setVideoThumbnailFromFile = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(fs.readFileSync(r.filePath)); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }
 B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getIdentities().length > 0, blobServerPort: getBlobPort() } })
-B.getSwarmStatus = async () => ({ connected: false, peerCount: 0 })
+B.getSwarmStatus = async () => ({ connected: ctx.swarm.connections.size > 0, peerCount: ctx.swarm.connections.size })
 B.getBlobServerPort = async () => ({ port: getBlobPort() })
 B.createDeviceInvite = async (r: any) => { const res = await api.createDeviceInvite(r.channelKey); return { inviteCode: res.inviteCode } }
 B.pairDevice = async (r: any) => { const res = await api.pairDevice(r.inviteCode, r.deviceName || ''); try { const ex = identityManager.getIdentities?.() || []; if (ex.length === 0 && res?.channelKey) await identityManager.addPairedChannelIdentity?.(res.channelKey, 'Paired Channel') } catch {} return { success: Boolean(res.success), channelKey: res.channelKey } }
@@ -640,8 +656,16 @@ B.uploadVideo = async (r: any) => {
   let videoDimensions = { width: 0, height: 0 }
   try { const p = await transcoder.probeMedia(uploadPath, r.title) as any; videoDimensions = { width: p.width || 0, height: p.height || 0 } } catch {}
   const onProgress = (progress: number, bytesWritten: number, totalBytes: number, stats?: any) => { try { rpc.eventUploadProgress({ videoId: '', progress, bytesUploaded: bytesWritten, totalBytes, speed: stats?.speed || 0, eta: stats?.eta || 0 }) } catch {} }
-  if (typeof api.uploadVideo !== 'function') throw new Error('Engine upload API unavailable')
-  return api.uploadVideo(active.driveKey, uploadPath, { title: r.title, description: r.description, mimeType, width: videoDimensions.width, height: videoDimensions.height, onProgress })
+  if (typeof api.uploadVideo === 'function') {
+    return api.uploadVideo(active.driveKey, uploadPath, { title: r.title, description: r.description, mimeType, width: videoDimensions.width, height: videoDimensions.height, onProgress })
+  }
+  const channel = await identityManager.getActiveChannel?.()
+  if (!channel?.blobs) throw new Error('No active channel or blobs not initialized')
+  const result = await uploadManager.uploadFromPath(channel, uploadPath, { title: r.title, description: r.description, mimeType, width: videoDimensions.width, height: videoDimensions.height }, fs, onProgress)
+  if (result.success && result.videoId && !r.skipThumbnailGeneration) {
+    try { const t = await generateAndStoreThumbnail(r.filePath, result.videoId, channel, { frameIndex: 300 }); if (t?.thumbnailBlobId) await channel.updateVideo(result.videoId, { thumbnailBlobId: t.thumbnailBlobId, thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey, thumbnailMimeType: t.thumbnailMimeType }) } catch {}
+  }
+  return { video: { id: result.videoId || '', title: r.title || '', description: r.description || '', channelKey: active.driveKey } }
 }
 B.pickVideoFile = async () => { const r = await pickVideoFile(); return { filePath: r.filePath || null, name: r.name || null, size: r.size || 0, cancelled: r.cancelled || false } }
 B.pickImageFile = async () => { const r = await pickImageFile(); return { filePath: r.filePath || null, name: r.name || null, size: r.size || 0, dataUrl: r.dataUrl || null, cancelled: r.cancelled || false } }

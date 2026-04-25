@@ -14,78 +14,48 @@ function readPackageJson(relativePath) {
   )
 }
 
-test('engine-first package boundaries do not keep deleted backend stack dependencies alive', () => {
-  const backendPkg = readPackageJson('packages/backend/package.json')
+test('major Holepunch dependency migrations are applied consistently', () => {
+  const rootPkg = readPackageJson('package.json')
   const appPkg = readPackageJson('packages/app/package.json')
+  const pearPkg = readPackageJson('packages/app/pear-src/package.json')
+  const backendPkg = readPackageJson('packages/backend/package.json')
   const cliPkg = readPackageJson('packages/cli/package.json')
 
   assert.equal(
-    backendPkg.dependencies['@peartube/engine'],
-    'file:../engine',
-    'backend should route the P2P runtime through @peartube/engine',
+    appPkg.devDependencies['bare-build'],
+    '^0.4.6',
+    'app should use the current bare-build line',
   )
-
-  for (const name of [
-    'autobase',
-    'hyperblobs',
-    'corestore',
-    'hyperbee',
-    'hypercore',
-    'hyperdispatch',
-    'hyperswarm',
-    'protomux',
-    'hypercore-blob-server',
-    'hypercore-crypto',
-    'hyperbee-diff-stream',
-    'hyperswarm-stats',
-    'protomux-wakeup',
-    'blind-pairing',
-    'blind-peer',
-    'blind-peering',
-    'compact-encoding',
-    'ready-resource',
-    'z32',
-  ]) {
-    assert.ok(
-      !(name in backendPkg.dependencies),
-      `backend should not keep unused direct ${name} dependency after engine migration`,
-    )
-  }
-
-  for (const name of [
-    'autobase',
-    'hyperblobs',
-    'corestore',
-    'hyperbee',
-    'hypercore',
-    'hyperdispatch',
-    'hyperswarm',
-    'protomux',
-    'hypercore-blob-server',
-    'hypercore-crypto',
-    'hyperswarm-stats',
-    'protomux-wakeup',
-    'blind-pairing',
-    'compact-encoding',
-    'ready-resource',
-    'z32',
-  ]) {
-    assert.ok(
-      !(name in (appPkg.dependencies || {})),
-      `app should not keep unused direct runtime ${name} dependency`,
-    )
-    assert.ok(
-      !(name in (appPkg.devDependencies || {})),
-      `app should not keep unused direct dev ${name} dependency`,
-    )
-  }
-
-  assert.ok(
-    !('test:multiwriter' in backendPkg.scripts),
-    'backend should not expose deleted Autobase multi-writer test script',
+  assert.equal(
+    cliPkg.devDependencies['bare-build'],
+    '^0.4.6',
+    'cli should use the current bare-build line',
+  )
+  assert.equal(
+    appPkg.devDependencies['bare-pack'],
+    '^2.0.1',
+    'app should use the current bare-pack major line',
+  )
+  assert.equal(
+    pearPkg.dependencies['bare-subprocess'],
+    '^5.2.3',
+    'pear worker should use the current bare-subprocess line',
   )
   assert.ok(
-    cliPkg.scripts.test,
-    'CLI keeps its test entrypoint while old backend internals are removed',
+    !('hyperdb' in appPkg.devDependencies),
+    'app should not keep an unused direct hyperdb dependency',
+  )
+  assert.ok(
+    !('hyperdb' in pearPkg.dependencies),
+    'pear worker should not keep an unused direct hyperdb dependency',
+  )
+  assert.ok(
+    !('hyperdb' in backendPkg.dependencies),
+    'backend should not keep an unused direct hyperdb dependency',
+  )
+  assert.equal(
+    rootPkg.dependencies['bare-runtime'],
+    '^1.28.1',
+    'root runtime should stay on the latest compatible bare-runtime line',
   )
 })

@@ -1,10 +1,59 @@
-export { createBackendRuntime } from './runtime.js'
-export { createBackendContext } from './orchestrator.js'
-export { createApi } from './api.js'
-export { createEngineAdapter, normalizeEngineVideoId, adaptEngineVideoRecord } from './engine-adapter.js'
-export { createIdentityManager, generateMnemonic, validateMnemonic } from './identity.js'
-export { initializeStorage, shutdownBackend, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js'
-export { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js'
-export { logger, setLogLevel, LogLevel } from './logger.js'
-export * as transcode from './transcode/index.js'
-export * as cast from './cast/index.js'
+/**
+ * Backend Core - Shared P2P backend logic for PearTube
+ *
+ * This package contains shared code used by both mobile and desktop backends.
+ */
+
+// Storage module - Corestore, BlobServer
+export {
+  initializeStorage,
+  loadChannel,
+  createChannel,
+  pairDevice
+} from './storage.js';
+
+// Public Feed - P2P channel discovery
+export { PublicFeedManager } from './public-feed.js';
+
+// Modular facades for smaller backend surfaces
+export { createBackendRuntime } from './runtime.js';
+export * as feed from './feed.js';
+export * as media from './media.js';
+export * as swarm from './swarm.js';
+
+// Video Stats - P2P download progress tracking
+export { VideoStatsTracker } from './video-stats.js';
+
+// Seeding - Distributed content availability
+export { SeedingManager } from './seeding.js';
+
+// API - Shared backend methods
+export { createApi } from './api.js';
+
+// Identity Management
+export {
+  createIdentityManager,
+  generateMnemonic,
+  keypairFromMnemonic,
+  validateMnemonic
+} from './identity.js';
+
+// Video Upload
+export { createUploadManager } from './upload.js';
+
+// Transcoding (bare-ffmpeg)
+export * as transcode from './transcode/index.js';
+
+// Multi-writer channels (Autobase)
+export { MultiWriterChannel, ChannelPairer } from './channel/index.js';
+
+// Types and constants
+export { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
+
+// Logger - structured logging with automatic secret redaction
+export { logger, setLogLevel, LogLevel } from './logger.js';
+
+// Orchestrator - one-shot initialization for all components
+export { createBackendContext } from './orchestrator.js';
+
+export * as cast from './cast/index.js';

@@ -20,6 +20,61 @@ function createDeps(overrides = {}) {
   }
 }
 
+test('uploadVideo delegates to engine-backed api.uploadVideo before old upload manager', async () => {
+  const backend = {}
+  const calls = []
+  const deps = createDeps({
+    identityManager: {
+      getActiveIdentity() {
+        return { driveKey: 'ui-channel' }
+      },
+      async getActiveChannel() {
+        throw new Error('old channel path should not be used')
+      },
+    },
+    api: {
+      async uploadVideo(...args) {
+        calls.push(args)
+        return { video: { id: 'v1', title: 'Engine Upload', channelKey: 'ui-channel' } }
+      },
+    },
+    rpc: {
+      eventUploadProgress() {}
+    },
+    uploadManager: {
+      async uploadFromPath() {
+        throw new Error('old upload manager should not be used')
+      }
+    }
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  const result = await backend.uploadVideo({
+    filePath: 'file:///tmp/demo.webm',
+    title: 'Engine Upload',
+    description: 'desc',
+    category: 'cat'
+  })
+
+  assert.deepEqual(result, { video: { id: 'v1', title: 'Engine Upload', channelKey: 'ui-channel' } })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][0], 'ui-channel')
+  assert.equal(calls[0][1], '/tmp/demo.webm')
+  assert.deepEqual({
+    title: calls[0][2].title,
+    description: calls[0][2].description,
+    category: calls[0][2].category,
+    mimeType: calls[0][2].mimeType,
+  }, {
+    title: 'Engine Upload',
+    description: 'desc',
+    category: 'cat',
+    mimeType: 'video/webm',
+  })
+  assert.equal(typeof calls[0][2].onProgress, 'function')
+})
+
 test('getVideoUrl forwards direct blob playback fields to the backend api', async () => {
   const backend = {}
   const captured = []

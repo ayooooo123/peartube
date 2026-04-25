@@ -652,12 +652,16 @@ B.verifyAttestation = async (r: any) => { try { const res = await identityManage
 B.uploadVideo = async (r: any) => {
   const active = identityManager.getActiveIdentity()
   if (!active?.driveKey) throw new Error('No active identity')
-  const channel = await identityManager.getActiveChannel?.()
-  if (!channel?.blobs) throw new Error('No active channel or blobs not initialized')
   let uploadPath = r.filePath, mimeType = getMimeTypeFromPath(r.filePath)
   let videoDimensions = { width: 0, height: 0 }
   try { const p = await transcoder.probeMedia(uploadPath, r.title) as any; videoDimensions = { width: p.width || 0, height: p.height || 0 } } catch {}
-  const result = await uploadManager.uploadFromPath(channel, uploadPath, { title: r.title, description: r.description, mimeType, width: videoDimensions.width, height: videoDimensions.height }, fs, (progress: number, bytesWritten: number, totalBytes: number, stats?: any) => { try { rpc.eventUploadProgress({ videoId: '', progress, bytesUploaded: bytesWritten, totalBytes, speed: stats?.speed || 0, eta: stats?.eta || 0 }) } catch {} })
+  const onProgress = (progress: number, bytesWritten: number, totalBytes: number, stats?: any) => { try { rpc.eventUploadProgress({ videoId: '', progress, bytesUploaded: bytesWritten, totalBytes, speed: stats?.speed || 0, eta: stats?.eta || 0 }) } catch {} }
+  if (typeof api.uploadVideo === 'function') {
+    return api.uploadVideo(active.driveKey, uploadPath, { title: r.title, description: r.description, mimeType, width: videoDimensions.width, height: videoDimensions.height, onProgress })
+  }
+  const channel = await identityManager.getActiveChannel?.()
+  if (!channel?.blobs) throw new Error('No active channel or blobs not initialized')
+  const result = await uploadManager.uploadFromPath(channel, uploadPath, { title: r.title, description: r.description, mimeType, width: videoDimensions.width, height: videoDimensions.height }, fs, onProgress)
   if (result.success && result.videoId && !r.skipThumbnailGeneration) {
     try { const t = await generateAndStoreThumbnail(r.filePath, result.videoId, channel, { frameIndex: 300 }); if (t?.thumbnailBlobId) await channel.updateVideo(result.videoId, { thumbnailBlobId: t.thumbnailBlobId, thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey, thumbnailMimeType: t.thumbnailMimeType }) } catch {}
   }

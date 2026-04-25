@@ -16,6 +16,7 @@ import { SeedingManager } from './seeding.js';
 import { createApi } from './api.js';
 import { createIdentityManager } from './identity.js';
 import { createUploadManager } from './upload.js';
+import { createEngineAdapter } from './engine-adapter.js';
 import {
   readIdentityKeyFile,
   readPrimaryKeyFile,
@@ -357,11 +358,19 @@ export async function createBackendContext(config) {
 
   // Phase 6: Create unified API before feed start so the initial HAVE_FEED
   // exchange can already include local availability hints and serving manifests.
+  const engineAdapter = createEngineAdapter({
+    storagePath,
+    ctx,
+    swarm: ctx.swarm,
+  });
+  ctx.engineAdapter = engineAdapter;
+
   const api = createApi({
     ctx,
     publicFeed,
     seedingManager,
-    videoStats
+    videoStats,
+    engineAdapter
   });
 
   if (typeof api.getAvailabilityHints === 'function') {
@@ -391,6 +400,7 @@ export async function createBackendContext(config) {
     videoStats,
     identityManager,
     uploadManager,
+    engineAdapter,
     async initializeIdentityFromMnemonic(mnemonic) {
       const pk = await derivePrimaryKey(mnemonic);
       const { identityPublicKey } = await (await import('./peartube-identity.js')).deriveIdentity(mnemonic);

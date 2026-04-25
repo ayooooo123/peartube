@@ -39,6 +39,7 @@ export function createApi({
   publicFeed,
   seedingManager,
   videoStats,
+  engineAdapter,
   loadChannel = storageLoadChannel,
   loadPublicBee = storageLoadPublicBee,
 }) {
@@ -484,6 +485,20 @@ export function createApi({
     // ============================================
 
     /**
+     * Upload a video through the engine adapter for new Hyperdrive-backed channels.
+     * @param {string} driveKey
+     * @param {string} filePath
+     * @param {Object} options
+     * @returns {Promise<{video: VideoMetadata}>}
+     */
+    async uploadVideo(driveKey, filePath, options = {}) {
+      if (!engineAdapter) throw new Error('Engine adapter not initialized')
+      const result = await engineAdapter.uploadVideo(driveKey, filePath, options)
+      try { this.invalidateChannelCaches?.(driveKey) } catch {}
+      return result
+    },
+
+    /**
      * List videos in a channel
      * @param {string} driveKey
      * @param {string} [publicBeeKey] - Optional PublicBee key for fast viewer access
@@ -492,6 +507,11 @@ export function createApi({
     async listVideos(driveKey, publicBeeKey) {
       console.log('[API] LIST_VIDEOS for:', driveKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16));
       try {
+        if (!publicBeeKey && engineAdapter && await engineAdapter.hasEngineChannel(driveKey)) {
+          console.log('[API] LIST_VIDEOS: using engine adapter')
+          return await engineAdapter.listVideos(driveKey)
+        }
+
         const extractVideoId = (video) => {
           if (!video) return null
           if (video.id) return video.id
@@ -808,6 +828,11 @@ export function createApi({
     async getVideoUrl(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath);
 
+      if (!publicBeeKey && !blobId && !blobsCoreKey && engineAdapter && await engineAdapter.hasEngineChannel(driveKey)) {
+        console.log('[API] getVideoUrl: using engine adapter')
+        return await engineAdapter.getVideoUrl(driveKey, videoPath)
+      }
+
       // INSTANT PATH: If we already have blobId and blobsCoreKey, skip metadata fetch entirely
       if (blobId && blobsCoreKey) {
         console.log('[API] getVideoUrl: INSTANT - using direct blobId/blobsCoreKey');
@@ -910,6 +935,11 @@ export function createApi({
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
 
       let warmupStarted = true
+
+      if (!publicBeeKey && !blobId && !blobsCoreKey && engineAdapter && await engineAdapter.hasEngineChannel(driveKey)) {
+        console.log('[API] preparePlayback: using engine adapter')
+        return await engineAdapter.preparePlayback(driveKey, videoPath)
+      }
 
       try {
         Promise.resolve(this.prefetchVideo(driveKey, videoPath, publicBeeKey)).catch((err) => {
@@ -1038,6 +1068,11 @@ export function createApi({
         if (typeof videoId === 'string' && videoId.startsWith('/videos/')) {
           const match = videoId.match(/\/videos\/([^.]+)/)
           if (match) id = match[1]
+        }
+
+        if (!publicBeeKey && engineAdapter && await engineAdapter.hasEngineChannel(driveKey)) {
+          console.log('[API] GET_VIDEO_DATA: using engine adapter')
+          return await engineAdapter.getVideoData(driveKey, videoId)
         }
 
         // Fast path: use PublicBee if we have the key (for viewers)

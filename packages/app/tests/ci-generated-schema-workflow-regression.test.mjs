@@ -14,7 +14,13 @@ function readFile(relativePath) {
 
 test('desktop workflows regenerate HRPC schema before desktop builds that import @peartube/spec', () => {
   const workflow = readFile('.github/workflows/build-desktop.yml')
+  const appPackage = JSON.parse(readFile('packages/app/package.json'))
 
+  assert.match(
+    workflow,
+    /validate-submodules/,
+    'desktop CI must initialize real gitlink submodules before native desktop bundles import bare-mpv',
+  )
   assert.match(
     workflow,
     /npm run schema/,
@@ -24,6 +30,11 @@ test('desktop workflows regenerate HRPC schema before desktop builds that import
     workflow,
     /npm run schema:full/,
     'native desktop CI must regenerate JS and Swift schema before bundling/testing native desktop sidecar',
+  )
+  assert.match(
+    appPackage.scripts['desktop:ecopy'],
+    /mkdir -p .*Resources\/app\/workers\/core/,
+    'Electrobun copy step must create app resource directories before rsync on clean CI runners',
   )
 })
 

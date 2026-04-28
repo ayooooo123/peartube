@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 
 const EXTENSION_RE = /\.(js|jsx|mjs|cjs|ts|tsx)$/
 
@@ -9,11 +10,17 @@ function runGit(args) {
 
 function getBaseRef() {
   const envBase = process.env.GITHUB_BASE_REF || 'main'
+  const remoteRef = `origin/${envBase}`
   try {
-    runGit(['rev-parse', '--verify', `origin/${envBase}`])
-    return `origin/${envBase}`
+    runGit(['rev-parse', '--verify', remoteRef])
+    return remoteRef
   } catch {
-    return envBase
+    try {
+      execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', `${envBase}:refs/remotes/${remoteRef}`], { stdio: 'ignore' })
+      return remoteRef
+    } catch {
+      return envBase
+    }
   }
 }
 
@@ -31,9 +38,10 @@ if (changedFiles.length === 0) {
   process.exit(0)
 }
 
-console.log(`[lint:changed] Linting ${changedFiles.length} changed JS/TS file(s)`) 
-execFileSync(
-  'npm',
-  ['exec', '--', 'eslint', '--quiet', ...changedFiles],
-  { stdio: 'inherit' },
-)
+console.log(`[lint:changed] Linting ${changedFiles.length} changed JS/TS file(s)`)
+const eslintCommand = existsSync('./node_modules/.bin/eslint') ? './node_modules/.bin/eslint' : 'npx'
+const eslintArgs = eslintCommand === 'npx'
+  ? ['--no-install', 'eslint', '--quiet', ...changedFiles]
+  : ['--quiet', ...changedFiles]
+
+execFileSync(eslintCommand, eslintArgs, { stdio: 'inherit' })

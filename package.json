@@ -37,6 +37,7 @@
     "test": "npm test --prefix packages/backend",
     "test:watch": "npm run test:watch --prefix packages/backend",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx --quiet",
+    "lint:changed": "node scripts/lint-changed.mjs",
     "lint:fix": "npm run lint -- --fix",
     "install:all": "npm install && npm install --prefix packages/spec && npm install --prefix packages/backend && npm install --prefix packages/host && npm install --prefix packages/platform && npm install --prefix packages/app --legacy-peer-deps"
   },

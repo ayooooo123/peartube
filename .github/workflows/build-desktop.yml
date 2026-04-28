@@ -45,6 +45,9 @@ jobs:
         with:
           bun-version: 1.3.11
 
+      - name: Generate HRPC schema
+        run: npm run schema
+
       - name: Build desktop web/export assets
         working-directory: packages/app
         run: npm run desktop:build
@@ -83,6 +86,9 @@ jobs:
 
       - name: Install xcodegen
         run: brew install xcodegen
+
+      - name: Generate HRPC schema
+        run: npm run schema:full
 
       - name: Run native desktop tests
         run: npm run desktop:native:test

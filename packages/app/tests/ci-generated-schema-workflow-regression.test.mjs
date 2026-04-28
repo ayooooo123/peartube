@@ -14,6 +14,7 @@ function readFile(relativePath) {
 
 test('desktop workflows regenerate HRPC schema before desktop builds that import @peartube/spec', () => {
   const workflow = readFile('.github/workflows/build-desktop.yml')
+  const validateSubmodulesAction = readFile('.github/actions/validate-submodules/action.yml')
   const appPackage = JSON.parse(readFile('packages/app/package.json'))
 
   assert.match(
@@ -31,6 +32,11 @@ test('desktop workflows regenerate HRPC schema before desktop builds that import
     /npm run schema:full/,
     'native desktop CI must regenerate JS and Swift schema before bundling/testing native desktop sidecar',
   )
+  assert.doesNotMatch(
+    validateSubmodulesAction,
+    /declare -A|mapfile/,
+    'validate-submodules must avoid bash 4-only syntax because macOS CI ships old bash',
+  )
   assert.match(
     appPackage.scripts['desktop:ecopy'],
     /mkdir -p .*Resources\/app\/workers\/core/,
@@ -46,6 +52,11 @@ test('PR lint avoids the historical repo-wide lint backlog', () => {
     rootPackage.scripts['lint:changed'],
     /scripts\/lint-changed\.mjs/,
     'root package should expose a changed-file lint command for PR CI',
+  )
+  assert.match(
+    workflow,
+    /fetch-depth: 0/,
+    'pull_request lint checkout must fetch enough history for merge-base against origin/main',
   )
   assert.match(
     workflow,

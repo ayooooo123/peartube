@@ -7,23 +7,25 @@ runs:
     - name: Validate and init required submodules
       shell: bash
       run: |
-        declare -A EXPECTED_URLS=(
-          [packages/bare-ffmpeg]=https://github.com/ayooooo123/bare-ffmpeg.git
-          [packages/bare-mpv]=https://github.com/ayooooo123/bare-mpv.git
-        )
-
-        mapfile -t SUBMODULE_PATHS < <(git ls-files --stage | awk '$1 == "160000" {print $4}')
-        if [ "${#SUBMODULE_PATHS[@]}" -eq 0 ]; then
+        SUBMODULE_PATHS=$(git ls-files --stage | awk '$1 == "160000" {print $4}')
+        if [ -z "$SUBMODULE_PATHS" ]; then
           echo "::error::No git submodules found in the checked-out tree"
           exit 1
         fi
 
-        for path in "${SUBMODULE_PATHS[@]}"; do
-          expected="${EXPECTED_URLS[$path]:-}"
-          if [ -z "$expected" ]; then
-            echo "::error::Unexpected git submodule path in repository tree: $path"
-            exit 1
-          fi
+        for path in $SUBMODULE_PATHS; do
+          case "$path" in
+            packages/bare-ffmpeg)
+              expected="https://github.com/ayooooo123/bare-ffmpeg.git"
+              ;;
+            packages/bare-mpv)
+              expected="https://github.com/ayooooo123/bare-mpv.git"
+              ;;
+            *)
+              echo "::error::Unexpected git submodule path in repository tree: $path"
+              exit 1
+              ;;
+          esac
 
           actual=$(git config -f .gitmodules --get "submodule.$path.url" || true)
           if [ "$actual" != "$expected" ]; then
@@ -32,5 +34,5 @@ runs:
           fi
         done
 
-        git submodule sync -- "${SUBMODULE_PATHS[@]}"
-        git submodule update --init --depth 1 -- "${SUBMODULE_PATHS[@]}"
+        git submodule sync -- $SUBMODULE_PATHS
+        git submodule update --init --depth 1 -- $SUBMODULE_PATHS

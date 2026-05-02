@@ -10,6 +10,8 @@ dist/
 *.bundle.js
 
 # Generated HRPC schema (regenerate with `npm run schema`)
+spec/hrpc/
+spec/schema/
 packages/spec/spec/hrpc/
 packages/spec/spec/schema/
 packages/spec/spec/swift-hrpc/
@@ -17,6 +19,7 @@ packages/spec/spec/swift-schema/
 packages/desktop-native/Sources/Support/GeneratedSchema.swift
 packages/desktop-native/Sources/Support/GeneratedHRPC.swift
 packages/app/pear/
+packages/app/packages/app/pear/
 packages/app/.pear-build/
 packages/app/desktop-build/
 packages/app/.desktop-export/
@@ -76,8 +79,9 @@ packages/desktop/(tabs)/
 packages/desktop/video/
 *.tgz
 
-# OpenProse state
+# OpenProse state/workflows
 .prose/
+*.prose
 
 # Build caches
 **/.cache/
@@ -85,20 +89,12 @@ packages/desktop/video/
 # Android native build artifacts (externalNativeBuild / CMake)
 **/android/.cxx/
 
-# OpenProse workflows
-*.prose
-
-# OpenProse state
-.prose/
-
-# Build caches
-**/.cache/
-
-# OpenProse workflows
-*.prose
+# Local logs
 logfile
 
 # Agent state
+.codex
+.codex/
 .sisyphus/
 .tmp-device-crashes/
 .evidence/
@@ -106,3 +102,6 @@ logfile
 # Artifacts
 **/.artifacts/
 packages/desktop-native/Vendor/bare-rpc-swift/.build/
+
+# Local native debug signing material
+packages/app/android/app/debug.keystore

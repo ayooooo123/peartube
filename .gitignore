@@ -98,6 +98,7 @@ logfile
 .sisyphus/
 .tmp-device-crashes/
 .evidence/
+.trash-peartube-cleanup/
 
 # Artifacts
 **/.artifacts/

@@ -358,6 +358,7 @@ export function VideoPlayerOverlay() {
     seekTo,
     setPlaybackRate,
     onProgress,
+    onLoaded,
     onPlaying,
     onPaused,
     onBuffering,
@@ -786,11 +787,12 @@ export function VideoPlayerOverlay() {
 
   // Handle video load - set PiP aspect ratio to match actual video dimensions
   const handleVideoLoad = useCallback((info: { duration?: number; videoSize?: { width: number; height: number } }) => {
+    onLoaded()
     const width = info?.videoSize?.width
     const height = info?.videoSize?.height
     console.log('[VideoPlayerOverlay] Video loaded with dimensions:', width, 'x', height)
     // PiP aspect ratio is handled natively by react-native-video
-  }, [])
+  }, [onLoaded])
 
    // Animation progress: 0 = mini, 1 = fullscreen
     // Initialize based on playerMode to avoid layout flash on first render

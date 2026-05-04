@@ -93,6 +93,7 @@ interface VideoPlayerContextType {
   setIsLoading: (loading: boolean) => void
 
   onProgress: (data: { currentTime: number; duration: number }) => void
+  onLoaded: () => void
   onPlaying: () => void
   onPaused: () => void
   onBuffering: (data: { isBuffering: boolean }) => void
@@ -704,10 +705,15 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
        if (sameVideo) {
          console.log('[VideoPlayerContext] Received stats event:', stats.progress + '%')
-         setVideoStats(stats)
-         // Keep the loading overlay up until the player actually starts.
-         // (We still display live P2P stats while waiting.)
-       }
+        setVideoStats(stats)
+        if (typeof stats.progress === 'number' && stats.progress > 0) {
+          // Once the backend is serving bytes, stop showing the generic
+          // "Connecting to P2P network" gate even if the native player has not
+          // emitted onLoad/onReadyForDisplay yet.
+          setIsLoading(false)
+          isBufferingRef.current = false
+        }
+      }
      })
      return () => { unsubscribe() }
    }, [isPrimaryController])
@@ -1078,6 +1084,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // MediaSession playback state updates removed - react-native-video handles this natively
   }, [])
 
+  const onLoaded = useCallback(() => {
+    console.log('[VideoPlayerContext] Player loaded')
+    isBufferingRef.current = false
+    setIsLoading(false)
+  }, [])
+
   const onPlaying = useCallback(() => {
     console.log('[VideoPlayerContext] Player playing')
     if (Platform.OS === 'ios') {
@@ -1227,6 +1239,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setVideoStats,
     setIsLoading,
     onProgress,
+    onLoaded,
     onPlaying,
     onPaused,
     onBuffering,
@@ -1245,7 +1258,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     loadAndPlayVideo, pauseVideo, resumeVideo,
     closeVideo, enterBackgroundAudio, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo, minimizePlayer, maximizePlayer, seekTo, seekBy, setPlaybackRate,
     setIsInPipMode,
-    onProgress, onPlaying, onPaused, onBuffering,
+    onProgress, onLoaded, onPlaying, onPaused, onBuffering,
     onEnded, onError, onVideoStateChange,
   ])
 

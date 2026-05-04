@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { test } from 'node:test'
+
+const contextPath = new URL('../lib/VideoPlayerContext.tsx', import.meta.url)
+const videoRoutePath = new URL('../app/video/[id].tsx', import.meta.url)
+const overlayPath = new URL('../components/VideoPlayerOverlayImpl.tsx', import.meta.url)
+
+async function source(url) {
+  return readFile(url, 'utf8')
+}
+
+test('VideoPlayerContext clears loading when the native player reports load', async () => {
+  const src = await source(contextPath)
+  const loadHandlerStart = src.indexOf('const onLoaded = useCallback')
+  assert.notEqual(loadHandlerStart, -1, 'expected VideoPlayerContext onLoaded callback')
+  const loadHandler = src.slice(loadHandlerStart, src.indexOf('const onPlaying', loadHandlerStart))
+  assert.match(loadHandler, /setIsLoading\(false\)/, 'onLoaded must clear global player loading')
+  assert.match(loadHandler, /isBufferingRef\.current\s*=\s*false/, 'onLoaded must clear buffering ref')
+})
+
+test('VideoPlayerContext also clears the connecting gate once backend stats show bytes are available', async () => {
+  const src = await source(contextPath)
+  const statsHandlerStart = src.indexOf('Received stats event')
+  assert.notEqual(statsHandlerStart, -1, 'expected video stats handler')
+  const statsHandler = src.slice(statsHandlerStart, src.indexOf('})\n     return () => { unsubscribe() }', statsHandlerStart))
+  assert.match(statsHandler, /stats\.progress[^\n]+>\s*0/, 'stats handler must treat positive progress as media-ready')
+  assert.match(statsHandler, /setIsLoading\(false\)/, 'stats handler must clear global player loading')
+  assert.match(statsHandler, /isBufferingRef\.current\s*=\s*false/, 'stats handler must clear buffering ref')
+})
+
+test('mobile/native route uses the shared overlay player instead of an inline player shell', async () => {
+  const src = await source(videoRoutePath)
+  assert.match(src, /Video is rendered by VideoPlayerOverlay on all platforms/, 'route should not own the native video load event directly')
+  assert.doesNotMatch(src, /onLoad=\{onLoaded\}/, 'route should not try to wire a nonexistent inline player load handler')
+})
+
+test('desktop/native overlay forwards load events into shared player context before local handling', async () => {
+  const src = await source(overlayPath)
+  assert.match(src, /onLoaded,/, 'overlay must read onLoaded from useVideoPlayerContext')
+  const handlerStart = src.indexOf('const handleVideoLoad = useCallback')
+  assert.notEqual(handlerStart, -1, 'expected wrapped overlay load handler')
+  const handler = src.slice(handlerStart, src.indexOf('// Animation progress', handlerStart))
+  assert.match(handler, /onLoaded\(\)/, 'overlay load handler must notify shared context')
+  assert.match(src, /onLoad=\{handleVideoLoad\}/, 'overlay player must use the wrapped load handler')
+})

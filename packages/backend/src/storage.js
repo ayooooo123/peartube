@@ -113,6 +113,58 @@ let path = null;
 let Hyperswarm = null;
 let http = null;
 
+function createNoopDiscoveryHandle() {
+  return {
+    flushed: async () => {},
+    destroy() {},
+    close() {}
+  }
+}
+
+function createOfflineSwarm(keyPair, reason = 'unavailable') {
+  const listeners = new Map()
+  const swarm = {
+    keyPair,
+    connections: new Set(),
+    peers: new Set(),
+    dht: {
+      firewalled: null,
+      bootstrapped: false,
+      ephemeral: true,
+      online: false
+    },
+    _peartubeOffline: true,
+    _peartubeOfflineReason: reason,
+    on(event, listener) {
+      if (!listeners.has(event)) listeners.set(event, new Set())
+      listeners.get(event).add(listener)
+      return this
+    },
+    off(event, listener) {
+      listeners.get(event)?.delete(listener)
+      return this
+    },
+    emit(event, ...args) {
+      for (const listener of listeners.get(event) || []) {
+        try { listener(...args) } catch {}
+      }
+      return true
+    },
+    join() {
+      return createNoopDiscoveryHandle()
+    },
+    listen: async () => {},
+    suspend: async () => {},
+    resume: async () => {},
+    destroy: async () => {
+      listeners.clear()
+      swarm.connections.clear()
+      swarm.peers.clear()
+    }
+  }
+  return swarm
+}
+
 async function ensureHttpModule() {
   if (http) return http
   try {
@@ -576,9 +628,22 @@ export async function initializeStorage(config) {
 
   console.log('[Storage] Creating Hyperswarm...');
   await appendDebugLine('[storage] creating hyperswarm')
-  const swarm = new Hyperswarm({ keyPair });
+  let swarm
+  if (typeof Hyperswarm !== 'function') {
+    console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
+    await appendDebugLine('[storage] hyperswarm unavailable; using offline swarm')
+    swarm = createOfflineSwarm(keyPair, 'module-unavailable')
+  } else {
+    try {
+      swarm = new Hyperswarm({ keyPair });
+    } catch (err) {
+      console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
+      await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)
+      swarm = createOfflineSwarm(keyPair, err?.message || 'create-failed')
+    }
+  }
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
-  await appendDebugLine('[storage] hyperswarm created')
+  await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
 
   // Set global references for suspend/resume and stats
   globalSwarm = swarm;
@@ -596,20 +661,26 @@ export async function initializeStorage(config) {
   // Join the PearTube network topic for peer pool building
   // More connected peers = better relay options for symmetric NAT holepunching
   const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'));
-  try {
-    const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
-    globalPeerPoolDiscovery = poolDiscovery;
-    console.log('[Storage] Joined peartube-network topic for peer pool building');
-    // Don't await flushed() - it can hang on mobile
-    poolDiscovery.flushed().then(() => {
-      console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
-      void appendDebugLine(
-        `[storage] peer-pool discovery flushed connections=${swarm.connections?.size || 0} bootstrapped=${swarm.dht?.bootstrapped}`
-      )
-    }).catch(() => {});
-  } catch (e) {
-    console.log('[Storage] Failed to join peer pool topic:', e?.message);
-    globalPeerPoolDiscovery = null;
+  if (!swarm._peartubeOffline) {
+    try {
+      const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
+      globalPeerPoolDiscovery = poolDiscovery;
+      console.log('[Storage] Joined peartube-network topic for peer pool building');
+      // Don't await flushed() - it can hang on mobile
+      poolDiscovery.flushed().then(() => {
+        console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
+        void appendDebugLine(
+          `[storage] peer-pool discovery flushed connections=${swarm.connections?.size || 0} bootstrapped=${swarm.dht?.bootstrapped}`
+        )
+      }).catch(() => {});
+    } catch (e) {
+      console.log('[Storage] Failed to join peer pool topic:', e?.message);
+      globalPeerPoolDiscovery = null;
+    }
+  } else {
+    console.log('[Storage] Skipping peer pool discovery; P2P networking is offline:', swarm._peartubeOfflineReason)
+    await appendDebugLine(`[storage] peer-pool discovery skipped offline reason=${swarm._peartubeOfflineReason}`)
+    globalPeerPoolDiscovery = null
   }
 
   // Start listening - DON'T block on it since it may hang on mobile

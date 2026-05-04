@@ -257,6 +257,7 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
     startupLog('[Startup] backend ready via', source)
     setBlobServerPort(port)
     setReady(true)
+    setLoading(false)
     setBackendError(null)
     setStartupStatus(null)
     await loadInitialData()
@@ -479,6 +480,7 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
             startupLog('[Startup] TIMEOUT ms=', Date.now() - t0)
             setBackendError('Backend is taking longer than expected. You can browse the UI — it will connect when ready.')
             setReady(true)
+            setLoading(false)
           }
           startupTimerRef.current = null
         }, BACKEND_STARTUP_TIMEOUT_MS)
@@ -513,6 +515,8 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       } else {
         setBackendError(message)
       }
+      setReady(true)
+      setLoading(false)
     }
     })()
 

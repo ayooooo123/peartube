@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const appRoot = path.resolve(__dirname, '..')
+
+function readAppFile(relativePath) {
+  return fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
+}
+
+test('native startup timeout exits the connecting screen and marks loading false in degraded mode', () => {
+  const source = readAppFile('app/_layout.tsx')
+  const timeoutIndex = source.indexOf("console.warn('[App] Backend startup timeout after'")
+  assert.notEqual(timeoutIndex, -1, 'native backend startup timeout handler should exist')
+
+  const timeoutBlock = source.slice(timeoutIndex, source.indexOf('}, BACKEND_STARTUP_TIMEOUT_MS)', timeoutIndex))
+  assert.match(timeoutBlock, /setReady\(true\)/, 'timeout should allow the app shell to render')
+  assert.match(timeoutBlock, /setLoading\(false\)/, 'timeout must clear loading so screens stop showing Connecting to P2P network')
+})
+
+test('native init failure exits the connecting screen even when backend startup throws', () => {
+  const source = readAppFile('app/_layout.tsx')
+  const catchIndex = source.indexOf("console.error('[App] Failed to initialize platform RPC:'")
+  assert.notEqual(catchIndex, -1, 'native init catch block should exist')
+
+  const catchBlock = source.slice(catchIndex, source.indexOf('    }', source.indexOf('setLoading(false)', catchIndex)))
+  assert.match(catchBlock, /setReady\(true\)/, 'init failure should allow the app shell to render')
+  assert.match(catchBlock, /setLoading\(false\)/, 'init failure must clear loading so retry UI can render')
+})
+
+test('backend ready clears loading before initial data loading begins', () => {
+  const source = readAppFile('app/_layout.tsx')
+  const markerIndex = source.indexOf('const markBackendReady = useCallback')
+  assert.notEqual(markerIndex, -1, 'markBackendReady should exist')
+
+  const readyBlock = source.slice(markerIndex, source.indexOf('  // Subscribe to video load events', markerIndex))
+  const setLoadingIndex = readyBlock.indexOf('setLoading(false)')
+  const loadInitialDataIndex = readyBlock.indexOf('await loadInitialData()')
+  assert.notEqual(setLoadingIndex, -1, 'backend ready should clear loading')
+  assert.notEqual(loadInitialDataIndex, -1, 'backend ready should load initial data')
+  assert.ok(setLoadingIndex < loadInitialDataIndex, 'loading should clear before initial data fetches can hang or retry')
+})

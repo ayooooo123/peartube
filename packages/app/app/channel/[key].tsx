@@ -134,8 +134,9 @@ function ChannelPageSkeleton() {
 
 export default function ChannelScreen() {
   const router = useRouter()
-  const { key } = useLocalSearchParams<{ key: string | string[] }>()
+  const { key, publicBeeKey } = useLocalSearchParams<{ key: string | string[], publicBeeKey?: string | string[] }>()
   const channelKey = useMemo(() => (Array.isArray(key) ? key[0] : key) || '', [key])
+  const channelPublicBeeKey = useMemo(() => (Array.isArray(publicBeeKey) ? publicBeeKey[0] : publicBeeKey) || '', [publicBeeKey])
 
   const [channelMeta, setChannelMeta] = useState<ChannelMeta | null>(null)
   const [channelVideos, setChannelVideos] = useState<ChannelVideo[]>([])
@@ -167,8 +168,8 @@ export default function ChannelScreen() {
       setScreenError('')
       setIsLoading(true)
       const [channelMetaResponse, channelVideosResponse] = await Promise.all([
-        rpc.getChannelMeta({ channelKey }),
-        rpc.listVideos({ channelKey }),
+        rpc.getChannelMeta({ channelKey, publicBeeKey: channelPublicBeeKey || undefined }),
+        rpc.listVideos({ channelKey, publicBeeKey: channelPublicBeeKey || undefined }),
       ])
       setChannelMeta(channelMetaResponse || null)
       setChannelVideos(Array.isArray(channelVideosResponse?.videos) ? channelVideosResponse.videos : [])
@@ -177,7 +178,7 @@ export default function ChannelScreen() {
     } finally {
       setIsLoading(false)
     }
-  }, [channelKey])
+  }, [channelKey, channelPublicBeeKey])
 
   useEffect(() => {
     let isMounted = true
@@ -361,9 +362,11 @@ export default function ChannelScreen() {
                     params: {
                       id: channelVideo.id,
                       channel: channelKey,
+                      publicBeeKey: channelPublicBeeKey || undefined,
                       videoData: JSON.stringify({
                         ...channelVideo,
                         channelKey,
+                        publicBeeKey: channelPublicBeeKey || undefined,
                         channel: { name: channelDisplayName },
                       }),
                     },

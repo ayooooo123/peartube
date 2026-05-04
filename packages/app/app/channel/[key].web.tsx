@@ -24,18 +24,29 @@ type PickedAvatar = {
   mimeType?: string
 }
 
+type ChannelRouteParams = {
+  channelKey: string
+  publicBeeKey: string
+}
+
 type ChannelPageProps = {
   channelKey?: string
+  publicBeeKey?: string
   params?: {
     key?: string
+    publicBeeKey?: string
   }
 }
 
-function parseChannelKeyFromHash(hash: string): string {
+function parseChannelKeyFromHash(hash: string): ChannelRouteParams {
   const normalized = hash.replace(/^#\/?/, '')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts[0] === 'channel' && parts[1]) return safeDecodeURIComponent(parts[1])
-  return ''
+  const [pathPart = '', queryPart = ''] = normalized.split('?')
+  const parts = pathPart.split('/').filter(Boolean)
+  const params = new URLSearchParams(queryPart)
+  return {
+    channelKey: parts[0] === 'channel' && parts[1] ? safeDecodeURIComponent(parts[1]) : '',
+    publicBeeKey: safeDecodeURIComponent(params.get('publicBeeKey') || ''),
+  }
 }
 
 function safeDecodeURIComponent(value: string): string {
@@ -49,12 +60,16 @@ function safeDecodeURIComponent(value: string): string {
 export default function ChannelPageWeb(props: ChannelPageProps) {
   const { rpc, identity } = useApp()
   const propChannelKey = props.channelKey || props.params?.key || ''
+  const propPublicBeeKey = props.publicBeeKey || props.params?.publicBeeKey || ''
 
-  const [resolvedChannelKey, setResolvedChannelKey] = useState<string>(() => {
-    if (propChannelKey) return propChannelKey
-    if (typeof window === 'undefined') return ''
+  const initialRouteParams = useMemo(() => {
+    if (propChannelKey) return { channelKey: propChannelKey, publicBeeKey: propPublicBeeKey }
+    if (typeof window === 'undefined') return { channelKey: '', publicBeeKey: '' }
     return parseChannelKeyFromHash(window.location.hash)
-  })
+  }, [propChannelKey, propPublicBeeKey])
+
+  const [resolvedChannelKey, setResolvedChannelKey] = useState<string>(initialRouteParams.channelKey)
+  const [resolvedPublicBeeKey, setResolvedPublicBeeKey] = useState<string>(initialRouteParams.publicBeeKey)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -71,16 +86,21 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
   useEffect(() => {
     if (propChannelKey) {
       setResolvedChannelKey(propChannelKey)
+      setResolvedPublicBeeKey(propPublicBeeKey)
       return
     }
     if (typeof window === 'undefined') return
 
-    const updateKey = () => setResolvedChannelKey(parseChannelKeyFromHash(window.location.hash))
+    const updateKey = () => {
+      const routeParams = parseChannelKeyFromHash(window.location.hash)
+      setResolvedChannelKey(routeParams.channelKey)
+      setResolvedPublicBeeKey(routeParams.publicBeeKey)
+    }
     updateKey()
 
     window.addEventListener('hashchange', updateKey)
     return () => window.removeEventListener('hashchange', updateKey)
-  }, [propChannelKey])
+  }, [propChannelKey, propPublicBeeKey])
 
   const loadChannelData = useCallback(async () => {
     if (!rpc || !resolvedChannelKey) {
@@ -92,8 +112,8 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
     setError(null)
     try {
       const [metaResult, videosResult] = await Promise.all([
-        rpc.getChannelMeta({ channelKey: resolvedChannelKey }),
-        rpc.listVideos({ channelKey: resolvedChannelKey }),
+        rpc.getChannelMeta({ channelKey: resolvedChannelKey, publicBeeKey: resolvedPublicBeeKey || undefined }),
+        rpc.listVideos({ channelKey: resolvedChannelKey, publicBeeKey: resolvedPublicBeeKey || undefined }),
       ])
 
       setChannelMeta(metaResult || null)
@@ -103,7 +123,7 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
     } finally {
       setLoading(false)
     }
-  }, [rpc, resolvedChannelKey])
+  }, [rpc, resolvedChannelKey, resolvedPublicBeeKey])
 
   useEffect(() => {
     loadChannelData()

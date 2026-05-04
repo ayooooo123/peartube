@@ -11,6 +11,7 @@ import { CastHeaderButton } from '@/components/cast'
 
 interface Subscription {
   channelKey: string
+  publicBeeKey?: string | null
   name: string
   subscribedAt: number
 }
@@ -164,7 +165,7 @@ export default function SubscriptionsScreen() {
           <View className="flex-row bg-pear-bg-elevated rounded-xl p-4 items-center">
             {/* Avatar + Info - tappable to navigate to channel */}
             <Pressable
-              onPress={() => router.push({ pathname: '/channel/[key]', params: { key: item.channelKey } })}
+              onPress={() => router.push({ pathname: '/channel/[key]', params: { key: item.channelKey, publicBeeKey: item.publicBeeKey || undefined } })}
               style={({ pressed }) => ({
                 flexDirection: 'row',
                 alignItems: 'center',

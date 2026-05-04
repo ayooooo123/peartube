@@ -186,6 +186,7 @@ interface WatchRoute {
 interface ChannelRoute {
   type: 'channel'
   channelKey: string
+  publicBeeKey?: string
 }
 
 interface HomeRoute {
@@ -195,14 +196,20 @@ interface HomeRoute {
 type Route = WatchRoute | ChannelRoute | HomeRoute
 
 function parseHash(hash: string): Route {
-  const path = hash.replace(/^#\/?/, '') || ''
-  const parts = path.split('/').filter(Boolean)
+  const normalized = hash.replace(/^#\/?/, '') || ''
+  const [pathPart = '', queryPart = ''] = normalized.split('?')
+  const parts = pathPart.split('/').filter(Boolean)
+  const params = new URLSearchParams(queryPart)
 
   if (parts[0] === 'watch' && parts[1] && parts[2]) {
     return { type: 'watch', channelKey: safeDecodeURIComponent(parts[1]), videoId: safeDecodeURIComponent(parts[2]) }
   }
   if (parts[0] === 'channel' && parts[1]) {
-    return { type: 'channel', channelKey: safeDecodeURIComponent(parts[1]) }
+    return {
+      type: 'channel',
+      channelKey: safeDecodeURIComponent(parts[1]),
+      publicBeeKey: safeDecodeURIComponent(params.get('publicBeeKey') || ''),
+    }
   }
   return { type: 'home' }
 }
@@ -1133,7 +1140,7 @@ function WatchPageView({
             {/* Channel info */}
             <div
               style={{ ...watchStyles.channelRow, cursor: 'pointer' }}
-              onClick={() => { window.location.hash = '#/channel/' + encodeURIComponent(channelKey) }}
+              onClick={() => { window.location.hash = publicBeeKey ? `#/channel/${encodeURIComponent(channelKey)}?publicBeeKey=${encodeURIComponent(publicBeeKey)}` : '#/channel/' + encodeURIComponent(channelKey) }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '0.8'; (e.currentTarget as HTMLDivElement).style.transform = 'scale(0.98)' }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '1'; (e.currentTarget as HTMLDivElement).style.transform = 'scale(1)' }}
             >
@@ -2484,7 +2491,7 @@ export default function HomeScreen() {
   if (isPear && currentRoute.type === 'channel') {
     return (
       <div style={styles.container}>
-        <ChannelPageWeb channelKey={currentRoute.channelKey} />
+        <ChannelPageWeb channelKey={currentRoute.channelKey} publicBeeKey={currentRoute.publicBeeKey} />
       </div>
     )
   }
@@ -2561,7 +2568,7 @@ export default function HomeScreen() {
                     const video = channelVideos.find(v => v.id === videoId)
                     if (video) playVideo(video)
                   }}
-                  onChannelPress={viewingChannel ? () => { window.location.hash = '#/channel/' + encodeURIComponent(viewingChannel) } : undefined}
+                  onChannelPress={viewingChannel ? () => { const feedEntry = feedEntries.find((entry: any) => (entry.channelKey || entry.driveKey) === viewingChannel); const publicBeeKey = (feedEntry as any)?.publicBeeKey; window.location.hash = publicBeeKey ? `#/channel/${encodeURIComponent(viewingChannel)}?publicBeeKey=${encodeURIComponent(publicBeeKey)}` : '#/channel/' + encodeURIComponent(viewingChannel) } : undefined}
                 />
               )}
             </div>
@@ -2641,7 +2648,7 @@ export default function HomeScreen() {
                 }}
                 onChannelPress={(videoId) => {
                   const video = feedVideos.find(v => v.id === videoId)
-                  if (video?.channelKey) { window.location.hash = '#/channel/' + encodeURIComponent(video.channelKey) }
+                  if (video?.channelKey) { window.location.hash = video.publicBeeKey ? `#/channel/${encodeURIComponent(video.channelKey)}?publicBeeKey=${encodeURIComponent(video.publicBeeKey)}` : '#/channel/' + encodeURIComponent(video.channelKey) }
                 }}
               />
             )}

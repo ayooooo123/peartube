@@ -640,7 +640,7 @@ function MobileVideoPlayerScreen() {
         <ChannelInfo
           channelName={channelName}
           channelInitial={channelInitial}
-          onChannelPress={videoData?.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: videoData.channelKey } }) : undefined}
+          onChannelPress={videoData?.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: videoData.channelKey, publicBeeKey: videoData.publicBeeKey || undefined } }) : undefined}
         />
 
         {/* Divider */}

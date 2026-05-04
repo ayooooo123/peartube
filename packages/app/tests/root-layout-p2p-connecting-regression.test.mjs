@@ -38,8 +38,17 @@ test('backend ready clears loading before initial data loading begins', () => {
 
   const readyBlock = source.slice(markerIndex, source.indexOf('  // Subscribe to video load events', markerIndex))
   const setLoadingIndex = readyBlock.indexOf('setLoading(false)')
-  const loadInitialDataIndex = readyBlock.indexOf('await loadInitialData()')
+  const loadInitialDataIndex = readyBlock.indexOf('loadInitialData().catch')
   assert.notEqual(setLoadingIndex, -1, 'backend ready should clear loading')
   assert.notEqual(loadInitialDataIndex, -1, 'backend ready should load initial data')
   assert.ok(setLoadingIndex < loadInitialDataIndex, 'loading should clear before initial data fetches can hang or retry')
+})
+
+test('initial data loading does not re-enable the startup loading spinner after backend ready', () => {
+  const source = readAppFile('app/_layout.tsx')
+  const markerIndex = source.indexOf('const loadInitialData = useCallback')
+  assert.notEqual(markerIndex, -1, 'loadInitialData should exist')
+
+  const loadBlock = source.slice(markerIndex, source.indexOf('  const markBackendReady = useCallback', markerIndex))
+  assert.doesNotMatch(loadBlock, /setLoading\(true\)/, 'initial data should run in the background without restoring the startup spinner')
 })

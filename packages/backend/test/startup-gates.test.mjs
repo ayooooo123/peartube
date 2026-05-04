@@ -35,3 +35,20 @@ test('startup gate resolves once the first useful milestone is recorded', async 
     firstFeedSyncAt: 3,
   })
 })
+
+test('startup gate timeout returns null when no useful peer state arrives', async () => {
+  const gate = createStartupGate()
+
+  assert.equal(await gate.waitUntilOpen({ timeoutMs: 5 }), null)
+})
+
+test('startup gate timeout still resolves immediately after a useful peer state arrives', async () => {
+  const gate = createStartupGate()
+  gate.noteSwarmPeer(4)
+
+  assert.deepEqual(await gate.waitUntilOpen({ timeoutMs: 5000 }), {
+    firstSwarmPeerAt: 4,
+    firstFeedChannelOpenAt: null,
+    firstFeedSyncAt: null,
+  })
+})

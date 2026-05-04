@@ -75,9 +75,20 @@ export function createStartupGate() {
     shouldStart() {
       return shouldStartDeferredWarmup(milestones)
     },
-    waitUntilOpen() {
+    waitUntilOpen(options = {}) {
       if (shouldStartDeferredWarmup(milestones)) return Promise.resolve(milestones)
-      return ensureWaitPromise()
+
+      const timeoutMs = Number(options?.timeoutMs)
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        return ensureWaitPromise()
+      }
+
+      return Promise.race([
+        ensureWaitPromise(),
+        new Promise((resolve) => {
+          setTimeout(() => resolve(null), timeoutMs)
+        })
+      ])
     }
   }
 }

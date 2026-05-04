@@ -202,8 +202,6 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
 
     try {
       const t0 = Date.now()
-      setLoading(true)
-
       const identityResult = await platformRPC.rpc.getIdentities()
       const identities: any[] = identityResult?.identities || []
       console.log('[App] Got', identities.length, 'identities')
@@ -238,8 +236,6 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       }
     } catch (err) {
       console.error('[App] Failed to load initial data:', err)
-    } finally {
-      setLoading(false)
     }
   }, [startupLog])
 
@@ -260,7 +256,9 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
     setLoading(false)
     setBackendError(null)
     setStartupStatus(null)
-    await loadInitialData()
+    loadInitialData().catch((err) => {
+      console.error('[App] Background initial data load failed:', err)
+    })
   }, [loadInitialData, startupLog])
 
   // Subscribe to video load events to trigger prefetch

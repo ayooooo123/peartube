@@ -81,6 +81,8 @@ test('backend orchestrator defers warm-up behind startup gates and does not forc
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 
   assert.match(source, /createStartupGate/)
-  assert.match(source, /startupGate\.waitUntilOpen\(\)/)
+  assert.match(source, /STARTUP_GATE_WARMUP_WAIT_MS/)
+  assert.match(source, /startupGate\.waitUntilOpen\(\{ timeoutMs: STARTUP_GATE_WARMUP_WAIT_MS \}\)/)
+  assert.match(source, /publicFeed startup gate timed out; continuing backend warmup offline/)
   assert.doesNotMatch(source, /publicFeed\.requestFeedsFromPeers\(\)/)
 })

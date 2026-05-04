@@ -37,6 +37,8 @@ import {
 } from './corestore-error-utils.js'
 import { createStartupGate } from './startup-gates.js'
 
+const STARTUP_GATE_WARMUP_WAIT_MS = 2000
+
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
 }
@@ -417,8 +419,12 @@ export async function createBackendContext(config) {
     }
 
     try {
-      await startupGate.waitUntilOpen()
-      console.log('[Orchestrator] Startup gate opened, beginning deferred warm-up')
+      const startupMilestones = await startupGate.waitUntilOpen({ timeoutMs: STARTUP_GATE_WARMUP_WAIT_MS })
+      if (!startupMilestones) {
+        console.log('[Orchestrator] publicFeed startup gate timed out; continuing backend warmup offline')
+      } else {
+        console.log('[Orchestrator] Startup gate opened, beginning deferred warm-up')
+      }
     } catch (e) {
       console.log('[Orchestrator] Startup gate wait failed:', e?.message)
       return

@@ -169,7 +169,7 @@ export default function SearchTab() {
     if (isPear && typeof window !== 'undefined') {
       closeVideo()
       setTimeout(() => {
-        window.location.hash = `/watch/${channelKey}/${video.id}`
+        window.location.hash = `/watch/${encodeURIComponent(channelKey)}/${encodeURIComponent(video.id)}`
       }, 50)
       return
     }

@@ -199,12 +199,20 @@ function parseHash(hash: string): Route {
   const parts = path.split('/').filter(Boolean)
 
   if (parts[0] === 'watch' && parts[1] && parts[2]) {
-    return { type: 'watch', channelKey: parts[1], videoId: parts[2] }
+    return { type: 'watch', channelKey: safeDecodeURIComponent(parts[1]), videoId: safeDecodeURIComponent(parts[2]) }
   }
   if (parts[0] === 'channel' && parts[1]) {
-    return { type: 'channel', channelKey: decodeURIComponent(parts[1]) }
+    return { type: 'channel', channelKey: safeDecodeURIComponent(parts[1]) }
   }
   return { type: 'home' }
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
 }
 
 // WatchPageView - YouTube-style video playback page
@@ -1125,7 +1133,7 @@ function WatchPageView({
             {/* Channel info */}
             <div
               style={{ ...watchStyles.channelRow, cursor: 'pointer' }}
-              onClick={() => { window.location.hash = '#/channel/' + channelKey }}
+              onClick={() => { window.location.hash = '#/channel/' + encodeURIComponent(channelKey) }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '0.8'; (e.currentTarget as HTMLDivElement).style.transform = 'scale(0.98)' }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.opacity = '1'; (e.currentTarget as HTMLDivElement).style.transform = 'scale(1)' }}
             >
@@ -2423,7 +2431,7 @@ export default function HomeScreen() {
     if (isPear) {
       setViewingChannel(null)
       setWatchVideo({ ...video, channelKey })
-      window.location.hash = `/watch/${channelKey}/${video.id}`
+      window.location.hash = `/watch/${encodeURIComponent(channelKey)}/${encodeURIComponent(video.id)}`
       return
     }
 
@@ -2553,7 +2561,7 @@ export default function HomeScreen() {
                     const video = channelVideos.find(v => v.id === videoId)
                     if (video) playVideo(video)
                   }}
-                  onChannelPress={viewingChannel ? () => { window.location.hash = '#/channel/' + viewingChannel } : undefined}
+                  onChannelPress={viewingChannel ? () => { window.location.hash = '#/channel/' + encodeURIComponent(viewingChannel) } : undefined}
                 />
               )}
             </div>
@@ -2633,7 +2641,7 @@ export default function HomeScreen() {
                 }}
                 onChannelPress={(videoId) => {
                   const video = feedVideos.find(v => v.id === videoId)
-                  if (video?.channelKey) { window.location.hash = '#/channel/' + video.channelKey }
+                  if (video?.channelKey) { window.location.hash = '#/channel/' + encodeURIComponent(video.channelKey) }
                 }}
               />
             )}
@@ -2665,7 +2673,7 @@ export default function HomeScreen() {
               <VideoGrid
                 videos={gridVideos}
                 onVideoPress={handleVideoPress}
-                onChannelPress={identity?.driveKey ? () => { window.location.hash = '#/channel/' + identity.driveKey } : undefined}
+                onChannelPress={identity?.driveKey ? () => { window.location.hash = '#/channel/' + encodeURIComponent(identity.driveKey!) } : undefined}
               />
             )}
           </div>

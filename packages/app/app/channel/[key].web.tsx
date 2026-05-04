@@ -34,8 +34,16 @@ type ChannelPageProps = {
 function parseChannelKeyFromHash(hash: string): string {
   const normalized = hash.replace(/^#\/?/, '')
   const parts = normalized.split('/').filter(Boolean)
-  if (parts[0] === 'channel' && parts[1]) return decodeURIComponent(parts[1])
+  if (parts[0] === 'channel' && parts[1]) return safeDecodeURIComponent(parts[1])
   return ''
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
 }
 
 export default function ChannelPageWeb(props: ChannelPageProps) {
@@ -253,7 +261,7 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
                   className="ptVideoCard"
                   onClick={() => {
                     if (typeof window !== 'undefined') {
-                      window.location.hash = `/watch/${resolvedChannelKey}/${video.id}`
+                      window.location.hash = `/watch/${encodeURIComponent(resolvedChannelKey)}/${encodeURIComponent(video.id)}`
                     }
                   }}
                 >

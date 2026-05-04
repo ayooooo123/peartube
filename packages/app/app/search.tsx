@@ -260,7 +260,7 @@ export default function SearchScreen() {
 
       const setWatchHash = () => {
         console.log('[Search] Setting hash to watch:', channelKey, video.id)
-        window.location.hash = `/watch/${channelKey}/${video.id}`
+        window.location.hash = `/watch/${encodeURIComponent(channelKey)}/${encodeURIComponent(video.id)}`
       }
 
       const ensureHome = () => {

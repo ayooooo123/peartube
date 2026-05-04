@@ -954,7 +954,7 @@ export default function HomeScreen() {
                       video={video}
                       onPress={() => playVideo(video)}
                       showChannelInfo={true}
-                      onChannelPress={video.channelKey ? () => router.push('/channel/' + video.channelKey) : undefined}
+                      onChannelPress={video.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: video.channelKey } }) : undefined}
                       testID={index === 0 ? 'discover-feed-first-video' : undefined}
                     />
                   </View>
@@ -1000,7 +1000,7 @@ export default function HomeScreen() {
                       video={video}
                       onPress={() => playVideo(video)}
                       showChannelInfo={true}
-                      onChannelPress={video.channelKey ? () => router.push('/channel/' + video.channelKey) : undefined}
+                      onChannelPress={video.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: video.channelKey } }) : undefined}
                     />
                   </View>
                 ))}

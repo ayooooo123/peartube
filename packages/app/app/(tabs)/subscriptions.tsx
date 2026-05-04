@@ -164,7 +164,7 @@ export default function SubscriptionsScreen() {
           <View className="flex-row bg-pear-bg-elevated rounded-xl p-4 items-center">
             {/* Avatar + Info - tappable to navigate to channel */}
             <Pressable
-              onPress={() => router.push('/channel/' + item.channelKey)}
+              onPress={() => router.push({ pathname: '/channel/[key]', params: { key: item.channelKey } })}
               style={({ pressed }) => ({
                 flexDirection: 'row',
                 alignItems: 'center',

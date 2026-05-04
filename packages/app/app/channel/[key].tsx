@@ -86,12 +86,14 @@ function formatVideoTime(timestamp?: number) {
 function ChannelVideoCard({
   video,
   channelName,
+  onPress,
 }: {
   video: ChannelVideo
   channelName: string
+  onPress: () => void
 }) {
   return (
-    <PressableFeedback className="mb-4" onPress={() => {}} accessibilityRole="button">
+    <PressableFeedback className="mb-4" onPress={onPress} accessibilityRole="button">
       <ThumbnailImage
         thumbnailUrl={video.thumbnailUrl || video.thumbnail}
         duration={video.duration}
@@ -350,7 +352,23 @@ export default function ChannelScreen() {
               </View>
             ) : (
               channelVideos.map((channelVideo) => (
-                <ChannelVideoCard key={channelVideo.id} video={channelVideo} channelName={channelDisplayName} />
+                <ChannelVideoCard
+                  key={channelVideo.id}
+                  video={channelVideo}
+                  channelName={channelDisplayName}
+                  onPress={() => router.push({
+                    pathname: '/video/[id]',
+                    params: {
+                      id: channelVideo.id,
+                      channel: channelKey,
+                      videoData: JSON.stringify({
+                        ...channelVideo,
+                        channelKey,
+                        channel: { name: channelDisplayName },
+                      }),
+                    },
+                  })}
+                />
               ))
             )}
           </View>

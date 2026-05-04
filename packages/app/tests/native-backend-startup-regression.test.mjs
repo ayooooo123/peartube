@@ -64,17 +64,19 @@ test('mobile backend startup lock cleanup removes db LOCK files before orchestra
   assert.match(removeLocksBody, /path\.join\(storageDir, 'db', 'LOCK'\)/)
 })
 
-test('native root layout clears the backend startup timeout when an explicit startup error arrives', () => {
+test('native root layout clears startup timeout and releases loading on explicit startup errors', () => {
   const source = readAppFile('app/_layout.tsx')
   const onErrorBlock = source.match(/platformRPC\.events\.onError\(\(data: any\) => \{([\s\S]*?)\n\s*\}\)/)?.[1] ?? ''
   const catchBlock = source.match(/\} catch \(err\) \{([\s\S]*?)\n\s*\}\n\s*\}\)\(\)/)?.[1] ?? ''
 
   assert.ok(onErrorBlock, 'native startup onError handler should exist')
   assert.ok(catchBlock, 'native startup init catch block should exist')
-  assert.match(onErrorBlock, /clearTimeout\(startupTimerRef\.current\)/)
-  assert.match(onErrorBlock, /startupTimerRef\.current = null/)
+  assert.match(onErrorBlock, /setReady\(true\)/)
+  assert.match(onErrorBlock, /setLoading\(false\)/)
   assert.match(catchBlock, /clearTimeout\(startupTimerRef\.current\)/)
   assert.match(catchBlock, /startupTimerRef\.current = null/)
+  assert.match(catchBlock, /setReady\(true\)/)
+  assert.match(catchBlock, /setLoading\(false\)/)
 })
 
 test('backend orchestrator defers warm-up behind startup gates and does not force a boot-time feed sync request', () => {

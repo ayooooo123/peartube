@@ -396,11 +396,11 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       platformRPC.events.onError((data: any) => {
         const message = String(data?.message || 'Backend error')
         console.error('[App] Backend error:', message)
-        if (startupTimerRef.current) {
-          clearTimeout(startupTimerRef.current)
-          startupTimerRef.current = null
-        }
         setBackendError(message)
+        if (!backendReadyRef.current) {
+          setReady(true)
+          setLoading(false)
+        }
       })
 
       platformRPC.events.onVideoStats((data: any) => {

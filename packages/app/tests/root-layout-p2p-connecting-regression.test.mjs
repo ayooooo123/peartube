@@ -24,11 +24,22 @@ test('native startup timeout exits the connecting screen and marks loading false
 test('native init failure exits the connecting screen even when backend startup throws', () => {
   const source = readAppFile('app/_layout.tsx')
   const catchIndex = source.indexOf("console.error('[App] Failed to initialize platform RPC:'")
-  assert.notEqual(catchIndex, -1, 'native init catch block should exist')
+  assert.notEqual(catchIndex, -1, 'native init failure catch should exist')
 
   const catchBlock = source.slice(catchIndex, source.indexOf('    }', source.indexOf('setLoading(false)', catchIndex)))
   assert.match(catchBlock, /setReady\(true\)/, 'init failure should allow the app shell to render')
-  assert.match(catchBlock, /setLoading\(false\)/, 'init failure must clear loading so retry UI can render')
+  assert.match(catchBlock, /setLoading\(false\)/, 'init failure must clear loading so screens stop showing Connecting to P2P network')
+})
+
+test('native backend error event cannot cancel degraded startup fallback while leaving loading true', () => {
+  const source = readAppFile('app/_layout.tsx')
+  const errorIndex = source.indexOf('platformRPC.events.onError')
+  assert.notEqual(errorIndex, -1, 'native backend error event handler should exist')
+
+  const errorBlock = source.slice(errorIndex, source.indexOf('      platformRPC.events.onVideoStats', errorIndex))
+  assert.doesNotMatch(errorBlock, /clearTimeout\(startupTimerRef\.current\)/, 'backend errors before ready must not cancel the timeout fallback unless they also clear loading')
+  assert.match(errorBlock, /setReady\(true\)/, 'backend errors should release the app shell')
+  assert.match(errorBlock, /setLoading\(false\)/, 'backend errors must clear the startup spinner')
 })
 
 test('backend ready clears loading before initial data loading begins', () => {

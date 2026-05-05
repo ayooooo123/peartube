@@ -892,7 +892,10 @@ export function createApi({
         } catch {}
       }
       console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
-      return getVideoUrlFromBlob(ctx, blobsKeyHex, blobEntry.blobId, { mimeType: meta.mimeType })
+      return getVideoUrlFromBlob(ctx, blobsKeyHex, blobEntry.blobId, {
+        mimeType: meta.mimeType,
+        instant: true
+      })
     },
 
     /**

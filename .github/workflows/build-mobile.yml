@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
       - uses: ./.github/actions/validate-submodules
 
@@ -29,14 +29,14 @@ jobs:
           install: 'true'
 
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5.2.0
         with:
           distribution: temurin
           java-version: 17
           cache: gradle
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4.0.1
 
       - uses: ./.github/actions/prepare-mobile-backend
 
@@ -49,7 +49,7 @@ jobs:
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload debug APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: peartube-android-debug
           path: packages/app/android/app/build/outputs/apk/**/*.apk
@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
       - uses: ./.github/actions/validate-submodules
 
@@ -69,14 +69,14 @@ jobs:
           install: 'true'
 
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5.2.0
         with:
           distribution: temurin
           java-version: 17
           cache: gradle
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4.0.1
 
       - uses: ./.github/actions/prepare-mobile-backend
 
@@ -89,7 +89,7 @@ jobs:
         run: ./gradlew assembleRelease bundleRelease --no-daemon
 
       - name: Upload Android release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: peartube-android-release-artifacts
           path: |
@@ -101,7 +101,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6.0.2
 
       - uses: ./.github/actions/setup-node-workspace
         with:
@@ -133,7 +133,7 @@ jobs:
             build
 
       - name: Upload iOS simulator app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: peartube-ios-simulator-app
           path: packages/app/ios/build/Build/Products/Debug-iphonesimulator/PearTube.app

@@ -25,7 +25,7 @@ test('build workflows stay separate from publish workflows', () => {
   )
   assert.match(
     releaseAndroid,
-    /softprops\/action-gh-release@v2/,
+    /softprops\/action-gh-release@v3\.0\.0/,
     'release-android should own GitHub release publishing',
   )
 
@@ -36,7 +36,7 @@ test('build workflows stay separate from publish workflows', () => {
   )
   assert.match(
     releaseRelay,
-    /docker\/login-action@v3/,
+    /docker\/login-action@v4\.1\.0/,
     'release-relay should own GHCR publishing',
   )
   assert.match(
@@ -49,4 +49,32 @@ test('build workflows stay separate from publish workflows', () => {
     /packages:\s*write/,
     'build-relay should not request package publish permissions',
   )
+})
+
+test('GitHub Actions references use Node 24-compatible action majors', () => {
+  const files = [
+    ...fs.readdirSync(path.join(repoRoot, '.github/workflows')).map((name) => `.github/workflows/${name}`),
+    ...fs.readdirSync(path.join(repoRoot, '.github/actions')).map((name) => `.github/actions/${name}/action.yml`),
+  ].filter((relativePath) => /\.ya?ml$/.test(relativePath))
+
+  const legacyActionRefs = [
+    /actions\/checkout@v[1-5](\D|$)/,
+    /actions\/setup-node@v[1-5](\D|$)/,
+    /actions\/setup-java@v[1-4](\D|$)/,
+    /actions\/upload-artifact@v[1-6](\D|$)/,
+    /actions\/download-artifact@v[1-7](\D|$)/,
+    /android-actions\/setup-android@v[1-3](\D|$)/,
+    /softprops\/action-gh-release@v[1-2](\D|$)/,
+    /docker\/setup-qemu-action@v[1-3](\D|$)/,
+    /docker\/setup-buildx-action@v[1-3](\D|$)/,
+    /docker\/login-action@v[1-3](\D|$)/,
+    /docker\/build-push-action@v[1-6](\D|$)/,
+  ]
+
+  for (const relativePath of files) {
+    const source = readFile(relativePath)
+    for (const pattern of legacyActionRefs) {
+      assert.doesNotMatch(source, pattern, `${relativePath} should not use ${pattern}`)
+    }
+  }
 })

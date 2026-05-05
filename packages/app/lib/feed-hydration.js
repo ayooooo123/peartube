@@ -136,10 +136,10 @@ export function isConfirmedFeedHydrationResult({ entry, resolved, videos = [] })
 }
 
 export function mergeHydratedFeedVideos({
-  previousVideos = [],
-  incomingVideos = [],
-  refreshedChannelKeys = [],
-  identityDriveKey = null,
+  previousVideos = /** @type {any[]} */ ([]),
+  incomingVideos = /** @type {any[]} */ ([]),
+  refreshedChannelKeys = /** @type {string[]} */ ([]),
+  identityDriveKey = undefined,
   limit = 50,
 }) {
   const refreshed = new Set((refreshedChannelKeys || []).filter(Boolean))
@@ -172,6 +172,14 @@ export function mergeHydratedFeedVideos({
     .filter(Boolean)
     .sort((a, b) => (b?.uploadedAt || 0) - (a?.uploadedAt || 0))
     .slice(0, limit)
+}
+
+export function shouldKeepFeedVideoForVisibleEntries({ video, seededFeedChannelKeys, snapshotChannelKeys }) {
+  const channelKey = video?.channelKey || video?.driveKey || null
+  if (!channelKey) return false
+  if (!seededFeedChannelKeys || seededFeedChannelKeys.size === 0) return true
+  if (seededFeedChannelKeys.has(channelKey)) return true
+  return video?.__feedSource === 'snapshot' && snapshotChannelKeys?.has(channelKey)
 }
 
 export function mergePreviewFeedVideos({

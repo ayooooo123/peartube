@@ -28,6 +28,7 @@ import { colors } from '@/lib/colors'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { getFeedPreviewVideos, getVisibleSeededFeedEntries, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-feed-cache'
 import { formatTimeAgo } from '@/lib/formatters'
 
 interface FeedEntry {
@@ -91,12 +92,13 @@ export default function VerticalDiscoveryScreen() {
   const { isDesktop } = usePlatform()
   const { ready, identity, rpc, blobServerPort, backendError, startupStatus } = useApp()
   const { currentVideo, videoUrl, isLoading, loadAndPlayVideo } = useVideoPlayerContext()
+  const cachedFeed = useMemo(() => readDiscoverFeedCache(), [])
 
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const [refreshing, setRefreshing] = useState(false)
   const [feedLoading, setFeedLoading] = useState(false)
-  const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([])
-  const [videos, setVideos] = useState<VideoData[]>([])
+  const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(() => cachedFeed.feedEntries as FeedEntry[])
+  const [videos, setVideos] = useState<VideoData[]>(() => cachedFeed.videos as VideoData[])
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const [activeIndex, setActiveIndex] = useState(0)
   const pendingPlayKeyRef = useRef<string | null>(null)
@@ -161,14 +163,15 @@ export default function VerticalDiscoveryScreen() {
     if (!rpc) return
     const channelKey = entry.channelKey || entry.driveKey
     if (!channelKey || hydratedChannelsRef.current.has(channelKey)) return
-    hydratedChannelsRef.current.add(channelKey)
 
     try {
       const result = await withTimeout(
         rpc.listVideos({ channelKey, publicBeeKey: entry.publicBeeKey || undefined }),
         3500,
-        { videos: [] } as any,
+        null as any,
       )
+      if (!result) return
+      hydratedChannelsRef.current.add(channelKey)
       const channelVideos = Array.isArray((result as any)?.videos) ? (result as any).videos : []
       const mapped = channelVideos
         .filter((video: any) => shouldRenderFeedVideo({
@@ -199,7 +202,9 @@ export default function VerticalDiscoveryScreen() {
     if (!rpc) return
     setFeedLoading(true)
     try {
-      const result = await withTimeout(rpc.getPublicFeed({}), 4000, { entries: [] } as any)
+      const timeoutToken = Symbol('getPublicFeedTimeout')
+      const result = await withTimeout(rpc.getPublicFeed({}), 4000, timeoutToken as any)
+      if (result === timeoutToken) return
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
       setFeedEntries(entries)
       seedFromFeedEntries(entries)
@@ -217,6 +222,15 @@ export default function VerticalDiscoveryScreen() {
     if (!ready || !rpc) return
     loadFeed()
   }, [loadFeed, ready, rpc])
+
+  useEffect(() => {
+    if (feedEntries.length === 0 && videos.length === 0) return
+    writeDiscoverFeedCache({
+      feedEntries,
+      videos,
+      savedAt: Date.now(),
+    })
+  }, [feedEntries, videos])
 
   const playVideo = useCallback(async (video: VideoData) => {
     if (!rpc) return

@@ -43,3 +43,13 @@ test('vertical discovery keeps channel navigation and detail escape hatches', ()
   assert.match(source, /Feather name="message-circle"/, 'vertical player should include a comments/details affordance')
   assert.match(source, /Feather name="user"/, 'vertical player should include a channel affordance')
 })
+
+test('vertical discovery preserves known-good cards across remount and sparse feed refreshes', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /readDiscoverFeedCache\(\)/, 'vertical discovery should initialize from its last known-good in-memory cache')
+  assert.match(source, /writeDiscoverFeedCache\(\{/, 'vertical discovery should snapshot entries/videos while mounted')
+  assert.match(source, /const timeoutToken = Symbol\('getPublicFeedTimeout'\)/, 'feed loading should distinguish timeout from authoritative empty feed')
+  assert.match(source, /if \(result === timeoutToken\)/, 'timeout refreshes must not replace current feed entries with []')
+  assert.doesNotMatch(source, /hydratedChannelsRef\.current\.add\(channelKey\)[\s\S]{0,500}rpc\.listVideos/, 'channels must not be marked hydrated before listVideos returns usable videos')
+})

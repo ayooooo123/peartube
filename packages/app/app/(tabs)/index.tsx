@@ -25,8 +25,18 @@ import {
   isConfirmedFeedHydrationResult,
   mergeHydratedFeedVideos,
   mergePreviewFeedVideos,
+  shouldKeepFeedVideoForVisibleEntries,
   shouldRenderFeedVideo,
 } from '@/lib/feed-hydration'
+import {
+  createFeedSnapshot,
+  getSnapshotChannelKeys,
+  restoreFeedSnapshot,
+} from '@/lib/feed-snapshot'
+import {
+  readFeedSnapshotFromDisk,
+  writeFeedSnapshotToDisk,
+} from '@/lib/feed-snapshot-storage'
 
 // Public feed types
 interface FeedEntry {
@@ -70,6 +80,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   ])
 }
 
+function nowMs() {
+  return Date.now()
+}
+
+function logTiming(label: string, startMs: number, details: Record<string, any> = {}) {
+  console.log(`[HomeTiming] ${label}`, {
+    ms: Date.now() - startMs,
+    ...details,
+  })
+}
+
 // Detect Pear desktop vs mobile
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).PearWorkerClient || !!(window as any).bridge)
 
@@ -106,7 +127,11 @@ export default function HomeScreen() {
   // Aggregated feed videos from all discovered channels
   const [feedVideos, setFeedVideos] = useState<VideoData[]>([])
   const [loadingFeedVideos, setLoadingFeedVideos] = useState(false)
+  const [snapshotChannelKeys, setSnapshotChannelKeys] = useState<Set<string>>(new Set())
+  const [snapshotRestoredOnly, setSnapshotRestoredOnly] = useState(false)
   const feedLoadRunIdRef = useRef(0)
+  const feedSnapshotRestoredRef = useRef(false)
+  const feedSnapshotWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Category filter state
   const categories = ['All', 'Music', 'Gaming', 'Tech', 'Education', 'Entertainment', 'Vlog', 'Other']
@@ -182,6 +207,7 @@ export default function HomeScreen() {
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {
     if (!rpc) return
+    const startedAt = nowMs()
     try {
       setFeedLoading(true)
       // Add timeout to prevent infinite spinner if RPC hangs
@@ -204,6 +230,10 @@ export default function HomeScreen() {
       if (result?.stats) {
         setPeerCount(result.stats.peerCount || 0)
       }
+      logTiming('publicFeed', startedAt, {
+        entries: result?.entries?.length || 0,
+        timedOut: !result,
+      })
       setLastFeedRefresh(Date.now())
       try {
         const statusPromise = rpc.getSwarmStatus()
@@ -215,7 +245,9 @@ export default function HomeScreen() {
             channels: (status as any).channelsLoaded,
           })
         }
-      } catch {}
+      } catch (err) {
+        console.log('[Home] Failed to load swarm status:', (err as any)?.message || err)
+      }
     } catch (err) {
       console.error('[Home] Failed to load public feed:', err)
     } finally {
@@ -240,6 +272,63 @@ export default function HomeScreen() {
       fetchThumbnailsForVideos(vidsWithKey as VideoData[])
     }
   }, [videos, identity?.driveKey, fetchThumbnailsForVideos])
+
+  // Restore the last renderable Discover cards before P2P/feed hydration finishes.
+  useEffect(() => {
+    if (!ready || feedSnapshotRestoredRef.current) return
+    let cancelled = false
+    void (async () => {
+      const snapshotStartedAt = nowMs()
+      const snapshot = await readFeedSnapshotFromDisk()
+      const restored = restoreFeedSnapshot(snapshot) as VideoData[]
+      logTiming('feedSnapshotRestore', snapshotStartedAt, { videos: restored.length })
+      if (cancelled || restored.length === 0) return
+      feedSnapshotRestoredRef.current = true
+
+      const restoredChannelKeys = getSnapshotChannelKeys(restored)
+      console.log('[Home] restored feed snapshot', {
+        videos: restored.length,
+        channels: restoredChannelKeys.length,
+      })
+      setSnapshotChannelKeys(new Set(restoredChannelKeys))
+      setFeedVideos((prev) => {
+        if (prev.length > 0) return prev
+        setSnapshotRestoredOnly(true)
+        return restored
+      })
+      fetchThumbnailsForVideos(restored)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [ready, fetchThumbnailsForVideos])
+
+  // Persist the last known good renderable feed so the next launch can paint instantly.
+  useEffect(() => {
+    if (!ready || feedVideos.length === 0 || snapshotRestoredOnly) return
+    if (feedSnapshotWriteTimerRef.current) {
+      clearTimeout(feedSnapshotWriteTimerRef.current)
+    }
+
+    feedSnapshotWriteTimerRef.current = setTimeout(() => {
+      const snapshot = createFeedSnapshot({
+        videos: feedVideos,
+        channelMeta,
+        identityDriveKey: identity?.driveKey || undefined,
+        limit: 50,
+      })
+      if (snapshot.videos.length > 0) {
+        void writeFeedSnapshotToDisk(snapshot)
+      }
+    }, 1000)
+
+    return () => {
+      if (feedSnapshotWriteTimerRef.current) {
+        clearTimeout(feedSnapshotWriteTimerRef.current)
+        feedSnapshotWriteTimerRef.current = null
+      }
+    }
+  }, [ready, feedVideos, channelMeta, identity?.driveKey, snapshotRestoredOnly])
 
   // Load public feed on mount
   useEffect(() => {
@@ -296,6 +385,7 @@ export default function HomeScreen() {
     if (!rpc || hydrationMode === 'off') return
 
     const runId = feedLoadRunIdRef.current + 1
+    const startedAt = nowMs()
     feedLoadRunIdRef.current = runId
     setLoadingFeedVideos(true)
     // Keep existing Discover cards visible during background refresh/hydration.
@@ -318,7 +408,7 @@ export default function HomeScreen() {
         previousVideos: prev,
         incomingVideos: incoming,
         refreshedChannelKeys,
-        identityDriveKey: identity?.driveKey || null,
+        identityDriveKey: identity?.driveKey || undefined,
         limit: 50,
       }))
       if (incoming.length > 0) {
@@ -387,7 +477,7 @@ export default function HomeScreen() {
         const filteredVideos = (loadedVideos || [])
           .filter((v: any) => shouldRenderFeedVideo({
             video: { ...v, channelKey },
-            identityDriveKey: identity?.driveKey || null,
+            identityDriveKey: identity?.driveKey || undefined,
           }))
           .map((v: any) => ({
             ...v,
@@ -416,9 +506,18 @@ export default function HomeScreen() {
         attemptTimeout: FIRST_PASS_ATTEMPT_TIMEOUT,
         attempts: FIRST_PASS_ATTEMPTS,
       })))
+      const firstPassVideos = firstPassResults.flatMap((result) => result.videos)
+      if (firstPassVideos.length > 0) {
+        setSnapshotRestoredOnly(false)
+      }
       if (feedLoadRunIdRef.current === runId) {
+        logTiming('feedHydrationFirstPass', startedAt, {
+          mode: hydrationMode,
+          entries: initialEntries.length,
+          videos: firstPassVideos.length,
+        })
         mergeVideos(
-          firstPassResults.flatMap((result) => result.videos),
+          firstPassVideos,
           firstPassResults.filter((result) => result.confirmed).map((result) => result.channelKey).filter(Boolean)
         )
       }
@@ -448,17 +547,19 @@ export default function HomeScreen() {
   // channel appears in the feed. This avoids an empty Discover section while
   // remote/public-bee hydration is still catching up.
   useEffect(() => {
-    if (!identity?.driveKey) return
+    const identityDriveKey = identity?.driveKey
+    if (!identityDriveKey) return
     if (!Array.isArray(videos) || videos.length === 0) return
-    const hasOwnFeedEntry = feedEntries.some((e) => (e.channelKey || e.driveKey) === identity.driveKey)
+    const hasOwnFeedEntry = feedEntries.some((e) => (e.channelKey || e.driveKey) === identityDriveKey)
     if (!hasOwnFeedEntry) return
 
     setFeedVideos((prev) => {
       if (prev.length > 0) return prev
+      setSnapshotRestoredOnly(false)
       return videos.map((v: any) => ({
         ...v,
-        channelKey: identity.driveKey,
-        channel: { name: channelMetaRef.current[identity.driveKey]?.name || 'Your channel' },
+        channelKey: identityDriveKey,
+        channel: { name: channelMetaRef.current[identityDriveKey]?.name || 'Your channel' },
       }))
     })
   }, [feedEntries, videos, identity?.driveKey])
@@ -469,7 +570,7 @@ export default function HomeScreen() {
     const previewVideos = getFeedPreviewVideos(
       feedEntries,
       channelMeta,
-      identity?.driveKey || null,
+      identity?.driveKey || undefined,
       18
     ) as VideoData[]
     const previewManifestResolved = feedEntries.some((entry) => (
@@ -478,6 +579,7 @@ export default function HomeScreen() {
     ))
 
     if (previewVideos.length > 0 || previewManifestResolved) {
+      setSnapshotRestoredOnly(false)
       setFeedVideos((prev) => mergePreviewFeedVideos({
         previousVideos: prev,
         previewVideos,
@@ -528,7 +630,7 @@ export default function HomeScreen() {
           const videosWithChannel = videoList
             .filter((v: any) => shouldRenderFeedVideo({
               video: { ...v, channelKey: driveKey },
-              identityDriveKey: identity?.driveKey || null,
+              identityDriveKey: identity?.driveKey || undefined,
             }))
             .map((v: any) => ({
             ...v,
@@ -695,10 +797,14 @@ export default function HomeScreen() {
   const seededFeedChannelKeys = new Set(visibleSeededFeedEntries.map((entry) => entry.channelKey || entry.driveKey).filter(Boolean))
 
   const feedVideosWithThumbs: VideoData[] = feedVideos
-    .filter(v => seededFeedChannelKeys.has(v.channelKey))
+    .filter(v => shouldKeepFeedVideoForVisibleEntries({
+      video: v,
+      seededFeedChannelKeys,
+      snapshotChannelKeys,
+    }))
     .filter(v => shouldRenderFeedVideo({
       video: v,
-      identityDriveKey: identity?.driveKey || null,
+      identityDriveKey: identity?.driveKey || undefined,
     }))
     .map(v => {
       const cacheKey = `${v.channelKey}:${v.id}`

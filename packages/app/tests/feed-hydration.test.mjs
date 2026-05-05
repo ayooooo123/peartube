@@ -10,6 +10,7 @@ import {
   isConfirmedFeedHydrationResult,
   mergeHydratedFeedVideos,
   mergePreviewFeedVideos,
+  shouldKeepFeedVideoForVisibleEntries,
   shouldRenderFeedVideo,
 } from '../lib/feed-hydration.js'
 
@@ -144,6 +145,29 @@ test('getFeedPreviewVideos only uses local or live-peer manifest previews', () =
       channelName: 'Live channel',
     },
   ])
+})
+
+test('shouldKeepFeedVideoForVisibleEntries keeps restored snapshot cards until their channels are refreshed', () => {
+  const seededFeedChannelKeys = new Set(['live-channel'])
+  const snapshotChannelKeys = new Set(['cached-channel'])
+
+  assert.equal(shouldKeepFeedVideoForVisibleEntries({
+    video: { id: 'cached', channelKey: 'cached-channel', __feedSource: 'snapshot' },
+    seededFeedChannelKeys,
+    snapshotChannelKeys,
+  }), true)
+
+  assert.equal(shouldKeepFeedVideoForVisibleEntries({
+    video: { id: 'live', channelKey: 'live-channel', __feedSource: 'hydrated' },
+    seededFeedChannelKeys,
+    snapshotChannelKeys,
+  }), true)
+
+  assert.equal(shouldKeepFeedVideoForVisibleEntries({
+    video: { id: 'other', channelKey: 'other-channel', __feedSource: 'hydrated' },
+    seededFeedChannelKeys,
+    snapshotChannelKeys,
+  }), false)
 })
 
 test('shouldRenderFeedVideo only accepts proven-playable remote videos but keeps the local channel visible', () => {

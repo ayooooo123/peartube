@@ -76,7 +76,7 @@
     "bare-storage": "^1.1.0",
     "bare-tcp": "^2.2.7",
     "bare-thread": "^1.2.0",
-    "bare-tls": "file:../bare-tls",
+    "bare-tls": "^2.2.3",
     "bare-worker": "^4.1.6",
     "electrobun": "^1.16.0",
     "events": "^3.3.0",

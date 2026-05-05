@@ -236,16 +236,16 @@ Legacy code that finds SurfaceViews and applies scale transforms. **Only finds S
 | `VideoPlayerOverlay.tsx` | 1592-1636 | `videoPlayerStyle` — PiP branch freezes video position |
 | `VideoPlayerOverlay.tsx` | 2776 | Overlay controls condition — **includes `isInPipMode`** |
 | `VideoPlayerOverlay.tsx` | 3021 | View hierarchy: `style={[container, containerStyle, containerDragStyle]}` |
-| `HybridNitroVLCView.kt` | 30-46 | `setAllPipMode()` + `cancelDeferredSync()` |
-| `HybridNitroVLCView.kt` | 95-100 | `pipModeActive` volatile flag |
-| `HybridNitroVLCView.kt` | 627-710 | `applySurfaceSize` — PiP guard + dedup + deferred sync |
-| `HybridNitroVLCView.kt` | 471-510 | `onNewVideoLayout` — PiP guard |
-| `HybridNitroVLCView.kt` | 742-744 | `applyAspectRatio` — PiP guard |
-| `HybridNitroVLCView.kt` | 802-815 | `isEffectivelyInPip()` helper |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 30-46 | `setAllPipMode()` + `cancelDeferredSync()` |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 95-100 | `pipModeActive` volatile flag |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 627-710 | `applySurfaceSize` — PiP guard + dedup + deferred sync |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 471-510 | `onNewVideoLayout` — PiP guard |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 742-744 | `applyAspectRatio` — PiP guard |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 802-815 | `isEffectivelyInPip()` helper |
 | `MediaSessionModule.kt` | 122-172 | `onUserLeaveHint` — sets pipModeActive early |
 | `MediaSessionModule.kt` | 178-203 | `notifyPipModeChanged` — PiP enter/exit notification |
 | `MediaSessionModule.kt` | 244-291 | `applySurfaceViewTransforms` — legacy SurfaceView scaling (NOT TextureView) |
-| `NitroVLCViewManager.kt` | 22-59 | Plain ViewManager — FrameLayout + TextureView MATCH_PARENT |
+| `ayooooo123/react-native-nitro-vlc:android/.../NitroVLCViewManager.kt` | 22-59 | Plain ViewManager — FrameLayout + TextureView MATCH_PARENT |
 
 ## Constraints
 

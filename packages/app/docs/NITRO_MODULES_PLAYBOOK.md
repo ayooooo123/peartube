@@ -5,7 +5,7 @@ This doc covers practical patterns for working with **Nitro Modules** in this re
 ## What "Nitro Modules" means here
 
 - A native module/view with a JS/TS surface, typically generated/bound via Nitro tooling.
-- In PearTube we use Nitro for the VLC view (`react-native-nitro-vlc`) and bridge it to system features (MediaSession, PiP).
+- Historical note: PearTube previously kept a Nitro VLC view (`react-native-nitro-vlc`) in-tree for MediaSession / PiP experiments. That library now lives at https://github.com/ayooooo123/react-native-nitro-vlc.
 
 ## Key Principles
 

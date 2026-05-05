@@ -32,7 +32,7 @@ export const ActionButton = memo(function ActionButton({
       ) : (
         Icon({ color: active ? colors.primary : colors.text, size: 22 })
       )}
-      <Text style={[styles.actionLabel, active && styles.actionLabelActive]}>{label}</Text>
+      <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.actionLabel, active && styles.actionLabelActive]}>{label}</Text>
     </Pressable>
   )
 })

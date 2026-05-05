@@ -48,6 +48,7 @@ export interface VideoContainerProps {
 
   // Style override
   style?: any
+  testID?: string
 }
 
 export const VideoContainer = memo(
@@ -77,13 +78,14 @@ export const VideoContainer = memo(
       onError,
       onVideoStateChange,
       style,
+      testID,
     },
     ref
   ) {
     // Casting placeholder
     if (isCasting) {
       return (
-        <View style={[styles.castPlaceholder, style]}>
+        <View testID={testID} style={[styles.castPlaceholder, style]}>
           <Feather name="cast" size={40} color={colors.primary} />
           <Text style={styles.castPlaceholderTitle}>
             Casting to {castDeviceName || 'device'}
@@ -98,7 +100,7 @@ export const VideoContainer = memo(
     // No video URL - show placeholder
     if (!videoUrl) {
       return (
-        <View style={[styles.videoPlaceholder, style]}>
+        <View testID={testID} style={[styles.videoPlaceholder, style]}>
           <Text style={styles.placeholderText}>
             {currentVideo?.title?.charAt(0).toUpperCase() || '?'}
           </Text>
@@ -108,6 +110,7 @@ export const VideoContainer = memo(
 
     return (
       <PearInlineVideoView
+        testID={testID}
         style={style}
         playerRef={playerRef}
         videoUrl={videoUrl}

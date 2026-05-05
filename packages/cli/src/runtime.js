@@ -3,11 +3,13 @@ export async function createRelayRuntime({ config, logger }) {
     { initializeStorage, loadChannel, loadPublicBee },
     { PublicFeedManager },
     { CacheManager },
+    { createRelaySeeder },
     { readPrimaryKeyFile, writePrimaryKeyFile }
   ] = await Promise.all([
     import('@peartube/backend/storage'),
     import('@peartube/backend/public-feed'),
     import('./cache-manager.js'),
+    import('./seeding.js'),
     import('../../backend/src/identity-key-file.js')
   ])
 
@@ -52,6 +54,11 @@ export async function createRelayRuntime({ config, logger }) {
 
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb)
   const cacheManager = new CacheManager(ctx.store, ctx.metaDb, config?.storage?.maxBytes || 0)
+  const seeder = createRelaySeeder({
+    ctx,
+    loadPublicBee,
+    logger: logger.runtime || logger.relay || logger
+  })
   let candidateHandler = null
 
   function emitFeedEntries() {
@@ -88,6 +95,7 @@ export async function createRelayRuntime({ config, logger }) {
     ctx,
     publicFeed,
     cacheManager,
+    seeder,
     setCandidateHandler(handler) {
       candidateHandler = handler
     },
@@ -108,6 +116,7 @@ export async function createRelayRuntime({ config, logger }) {
         try {
           await loadPublicBee(ctx, channel.publicBeeKey)
           await publicFeed.submitChannel(channel.driveKey, channel.publicBeeKey)
+          await seeder.seedChannel(channel)
         } catch (err) {
           logger.runtime?.debug('Failed to restore cached mirrored channel', {
             channelKey: channel.driveKey,
@@ -117,6 +126,9 @@ export async function createRelayRuntime({ config, logger }) {
       }
 
       logger.runtime?.info('Relay runtime started', this.getNetworkStats())
+      await seeder.seedCachedChannels(cacheManager).catch((err) => {
+        logger.runtime?.warn('Relay seeding refresh failed', { error: err?.message || String(err) })
+      })
       emitFeedEntries()
     },
     requestFeedSync() {
@@ -184,14 +196,21 @@ export async function createRelayRuntime({ config, logger }) {
         connections: ctx.swarm?.connections?.size || 0,
         feedPeers: feedStats.peerCount || 0,
         feedConnections: publicFeed.feedConnections?.size || 0,
-        feedEntries: feedStats.totalEntries || 0
+        feedEntries: feedStats.totalEntries || 0,
+        dht: {
+          bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
+          firewalled: ctx.swarm?.dht?.firewalled ?? null,
+          online: ctx.swarm?.dht?.online ?? null
+        },
+        seeding: seeder.getStats()
       }
     },
     async close() {
-      try { publicFeed.stop() } catch {}
-      try { await ctx.swarm.destroy() } catch {}
-      try { ctx.blobServer?.close?.() } catch {}
-      try { await ctx.store.close() } catch {}
+      try { publicFeed.stop() } catch (err) { logger.runtime?.debug('Public feed close failed', { error: err?.message || String(err) }) }
+      try { await seeder.close() } catch (err) { logger.runtime?.debug('Relay seeder close failed', { error: err?.message || String(err) }) }
+      try { await ctx.swarm.destroy() } catch (err) { logger.runtime?.debug('Swarm close failed', { error: err?.message || String(err) }) }
+      try { ctx.blobServer?.close?.() } catch (err) { logger.runtime?.debug('Blob server close failed', { error: err?.message || String(err) }) }
+      try { await ctx.store.close() } catch (err) { logger.runtime?.debug('Store close failed', { error: err?.message || String(err) }) }
     }
   }
 }

@@ -826,7 +826,7 @@ export function createApi({
         // Return URL instantly
         return getVideoUrlFromBlob(ctx, blobsCoreKey, blobId, {
           mimeType: mimeType || 'video/mp4',
-          instant: false
+          instant: true
         })
       }
 
@@ -862,7 +862,7 @@ export function createApi({
         // Return URL instantly - blob server handles fetching
         return getVideoUrlFromBlob(ctx, blobsKeyHex, meta.blobId, {
           mimeType: meta.mimeType,
-          instant: false
+          instant: true
         })
       }
 

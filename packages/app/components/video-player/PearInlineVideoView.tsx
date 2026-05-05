@@ -10,6 +10,7 @@ import Video, {
 
 type PearInlineVideoViewProps = {
   style?: StyleProp<ViewStyle>
+  testID?: string
   playerRef: RefObject<any>
   videoUrl: string
   playbackSession: number
@@ -71,6 +72,7 @@ function getEventDurationMs(data: any) {
 
 export const PearInlineVideoView = memo(function PearInlineVideoView({
   style,
+  testID,
   playerRef,
   videoUrl,
   playbackSession,
@@ -365,7 +367,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   }, [onPictureInPictureChanged])
 
   return (
-    <View style={[styles.container, style]}>
+    <View testID={testID} style={[styles.container, style]}>
       <Video
         key={`rnv-${playbackSession}:${currentVideoKey || ''}:${sourceKey}`}
         ref={videoRef}

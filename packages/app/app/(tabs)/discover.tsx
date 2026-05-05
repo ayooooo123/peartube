@@ -23,12 +23,12 @@ import { Feather } from '@expo/vector-icons'
 import type { VideoData } from '@peartube/core'
 import { useApp } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
-import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { colors } from '@/lib/colors'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { getFeedPreviewVideos, getVisibleSeededFeedEntries, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { formatTimeAgo } from '@/lib/formatters'
+import { VideoContainer } from '@/components/video-player/VideoContainer'
 
 interface FeedEntry {
   driveKey: string
@@ -90,7 +90,6 @@ export default function VerticalDiscoveryScreen() {
   const { height: screenHeight, width: screenWidth } = useWindowDimensions()
   const { isDesktop } = usePlatform()
   const { ready, identity, rpc, blobServerPort, backendError, startupStatus } = useApp()
-  const { currentVideo, videoUrl, isLoading, loadAndPlayVideo } = useVideoPlayerContext()
 
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const [refreshing, setRefreshing] = useState(false)
@@ -99,12 +98,15 @@ export default function VerticalDiscoveryScreen() {
   const [videos, setVideos] = useState<VideoData[]>([])
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const [activeIndex, setActiveIndex] = useState(0)
+  const [shortsVideoUrl, setShortsVideoUrl] = useState<string | null>(null)
+  const [shortsPlaybackSession, setShortsPlaybackSession] = useState(0)
+  const [shortsLoading, setShortsLoading] = useState(false)
+  const shortsPlayerRef = useRef<any>(null)
   const pendingPlayKeyRef = useRef<string | null>(null)
   const hydratedChannelsRef = useRef<Set<string>>(new Set())
 
   const activeVideo = videos[activeIndex]
   const activeVideoKey = activeVideo ? `${activeVideo.channelKey}:${activeVideo.id}` : null
-  const currentVideoKey = currentVideo ? `${currentVideo.channelKey}:${currentVideo.id}` : null
 
   const fetchThumbnailsForVideos = useCallback(async (items: VideoData[]) => {
     if (!rpc || !blobServerPort) return
@@ -245,20 +247,25 @@ export default function VerticalDiscoveryScreen() {
       const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).catch(() => undefined)
-        loadAndPlayVideo(video, cachedUrl)
+        setShortsVideoUrl(cachedUrl)
+        setShortsPlaybackSession((prev) => prev + 1)
+        setShortsLoading(false)
         return
       }
+      setShortsLoading(true)
       const result = await rpc.preparePlayback(playbackRequest)
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
-        loadAndPlayVideo(video, result.url)
+        setShortsVideoUrl(result.url)
+        setShortsPlaybackSession((prev) => prev + 1)
       }
     } catch (err) {
       console.log('[VerticalDiscovery] Playback failed:', (err as any)?.message || err)
     } finally {
       pendingPlayKeyRef.current = null
+      setShortsLoading(false)
     }
-  }, [loadAndPlayVideo, rpc])
+  }, [rpc])
 
   useEffect(() => {
     if (!activeVideo || !ready) return
@@ -399,9 +406,24 @@ export default function VerticalDiscoveryScreen() {
               >
                 <View style={styles.scrim} />
                 <View style={styles.videoStage}>
-                  {activeVideoKey === `${video.channelKey}:${video.id}` && currentVideoKey === activeVideoKey && videoUrl && !isLoading ? (
+                  {activeVideoKey === `${video.channelKey}:${video.id}` && shortsVideoUrl ? (
                     <View style={styles.playingFrame}>
-                      <Text style={styles.playingText}>Playing</Text>
+                      <VideoContainer
+                        testID="vertical-discovery-inline-player"
+                        style={styles.shortsInlinePlayer}
+                        playerRef={shortsPlayerRef}
+                        videoUrl={shortsVideoUrl}
+                        currentVideo={video}
+                        playbackSession={shortsPlaybackSession}
+                        isPlaying
+                        playbackRate={1}
+                        isCasting={false}
+                        isInPipMode={false}
+                      />
+                    </View>
+                  ) : shortsLoading && activeVideoKey === `${video.channelKey}:${video.id}` ? (
+                    <View style={styles.playButtonShell}>
+                      <ActivityIndicator color="#fff" size="large" />
                     </View>
                   ) : (
                     <View style={styles.playButtonShell}>
@@ -533,8 +555,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.18)',
     backgroundColor: 'rgba(0,0,0,0.34)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  shortsInlinePlayer: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000',
   },
   playingText: {
     color: colors.primary,

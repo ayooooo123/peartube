@@ -30,7 +30,21 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
       connections: runtimeStats.connections || 0,
       feedPeers: runtimeStats.feedPeers || 0,
       feedConnections: runtimeStats.feedConnections || 0,
-      feedEntries: runtimeStats.feedEntries || 0
+      feedEntries: runtimeStats.feedEntries || 0,
+      dht: {
+        bootstrapped: runtimeStats.dht?.bootstrapped ?? null,
+        firewalled: runtimeStats.dht?.firewalled ?? null,
+        online: runtimeStats.dht?.online ?? null
+      },
+      seeding: {
+        channels: runtimeStats.seeding?.channels || 0,
+        videos: runtimeStats.seeding?.videos || 0,
+        publicBeeCores: runtimeStats.seeding?.publicBeeCores || 0,
+        blobCores: runtimeStats.seeding?.blobCores || 0,
+        discoveryHandles: runtimeStats.seeding?.discoveryHandles || 0,
+        lastSeededAt: runtimeStats.seeding?.lastSeededAt || null,
+        lastError: runtimeStats.seeding?.lastError || null
+      }
     },
     evictionCandidates: sortEvictionCandidates(channels).map((channel) => ({
       channelKey: channel.channelKey,
@@ -64,7 +78,9 @@ export function formatRelayStatus(status) {
     `connections: ${status.runtime.connections}`,
     `feedPeers: ${status.runtime.feedPeers}`,
     `feedConnections: ${status.runtime.feedConnections}`,
-    `feedEntries: ${status.runtime.feedEntries}`
+    `feedEntries: ${status.runtime.feedEntries}`,
+    `dht: bootstrapped=${status.runtime.dht.bootstrapped} firewalled=${status.runtime.dht.firewalled} online=${status.runtime.dht.online}`,
+    `seeding: channels=${status.runtime.seeding.channels} videos=${status.runtime.seeding.videos} publicBeeCores=${status.runtime.seeding.publicBeeCores} blobCores=${status.runtime.seeding.blobCores} discoveryHandles=${status.runtime.seeding.discoveryHandles}`
   ]
 
   if (status.evictionCandidates.length > 0) {

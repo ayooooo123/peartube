@@ -131,6 +131,8 @@ export const Scrubber = memo(function Scrubber({
   const previewVisibilitySV = useSharedValue(0)
   // Track whether we were at a boundary last update (for heavy haptic)
   const wasAtBoundarySV = useSharedValue(false)
+  const startYSV = useSharedValue(0)
+  const dragOffsetSV = useSharedValue(0)
 
   // Buffer shimmer opacity (starts hidden, only visible when buffer is growing)
   const bufferShimmerOpacity = useSharedValue(0)
@@ -222,9 +224,6 @@ export const Scrubber = memo(function Scrubber({
 
   // ── Gestures ─────────────────────────────────────────────────────────
   const gesture = useMemo(() => {
-    let startY = 0
-    let dragOffset = 0
-
     let tap = Gesture.Tap()
       .maxDistance(8)
       .hitSlop({ top: 12, bottom: 12, left: 0, right: 0 })
@@ -255,7 +254,7 @@ export const Scrubber = memo(function Scrubber({
         const d = durationSV.value
         if (disabled || tw <= 0 || d <= 0) return
 
-        startY = evt.y
+        startYSV.value = evt.y
         isInteractingSV.value = true
 
         // Hybrid behavior:
@@ -270,10 +269,10 @@ export const Scrubber = memo(function Scrubber({
         if (touchedHandle) {
           // Preserve where inside the handle/track the finger landed so the
           // handle doesn't jump when drag starts.
-          dragOffset = touchProgress - (lockActiveSV.value ? lockProgress : renderedProgress)
+          dragOffsetSV.value = touchProgress - (lockActiveSV.value ? lockProgress : renderedProgress)
           uiProgressSV.value = lockActiveSV.value ? lockProgress : renderedProgress
         } else {
-          dragOffset = 0
+          dragOffsetSV.value = 0
           uiProgressSV.value = clamp(touchProgress, 0, 1)
         }
 
@@ -304,7 +303,7 @@ export const Scrubber = memo(function Scrubber({
         const tw = trackWidthSV.value
         if (tw <= 0) return
 
-        const verticalDistance = Math.abs(evt.y - startY)
+        const verticalDistance = Math.abs(evt.y - startYSV.value)
         const scale = getFineScrubScale(verticalDistance)
         const fingerProgress = getProgressFromTouch(evt.x, tw)
         if (fingerProgress < 0) return
@@ -314,7 +313,7 @@ export const Scrubber = memo(function Scrubber({
           const renderedProgress = clamp(uiProgressSV.value, 0, 1)
           uiProgressSV.value = clamp(renderedProgress + ((evt.changeX ?? 0) * scale) / tw, 0, 1)
         } else {
-          uiProgressSV.value = clamp(fingerProgress - dragOffset, 0, 1)
+          uiProgressSV.value = clamp(fingerProgress - dragOffsetSV.value, 0, 1)
         }
 
         const atBoundary = uiProgressSV.value <= 0.0 || uiProgressSV.value >= 1.0
@@ -344,7 +343,8 @@ export const Scrubber = memo(function Scrubber({
         isInteractingSV.value = false
         showPreviewSV.value = false
         previewVisibilitySV.value = withTiming(0, PREVIEW_EXIT)
-        startY = 0
+        startYSV.value = 0
+        dragOffsetSV.value = 0
         runOnJS(setPreviewSeconds)(null)
       })
 
@@ -354,7 +354,7 @@ export const Scrubber = memo(function Scrubber({
     }
 
     return Gesture.Exclusive(pan, tap)
-  }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, wasAtBoundarySV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
+  }, [disabled, trackWidthSV, durationSV, uiProgressSV, isTouchingSV, isScrubbingSV, isInteractingSV, lockActiveSV, lockProgressSV, wasAtBoundarySV, startYSV, dragOffsetSV, externalGesture, onScrubStart, handleCommit, showPreviewSV, previewVisibilitySV, setPreviewSeconds])
 
   // ── Animated styles ──────────────────────────────────────────────────
 

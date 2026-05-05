@@ -37,7 +37,22 @@ test('Scrubber source keeps the redesign geometry aligned with the spec', () => 
   )
   assert.match(
     source,
-    /const verticalDistance = Math\.abs\(evt\.y - startY\)/,
+    /const startYSV = useSharedValue\(0\)/,
+    'Scrubber should keep gesture startY in a Reanimated shared value so Android worklets can access it safely',
+  )
+  assert.match(
+    source,
+    /const dragOffsetSV = useSharedValue\(0\)/,
+    'Scrubber should keep gesture drag offset in a Reanimated shared value instead of a closure local',
+  )
+  assert.doesNotMatch(
+    source,
+    /let startY = 0|let dragOffset = 0/,
+    'Scrubber worklets must not capture mutable closure locals; Android release builds can throw missing-property errors while seeking',
+  )
+  assert.match(
+    source,
+    /const verticalDistance = Math\.abs\(evt\.y - startYSV\.value\)/,
     'Scrubber should derive fine-scrubbing speed from the vertical drift distance',
   )
   assert.match(
@@ -57,7 +72,7 @@ test('Scrubber source keeps the redesign geometry aligned with the spec', () => 
   )
   assert.match(
     source,
-    /<View style=\{styles\.scrubberTooltipBubble\}>[\s\S]*<View style=\{styles\.scrubberTooltipArrow\} \/>/,
+    /<View style=\{styles\.scrubberTooltipBubble\} onLayout=\{handleTooltipLayout\}>[\s\S]*<\/View>\s*<View style=\{styles\.scrubberTooltipArrow\} \/>/,
     'Scrubber should render the tooltip arrow outside the pill body so the arrow looks like a pointer instead of extra bubble padding',
   )
 })

@@ -23,6 +23,16 @@ test('preparePlayback/getVideoUrl uses instant blob URLs when blob keys are alre
   assert.match(publicBeeKeyBlock, /instant:\s*true/, 'publicBee blobsCoreKey playback must not wait on peer discovery before returning a URL')
 })
 
+test('fallback channel blob-entry playback also returns an instant blob URL', async () => {
+  const src = await source(apiPath)
+  const fallbackStart = src.indexOf('// Fallback: load channel to get blob entry')
+  assert.notEqual(fallbackStart, -1, 'expected fallback blob-entry path')
+  const fallbackBlock = src.slice(fallbackStart, src.indexOf('},\n\n    /**\n     * Prepare normal watch playback', fallbackStart))
+
+  assert.match(fallbackBlock, /const blobEntry = await channel\.getBlobEntry\(meta\)/, 'expected fallback to resolve blob entry from channel metadata')
+  assert.match(fallbackBlock, /getVideoUrlFromBlob\(ctx, blobsKeyHex, blobEntry\.blobId, \{[\s\S]*instant:\s*true/, 'fallback blob-entry path should not wait on core update once it has blob coordinates')
+})
+
 test('instant blob URL path generates the blob-server link before background core readiness/update', async () => {
   const src = await source(storagePath)
   const start = src.indexOf('function getVideoUrlInstant')

@@ -6,6 +6,7 @@
  */
 import { memo, useMemo, useCallback } from 'react'
 import { View, Text, Pressable, StyleSheet } from 'react-native'
+import { colors } from '@/lib/colors'
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming } from 'react-native-reanimated'
 import { ThumbnailImage } from './ThumbnailImage'
 import { formatTimeAgo } from '@/lib/formatters'
@@ -101,66 +102,66 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
 
   return (
     <Pressable onPress={handlePress} style={getPressedStyle} testID={testID}>
-      {/* Thumbnail */}
-      <ThumbnailImage
-        thumbnailUrl={video.thumbnailUrl || video.thumbnail}
-        duration={video.duration}
-        channelInitial={channelInitial}
-      />
+      <View style={styles.surface}>
+        <View style={styles.thumbnailFrame}>
+          <ThumbnailImage
+            thumbnailUrl={video.thumbnailUrl || video.thumbnail}
+            duration={video.duration}
+            channelInitial={channelInitial}
+          />
+        </View>
 
-      {/* Video info row */}
-      <View style={styles.infoRow}>
-        {/* Channel avatar */}
-        {showChannelInfo && onChannelPress ? (
-          <AnimatedPressable
-            onPress={onChannelPress}
-            onPressIn={channelPressIn}
-            onPressOut={channelPressOut}
-            style={[styles.avatarContainer, channelAnimStyle]}
-            hitSlop={4}
-          >
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{channelInitial}</Text>
+        <View style={styles.infoRow}>
+          {showChannelInfo && onChannelPress ? (
+            <AnimatedPressable
+              onPress={onChannelPress}
+              onPressIn={channelPressIn}
+              onPressOut={channelPressOut}
+              style={[styles.avatarContainer, channelAnimStyle]}
+              hitSlop={6}
+            >
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{channelInitial}</Text>
+              </View>
+            </AnimatedPressable>
+          ) : showChannelInfo ? (
+            <View style={styles.avatarContainer}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{channelInitial}</Text>
+              </View>
             </View>
-          </AnimatedPressable>
-        ) : showChannelInfo ? (
-          <View style={styles.avatarContainer}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{channelInitial}</Text>
-            </View>
-          </View>
-        ) : null}
+          ) : null}
 
-        {/* Title and metadata */}
-        <View style={styles.textContainer}>
-          <Text style={styles.title} numberOfLines={2}>
-            {video.title}
-          </Text>
-          <View style={styles.metaRow}>
-            {showChannelInfo && onChannelPress ? (
-              <>
-                <AnimatedPressable
-                  onPress={onChannelPress}
-                  onPressIn={channelPressIn}
-                  onPressOut={channelPressOut}
-                  style={channelAnimStyle}
-                  hitSlop={4}
-                >
-                  <Text style={styles.channelNameLink} numberOfLines={1}>
+          <View style={styles.textContainer}>
+            <Text style={styles.title} numberOfLines={2}>
+              {video.title}
+            </Text>
+            <View style={styles.metaRow}>
+              {showChannelInfo && onChannelPress ? (
+                <>
+                  <AnimatedPressable
+                    onPress={onChannelPress}
+                    onPressIn={channelPressIn}
+                    onPressOut={channelPressOut}
+                    style={channelAnimStyle}
+                    hitSlop={6}
+                  >
+                    <Text style={styles.channelNameLink} numberOfLines={1}>
+                      {channelName}
+                    </Text>
+                  </AnimatedPressable>
+                  <Text style={styles.dot}>·</Text>
+                </>
+              ) : showChannelInfo ? (
+                <>
+                  <Text style={styles.channelName} numberOfLines={1}>
                     {channelName}
                   </Text>
-                </AnimatedPressable>
-                <Text style={styles.dot}>·</Text>
-              </>
-            ) : showChannelInfo ? (
-              <>
-                <Text style={styles.channelName} numberOfLines={1}>
-                  {channelName}
-                </Text>
-                <Text style={styles.dot}>·</Text>
-              </>
-            ) : null}
-            <Text style={styles.timeAgo}>{timeAgo}</Text>
+                  <Text style={styles.dot}>·</Text>
+                </>
+              ) : null}
+              <Text style={styles.timeAgo}>{timeAgo}</Text>
+            </View>
           </View>
         </View>
       </View>
@@ -203,66 +204,83 @@ export const VideoCard = memo(VideoCardComponent, arePropsEqual)
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    marginBottom: 16,
+    marginBottom: 18,
+    paddingHorizontal: 14,
+  },
+  surface: {
+    overflow: 'hidden',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: colors.surface,
+  },
+  thumbnailFrame: {
+    overflow: 'hidden',
+    borderTopLeftRadius: 17,
+    borderTopRightRadius: 17,
+    backgroundColor: colors.bg,
   },
   pressed: {
-    opacity: 0.7,
+    opacity: 0.78,
+    transform: [{ scale: 0.99 }],
   },
   infoRow: {
     flexDirection: 'row',
-    marginTop: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 14,
   },
   avatarContainer: {
     marginRight: 12,
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#9147ff',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   avatarText: {
     color: '#ffffff',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
   },
   textContainer: {
     flex: 1,
+    minWidth: 0,
     justifyContent: 'center',
   },
   title: {
-    color: '#efeff1',
-    fontSize: 14,
-    fontWeight: '500',
-    lineHeight: 20,
-    marginBottom: 4,
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '590' as any,
+    lineHeight: 21,
+    marginBottom: 5,
+    letterSpacing: -0.18,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   channelName: {
-    color: '#adadb8',
+    color: colors.textSecondary,
     fontSize: 12,
     maxWidth: 150,
   },
   channelNameLink: {
-    color: '#adadb8',
+    color: colors.textSecondary,
     fontSize: 12,
     maxWidth: 150,
-    textDecorationLine: 'underline',
-    textDecorationStyle: 'dotted',
+    fontWeight: '500',
   },
   dot: {
-    color: '#adadb8',
+    color: colors.textMuted,
     fontSize: 12,
-    marginHorizontal: 4,
+    marginHorizontal: 5,
   },
   timeAgo: {
-    color: '#adadb8',
+    color: colors.textMuted,
     fontSize: 12,
   },
 })

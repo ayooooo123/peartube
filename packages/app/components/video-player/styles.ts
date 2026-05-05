@@ -5,12 +5,12 @@
  */
 
 import { StyleSheet } from 'react-native'
-import { colors } from '@/lib/colors'
+import { colors } from '@peartube/core'
 import { MINI_PIP_WIDTH, MINI_PIP_HEIGHT } from './constants'
 
 const PLAYER_COLORS = {
-  brandPurple: '#9147ff',
-  brandPurpleAlpha35: 'rgba(145, 71, 255, 0.35)',
+  brandPurple: colors.primary,
+  brandPurpleAlpha35: 'rgba(94, 106, 210, 0.35)',
   whiteAlpha15: 'rgba(255, 255, 255, 0.15)',
   black: '#000',
   blackShadow: '#000000',

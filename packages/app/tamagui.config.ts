@@ -3,17 +3,17 @@ import { config as defaultConfig } from '@tamagui/config/v3'
 
 // PearTube dark theme colors
 const colors = {
-  bg: '#0e0e10',
-  bgSecondary: '#18181b',
-  bgHover: '#26262c',
-  primary: '#9147ff',
-  primaryHover: '#772ce8',
-  text: '#efeff1',
-  textSecondary: '#adadb8',
-  textMuted: '#848494',
-  border: '#2f2f35',
-  error: '#ff4444',
-  success: '#00c853',
+  bg: '#08090a',
+  bgSecondary: '#0f1011',
+  bgHover: '#191a1b',
+  primary: '#5e6ad2',
+  primaryHover: '#7170ff',
+  text: '#f7f8f8',
+  textSecondary: '#d0d6e0',
+  textMuted: '#8a8f98',
+  border: 'rgba(255,255,255,0.08)',
+  error: '#ef6262',
+  success: '#27a644',
 }
 
 const tokens = createTokens({
@@ -65,6 +65,7 @@ export const tamaguiConfig = createTamagui({
 export type AppConfig = typeof tamaguiConfig
 
 declare module '@tamagui/core' {
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
   interface TamaguiCustomConfig extends AppConfig {}
 }
 

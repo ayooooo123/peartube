@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import * as Haptics from 'expo-haptics'
 import { type LayoutChangeEvent, Platform, Text, View } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 import Animated, {
@@ -13,8 +14,6 @@ import Animated, {
   withTiming,
   withRepeat,
 } from 'react-native-reanimated'
-let Haptics: any = null
-try { Haptics = require('expo-haptics') } catch {}
 import { styles } from './styles'
 import { formatDuration } from './formatters'
 
@@ -64,15 +63,27 @@ function getFineScrubScale(verticalDistance: number): number {
 
 // ── Haptic helpers (called from UI thread via runOnJS) ──────────────────
 function triggerLightHaptic() {
-  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Light)?.catch?.(() => {}) } catch {}
+  try {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined)
+  } catch {
+    // Haptics are best-effort and unavailable on some platforms.
+  }
 }
 
 function triggerMediumHaptic() {
-  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Medium)?.catch?.(() => {}) } catch {}
+  try {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined)
+  } catch {
+    // Haptics are best-effort and unavailable on some platforms.
+  }
 }
 
 function triggerHeavyHaptic() {
-  try { Haptics?.impactAsync?.(Haptics?.ImpactFeedbackStyle?.Heavy)?.catch?.(() => {}) } catch {}
+  try {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => undefined)
+  } catch {
+    // Haptics are best-effort and unavailable on some platforms.
+  }
 }
 
 type Props = {
@@ -386,7 +397,7 @@ export const Scrubber = memo(function Scrubber({
       borderRadius: geometry.borderRadius,
       width: shimmerWidth,
       left: Math.max(0, bufW - shimmerWidth),
-      backgroundColor: `rgba(145, 71, 255, 1)`,
+      backgroundColor: '#5e6ad2',
       opacity: bufferShimmerOpacity.value,
     }
   }, [])
@@ -422,7 +433,7 @@ export const Scrubber = memo(function Scrubber({
       transform: [{ translateX: tx }],
       // Glow ring on scrub
       borderWidth: interpolate(isScrubbingSV.value, [0, 1], [0, 2]),
-      borderColor: 'rgba(145, 71, 255, 0.50)',
+      borderColor: 'rgba(94, 106, 210, 0.50)',
       shadowOpacity: interpolate(isScrubbingSV.value, [0, 1], [0.4, 0.5]),
       shadowRadius: interpolate(isScrubbingSV.value, [0, 1], [3, 5]),
       elevation: interpolate(isScrubbingSV.value, [0, 1], [4, 6]),

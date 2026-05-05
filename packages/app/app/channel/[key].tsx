@@ -8,13 +8,16 @@ import {
   ActivityIndicator,
   Pressable,
   Image,
+  StyleSheet,
   type PressableProps,
-  } from 'react-native'
+} from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useApp } from '../_layout'
 import { Feather } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
+import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { rpc } from '@peartube/platform/rpc'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
@@ -39,7 +42,12 @@ type ChannelVideo = {
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
 
-function PressableFeedback({ children, className, ...props }: PressableProps) {
+function PressableFeedback({
+  children,
+  className,
+  enableMotion = true,
+  ...props
+}: PressableProps & { enableMotion?: boolean }) {
   const scale = useSharedValue(1)
   const opacity = useSharedValue(1)
 
@@ -53,17 +61,20 @@ function PressableFeedback({ children, className, ...props }: PressableProps) {
     opacity.value = withSpring(1, { damping: 15, stiffness: 400 })
   }, [opacity, scale])
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-    opacity: opacity.value,
-  }))
+  const animatedStyle = useAnimatedStyle(() => {
+    if (!enableMotion) return {}
+    return {
+      transform: [{ scale: scale.value }],
+      opacity: opacity.value,
+    }
+  })
 
   return (
     <AnimatedPressable
       {...props}
       className={className}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
+      onPressIn={enableMotion ? handlePressIn : undefined}
+      onPressOut={enableMotion ? handlePressOut : undefined}
       style={animatedStyle}
     >
       {children}
@@ -93,7 +104,7 @@ function ChannelVideoCard({
   onPress: () => void
 }) {
   return (
-    <PressableFeedback className="mb-4" onPress={onPress} accessibilityRole="button">
+    <PressableFeedback className="mb-4" onPress={onPress} accessibilityRole="button" enableMotion={false}>
       <ThumbnailImage
         thumbnailUrl={video.thumbnailUrl || video.thumbnail}
         duration={video.duration}
@@ -138,8 +149,10 @@ export default function ChannelScreen() {
   const channelKey = useMemo(() => (Array.isArray(key) ? key[0] : key) || '', [key])
   const channelPublicBeeKey = useMemo(() => (Array.isArray(publicBeeKey) ? publicBeeKey[0] : publicBeeKey) || '', [publicBeeKey])
 
+  const { rpc: appRpc, blobServerPort } = useApp()
   const [channelMeta, setChannelMeta] = useState<ChannelMeta | null>(null)
   const [channelVideos, setChannelVideos] = useState<ChannelVideo[]>([])
+  const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const [identityDriveKey, setIdentityDriveKey] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [screenError, setScreenError] = useState('')
@@ -156,6 +169,30 @@ export default function ChannelScreen() {
   const activeAvatarUrl = avatarPreviewUrl || channelMeta?.avatar || ''
   const channelDisplayName = channelMeta?.name?.trim() || `Channel ${channelKey.slice(0, 8)}`
   const channelDescription = channelMeta?.description?.trim() || 'No channel description yet.'
+  const channelVideoCountText = `${channelVideos.length} ${channelVideos.length === 1 ? 'video' : 'videos'}`
+
+  const resolveChannelThumbnails = useCallback((videosToResolve: ChannelVideo[]) => {
+    if (!appRpc || !channelKey || videosToResolve.length === 0) return
+
+    for (const video of videosToResolve) {
+      if (!video?.id) continue
+      const cacheKey = `${channelKey}:${video.id}`
+      if (video.thumbnailUrl || video.thumbnail) continue
+
+      void fetchThumbnailUrlWithRetry({
+        rpc: appRpc,
+        channelKey,
+        videoId: video.id,
+        expectedPort: blobServerPort,
+      }).then((url) => {
+        if (!url) return
+        setThumbnailCache((prev) => {
+          if (prev[cacheKey] === url) return prev
+          return { ...prev, [cacheKey]: url }
+        })
+      })
+    }
+  }, [appRpc, blobServerPort, channelKey])
 
   const fetchChannelPage = useCallback(async () => {
     if (!channelKey) {
@@ -168,17 +205,19 @@ export default function ChannelScreen() {
       setScreenError('')
       setIsLoading(true)
       const [channelMetaResponse, channelVideosResponse] = await Promise.all([
-        rpc.getChannelMeta({ channelKey, publicBeeKey: channelPublicBeeKey || undefined }),
-        rpc.listVideos({ channelKey, publicBeeKey: channelPublicBeeKey || undefined }),
+        rpc.getChannelMeta({ channelKey, publicBeeKey: channelPublicBeeKey || undefined } as any),
+        rpc.listVideos({ channelKey, publicBeeKey: channelPublicBeeKey || undefined } as any),
       ])
+      const loadedVideos = Array.isArray(channelVideosResponse?.videos) ? channelVideosResponse.videos : []
       setChannelMeta(channelMetaResponse || null)
-      setChannelVideos(Array.isArray(channelVideosResponse?.videos) ? channelVideosResponse.videos : [])
+      setChannelVideos(loadedVideos)
+      resolveChannelThumbnails(loadedVideos)
     } catch (channelFetchError: any) {
       setScreenError(channelFetchError?.message || 'Failed to load channel page.')
     } finally {
       setIsLoading(false)
     }
-  }, [channelKey, channelPublicBeeKey])
+  }, [channelKey, channelPublicBeeKey, resolveChannelThumbnails])
 
   useEffect(() => {
     let isMounted = true
@@ -282,17 +321,17 @@ export default function ChannelScreen() {
   }, [avatarBase64, editDescription, editName, fetchChannelPage, isSaving])
 
   return (
-    <SafeAreaView className="flex-1 bg-pear-bg">
-      <View className="flex-row items-center px-5 py-4 border-b border-pear-border">
+    <SafeAreaView style={styles.screen}>
+      <View style={styles.topBar}>
         <PressableFeedback
           onPress={() => router.back()}
-          className="w-10 h-10 rounded-full bg-pear-bg-card items-center justify-center mr-3"
+          className="w-10 h-10 rounded-full items-center justify-center mr-3"
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
           <Feather name="chevron-left" size={20} color={colors.text} />
         </PressableFeedback>
-        <Text className="text-headline text-pear-text" numberOfLines={1}>Channel</Text>
+        <Text style={styles.topBarTitle} numberOfLines={1}>Channel</Text>
       </View>
 
       {isLoading ? (
@@ -312,67 +351,76 @@ export default function ChannelScreen() {
           </PressableFeedback>
         </View>
       ) : (
-        <ScrollView
-          contentInsetAdjustmentBehavior="automatic"
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 28 }}
-        >
-          <View className="px-5 pt-4 pb-2">
-            <View className="flex-row items-center">
-              {activeAvatarUrl ? (
-                <Image source={{ uri: activeAvatarUrl }} className="w-20 h-20 rounded-full bg-pear-bg-card" resizeMode="cover" />
-              ) : (
-                <View className="w-20 h-20 rounded-full bg-pear-primary items-center justify-center">
-                  <Text className="text-white text-title font-bold">{channelDisplayName.charAt(0).toUpperCase() || 'P'}</Text>
+            <ScrollView
+              contentInsetAdjustmentBehavior="automatic"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.scrollContent}
+            >
+              <View style={styles.hero}>
+                <View style={styles.avatarShell}>
+                  {activeAvatarUrl ? (
+                    <Image source={{ uri: activeAvatarUrl }} style={styles.avatarImage} resizeMode="cover" />
+                  ) : (
+                    <Text style={styles.avatarInitial}>{channelDisplayName.charAt(0).toUpperCase() || 'P'}</Text>
+                  )}
                 </View>
-              )}
 
-              <View className="flex-1 ml-4">
-                <Text className="text-title text-pear-text font-bold" numberOfLines={2} selectable>{channelDisplayName}</Text>
-                <Text className="text-body text-pear-text-secondary mt-1" selectable>{channelDescription}</Text>
+                <View style={styles.heroCopy}>
+                  <Text style={styles.channelTitle} numberOfLines={2} selectable>{channelDisplayName}</Text>
+                  <Text style={styles.channelDescription} numberOfLines={3} selectable>{channelDescription}</Text>
+                  <View style={styles.heroMetaRow}>
+                    <View style={styles.videoCountPill}>
+                      <Feather name="film" size={13} color={colors.textSecondary} />
+                      <Text style={styles.videoCountText}>{channelVideoCountText}</Text>
+                    </View>
+                    <Text style={styles.channelKeyText}>{channelKey.slice(0, 12)}...</Text>
+                  </View>
+                </View>
+
+                {isOwner ? (
+                  <PressableFeedback
+                    onPress={openEditModal}
+                    className="mt-5 rounded-full px-4 py-3 flex-row items-center justify-center gap-2"
+                    accessibilityRole="button"
+                  >
+                    <Feather name="edit-2" size={16} color={colors.text} />
+                    <Text style={styles.editButtonText}>Edit Channel</Text>
+                  </PressableFeedback>
+                ) : null}
               </View>
-            </View>
 
-            {isOwner ? (
-              <PressableFeedback
-                onPress={openEditModal}
-                className="mt-4 bg-pear-bg-card border border-pear-border rounded-lg px-4 py-3 flex-row items-center justify-center gap-2"
-                accessibilityRole="button"
-              >
-                <Feather name="edit-2" size={16} color={colors.text} />
-                <Text className="text-label text-pear-text">Edit Channel</Text>
-              </PressableFeedback>
-            ) : null}
-          </View>
-
-          <View className="px-5 pt-4">
+              <View style={styles.videoListSection}>
             {channelVideos.length === 0 ? (
               <View className="py-16 items-center justify-center rounded-xl bg-pear-bg-card border border-pear-border">
                 <Feather name="video-off" size={30} color={colors.textMuted} />
                 <Text className="text-body text-pear-text-secondary mt-3">No videos yet</Text>
               </View>
             ) : (
-              channelVideos.map((channelVideo) => (
-                <ChannelVideoCard
-                  key={channelVideo.id}
-                  video={channelVideo}
-                  channelName={channelDisplayName}
-                  onPress={() => router.push({
-                    pathname: '/video/[id]',
-                    params: {
-                      id: channelVideo.id,
-                      channel: channelKey,
-                      publicBeeKey: channelPublicBeeKey || undefined,
-                      videoData: JSON.stringify({
-                        ...channelVideo,
-                        channelKey,
+              channelVideos.map((channelVideo) => {
+                const thumbnailUrl = thumbnailCache[`${channelKey}:${channelVideo.id}`] || channelVideo.thumbnailUrl || channelVideo.thumbnail || null
+                return (
+                  <ChannelVideoCard
+                    key={channelVideo.id}
+                    video={{ ...channelVideo, thumbnailUrl }}
+                    channelName={channelDisplayName}
+                    onPress={() => router.push({
+                      pathname: '/video/[id]',
+                      params: {
+                        id: channelVideo.id,
+                        channel: channelKey,
                         publicBeeKey: channelPublicBeeKey || undefined,
-                        channel: { name: channelDisplayName },
-                      }),
-                    },
-                  })}
-                />
-              ))
+                        videoData: JSON.stringify({
+                          ...channelVideo,
+                          thumbnailUrl,
+                          channelKey,
+                          publicBeeKey: channelPublicBeeKey || undefined,
+                          channel: { name: channelDisplayName },
+                        }),
+                      },
+                    })}
+                  />
+                )
+              })
             )}
           </View>
         </ScrollView>
@@ -462,3 +510,108 @@ export default function ChannelScreen() {
     </SafeAreaView>
   )
 }
+const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.bg,
+  },
+  topBarTitle: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '600',
+    letterSpacing: -0.25,
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 34,
+  },
+  hero: {
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: 18,
+    overflow: 'hidden',
+  },
+  avatarShell: {
+    width: 82,
+    height: 82,
+    borderRadius: 28,
+    backgroundColor: colors.primary,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 27,
+  },
+  avatarInitial: {
+    color: '#fff',
+    fontSize: 30,
+    fontWeight: '700',
+  },
+  heroCopy: {
+    gap: 8,
+  },
+  channelTitle: {
+    color: colors.text,
+    fontSize: 28,
+    lineHeight: 33,
+    fontWeight: '700',
+    letterSpacing: -0.65,
+  },
+  channelDescription: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  heroMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  videoCountPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: colors.bgElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  videoCountText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  channelKeyText: {
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  editButtonText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  videoListSection: {
+    paddingTop: 18,
+  },
+})

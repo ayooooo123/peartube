@@ -36,6 +36,7 @@ export default function TabLayout() {
         tabBar={() => <PillTabBar />}
       >
         <Tabs.Screen name="index" />
+        <Tabs.Screen name="discover" />
         <Tabs.Screen name="subscriptions" />
         <Tabs.Screen name="studio" />
         <Tabs.Screen name="downloads" />

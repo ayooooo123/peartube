@@ -577,7 +577,8 @@ export const styles = StyleSheet.create({
   },
   actions: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
     paddingVertical: 12,
     backgroundColor: PLAYER_COLORS.black,
     paddingHorizontal: 8,
@@ -586,14 +587,19 @@ export const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   actionButton: {
+    width: '16.66%',
+    minWidth: 56,
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 4,
     paddingVertical: 8,
   },
   actionLabel: {
     color: colors.text,
-    fontSize: 11,
+    fontSize: 10,
     marginTop: 4,
+    maxWidth: '100%',
+    textAlign: 'center',
+    numberOfLines: 1,
   },
   actionLabelActive: {
     color: colors.primary,

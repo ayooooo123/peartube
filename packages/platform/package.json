@@ -11,6 +11,7 @@
     "./types": "./src/types.js",
     "./detection": "./src/detection.js",
     "./storage": "./src/storage.js",
+    "./native-bundle-cache": "./src/native-bundle-cache.js",
     "./rpc": {
       "react-native": "./src/rpc.native.ts",
       "default": "./src/rpc.web.ts"

@@ -20,6 +20,7 @@ import * as ScreenOrientation from 'expo-screen-orientation'
 import Constants from 'expo-constants'
 import { colors } from '@/lib/colors'
 import { AppContext, type AppContextType } from '@/lib/AppContext'
+import { buildBundleVersionKey } from '@peartube/platform/native-bundle-cache'
 export { useApp } from '@/lib/AppContext'
 
 // Configure Reanimated logger to disable strict mode warnings
@@ -131,7 +132,10 @@ function loadNativeBundleSources(): { backendSource: string; downloaderWorkerSou
   throw new Error('Backend bundles could not be resolved')
 }
 
-function getNativeBackendVersionKey(): string | undefined {
+function getNativeBackendVersionKey(
+  backendSource?: string | null,
+  downloaderWorkerSource?: string | null,
+): string | undefined {
   if (typeof __DEV__ !== 'undefined' && __DEV__) return undefined
 
   const expoConfig = (Constants as any)?.expoConfig ?? {}
@@ -142,7 +146,15 @@ function getNativeBackendVersionKey(): string | undefined {
     || expoConfig.android?.versionCode
     || 'native'
 
-  return `peartube-native-backend:${version}:${buildVersion}`
+  // Note: `version` (from app.json) and `versionCode` (from android/app/build.gradle)
+  // are static across releases unless explicitly bumped. Mix in a content
+  // fingerprint of the embedded backend bundle so persisted bundle cache hits
+  // do not silently re-launch a stale bundle after an in-place app upgrade.
+  return buildBundleVersionKey({
+    baseKey: `peartube-native-backend:${version}:${buildVersion}`,
+    backendSource,
+    downloaderWorkerSource,
+  })
 }
 
 // Cached app state to persist across soft navigations (component remounts)
@@ -484,10 +496,19 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
         }, BACKEND_STARTUP_TIMEOUT_MS)
       }
 
+      // Read sources up front so the version key includes a content
+      // fingerprint of the embedded bundle. Without this, in-place app
+      // upgrades reuse the cached worklet bundle and never run new backend
+      // code (the user keeps seeing the same "Connecting to P2P network"
+      // behavior even after a fix shipped).
+      const sources = readBundleSources()
       await platformRPC.initPlatformRPC({
-        backendVersionKey: getNativeBackendVersionKey(),
-        loadBackendSource: async () => readBundleSources().backendSource,
-        loadDownloaderWorkerSource: async () => readBundleSources().downloaderWorkerSource ?? null,
+        backendVersionKey: getNativeBackendVersionKey(
+          sources.backendSource,
+          sources.downloaderWorkerSource,
+        ),
+        loadBackendSource: async () => sources.backendSource,
+        loadDownloaderWorkerSource: async () => sources.downloaderWorkerSource ?? null,
       })
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
 

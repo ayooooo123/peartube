@@ -304,7 +304,8 @@ function MobileVideoPlayerScreen() {
   // Parse video data from params (JSON encoded or URL params)
   const params = useLocalSearchParams()
   const channelKeyParam = params.channel as string | undefined
-  const publicBeeParam = params.publicBee as string | undefined
+  const rawPublicBeeParam = params.publicBeeKey ?? params.publicBee
+  const publicBeeParam = Array.isArray(rawPublicBeeParam) ? rawPublicBeeParam[0] : (rawPublicBeeParam as string | undefined)
   const videoDataParam = params.videoData ? JSON.parse(params.videoData as string) : null
   const fromMiniPlayer = params.fromMiniPlayer === 'true'
 
@@ -340,13 +341,14 @@ function MobileVideoPlayerScreen() {
           videoId: id,
           publicBeeKey: publicBeeParam || undefined
         })
-        if (result) {
-          console.log('[VideoPlayer] Got video data:', result.title)
+        const fetchedVideoData = result?.video || result
+        if (fetchedVideoData) {
+          console.log('[VideoPlayer] Got video data:', fetchedVideoData.title)
           setVideoData({
             id,
             channelKey: channelKeyParam,
             publicBeeKey: publicBeeParam,
-            ...result
+            ...fetchedVideoData
           })
         }
       } catch (err) {

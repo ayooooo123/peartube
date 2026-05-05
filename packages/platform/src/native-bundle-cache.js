@@ -3,6 +3,69 @@ export const BACKEND_BUNDLE_FILENAME = 'backend.bundle'
 export const DOWNLOADER_WORKER_FILENAME = 'downloader-worker.bundle.js'
 export const BACKEND_BUNDLE_VERSION_FILENAME = 'backend-bundle.version'
 
+const FNV_OFFSET_BASIS = 0x811c9dc5
+const FNV_PRIME = 0x01000193
+const FINGERPRINT_SAMPLE_BYTES = 4096
+
+/**
+ * FNV-1a 32-bit hash of an ASCII-bounded string. Matches OUR previously
+ * persisted fingerprints exactly across runs so cache hits are deterministic.
+ * @param {string} input
+ * @returns {string} 8-character lower-hex digest
+ */
+export function fnv1aHashString(input) {
+  if (typeof input !== 'string' || input.length === 0) return '00000000'
+  let hash = FNV_OFFSET_BASIS
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i) & 0xff
+    hash = Math.imul(hash, FNV_PRIME)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+/**
+ * Compute a cheap content fingerprint that is stable for identical bundle
+ * outputs and discriminative across builds. Combines length with hashes of a
+ * head and tail sample so any code change perturbs the fingerprint.
+ * @param {string | null | undefined} source
+ * @returns {string}
+ */
+export function fingerprintBundleSource(source) {
+  if (typeof source !== 'string' || source.length === 0) return '0:00000000:00000000'
+  const len = source.length
+  const head = source.slice(0, Math.min(FINGERPRINT_SAMPLE_BYTES, len))
+  const tail = len > FINGERPRINT_SAMPLE_BYTES
+    ? source.slice(len - FINGERPRINT_SAMPLE_BYTES)
+    : ''
+  return `${len}:${fnv1aHashString(head)}:${fnv1aHashString(tail)}`
+}
+
+/**
+ * Build a cache version key that includes a content fingerprint of the embedded
+ * bundle sources. This guarantees that the persisted bundle cache is
+ * invalidated whenever the embedded backend bundle changes between releases,
+ * even if the app's marketing version and native build version do not change.
+ *
+ * Without this, two installs that share the same `version` and `versionCode`
+ * (which is the default for a hand-managed `android/app/build.gradle`) would
+ * keep launching the original cached bundle even after the embedded JS bundle
+ * shipped fresh backend code.
+ *
+ * @param {{
+ *   baseKey?: string | null | undefined,
+ *   backendSource?: string | null | undefined,
+ *   downloaderWorkerSource?: string | null | undefined,
+ * }} options
+ * @returns {string | undefined}
+ */
+export function buildBundleVersionKey(options = {}) {
+  const baseKey = options.baseKey
+  if (typeof baseKey !== 'string' || baseKey.length === 0) return undefined
+  const backendFingerprint = fingerprintBundleSource(options.backendSource)
+  const downloaderFingerprint = fingerprintBundleSource(options.downloaderWorkerSource)
+  return `${baseKey}:b=${backendFingerprint}:w=${downloaderFingerprint}`
+}
+
 /**
  * @param {string} uri
  * @returns {string}

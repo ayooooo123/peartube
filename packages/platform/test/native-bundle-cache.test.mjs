@@ -2,7 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  buildBundleVersionKey,
   createBundleCachePaths,
+  fingerprintBundleSource,
+  fnv1aHashString,
   normalizeBundleFilePath,
   shouldReusePersistedBundleCache,
 } from '../src/native-bundle-cache.js'
@@ -67,4 +70,49 @@ test('shouldReusePersistedBundleCache only reuses matching versioned bundle sets
     }),
     true,
   )
+})
+
+test('fnv1aHashString is deterministic and discriminative', () => {
+  assert.equal(fnv1aHashString('hello'), fnv1aHashString('hello'))
+  assert.notEqual(fnv1aHashString('hello'), fnv1aHashString('hellO'))
+  assert.equal(fnv1aHashString(''), '00000000')
+  assert.equal(fnv1aHashString('a').length, 8)
+})
+
+test('fingerprintBundleSource produces stable identifiers per source content', () => {
+  const a = 'X'.repeat(10000)
+  const b = 'X'.repeat(10000) + 'Y'
+  assert.equal(fingerprintBundleSource(a), fingerprintBundleSource(a))
+  assert.notEqual(fingerprintBundleSource(a), fingerprintBundleSource(b))
+  assert.equal(fingerprintBundleSource(null), fingerprintBundleSource(undefined))
+})
+
+test('buildBundleVersionKey changes when only the embedded backend bundle changes', () => {
+  const baseKey = 'peartube-native-backend:1.0.0:1'
+  const a = buildBundleVersionKey({ baseKey, backendSource: 'console.log("v1")' })
+  const b = buildBundleVersionKey({ baseKey, backendSource: 'console.log("v2")' })
+  assert.notEqual(a, b, 'fingerprint must change when bundle content changes (otherwise updated installs reuse stale cached worklet)')
+  assert.match(String(a), /^peartube-native-backend:1\.0\.0:1:b=/)
+})
+
+test('buildBundleVersionKey is stable when nothing changes between launches', () => {
+  const baseKey = 'peartube-native-backend:1.0.0:1'
+  const source = 'console.log("identical")'
+  assert.equal(
+    buildBundleVersionKey({ baseKey, backendSource: source, downloaderWorkerSource: 'worker' }),
+    buildBundleVersionKey({ baseKey, backendSource: source, downloaderWorkerSource: 'worker' }),
+  )
+})
+
+test('buildBundleVersionKey returns undefined without a base key (dev/Expo Go fallthrough)', () => {
+  assert.equal(buildBundleVersionKey({ baseKey: undefined, backendSource: 'src' }), undefined)
+  assert.equal(buildBundleVersionKey({ baseKey: '', backendSource: 'src' }), undefined)
+})
+
+test('buildBundleVersionKey discriminates downloader worker changes too', () => {
+  const baseKey = 'peartube-native-backend:1.0.0:1'
+  const backendSource = 'backend-source'
+  const a = buildBundleVersionKey({ baseKey, backendSource, downloaderWorkerSource: 'worker-v1' })
+  const b = buildBundleVersionKey({ baseKey, backendSource, downloaderWorkerSource: 'worker-v2' })
+  assert.notEqual(a, b)
 })

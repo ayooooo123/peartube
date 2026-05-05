@@ -1,24 +1,10 @@
 name: Build Desktop
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'packages/app/**'
-      - 'packages/desktop-native/**'
-      - 'packages/backend/**'
-      - 'packages/core/**'
-      - 'packages/platform/**'
-      - 'packages/spec/**'
-      - 'packages/host/**'
-      - 'packages/protocol/**'
-      - 'packages/bare-mpv/**'
-      - '.github/actions/**'
-      - '.github/workflows/build-desktop.yml'
   push:
     branches: [main]
-  schedule:
-    - cron: '17 7 * * *'
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:

@@ -1,23 +1,10 @@
 name: Build Mobile
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'packages/app/**'
-      - 'packages/backend/**'
-      - 'packages/core/**'
-      - 'packages/platform/**'
-      - 'packages/spec/**'
-      - 'packages/host/**'
-      - 'packages/bare-ffmpeg/**'
-      - 'packages/bare-mpv/**'
-      - '.github/actions/**'
-      - '.github/workflows/build-mobile.yml'
   push:
     branches: [main]
-  schedule:
-    - cron: '17 6 * * *'
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -69,7 +56,6 @@ jobs:
           retention-days: 7
 
   android-release-artifacts:
-    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

@@ -245,7 +245,9 @@ export default function HomeScreen() {
             channels: (status as any).channelsLoaded,
           })
         }
-      } catch {}
+      } catch (err) {
+        console.log('[Home] Failed to load swarm status:', (err as any)?.message || err)
+      }
     } catch (err) {
       console.error('[Home] Failed to load public feed:', err)
     } finally {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 const FEED_SNAPSHOT_VERSION = 1
 const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const DEFAULT_LIMIT = 50

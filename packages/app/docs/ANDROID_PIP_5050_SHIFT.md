@@ -146,14 +146,14 @@ Shared values are set synchronously in the render body (lines 906-925). If React
 | `packages/app/components/VideoPlayerOverlay.tsx` | 1270-1290 | containerStyle PiP branch (frozen fullscreen dims) |
 | `packages/app/components/VideoPlayerOverlay.tsx` | 1397-1448 | videoStyle (PiP + non-PiP fullscreen branches) |
 | `packages/app/components/VideoPlayerOverlay.tsx` | 1539-1584 | videoPlayerStyle (PiP + non-PiP branches) |
-| `packages/react-native-nitro-vlc/android/.../HybridNitroVLCView.kt` | 30-40 | `setAllPipMode()` + companion registry |
-| `packages/react-native-nitro-vlc/android/.../HybridNitroVLCView.kt` | 89-94 | `pipModeActive` volatile flag |
-| `packages/react-native-nitro-vlc/android/.../HybridNitroVLCView.kt` | 127-149 | TextureView layout listener + `onSurfaceTextureSizeChanged` |
-| `packages/react-native-nitro-vlc/android/.../HybridNitroVLCView.kt` | 467-504 | `onNewVideoLayout` (VLC callback, has PiP guard) |
-| `packages/react-native-nitro-vlc/android/.../HybridNitroVLCView.kt` | 621-703 | `applySurfaceSize` (PiP guard + dedup + deferred sync) |
-| `packages/react-native-nitro-vlc/android/.../HybridNitroVLCView.kt` | 706-728 | `scheduleDeferredSurfaceSync` (120ms delayed reconfigure) |
-| `packages/react-native-nitro-vlc/android/.../HybridNitroVLCView.kt` | 789-802 | `isEffectivelyInPip()` helper |
-| `packages/react-native-nitro-vlc/android/.../NitroVLCViewManager.kt` | 1-59 | Plain ViewManager (FrameLayout + TextureView MATCH_PARENT) |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 30-40 | `setAllPipMode()` + companion registry |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 89-94 | `pipModeActive` volatile flag |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 127-149 | TextureView layout listener + `onSurfaceTextureSizeChanged` |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 467-504 | `onNewVideoLayout` (VLC callback, has PiP guard) |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 621-703 | `applySurfaceSize` (PiP guard + dedup + deferred sync) |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 706-728 | `scheduleDeferredSurfaceSync` (120ms delayed reconfigure) |
+| `ayooooo123/react-native-nitro-vlc:android/.../HybridNitroVLCView.kt` | 789-802 | `isEffectivelyInPip()` helper |
+| `ayooooo123/react-native-nitro-vlc:android/.../NitroVLCViewManager.kt` | 1-59 | Plain ViewManager (FrameLayout + TextureView MATCH_PARENT) |
 | `packages/app/modules/expo-media-session/.../MediaSessionModule.kt` | 122-172 | `onUserLeaveHint` (sets `pipModeActive` early) |
 | `packages/app/modules/expo-media-session/.../MediaSessionModule.kt` | 178+ | `notifyPipModeChanged` (sends JS event) |
 

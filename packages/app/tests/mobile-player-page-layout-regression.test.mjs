@@ -72,10 +72,15 @@ test('android fullscreen overlay does not add a second JS cutout shift on top of
     /const cutoutOffset = Platform\.OS === 'ios'\s+&& !isInPipModeShared\.value\s+&& !isLandscapeFullscreenShared\.value/,
     'video surface offset should be limited to iOS so Android does not get shifted twice',
   )
+  assert.doesNotMatch(
+    overlaySource,
+    /MediaSession\.setSurfaceViewInset\([^)]*\)/,
+    'inline Android playback should not translate the Media3 SurfaceView from JS; native playback owns surface inset handling',
+  )
   assert.match(
     overlaySource,
-    /MediaSession\.setSurfaceViewInset\(0\)\.catch\(\(\) => \{\}\)/,
-    'inline Android playback should not translate the Media3 SurfaceView down inside the fixed player-page slot',
+    /setSurfaceViewInset and setAutoPictureInPicture are no longer needed/,
+    'the overlay should document that Android surface inset handling has moved out of JS layout code',
   )
   assert.match(
     overlaySource,
@@ -144,22 +149,27 @@ test('mobile mini-player drag snaps to safe-area corners', () => {
 
   assert.match(
     overlaySource,
-    /function getMobileMiniPlayerSnapPosition\(\{\s*corner,\s*screenWidth,\s*screenHeight,\s*miniWidth,\s*topInset,\s*bottomOffset,/,
+    /function getMobileMiniPlayerSnapPosition\(\{\s*corner,\s*screenWidth,\s*screenHeight,\s*topInset,\s*rightInset,\s*bottomInset,\s*leftInset,\s*bottomOffset,\s*aspectRatio,\s*sizeMode,/,
     'mobile mini-player placement should be derived from a dedicated corner snap helper',
   )
   assert.match(
     overlaySource,
-    /const topY = topInset \+ MINI_PIP_MARGIN/,
+    /const bounds = computeMiniBounds\(\s*screenWidth,\s*screenHeight,\s*topInset,\s*rightInset,\s*bottomInset,\s*leftInset,\s*bottomOffset,\s*miniWidth,\s*miniHeight,/,
+    'mobile snap helper should derive bounds from safe-area insets, tab bar offset, and dynamic mini-player size',
+  )
+  assert.match(
+    overlaySource,
+    /topBound: insetTop \+ margin,/,
     'mobile top-corner snapping should stay below the safe-area inset',
   )
   assert.match(
     overlaySource,
-    /const bottomY = screenHeight - MINI_PIP_HEIGHT - MINI_PIP_MARGIN - bottomOffset/,
+    /bottomBound: screenHeight - bottomMargin - miniHeight,/,
     'mobile bottom-corner snapping should stay above the tab bar and bottom inset',
   )
   assert.match(
     overlaySource,
-    /const nextMiniPlayerPosition = getMobileMiniPlayerSnapPosition\(\{\s*corner: miniPlayerCorner,/,
+    /const nextPos = getMobileMiniPlayerSnapPosition\(\{\s*corner: miniPlayerCorner,/,
     'mobile mini-player relayout should reuse the selected corner instead of always resetting to bottom-right',
   )
   assert.match(
@@ -169,22 +179,22 @@ test('mobile mini-player drag snaps to safe-area corners', () => {
   )
   assert.match(
     overlaySource,
-    /const newCorner = `\$\{isBottom \? 'bottom' : 'top'\}-\$\{isRight \? 'right' : 'left'\}` as MiniPlayerCorner/,
-    'mobile mini-player drag release should snap to the nearest corner state',
+    /const snap = resolveSnapTarget\(/,
+    'mobile mini-player drag release should snap to the nearest safe-area anchor',
   )
   assert.match(
     overlaySource,
-    /runOnJS\(setMiniPlayerCorner\)\(newCorner\)/,
+    /runOnJS\(setMiniPlayerCorner\)\(snap\.corner\)/,
     'mobile mini-player drag release should persist the snapped corner in React state',
   )
   assert.match(
     overlaySource,
-    /miniPipX\.value = withSpring\(targetX, SPRING_CONFIG_TIGHT\)/,
+    /miniPipX\.value = withSpring\(snap\.x, \{ \.\.\.SPRING_CONFIG_MINI_SNAP, velocity: event\.velocityX \}\)/,
     'mobile mini-player drag release should spring the player to the snapped horizontal corner',
   )
   assert.match(
     overlaySource,
-    /miniPipY\.value = withSpring\(targetY, SPRING_CONFIG_TIGHT\)/,
+    /miniPipY\.value = withSpring\(snap\.y, \{ \.\.\.SPRING_CONFIG_MINI_SNAP, velocity: event\.velocityY \}\)/,
     'mobile mini-player drag release should spring the player to the snapped vertical corner',
   )
 })

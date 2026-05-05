@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useMemo, memo } from 'react'
 import { View, Image, Text, StyleSheet, ActivityIndicator } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { formatDuration } from '@/lib/formatters'
+import { colors } from '@/lib/colors'
 
 interface ThumbnailImageProps {
   thumbnailUrl?: string | null
@@ -92,7 +93,7 @@ function ThumbnailImageComponent({
       {/* Always show placeholder as background, image overlays on top when loaded */}
       <View style={styles.placeholder}>
         <View style={styles.playIconContainer}>
-          <Ionicons name="play" color="#9147ff" size={48} />
+          <Ionicons name="play" color={colors.primary} size={48} />
         </View>
       </View>
 
@@ -101,7 +102,7 @@ function ThumbnailImageComponent({
         <Image
           source={imageSource}
           style={styles.image}
-          resizeMode="contain"
+          resizeMode="cover"
           onError={handleError}
           onLoadStart={handleLoadStart}
           onLoadEnd={handleLoadEnd}
@@ -111,7 +112,7 @@ function ThumbnailImageComponent({
       {/* Loading indicator */}
       {imageLoading && thumbnailUrl && !imageError && (
         <View style={styles.loadingOverlay}>
-          <ActivityIndicator color="#9147ff" size="small" />
+          <ActivityIndicator color={colors.primary} size="small" />
         </View>
       )}
 
@@ -144,24 +145,24 @@ const styles = StyleSheet.create({
   container: {
     width: '100%',
     aspectRatio: 16 / 9,
-    backgroundColor: '#1f1f23',
+    backgroundColor: colors.bgElevated,
     borderRadius: 12,
     overflow: 'hidden',
     position: 'relative',
   },
   image: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0e0e10',
+    backgroundColor: colors.bg,
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#1f1f23',
+    backgroundColor: colors.bgElevated,
     justifyContent: 'center',
     alignItems: 'center',
   },
   placeholder: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#1f1f23',
+    backgroundColor: colors.bgElevated,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -169,7 +170,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: 'rgba(145, 71, 255, 0.15)',
+    backgroundColor: colors.primaryLight,
     justifyContent: 'center',
     alignItems: 'center',
   },

@@ -386,7 +386,7 @@ export const Scrubber = memo(function Scrubber({
       borderRadius: geometry.borderRadius,
       width: shimmerWidth,
       left: Math.max(0, bufW - shimmerWidth),
-      backgroundColor: `rgba(145, 71, 255, 1)`,
+      backgroundColor: '#5e6ad2',
       opacity: bufferShimmerOpacity.value,
     }
   }, [])
@@ -422,7 +422,7 @@ export const Scrubber = memo(function Scrubber({
       transform: [{ translateX: tx }],
       // Glow ring on scrub
       borderWidth: interpolate(isScrubbingSV.value, [0, 1], [0, 2]),
-      borderColor: 'rgba(145, 71, 255, 0.50)',
+      borderColor: 'rgba(94, 106, 210, 0.50)',
       shadowOpacity: interpolate(isScrubbingSV.value, [0, 1], [0.4, 0.5]),
       shadowRadius: interpolate(isScrubbingSV.value, [0, 1], [3, 5]),
       elevation: interpolate(isScrubbingSV.value, [0, 1], [4, 6]),

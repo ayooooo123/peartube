@@ -23,7 +23,7 @@ test('native channel page video cards navigate to the video route with channel c
 
   assert.match(
     source,
-    /router\.push\(\{\s*pathname: '\/video\/\[id\]'[\s\S]*?channel: channelKey[\s\S]*?videoData: JSON\.stringify/s,
+    /router\.(?:push|replace)\(\{\s*pathname: '\/video\/\[id\]'[\s\S]*?channel: channelKey[\s\S]*?videoData: JSON\.stringify/s,
     'native channel videos should open /video/[id] with channel and videoData params',
   )
 
@@ -96,8 +96,8 @@ test('channel view preserves publicBeeKey across native and web navigation/data 
   assert.match(nativeVideo, /const rawPublicBeeParam = params\.publicBeeKey \?\? params\.publicBee/, 'native watch route should accept both publicBeeKey and legacy publicBee route params')
   assert.match(nativeVideo, /const fetchedVideoData = result\?\.video \|\| result/, 'native watch route should unwrap backend getVideoData responses before playback')
   assert.match(nativeChannel, /const channelPublicBeeKey = useMemo/, 'native channel view should resolve publicBeeKey route params')
-  assert.match(nativeChannel, /rpc\.getChannelMeta\(\{ channelKey, publicBeeKey: channelPublicBeeKey \|\| undefined \}\)/, 'native channel metadata should pass publicBeeKey')
-  assert.match(nativeChannel, /rpc\.listVideos\(\{ channelKey, publicBeeKey: channelPublicBeeKey \|\| undefined \}\)/, 'native channel video list should pass publicBeeKey')
+  assert.match(nativeChannel, /rpc\.getChannelMeta\(\{ channelKey, publicBeeKey: channelPublicBeeKey \|\| undefined \}(?: as any)?\)/, 'native channel metadata should pass publicBeeKey')
+  assert.match(nativeChannel, /rpc\.listVideos\(\{ channelKey, publicBeeKey: channelPublicBeeKey \|\| undefined \}(?: as any)?\)/, 'native channel video list should pass publicBeeKey')
   assert.match(nativeChannel, /publicBeeKey: channelPublicBeeKey \|\| undefined/, 'native channel video navigation should preserve publicBeeKey')
 
   assert.match(webHome, /#\/channel\/\$\{encodeURIComponent\(channelKey\)\}\?publicBeeKey=\$\{encodeURIComponent\(publicBeeKey\)\}/, 'web watch channel navigation should include publicBeeKey in hash query')

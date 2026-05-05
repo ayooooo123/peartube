@@ -21,18 +21,18 @@ module.exports = {
       colors: {
         // PearTube brand colors mapped to Gluestack semantic colors
         primary: {
-          0: "#E8DAFF",
-          50: "#D4B8FF",
-          100: "#C099FF",
-          200: "#AB7AFF",
-          300: "#9B5CFF",
-          400: "#9147ff", // PearTube primary
-          500: "#8236E8",
-          600: "#772ce8", // hover
-          700: "#6420C7",
-          800: "#5115A6",
-          900: "#3E0A85",
-          950: "#2B0064",
+          0: "#F0F2FF",
+          50: "#E2E6FF",
+          100: "#CAD1FF",
+          200: "#AAB4F6",
+          300: "#8B95EA",
+          400: "#7170ff", // PearTube primary hover
+          500: "#5e6ad2", // PearTube primary
+          600: "#505ab7",
+          700: "#414894",
+          800: "#30356f",
+          900: "#20254f",
+          950: "#151936",
         },
         secondary: {
           0: "#FEFFFF",
@@ -192,21 +192,21 @@ module.exports = {
         },
         // PearTube legacy colors for backwards compatibility
         pear: {
-          primary: '#9147ff',
-          'primary-hover': '#772ce8',
-          'primary-muted': '#9147ff20',
-          bg: '#0e0e10',
-          'bg-elevated': '#18181b',
-          'bg-card': '#1f1f23',
-          'bg-input': '#26262c',
-          text: '#efeff1',
-          'text-secondary': '#adadb8',
-          'text-muted': '#53535f',
-          border: '#2f2f35',
-          'border-light': '#3f3f46',
-          error: '#eb0400',
-          success: '#00c853',
-          warning: '#ffb300',
+          primary: '#5e6ad2',
+          'primary-hover': '#7170ff',
+          'primary-muted': 'rgba(94, 106, 210, 0.18)',
+          bg: '#08090a',
+          'bg-elevated': '#0f1011',
+          'bg-card': 'rgba(255,255,255,0.035)',
+          'bg-input': '#191a1b',
+          text: '#f7f8f8',
+          'text-secondary': '#d0d6e0',
+          'text-muted': '#8a8f98',
+          border: 'rgba(255,255,255,0.08)',
+          'border-light': 'rgba(255,255,255,0.12)',
+          error: '#ef6262',
+          success: '#27a644',
+          warning: '#d6a243',
         },
       },
       fontFamily: {

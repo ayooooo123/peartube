@@ -4,6 +4,7 @@
  */
 import { FlatList, View, Text, RefreshControl, StyleSheet, ActivityIndicator } from 'react-native'
 import { VideoCard, VideoData } from './VideoCard'
+import { colors } from '@/lib/colors'
 
 interface VideoFeedProps {
   videos: VideoData[]
@@ -104,8 +105,8 @@ export function VideoFeed({
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            tintColor="#9147ff"
-            colors={['#9147ff']}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
           />
         ) : undefined
       }
@@ -121,7 +122,7 @@ export function VideoFeed({
       ListFooterComponent={
         loading && videos.length > 0 ? (
           <View style={styles.footer}>
-            <ActivityIndicator color="#9147ff" size="small" />
+            <ActivityIndicator color={colors.primary} size="small" />
           </View>
         ) : null
       }
@@ -132,7 +133,7 @@ export function VideoFeed({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0e0e10',
+    backgroundColor: colors.bg,
   },
   contentContainer: {
     paddingBottom: 20,
@@ -150,7 +151,7 @@ const skeletonStyles = StyleSheet.create({
   thumbnail: {
     width: '100%',
     aspectRatio: 16 / 9,
-    backgroundColor: '#1f1f23',
+    backgroundColor: colors.bgElevated,
     borderRadius: 12,
   },
   infoRow: {
@@ -162,7 +163,7 @@ const skeletonStyles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#1f1f23',
+    backgroundColor: colors.bgElevated,
     marginRight: 12,
   },
   textContainer: {
@@ -170,21 +171,21 @@ const skeletonStyles = StyleSheet.create({
   },
   titleLine1: {
     height: 14,
-    backgroundColor: '#1f1f23',
+    backgroundColor: colors.bgElevated,
     borderRadius: 4,
     marginBottom: 6,
     width: '90%',
   },
   titleLine2: {
     height: 14,
-    backgroundColor: '#1f1f23',
+    backgroundColor: colors.bgElevated,
     borderRadius: 4,
     marginBottom: 8,
     width: '60%',
   },
   metaLine: {
     height: 12,
-    backgroundColor: '#1f1f23',
+    backgroundColor: colors.bgElevated,
     borderRadius: 4,
     width: '40%',
   },

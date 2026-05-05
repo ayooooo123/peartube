@@ -127,47 +127,48 @@ export const RPC_METHODS = {
 
 export const colors = {
   // Brand
-  primary: '#9147ff',
-  primaryHover: '#772ce8',
-  primaryLight: 'rgba(145, 71, 255, 0.2)',
+  primary: '#5e6ad2',
+  primaryHover: '#7170ff',
+  primaryLight: 'rgba(94, 106, 210, 0.18)',
 
   // Accent
-  accent: '#00f0b5',
-  accentHover: '#00d9a4',
+  accent: '#10b981',
+  accentHover: '#34d399',
 
   // Status
-  success: '#00c853',
-  successLight: 'rgba(0, 200, 83, 0.2)',
-  warning: '#ffb300',
-  warningLight: 'rgba(255, 179, 0, 0.2)',
-  error: '#ff5252',
-  errorLight: 'rgba(255, 82, 82, 0.2)',
+  success: '#27a644',
+  successLight: 'rgba(39, 166, 68, 0.18)',
+  warning: '#d6a243',
+  warningLight: 'rgba(214, 162, 67, 0.18)',
+  error: '#ef6262',
+  errorLight: 'rgba(239, 98, 98, 0.18)',
+  red: '#ef6262',
 
   // Backgrounds
-  bg: '#0e0e10',
-  bgElevated: '#18181b',
-  bgSecondary: '#18181b', // Alias for bgElevated
-  bgHover: '#1f1f23',
-  bgActive: '#26262c',
+  bg: '#08090a',
+  bgElevated: '#0f1011',
+  bgSecondary: '#0f1011', // Alias for bgElevated
+  bgHover: '#191a1b',
+  bgActive: '#28282c',
   bgOverlay: 'rgba(0, 0, 0, 0.85)',
-  bgCard: '#1f1f23',
+  bgCard: 'rgba(255,255,255,0.035)',
 
   // Surfaces
-  surface: '#1f1f23',
-  surfaceHover: '#26262c',
-  surfaceBorder: '#303035',
+  surface: 'rgba(255,255,255,0.035)',
+  surfaceHover: 'rgba(255,255,255,0.055)',
+  surfaceBorder: 'rgba(255,255,255,0.08)',
 
   // Text
-  text: '#efeff1', // Alias for textPrimary
-  textPrimary: '#efeff1',
-  textSecondary: '#adadb8',
-  textMuted: '#7a7a85',
-  textDisabled: '#53535f',
+  text: '#f7f8f8', // Alias for textPrimary
+  textPrimary: '#f7f8f8',
+  textSecondary: '#d0d6e0',
+  textMuted: '#8a8f98',
+  textDisabled: '#62666d',
 
   // Borders
-  border: '#303035',
-  borderLight: '#404045',
-  borderFocus: '#9147ff',
+  border: 'rgba(255,255,255,0.08)',
+  borderLight: 'rgba(255,255,255,0.12)',
+  borderFocus: '#7170ff',
 } as const;
 
 export const spacing = {

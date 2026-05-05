@@ -53,7 +53,9 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {} }) {
             .then(() => logDebug('[relay-seeder] discovery flushed', { label, discoveryKey: discoveryKeyHex.slice(0, 16) }))
             .catch((err) => logDebug('[relay-seeder] discovery flush failed', { label, error: err?.message || String(err) }))
         }
-      } catch {}
+      } catch (err) {
+        logDebug('[relay-seeder] discovery flush setup failed', { label, error: err?.message || String(err) })
+      }
       return handle
     } catch (err) {
       logWarn('[relay-seeder] failed to join discovery', { label, error: err?.message || String(err) })
@@ -170,8 +172,16 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {} }) {
 
   async function close() {
     for (const handle of handles.values()) {
-      try { await handle?.destroy?.() } catch {}
-      try { await handle?.close?.() } catch {}
+      try {
+        await handle?.destroy?.()
+      } catch (err) {
+        logDebug('[relay-seeder] discovery handle destroy failed', { error: err?.message || String(err) })
+      }
+      try {
+        await handle?.close?.()
+      } catch (err) {
+        logDebug('[relay-seeder] discovery handle close failed', { error: err?.message || String(err) })
+      }
     }
     handles.clear()
     seededChannels.clear()

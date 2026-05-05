@@ -206,11 +206,11 @@ export async function createRelayRuntime({ config, logger }) {
       }
     },
     async close() {
-      try { publicFeed.stop() } catch {}
-      try { await seeder.close() } catch {}
-      try { await ctx.swarm.destroy() } catch {}
-      try { ctx.blobServer?.close?.() } catch {}
-      try { await ctx.store.close() } catch {}
+      try { publicFeed.stop() } catch (err) { logger.runtime?.debug('Public feed close failed', { error: err?.message || String(err) }) }
+      try { await seeder.close() } catch (err) { logger.runtime?.debug('Relay seeder close failed', { error: err?.message || String(err) }) }
+      try { await ctx.swarm.destroy() } catch (err) { logger.runtime?.debug('Swarm close failed', { error: err?.message || String(err) }) }
+      try { ctx.blobServer?.close?.() } catch (err) { logger.runtime?.debug('Blob server close failed', { error: err?.message || String(err) }) }
+      try { await ctx.store.close() } catch (err) { logger.runtime?.debug('Store close failed', { error: err?.message || String(err) }) }
     }
   }
 }

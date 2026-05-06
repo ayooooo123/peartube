@@ -19,7 +19,7 @@ services:
       PEARTUBE_POLICY: discovery
       PEARTUBE_DISCOVERY_ENABLED: "true"
       PEARTUBE_NETWORK_ANNOUNCE: "true"
-      PEARTUBE_ARCHIVE_UI_ENABLED=true
+      PEARTUBE_ARCHIVE_UI_ENABLED: "true"
       PEARTUBE_ARCHIVE_UI_HOST: 0.0.0.0
       PEARTUBE_ARCHIVE_UI_PORT: "8174"
       PEARTUBE_ARCHIVE_TMP_PATH: /var/lib/peartube-relay/archive-tmp

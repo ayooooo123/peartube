@@ -32,11 +32,16 @@
     "#subprocess": {
       "bare": "./src/shims/subprocess.bare.js",
       "default": "./src/shims/subprocess.node.js"
+    },
+    "#http": {
+      "bare": "./src/shims/http.bare.js",
+      "default": "./src/shims/http.node.js"
     }
   },
   "dependencies": {
     "@peartube/backend": "file:../backend",
     "b4a": "^1.8.0",
+    "bare-http1": "^4.5.6",
     "bare-process": "^4.4.1",
     "bare-subprocess": "^5.2.3",
     "compact-encoding": "^2.19.2",

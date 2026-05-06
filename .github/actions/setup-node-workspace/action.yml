@@ -22,4 +22,18 @@ runs:
     - name: Install workspace dependencies
       if: ${{ inputs.install == 'true' }}
       shell: bash
-      run: npm run install:all
+      run: |
+        for attempt in 1 2 3; do
+          if npm run install:all; then
+            exit 0
+          fi
+
+          if [ "$attempt" -eq 3 ]; then
+            echo "::error::npm run install:all failed after 3 attempts"
+            exit 1
+          fi
+
+          echo "npm run install:all failed; retrying in $((attempt * 20)) seconds..."
+          npm cache verify || true
+          sleep $((attempt * 20))
+        done

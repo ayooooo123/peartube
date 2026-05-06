@@ -28,7 +28,7 @@ import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { getFeedPreviewVideos, getVisibleSeededFeedEntries, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { formatTimeAgo } from '@/lib/formatters'
-import { VideoContainer } from '@/components/video-player/VideoContainer'
+import { VerticalShortsPlayer } from '@/components/discovery/VerticalShortsPlayer'
 
 interface FeedEntry {
   driveKey: string
@@ -406,30 +406,17 @@ export default function VerticalDiscoveryScreen() {
               >
                 <View style={styles.scrim} />
                 <View style={styles.videoStage}>
-                  {activeVideoKey === `${video.channelKey}:${video.id}` && shortsVideoUrl ? (
-                    <View style={styles.playingFrame}>
-                      <VideoContainer
-                        testID="vertical-discovery-inline-player"
-                        style={styles.shortsInlinePlayer}
-                        playerRef={shortsPlayerRef}
-                        videoUrl={shortsVideoUrl}
-                        currentVideo={video}
-                        playbackSession={shortsPlaybackSession}
-                        isPlaying
-                        playbackRate={1}
-                        isCasting={false}
-                        isInPipMode={false}
-                      />
-                    </View>
-                  ) : shortsLoading && activeVideoKey === `${video.channelKey}:${video.id}` ? (
-                    <View style={styles.playButtonShell}>
-                      <ActivityIndicator color="#fff" size="large" />
-                    </View>
-                  ) : (
-                    <View style={styles.playButtonShell}>
-                      <Feather name="play" color="#fff" size={42} />
-                    </View>
-                  )}
+                  <VerticalShortsPlayer
+                    testID="vertical-discovery-inline-player"
+                    playerRef={shortsPlayerRef}
+                    videoUrl={activeVideoKey === `${video.channelKey}:${video.id}` ? shortsVideoUrl : null}
+                    video={video}
+                    playbackSession={shortsPlaybackSession}
+                    isActive={activeVideoKey === `${video.channelKey}:${video.id}`}
+                    isLoading={shortsLoading && activeVideoKey === `${video.channelKey}:${video.id}`}
+                    thumbnailUrl={video.thumbnailUrl || null}
+                    onReplay={() => playVideo(video)}
+                  />
                 </View>
                 <View style={[styles.bottomMeta, { paddingBottom: Math.max(insets.bottom + 86, 104) }]}> 
                   <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
@@ -542,42 +529,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.38)',
   },
   videoStage: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-  },
-  playingFrame: {
-    width: '78%',
-    aspectRatio: 9 / 16,
-    maxHeight: '66%',
-    borderRadius: 28,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
-    backgroundColor: 'rgba(0,0,0,0.34)',
-    overflow: 'hidden',
-  },
-  shortsInlinePlayer: {
-    width: '100%',
-    height: '100%',
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: '#000',
-  },
-  playingText: {
-    color: colors.primary,
-    fontSize: 13,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 1.5,
-  },
-  playButtonShell: {
-    width: 86,
-    height: 86,
-    borderRadius: 43,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.13)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
   },
   bottomMeta: {
     position: 'absolute',

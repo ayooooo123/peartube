@@ -43,6 +43,11 @@ test('Android GitHub workflows regenerate HRPC spec and backend bundles before A
       /npm run install:all/,
       `${name} workflow family should use the repo install:all flow instead of root npm ci`,
     )
+    assert.match(
+      setupAction,
+      /for attempt in 1 2 3/,
+      `${name} workflow family should retry transient npm install failures before failing`,
+    )
   }
 
   assert.match(

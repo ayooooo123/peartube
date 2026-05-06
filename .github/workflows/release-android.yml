@@ -167,7 +167,7 @@ jobs:
   publish-release:
     needs: build-release
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag != ''
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag != '')
     permissions:
       contents: write
 
@@ -177,6 +177,19 @@ jobs:
         with:
           path: apks
           merge-multiple: true
+
+      - name: Verify APK artifacts exist
+        shell: bash
+        run: |
+          mapfile -t apks < <(find apks -type f -name '*.apk' | sort)
+          if [ "${#apks[@]}" -eq 0 ]; then
+            echo "::error::No APK artifacts were downloaded for release publishing"
+            find apks -maxdepth 3 -type f -print 2>/dev/null || true
+            exit 1
+          fi
+
+          printf 'Publishing %s APK artifact(s):\n' "${#apks[@]}"
+          printf ' - %s\n' "${apks[@]}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3.0.0

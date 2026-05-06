@@ -38,6 +38,16 @@ test('test workflow avoids root npm cache and npm ci because the repo has no roo
     'shared Node setup should install dependencies via the repo install:all script',
   )
   assert.match(
+    setupAction,
+    /for attempt in 1 2 3/,
+    'shared Node setup should retry transient npm registry/network failures before failing the workflow',
+  )
+  assert.match(
+    setupAction,
+    /npm cache verify \|\| true/,
+    'shared Node setup should verify cache between install retries without masking the final install failure',
+  )
+  assert.match(
     rootPackage.scripts['install:all'],
     /packages\/spec/,
     'install:all should install packages/spec so schema generation can require hrpc-swift in CI',

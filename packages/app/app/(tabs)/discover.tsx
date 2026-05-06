@@ -108,12 +108,34 @@ export default function VerticalDiscoveryScreen() {
   const [shortsVideoUrl, setShortsVideoUrl] = useState<string | null>(null)
   const [shortsPlaybackSession, setShortsPlaybackSession] = useState(0)
   const [shortsLoading, setShortsLoading] = useState(false)
+  const [shortsChromeVisible, setShortsChromeVisible] = useState(true)
   const shortsPlayerRef = useRef<any>(null)
   const pendingPlayKeyRef = useRef<string | null>(null)
   const hydratedChannelsRef = useRef<Set<string>>(new Set())
 
   const activeVideo = videos[activeIndex]
   const activeVideoKey = activeVideo ? `${activeVideo.channelKey}:${activeVideo.id}` : null
+
+  const makePlaybackRequest = useCallback((video: VideoData) => {
+    const videoRef = getVideoRef(video)
+    const videoAny = video as any
+    const cacheKey = makeVideoUrlCacheKey(
+      video.channelKey,
+      videoRef,
+      videoAny.blobId || undefined,
+      videoAny.blobsCoreKey || undefined,
+    )
+    const playbackRequest = {
+      channelKey: video.channelKey,
+      videoId: videoRef,
+      publicBeeKey: videoAny.publicBeeKey || undefined,
+      blobId: videoAny.blobId || undefined,
+      blobsCoreKey: videoAny.blobsCoreKey || undefined,
+      mimeType: videoAny.mimeType || undefined,
+    }
+
+    return { cacheKey, playbackRequest }
+  }, [])
 
   const fetchThumbnailsForVideos = useCallback(async (items: VideoData[]) => {
     if (!rpc || !blobServerPort) return
@@ -170,14 +192,16 @@ export default function VerticalDiscoveryScreen() {
     if (!rpc) return
     const channelKey = entry.channelKey || entry.driveKey
     if (!channelKey || hydratedChannelsRef.current.has(channelKey)) return
-    hydratedChannelsRef.current.add(channelKey)
 
     try {
+      const timeoutToken = Symbol('vertical-channel-timeout')
       const result = await withTimeout(
         rpc.listVideos({ channelKey, publicBeeKey: entry.publicBeeKey || undefined }),
         3500,
-        { videos: [] } as any,
+        timeoutToken as any,
       )
+      if (result === timeoutToken) return
+      hydratedChannelsRef.current.add(channelKey)
       const channelVideos = Array.isArray((result as any)?.videos) ? (result as any).videos : []
       const mapped = channelVideos
         .filter((video: any) => shouldRenderFeedVideo({
@@ -212,7 +236,7 @@ export default function VerticalDiscoveryScreen() {
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
       setFeedEntries(entries)
       seedFromFeedEntries(entries)
-      for (const entry of entries.slice(0, 8)) {
+      for (const entry of entries.slice(0, 24)) {
         void hydrateChannelVideos(entry)
       }
     } catch (err) {
@@ -235,26 +259,10 @@ export default function VerticalDiscoveryScreen() {
 
   const playVideo = useCallback(async (video: VideoData) => {
     if (!rpc) return
-    const videoRef = getVideoRef(video)
-    const videoAny = video as any
-    const cacheKey = makeVideoUrlCacheKey(
-      video.channelKey,
-      videoRef,
-      videoAny.blobId || undefined,
-      videoAny.blobsCoreKey || undefined,
-    )
+    const { cacheKey, playbackRequest } = makePlaybackRequest(video)
     const playKey = `${video.channelKey}:${video.id}`
     if (pendingPlayKeyRef.current === playKey) return
     pendingPlayKeyRef.current = playKey
-
-    const playbackRequest = {
-      channelKey: video.channelKey,
-      videoId: videoRef,
-      publicBeeKey: videoAny.publicBeeKey || undefined,
-      blobId: videoAny.blobId || undefined,
-      blobsCoreKey: videoAny.blobsCoreKey || undefined,
-      mimeType: videoAny.mimeType || undefined,
-    }
 
     try {
       handoffToShorts()
@@ -279,29 +287,27 @@ export default function VerticalDiscoveryScreen() {
       pendingPlayKeyRef.current = null
       setShortsLoading(false)
     }
-  }, [handoffToShorts, rpc])
+  }, [handoffToShorts, makePlaybackRequest, rpc])
 
   useEffect(() => {
     if (!activeVideo || !ready) return
+    setShortsChromeVisible(true)
     void playVideo(activeVideo)
   }, [activeVideo, playVideo, ready])
 
   useEffect(() => {
-    const nextVideos = videos.slice(activeIndex + 1, activeIndex + 3)
-    for (const video of nextVideos) {
-      const videoAny = video as any
-      const videoRef = getVideoRef(video)
-      const playbackRequest = {
-        channelKey: video.channelKey,
-        videoId: videoRef,
-        publicBeeKey: videoAny.publicBeeKey || undefined,
-        blobId: videoAny.blobId || undefined,
-        blobsCoreKey: videoAny.blobsCoreKey || undefined,
-        mimeType: videoAny.mimeType || undefined,
-      }
-      void rpc?.preparePlayback?.(playbackRequest).catch(() => undefined)
+    const warmPlaybackUrl = async (video: VideoData) => {
+      const { cacheKey, playbackRequest } = makePlaybackRequest(video)
+      if (cacheKey && getCachedVideoUrl(cacheKey)) return
+      const result = await rpc?.preparePlayback?.(playbackRequest)
+      if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
     }
-  }, [activeIndex, rpc, videos])
+
+    const nextVideos = videos.slice(activeIndex + 1, activeIndex + 5)
+    for (const video of nextVideos) {
+      void warmPlaybackUrl(video).catch(() => undefined)
+    }
+  }, [activeIndex, makePlaybackRequest, rpc, videos])
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
@@ -429,34 +435,38 @@ export default function VerticalDiscoveryScreen() {
                     isActive={activeVideoKey === `${video.channelKey}:${video.id}`}
                     isLoading={shortsLoading && activeVideoKey === `${video.channelKey}:${video.id}`}
                     thumbnailUrl={video.thumbnailUrl || null}
+                    controlsVisible={shortsChromeVisible}
+                    onControlsVisibleChange={setShortsChromeVisible}
                     onReplay={() => playVideo(video)}
                   />
                 </View>
-                <View style={[styles.bottomMeta, { paddingBottom: Math.max(insets.bottom + 86, 104) }]}> 
-                  <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
-                    <Text style={styles.videoTitle} numberOfLines={2}>{video.title || 'Untitled'}</Text>
-                    <Text style={styles.videoMeta} numberOfLines={1}>
-                      {video.channel?.name || 'Channel'} · {formatTimeAgo(video.uploadedAt || Date.now())}
-                    </Text>
-                    {video.description ? (
-                      <Text style={styles.videoDescription} numberOfLines={2}>{video.description}</Text>
-                    ) : null}
-                  </Pressable>
-                  <View style={styles.sideRail}>
-                    <Pressable onPress={() => openChannel(video)} style={styles.sideButton}>
-                      <Feather name="user" color="#fff" size={24} />
-                      <Text style={styles.sideLabel}>Channel</Text>
+                {shortsChromeVisible ? (
+                  <View style={[styles.bottomMeta, { paddingBottom: Math.max(insets.bottom + 116, 134) }]}>
+                    <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
+                      <Text style={styles.videoTitle} numberOfLines={2}>{video.title || 'Untitled'}</Text>
+                      <Text style={styles.videoMeta} numberOfLines={1}>
+                        {video.channel?.name || 'Channel'} · {formatTimeAgo(video.uploadedAt || Date.now())}
+                      </Text>
+                      {video.description ? (
+                        <Text style={styles.videoDescription} numberOfLines={2}>{video.description}</Text>
+                      ) : null}
                     </Pressable>
-                    <Pressable onPress={() => openDetails(video)} style={styles.sideButton}>
-                      <Feather name="message-circle" color="#fff" size={24} />
-                      <Text style={styles.sideLabel}>Details</Text>
-                    </Pressable>
-                    <Pressable onPress={() => playVideo(video)} style={styles.sideButton}>
-                      <Feather name="rotate-cw" color="#fff" size={24} />
-                      <Text style={styles.sideLabel}>Replay</Text>
-                    </Pressable>
+                    <View style={styles.sideRail}>
+                      <Pressable onPress={() => openChannel(video)} style={styles.sideButton}>
+                        <Feather name="user" color="#fff" size={24} />
+                        <Text style={styles.sideLabel}>Channel</Text>
+                      </Pressable>
+                      <Pressable onPress={() => openDetails(video)} style={styles.sideButton}>
+                        <Feather name="message-circle" color="#fff" size={24} />
+                        <Text style={styles.sideLabel}>Details</Text>
+                      </Pressable>
+                      <Pressable onPress={() => playVideo(video)} style={styles.sideButton}>
+                        <Feather name="rotate-cw" color="#fff" size={24} />
+                        <Text style={styles.sideLabel}>Replay</Text>
+                      </Pressable>
+                    </View>
                   </View>
-                </View>
+                ) : null}
               </ImageBackground>
             </View>
           )}

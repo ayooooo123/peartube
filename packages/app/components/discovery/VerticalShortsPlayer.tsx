@@ -1,5 +1,5 @@
 import { memo, RefObject, useCallback, useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, ImageBackground, Pressable, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, ImageBackground, LayoutChangeEvent, Pressable, StyleSheet, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
 import type { VideoData } from '@peartube/core'
 import { colors } from '@/lib/colors'
@@ -15,11 +15,18 @@ type VerticalShortsPlayerProps = {
   isActive: boolean
   isLoading?: boolean
   thumbnailUrl?: string | null
+  controlsVisible?: boolean
+  onControlsVisibleChange?: (visible: boolean) => void
   onReplay?: () => void
 }
 
 function getShortsVideoKey(video: VideoData, fallbackUrl?: string | null) {
   return `${video.channelKey || 'channel'}:${video.id || video.path || fallbackUrl || 'video'}`
+}
+
+function clampProgress(value: number) {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(1, value))
 }
 
 export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
@@ -31,15 +38,24 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
   isActive,
   isLoading = false,
   thumbnailUrl,
+  controlsVisible = true,
+  onControlsVisibleChange,
   onReplay,
 }: VerticalShortsPlayerProps) {
   const [videoSize, setVideoSize] = useState<{ width: number; height: number } | null>(null)
   const [hasPlaybackError, setHasPlaybackError] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
+  const [seekPosition, setSeekPosition] = useState<number | undefined>(undefined)
+  const [progressBarWidth, setProgressBarWidth] = useState(0)
+  const [playbackProgress, setPlaybackProgress] = useState({ currentTime: 0, duration: 0 })
   const videoKey = getShortsVideoKey(video, videoUrl)
 
   useEffect(() => {
     setHasPlaybackError(false)
     setVideoSize(null)
+    setIsPaused(false)
+    setSeekPosition(undefined)
+    setPlaybackProgress({ currentTime: 0, duration: 0 })
   }, [videoKey])
 
   const isLandscape = useMemo(() => {
@@ -56,20 +72,69 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
     }
   }, [])
 
+  const handleProgress = useCallback((event: any) => {
+    const currentTime = Math.max(0, Number(event?.currentTime || 0))
+    const duration = Math.max(0, Number(event?.duration || 0))
+    setPlaybackProgress({ currentTime, duration })
+    if (duration > 0 && seekPosition !== undefined && Math.abs(currentTime - seekPosition) < 900) {
+      setSeekPosition(undefined)
+    }
+  }, [seekPosition])
+
   const handleError = useCallback((error: any) => {
     setHasPlaybackError(true)
     console.log('[VerticalShortsPlayer] Playback failed:', error?.message || error)
   }, [])
 
+  const toggleControlsVisibility = useCallback(() => {
+    onControlsVisibleChange?.(!controlsVisible)
+  }, [controlsVisible, onControlsVisibleChange])
+
+  const pauseShorts = useCallback(() => {
+    setIsPaused(true)
+    void playerRef.current?.pause?.()
+  }, [playerRef])
+
+  const playShorts = useCallback(() => {
+    setIsPaused(false)
+    void playerRef.current?.play?.()
+  }, [playerRef])
+
+  const restartShorts = useCallback(() => {
+    setIsPaused(false)
+    setSeekPosition(0)
+    setPlaybackProgress((prev) => ({ ...prev, currentTime: 0 }))
+    void playerRef.current?.seek?.(0)
+    void playerRef.current?.play?.()
+  }, [playerRef])
+
+  const handleProgressBarLayout = useCallback((event: LayoutChangeEvent) => {
+    setProgressBarWidth(event.nativeEvent.layout.width)
+  }, [])
+
+  const handleProgressBarPress = useCallback((event: any) => {
+    if (progressBarWidth <= 0 || playbackProgress.duration <= 0) return
+    const locationX = Number(event?.nativeEvent?.locationX || 0)
+    const progress = clampProgress(locationX / progressBarWidth)
+    const nextTime = progress * playbackProgress.duration
+    setSeekPosition(nextTime / 1000)
+    setPlaybackProgress((prev) => ({ ...prev, currentTime: nextTime }))
+    void playerRef.current?.seek?.(nextTime / 1000)
+  }, [playbackProgress.duration, playerRef, progressBarWidth])
+
   const showPlayer = Boolean(videoUrl && isActive && !hasPlaybackError)
   const showPoster = !showPlayer && Boolean(thumbnailUrl)
+  const effectiveProgress = playbackProgress.duration > 0
+    ? clampProgress(playbackProgress.currentTime / playbackProgress.duration)
+    : 0
 
   return (
-    <View
+    <Pressable
       testID={testID}
       style={styles.container}
       accessibilityRole="imagebutton"
       accessibilityLabel={`Vertical video player for ${video.title || 'video'}`}
+      onPress={toggleControlsVisibility}
     >
       {showPoster ? (
         <ImageBackground
@@ -85,12 +150,16 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
           videoUrl={videoUrl as string}
           playbackSession={playbackSession}
           currentVideoKey={videoKey}
-          isPlaying={isActive}
+          isPlaying={isActive && !isPaused}
           playbackRate={1}
+          seekPosition={seekPosition}
           videoTitle={video.title}
           channelName={video.channel?.name || 'Channel'}
           thumbnailUrl={thumbnailUrl || undefined}
           onVideoStateChange={handleVideoStateChange}
+          onProgress={handleProgress}
+          onPlaying={() => setIsPaused(false)}
+          onEnded={restartShorts}
           onError={handleError}
           style={[
             styles.videoSurface,
@@ -114,7 +183,33 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
           <Feather name={hasPlaybackError ? 'rotate-cw' : 'play'} color="#fff" size={42} />
         </Pressable>
       ) : null}
-    </View>
+
+      {showPlayer && controlsVisible ? (
+        <View style={styles.controlsOverlay} pointerEvents="box-none">
+          <View style={styles.controlButtons}>
+            <Pressable
+              onPress={isPaused ? playShorts : pauseShorts}
+              style={styles.controlButton}
+              accessibilityLabel={isPaused ? 'Play Shorts video' : 'Pause Shorts video'}
+            >
+              <Feather name={isPaused ? 'play' : 'pause'} color="#fff" size={24} />
+            </Pressable>
+            <Pressable onPress={restartShorts} style={styles.controlButton} accessibilityLabel="Restart Shorts video">
+              <Feather name="rotate-cw" color="#fff" size={22} />
+            </Pressable>
+          </View>
+          <Pressable
+            onPress={handleProgressBarPress}
+            onLayout={handleProgressBarLayout}
+            style={styles.progressTrack}
+            accessibilityRole="adjustable"
+            accessibilityLabel="Shorts progress bar"
+          >
+            <View style={[styles.progressFill, { width: `${effectiveProgress * 100}%` }]} />
+          </Pressable>
+        </View>
+      ) : null}
+    </Pressable>
   )
 })
 
@@ -152,6 +247,39 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.2)',
+  },
+  controlsOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 18,
+    paddingBottom: 18,
+  },
+  controlButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  controlButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.42)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  progressTrack: {
+    height: 18,
+    justifyContent: 'center',
+  },
+  progressFill: {
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: colors.primary,
   },
   playButtonShell: {
     position: 'absolute',

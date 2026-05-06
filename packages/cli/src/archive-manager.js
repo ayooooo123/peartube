@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { spawn } from '#subprocess'
+import crypto from 'hypercore-crypto'
+import b4a from 'b4a'
 import { mkdirSync, rmSync } from '#fs'
 import { join } from '#path'
 
@@ -32,10 +33,7 @@ function publicJob(job) {
 }
 
 function makeJobId(url) {
-  const digest = createHash('sha256')
-    .update(`${url}:${now()}:${randomBytes(8).toString('hex')}`)
-    .digest('hex')
-    .slice(0, 16)
+  const digest = b4a.toString(crypto.hash(Buffer.from(`${url}:${now()}:${b4a.toString(crypto.randomBytes(8), 'hex')}`)), 'hex').slice(0, 16)
   return `arch_${digest}`
 }
 
@@ -159,7 +157,11 @@ export function createYtDlpDownloader({ bin = 'yt-dlp', outputDir, spawnFn = spa
         description: input.description || `Archived anonymously from ${new URL(input.url).hostname}`,
         mimeType: filePath.endsWith('.webm') ? 'video/webm' : 'video/mp4',
         cleanup() {
-          try { fs.rmSync(targetDir, { recursive: true, force: true }) } catch {}
+          try {
+            fs.rmSync(targetDir, { recursive: true, force: true })
+          } catch (err) {
+            // Best effort: stale archive temp directories are harmless and can be cleaned on the next run.
+          }
         }
       }
     }
@@ -260,7 +262,11 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
         const failed = await store.updateJob(id, { status: 'failed', error: err?.message || String(err) })
         return failed
       } finally {
-        try { downloaded?.cleanup?.() } catch {}
+        try {
+          downloaded?.cleanup?.()
+        } catch (err) {
+          // Best effort: import result is already persisted before cleanup runs.
+        }
       }
     }
   }

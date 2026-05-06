@@ -17,8 +17,11 @@ test('archive UI commands and flags are exposed by the relay CLI', async (t) => 
   t.is(parseArgv(['archive', '--url', 'https://www.youtube.com/watch?v=abc', '--channel-name', 'Anon']).command, 'archive')
   t.ok(bin.includes('ui       Run the relay archive WebUI'), 'help exposes the container WebUI')
   t.ok(bin.includes('archive  Queue or run anonymous YouTube archive jobs'), 'help exposes archive job management')
+  t.absent(readFileSync(join(__dirname, '..', 'src', 'archive-manager.js'), 'utf8').includes('node:child_process'), 'archive manager uses runtime subprocess shim')
+  t.absent(readFileSync(join(__dirname, '..', 'src', 'archive-manager.js'), 'utf8').includes('node:crypto'), 'archive manager uses Bare-compatible crypto')
+  t.absent(readFileSync(join(__dirname, '..', 'src', 'archive-console.js'), 'utf8').startsWith("import { createServer } from 'node:http'"), 'archive console does not statically import node:http')
   t.ok(compose.includes('8174:8174'), 'root relay compose exposes the local archive UI port')
-  t.ok(compose.includes('PEARTUBE_ARCHIVE_UI_ENABLED=true'), 'compose enables archive UI by default')
+  t.ok(compose.includes('PEARTUBE_ARCHIVE_UI_ENABLED: "true"'), 'compose enables archive UI by default')
 })
 
 test('archive manager stores anonymous channel/job state without raw URLs in public status', async (t) => {

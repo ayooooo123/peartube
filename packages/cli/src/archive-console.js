@@ -1,4 +1,3 @@
-import { createServer } from 'node:http'
 import { createArchiveJobStore, createArchiveManager } from './archive-manager.js'
 import { renderArchiveTui, renderArchiveWebHome } from './archive-ui.js'
 
@@ -22,7 +21,19 @@ async function collectBody(req) {
   })
 }
 
-export async function createArchiveConsole({ service, downloader, publisher, host = '127.0.0.1', port = 8174, logger = null }) {
+function createNodeServer(handler) {
+  return import('node:http').then(({ createServer }) => createServer(handler))
+}
+
+export async function createArchiveConsole({
+  service,
+  downloader,
+  publisher,
+  host = '127.0.0.1',
+  port = 8174,
+  logger = null,
+  serverFactory = createNodeServer
+}) {
   if (!service?.runtime?.ctx?.metaDb) throw new Error('archive console requires a relay service runtime')
   const store = createArchiveJobStore({ metaDb: service.runtime.ctx.metaDb })
   const manager = createArchiveManager({ store, downloader, publisher, logger })
@@ -34,7 +45,7 @@ export async function createArchiveConsole({ service, downloader, publisher, hos
     }
   }
 
-  const server = createServer(async (req, res) => {
+  const server = await serverFactory(async (req, res) => {
     try {
       if (req.method === 'GET' && req.url === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' })

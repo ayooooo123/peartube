@@ -29,6 +29,17 @@ test('build workflows stay separate from publish workflows', () => {
     'release-android should own GitHub release publishing',
   )
 
+  assert.match(
+    releaseAndroid,
+    /if:\s*always\(\)[^\n]*contains\(needs\.build-release\.result, 'success'\)/,
+    'release-android should still publish completed APK artifacts when one matrix ABI flakes after other ABIs uploaded',
+  )
+  assert.match(
+    releaseAndroid,
+    /No APK artifacts were downloaded for release publishing/,
+    'release-android should fail loudly if no APK artifacts are available to attach to the tag release',
+  )
+
   assert.doesNotMatch(
     buildRelay,
     /docker\/login-action/,

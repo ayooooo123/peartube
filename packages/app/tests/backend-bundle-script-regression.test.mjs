@@ -49,13 +49,14 @@ test('mobile build scripts regenerate HRPC spec before rebuilding backend bundle
   }
 })
 
-test('mobile backend bundle scripts use bare-pack mobile preset instead of removed target flags', () => {
+test('mobile backend bundle scripts use the manifest builder with bare-pack mobile preset instead of removed target flags', () => {
   const { scripts } = readPackageJson()
+  const builderSource = fs.readFileSync(path.join(appRoot, 'scripts', 'build-backend-bundles.js'), 'utf8')
+  const manifestSource = fs.readFileSync(path.join(appRoot, 'backend-bundles.manifest.mjs'), 'utf8')
   const bundleScriptNames = [
     'bundle:backend',
     'bundle:backend:main',
     'bundle:backend:worker',
-    'bundle:test',
   ]
 
   for (const scriptName of bundleScriptNames) {
@@ -63,13 +64,14 @@ test('mobile backend bundle scripts use bare-pack mobile preset instead of remov
     assert.ok(script, `${scriptName} should exist`)
     assert.match(
       script,
-      /bare-pack --preset mobile --linked/,
-      `${scriptName} should invoke bare-pack with the mobile preset`,
-    )
-    assert.doesNotMatch(
-      script,
-      /--target\b/,
-      `${scriptName} should not use the removed bare-pack --target flag`,
+      /node \.\/scripts\/build-backend-bundles\.js/,
+      `${scriptName} should invoke the manifest-driven backend bundle builder`,
     )
   }
+
+  assert.match(scripts['bundle:test'], /bare-pack --preset mobile --linked/)
+  assert.match(builderSource, /backend-bundles\.manifest\.mjs/)
+  assert.match(manifestSource, /flags: \['--preset', 'mobile', '--linked'\]/)
+  assert.doesNotMatch(manifestSource, /--target\b/)
+  assert.doesNotMatch(builderSource, /--target\b/)
 })

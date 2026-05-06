@@ -1,38 +1,59 @@
 /* eslint-disable no-console */
 const fs = require('fs')
 const path = require('path')
+const { pathToFileURL } = require('url')
 const { spawnSync } = require('child_process')
 
 const projectRoot = path.resolve(__dirname, '..')
 const repoRoot = path.resolve(projectRoot, '..', '..')
+const manifestPath = path.join(projectRoot, 'backend-bundles.manifest.mjs')
 
-const bundleFiles = [
-  path.join(projectRoot, 'backend.bundle.js'),
-  path.join(projectRoot, 'downloader-worker.bundle.js'),
-]
+function resolveRepoPath(relativePath) {
+  if (typeof relativePath !== 'string' || relativePath.length === 0) {
+    throw new Error('Manifest paths must be non-empty strings')
+  }
+  if (path.isAbsolute(relativePath)) return path.normalize(relativePath)
+  return path.resolve(repoRoot, relativePath)
+}
 
-const sourceRoots = [
-  path.join(projectRoot, 'backend'),
-  path.join(repoRoot, 'packages', 'backend', 'src'),
-  path.join(repoRoot, 'packages', 'host', 'src'),
-  path.join(repoRoot, 'packages', 'protocol', 'src'),
-  path.join(repoRoot, 'packages', 'bare-tls'),
-  path.join(repoRoot, 'packages', 'platform', 'src'),
-  path.join(repoRoot, 'packages', 'spec', 'spec'),
-]
+function loadManifest() {
+  const manifestUrl = pathToFileURL(manifestPath).href
+  return import(manifestUrl).then(mod => mod.default || mod.backendBundlesManifest)
+}
 
-const sourceFiles = [
-  path.join(projectRoot, 'package.json'),
-  path.join(repoRoot, 'packages', 'backend', 'package.json'),
-  path.join(repoRoot, 'packages', 'host', 'package.json'),
-  path.join(repoRoot, 'packages', 'protocol', 'package.json'),
-  path.join(repoRoot, 'packages', 'bare-tls', 'package.json'),
-  path.join(repoRoot, 'packages', 'platform', 'package.json'),
-  path.join(repoRoot, 'packages', 'spec', 'package.json'),
-  path.join(repoRoot, 'packages', 'spec', 'schema.cjs'),
-]
+function validateManifest(manifest) {
+  if (!manifest || !Array.isArray(manifest.bundles) || manifest.bundles.length === 0) {
+    throw new Error('Backend bundle manifest must declare at least one bundle')
+  }
 
-const watchedExtensions = new Set(['.js', '.mjs', '.cjs', '.ts', '.json'])
+  const ids = new Set()
+  const cacheIds = new Set()
+  for (const bundle of manifest.bundles) {
+    if (!bundle || typeof bundle !== 'object') throw new Error('Manifest bundle entries must be objects')
+    for (const key of ['id', 'cacheId', 'entry', 'output']) {
+      if (typeof bundle[key] !== 'string' || bundle[key].length === 0) {
+        throw new Error(`Manifest bundle is missing ${key}`)
+      }
+    }
+    if (ids.has(bundle.id)) throw new Error(`Duplicate manifest bundle id: ${bundle.id}`)
+    if (cacheIds.has(bundle.cacheId)) throw new Error(`Duplicate manifest bundle cacheId: ${bundle.cacheId}`)
+    ids.add(bundle.id)
+    cacheIds.add(bundle.cacheId)
+
+    if (!Array.isArray(bundle.sourceRoots)) throw new Error(`Manifest bundle ${bundle.id} must declare sourceRoots`)
+    if (!Array.isArray(bundle.sourceFiles)) throw new Error(`Manifest bundle ${bundle.id} must declare sourceFiles`)
+    if (!bundle.pack || !Array.isArray(bundle.pack.flags)) throw new Error(`Manifest bundle ${bundle.id} must declare pack flags`)
+    if (!bundle.runtime || typeof bundle.runtime !== 'object') throw new Error(`Manifest bundle ${bundle.id} must declare runtime metadata`)
+  }
+}
+
+function getWatchedExtensions(manifest) {
+  return new Set(manifest.watch?.extensions || ['.js', '.mjs', '.cjs', '.ts', '.json'])
+}
+
+function getIgnoredDirectories(manifest) {
+  return new Set(manifest.watch?.ignoredDirectories || ['node_modules', '.git'])
+}
 
 function getNewestMtimeMs(filePath) {
   try {
@@ -42,7 +63,7 @@ function getNewestMtimeMs(filePath) {
   }
 }
 
-function walkNewestMtimeMs(dirPath) {
+function walkNewestMtimeMs(dirPath, watchedExtensions, ignoredDirectories) {
   let newest = 0
   let entries
   try {
@@ -52,10 +73,10 @@ function walkNewestMtimeMs(dirPath) {
   }
 
   for (const entry of entries) {
-    if (entry.name === 'node_modules' || entry.name === '.git') continue
+    if (ignoredDirectories.has(entry.name)) continue
     const fullPath = path.join(dirPath, entry.name)
     if (entry.isDirectory()) {
-      newest = Math.max(newest, walkNewestMtimeMs(fullPath))
+      newest = Math.max(newest, walkNewestMtimeMs(fullPath, watchedExtensions, ignoredDirectories))
       continue
     }
     if (!entry.isFile()) continue
@@ -66,30 +87,31 @@ function walkNewestMtimeMs(dirPath) {
   return newest
 }
 
-function getSourceNewestMtimeMs() {
-  let newest = 0
+function getBundleSourceNewestMtimeMs(bundle, manifest) {
+  let newest = getNewestMtimeMs(manifestPath)
+  const watchedExtensions = getWatchedExtensions(manifest)
+  const ignoredDirectories = getIgnoredDirectories(manifest)
 
-  for (const root of sourceRoots) {
-    newest = Math.max(newest, walkNewestMtimeMs(root))
+  for (const root of bundle.sourceRoots) {
+    newest = Math.max(newest, walkNewestMtimeMs(resolveRepoPath(root), watchedExtensions, ignoredDirectories))
   }
 
-  for (const filePath of sourceFiles) {
-    newest = Math.max(newest, getNewestMtimeMs(filePath))
+  for (const filePath of bundle.sourceFiles) {
+    newest = Math.max(newest, getNewestMtimeMs(resolveRepoPath(filePath)))
   }
 
   return newest
 }
 
-function hasAllBundles() {
-  return bundleFiles.every(filePath => fs.existsSync(filePath))
+function bundleExists(bundle) {
+  return fs.existsSync(resolveRepoPath(bundle.output))
 }
 
-function bundlesAreFresh(sourceNewestMtimeMs) {
-  return bundleFiles.every(filePath => {
-    const stat = fs.existsSync(filePath) ? fs.statSync(filePath) : null
-    if (!stat) return false
-    return stat.mtimeMs >= sourceNewestMtimeMs
-  })
+function bundleIsFresh(bundle, sourceNewestMtimeMs) {
+  const outputPath = resolveRepoPath(bundle.output)
+  const stat = fs.existsSync(outputPath) ? fs.statSync(outputPath) : null
+  if (!stat) return false
+  return stat.mtimeMs >= sourceNewestMtimeMs
 }
 
 function runSchema() {
@@ -121,15 +143,30 @@ function runPrepareMobileBackend() {
   runBundleBackend()
 }
 
-const forced = process.env.PEARTUBE_FORCE_BUNDLE === '1'
-const sourceNewest = getSourceNewestMtimeMs()
-const missingBundles = !hasAllBundles()
-const staleBundles = !missingBundles && !bundlesAreFresh(sourceNewest)
+async function main() {
+  const manifest = await loadManifest()
+  validateManifest(manifest)
 
-if (forced || missingBundles || staleBundles) {
-  const reason = forced ? 'forced rebuild' : missingBundles ? 'missing bundles' : 'stale bundles'
-  console.log(`[bundle:backend:ensure] Rebuilding (${reason})`)
-  runPrepareMobileBackend()
-} else {
-  console.log('[bundle:backend:ensure] Bundles are up to date')
+  const forced = process.env.PEARTUBE_FORCE_BUNDLE === '1'
+  const missingBundles = manifest.bundles.filter(bundle => !bundleExists(bundle))
+  const staleBundles = missingBundles.length > 0
+    ? []
+    : manifest.bundles.filter(bundle => !bundleIsFresh(bundle, getBundleSourceNewestMtimeMs(bundle, manifest)))
+
+  if (forced || missingBundles.length > 0 || staleBundles.length > 0) {
+    const reason = forced
+      ? 'forced rebuild'
+      : missingBundles.length > 0
+        ? `missing bundles: ${missingBundles.map(bundle => bundle.id).join(', ')}`
+        : `stale bundles: ${staleBundles.map(bundle => bundle.id).join(', ')}`
+    console.log(`[bundle:backend:ensure] Rebuilding (${reason})`)
+    runPrepareMobileBackend()
+  } else {
+    console.log('[bundle:backend:ensure] Bundles are up to date')
+  }
 }
+
+main().catch(err => {
+  console.error('[bundle:backend:ensure] Failed:', err)
+  process.exit(1)
+})

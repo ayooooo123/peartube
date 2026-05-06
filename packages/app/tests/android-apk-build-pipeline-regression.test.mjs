@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -57,13 +57,13 @@ test('Android GitHub workflows regenerate HRPC spec and backend bundles before A
   )
 })
 
-test('bundle freshness guard watches schema changes and regenerates spec before bundling', () => {
+test('bundle freshness guard watches manifest schema changes and regenerates spec before bundling', async () => {
   const source = readFile('packages/app/scripts/ensure-backend-bundles.js')
+  const manifest = await import(pathToFileURL(path.join(repoRoot, 'packages/app/backend-bundles.manifest.mjs')).href)
 
-  assert.match(
-    source,
-    /packages', 'spec', 'schema\.cjs'/,
-    'ensure-backend-bundles should treat schema.cjs as a source dependency',
+  assert.ok(
+    manifest.default.bundles.every(bundle => bundle.sourceFiles.includes('packages/spec/schema.cjs')),
+    'backend bundle manifest should treat schema.cjs as a source dependency for every bundle',
   )
   assert.match(
     source,

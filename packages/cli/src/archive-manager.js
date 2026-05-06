@@ -1,7 +1,7 @@
 import { spawn } from '#subprocess'
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
-import { mkdirSync, rmSync } from '#fs'
+import { mkdirSync, rmSync, existsSync } from '#fs'
 import { join } from '#path'
 
 const JOBS_KEY = 'relay-archive-jobs'
@@ -114,7 +114,7 @@ export async function enqueueArchiveJob(store, input = {}) {
   })
 }
 
-export function createYtDlpDownloader({ bin = 'yt-dlp', outputDir, spawnFn = spawn, fs = { mkdirSync, rmSync }, path = { join } } = {}) {
+export function createYtDlpDownloader({ bin = 'yt-dlp', outputDir, spawnFn = spawn, fs = { mkdirSync, rmSync, existsSync }, path = { join } } = {}) {
   if (!outputDir) throw new Error('outputDir is required')
 
   return {
@@ -148,8 +148,22 @@ export function createYtDlpDownloader({ bin = 'yt-dlp', outputDir, spawnFn = spa
         })
       })
 
-      const filePath = stdout.trim().split(/\r?\n/).filter(Boolean).pop()
+      const lines = stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      let filePath = null
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const line = lines[i]
+        if (line === 'filepath') continue
+        if (line.startsWith('filepath ')) {
+          filePath = line.slice('filepath '.length).trim()
+          break
+        }
+        filePath = line
+        break
+      }
       if (!filePath) throw new Error('yt-dlp did not report an output file')
+      if (typeof fs.existsSync === 'function' && !fs.existsSync(filePath)) {
+        throw new Error(`yt-dlp reported output file does not exist: ${filePath}`)
+      }
 
       return {
         filePath,

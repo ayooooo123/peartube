@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { parseArgv } from '../src/argv.js'
-import { createArchiveJobStore, enqueueArchiveJob, createArchiveManager } from '../src/archive-manager.js'
+import { createArchiveJobStore, enqueueArchiveJob, createArchiveManager, createYtDlpDownloader } from '../src/archive-manager.js'
 import { renderArchiveTui, renderArchiveWebHome } from '../src/archive-ui.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -123,4 +123,62 @@ test('archive TUI and WebUI render queue, archive form, and publish actions', as
   t.ok(web.includes('name="url"'), 'WebUI accepts video or channel URL')
   t.ok(web.includes('name="channelName"'), 'WebUI accepts anonymous channel name')
   t.ok(web.includes('Queued video'), 'WebUI renders archive queue')
+})
+
+
+test('yt-dlp downloader extracts the actual after_move filepath and verifies it exists', async (t) => {
+  const calls = []
+  const createdDirs = []
+  const existing = new Set(['/archive/tmp/arch_1/example.mp4'])
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    fs: {
+      mkdirSync(dir) { createdDirs.push(dir) },
+      rmSync() {},
+      existsSync(path) { return existing.has(path) }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_1/example.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { if (event === 'close') cb(0) }
+      }
+    }
+  })
+
+  const result = await downloader.download({ id: 'arch_1', url: 'https://www.youtube.com/watch?v=abc' })
+
+  t.is(result.filePath, '/archive/tmp/arch_1/example.mp4')
+  t.alike(createdDirs, ['/archive/tmp/arch_1'])
+  t.ok(calls[0].args.includes('after_move:filepath'), 'keeps yt-dlp after_move filepath print')
+})
+
+test('yt-dlp downloader fails with useful context when reported output file is missing', async (t) => {
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync() { return false }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn() {
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_2/missing.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { if (event === 'close') cb(0) }
+      }
+    }
+  })
+
+  await t.exception(
+    () => downloader.download({ id: 'arch_2', url: 'https://youtu.be/abc' }),
+    /yt-dlp reported output file does not exist: \/archive\/tmp\/arch_2\/missing\.mp4/
+  )
 })

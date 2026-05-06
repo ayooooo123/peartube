@@ -56,7 +56,7 @@ test('package.json defines standalone relay build scripts', async (t) => {
   t.is(pkg.imports['#subprocess'].default, './src/shims/subprocess.node.js')
   t.is(pkg.imports['#http'].bare, './src/shims/http.bare.js')
   t.is(pkg.imports['#http'].default, './src/shims/http.node.js')
-  t.is(pkg.dependencies['bare-subprocess'], '^5.2.3')
+  t.is(pkg.dependencies['bare-subprocess'], '^6.0.0')
   t.is(pkg.dependencies['bare-http1'], '^4.5.6')
   t.is(pkg.scripts['build:standalone'], 'node ./scripts/build-standalone.mjs')
   t.is(pkg.scripts['build:standalone:linux-x64'], 'RELAY_STANDALONE_HOST=linux-x64 node ./scripts/build-standalone.mjs')

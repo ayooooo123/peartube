@@ -115,3 +115,33 @@ test('shorts player has functional playback buttons and a seekable progress bar'
   assert.match(source, /handleProgressBarPress/, 'progress bar should handle tap-to-seek')
   assert.match(source, /accessibilityLabel="Shorts progress bar"/, 'progress bar should be accessible and testable')
 })
+
+test('vertical discovery stops inline Shorts playback when the route unmounts or loses focus', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /useFocusEffect/, 'Discover should subscribe to route focus lifecycle')
+  assert.match(source, /stopShortsPlayback/, 'Discover should centralize Shorts playback teardown')
+  assert.match(source, /shortsPlayerRef\.current\?\.stop\?\.\(\)/, 'teardown should stop the native inline player instead of merely hiding React chrome')
+  assert.match(source, /setShortsVideoUrl\(null\)/, 'teardown should detach the playback URL so the inline surface unmounts')
+  assert.match(source, /return stopShortsPlayback/, 'Discover should run teardown when tab navigation leaves the Shorts route')
+})
+
+test('bottom tab screens pad scrollable content by the measured pill tab bar height', () => {
+  const indexSource = readAppFile('app/(tabs)/index.tsx')
+  const subscriptionsSource = readAppFile('app/(tabs)/subscriptions.tsx')
+  const studioSource = readAppFile('app/(tabs)/studio.tsx')
+  const downloadsSource = readAppFile('app/(tabs)/downloads.tsx')
+  const settingsSource = readAppFile('app/(tabs)/settings.tsx')
+
+  for (const [label, source] of [
+    ['home', indexSource],
+    ['subscriptions', subscriptionsSource],
+    ['studio', studioSource],
+    ['downloads', downloadsSource],
+    ['settings', settingsSource],
+  ]) {
+    assert.match(source, /useTabBarMetrics\(/, `${label} should read measured tab bar metrics`)
+    assert.match(source, /const bottomPadding = Math\.max\(tabBarMetrics\.height \+ 16, insets\.bottom \+ 16\)/, `${label} should reserve enough space for the floating pill nav`)
+    assert.doesNotMatch(source, /paddingBottom:\s*insets\.bottom \+ (16|20|100)/, `${label} should not use hard-coded safe-area-only bottom padding`)
+  }
+})

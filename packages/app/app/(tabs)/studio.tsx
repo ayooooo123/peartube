@@ -14,6 +14,7 @@ import { CastHeaderButton } from '@/components/cast'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatBytes } from '@/lib/formatters'
+import { useTabBarMetrics } from '@/lib/tabBarHeight'
 
 // Detect Pear desktop (must match index.web.tsx detection)
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
@@ -61,6 +62,8 @@ export default function StudioScreen() {
   const [pickingVideo, setPickingVideo] = useState(false)
   const pickingVideoRef = useRef(false)
   const [editingVideo, setEditingVideo] = useState<any>(null)
+  const tabBarMetrics = useTabBarMetrics()
+  const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
 
   const uploadThumbnailForVideo = useCallback(async (videoId: string, thumbPath: string) => {
     if (!rpc || !videoId || !thumbPath) return false
@@ -703,7 +706,7 @@ export default function StudioScreen() {
         ListHeaderComponent={listHeaderComponent}
         contentContainerStyle={{
           paddingHorizontal: 20,
-          paddingBottom: insets.bottom + 16,
+          paddingBottom: bottomPadding,
         }}
         ListEmptyComponent={
           <View className="flex-1 justify-center items-center py-16">

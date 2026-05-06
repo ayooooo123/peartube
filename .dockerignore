@@ -6,7 +6,6 @@ packages/app
 packages/core
 packages/platform
 packages/bare-mpv
-packages/bare-tls/build
 packages/app/ios
 packages/app/android
 packages/app/pear

@@ -17,4 +17,20 @@ export type {
   TransitionOrigin,
   UnifiedPlayerState,
 } from './playerModeContract'
+export {
+  createPlayerPort,
+  createWebMsePlayerPort,
+  isPlayerPort,
+  resolvePlayerPort,
+} from './playerPort'
+export type {
+  LegacyPlayerRef,
+  PlayerBackendKind,
+  PlayerPort,
+  PlayerPortCapabilities,
+  PlayerPortEventHandler,
+  PlayerPortEventMap,
+  PlayerPortEventName,
+  PlayerPortMetadata,
+} from './playerPort'
 export type { VideoData, VideoStats } from './VideoMetaContext'

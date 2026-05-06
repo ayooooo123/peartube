@@ -1,3 +1,4 @@
+/* eslint-disable jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */
 /**
  * DesktopMiniPlayer - Draggable mini player for Pear desktop
  *
@@ -10,6 +11,7 @@ import { ActivityIndicator, Text } from 'react-native'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
 import { PearInlineVideoView } from './PearInlineVideoView'
+import type { PlayerPort } from '@/lib/video-player'
 import { desktopStyles } from './desktopStyles'
 import {
   DESKTOP_MINI_WIDTH,
@@ -31,7 +33,7 @@ interface DesktopMiniPlayerProps {
     id?: string
   } | null
   playbackSession: number
-  playerRef: React.RefObject<any>
+  playerRef: React.RefObject<PlayerPort | null>
   isPlaying: boolean
   progress: number
   isCasting: boolean

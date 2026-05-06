@@ -29,6 +29,7 @@ import { getFeedPreviewVideos, getVisibleSeededFeedEntries, shouldRenderFeedVide
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { formatTimeAgo } from '@/lib/formatters'
 import { VerticalShortsPlayer } from '@/components/discovery/VerticalShortsPlayer'
+import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 
 interface FeedEntry {
   driveKey: string
@@ -90,6 +91,12 @@ export default function VerticalDiscoveryScreen() {
   const { height: screenHeight, width: screenWidth } = useWindowDimensions()
   const { isDesktop } = usePlatform()
   const { ready, identity, rpc, blobServerPort, backendError, startupStatus } = useApp()
+  const {
+    currentVideo,
+    playerMode,
+    pauseVideo,
+    closeVideo,
+  } = useVideoPlayerContext()
 
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const [refreshing, setRefreshing] = useState(false)
@@ -220,6 +227,12 @@ export default function VerticalDiscoveryScreen() {
     loadFeed()
   }, [loadFeed, ready, rpc])
 
+  const handoffToShorts = useCallback(() => {
+    if (!currentVideo || playerMode === 'hidden') return
+    pauseVideo()
+    closeVideo()
+  }, [closeVideo, currentVideo, pauseVideo, playerMode])
+
   const playVideo = useCallback(async (video: VideoData) => {
     if (!rpc) return
     const videoRef = getVideoRef(video)
@@ -244,6 +257,7 @@ export default function VerticalDiscoveryScreen() {
     }
 
     try {
+      handoffToShorts()
       const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).catch(() => undefined)
@@ -265,7 +279,7 @@ export default function VerticalDiscoveryScreen() {
       pendingPlayKeyRef.current = null
       setShortsLoading(false)
     }
-  }, [rpc])
+  }, [handoffToShorts, rpc])
 
   useEffect(() => {
     if (!activeVideo || !ready) return

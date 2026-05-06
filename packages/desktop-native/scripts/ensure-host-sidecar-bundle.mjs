@@ -130,6 +130,27 @@ function stageDirectory(tempRoot, sourcePath) {
   linkDirectory(sourcePath, path.join(tempRoot, relativePath))
 }
 
+function ensureGeneratedSpec() {
+  const generatedHrpcEntry = path.join(repoRoot, 'packages', 'spec', 'spec', 'hrpc', 'index.js')
+  if (fs.existsSync(generatedHrpcEntry)) return
+
+  const schemaScript = path.join(repoRoot, 'packages', 'spec', 'schema.cjs')
+  console.log('[bundle:native-sidecar:ensure] Generated HRPC spec missing; running schema.cjs')
+  const result = spawnSync(process.execPath, [schemaScript], {
+    cwd: path.dirname(schemaScript),
+    stdio: 'inherit',
+    env: process.env,
+  })
+
+  if (result.status !== 0) {
+    throw new Error(`Failed to generate HRPC spec with ${schemaScript}`)
+  }
+
+  if (!fs.existsSync(generatedHrpcEntry)) {
+    throw new Error(`HRPC spec generation completed but ${generatedHrpcEntry} is still missing`)
+  }
+}
+
 function linkPackageNodeModules(tempRoot, packageName) {
   const realNmPath = path.join(repoRoot, 'packages', packageName, 'node_modules')
   const targetNmPath = path.join(tempRoot, 'packages', packageName, 'node_modules')
@@ -208,6 +229,7 @@ function stagePackageJson(tempRoot, packageName) {
 function createTempBundleRoot() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'peartube-native-sidecar-'))
 
+  ensureGeneratedSpec()
   for (const sourcePath of sourceRoots) {
     stageDirectory(tempRoot, sourcePath)
   }

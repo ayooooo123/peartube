@@ -30,6 +30,7 @@ export function parseBlobId(value) {
 }
 
 export function normalizeBlobRefInput(value) {
+  if (typeof value === 'string') return parseBlobId(value)
   if (!value || typeof value !== 'object') return null
   const blockOffset = normalizeNumber(value.blockOffset)
   const blockLength = normalizeNumber(value.blockLength)

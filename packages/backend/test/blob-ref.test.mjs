@@ -56,6 +56,15 @@ test('parseBlobRef fails closed for partial or invalid refs', (t) => {
   t.is(parseBlobRef({ blobsCoreKey: 'a'.repeat(64), blobId: '1:2:3' }), null)
 })
 
+test('normalizeBlobRefInput accepts persisted hyperblob range strings', (t) => {
+  t.alike(normalizeBlobRefInput('10:4:128:4096'), {
+    blockOffset: 10,
+    blockLength: 4,
+    byteOffset: 128,
+    byteLength: 4096,
+  })
+})
+
 test('stringifyBlobId and cache key use normalized identity', (t) => {
   const blob = { blockOffset: 1, blockLength: 2, byteOffset: 3, byteLength: 4 }
   t.is(stringifyBlobId(blob), '1:2:3:4')

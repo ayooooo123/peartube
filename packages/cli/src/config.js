@@ -216,6 +216,13 @@ function configFromEnv(env = {}) {
   if (env.PEARTUBE_LOG_LEVEL) {
     config.logging = { level: env.PEARTUBE_LOG_LEVEL }
   }
+  if (env.PEARTUBE_ARCHIVE_UI_ENABLED || env.PEARTUBE_ARCHIVE_UI_HOST || env.PEARTUBE_ARCHIVE_UI_PORT || env.PEARTUBE_ARCHIVE_TMP_PATH) {
+    config.archive = {}
+    if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
+    if (env.PEARTUBE_ARCHIVE_UI_HOST) config.archive.uiHost = env.PEARTUBE_ARCHIVE_UI_HOST
+    if (env.PEARTUBE_ARCHIVE_UI_PORT) config.archive.uiPort = Number(env.PEARTUBE_ARCHIVE_UI_PORT)
+    if (env.PEARTUBE_ARCHIVE_TMP_PATH) config.archive.tmpPath = env.PEARTUBE_ARCHIVE_TMP_PATH
+  }
 
   return config
 }
@@ -223,6 +230,7 @@ function configFromEnv(env = {}) {
 function configFromCli(cli = {}) {
   const config = {}
 
+  if (cli.archive) config.archive = { ...cli.archive }
   if (cli.mode) config.mode = cli.mode
   if (cli.policy) config.policy = cli.policy
 
@@ -243,6 +251,12 @@ function configFromCli(cli = {}) {
     config.logging = { level: 'debug' }
   } else if (cli.logLevel) {
     config.logging = { level: cli.logLevel }
+  }
+
+  if (cli.host || cli.port) {
+    config.archive = {}
+    if (cli.host) config.archive.uiHost = cli.host
+    if (cli.port) config.archive.uiPort = Number(cli.port)
   }
 
   return config
@@ -302,6 +316,11 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   config.retention = deepMerge(DEFAULT_RELAY_CONFIG.retention, config.retention || {})
   config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
   config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
+  config.archive = deepMerge(DEFAULT_RELAY_CONFIG.archive, config.archive || {})
+  config.archive.uiPort = Number(config.archive.uiPort)
+  if (!Number.isFinite(config.archive.uiPort) || config.archive.uiPort <= 0) {
+    throw new Error('archive.uiPort must be a positive number')
+  }
 
   config.paths = {
     catalog: join(config.storage.path, RELAY_CATALOG_FILENAME),
@@ -365,6 +384,11 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     `  enabled: ${config.discovery.enabled}`,
     `  maxChannels: ${config.discovery.maxChannels}`,
     `  maxChannelsPerOwner: ${config.discovery.maxChannelsPerOwner}`,
+    'archive:',
+    `  uiEnabled: ${config.archive?.uiEnabled ?? false}`,
+    `  uiHost: ${config.archive?.uiHost || '127.0.0.1'}`,
+    `  uiPort: ${config.archive?.uiPort || 8174}`,
+    `  tmpPath: ${config.archive?.tmpPath || './peartube-relay/archive-tmp'}`,
     'logging:',
     `  level: ${config.logging.level}`,
     ''

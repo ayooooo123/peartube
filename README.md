@@ -85,6 +85,26 @@ npm run desktop:native:build
 open packages/desktop-native/build/Build/Products/Debug/PearTubeDesktop.app
 ```
 
+### Relay container
+
+Run the packaged relay container from the root compose file:
+
+```bash
+docker compose -f docker-compose.relay.yml up -d
+docker compose -f docker-compose.relay.yml exec relay /peartube-relay status --json
+```
+
+The compose uses `ghcr.io/ayooooo123/peartube-relay:latest`, persists relay storage in `peartube-relay-data`, and exposes the archive WebUI at `http://127.0.0.1:8174`.
+
+Archive a video from the container without opening the browser:
+
+```bash
+docker compose -f docker-compose.relay.yml exec relay \
+  /peartube-relay archive --url https://youtu.be/... --channel-name "Anonymous Archive" --run-now
+```
+
+Archived source URLs stay in the local relay job input store. Public job/status output only includes imported metadata, generated video IDs, and channel keys.
+
 ## Development
 
 ### Mobile

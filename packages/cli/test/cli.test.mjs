@@ -51,6 +51,7 @@ test('package.json defines standalone relay build scripts', async (t) => {
   const packageJsonPath = join(__dirname, '..', 'package.json')
   const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
 
+  t.is(pkg.scripts['test'], 'brittle test/admission.test.mjs test/archive-ui.test.mjs test/cli.test.mjs test/config.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs')
   t.is(pkg.scripts['build:standalone'], 'node ./scripts/build-standalone.mjs')
   t.is(pkg.scripts['build:standalone:linux-x64'], 'RELAY_STANDALONE_HOST=linux-x64 node ./scripts/build-standalone.mjs')
   t.is(pkg.scripts['build:standalone:linux-arm64'], 'RELAY_STANDALONE_HOST=linux-arm64 node ./scripts/build-standalone.mjs')

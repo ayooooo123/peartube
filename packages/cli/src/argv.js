@@ -62,6 +62,11 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    if (arg === '--run-now') {
+      flags.runNow = true
+      continue
+    }
+
     const next = args[i + 1]
     const consumeValue = () => {
       if (next === undefined) {
@@ -108,6 +113,36 @@ export function parseArgv(argv = []) {
 
     if (arg === '--owner') {
       pushFlag(flags, 'owner', consumeValue())
+      continue
+    }
+
+    if (arg === '--url') {
+      flags.url = consumeValue()
+      continue
+    }
+
+    if (arg === '--channel-name') {
+      flags.channelName = consumeValue()
+      continue
+    }
+
+    if (arg === '--title') {
+      flags.title = consumeValue()
+      continue
+    }
+
+    if (arg === '--description') {
+      flags.description = consumeValue()
+      continue
+    }
+
+    if (arg === '--host') {
+      flags.host = consumeValue()
+      continue
+    }
+
+    if (arg === '--port') {
+      flags.port = consumeValue()
       continue
     }
 

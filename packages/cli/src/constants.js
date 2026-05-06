@@ -51,5 +51,11 @@ export const DEFAULT_RELAY_CONFIG = {
   },
   logging: {
     level: 'info'
+  },
+  archive: {
+    uiEnabled: false,
+    uiHost: '127.0.0.1',
+    uiPort: 8174,
+    tmpPath: './peartube-relay/archive-tmp'
   }
 }

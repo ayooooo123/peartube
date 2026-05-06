@@ -31,7 +31,7 @@ test('build workflows stay separate from publish workflows', () => {
 
   assert.match(
     releaseAndroid,
-    /if:\s*always\(\)[^\n]*contains\(needs\.build-release\.result, 'success'\)/,
+    /if:\s*always\(\)[^\n]*startsWith\(github\.ref, 'refs\/tags\/v'\)/,
     'release-android should still publish completed APK artifacts when one matrix ABI flakes after other ABIs uploaded',
   )
   assert.match(

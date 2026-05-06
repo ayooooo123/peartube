@@ -167,7 +167,7 @@ jobs:
   publish-release:
     needs: build-release
     runs-on: ubuntu-latest
-    if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag != '') && contains(needs.build-release.result, 'success')
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag != '')
     permissions:
       contents: write
 

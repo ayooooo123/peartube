@@ -1,9 +1,11 @@
 /* eslint-disable no-console */
-const fs = require('fs')
-const path = require('path')
-const { pathToFileURL } = require('url')
-const { spawnSync } = require('child_process')
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { spawnSync } from 'node:child_process'
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 const projectRoot = path.resolve(__dirname, '..')
 const repoRoot = path.resolve(projectRoot, '..', '..')
 const manifestPath = path.join(projectRoot, 'backend-bundles.manifest.mjs')

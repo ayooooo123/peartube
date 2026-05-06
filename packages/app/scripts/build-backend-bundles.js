@@ -1,8 +1,11 @@
 /* eslint-disable no-console */
-const path = require('path')
-const { pathToFileURL } = require('url')
-const { spawnSync } = require('child_process')
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { spawnSync } from 'node:child_process'
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 const projectRoot = path.resolve(__dirname, '..')
 const repoRoot = path.resolve(projectRoot, '..', '..')
 const manifestPath = path.join(projectRoot, 'backend-bundles.manifest.mjs')
@@ -25,8 +28,8 @@ async function loadManifest() {
 function removeOutput(bundle) {
   try {
     const outputPath = resolveRepoPath(bundle.output)
-    require('fs').rmSync(outputPath, { force: true })
-  } catch {}
+    fs.rmSync(outputPath, { force: true })
+  } catch { /* best effort */ }
 }
 
 function runBarePack(bundle) {

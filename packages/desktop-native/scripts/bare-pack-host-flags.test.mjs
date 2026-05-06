@@ -104,3 +104,48 @@ test('native host sidecar bundler stages a temp bundle tree with app node_module
     'ensure-host-sidecar-bundle should stage a temporary bundle root',
   )
 })
+
+test('native host sidecar bundler regenerates missing HRPC spec before staging temp tree', () => {
+  const absolutePath = path.join(packageRoot, 'scripts/ensure-host-sidecar-bundle.mjs')
+  const source = fs.readFileSync(absolutePath, 'utf8')
+
+  assert.match(
+    source,
+    /function ensureGeneratedSpec\(/,
+    'ensure-host-sidecar-bundle should explicitly guard generated spec outputs',
+  )
+  assert.match(
+    source,
+    /packages', 'spec', 'spec', 'hrpc', 'index\.js'/,
+    'ensure-host-sidecar-bundle should require generated HRPC entry before bare-pack traversal',
+  )
+  assert.match(
+    source,
+    /packages', 'spec', 'schema\.cjs'/,
+    'ensure-host-sidecar-bundle should run the canonical schema generator when generated files are absent',
+  )
+  assert.match(
+    source,
+    /spawnSync\(process\.execPath, \[schemaScript\]/,
+    'ensure-host-sidecar-bundle should invoke schema.cjs with the current Node runtime',
+  )
+  assert.match(
+    source,
+    /ensureGeneratedSpec\(\)\s*\n\s*for \(const sourcePath of sourceRoots\)/,
+    'ensure-host-sidecar-bundle should generate spec before staging sourceRoots into the temp bundle root',
+  )
+})
+
+test('desktop release workflow generates HRPC schema before desktop release builds', () => {
+  const workflowPath = path.resolve(packageRoot, '..', '..', '.github', 'workflows', 'release-desktop.yml')
+  const source = fs.readFileSync(workflowPath, 'utf8')
+  const electrobunSchemaIndex = source.indexOf('Generate HRPC schema')
+  const electrobunBuildIndex = source.indexOf('Build desktop app')
+  const nativeSchemaIndex = source.indexOf('Generate HRPC schema', electrobunBuildIndex)
+  const nativeProjectIndex = source.indexOf('Generate native desktop project')
+
+  assert.ok(electrobunSchemaIndex >= 0, 'electrobun release job should generate HRPC schema')
+  assert.ok(electrobunSchemaIndex < electrobunBuildIndex, 'electrobun release schema generation should run before web bundling')
+  assert.ok(nativeSchemaIndex >= 0, 'native desktop release job should generate full HRPC/Swift schema')
+  assert.ok(nativeSchemaIndex < nativeProjectIndex, 'native release schema generation should run before native project generation')
+})

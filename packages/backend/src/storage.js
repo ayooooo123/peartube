@@ -56,7 +56,7 @@ function describeDebugError(error) {
       extra[key] = error[key]
     }
     if (Object.keys(extra).length > 0) details.extra = extra
-  } catch {}
+  } catch { /* best effort */ }
 
   try {
     return JSON.stringify(details)
@@ -74,7 +74,7 @@ async function appendDebugLine(line) {
     const fs = fsModule?.default ?? fsModule
     if (typeof fs?.appendFileSync !== 'function') return
     fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
-  } catch {}
+  } catch { /* best effort */ }
 }
 
 const log = logger('Storage')
@@ -147,7 +147,7 @@ function createOfflineSwarm(keyPair, reason = 'unavailable') {
     },
     emit(event, ...args) {
       for (const listener of listeners.get(event) || []) {
-        try { listener(...args) } catch {}
+        try { listener(...args) } catch { /* best effort */ }
       }
       return true
     },
@@ -218,13 +218,13 @@ async function initStorageModules() {
   fs = resolveBareOrNodeFsModuleSync()
   path = resolveBareOrNodePathModuleSync()
   if (!fs) {
-    try { fs = await loadBareOrNodeFsModule(); } catch {}
+    try { fs = await loadBareOrNodeFsModule(); } catch { /* best effort */ }
   }
   if (!path) {
-    try { path = await loadBareOrNodePathModule(); } catch {}
+    try { path = await loadBareOrNodePathModule(); } catch { /* best effort */ }
   }
   if (!Hyperswarm) {
-    try { Hyperswarm = await loadHyperswarmModule(); } catch {}
+    try { Hyperswarm = await loadHyperswarmModule(); } catch { /* best effort */ }
   }
 }
 
@@ -238,7 +238,7 @@ async function migrateLegacyCorestoreLayout(storagePath) {
       await appendDebugLine('[storage] embedded migration skipped (CORESTORE exists)')
       return
     }
-  } catch {}
+  } catch { /* best effort */ }
 
   if (!fs.promises?.readdir || !fs.promises?.rename || !fs.promises?.mkdir) {
     await appendDebugLine('[storage] embedded migration skipped (fs.promises unavailable)')
@@ -272,7 +272,7 @@ async function migrateLegacyCorestoreLayout(storagePath) {
 
     try {
       await fs.promises.mkdir(path.join(storagePath, 'db'), { recursive: true })
-    } catch {}
+    } catch { /* best effort */ }
 
     try {
       await fs.promises.rename(
@@ -280,7 +280,7 @@ async function migrateLegacyCorestoreLayout(storagePath) {
         path.join(storagePath, 'db', entry)
       )
       moved++
-    } catch {}
+    } catch { /* best effort */ }
   }
 
   await appendDebugLine(`[storage] embedded migration moved=${moved}`)
@@ -365,7 +365,7 @@ export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
           console.log(`[Storage] Swarm discovery flush failed for ${label} (non-fatal):`, err?.message)
         })
     }
-  } catch {}
+  } catch { /* best effort */ }
 
   return handle
 }
@@ -854,7 +854,7 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
     if (!isChannelUsable(cached)) {
       console.log('[Storage] loadChannel: evicting stale cached channel:', channelKeyHex.slice(0, 16))
       ctx.channels.delete(channelKeyHex)
-      try { await cached?.close?.() } catch {}
+      try { await cached?.close?.() } catch { /* best effort */ }
     }
 
     if (ctx.channels.has(channelKeyHex)) {
@@ -867,7 +867,7 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
               current.close(),
               new Promise((resolve) => setTimeout(resolve, 2000))
             ])
-          } catch {}
+          } catch { /* best effort */ }
           ctx.channels.delete(channelKeyHex)
         } else {
           console.log('[Storage] loadChannel: cached channel remains read-only (no writer key name):', channelKeyHex.slice(0, 16))
@@ -950,7 +950,7 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
           new Promise((_, reject) => setTimeout(() => reject(new Error('Channel ready timeout')), readyTimeoutMs))
         ])
       } catch (err) {
-        try { await ch.close() } catch {}
+        try { await ch.close() } catch { /* best effort */ }
         throw err
       }
 
@@ -1093,7 +1093,7 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
       return false
     },
     closeStale: async (bee) => {
-      try { await bee?.close?.() } catch {}
+      try { await bee?.close?.() } catch { /* best effort */ }
     },
     loadFresh: async () => {
       console.log('[Storage] loadPublicBee: loading:', publicBeeKeyHex.slice(0, 16))
@@ -1109,7 +1109,7 @@ export async function loadPublicBee(ctx, publicBeeKeyHex) {
         ])
       } catch (err) {
         console.error('[Storage] loadPublicBee failed:', err.message)
-        try { await bee.close() } catch {}
+        try { await bee.close() } catch { /* best effort */ }
         throw err
       }
 
@@ -1170,7 +1170,7 @@ export async function createChannel(ctx, options = {}) {
   // Persist a marker so we can reliably distinguish multi-writer channels.
   try {
     await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'autobase', createdAt: Date.now() })
-  } catch {}
+  } catch { /* best effort */ }
 
   // Set up pairing and replication - AWAIT to ensure handlers are registered
   if (ctx.swarm) {
@@ -1223,9 +1223,9 @@ export async function deriveDeterministicChannelSeed(store, { writerKeyName, enc
       encryptionKeyHex: encrypt && bootstrapCore.encryptionKey ? b4a.toString(bootstrapCore.encryptionKey, 'hex') : null
     }
   } finally {
-    try { await bootstrapCore?.close?.() } catch {}
+    try { await bootstrapCore?.close?.() } catch { /* best effort */ }
     if (deriveSession !== store) {
-      try { await deriveSession.close?.() } catch {}
+      try { await deriveSession.close?.() } catch { /* best effort */ }
     }
   }
 }
@@ -1253,7 +1253,7 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
   // Persist marker for multi-writer channel
   try {
     await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'autobase', createdAt: Date.now() })
-  } catch {}
+  } catch { /* best effort */ }
 
   // Set up pairing and replication - AWAIT to ensure base.replicate(conn) handlers are registered
   if (ctx.swarm) {
@@ -1332,7 +1332,7 @@ export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
         retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
           label: `blobs:${blobsCoreKeyHex.slice(0, 16)}`
         })
-      } catch {}
+      } catch { /* best effort */ }
     }
     // Trigger update in background to find peers
     blobsCore.update().catch(() => {})
@@ -1404,7 +1404,7 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
       blobsCore.update({ wait: true }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('blobs core update timeout')), 5000))
     ])
-  } catch {}
+  } catch { /* best effort */ }
 
   const mimeType = options.mimeType || 'video/mp4'
 
@@ -1497,7 +1497,7 @@ export async function shutdownBackend(ctx) {
             if (ch && typeof ch.close === 'function') {
               await ch.close()
             }
-          } catch {}
+          } catch { /* best effort */ }
         }))
       } catch (err) {
         console.log('[Backend] Shutdown: channel close batch failed (non-fatal):', err?.message)
@@ -1513,7 +1513,7 @@ export async function shutdownBackend(ctx) {
             if (bee && typeof bee.close === 'function') {
               await bee.close()
             }
-          } catch {}
+          } catch { /* best effort */ }
         }))
       } catch (err) {
         console.log('[Backend] Shutdown: publicBeeCache close batch failed (non-fatal):', err?.message)
@@ -1533,7 +1533,7 @@ export async function shutdownBackend(ctx) {
       for (const handle of ctx._swarmDiscoveryHandles.values()) {
         try {
           handle?.destroy?.()
-        } catch {}
+        } catch { /* best effort */ }
       }
       ctx._swarmDiscoveryHandles.clear()
     }
@@ -1764,7 +1764,7 @@ export async function prefetchVideoForCast(drive, filePath, signal) {
   const onAbort = () => {
     try {
       stream.destroy(abortError())
-    } catch {}
+    } catch { /* best effort */ }
   }
   if (signal) signal.addEventListener('abort', onAbort)
 
@@ -1801,7 +1801,7 @@ export async function prefetchVideoForCast(drive, filePath, signal) {
   } finally {
     if (signal) signal.removeEventListener('abort', onAbort)
     if (!settled) {
-      try { stream.destroy() } catch {}
+      try { stream.destroy() } catch { /* best effort */ }
     }
   }
 }

@@ -671,7 +671,7 @@ export class MultiWriterChannel extends ReadyResource {
           const pubMeta = await this.publicBee.getMetadata().catch(() => null)
           existingKey = pubMeta?.commentsAutobaseKey || null
           existingAdminKey = existingAdminKey || pubMeta?.commentsAdminKey || null
-        } catch {}
+        } catch { /* best effort */ }
       }
 
       const isPublishingDevice = Boolean(this.publicBee?.writable)
@@ -750,49 +750,49 @@ export class MultiWriterChannel extends ReadyResource {
     }
 
     if (this.wakeupSession) {
-      try { await this.wakeupSession.destroy?.() } catch {}
-      try { await this.wakeupSession.close?.() } catch {}
+      try { await this.wakeupSession.destroy?.() } catch { /* best effort */ }
+      try { await this.wakeupSession.close?.() } catch { /* best effort */ }
       this.wakeupSession = null
     }
 
     if (this._channelDiscovery) {
-      try { this._channelDiscovery.destroy?.() } catch {}
-      try { this._channelDiscovery.close?.() } catch {}
+      try { this._channelDiscovery.destroy?.() } catch { /* best effort */ }
+      try { this._channelDiscovery.close?.() } catch { /* best effort */ }
       this._channelDiscovery = null
     }
 
     if (this.commentsAutobase) {
-      try { await this.commentsAutobase.close() } catch {}
+      try { await this.commentsAutobase.close() } catch { /* best effort */ }
       this.commentsAutobase = null
     }
 
     if (this.publicBee) {
-      try { await this.publicBee.close() } catch {}
+      try { await this.publicBee.close() } catch { /* best effort */ }
       this.publicBee = null
     }
 
     // Close pairing resources
     if (this.pairingMember) {
-      try { await this.pairingMember.close() } catch {}
+      try { await this.pairingMember.close() } catch { /* best effort */ }
       this.pairingMember = null
     }
     if (this.pairing) {
-      try { await this.pairing.close() } catch {}
+      try { await this.pairing.close() } catch { /* best effort */ }
       this.pairing = null
     }
 
     // Close blobs core
     if (this._blobsCore) {
-      try { await this._blobsCore.close() } catch {}
+      try { await this._blobsCore.close() } catch { /* best effort */ }
       this._blobsCore = null
       this.blobs = null
     }
     if (this.view) {
-      try { await this.view.close() } catch {}
+      try { await this.view.close() } catch { /* best effort */ }
       this.view = null
     }
     if (this.base) {
-      try { await this.base.close() } catch {}
+      try { await this.base.close() } catch { /* best effort */ }
       this.base = null
     }
   }

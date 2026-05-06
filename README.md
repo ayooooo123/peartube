@@ -105,6 +105,29 @@ docker compose -f docker-compose.relay.yml exec relay \
 
 Archived source URLs stay in the local relay job input store. Public job/status output only includes imported metadata, generated video IDs, and channel keys.
 
+### Relay archive mode (YouTube)
+
+Beyond the on-demand archive command, a relay can be configured to continuously poll YouTube channels/playlists and publish new uploads into PearTube channels it owns. `yt-dlp` is bundled in the relay Docker image; for a local install ensure `yt-dlp` is on `PATH`.
+
+Add an `archive` block to the relay config (or set `PEARTUBE_ARCHIVE_*` env vars):
+
+```yaml
+archive:
+  enabled: true
+  poll: 3600              # seconds between polls
+  maxItems: 50            # newest videos considered per poll
+  maxRetries: 3           # give up on a video after N consecutive failures
+  budgetReservePercent: 5 # stop archiving when within N% of storage.maxBytes
+  format: "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b"
+  tmpPath: /var/lib/peartube-relay/archive-tmp
+  sources:
+    - url: https://www.youtube.com/@somechannel
+      label: Some Channel
+    - url: https://www.youtube.com/playlist?list=PLxxxxxxxxxxx
+```
+
+Each source maps to a separate PearTube channel whose keypair is deterministic from the relay's persistent identity and the source URL — restarts reopen the same channel, and each archived channel is announced to the public feed and pinned in the relay's cache.
+
 ## Development
 
 ### Mobile

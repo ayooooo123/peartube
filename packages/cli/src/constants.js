@@ -25,6 +25,31 @@ export const RETENTION_PRIORITY = {
   private: 3
 }
 
+export const ARCHIVE_TYPE_YOUTUBE = 'youtube'
+export const VALID_ARCHIVE_TYPES = [ARCHIVE_TYPE_YOUTUBE]
+
+export const DEFAULT_ARCHIVE_POLL_SECONDS = 3600
+export const DEFAULT_ARCHIVE_FORMAT = 'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b'
+export const DEFAULT_ARCHIVE_MAX_ITEMS = 50
+export const DEFAULT_ARCHIVE_MAX_RETRIES = 3
+export const DEFAULT_ARCHIVE_BUDGET_RESERVE_PERCENT = 5
+export const DEFAULT_ARCHIVE_YT_DLP_PATH = 'yt-dlp'
+
+export const DEFAULT_ARCHIVE_CONFIG = {
+  enabled: false,
+  poll: DEFAULT_ARCHIVE_POLL_SECONDS,
+  format: DEFAULT_ARCHIVE_FORMAT,
+  tmpPath: null,
+  ytDlpPath: DEFAULT_ARCHIVE_YT_DLP_PATH,
+  maxRetries: DEFAULT_ARCHIVE_MAX_RETRIES,
+  budgetReservePercent: DEFAULT_ARCHIVE_BUDGET_RESERVE_PERCENT,
+  maxItems: DEFAULT_ARCHIVE_MAX_ITEMS,
+  sources: [],
+  uiEnabled: false,
+  uiHost: '127.0.0.1',
+  uiPort: 8174
+}
+
 export const DEFAULT_RELAY_CONFIG = {
   mode: RELAY_MODE_PUBLIC,
   policy: RELAY_POLICY_DISCOVERY,
@@ -49,13 +74,8 @@ export const DEFAULT_RELAY_CONFIG = {
     announce: true,
     bootstrap: 'default'
   },
+  archive: DEFAULT_ARCHIVE_CONFIG,
   logging: {
     level: 'info'
-  },
-  archive: {
-    uiEnabled: false,
-    uiHost: '127.0.0.1',
-    uiPort: 8174,
-    tmpPath: './peartube-relay/archive-tmp'
   }
 }

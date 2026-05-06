@@ -2,6 +2,12 @@ import { readFileSync } from '#fs'
 import { join } from '#path'
 import process from '#process'
 import {
+  DEFAULT_ARCHIVE_CONFIG,
+  DEFAULT_ARCHIVE_FORMAT,
+  DEFAULT_ARCHIVE_MAX_ITEMS,
+  DEFAULT_ARCHIVE_MAX_RETRIES,
+  DEFAULT_ARCHIVE_POLL_SECONDS,
+  DEFAULT_ARCHIVE_YT_DLP_PATH,
   DEFAULT_RELAY_CONFIG,
   RELAY_CATALOG_FILENAME,
   RELAY_MODE_PRIVATE,
@@ -12,6 +18,7 @@ import {
   VALID_MODES,
   VALID_POLICIES
 } from './constants.js'
+import { buildSourceId, classifySourceUrl } from './archive/source-id.js'
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -216,12 +223,32 @@ function configFromEnv(env = {}) {
   if (env.PEARTUBE_LOG_LEVEL) {
     config.logging = { level: env.PEARTUBE_LOG_LEVEL }
   }
-  if (env.PEARTUBE_ARCHIVE_UI_ENABLED || env.PEARTUBE_ARCHIVE_UI_HOST || env.PEARTUBE_ARCHIVE_UI_PORT || env.PEARTUBE_ARCHIVE_TMP_PATH) {
+  if (
+    env.PEARTUBE_ARCHIVE_UI_ENABLED ||
+    env.PEARTUBE_ARCHIVE_UI_HOST ||
+    env.PEARTUBE_ARCHIVE_UI_PORT ||
+    env.PEARTUBE_ARCHIVE_TMP_PATH ||
+    env.PEARTUBE_ARCHIVE_ENABLED ||
+    env.PEARTUBE_ARCHIVE_POLL ||
+    env.PEARTUBE_ARCHIVE_FORMAT ||
+    env.PEARTUBE_ARCHIVE_YT_DLP_PATH ||
+    env.PEARTUBE_ARCHIVE_SOURCES
+  ) {
     config.archive = {}
     if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
     if (env.PEARTUBE_ARCHIVE_UI_HOST) config.archive.uiHost = env.PEARTUBE_ARCHIVE_UI_HOST
     if (env.PEARTUBE_ARCHIVE_UI_PORT) config.archive.uiPort = Number(env.PEARTUBE_ARCHIVE_UI_PORT)
     if (env.PEARTUBE_ARCHIVE_TMP_PATH) config.archive.tmpPath = env.PEARTUBE_ARCHIVE_TMP_PATH
+    if (env.PEARTUBE_ARCHIVE_ENABLED) {
+      const parsed = parseBoolean(env.PEARTUBE_ARCHIVE_ENABLED)
+      if (parsed !== undefined) config.archive.enabled = parsed
+    }
+    if (env.PEARTUBE_ARCHIVE_POLL) config.archive.poll = Number(env.PEARTUBE_ARCHIVE_POLL)
+    if (env.PEARTUBE_ARCHIVE_FORMAT) config.archive.format = env.PEARTUBE_ARCHIVE_FORMAT
+    if (env.PEARTUBE_ARCHIVE_YT_DLP_PATH) config.archive.ytDlpPath = env.PEARTUBE_ARCHIVE_YT_DLP_PATH
+    if (env.PEARTUBE_ARCHIVE_SOURCES) {
+      config.archive.sources = splitCommaList(env.PEARTUBE_ARCHIVE_SOURCES).map((url) => ({ url }))
+    }
   }
 
   return config
@@ -254,12 +281,118 @@ function configFromCli(cli = {}) {
   }
 
   if (cli.host || cli.port) {
-    config.archive = {}
+    config.archive = config.archive || {}
     if (cli.host) config.archive.uiHost = cli.host
     if (cli.port) config.archive.uiPort = Number(cli.port)
   }
 
   return config
+}
+
+function normalizeSource(rawSource, defaults) {
+  if (!isPlainObject(rawSource)) {
+    if (typeof rawSource === 'string') {
+      rawSource = { url: rawSource }
+    } else {
+      throw new Error('archive.sources entries must be objects with a url')
+    }
+  }
+
+  const url = typeof rawSource.url === 'string' ? rawSource.url.trim() : ''
+  if (!url) throw new Error('archive.sources entries must include a url')
+
+  const classified = classifySourceUrl(url)
+  if (!classified.type) {
+    throw new Error(`Unsupported archive source url "${url}"`)
+  }
+
+  const sourceId = buildSourceId(classified.type, classified.identifier)
+
+  return {
+    url: classified.normalizedUrl,
+    type: classified.type,
+    identifier: classified.identifier,
+    kind: classified.kind,
+    sourceId,
+    label: typeof rawSource.label === 'string' && rawSource.label.trim()
+      ? rawSource.label.trim()
+      : null,
+    format: typeof rawSource.format === 'string' && rawSource.format.trim()
+      ? rawSource.format.trim()
+      : defaults.format,
+    maxItems: Number.isFinite(Number(rawSource.maxItems))
+      ? Number(rawSource.maxItems)
+      : defaults.maxItems
+  }
+}
+
+function resolveArchiveConfig(rawArchive, { storagePath }) {
+  const merged = deepMerge(DEFAULT_ARCHIVE_CONFIG, isPlainObject(rawArchive) ? rawArchive : {})
+
+  merged.enabled = Boolean(merged.enabled)
+
+  merged.poll = Number(merged.poll)
+  if (!Number.isFinite(merged.poll) || merged.poll <= 0) {
+    merged.poll = DEFAULT_ARCHIVE_POLL_SECONDS
+  }
+
+  merged.format = typeof merged.format === 'string' && merged.format.trim()
+    ? merged.format.trim()
+    : DEFAULT_ARCHIVE_FORMAT
+
+  merged.ytDlpPath = typeof merged.ytDlpPath === 'string' && merged.ytDlpPath.trim()
+    ? merged.ytDlpPath.trim()
+    : DEFAULT_ARCHIVE_YT_DLP_PATH
+
+  merged.maxRetries = Number(merged.maxRetries)
+  if (!Number.isFinite(merged.maxRetries) || merged.maxRetries < 0) {
+    merged.maxRetries = DEFAULT_ARCHIVE_MAX_RETRIES
+  }
+
+  merged.budgetReservePercent = Number(merged.budgetReservePercent)
+  if (!Number.isFinite(merged.budgetReservePercent) || merged.budgetReservePercent < 0 || merged.budgetReservePercent > 50) {
+    merged.budgetReservePercent = DEFAULT_ARCHIVE_CONFIG.budgetReservePercent
+  }
+
+  merged.maxItems = Number(merged.maxItems)
+  if (!Number.isFinite(merged.maxItems) || merged.maxItems <= 0) {
+    merged.maxItems = DEFAULT_ARCHIVE_MAX_ITEMS
+  }
+
+  if (typeof merged.tmpPath !== 'string' || !merged.tmpPath) {
+    merged.tmpPath = join(storagePath, 'archive-tmp')
+  }
+
+  merged.uiEnabled = Boolean(merged.uiEnabled)
+  merged.uiHost = typeof merged.uiHost === 'string' && merged.uiHost
+    ? merged.uiHost
+    : '127.0.0.1'
+  merged.uiPort = Number(merged.uiPort)
+  if (!Number.isFinite(merged.uiPort) || merged.uiPort <= 0) {
+    throw new Error('archive.uiPort must be a positive number')
+  }
+
+  const sourceDefaults = {
+    format: merged.format,
+    maxItems: merged.maxItems
+  }
+
+  const sources = Array.isArray(merged.sources) ? merged.sources : []
+  const seenSourceIds = new Set()
+  merged.sources = sources.map((entry) => {
+    const normalized = normalizeSource(entry, sourceDefaults)
+    if (seenSourceIds.has(normalized.sourceId)) {
+      throw new Error(`Duplicate archive source: ${normalized.sourceId}`)
+    }
+    seenSourceIds.add(normalized.sourceId)
+    return normalized
+  })
+
+  if (merged.enabled && merged.sources.length === 0) {
+    throw new Error('archive.enabled is true but archive.sources is empty')
+  }
+
+  return merged
 }
 
 export function resolveRelayConfig(input = {}, { env = process.env || {} } = {}) {
@@ -316,16 +449,14 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   config.retention = deepMerge(DEFAULT_RELAY_CONFIG.retention, config.retention || {})
   config.network = deepMerge(DEFAULT_RELAY_CONFIG.network, config.network || {})
   config.logging = deepMerge(DEFAULT_RELAY_CONFIG.logging, config.logging || {})
-  config.archive = deepMerge(DEFAULT_RELAY_CONFIG.archive, config.archive || {})
-  config.archive.uiPort = Number(config.archive.uiPort)
-  if (!Number.isFinite(config.archive.uiPort) || config.archive.uiPort <= 0) {
-    throw new Error('archive.uiPort must be a positive number')
-  }
+
+  config.archive = resolveArchiveConfig(config.archive, { storagePath: config.storage.path })
 
   config.paths = {
     catalog: join(config.storage.path, RELAY_CATALOG_FILENAME),
     status: join(config.storage.path, RELAY_STATUS_FILENAME),
-    corestore: join(config.storage.path, 'corestore')
+    corestore: join(config.storage.path, 'corestore'),
+    archiveTmpPath: config.archive.tmpPath
   }
 
   config.env = {
@@ -383,12 +514,33 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     'discovery:',
     `  enabled: ${config.discovery.enabled}`,
     `  maxChannels: ${config.discovery.maxChannels}`,
-    `  maxChannelsPerOwner: ${config.discovery.maxChannelsPerOwner}`,
+    `  maxChannelsPerOwner: ${config.discovery.maxChannelsPerOwner}`
+  )
+
+  const archive = config.archive || DEFAULT_ARCHIVE_CONFIG
+  lines.push(
     'archive:',
-    `  uiEnabled: ${config.archive?.uiEnabled ?? false}`,
-    `  uiHost: ${config.archive?.uiHost || '127.0.0.1'}`,
-    `  uiPort: ${config.archive?.uiPort || 8174}`,
-    `  tmpPath: ${config.archive?.tmpPath || './peartube-relay/archive-tmp'}`,
+    `  uiEnabled: ${Boolean(archive.uiEnabled)}`,
+    `  uiHost: ${archive.uiHost || '127.0.0.1'}`,
+    `  uiPort: ${archive.uiPort || 8174}`,
+    `  tmpPath: ${archive.tmpPath || './peartube-relay/archive-tmp'}`,
+    `  enabled: ${Boolean(archive.enabled)}`,
+    `  poll: ${archive.poll || DEFAULT_ARCHIVE_POLL_SECONDS}`,
+    `  maxItems: ${archive.maxItems || DEFAULT_ARCHIVE_MAX_ITEMS}`,
+    `  maxRetries: ${archive.maxRetries ?? DEFAULT_ARCHIVE_MAX_RETRIES}`,
+    `  format: "${archive.format || DEFAULT_ARCHIVE_FORMAT}"`
+  )
+  if (Array.isArray(archive.sources) && archive.sources.length) {
+    lines.push('  sources:')
+    for (const source of archive.sources) {
+      lines.push(`    - url: ${source.url}`)
+      if (source.label) lines.push(`      label: ${source.label}`)
+    }
+  } else {
+    lines.push('  sources: []')
+  }
+
+  lines.push(
     'logging:',
     `  level: ${config.logging.level}`,
     ''

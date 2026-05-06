@@ -48,7 +48,7 @@ function createLogger(component) {
 /**
  * Create all component loggers for the CLI.
  * @param {boolean|string} debugOrLevel - Enable debug logging or set a level directly
- * @returns {{ relay: Logger, runtime: Logger, admission: Logger, status: Logger, mirror: Logger, peer: Logger, cache: Logger, feed: Logger, download: Logger }}
+ * @returns {{ relay: Logger, runtime: Logger, admission: Logger, status: Logger, mirror: Logger, peer: Logger, cache: Logger, feed: Logger, download: Logger, archive: Logger }}
  */
 export function createCliLogger(debugOrLevel) {
   setDebugLevel(debugOrLevel)

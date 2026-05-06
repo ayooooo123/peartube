@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
+import { useTabBarMetrics } from '@/lib/tabBarHeight'
 
 interface Subscription {
   channelKey: string
@@ -27,6 +28,8 @@ export default function SubscriptionsScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [channelKey, setChannelKey] = useState('')
   const [loading, setLoading] = useState(false)
+  const tabBarMetrics = useTabBarMetrics()
+  const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
 
   const loadSubscriptions = useCallback(async () => {
     if (!rpc) return
@@ -139,7 +142,7 @@ export default function SubscriptionsScreen() {
         contentContainerStyle={{
           paddingHorizontal: 20,
           paddingTop: 16,
-          paddingBottom: insets.bottom + 16,
+          paddingBottom: bottomPadding,
           flexGrow: 1,
         }}
         refreshControl={

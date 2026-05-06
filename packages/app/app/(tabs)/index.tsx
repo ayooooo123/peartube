@@ -33,6 +33,7 @@ import {
   getSnapshotChannelKeys,
   restoreFeedSnapshot,
 } from '@/lib/feed-snapshot'
+import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import {
   readFeedSnapshotFromDisk,
   writeFeedSnapshotToDisk,
@@ -101,6 +102,8 @@ export default function HomeScreen() {
   const { loadAndPlayVideo } = useVideoPlayerContext()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
+  const tabBarMetrics = useTabBarMetrics()
+  const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
 
   const gridColumns = getDesktopVideoGridColumns(isDesktop, screenWidth)
 
@@ -858,7 +861,7 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 20, paddingHorizontal: isDesktop ? 24 : 0 }}>
+          <ScrollView contentContainerStyle={{ paddingBottom: bottomPadding, paddingHorizontal: isDesktop ? 24 : 0 }}>
             {loadingChannel ? (
               <View className="py-12 items-center">
                 <ActivityIndicator color={colors.primary} size="large" />
@@ -893,7 +896,7 @@ export default function HomeScreen() {
       {/* Main Feed */}
       {!viewingChannel && (
         <ScrollView
-          contentContainerStyle={{ paddingBottom: insets.bottom + 16, flexGrow: 1 }}
+          contentContainerStyle={{ paddingBottom: bottomPadding, flexGrow: 1 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         >
           {/* Discover Section */}

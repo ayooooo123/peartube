@@ -17,7 +17,7 @@ import {
   View,
   ViewToken,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import type { VideoData } from '@peartube/core'
@@ -250,6 +250,20 @@ export default function VerticalDiscoveryScreen() {
     if (!ready || !rpc) return
     loadFeed()
   }, [loadFeed, ready, rpc])
+
+  const stopShortsPlayback = useCallback(() => {
+    void shortsPlayerRef.current?.stop?.()
+    void shortsPlayerRef.current?.pause?.()
+    pendingPlayKeyRef.current = null
+    setShortsVideoUrl(null)
+    setShortsLoading(false)
+  }, [])
+
+  useFocusEffect(
+    useCallback(() => {
+      return stopShortsPlayback
+    }, [stopShortsPlayback])
+  )
 
   const handoffToShorts = useCallback(() => {
     if (!currentVideo || playerMode === 'hidden') return

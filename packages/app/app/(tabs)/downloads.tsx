@@ -9,6 +9,7 @@ import { useDownloads, DownloadItem, DownloadStatus } from '../../lib/DownloadsC
 import { colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
 import { formatBytes } from '@/lib/formatters'
+import { useTabBarMetrics } from '@/lib/tabBarHeight'
 
 // Status icon component
 function StatusIcon({ status }: { status: DownloadStatus }) {
@@ -153,6 +154,8 @@ export default function DownloadsScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { downloads, activeCount, cancelDownload, removeDownload, clearCompleted, retryDownload } = useDownloads()
+  const tabBarMetrics = useTabBarMetrics()
+  const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
 
   // We need rpc for retry - get it from app context
   // For now, retry won't work without passing rpc through
@@ -223,7 +226,7 @@ export default function DownloadsScreen() {
         style={{ flex: 1 }}
         contentContainerStyle={{
           paddingHorizontal: 16,
-          paddingBottom: insets.bottom + 100
+          paddingBottom: bottomPadding
         }}
       >
         {downloads.length === 0 ? (

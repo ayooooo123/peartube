@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
+import { useTabBarMetrics } from '@/lib/tabBarHeight'
 
 interface StorageStats {
   usedBytes: number
@@ -40,6 +41,8 @@ export default function SettingsScreen() {
   const [clearingCache, setClearingCache] = useState(false)
   const [isPublished, setIsPublished] = useState(false)
   const [publishLoading, setPublishLoading] = useState(false)
+  const tabBarMetrics = useTabBarMetrics()
+  const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
 
   // Multi-device (multi-writer) channel
   const [devices, setDevices] = useState<any[]>([])
@@ -508,7 +511,7 @@ export default function SettingsScreen() {
       </View>
 
       <ScrollView
-        contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}
+        contentContainerStyle={{ paddingBottom: bottomPadding }}
         showsVerticalScrollIndicator={false}
       >
         {/* Your Channel Section */}

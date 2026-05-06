@@ -19,7 +19,7 @@ ARG TARGETARCH
 ARG YT_DLP_VERSION=2026.03.17
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 \
+  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 zlib1g \
   && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \
@@ -32,12 +32,17 @@ RUN case "${TARGETARCH}" in \
   && chmod 755 /usr/local/bin/yt-dlp \
   && /usr/local/bin/yt-dlp --version
 
-RUN case "${TARGETARCH}" in \
-    amd64) cp /usr/lib/x86_64-linux-gnu/libatomic.so.1 /libatomic.so.1 ;; \
-    arm64) cp /usr/lib/aarch64-linux-gnu/libatomic.so.1 /libatomic.so.1 ;; \
+RUN mkdir -p /runtime-libs \
+  && case "${TARGETARCH}" in \
+    amd64) archTriplet=x86_64-linux-gnu; loader=ld-linux-x86-64.so.2; loaderDir=/lib64 ;; \
+    arm64) archTriplet=aarch64-linux-gnu; loader=ld-linux-aarch64.so.1; loaderDir=/lib ;; \
     *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
   esac \
-  && chmod 755 /libatomic.so.1
+  && cp /usr/lib/${archTriplet}/libatomic.so.1 /runtime-libs/libatomic.so.1 \
+  && cp /lib/${archTriplet}/libz.so.1 /runtime-libs/libz.so.1 \
+  && cp /lib/${archTriplet}/${loader} /runtime-libs/${loader} \
+  && printf '%s' "${loaderDir}" > /runtime-libs/loader-dir \
+  && chmod 755 /runtime-libs/libatomic.so.1 /runtime-libs/libz.so.1 /runtime-libs/${loader}
 
 FROM gcr.io/distroless/cc-debian12
 
@@ -52,7 +57,10 @@ ENV PATH="/usr/local/bin:/usr/bin:${PATH}"
 WORKDIR /var/lib/peartube-relay
 
 COPY --from=artifact /peartube-relay /peartube-relay
-COPY --from=runtime-libs /libatomic.so.1 /lib/libatomic.so.1
+COPY --from=runtime-libs /runtime-libs/libatomic.so.1 /lib/libatomic.so.1
+COPY --from=runtime-libs /runtime-libs/libz.so.1 /lib/libz.so.1
+COPY --from=runtime-libs /runtime-libs/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
+COPY --from=runtime-libs /runtime-libs/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1
 COPY --from=runtime-libs /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 
 VOLUME ["/var/lib/peartube-relay"]

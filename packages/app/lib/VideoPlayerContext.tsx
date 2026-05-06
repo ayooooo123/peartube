@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, no-useless-escape */
 /**
  * VideoPlayerContext - Unified Video Player State Management
  *

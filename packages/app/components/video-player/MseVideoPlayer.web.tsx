@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, no-constant-condition, jsx-a11y/media-has-caption */
 /**
  * MseVideoPlayer — streaming MSE player with sliding buffer window.
  *

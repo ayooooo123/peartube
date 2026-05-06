@@ -32,11 +32,22 @@ test('vertical discovery uses paged full-screen feed and plays inline in the sho
   assert.match(source, /<VerticalShortsPlayer[\s\S]*testID="vertical-discovery-inline-player"/, 'active vertical item should render through the dedicated shorts player surface')
   assert.doesNotMatch(source, /<VideoContainer/, 'vertical discovery must not embed the normal watch player container')
   assert.doesNotMatch(source, /loadAndPlayVideo\(/, 'vertical playback must not open the normal mobile playback overlay')
-  assert.doesNotMatch(source, /useVideoPlayerContext\(/, 'vertical playback should not depend on the global overlay player context')
+  assert.match(source, /useVideoPlayerContext\(/, 'vertical discovery should coordinate with the global player for playback handoff')
+  assert.match(source, /handoffToShorts\(\)/, 'vertical discovery should pause and close the global player before Shorts starts')
   assert.match(source, /preparePlayback\(playbackRequest\)/, 'vertical player should resolve playback through backend preparePlayback')
   assert.match(source, /getCachedVideoUrl\(cacheKey\)/, 'vertical player should use the short playback URL cache')
   assert.match(source, /setShortsVideoUrl\(/, 'vertical player should keep playback URL in local shorts-player state')
-  assert.match(source, /testID=\{index === 0 \? 'vertical-discovery-first-video' : undefined\}/, 'first vertical card should keep a stable test hook')
+  assert.match(source, /handoffToShorts\(\)[\s\S]*const cachedUrl = cacheKey \? getCachedVideoUrl\(cacheKey\) : null/, 'handoff should happen before cached Shorts playback attaches')
+  assert.match(source, /handoffToShorts\(\)[\s\S]*const result = await rpc\.preparePlayback\(playbackRequest\)/, 'handoff should happen before prepared Shorts playback attaches')
+})
+
+test('vertical discovery handoff pauses and hides the global player while preserving return position', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /const \{[\s\S]*currentVideo,[\s\S]*playerMode,[\s\S]*pauseVideo,[\s\S]*closeVideo,[\s\S]*\} = useVideoPlayerContext\(\)/, 'Discover should read global player state and controls')
+  assert.match(source, /if \(!currentVideo \|\| playerMode === 'hidden'\) return/, 'handoff should no-op when no in-app player is active')
+  assert.match(source, /pauseVideo\(\)/, 'handoff should pause the active global player immediately')
+  assert.match(source, /closeVideo\(\)/, 'handoff should hide/detach the global player surface before Shorts plays')
 })
 
 test('vertical discovery uses a dedicated shorts player surface instead of the watch player frame', () => {

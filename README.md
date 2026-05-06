@@ -85,6 +85,17 @@ npm run desktop:native:build
 open packages/desktop-native/build/Build/Products/Debug/PearTubeDesktop.app
 ```
 
+### Relay container
+
+Use the root-level relay Compose file to run a public PearTube CLI relay:
+
+```bash
+docker compose -f docker-compose.relay.yml up -d
+docker compose -f docker-compose.relay.yml exec relay /peartube-relay status --json
+```
+
+The relay image is `ghcr.io/ayooooo123/peartube-relay:latest` and stores persistent data in the `peartube-relay-data` volume at `/var/lib/peartube-relay`.
+
 ## Development
 
 ### Mobile

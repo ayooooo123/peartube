@@ -117,6 +117,19 @@ test('Dockerfile final stage copies the prepared relay artifact', async (t) => {
   t.ok(content.includes('COPY --from=artifact /peartube-relay /peartube-relay'), 'final image copies the packaged relay executable from the artifact stage')
 })
 
+test('root-level relay compose file points to the packaged relay container example', async (t) => {
+  const rootComposePath = join(__dirname, '..', '..', '..', 'docker-compose.relay.yml')
+  const rootReadmePath = join(__dirname, '..', '..', '..', 'README.md')
+  const composeContent = readFileSync(rootComposePath, 'utf8')
+  const readmeContent = readFileSync(rootReadmePath, 'utf8')
+
+  t.ok(composeContent.includes('ghcr.io/ayooooo123/peartube-relay:latest'), 'root compose uses the published relay image')
+  t.ok(composeContent.includes('PEARTUBE_STORAGE_PATH: /var/lib/peartube-relay'), 'root compose persists relay storage at the container storage path')
+  t.ok(composeContent.includes('PEARTUBE_NETWORK_ANNOUNCE: "true"'), 'root compose announces relay availability to the P2P network')
+  t.ok(readmeContent.includes('docker-compose.relay.yml'), 'README links the discoverable root relay compose file')
+  t.ok(readmeContent.includes('docker compose -f docker-compose.relay.yml up -d'), 'README documents the relay compose startup command')
+})
+
 test('relay workflow prepares standalone artifacts before docker image build', async (t) => {
   const workflowPath = join(__dirname, '..', '..', '..', '.github', 'workflows', 'build-relay.yml')
   const content = readFileSync(workflowPath, 'utf8')

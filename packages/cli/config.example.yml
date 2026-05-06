@@ -14,5 +14,21 @@ discovery:
   maxChannels: 500
   maxChannelsPerOwner: 20
 
+# Optional: archive YouTube channels into PearTube channels owned by this relay.
+# Each source URL maps to one PearTube channel (deterministic per relay identity).
+# yt-dlp must be available in PATH (the relay Docker image bundles it).
+archive:
+  enabled: false
+  poll: 3600              # seconds between polls per source
+  maxItems: 50            # videos to consider per poll, newest first
+  maxRetries: 3           # give up on a video after this many consecutive failures
+  budgetReservePercent: 5 # stop archiving when within N% of storage.maxBytes
+  format: "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b"
+  tmpPath: /var/lib/peartube-relay/archive-tmp  # yt-dlp scratch dir
+  sources:
+    - url: https://www.youtube.com/@somechannel
+      label: Some Channel
+    # - url: https://www.youtube.com/playlist?list=PLxxxxxxx
+
 logging:
   level: info

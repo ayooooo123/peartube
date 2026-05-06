@@ -68,3 +68,50 @@ test('vertical discovery keeps channel navigation and detail escape hatches', ()
   assert.match(source, /Feather name="message-circle"/, 'vertical player should include a comments/details affordance')
   assert.match(source, /Feather name="user"/, 'vertical player should include a channel affordance')
 })
+
+test('vertical discovery hydrates beyond sparse previews without permanently poisoning timed-out channels', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+  const hydrateBlock = source.slice(source.indexOf('const hydrateChannelVideos'), source.indexOf('const loadFeed'))
+
+  assert.doesNotMatch(source, /entries\.slice\(0, 8\)/, 'shorts should not cap channel hydration to the first few feed entries')
+  assert.match(source, /entries\.slice\(0, 24\)/, 'shorts should fan out across enough feed channels to expose more than preview videos')
+  assert.doesNotMatch(hydrateBlock, /hydratedChannelsRef\.current\.add\(channelKey\)[\s\S]*?const result = await withTimeout/, 'timed-out channel list calls must remain retryable')
+  assert.match(hydrateBlock, /const timeoutToken = Symbol\('vertical-channel-timeout'\)/, 'channel hydration should distinguish timeout from an authoritative empty video list')
+  assert.match(hydrateBlock, /if \(result === timeoutToken\) return[\s\S]*hydratedChannelsRef\.current\.add\(channelKey\)/, 'channel hydration should only mark the channel hydrated after a real response')
+})
+
+test('vertical discovery preloads the next few videos into the playback URL cache', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /const nextVideos = videos\.slice\(activeIndex \+ 1, activeIndex \+ 5\)/, 'shorts should warm the next few videos, not only one or two')
+  assert.match(source, /const warmPlaybackUrl = async \(video: VideoData\)/, 'preload should use a named URL warming helper')
+  assert.match(source, /const result = await rpc\?\.preparePlayback\?\.\(playbackRequest\)/, 'preload should await preparePlayback so it can keep the resolved URL')
+  assert.match(source, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'preload should populate the playback URL cache for instant swipe playback')
+})
+
+
+test('vertical discovery lets the shorts player hide card chrome', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+  const playerSource = readAppFile('components/discovery/VerticalShortsPlayer.tsx')
+
+  assert.match(source, /const \[shortsChromeVisible, setShortsChromeVisible\] = useState\(true\)/, 'Discover should track whether Shorts chrome/buttons are visible')
+  assert.match(source, /controlsVisible=\{shortsChromeVisible\}/, 'Discover should pass shared chrome visibility to the Shorts player')
+  assert.match(source, /onControlsVisibleChange=\{setShortsChromeVisible\}/, 'Shorts player taps should update route chrome visibility')
+  assert.match(source, /\{shortsChromeVisible \? \([\s\S]*styles\.bottomMeta/, 'channel/details/replay buttons should hide when Shorts controls are hidden')
+  assert.match(playerSource, /toggleControlsVisibility/, 'Shorts player should toggle controls on tap')
+  assert.match(playerSource, /onControlsVisibleChange\?\.\(!controlsVisible\)/, 'Shorts player should notify the parent when controls are toggled')
+})
+
+test('shorts player has functional playback buttons and a seekable progress bar', () => {
+  const source = readAppFile('components/discovery/VerticalShortsPlayer.tsx')
+
+  assert.match(source, /const \[isPaused, setIsPaused\] = useState\(false\)/, 'Shorts player should own local pause state')
+  assert.match(source, /const \[playbackProgress, setPlaybackProgress\]/, 'Shorts player should track current time and duration')
+  assert.match(source, /onProgress=\{handleProgress\}/, 'Shorts player should receive native progress events')
+  assert.match(source, /seekPosition=\{seekPosition\}/, 'Shorts player should pass seek requests to the native inline player')
+  assert.match(source, /playerRef\.current\?\.pause\?\.\(\)/, 'pause button should call the player port')
+  assert.match(source, /playerRef\.current\?\.play\?\.\(\)/, 'play button should call the player port')
+  assert.match(source, /playerRef\.current\?\.seek\?\.\(0\)/, 'restart button should seek to the beginning')
+  assert.match(source, /handleProgressBarPress/, 'progress bar should handle tap-to-seek')
+  assert.match(source, /accessibilityLabel="Shorts progress bar"/, 'progress bar should be accessible and testable')
+})

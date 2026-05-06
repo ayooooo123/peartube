@@ -4,10 +4,11 @@ import { Feather } from '@expo/vector-icons'
 import type { VideoData } from '@peartube/core'
 import { colors } from '@/lib/colors'
 import { PearInlineVideoView } from '@/components/video-player/PearInlineVideoView'
+import type { PlayerPort } from '@/lib/video-player'
 
 type VerticalShortsPlayerProps = {
   testID?: string
-  playerRef: RefObject<any>
+  playerRef: RefObject<PlayerPort | null>
   videoUrl: string | null
   video: VideoData
   playbackSession: number

@@ -4,6 +4,7 @@ import { Feather } from '@expo/vector-icons'
 import { colors } from '@/lib/colors'
 import { styles } from './styles'
 import { PearInlineVideoView } from './PearInlineVideoView'
+import type { PlayerPort } from '@/lib/video-player'
 
 export interface VideoContainerProps {
   // Video state
@@ -17,7 +18,7 @@ export interface VideoContainerProps {
   } | null
   playbackSession: number
 
-  playerRef: RefObject<any>
+  playerRef: RefObject<PlayerPort | null>
 
   // Playback control
   isPlaying: boolean

@@ -15,6 +15,7 @@ import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
+import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { NETWORK_TOPIC_STRING } from './types.js'
 
 /**
@@ -59,10 +60,10 @@ export function createApi({
       const identities = stored?.value || []
       if (identities.some((i) => i?.channelKey === channelKey || i?.driveKey === channelKey)) {
         // Backfill marker so future checks are fast
-        try { await ctx.metaDb.put(`mw-channel:${channelKey}`, { kind: 'autobase', backfilledAt: Date.now() }) } catch {}
+        try { await ctx.metaDb.put(`mw-channel:${channelKey}`, { kind: 'autobase', backfilledAt: Date.now() }) } catch { /* best effort */ }
         return true
       }
-    } catch {}
+    } catch { /* best effort */ }
 
     return false
   }
@@ -70,7 +71,7 @@ export function createApi({
   async function markAsMultiWriterChannel(channelKey) {
     try {
       await ctx.metaDb.put(`mw-channel:${channelKey}`, { kind: 'autobase', discoveredAt: Date.now() })
-    } catch {}
+    } catch { /* best effort */ }
   }
 
   /**
@@ -157,13 +158,13 @@ export function createApi({
   }
 
   function invalidateChannelCaches(driveKey) {
-    try { listVideosCache.delete(driveKey) } catch {}
-    try { channelMetaCache.delete(driveKey) } catch {}
+    try { listVideosCache.delete(driveKey) } catch { /* best effort */ }
+    try { channelMetaCache.delete(driveKey) } catch { /* best effort */ }
     try {
       for (const key of videoAvailabilityCache.keys()) {
         if (key.startsWith(`${driveKey}:`)) videoAvailabilityCache.delete(key)
       }
-    } catch {}
+    } catch { /* best effort */ }
   }
 
   // ============================================
@@ -247,7 +248,12 @@ export function createApi({
             }
             const key = req?.driveKey || 'unknown'
             // Reuse the cheap local-only availability path shape
-            const cacheKey = `${key}:${id}:${video.blobsCoreKey}:${video.blobId}`
+            const cacheKey = buildBlobRefCacheKey({
+              driveKey: key,
+              id,
+              blobsCoreKey: video.blobsCoreKey,
+              blobId: video.blobId,
+            })
             const cachedAvailability = videoAvailabilityCache.get(cacheKey)
             if (
               cachedAvailability &&
@@ -255,17 +261,11 @@ export function createApi({
             ) {
               return { availability: cachedAvailability.value, contiguousBlocks: cachedAvailability.value === 'playable' ? 1 : 0, hasHeadBlock: cachedAvailability.value === 'playable' }
             }
-            const keyBuf = video?.blobsCoreKey ? b4a.from(video.blobsCoreKey, 'hex') : null
-            if (!keyBuf || !video?.blobId) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+            const keyBuf = normalizeBlobsCoreKey(video?.blobsCoreKey) ? b4a.from(normalizeBlobsCoreKey(video.blobsCoreKey), 'hex') : null
+            const blobId = normalizeBlobRefInput(video?.blobId) || parseBlobRef(video)?.blob
+            if (!keyBuf || !blobId) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
             const core = ctx.store.get({ key: keyBuf })
             await core.ready()
-            let blobId = video.blobId
-            if (typeof blobId === 'string') {
-              const parts = blobId.split(':').map(Number)
-              if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
-                blobId = { blockOffset: parts[0], blockLength: parts[1], byteOffset: parts[2], byteLength: parts[3] }
-              }
-            }
             const startBlock = blobId?.blockOffset
             const totalBlocks = blobId?.blockLength
             const endBlock = Number.isFinite(startBlock) && Number.isFinite(totalBlocks) ? startBlock + totalBlocks : null
@@ -274,7 +274,7 @@ export function createApi({
             if (fullyCached) return { availability: 'playable', contiguousBlocks: totalBlocks || 0, hasHeadBlock: true }
             const headEnd = Math.min(endBlock, startBlock + Math.max(1, Math.min(32, totalBlocks || 32)))
             let initialAvailable = false
-            try { initialAvailable = await core.has(startBlock, headEnd) } catch {}
+            try { initialAvailable = await core.has(startBlock, headEnd) } catch { /* best effort */ }
             return { availability: initialAvailable ? 'playable' : 'unknown', contiguousBlocks: initialAvailable ? Math.max(1, headEnd - startBlock) : 0, hasHeadBlock: initialAvailable }
           } catch {
             return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
@@ -496,7 +496,7 @@ export function createApi({
           if (!video) return null
           if (video.id) return video.id
           if (video.path && typeof video.path === 'string') {
-            const match = video.path.match(/\/videos\/([^.\/]+)/)
+            const match = video.path.match(/\/videos\/([^./]+)/)
             if (match?.[1]) return match[1]
             const base = video.path.split('/').pop() || ''
             return base.replace(/\.[^./]+$/, '') || null
@@ -522,7 +522,7 @@ export function createApi({
             try {
               const meta = await fetcher(id)
               if (meta) metaById.set(id, meta)
-            } catch {}
+            } catch { /* best effort */ }
           }))
 
           if (metaById.size === 0) return videos
@@ -551,7 +551,12 @@ export function createApi({
             return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
           }
 
-          const cacheKey = `${driveKey}:${id}:${blobsCoreKey}:${blobIdRaw}`
+          const cacheKey = buildBlobRefCacheKey({
+            driveKey,
+            id,
+            blobsCoreKey,
+            blobId: blobIdRaw,
+          })
           const cachedAvailability = videoAvailabilityCache.get(cacheKey)
           if (
             cachedAvailability &&
@@ -564,21 +569,14 @@ export function createApi({
           let contiguousBlocks = 0
           let hasHeadBlock = false
           try {
-            const keyBuf = b4a.from(blobsCoreKey, 'hex')
+            const keyBuf = b4a.from(normalizeBlobsCoreKey(blobsCoreKey) || blobsCoreKey, 'hex')
             const core = ctx.store.get({ key: keyBuf })
             await core.ready()
 
-            let blobId = blobIdRaw
-            if (typeof blobId === 'string') {
-              const parts = blobId.split(':').map(Number)
-              if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
-                blobId = {
-                  blockOffset: parts[0],
-                  blockLength: parts[1],
-                  byteOffset: parts[2],
-                  byteLength: parts[3]
-                }
-              }
+            const blobId = normalizeBlobRefInput(blobIdRaw) || parseBlobRef({ blobsCoreKey, blobId: blobIdRaw })?.blob
+            if (!blobId) {
+              videoAvailabilityCache.set(cacheKey, { ts: Date.now(), value: availability })
+              return { availability, contiguousBlocks, hasHeadBlock }
             }
 
             const startBlock = blobId?.blockOffset
@@ -598,7 +596,7 @@ export function createApi({
                 let initialAvailable = false
                 try {
                   initialAvailable = await core.has(startBlock, headEnd)
-                } catch {}
+                } catch { /* best effort */ }
                 hasHeadBlock = initialAvailable
                 contiguousBlocks = initialAvailable ? Math.max(1, headEnd - startBlock) : 0
                 availability = initialAvailable ? 'playable' : 'unknown'
@@ -664,7 +662,7 @@ export function createApi({
                 if (!hint?.id) continue
                 peerHintsById.set(hint.id, hint)
               }
-            } catch {}
+            } catch { /* best effort */ }
           }
 
           return videos.map((video) => {
@@ -820,7 +818,7 @@ export function createApi({
             retainSwarmDiscovery(ctx, discoveryKey, {
               label: `blobs:${String(blobsCoreKey).slice(0, 16)}`
             })
-          } catch {}
+          } catch { /* best effort */ }
         }
 
         // Return URL instantly
@@ -856,7 +854,7 @@ export function createApi({
             retainSwarmDiscovery(ctx, discoveryKey, {
               label: `blobs:${String(blobsKeyHex).slice(0, 16)}`
             })
-          } catch {}
+          } catch { /* best effort */ }
         }
 
         // Return URL instantly - blob server handles fetching
@@ -889,7 +887,7 @@ export function createApi({
           retainSwarmDiscovery(ctx, discoveryKey, {
             label: `blobs:${blobsKeyHex.slice(0, 16)}`
           })
-        } catch {}
+        } catch { /* best effort */ }
       }
       console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
       return getVideoUrlFromBlob(ctx, blobsKeyHex, blobEntry.blobId, {
@@ -964,17 +962,10 @@ export function createApi({
           return { success: false, error: 'Video missing blobId or blobsCoreKey' };
         }
 
-        // Parse blobId
-        const parts = meta.blobId.split(':').map(Number);
-        if (parts.length !== 4) {
+        const blob = normalizeBlobRefInput(meta.blobId) || parseBlobRef(meta)?.blob
+        if (!blob) {
           return { success: false, error: 'Invalid blob ID format' };
         }
-        const blob = {
-          blockOffset: parts[0],
-          blockLength: parts[1],
-          byteOffset: parts[2],
-          byteLength: parts[3]
-        };
 
         // Load channel and get blobs core
         const channel = await loadChannel(ctx, channelKey);
@@ -1088,7 +1079,7 @@ export function createApi({
         await channel.deleteVideo(videoId)
 
         if (ctx.semanticFinder) {
-          try { ctx.semanticFinder.removeVideo(videoId) } catch {}
+          try { ctx.semanticFinder.removeVideo(videoId) } catch { /* best effort */ }
         }
 
         return { success: true };
@@ -1109,7 +1100,7 @@ export function createApi({
         const normalizeVideoId = (value) => {
           if (!value || typeof value !== 'string') return value
           if (value.startsWith('/videos/')) {
-            const match = value.match(/\/videos\/([^.\/]+)/)
+            const match = value.match(/\/videos\/([^./]+)/)
             if (match?.[1]) return match[1]
           }
           return value
@@ -1161,7 +1152,7 @@ export function createApi({
               })
             : null;
           resolvedPublicBeeKey = entry && typeof entry === 'object' ? (entry.publicBeeKey || null) : null;
-        } catch {}
+        } catch { /* best effort */ }
 
         let meta = null;
         const cachedMeta = getThumbnailMetaFromCachedList()
@@ -1198,7 +1189,7 @@ export function createApi({
 
           // Join swarm for thumbnail core
           if (ctx.swarm && blobsCore.discoveryKey) {
-            try { ctx.swarm.join(blobsCore.discoveryKey) } catch {}
+            try { ctx.swarm.join(blobsCore.discoveryKey) } catch { /* best effort */ }
           }
 
           try {
@@ -1206,16 +1197,15 @@ export function createApi({
               blobsCore.update({ wait: true }),
               new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 1500))
             ]);
-          } catch {}
+          } catch { /* best effort */ }
 
-          // Parse blobId string to blob object
-          const parts = meta.thumbnailBlobId.split(':').map(Number);
-          const blob = {
-            blockOffset: parts[0],
-            blockLength: parts[1],
-            byteOffset: parts[2],
-            byteLength: parts[3]
-          };
+          const blob = normalizeBlobRefInput(meta.thumbnailBlobId) || parseBlobRef({
+            blobsCoreKey: meta.thumbnailBlobsCoreKey,
+            blobId: meta.thumbnailBlobId,
+          })?.blob
+          if (!blob) {
+            return { exists: false, error: 'Invalid thumbnail blob ID format' }
+          }
 
           const thumbnailMimeType = typeof meta.thumbnailMimeType === 'string' && meta.thumbnailMimeType.length > 0
             ? meta.thumbnailMimeType
@@ -1302,7 +1292,7 @@ export function createApi({
           const channel = await loadChannel(ctx, sub.driveKey)
           const meta = await channel?.getMetadata().catch(() => null)
           if (meta?.name) name = meta.name
-        } catch (e) {}
+        } catch (e) { /* best effort */ }
         enriched.push({ ...sub, name });
       }
 
@@ -1324,7 +1314,7 @@ export function createApi({
         if (!video) return null
         if (video.id) return video.id
         if (video.path && typeof video.path === 'string') {
-          const match = video.path.match(/\/videos\/([^.\/]+)/)
+          const match = video.path.match(/\/videos\/([^./]+)/)
           if (match?.[1]) return match[1]
           const base = video.path.split('/').pop() || ''
           return base.replace(/\.[^./]+$/, '') || null
@@ -1349,7 +1339,7 @@ export function createApi({
           try {
             const meta = await fetcher(id)
             if (meta) metaById.set(id, meta)
-          } catch {}
+          } catch { /* best effort */ }
         }))
 
         if (metaById.size === 0) return videos
@@ -1639,10 +1629,10 @@ export function createApi({
       const existingRanges = activeRangeRequests.get(prefetchKey)
       if (existingRanges) {
         console.log('[API] Cancelling orphaned range requests for:', videoPath)
-        existingRanges.ranges.forEach(r => { try { r?.destroy?.() } catch {} })
+        existingRanges.ranges.forEach(r => { try { r?.destroy?.() } catch { /* best effort */ } })
         if (existingRanges.core) {
-          try { existingRanges.core.off('download', existingRanges.onDownload) } catch {}
-          try { existingRanges.core.off('upload', existingRanges.onUpload) } catch {}
+          try { existingRanges.core.off('download', existingRanges.onDownload) } catch { /* best effort */ }
+          try { existingRanges.core.off('upload', existingRanges.onUpload) } catch { /* best effort */ }
         }
         activeRangeRequests.delete(prefetchKey)
       }
@@ -1754,20 +1744,11 @@ export function createApi({
               retainSwarmDiscovery(ctx, core.discoveryKey, {
                 label: `prefetch:${blobMeta.blobsCoreKey.slice(0, 16)}`
               })
-            } catch {}
+            } catch { /* best effort */ }
           }
 
-          let blobId = blobMeta.blobId
-          if (typeof blobId === 'string') {
-            const parts = blobId.split(':').map(Number)
-            if (parts.length !== 4) throw new Error('Invalid blob ID format')
-            blobId = {
-              blockOffset: parts[0],
-              blockLength: parts[1],
-              byteOffset: parts[2],
-              byteLength: parts[3]
-            }
-          }
+          const blobId = normalizeBlobRefInput(blobMeta.blobId) || parseBlobRef(blobMeta)?.blob
+          if (!blobId) throw new Error('Invalid blob ID format')
 
           const startBlock = blobId.blockOffset
           const endBlock = blobId.blockOffset + blobId.blockLength
@@ -2694,11 +2675,11 @@ export function createApi({
 
       // Best-effort: import replicated vectors from any loaded channels.
       if (ctx.channels && ctx.channels.size > 0) {
-        ;(async () => {
+        (async () => {
           for (const [channelKey, channel] of ctx.channels.entries()) {
             try {
               await finder.ensureGlobalIndexedFromChannelView(channelKey, channel)
-            } catch {}
+            } catch { /* best effort */ }
           }
         })()
       }
@@ -2717,14 +2698,14 @@ export function createApi({
         try {
           const video = await this.getVideoData(channelKey, r.id, meta.publicBeeKey)
           if (video) { validated.push(r); continue }
-        } catch {}
+        } catch { /* best effort */ }
         staleIds.push(r.id)
       }
 
       if (staleIds.length > 0) {
         console.log('[API] globalSearchVideos: pruning', staleIds.length, 'stale entries')
         for (const id of staleIds) {
-          try { finder.removeVideo(id) } catch {}
+          try { finder.removeVideo(id) } catch { /* best effort */ }
         }
       }
 

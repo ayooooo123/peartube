@@ -16,10 +16,15 @@ RUN case "${TARGETARCH}" in \
 FROM debian:12-slim AS runtime-libs
 
 ARG TARGETARCH
+ARG YT_DLP_VERSION=2026.03.17
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends libatomic1 \
+  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 \
   && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp" \
+    -o /usr/local/bin/yt-dlp \
+  && chmod 755 /usr/local/bin/yt-dlp
 
 RUN case "${TARGETARCH}" in \
     amd64) cp /usr/lib/x86_64-linux-gnu/libatomic.so.1 /libatomic.so.1 ;; \
@@ -40,6 +45,7 @@ WORKDIR /var/lib/peartube-relay
 
 COPY --from=artifact /peartube-relay /peartube-relay
 COPY --from=runtime-libs /libatomic.so.1 /lib/libatomic.so.1
+COPY --from=runtime-libs /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 
 VOLUME ["/var/lib/peartube-relay"]
 

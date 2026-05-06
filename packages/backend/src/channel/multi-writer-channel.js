@@ -16,6 +16,7 @@ import { ReactionsManager } from './reactions.js'
 import { WatchEventLogger } from '../recommendations/watch-events.js'
 import { applyMigrations } from './migrations.js'
 import { PublicChannelBee } from './public-channel-bee.js'
+import { normalizeBlobRefInput } from '../blob-ref.js'
 
 const BeeDiffStream = BeeDiffStreamImport?.default || BeeDiffStreamImport
 const CURRENT_SCHEMA_VERSION = 1
@@ -1604,17 +1605,8 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.blobs) throw new Error('Blobs not initialized')
 
     // Parse string ID if needed
-    let id = blobId
-    if (typeof blobId === 'string') {
-      const parts = blobId.split(':').map(Number)
-      if (parts.length !== 4) throw new Error('Invalid blob ID format')
-      id = {
-        blockOffset: parts[0],
-        blockLength: parts[1],
-        byteOffset: parts[2],
-        byteLength: parts[3]
-      }
-    }
+    const id = normalizeBlobRefInput(blobId)
+    if (!id) throw new Error('Invalid blob ID format')
 
     try {
       return await this.blobs.get(id)
@@ -1634,17 +1626,8 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.blobs) throw new Error('Blobs not initialized')
 
     // Parse string ID if needed
-    let id = blobId
-    if (typeof blobId === 'string') {
-      const parts = blobId.split(':').map(Number)
-      if (parts.length !== 4) throw new Error('Invalid blob ID format')
-      id = {
-        blockOffset: parts[0],
-        blockLength: parts[1],
-        byteOffset: parts[2],
-        byteLength: parts[3]
-      }
-    }
+    const id = normalizeBlobRefInput(blobId)
+    if (!id) throw new Error('Invalid blob ID format')
 
     return this.blobs.createReadStream(id, opts)
   }
@@ -1658,17 +1641,8 @@ export class MultiWriterChannel extends ReadyResource {
     if (!video?.blobId) return null
 
     // Parse the blobId
-    let id = video.blobId
-    if (typeof id === 'string') {
-      const parts = id.split(':').map(Number)
-      if (parts.length !== 4) return null
-      id = {
-        blockOffset: parts[0],
-        blockLength: parts[1],
-        byteOffset: parts[2],
-        byteLength: parts[3]
-      }
-    }
+    const id = normalizeBlobRefInput(video.blobId)
+    if (!id) return null
 
     // Determine which blobs core has this video
     let blobsKey = this._blobsCore?.key

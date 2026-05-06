@@ -24,6 +24,7 @@ import {
   resolveBareOrNodePathModuleSync,
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
+import { normalizeBlobRefInput } from './blob-ref.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -1310,15 +1311,9 @@ export function getVideoUrlInstant(ctx, blobsCoreKeyHex, blobId, options = {}) {
   const mimeType = options.mimeType || 'video/mp4'
 
   // Parse blobId string to object if needed
-  let blob = blobId
-  if (typeof blobId === 'string') {
-    const parts = blobId.split(':').map(Number)
-    blob = {
-      blockOffset: parts[0],
-      blockLength: parts[1],
-      byteOffset: parts[2],
-      byteLength: parts[3]
-    }
+  const blob = normalizeBlobRefInput(blobId)
+  if (!blob) {
+    throw new Error('Invalid blob ID format')
   }
 
   // Generate URL immediately - blob server fetches data on-demand
@@ -1415,15 +1410,9 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
 
   // Parse blobId string to object if needed
   // blobId can be a string like "0:28174:0:1846355808" or an object
-  let blob = blobId
-  if (typeof blobId === 'string') {
-    const parts = blobId.split(':').map(Number)
-    blob = {
-      blockOffset: parts[0],
-      blockLength: parts[1],
-      byteOffset: parts[2],
-      byteLength: parts[3]
-    }
+  const blob = normalizeBlobRefInput(blobId)
+  if (!blob) {
+    throw new Error('Invalid blob ID format')
   }
 
   // Generate direct blob URL

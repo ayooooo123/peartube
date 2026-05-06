@@ -15,6 +15,7 @@ import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
+import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { NETWORK_TOPIC_STRING } from './types.js'
 
 /**
@@ -247,7 +248,12 @@ export function createApi({
             }
             const key = req?.driveKey || 'unknown'
             // Reuse the cheap local-only availability path shape
-            const cacheKey = `${key}:${id}:${video.blobsCoreKey}:${video.blobId}`
+            const cacheKey = buildBlobRefCacheKey({
+              driveKey: key,
+              id,
+              blobsCoreKey: video.blobsCoreKey,
+              blobId: video.blobId,
+            })
             const cachedAvailability = videoAvailabilityCache.get(cacheKey)
             if (
               cachedAvailability &&
@@ -255,17 +261,11 @@ export function createApi({
             ) {
               return { availability: cachedAvailability.value, contiguousBlocks: cachedAvailability.value === 'playable' ? 1 : 0, hasHeadBlock: cachedAvailability.value === 'playable' }
             }
-            const keyBuf = video?.blobsCoreKey ? b4a.from(video.blobsCoreKey, 'hex') : null
-            if (!keyBuf || !video?.blobId) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
+            const keyBuf = normalizeBlobsCoreKey(video?.blobsCoreKey) ? b4a.from(normalizeBlobsCoreKey(video.blobsCoreKey), 'hex') : null
+            const blobId = normalizeBlobRefInput(video?.blobId) || parseBlobRef(video)?.blob
+            if (!keyBuf || !blobId) return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
             const core = ctx.store.get({ key: keyBuf })
             await core.ready()
-            let blobId = video.blobId
-            if (typeof blobId === 'string') {
-              const parts = blobId.split(':').map(Number)
-              if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
-                blobId = { blockOffset: parts[0], blockLength: parts[1], byteOffset: parts[2], byteLength: parts[3] }
-              }
-            }
             const startBlock = blobId?.blockOffset
             const totalBlocks = blobId?.blockLength
             const endBlock = Number.isFinite(startBlock) && Number.isFinite(totalBlocks) ? startBlock + totalBlocks : null
@@ -551,7 +551,12 @@ export function createApi({
             return { availability: 'unknown', contiguousBlocks: 0, hasHeadBlock: false }
           }
 
-          const cacheKey = `${driveKey}:${id}:${blobsCoreKey}:${blobIdRaw}`
+          const cacheKey = buildBlobRefCacheKey({
+            driveKey,
+            id,
+            blobsCoreKey,
+            blobId: blobIdRaw,
+          })
           const cachedAvailability = videoAvailabilityCache.get(cacheKey)
           if (
             cachedAvailability &&
@@ -564,21 +569,14 @@ export function createApi({
           let contiguousBlocks = 0
           let hasHeadBlock = false
           try {
-            const keyBuf = b4a.from(blobsCoreKey, 'hex')
+            const keyBuf = b4a.from(normalizeBlobsCoreKey(blobsCoreKey) || blobsCoreKey, 'hex')
             const core = ctx.store.get({ key: keyBuf })
             await core.ready()
 
-            let blobId = blobIdRaw
-            if (typeof blobId === 'string') {
-              const parts = blobId.split(':').map(Number)
-              if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
-                blobId = {
-                  blockOffset: parts[0],
-                  blockLength: parts[1],
-                  byteOffset: parts[2],
-                  byteLength: parts[3]
-                }
-              }
+            const blobId = normalizeBlobRefInput(blobIdRaw) || parseBlobRef({ blobsCoreKey, blobId: blobIdRaw })?.blob
+            if (!blobId) {
+              videoAvailabilityCache.set(cacheKey, { ts: Date.now(), value: availability })
+              return { availability, contiguousBlocks, hasHeadBlock }
             }
 
             const startBlock = blobId?.blockOffset
@@ -964,17 +962,10 @@ export function createApi({
           return { success: false, error: 'Video missing blobId or blobsCoreKey' };
         }
 
-        // Parse blobId
-        const parts = meta.blobId.split(':').map(Number);
-        if (parts.length !== 4) {
+        const blob = normalizeBlobRefInput(meta.blobId) || parseBlobRef(meta)?.blob
+        if (!blob) {
           return { success: false, error: 'Invalid blob ID format' };
         }
-        const blob = {
-          blockOffset: parts[0],
-          blockLength: parts[1],
-          byteOffset: parts[2],
-          byteLength: parts[3]
-        };
 
         // Load channel and get blobs core
         const channel = await loadChannel(ctx, channelKey);
@@ -1208,14 +1199,13 @@ export function createApi({
             ]);
           } catch {}
 
-          // Parse blobId string to blob object
-          const parts = meta.thumbnailBlobId.split(':').map(Number);
-          const blob = {
-            blockOffset: parts[0],
-            blockLength: parts[1],
-            byteOffset: parts[2],
-            byteLength: parts[3]
-          };
+          const blob = normalizeBlobRefInput(meta.thumbnailBlobId) || parseBlobRef({
+            blobsCoreKey: meta.thumbnailBlobsCoreKey,
+            blobId: meta.thumbnailBlobId,
+          })?.blob
+          if (!blob) {
+            return { exists: false, error: 'Invalid thumbnail blob ID format' }
+          }
 
           const thumbnailMimeType = typeof meta.thumbnailMimeType === 'string' && meta.thumbnailMimeType.length > 0
             ? meta.thumbnailMimeType
@@ -1757,17 +1747,8 @@ export function createApi({
             } catch {}
           }
 
-          let blobId = blobMeta.blobId
-          if (typeof blobId === 'string') {
-            const parts = blobId.split(':').map(Number)
-            if (parts.length !== 4) throw new Error('Invalid blob ID format')
-            blobId = {
-              blockOffset: parts[0],
-              blockLength: parts[1],
-              byteOffset: parts[2],
-              byteLength: parts[3]
-            }
-          }
+          const blobId = normalizeBlobRefInput(blobMeta.blobId) || parseBlobRef(blobMeta)?.blob
+          if (!blobId) throw new Error('Invalid blob ID format')
 
           const startBlock = blobId.blockOffset
           const endBlock = blobId.blockOffset + blobId.blockLength

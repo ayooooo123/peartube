@@ -115,7 +115,7 @@ test('Dockerfile packages the standalone relay executable in a minimal runtime i
   t.ok(content.includes('gcr.io/distroless/cc-debian12'), 'final image uses the distroless C runtime needed by the standalone relay binary')
   t.absent(content.includes('npm run build:standalone'), 'Docker build no longer runs bare-build inside the image')
   t.ok(content.includes('COPY --from=artifact'), 'final image copies the packaged artifact from the artifact stage')
-  t.ok(content.includes('COPY --from=runtime-libs /libatomic.so.1 /lib/libatomic.so.1'), 'final image copies libatomic into the runtime rootfs for rocksdb-native')
+  t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/libatomic.so.1 /lib/libatomic.so.1'), 'final image copies libatomic into the runtime rootfs for rocksdb-native')
   t.ok(content.includes('COPY --from=runtime-libs /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp'), 'final image copies yt-dlp into PATH for relay CLI import workflows')
   t.ok(content.includes('ENTRYPOINT ["/peartube-relay"]'), 'final image runs the standalone relay executable directly')
 })
@@ -144,4 +144,16 @@ test('Dockerfile packages executable standalone yt-dlp in the distroless relay i
   t.ok(content.includes('/usr/local/bin/yt-dlp --version'), 'Docker build verifies the packaged yt-dlp binary executes')
   t.ok(content.includes('ENV PATH="/usr/local/bin:/usr/bin:${PATH}"'), 'final image PATH includes the packaged yt-dlp location')
   t.ok(content.includes('PEARTUBE_ARCHIVE_YT_DLP_PATH=/usr/local/bin/yt-dlp'), 'relay archive config uses the absolute packaged yt-dlp path')
+})
+
+test('Dockerfile copies yt-dlp shared libraries required by the distroless runtime', async (t) => {
+  const dockerfilePath = join(__dirname, '..', 'Dockerfile')
+  const content = readFileSync(dockerfilePath, 'utf8')
+
+  t.ok(content.includes('zlib1g'), 'runtime libs stage installs libz provider for standalone yt-dlp')
+  t.ok(content.includes('cp /lib/${archTriplet}/libz.so.1 /runtime-libs/libz.so.1'), 'runtime libs stage stages libz for the final image')
+  t.ok(content.includes('cp /lib/${archTriplet}/${loader} /runtime-libs/${loader}'), 'runtime libs stage stages the architecture dynamic loader')
+  t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/libz.so.1 /lib/libz.so.1'), 'final image copies libz into the distroless runtime')
+  t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2'), 'final image copies the amd64 dynamic loader path')
+  t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1'), 'final image copies the arm64 dynamic loader path')
 })

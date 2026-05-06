@@ -11,6 +11,7 @@ function makeTempDir(prefix) {
 
 function createFakeRuntime() {
   let candidateHandler = null
+  const metaDbMap = new Map()
 
   return {
     async start() {},
@@ -34,14 +35,30 @@ function createFakeRuntime() {
     getNetworkStats() {
       return { peers: 3, connections: 2 }
     },
-    async close() {}
+    async close() {},
+    ctx: {
+      metaDb: {
+        async get(key) { return metaDbMap.has(key) ? { value: metaDbMap.get(key) } : null },
+        async put(key, value) { metaDbMap.set(key, value) }
+      }
+    },
+    identityManager: {
+      getActiveIdentity() { return { driveKey: 'drive-key' } },
+      getActiveChannel() { return { blobs: true, publicBeeKey: 'public-bee' } }
+    },
+    uploadManager: {
+      async uploadFromPath() { return { success: true, videoId: 'video-1' } }
+    },
+    api: {
+      async submitToFeed() { return { success: true } }
+    }
   }
 }
 
 function createFakeLogger() {
   const entries = []
   const levels = ['debug', 'info', 'warn', 'error']
-  const components = ['relay', 'runtime', 'admission', 'status', 'mirror', 'peer', 'cache', 'feed', 'download']
+  const components = ['relay', 'runtime', 'admission', 'status', 'mirror', 'peer', 'cache', 'feed', 'download', 'archive']
   const logger = { entries }
 
   for (const component of components) {
@@ -277,6 +294,72 @@ test('createRelayService installs and clears a heartbeat interval', async (t) =>
 
     await service.close()
     t.alike(cleared, [scheduled.timer])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('archive job uses configured yt-dlp binary when started from the WebUI relay service', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-archive-bin-')
+  const runtime = createFakeRuntime()
+  const logger = createFakeLogger()
+  const videoPath = join(dir, 'downloaded.mp4')
+  const spawned = []
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: {
+          channels: [],
+          owners: []
+        },
+        discovery: {
+          enabled: true,
+          maxChannels: 5,
+          maxChannelsPerOwner: 2
+        },
+        archive: {
+          uiEnabled: false,
+          ytDlpPath: '/usr/local/bin/yt-dlp',
+          tmpPath: join(dir, 'archive-tmp')
+        }
+      },
+      logger,
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {},
+      fsModule: {
+        mkdirSync() {},
+        rmSync() {},
+        existsSync(path) { return path === videoPath }
+      },
+      pathModule: {
+        join(...parts) { return join(...parts) }
+      },
+      spawnFn(binary, args) {
+        spawned.push({ binary, args })
+        return {
+          stdout: { on(event, cb) { if (event === 'data') cb(`filepath\n${videoPath}\n`) } },
+          stderr: { on() {} },
+          on(event, cb) { if (event === 'close') cb(0) }
+        }
+      }
+    })
+
+    await service.start()
+    const result = await service.enqueueArchiveJob({ url: 'https://youtu.be/archive-test', channelName: 'Archive Test' }, { runNow: true })
+
+    t.is(result.status, 'completed')
+    t.is(spawned[0]?.binary, '/usr/local/bin/yt-dlp')
+    t.ok(spawned[0]?.args.includes('--print'), 'archive job invokes yt-dlp through the real downloader wrapper')
+    await service.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

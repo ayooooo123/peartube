@@ -22,9 +22,15 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 \
   && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp" \
+RUN case "${TARGETARCH}" in \
+    amd64) YT_DLP_ASSET=yt-dlp_linux ;; \
+    arm64) YT_DLP_ASSET=yt-dlp_linux_aarch64 ;; \
+    *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${YT_DLP_ASSET}" \
     -o /usr/local/bin/yt-dlp \
-  && chmod 755 /usr/local/bin/yt-dlp
+  && chmod 755 /usr/local/bin/yt-dlp \
+  && /usr/local/bin/yt-dlp --version
 
 RUN case "${TARGETARCH}" in \
     amd64) cp /usr/lib/x86_64-linux-gnu/libatomic.so.1 /libatomic.so.1 ;; \
@@ -40,6 +46,8 @@ ENV PEARTUBE_POLICY=discovery
 ENV PEARTUBE_STORAGE_PATH=/var/lib/peartube-relay
 ENV PEARTUBE_STORAGE_MAX_BYTES=107374182400
 ENV PEARTUBE_LOG_LEVEL=info
+ENV PEARTUBE_ARCHIVE_YT_DLP_PATH=/usr/local/bin/yt-dlp
+ENV PATH="/usr/local/bin:/usr/bin:${PATH}"
 
 WORKDIR /var/lib/peartube-relay
 

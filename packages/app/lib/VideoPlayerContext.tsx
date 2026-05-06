@@ -9,7 +9,8 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react'
 import { Platform, AppState, AppStateStatus, DeviceEventEmitter } from 'react-native'
 import type { VideoData, VideoStats } from '@peartube/core'
-import type { PlayerMode } from './video-player'
+import type { PlayerMode, PlayerPort } from './video-player'
+import { resolvePlayerPort } from './video-player'
 import { usePlayerStateMachine } from './playerStateMachine'
 import type { ModeBeforePip, PlayerState } from './playerStateMachine'
 
@@ -72,7 +73,7 @@ interface VideoPlayerContextType {
 
   seekPosition: number | undefined
 
-  playerRef: React.MutableRefObject<any>
+  playerRef: React.MutableRefObject<PlayerPort | null>
 
   // Actions
   loadAndPlayVideo: (video: VideoData, url: string) => void
@@ -158,7 +159,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const [seekPosition, setSeekPosition] = useState<number | undefined>(undefined)
 
-  const playerRef = useRef<any>(null)
+  const playerRef = useRef<PlayerPort | null>(null)
+  const getPlayerPort = useCallback(() => resolvePlayerPort(playerRef.current), [])
 
   // Ref for current video - updated synchronously to avoid race conditions with stats events
   const currentVideoRef = useRef<VideoData | null>(null)
@@ -287,7 +289,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // transition (surface re-attach / audio focus). If JS ignores the pause event to
     // keep UI stable, we still need to *reassert* play on the native player.
     try {
-      playerRef.current?.play?.()
+      getPlayerPort()?.play?.()
     } catch (e) {
       if (__DEV__) console.warn('[VideoPlayerContext] Failed to reassert play after PiP exit:', reason, e)
     }
@@ -391,8 +393,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // The PiP window continues playing natively and we must not interfere with it.
     if (reason !== 'background-audio') {
       try {
-        playerRef.current?.stop?.()
-        playerRef.current?.pause?.()
+        getPlayerPort()?.stop?.()
+        getPlayerPort()?.pause?.()
       } catch {}
     }
 
@@ -734,8 +736,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     lastPlaybackStartAtRef.current = now
 
     try {
-      playerRef.current?.stop?.()
-      playerRef.current?.pause?.()
+      getPlayerPort()?.stop?.()
+      getPlayerPort()?.pause?.()
     } catch {}
     pendingAndroidMinimizeCloseRef.current = false
     // MediaSession.clearPendingPlayerLaunchPayload removed - using react-native-video native PiP
@@ -848,7 +850,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     console.log('[VideoPlayerContext] Pausing video')
     if (Platform.OS === 'web') {
       try {
-        playerRef.current?.pause?.()
+        getPlayerPort()?.pause?.()
       } catch {}
     }
     setDesiredPlaying(false)
@@ -871,7 +873,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       setDesiredPlaying(true)
       if (Platform.OS === 'web') {
         try {
-          playerRef.current?.play?.()
+          getPlayerPort()?.play?.()
         } catch {}
       }
     }
@@ -944,7 +946,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     if (wasInPip && wasPlaying) {
       pipExitExpectedPlayingRef.current = true
       pipExitResumeUntilRef.current = Date.now() + 3000
-      try { playerRef.current?.play?.() } catch {}
+      try { getPlayerPort()?.play?.() } catch {}
     }
 
     dispatch({
@@ -978,8 +980,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // cases where the native player isn't mounted/ready yet.
     let didImperativeSeek = false
     try {
-      if (typeof playerRef.current?.seek === 'function') {
-        playerRef.current.seek(clampedTime)
+      if (typeof getPlayerPort()?.seek === 'function') {
+        getPlayerPort()?.seek(clampedTime)
         didImperativeSeek = true
       }
     } catch {}
@@ -1004,8 +1006,8 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
     let didImperativeSeek = false
     try {
-      if (typeof playerRef.current?.seek === 'function') {
-        playerRef.current.seek(newTime)
+      if (typeof getPlayerPort()?.seek === 'function') {
+        getPlayerPort()?.seek(newTime)
         didImperativeSeek = true
       }
     } catch {}

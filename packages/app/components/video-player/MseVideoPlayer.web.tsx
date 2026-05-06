@@ -20,17 +20,20 @@ interface Segment {
   data: Uint8Array   // moof+mdat combined
 }
 
-interface MseVideoPlayerProps {
+import { createWebMsePlayerPort, type PlayerPort } from '@/lib/video-player'
+
+type MseVideoPlayerProps = {
   videoUrl: string
   style?: any
   isPlaying: boolean
-  onLoad?: (data: { duration: number; durationMs: number }) => void
+  playbackRate?: number
   onProgress?: (data: { currentTime: number; duration: number }) => void
+  onLoad?: (data?: any) => void
   onPlaying?: () => void
   onPaused?: () => void
   onEnded?: () => void
-  onError?: (error: { message: string }) => void
-  playerRef?: React.RefObject<any>
+  onError?: (error: any) => void
+  playerRef?: React.RefObject<PlayerPort | null>
 }
 
 /** Binary search for the segment whose time is <= target */
@@ -71,15 +74,7 @@ export const MseVideoPlayer = memo(function MseVideoPlayer({
     videoElRef.current = el
 
     if (playerRef) {
-      playerRef.current = {
-        play: async () => el.play(),
-        pause: async () => el.pause(),
-        stop: async () => { el.pause(); el.currentTime = 0 },
-        destroy: async () => {},
-        seek: async (t: number) => { el.currentTime = t },
-        resume: async (p: boolean) => { if (p) el.play(); else el.pause() },
-        enterPip: () => {},
-      }
+      playerRef.current = createWebMsePlayerPort(el)
     }
 
     // Progress reporting

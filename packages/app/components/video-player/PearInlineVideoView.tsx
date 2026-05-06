@@ -7,11 +7,12 @@ import Video, {
   type VideoRef,
   type BufferConfig,
 } from 'react-native-video'
+import { createPlayerPort, type PlayerPort } from '@/lib/video-player'
 
 type PearInlineVideoViewProps = {
   style?: StyleProp<ViewStyle>
   testID?: string
-  playerRef: RefObject<any>
+  playerRef: RefObject<PlayerPort | null>
   videoUrl: string
   playbackSession: number
   currentVideoKey?: string
@@ -167,35 +168,45 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   }, [])
 
   const adapter = useMemo(
-    () => ({
-      play: async () => {
-        videoRef.current?.resume?.()
-      },
-      pause: async () => {
-        videoRef.current?.pause?.()
-      },
-      stop: async () => {
-        videoRef.current?.pause?.()
-        videoRef.current?.seek(0)
-      },
-      destroy: async () => {
-        videoRef.current?.pause?.()
-        videoRef.current?.seek(0)
-      },
-      seek: async (timeSeconds: number) => {
-        videoRef.current?.seek(Math.max(0, timeSeconds))
-      },
-      resume: async (playing: boolean) => {
-        if (playing) {
+    () => createPlayerPort(
+      {
+        play: async () => {
           videoRef.current?.resume?.()
-        } else {
+        },
+        pause: async () => {
           videoRef.current?.pause?.()
-        }
+        },
+        stop: async () => {
+          videoRef.current?.pause?.()
+          videoRef.current?.seek(0)
+        },
+        destroy: async () => {
+          videoRef.current?.pause?.()
+          videoRef.current?.seek(0)
+        },
+        seek: async (timeSeconds: number) => {
+          videoRef.current?.seek(Math.max(0, timeSeconds))
+        },
+        resume: async (playing: boolean) => {
+          if (playing) {
+            videoRef.current?.resume?.()
+          } else {
+            videoRef.current?.pause?.()
+          }
+        },
+        enterPip: () => {
+          void videoRef.current?.enterPictureInPicture?.()
+        },
       },
-      enterPip: () => {
-        void videoRef.current?.enterPictureInPicture?.()
+      {
+        kind: 'native',
+        capabilities: {
+          pictureInPicture: Platform.OS === 'android',
+          playbackRate: true,
+          backgroundAudio: true,
+        },
       },
-    }),
+    ),
     [],
   )
 

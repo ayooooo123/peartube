@@ -13,7 +13,10 @@ export async function createRelayService({
   logger = createCliLogger(config?.logging?.level || 'info'),
   catalog = null,
   setIntervalFn = setInterval,
-  clearIntervalFn = clearInterval
+  clearIntervalFn = clearInterval,
+  fsModule = null,
+  pathModule = null,
+  spawnFn = null
 }) {
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
@@ -187,24 +190,26 @@ export async function createRelayService({
       })
 
       if (config.archive?.uiEnabled) {
-        const fsModule = await import('#fs')
-        const pathModule = await import('#path')
+        const runtimeFsModule = fsModule || await import('#fs')
+        const runtimePathModule = pathModule || await import('#path')
         archiveConsole = await createArchiveConsole({
           service,
           logger,
           host: config.archive.uiHost || '127.0.0.1',
           port: config.archive.uiPort || 8174,
           downloader: createYtDlpDownloader({
+            bin: config.archive.ytDlpPath,
             outputDir: config.archive.tmpPath,
-            fs: fsModule,
-            path: pathModule
+            spawnFn: spawnFn || undefined,
+            fs: runtimeFsModule,
+            path: runtimePathModule
           }),
           publisher: createArchivePublisher({
             identityManager: runtime.identityManager,
             uploadManager: runtime.uploadManager,
             api: runtime.api,
             runtime,
-            fs: fsModule
+            fs: runtimeFsModule
           })
         })
         await archiveConsole.start()
@@ -235,23 +240,25 @@ export async function createRelayService({
     },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
-      const fsModule = await import('#fs')
-      const pathModule = await import('#path')
+      const runtimeFsModule = fsModule || await import('#fs')
+      const runtimePathModule = pathModule || await import('#path')
       const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
       const manager = createArchiveManager({
         store,
         logger,
         downloader: createYtDlpDownloader({
+          bin: config.archive?.ytDlpPath,
           outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',
-          fs: fsModule,
-          path: pathModule
+          spawnFn: spawnFn || undefined,
+          fs: runtimeFsModule,
+          path: runtimePathModule
         }),
         publisher: createArchivePublisher({
           identityManager: runtime.identityManager,
           uploadManager: runtime.uploadManager,
           api: runtime.api,
           runtime,
-          fs: fsModule
+          fs: runtimeFsModule
         })
       })
       const job = await manager.enqueue(input)

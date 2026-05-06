@@ -104,8 +104,11 @@ test('Dockerfile packages the standalone relay executable in a minimal runtime i
   t.ok(content.includes('FROM debian:12-slim AS runtime-libs'), 'runtime libs stage installs missing shared libraries for native addons')
   t.ok(content.includes('ARG YT_DLP_VERSION='), 'Dockerfile pins the yt-dlp release version as a build arg')
   t.ok(content.includes('ca-certificates curl libatomic1'), 'runtime libs stage installs curl and CA roots to download yt-dlp')
-  t.ok(content.includes('https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp'), 'runtime libs stage downloads the pinned yt-dlp release')
+  t.ok(content.includes('YT_DLP_ASSET=yt-dlp_linux'), 'runtime libs stage selects the Linux standalone yt-dlp binary for amd64')
+  t.ok(content.includes('YT_DLP_ASSET=yt-dlp_linux_aarch64'), 'runtime libs stage selects the Linux standalone yt-dlp binary for arm64')
+  t.ok(content.includes('https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${YT_DLP_ASSET}'), 'runtime libs stage downloads the pinned standalone yt-dlp release asset')
   t.ok(content.includes('chmod 755 /usr/local/bin/yt-dlp'), 'runtime libs stage makes yt-dlp executable')
+  t.ok(content.includes('/usr/local/bin/yt-dlp --version'), 'Docker build fails early if the packaged yt-dlp binary cannot execute')
   t.ok(content.includes('COPY packages/cli/dist/docker/ /dist/'), 'builder stage only packages prebuilt docker artifacts')
   t.ok(content.includes('cp /dist/linux-amd64/peartube-relay /peartube-relay'), 'artifact stage maps Docker amd64 to the prepared standalone binary')
   t.ok(content.includes('cp /dist/linux-arm64/peartube-relay /peartube-relay'), 'artifact stage maps Docker arm64 to the prepared standalone binary')
@@ -130,4 +133,15 @@ test('relay workflow prepares standalone artifacts before docker image build', a
 
   t.ok(content.includes('npm run build:standalone:linux-x64 --prefix packages/cli'), 'workflow builds linux x64 standalone artifacts before docker packaging')
   t.ok(content.includes('npm run prepare:docker-artifacts --prefix packages/cli'), 'workflow stages prepared docker artifacts before docker packaging')
+})
+
+test('Dockerfile packages executable standalone yt-dlp in the distroless relay image', async (t) => {
+  const dockerfilePath = join(__dirname, '..', 'Dockerfile')
+  const content = readFileSync(dockerfilePath, 'utf8')
+
+  t.ok(content.includes('YT_DLP_ASSET=yt-dlp_linux'), 'amd64 uses the standalone Linux yt-dlp binary instead of the Python script')
+  t.ok(content.includes('YT_DLP_ASSET=yt-dlp_linux_aarch64'), 'arm64 uses the standalone Linux yt-dlp binary instead of the Python script')
+  t.ok(content.includes('/usr/local/bin/yt-dlp --version'), 'Docker build verifies the packaged yt-dlp binary executes')
+  t.ok(content.includes('ENV PATH="/usr/local/bin:/usr/bin:${PATH}"'), 'final image PATH includes the packaged yt-dlp location')
+  t.ok(content.includes('PEARTUBE_ARCHIVE_YT_DLP_PATH=/usr/local/bin/yt-dlp'), 'relay archive config uses the absolute packaged yt-dlp path')
 })

@@ -70,6 +70,7 @@ export function createArchiver({
   let publisher = null
   let stopped = false
   const sourceTimers = new Map()
+  const initialPollTimers = new Set()
   const inflight = new Set()
   const abortController = typeof AbortController === 'function' ? new AbortController() : null
 
@@ -316,9 +317,11 @@ export function createArchiver({
       const stagger = Math.max(1, Math.floor(60_000 / sources.length))
       sources.forEach((source, index) => {
         const delay = index * stagger
-        setTimeoutFn(() => {
+        const timeout = setTimeoutFn(() => {
+          initialPollTimers.delete(timeout)
           if (!stopped) pollSourceTracked(source)
         }, delay)
+        initialPollTimers.add(timeout)
         scheduleSource(source)
       })
     },
@@ -336,6 +339,10 @@ export function createArchiver({
         try { clearIntervalFn(timer) } catch { /* best effort */ }
       }
       sourceTimers.clear()
+      for (const timer of initialPollTimers.values()) {
+        try { clearIntervalFn(timer) } catch { /* best effort */ }
+      }
+      initialPollTimers.clear()
       try { abortController?.abort() } catch { /* best effort */ }
       // Wait for any in-flight poll to drain
       const drainStart = Date.now()

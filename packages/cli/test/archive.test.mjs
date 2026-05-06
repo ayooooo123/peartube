@@ -374,3 +374,51 @@ test('createArchiver budget exhaustion: stops archiving when within reserve', as
   const budgetWarn = logger.events.find((e) => e.msg === 'Storage budget reached; skipping new archives')
   t.ok(budgetWarn, 'logs budget warning')
 })
+
+test('createArchiver stop clears staggered initial poll timers', async (t) => {
+  const metaDb = makeFakeMetaDb()
+  const config = resolveRelayConfig({
+    storage: { path: '/tmp/peartube-test', maxBytes: 100000 },
+    archive: {
+      enabled: true,
+      tmpPath: '/tmp/peartube-test/archive-tmp',
+      sources: [
+        { url: 'https://www.youtube.com/@one' },
+        { url: 'https://www.youtube.com/@two' }
+      ]
+    }
+  }, { env: {} })
+
+  const scheduled = []
+  const cleared = []
+  let listed = 0
+  const archiver = createArchiver({
+    config,
+    runtime: makeFakeRuntime({ metaDb }),
+    logger: makeFakeLogger(),
+    fs: makeFakeFs(),
+    ytDlp: {
+      async listVideos() {
+        listed += 1
+        return []
+      },
+      async downloadVideo() { throw new Error('not expected') }
+    },
+    publisherFactory: () => ({}),
+    setIntervalFn: () => ({ type: 'interval' }),
+    clearIntervalFn: (timer) => { cleared.push(timer) },
+    setTimeoutFn: (fn, delay) => {
+      const timer = { type: 'timeout', fn, delay }
+      scheduled.push(timer)
+      return timer
+    }
+  })
+
+  await archiver.start()
+  t.is(scheduled.length, 2)
+  await archiver.stop()
+
+  t.is(cleared.filter((timer) => timer.type === 'timeout').length, 2)
+  for (const timer of scheduled) timer.fn()
+  t.is(listed, 0)
+})

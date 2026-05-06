@@ -96,6 +96,9 @@ export async function createRelayRuntime({ config, logger }) {
     publicFeed,
     cacheManager,
     seeder,
+    identityManager: null,
+    uploadManager: null,
+    api: null,
     setCandidateHandler(handler) {
       candidateHandler = handler
     },
@@ -108,6 +111,16 @@ export async function createRelayRuntime({ config, logger }) {
       })
       await cacheManager.init()
       await publicFeed.start()
+
+      const [{ createIdentityManager }, { createUploadManager }, { createApi }] = await Promise.all([
+        import('@peartube/backend/identity'),
+        import('@peartube/backend/upload'),
+        import('@peartube/backend/api')
+      ])
+      this.identityManager = createIdentityManager({ ctx })
+      await this.identityManager.loadIdentities()
+      this.uploadManager = createUploadManager({ ctx })
+      this.api = createApi({ ctx, publicFeed, seedingManager: null, videoStats: null })
 
       // Restore mirrored/cached channels as actively served feed entries so the
       // relay behaves like a real serving peer even when original publishers are offline.

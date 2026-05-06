@@ -36,6 +36,8 @@ function printHelp() {
     '',
     'Commands:',
     '  run       Run the relay service',
+    '  ui       Run the relay archive WebUI',
+    '  archive  Queue or run anonymous YouTube archive jobs',
     '  validate  Validate and print the normalized relay config',
     '  status    Print relay status from the local catalog',
     '  init      Write an example config file',
@@ -49,6 +51,13 @@ function printHelp() {
     '  --max-storage <mb>',
     '  --channel <key>',
     '  --owner <key>',
+    '  --url <youtube-url>',
+    '  --channel-name <name>',
+    '  --title <title>',
+    '  --description <text>',
+    '  --host <host>',
+    '  --port <port>',
+    '  --run-now',
     '  --debug, -d',
     '  --json',
     ''
@@ -95,6 +104,35 @@ async function runCommand(flags) {
   }
 }
 
+async function uiCommand(flags) {
+  const config = await loadRelayConfig({ ...flags, archive: { uiEnabled: true, uiHost: flags.host || '0.0.0.0', uiPort: Number(flags.port || 8174) } })
+  config.archive.uiEnabled = true
+  config.archive.uiHost = flags.host || config.archive.uiHost || '0.0.0.0'
+  config.archive.uiPort = Number(flags.port || config.archive.uiPort || 8174)
+  writeLine(`[relay] archive WebUI listening on ${config.archive.uiHost}:${config.archive.uiPort}\n`)
+  await runCommand({ ...flags, archive: config.archive })
+}
+
+async function archiveCommand(flags) {
+  if (!flags.url) throw new Error('--url is required')
+  const config = await loadRelayConfig(flags)
+  const { startRelay } = await import('./src/index.js')
+  const relay = await startRelay({ config })
+  try {
+    const job = await relay.enqueueArchiveJob({
+      url: flags.url,
+      channelName: flags.channelName || 'Anonymous Archive',
+      title: flags.title || '',
+      description: flags.description || '',
+      publish: true,
+      anonymous: true
+    }, { runNow: Boolean(flags.runNow) })
+    writeLine(JSON.stringify(job, null, 2) + '\n')
+  } finally {
+    await relay.close()
+  }
+}
+
 async function validateCommand(flags) {
   const config = await loadRelayConfig(flags)
   const output = JSON.stringify(config, null, 2)
@@ -137,6 +175,12 @@ async function main() {
   switch (command) {
     case 'run':
       await runCommand(flags)
+      break
+    case 'ui':
+      await uiCommand(flags)
+      break
+    case 'archive':
+      await archiveCommand(flags)
       break
     case 'validate':
       await validateCommand(flags)

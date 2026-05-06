@@ -2,6 +2,8 @@ import { createCliLogger } from './cli-logger.js'
 import { evaluateCandidate } from './admission.js'
 import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
+import { createArchiveConsole } from './archive-console.js'
+import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from './archive-manager.js'
 
 export async function createRelayService({
   config,
@@ -27,6 +29,7 @@ export async function createRelayService({
   let currentStatus = null
   let queue = Promise.resolve()
   let heartbeatTimer = null
+  let archiveConsole = null
 
   async function persistStatus() {
     currentStatus = buildRelayStatus({
@@ -183,6 +186,30 @@ export async function createRelayService({
         mirroredChannels: status.summary.totalChannels
       })
 
+      if (config.archive?.uiEnabled) {
+        const fsModule = await import('#fs')
+        const pathModule = await import('#path')
+        archiveConsole = await createArchiveConsole({
+          service,
+          logger,
+          host: config.archive.uiHost || '127.0.0.1',
+          port: config.archive.uiPort || 8174,
+          downloader: createYtDlpDownloader({
+            outputDir: config.archive.tmpPath,
+            fs: fsModule,
+            path: pathModule
+          }),
+          publisher: createArchivePublisher({
+            identityManager: runtime.identityManager,
+            uploadManager: runtime.uploadManager,
+            api: runtime.api,
+            runtime,
+            fs: fsModule
+          })
+        })
+        await archiveConsole.start()
+      }
+
       heartbeatTimer = setIntervalFn(async () => {
         try {
           const heartbeatStatus = await persistStatus()
@@ -206,6 +233,31 @@ export async function createRelayService({
     async processCandidate(candidate) {
       return scheduleCandidate(candidate)
     },
+    async enqueueArchiveJob(input, { runNow = false } = {}) {
+      if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
+      const fsModule = await import('#fs')
+      const pathModule = await import('#path')
+      const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
+      const manager = createArchiveManager({
+        store,
+        logger,
+        downloader: createYtDlpDownloader({
+          outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',
+          fs: fsModule,
+          path: pathModule
+        }),
+        publisher: createArchivePublisher({
+          identityManager: runtime.identityManager,
+          uploadManager: runtime.uploadManager,
+          api: runtime.api,
+          runtime,
+          fs: fsModule
+        })
+      })
+      const job = await manager.enqueue(input)
+      if (runNow) return manager.runJob(job.id)
+      return job
+    },
     getStatus() {
       return currentStatus || buildRelayStatus({
         config,
@@ -218,6 +270,10 @@ export async function createRelayService({
       if (heartbeatTimer) {
         clearIntervalFn(heartbeatTimer)
         heartbeatTimer = null
+      }
+      if (archiveConsole) {
+        await archiveConsole.close().catch(() => {})
+        archiveConsole = null
       }
       await queue.catch(() => {})
       await runtime.close?.()

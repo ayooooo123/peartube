@@ -2,7 +2,6 @@ const workspacePackageSourceRoots = [
   'packages/backend/src',
   'packages/host/src',
   'packages/protocol/src',
-  'packages/bare-tls',
   'packages/platform/src',
   'packages/spec/spec',
 ]
@@ -11,7 +10,6 @@ const workspacePackageSourceFiles = [
   'packages/backend/package.json',
   'packages/host/package.json',
   'packages/protocol/package.json',
-  'packages/bare-tls/package.json',
   'packages/platform/package.json',
   'packages/spec/package.json',
   'packages/spec/schema.cjs',

@@ -29,13 +29,24 @@ test('vertical discovery uses paged full-screen feed and plays inline in the sho
   assert.match(source, /snapToInterval=\{pageHeight\}/, 'vertical discovery should snap to full-screen item height')
   assert.match(source, /onViewableItemsChanged/, 'vertical discovery should track the active page')
   assert.match(source, /viewabilityConfig/, 'vertical discovery should use explicit viewability thresholds')
-  assert.match(source, /<VideoContainer[\s\S]*testID="vertical-discovery-inline-player"/, 'active vertical item should render the video inside the shorts surface')
+  assert.match(source, /<VerticalShortsPlayer[\s\S]*testID="vertical-discovery-inline-player"/, 'active vertical item should render through the dedicated shorts player surface')
+  assert.doesNotMatch(source, /<VideoContainer/, 'vertical discovery must not embed the normal watch player container')
   assert.doesNotMatch(source, /loadAndPlayVideo\(/, 'vertical playback must not open the normal mobile playback overlay')
   assert.doesNotMatch(source, /useVideoPlayerContext\(/, 'vertical playback should not depend on the global overlay player context')
   assert.match(source, /preparePlayback\(playbackRequest\)/, 'vertical player should resolve playback through backend preparePlayback')
   assert.match(source, /getCachedVideoUrl\(cacheKey\)/, 'vertical player should use the short playback URL cache')
   assert.match(source, /setShortsVideoUrl\(/, 'vertical player should keep playback URL in local shorts-player state')
   assert.match(source, /testID=\{index === 0 \? 'vertical-discovery-first-video' : undefined\}/, 'first vertical card should keep a stable test hook')
+})
+
+test('vertical discovery uses a dedicated shorts player surface instead of the watch player frame', () => {
+  const source = readAppFile('components/discovery/VerticalShortsPlayer.tsx')
+
+  assert.match(source, /PearInlineVideoView/, 'shorts player should paint the native inline video surface directly')
+  assert.doesNotMatch(source, /VideoContainer/, 'shorts player must not wrap the normal watch player container')
+  assert.match(source, /\.\.\.StyleSheet\.absoluteFillObject/, 'shorts player should own the full vertical card surface')
+  assert.match(source, /landscapeVideoSurface/, 'shorts player should have a landscape-specific presentation mode')
+  assert.match(source, /onVideoStateChange=\{handleVideoStateChange\}/, 'shorts player should react to loaded video dimensions')
 })
 
 test('vertical discovery keeps channel navigation and detail escape hatches', () => {

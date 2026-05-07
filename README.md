@@ -48,6 +48,24 @@ packages/
 | Metadata | Hyperbee (key-value database) |
 | Video playback | AVPlayer, bare-mpv (libmpv), react-native-video |
 
+## Generated RPC surfaces
+
+`packages/spec/schema.cjs` is the source of truth for HRPC. Running `npm run schema` regenerates JS/Swift HRPC output and the tracked app-facing adapter at `packages/spec/spec/hrpc/app-rpc-adapter.mjs`.
+
+The generated app adapter exports:
+
+- `APP_RPC_METADATA`: schema command metadata, app namespaces, platform-only commands, and runtime-only methods.
+- `APP_RPC_METHODS`: deterministic namespace → method maps for app client code.
+- `createGeneratedAppRpcClient()`: an additive facade builder for future migration away from handwritten RPC declarations.
+
+Platform-only lifecycle/event commands and runtime-only bridge methods are documented in the metadata so drift tests can distinguish intentional exclusions from missing app methods.
+
+Run adapter/drift tests with:
+
+```bash
+npm test --prefix packages/spec
+```
+
 ## Quick Start
 
 ### Prerequisites

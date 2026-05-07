@@ -6,16 +6,21 @@
     ".": "./spec/hrpc/index.js",
     "./messages": "./spec/hrpc/messages.js",
     "./schema": "./spec/schema/index.js",
+    "./app-rpc-adapter": "./spec/hrpc/app-rpc-adapter.mjs",
     "./swift-schema": "./spec/swift-schema",
     "./swift-hrpc": "./spec/swift-hrpc"
   },
   "scripts": {
-    "gen:schema": "node schema.cjs"
+    "gen:schema": "node schema.cjs",
+    "test": "brittle test/*.test.mjs"
   },
   "dependencies": {
     "hrpc": "^4.3.0",
     "hrpc-swift": "^0.1.1",
     "hyperschema": "^1.20.1",
     "hyperschema-swift": "^0.1.1"
+  },
+  "devDependencies": {
+    "brittle": "^3.19.1"
   }
 }

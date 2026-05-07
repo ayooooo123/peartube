@@ -2902,7 +2902,14 @@ rpcNs.register({
 // Save HRPC interface to disk
 HRPCBuilder.toDisk(builder)
 
+const { writeAppRpcAdapter } = require('./lib/app-rpc-adapter-codegen.cjs')
+const appRpcMetadata = writeAppRpcAdapter({
+  hrpcJsonPath: require('path').join(HRPC_DIR, 'hrpc.json'),
+  outputPath: require('path').join(HRPC_DIR, 'app-rpc-adapter.mjs')
+})
+
 console.log('HRPC interface generated in', HRPC_DIR)
+console.log('App RPC adapter generated with', appRpcMetadata.appCommands.length, 'app methods')
 
 // Post-process: inject missing-handler guard into the dispatch loop.
 // The RPC stream is hot from the moment the HRPC constructor runs, but

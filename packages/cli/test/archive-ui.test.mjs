@@ -22,6 +22,7 @@ test('archive UI commands and flags are exposed by the relay CLI', async (t) => 
   t.absent(readFileSync(join(__dirname, '..', 'src', 'archive-console.js'), 'utf8').includes('node:http'), 'archive console uses runtime HTTP shim')
   t.ok(compose.includes('8174:8174'), 'root relay compose exposes the local archive UI port')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_UI_ENABLED: "true"'), 'compose enables archive UI by default')
+  t.ok(compose.includes('PEARTUBE_ARCHIVE_COOKIES_PATH'), 'compose documents optional YouTube cookies path for bot checks')
 })
 
 test('archive manager stores anonymous channel/job state without raw URLs in public status', async (t) => {
@@ -181,4 +182,39 @@ test('yt-dlp downloader fails with useful context when reported output file is m
     () => downloader.download({ id: 'arch_2', url: 'https://youtu.be/abc' }),
     /yt-dlp reported output file does not exist: \/archive\/tmp\/arch_2\/missing\.mp4/
   )
+})
+
+test('yt-dlp downloader removes deprecated no-call-home and passes cookies/js runtime options', async (t) => {
+  const calls = []
+  const existing = new Set(['/archive/tmp/arch_auth/example.mp4'])
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    cookiesPath: '/var/lib/peartube-relay/youtube-cookies.txt',
+    jsRuntime: 'deno:/usr/local/bin/deno',
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync(path) { return existing.has(path) }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_auth/example.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { if (event === 'close') cb(0) }
+      }
+    }
+  })
+
+  await downloader.download({ id: 'arch_auth', url: 'https://www.youtube.com/watch?v=ABbqy1VGeck' })
+
+  const args = calls[0].args
+  t.absent(args.includes('--no-call-home'), 'deprecated yt-dlp no-call-home flag is not passed')
+  t.ok(args.includes('--cookies'), 'cookies option is passed when configured')
+  t.is(args[args.indexOf('--cookies') + 1], '/var/lib/peartube-relay/youtube-cookies.txt')
+  t.ok(args.includes('--js-runtimes'), 'JS runtime option is passed when configured')
+  t.is(args[args.indexOf('--js-runtimes') + 1], 'deno:/usr/local/bin/deno')
 })

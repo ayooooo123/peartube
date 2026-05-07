@@ -165,3 +165,13 @@ test('Dockerfile stages both dynamic loader filenames for each platform build', 
   t.ok(content.includes('test -e /runtime-libs/ld-linux-x86-64.so.2 || cp /runtime-libs/${loader} /runtime-libs/ld-linux-x86-64.so.2'), 'amd64 build still exposes the arm64 loader COPY source placeholder')
   t.ok(content.includes('test -e /runtime-libs/ld-linux-aarch64.so.1 || cp /runtime-libs/${loader} /runtime-libs/ld-linux-aarch64.so.1'), 'arm64 build still exposes the amd64 loader COPY source placeholder')
 })
+
+test('Dockerfile packages deno for yt-dlp YouTube JavaScript extraction', async (t) => {
+  const dockerfile = readFileSync(join(__dirname, '..', 'Dockerfile'), 'utf8')
+
+  t.ok(dockerfile.includes('ARG DENO_VERSION='), 'Dockerfile pins a Deno version for reproducible relay images')
+  t.ok(dockerfile.includes('github.com/denoland/deno/releases/download'), 'Dockerfile downloads Deno release assets')
+  t.ok(dockerfile.includes('/usr/local/bin/deno --version'), 'Dockerfile validates Deno during image build')
+  t.ok(dockerfile.includes('PEARTUBE_ARCHIVE_JS_RUNTIME=deno:/usr/local/bin/deno'), 'final image configures yt-dlp to use Deno')
+  t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/deno /usr/local/bin/deno'), 'final image includes Deno executable')
+})

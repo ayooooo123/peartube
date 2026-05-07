@@ -34,6 +34,7 @@ export const DEFAULT_ARCHIVE_MAX_ITEMS = 50
 export const DEFAULT_ARCHIVE_MAX_RETRIES = 3
 export const DEFAULT_ARCHIVE_BUDGET_RESERVE_PERCENT = 5
 export const DEFAULT_ARCHIVE_YT_DLP_PATH = 'yt-dlp'
+export const DEFAULT_ARCHIVE_JS_RUNTIME = ''
 
 export const DEFAULT_ARCHIVE_CONFIG = {
   enabled: false,
@@ -41,6 +42,8 @@ export const DEFAULT_ARCHIVE_CONFIG = {
   format: DEFAULT_ARCHIVE_FORMAT,
   tmpPath: null,
   ytDlpPath: DEFAULT_ARCHIVE_YT_DLP_PATH,
+  cookiesPath: null,
+  jsRuntime: DEFAULT_ARCHIVE_JS_RUNTIME,
   maxRetries: DEFAULT_ARCHIVE_MAX_RETRIES,
   budgetReservePercent: DEFAULT_ARCHIVE_BUDGET_RESERVE_PERCENT,
   maxItems: DEFAULT_ARCHIVE_MAX_ITEMS,

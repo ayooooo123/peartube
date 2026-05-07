@@ -124,3 +124,16 @@ test('loadRelayConfig supports env-only relay configuration', async (t) => {
   t.is(config.retention.protectAllowlist, false)
   t.is(config.logging.level, 'debug')
 })
+
+test('resolveRelayConfig reads archive cookies and JS runtime env vars', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_ARCHIVE_UI_ENABLED: 'true',
+      PEARTUBE_ARCHIVE_COOKIES_PATH: '/var/lib/peartube-relay/youtube-cookies.txt',
+      PEARTUBE_ARCHIVE_JS_RUNTIME: 'deno:/usr/local/bin/deno'
+    }
+  })
+
+  t.is(config.archive.cookiesPath, '/var/lib/peartube-relay/youtube-cookies.txt')
+  t.is(config.archive.jsRuntime, 'deno:/usr/local/bin/deno')
+})

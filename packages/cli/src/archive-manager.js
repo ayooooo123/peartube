@@ -114,7 +114,15 @@ export async function enqueueArchiveJob(store, input = {}) {
   })
 }
 
-export function createYtDlpDownloader({ bin = 'yt-dlp', outputDir, spawnFn = spawn, fs = { mkdirSync, rmSync, existsSync }, path = { join } } = {}) {
+export function createYtDlpDownloader({
+  bin = 'yt-dlp',
+  outputDir,
+  cookiesPath = null,
+  jsRuntime = null,
+  spawnFn = spawn,
+  fs = { mkdirSync, rmSync, existsSync },
+  path = { join }
+} = {}) {
   if (!outputDir) throw new Error('outputDir is required')
 
   return {
@@ -125,15 +133,16 @@ export function createYtDlpDownloader({ bin = 'yt-dlp', outputDir, spawnFn = spa
       const outputTemplate = path.join(targetDir, '%(title).200B [%(id)s].%(ext)s')
       const args = [
         '--no-playlist',
-        '--no-call-home',
         '--restrict-filenames',
         '--write-info-json',
         '--print', 'after_move:filepath',
         '-f', 'bv*+ba/b',
         '--merge-output-format', 'mp4',
-        '-o', outputTemplate,
-        input.url
+        '-o', outputTemplate
       ]
+      if (cookiesPath) args.push('--cookies', cookiesPath)
+      if (jsRuntime) args.push('--js-runtimes', jsRuntime)
+      args.push(input.url)
 
       const { stdout, stderr } = await new Promise((resolve, reject) => {
         const child = spawnFn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })

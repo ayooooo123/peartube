@@ -17,9 +17,10 @@ FROM debian:12-slim AS runtime-libs
 
 ARG TARGETARCH
 ARG YT_DLP_VERSION=2026.03.17
+ARG DENO_VERSION=v2.5.6
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 zlib1g \
+  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 python3 zlib1g \
   && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \
@@ -31,6 +32,18 @@ RUN case "${TARGETARCH}" in \
     -o /usr/local/bin/yt-dlp \
   && chmod 755 /usr/local/bin/yt-dlp \
   && /usr/local/bin/yt-dlp --version
+
+RUN case "${TARGETARCH}" in \
+    amd64) DENO_ASSET=deno-x86_64-unknown-linux-gnu.zip ;; \
+    arm64) DENO_ASSET=deno-aarch64-unknown-linux-gnu.zip ;; \
+    *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/${DENO_ASSET}" \
+    -o /tmp/deno.zip \
+  && python3 -m zipfile -e /tmp/deno.zip /usr/local/bin \
+  && rm -f /tmp/deno.zip \
+  && chmod 755 /usr/local/bin/deno \
+  && /usr/local/bin/deno --version
 
 RUN mkdir -p /runtime-libs \
   && case "${TARGETARCH}" in \
@@ -54,6 +67,7 @@ ENV PEARTUBE_STORAGE_PATH=/var/lib/peartube-relay
 ENV PEARTUBE_STORAGE_MAX_BYTES=107374182400
 ENV PEARTUBE_LOG_LEVEL=info
 ENV PEARTUBE_ARCHIVE_YT_DLP_PATH=/usr/local/bin/yt-dlp
+ENV PEARTUBE_ARCHIVE_JS_RUNTIME=deno:/usr/local/bin/deno
 ENV PATH="/usr/local/bin:/usr/bin:${PATH}"
 
 WORKDIR /var/lib/peartube-relay
@@ -64,6 +78,7 @@ COPY --from=runtime-libs /runtime-libs/libz.so.1 /lib/libz.so.1
 COPY --from=runtime-libs /runtime-libs/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
 COPY --from=runtime-libs /runtime-libs/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1
 COPY --from=runtime-libs /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
+COPY --from=runtime-libs /usr/local/bin/deno /usr/local/bin/deno
 
 VOLUME ["/var/lib/peartube-relay"]
 

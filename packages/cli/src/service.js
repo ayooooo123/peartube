@@ -200,6 +200,8 @@ export async function createRelayService({
           downloader: createYtDlpDownloader({
             bin: config.archive.ytDlpPath,
             outputDir: config.archive.tmpPath,
+            cookiesPath: config.archive.cookiesPath,
+            jsRuntime: config.archive.jsRuntime,
             spawnFn: spawnFn || undefined,
             fs: runtimeFsModule,
             path: runtimePathModule
@@ -249,6 +251,8 @@ export async function createRelayService({
         downloader: createYtDlpDownloader({
           bin: config.archive?.ytDlpPath,
           outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',
+          cookiesPath: config.archive?.cookiesPath,
+          jsRuntime: config.archive?.jsRuntime,
           spawnFn: spawnFn || undefined,
           fs: runtimeFsModule,
           path: runtimePathModule

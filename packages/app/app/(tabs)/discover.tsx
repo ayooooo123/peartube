@@ -104,6 +104,8 @@ export default function VerticalDiscoveryScreen() {
   const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([])
   const [videos, setVideos] = useState<VideoData[]>([])
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
+  const thumbnailCacheRef = useRef<Record<string, string>>({})
+  thumbnailCacheRef.current = thumbnailCache
   const [activeIndex, setActiveIndex] = useState(0)
   const [shortsVideoUrl, setShortsVideoUrl] = useState<string | null>(null)
   const [shortsPlaybackSession, setShortsPlaybackSession] = useState(0)
@@ -112,6 +114,7 @@ export default function VerticalDiscoveryScreen() {
   const shortsPlayerRef = useRef<any>(null)
   const pendingPlayKeyRef = useRef<string | null>(null)
   const hydratedChannelsRef = useRef<Set<string>>(new Set())
+  const feedLoadInFlightRef = useRef(false)
 
   const activeVideo = videos[activeIndex]
   const activeVideoKey = activeVideo ? `${activeVideo.channelKey}:${activeVideo.id}` : null
@@ -142,7 +145,7 @@ export default function VerticalDiscoveryScreen() {
     const targets = items.slice(0, 12)
     for (const video of targets) {
       const cacheKey = `${video.channelKey}:${video.id}`
-      if (thumbnailCache[cacheKey]) continue
+      if (thumbnailCacheRef.current[cacheKey]) continue
       try {
         const url = await fetchThumbnailUrlWithRetry({
           rpc,
@@ -157,7 +160,7 @@ export default function VerticalDiscoveryScreen() {
         console.log('[VerticalDiscovery] Thumbnail resolve failed:', (err as any)?.message || err)
       }
     }
-  }, [blobServerPort, rpc, thumbnailCache])
+  }, [blobServerPort, rpc])
 
   const seedFromFeedEntries = useCallback((entries: FeedEntry[]) => {
     const visibleEntries = getVisibleSeededFeedEntries(entries as any)
@@ -175,14 +178,10 @@ export default function VerticalDiscoveryScreen() {
 
     if (renderable.length > 0) {
       setVideos((prev) => {
-        const seen = new Set<string>()
-        const merged = [...prev, ...renderable].filter((video) => {
-          const key = `${video.channelKey}:${video.id}`
-          if (seen.has(key)) return false
-          seen.add(key)
-          return true
-        })
-        return merged
+        const existingKeys = new Set(prev.map((video) => `${video.channelKey}:${video.id}`))
+        const appended = renderable.filter((video) => !existingKeys.has(`${video.channelKey}:${video.id}`))
+        if (appended.length === 0) return prev
+        return [...prev, ...appended].slice(0, 80)
       })
       void fetchThumbnailsForVideos(renderable)
     }
@@ -217,9 +216,10 @@ export default function VerticalDiscoveryScreen() {
 
       if (mapped.length > 0) {
         setVideos((prev) => {
-          const byKey = new Map<string, VideoData>()
-          for (const video of [...prev, ...mapped]) byKey.set(`${video.channelKey}:${video.id}`, video)
-          return Array.from(byKey.values()).slice(0, 80)
+          const existingKeys = new Set(prev.map((video) => `${video.channelKey}:${video.id}`))
+          const appended = mapped.filter((video) => !existingKeys.has(`${video.channelKey}:${video.id}`))
+          if (appended.length === 0) return prev
+          return [...prev, ...appended].slice(0, 80)
         })
         void fetchThumbnailsForVideos(mapped)
       }
@@ -229,12 +229,17 @@ export default function VerticalDiscoveryScreen() {
   }, [fetchThumbnailsForVideos, identity?.driveKey, rpc])
 
   const loadFeed = useCallback(async () => {
-    if (!rpc) return
+    if (!rpc || feedLoadInFlightRef.current) return
+    feedLoadInFlightRef.current = true
     setFeedLoading(true)
     try {
       const result = await withTimeout(rpc.getPublicFeed({}), 4000, { entries: [] } as any)
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
-      setFeedEntries(entries)
+      setFeedEntries((prev) => {
+        const prevKeys = prev.map((entry) => entry.channelKey || entry.driveKey).join('|')
+        const nextKeys = entries.map((entry: FeedEntry) => entry.channelKey || entry.driveKey).join('|')
+        return prevKeys === nextKeys ? prev : entries
+      })
       seedFromFeedEntries(entries)
       for (const entry of entries.slice(0, 24)) {
         void hydrateChannelVideos(entry)
@@ -242,6 +247,7 @@ export default function VerticalDiscoveryScreen() {
     } catch (err) {
       console.log('[VerticalDiscovery] Feed load failed:', (err as any)?.message || err)
     } finally {
+      feedLoadInFlightRef.current = false
       setFeedLoading(false)
     }
   }, [hydrateChannelVideos, rpc, seedFromFeedEntries])
@@ -325,7 +331,6 @@ export default function VerticalDiscoveryScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
-    hydratedChannelsRef.current.clear()
     try {
       await rpc?.refreshFeed?.({})
       await loadFeed()

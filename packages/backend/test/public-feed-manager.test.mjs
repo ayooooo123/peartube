@@ -13,8 +13,11 @@ const PUBLIC_BEE_KEY = '22'.repeat(32)
 
 function createSwarm() {
   return {
+    keyPair: { publicKey: b4a.alloc(32, 0) },
     connections: new Set(),
+    peers: new Map(),
     joinCalls: [],
+    joinPeerCalls: [],
     join(topic, opts) {
       this.joinCalls.push({ topic, opts })
       return {
@@ -22,6 +25,10 @@ function createSwarm() {
           return Promise.resolve()
         }
       }
+    },
+    joinPeer(publicKey) {
+      this.joinPeerCalls.push(publicKey)
+      return {}
     }
   }
 }
@@ -54,6 +61,20 @@ function createPersistedMetaDb(seed = {}) {
 function createConnection() {
   return new EventEmitter()
 }
+
+test('PublicFeedManager explicitly dials peers discovered on the shared topic', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const publicKey = b4a.alloc(32, 7)
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(b4a.toString(swarm.joinPeerCalls[0], 'hex'), b4a.toString(publicKey, 'hex'))
+  } finally {
+    manager.stop()
+  }
+})
 
 test('PublicFeedManager.start joins shared PearTube network topic for feed-peer discovery', async () => {
   const swarm = createSwarm()

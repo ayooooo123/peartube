@@ -79,6 +79,13 @@ test('native root layout clears startup timeout and releases loading on explicit
   assert.match(catchBlock, /setLoading\(false\)/)
 })
 
+test('backend orchestrator explicitly dials peers discovered on the single shared topic', () => {
+  const source = readWorkspaceFile('backend/src/orchestrator.js')
+
+  assert.match(source, /ctx\.swarm\.on\('peer'/)
+  assert.match(source, /publicFeed\.handleDiscoveredPeer\(peer\)/)
+})
+
 test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
   const source = readAppFile('backend/mobile-handlers.mjs')
   const handlerBlock = source.match(/B\.getSwarmStatus = async \(\) => \{([\s\S]*?)\n\s*\}/)?.[1] ?? ''

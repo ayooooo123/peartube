@@ -52,7 +52,9 @@ async function appendDebugLine(line) {
     const fs = fsModule?.default ?? fsModule
     if (typeof fs?.appendFileSync !== 'function') return
     fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
-  } catch {}
+  } catch (err) {
+    void err
+  }
 }
 
 // Shutdown flag to prevent deferred init from running during cleanup
@@ -184,7 +186,11 @@ export async function createBackendContext(config) {
                 _path.join(opts.storagePath, 'primary', 'LOCK')
               ]
               for (const lockFile of lockFiles) {
-                try { _fs.unlinkSync(lockFile) } catch {}
+                try {
+                  _fs.unlinkSync(lockFile)
+                } catch (err) {
+                  void err
+                }
               }
               const result = await initializeStorage(opts)
               console.log('[Orchestrator] Stale lock recovery succeeded')
@@ -319,6 +325,15 @@ export async function createBackendContext(config) {
       console.error('[Orchestrator] publicFeed.handleConnection failed:', err?.message);
     }
   });
+  ctx.swarm.on('peer', (peer) => {
+    try {
+      if (publicFeed.handleDiscoveredPeer(peer)) {
+        startupGate.noteSwarmPeer()
+      }
+    } catch (err) {
+      console.error('[Orchestrator] publicFeed.handleDiscoveredPeer failed:', err?.message)
+    }
+  })
   ipcLog('[orchestrator] seedingManager.init starting')
   await appendDebugLine('[orchestrator] seedingManager.init starting')
 

@@ -62,6 +62,14 @@ export class PublicFeedManager {
     this._nextAvailabilityRequestId = 1;
     /** @type {Map<string, { resolve: Function, timeout: any }>} */
     this.pendingAvailabilityRequests = new Map();
+    /** @type {Map<string, number>} */
+    this._directPeerRetryCounts = new Map();
+    /** @type {number} */
+    this._maxDirectPeerRetries = 3;
+    /** @type {number} */
+    this._maxDirectPeers = 16;
+    /** @type {() => number} */
+    this._now = () => Date.now();
     /** @type {any | null} */
     this.feedDiscovery = null;
     /** @type {any | null} */
@@ -298,6 +306,37 @@ export class PublicFeedManager {
   }
 
   /**
+   * Remember a discovered peer and explicitly dial it when the shared topic has
+   * found peers but Hyperswarm has not promoted them into connections yet.
+   * This keeps the hard-cutover architecture on one topic while making the
+   * Protomux feed channel less dependent on passive connection timing.
+   * @param {any} peer
+   * @returns {boolean}
+   */
+  handleDiscoveredPeer(peer) {
+    const publicKey = peer?.publicKey
+    if (!publicKey || !this.swarm || typeof this.swarm.joinPeer !== 'function') return false
+
+    const keyHex = b4a.toString(publicKey, 'hex')
+    if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) return false
+    if (this.swarm.peers?.has?.(keyHex)) return false
+    if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) return false
+
+    const attempts = this._directPeerRetryCounts.get(keyHex) || 0
+    if (attempts >= this._maxDirectPeerRetries) return false
+
+    this._directPeerRetryCounts.set(keyHex, attempts + 1)
+    try {
+      this.swarm.joinPeer(publicKey)
+      console.log('[PublicFeed] Direct peer dial queued from shared topic:', keyHex.slice(0, 16), 'attempt=', attempts + 1)
+      return true
+    } catch (err) {
+      console.log('[PublicFeed] Direct peer dial failed:', keyHex.slice(0, 16), err?.message)
+      return false
+    }
+  }
+
+  /**
    * Start the public feed manager - restore cache and wire current connections
    */
   async start() {
@@ -446,6 +485,7 @@ export class PublicFeedManager {
         try { pending.resolve([]) } catch {}
       }
       this.pendingAvailabilityRequests.clear()
+      this._directPeerRetryCounts.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)
       if (this._gossipInterval) clearInterval(this._gossipInterval)
       this.feedDiscovery?.destroy?.()

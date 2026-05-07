@@ -20,7 +20,7 @@ ARG YT_DLP_VERSION=2026.03.17
 ARG DENO_VERSION=v2.5.6
 ARG FFMPEG_VERSION=release
 ARG BGUTIL_POT_PROVIDER_VERSION=0.8.1
-ARG RUST_VERSION=1.85.1
+ARG RUST_VERSION=1.91.1
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 python3 tar xz-utils zlib1g \

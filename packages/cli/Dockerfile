@@ -13,7 +13,7 @@ RUN case "${TARGETARCH}" in \
   esac \
   && chmod 755 /peartube-relay
 
-FROM debian:12-slim AS runtime-libs
+FROM debian:13-slim AS runtime-libs
 
 ARG TARGETARCH
 ARG YT_DLP_VERSION=2026.03.17
@@ -94,7 +94,7 @@ RUN mkdir -p /runtime-libs \
   && printf '%s' "${loaderDir}" > /runtime-libs/loader-dir \
   && chmod 755 /runtime-libs/libatomic.so.1 /runtime-libs/libz.so.1 /runtime-libs/libc.so.6 /runtime-libs/ld-linux-x86-64.so.2 /runtime-libs/ld-linux-aarch64.so.1
 
-FROM gcr.io/distroless/cc-debian12
+FROM gcr.io/distroless/cc-debian13
 
 ENV PEARTUBE_MODE=public
 ENV PEARTUBE_POLICY=discovery

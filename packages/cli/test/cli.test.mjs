@@ -195,6 +195,7 @@ test('Dockerfile packages the yt-dlp POT provider plugin for noninteractive YouT
   t.ok(dockerfile.includes('ARG RUST_VERSION='), 'Dockerfile pins a Rust toolchain that supports edition 2024')
   t.ok(dockerfile.includes('static.rust-lang.org/rustup/archive'), 'Dockerfile installs Rust with rustup instead of Debian cargo')
   t.ok(dockerfile.includes('cargo install bgutil-ytdlp-pot-provider --version "${BGUTIL_POT_PROVIDER_VERSION}" --locked'), 'Dockerfile builds the bgutil POT CLI against the relay image glibc')
+  t.ok(dockerfile.includes('cp /root/.cargo/bin/bgutil-pot /usr/local/bin/bgutil-pot'), 'Dockerfile copies rustup-installed bgutil POT CLI into the runtime path')
   t.ok(dockerfile.includes('/usr/local/bin/bgutil-pot --version'), 'Dockerfile validates the bgutil POT CLI binary during image build')
   t.ok(dockerfile.includes('bgutil-ytdlp-pot-provider-rs.zip'), 'Dockerfile downloads the yt-dlp POT provider plugin archive')
   t.ok(dockerfile.includes('/usr/local/bin/yt-dlp --plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args "youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"'), 'Dockerfile validates yt-dlp can load the packaged plugin directory')

@@ -50,7 +50,7 @@ RUN case "${TARGETARCH}" in \
 ENV PATH="/root/.cargo/bin:/usr/local/bin:/usr/bin:${PATH}"
 
 RUN cargo install bgutil-ytdlp-pot-provider --version "${BGUTIL_POT_PROVIDER_VERSION}" --locked \
-  && cp /usr/local/cargo/bin/bgutil-pot /usr/local/bin/bgutil-pot \
+  && cp /root/.cargo/bin/bgutil-pot /usr/local/bin/bgutil-pot \
   && chmod 755 /usr/local/bin/bgutil-pot \
   && /usr/local/bin/bgutil-pot --version
 

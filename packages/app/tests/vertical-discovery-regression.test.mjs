@@ -83,10 +83,8 @@ test('vertical discovery hydrates beyond sparse previews without permanently poi
 test('vertical discovery preloads the next few videos into the playback URL cache', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
-  assert.match(source, /const nextVideos = videos\.slice\(activeIndex \+ 1, activeIndex \+ 5\)/, 'shorts should warm the next few videos, not only one or two')
-  assert.match(source, /const warmPlaybackUrl = async \(video: VideoData\)/, 'preload should use a named URL warming helper')
-  assert.match(source, /const result = await rpc\?\.preparePlayback\?\.\(playbackRequest\)/, 'preload should await preparePlayback so it can keep the resolved URL')
-  assert.match(source, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'preload should populate the playback URL cache for instant swipe playback')
+  assert.match(source, /warmNextPlaybackUrls\(\{[\s\S]*videos,[\s\S]*activeIndex,[\s\S]*makePlaybackRequest/, 'shorts should warm the next few videos through the feed controller')
+  assert.match(source, /preparePlayback:\s*rpc\.preparePlayback\?\.bind\(rpc\)/, 'preload should route through backend preparePlayback')
 })
 
 

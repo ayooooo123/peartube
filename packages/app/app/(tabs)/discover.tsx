@@ -25,7 +25,14 @@ import { useApp } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
-import { getFeedPreviewVideos, getVisibleSeededFeedEntries, shouldRenderFeedVideo } from '@/lib/feed-hydration'
+import {
+  clearHydratedFeedChannels,
+  getVerticalFeedPreviewVideos,
+  mapHydratedVerticalFeedVideos,
+  mergeUniqueFeedVideos,
+  warmNextPlaybackUrls,
+  withFeedTimeout,
+} from '@/lib/discover-feed-controller'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { formatTimeAgo } from '@/lib/formatters'
 import { VerticalShortsPlayer } from '@/components/discovery/VerticalShortsPlayer'
@@ -50,13 +57,6 @@ interface FeedEntry {
     thumbnailBlobsCoreKey?: string | null
     thumbnailMimeType?: string | null
   }>
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
-  ])
 }
 
 function getVideoRef(video: VideoData) {
@@ -160,30 +160,14 @@ export default function VerticalDiscoveryScreen() {
   }, [blobServerPort, rpc, thumbnailCache])
 
   const seedFromFeedEntries = useCallback((entries: FeedEntry[]) => {
-    const visibleEntries = getVisibleSeededFeedEntries(entries as any)
-    const previewVideos = getFeedPreviewVideos(visibleEntries as any, {
+    const renderable = getVerticalFeedPreviewVideos(entries as any, {
       identityDriveKey: identity?.driveKey || undefined,
       channelMeta: {},
+      limit: 40,
     }) as VideoData[]
 
-    const renderable = previewVideos
-      .filter((video) => shouldRenderFeedVideo({
-        video,
-        identityDriveKey: identity?.driveKey || undefined,
-      }))
-      .slice(0, 40)
-
     if (renderable.length > 0) {
-      setVideos((prev) => {
-        const seen = new Set<string>()
-        const merged = [...prev, ...renderable].filter((video) => {
-          const key = `${video.channelKey}:${video.id}`
-          if (seen.has(key)) return false
-          seen.add(key)
-          return true
-        })
-        return merged
-      })
+      setVideos((prev) => mergeUniqueFeedVideos(prev, renderable, 80))
       void fetchThumbnailsForVideos(renderable)
     }
   }, [fetchThumbnailsForVideos, identity?.driveKey])
@@ -195,7 +179,7 @@ export default function VerticalDiscoveryScreen() {
 
     try {
       const timeoutToken = Symbol('vertical-channel-timeout')
-      const result = await withTimeout(
+      const result = await withFeedTimeout(
         rpc.listVideos({ channelKey, publicBeeKey: entry.publicBeeKey || undefined }),
         3500,
         timeoutToken as any,
@@ -203,24 +187,12 @@ export default function VerticalDiscoveryScreen() {
       if (result === timeoutToken) return
       hydratedChannelsRef.current.add(channelKey)
       const channelVideos = Array.isArray((result as any)?.videos) ? (result as any).videos : []
-      const mapped = channelVideos
-        .filter((video: any) => shouldRenderFeedVideo({
-          video: { ...video, channelKey },
-          identityDriveKey: identity?.driveKey || undefined,
-        }))
-        .map((video: any) => ({
-          ...video,
-          channelKey,
-          publicBeeKey: entry.publicBeeKey || undefined,
-          channel: { name: entry.channelName || 'Channel' },
-        }))
+      const mapped = mapHydratedVerticalFeedVideos(entry, channelVideos, {
+        identityDriveKey: identity?.driveKey || undefined,
+      }) as VideoData[]
 
       if (mapped.length > 0) {
-        setVideos((prev) => {
-          const byKey = new Map<string, VideoData>()
-          for (const video of [...prev, ...mapped]) byKey.set(`${video.channelKey}:${video.id}`, video)
-          return Array.from(byKey.values()).slice(0, 80)
-        })
+        setVideos((prev) => mergeUniqueFeedVideos(prev, mapped, 80))
         void fetchThumbnailsForVideos(mapped)
       }
     } catch (err) {
@@ -232,7 +204,7 @@ export default function VerticalDiscoveryScreen() {
     if (!rpc) return
     setFeedLoading(true)
     try {
-      const result = await withTimeout(rpc.getPublicFeed({}), 4000, { entries: [] } as any)
+      const result = await withFeedTimeout(rpc.getPublicFeed({}), 4000, { entries: [] } as any)
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
       setFeedEntries(entries)
       seedFromFeedEntries(entries)
@@ -310,22 +282,20 @@ export default function VerticalDiscoveryScreen() {
   }, [activeVideo, playVideo, ready])
 
   useEffect(() => {
-    const warmPlaybackUrl = async (video: VideoData) => {
-      const { cacheKey, playbackRequest } = makePlaybackRequest(video)
-      if (cacheKey && getCachedVideoUrl(cacheKey)) return
-      const result = await rpc?.preparePlayback?.(playbackRequest)
-      if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
-    }
-
-    const nextVideos = videos.slice(activeIndex + 1, activeIndex + 5)
-    for (const video of nextVideos) {
-      void warmPlaybackUrl(video).catch(() => undefined)
-    }
+    if (!rpc) return
+    void warmNextPlaybackUrls({
+      videos,
+      activeIndex,
+      makePlaybackRequest,
+      getCachedVideoUrl,
+      setCachedVideoUrl,
+      preparePlayback: rpc.preparePlayback?.bind(rpc),
+    })
   }, [activeIndex, makePlaybackRequest, rpc, videos])
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true)
-    hydratedChannelsRef.current.clear()
+    clearHydratedFeedChannels(hydratedChannelsRef)
     try {
       await rpc?.refreshFeed?.({})
       await loadFeed()

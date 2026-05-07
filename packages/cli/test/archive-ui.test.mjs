@@ -23,7 +23,8 @@ test('archive UI commands and flags are exposed by the relay CLI', async (t) => 
   t.ok(compose.includes('8174:8174'), 'root relay compose exposes the local archive UI port')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_UI_ENABLED: "true"'), 'compose enables archive UI by default')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_FFMPEG_PATH: /usr/local/bin/ffmpeg'), 'compose configures ffmpeg for yt-dlp archive merging')
-  t.ok(compose.includes('PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS: "--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"'), 'compose configures the packaged POT plugin directory and CLI provider for archive retries')
+  t.ok(compose.includes('PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS: "--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=default,-android_vr,mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"'), 'compose configures the packaged POT plugin directory and CLI provider for archive retries')
+  t.ok(compose.includes('PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS'), 'compose configures fallback yt-dlp client args for bot-check retries')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_COOKIES_PATH'), 'compose documents optional YouTube cookies path for bot checks')
 })
 
@@ -286,4 +287,75 @@ test('yt-dlp downloader appends configured extra args before the URL', async (t)
   t.is(args[urlIndex - 3], '--extractor-args')
   t.is(args[urlIndex - 2], 'youtube:player_client=mweb')
   t.is(args[urlIndex - 1], '--force-ipv4')
+})
+
+test('yt-dlp downloader retries bot-check failures with configured fallback args', async (t) => {
+  const calls = []
+  const removed = []
+  const existing = new Set(['/archive/tmp/arch_retry/example.mp4'])
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    ytDlpExtraArgs: ['--extractor-args', 'youtube:player_client=default,-android_vr,mweb'],
+    ytDlpRetryExtraArgs: [['--extractor-args', 'youtube:player_client=web_safari']],
+    fs: {
+      mkdirSync() {},
+      rmSync(dir) { removed.push(dir) },
+      existsSync(path) { return existing.has(path) }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      const callNumber = calls.length
+      return {
+        stdout: { on(event, cb) { if (event === 'data' && callNumber === 2) cb('filepath\n/archive/tmp/arch_retry/example.mp4\n') } },
+        stderr: { on(event, cb) { if (event === 'data' && callNumber === 1) cb('ERROR: [youtube] 6ZVnOQ8DmFI: Sign in to confirm you’re not a bot') } },
+        on(event, cb) { if (event === 'close') cb(callNumber === 1 ? 1 : 0) }
+      }
+    }
+  })
+
+  const result = await downloader.download({ id: 'arch_retry', url: 'https://www.youtube.com/watch?v=6ZVnOQ8DmFI' })
+
+  t.is(result.filePath, '/archive/tmp/arch_retry/example.mp4')
+  t.is(calls.length, 2, 'bot-check failure triggers a retry')
+  t.ok(calls[0].args.includes('youtube:player_client=default,-android_vr,mweb'), 'first attempt uses primary client args')
+  t.ok(calls[1].args.includes('youtube:player_client=web_safari'), 'second attempt uses retry client args')
+  t.alike(removed, ['/archive/tmp/arch_retry'], 'partial failed output dir is cleared before retry')
+})
+
+test('yt-dlp downloader can retry through a UI-provided Invidious instance', async (t) => {
+  const calls = []
+  const existing = new Set(['/archive/tmp/arch_inv/example.mp4'])
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    ytDlpExtraArgs: ['--extractor-args', 'youtube:player_client=default,-android_vr,mweb'],
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync(path) { return existing.has(path) }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      const callNumber = calls.length
+      return {
+        stdout: { on(event, cb) { if (event === 'data' && callNumber === 2) cb('filepath\n/archive/tmp/arch_inv/example.mp4\n') } },
+        stderr: { on(event, cb) { if (event === 'data' && callNumber === 1) cb('ERROR: [youtube] 6ZVnOQ8DmFI: HTTP Error 403: Forbidden') } },
+        on(event, cb) { if (event === 'close') cb(callNumber === 1 ? 1 : 0) }
+      }
+    }
+  })
+
+  await downloader.download({
+    id: 'arch_inv',
+    url: 'https://www.youtube.com/shorts/6ZVnOQ8DmFI',
+    invidiousInstance: 'https://yewtu.be/'
+  })
+
+  t.is(calls.length, 2, '403 failure triggers Invidious fallback when configured')
+  t.is(calls[1].args.at(-1), 'https://yewtu.be/watch?v=6ZVnOQ8DmFI')
 })

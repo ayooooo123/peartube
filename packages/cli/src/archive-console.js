@@ -6,6 +6,7 @@ function parseForm(body) {
   const params = new URLSearchParams(body)
   return {
     url: params.get('url') || '',
+    invidiousInstance: params.get('invidiousInstance') || '',
     channelName: params.get('channelName') || 'Anonymous Archive',
     title: params.get('title') || '',
     description: params.get('description') || '',

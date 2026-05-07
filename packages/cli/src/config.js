@@ -10,6 +10,7 @@ import {
   DEFAULT_ARCHIVE_MAX_RETRIES,
   DEFAULT_ARCHIVE_POLL_SECONDS,
   DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS,
+  DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS,
   DEFAULT_ARCHIVE_YT_DLP_PATH,
   DEFAULT_RELAY_CONFIG,
   RELAY_CATALOG_FILENAME,
@@ -284,6 +285,7 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_COOKIES_PATH ||
     env.PEARTUBE_ARCHIVE_JS_RUNTIME ||
     env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS ||
+    env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS ||
     env.PEARTUBE_ARCHIVE_SOURCES
   ) {
     config.archive = {}
@@ -302,6 +304,12 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_ARCHIVE_COOKIES_PATH) config.archive.cookiesPath = env.PEARTUBE_ARCHIVE_COOKIES_PATH
     if (env.PEARTUBE_ARCHIVE_JS_RUNTIME) config.archive.jsRuntime = env.PEARTUBE_ARCHIVE_JS_RUNTIME
     if (env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS) config.archive.ytDlpExtraArgs = splitShellArgs(env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS)
+    if (env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS) {
+      config.archive.ytDlpRetryExtraArgs = String(env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS)
+        .split(/\s*\|\|\s*/)
+        .map(splitShellArgs)
+        .filter((args) => args.length)
+    }
     if (env.PEARTUBE_ARCHIVE_SOURCES) {
       config.archive.sources = splitCommaList(env.PEARTUBE_ARCHIVE_SOURCES).map((url) => ({ url }))
     }
@@ -416,6 +424,18 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
     ? merged.ytDlpExtraArgs.map((arg) => String(arg).trim()).filter(Boolean)
     : splitShellArgs(String(merged.ytDlpExtraArgs || ''))
   if (!merged.ytDlpExtraArgs.length) merged.ytDlpExtraArgs = [...DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS]
+
+  if (Array.isArray(merged.ytDlpRetryExtraArgs)) {
+    merged.ytDlpRetryExtraArgs = merged.ytDlpRetryExtraArgs
+      .map((entry) => Array.isArray(entry) ? entry.map((arg) => String(arg).trim()).filter(Boolean) : splitShellArgs(String(entry || '')))
+      .filter((entry) => entry.length)
+  } else {
+    const retryArgs = splitShellArgs(String(merged.ytDlpRetryExtraArgs || ''))
+    merged.ytDlpRetryExtraArgs = retryArgs.length ? [retryArgs] : []
+  }
+  if (!merged.ytDlpRetryExtraArgs.length) {
+    merged.ytDlpRetryExtraArgs = DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS.map((entry) => [...entry])
+  }
 
   merged.maxRetries = Number(merged.maxRetries)
   if (!Number.isFinite(merged.maxRetries) || merged.maxRetries < 0) {

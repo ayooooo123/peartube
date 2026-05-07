@@ -205,6 +205,7 @@ export async function createRelayService({
             cookiesPath: config.archive.cookiesPath,
             jsRuntime: config.archive.jsRuntime,
             ytDlpExtraArgs: config.archive.ytDlpExtraArgs,
+            ytDlpRetryExtraArgs: config.archive.ytDlpRetryExtraArgs,
             spawnFn: spawnFn || undefined,
             fs: runtimeFsModule,
             path: runtimePathModule
@@ -259,6 +260,7 @@ export async function createRelayService({
           cookiesPath: config.archive?.cookiesPath,
           jsRuntime: config.archive?.jsRuntime,
           ytDlpExtraArgs: config.archive?.ytDlpExtraArgs,
+          ytDlpRetryExtraArgs: config.archive?.ytDlpRetryExtraArgs,
           spawnFn: spawnFn || undefined,
           fs: runtimeFsModule,
           path: runtimePathModule

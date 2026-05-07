@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
+import crypto from 'hypercore-crypto'
+import b4a from 'b4a'
 
 import Protomux from 'protomux'
 
 import { PublicFeedManager } from '../src/public-feed.js'
-
+import { NETWORK_TOPIC_STRING } from '../src/types.js'
 const DRIVE_KEY = '11'.repeat(32)
 const PUBLIC_BEE_KEY = '22'.repeat(32)
 
@@ -53,13 +55,15 @@ function createConnection() {
   return new EventEmitter()
 }
 
-test('PublicFeedManager.start restores cache without joining a feed topic', async () => {
+test('PublicFeedManager.start joins shared PearTube network topic for feed-peer discovery', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
 
   try {
     await manager.start()
-    assert.equal(swarm.joinCalls.length, 0)
+    assert.equal(swarm.joinCalls.length, 1)
+    assert.equal(b4a.toString(swarm.joinCalls[0].topic, 'hex'), b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex'))
+    assert.deepEqual(swarm.joinCalls[0].opts, { server: true, client: true })
   } finally {
     manager.stop()
   }

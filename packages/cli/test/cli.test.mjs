@@ -101,7 +101,7 @@ test('Dockerfile packages the standalone relay executable in a minimal runtime i
   const content = readFileSync(dockerfilePath, 'utf8')
 
   t.ok(content.includes('FROM busybox:1.36.1 AS artifact'), 'artifact stage selects the prebuilt standalone relay binary')
-  t.ok(content.includes('FROM debian:12-slim AS runtime-libs'), 'runtime libs stage installs missing shared libraries for native addons')
+  t.ok(content.includes('FROM debian:13-slim AS runtime-libs'), 'runtime libs stage installs missing shared libraries for native addons')
   t.ok(content.includes('ARG YT_DLP_VERSION='), 'Dockerfile pins the yt-dlp release version as a build arg')
   t.ok(content.includes('ca-certificates curl libatomic1'), 'runtime libs stage installs curl and CA roots to download archive helpers')
   t.ok(content.includes('YT_DLP_ASSET=yt-dlp_linux'), 'runtime libs stage selects the Linux standalone yt-dlp binary for amd64')
@@ -112,7 +112,7 @@ test('Dockerfile packages the standalone relay executable in a minimal runtime i
   t.ok(content.includes('COPY packages/cli/dist/docker/ /dist/'), 'builder stage only packages prebuilt docker artifacts')
   t.ok(content.includes('cp /dist/linux-amd64/peartube-relay /peartube-relay'), 'artifact stage maps Docker amd64 to the prepared standalone binary')
   t.ok(content.includes('cp /dist/linux-arm64/peartube-relay /peartube-relay'), 'artifact stage maps Docker arm64 to the prepared standalone binary')
-  t.ok(content.includes('gcr.io/distroless/cc-debian12'), 'final image uses the distroless C runtime needed by the standalone relay binary')
+  t.ok(content.includes('gcr.io/distroless/cc-debian13'), 'final image uses the distroless C runtime needed by the standalone relay binary and bgutil-pot')
   t.absent(content.includes('npm run build:standalone'), 'Docker build no longer runs bare-build inside the image')
   t.ok(content.includes('COPY --from=artifact'), 'final image copies the packaged artifact from the artifact stage')
   t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/libatomic.so.1 /lib/libatomic.so.1'), 'final image copies libatomic into the runtime rootfs for rocksdb-native')

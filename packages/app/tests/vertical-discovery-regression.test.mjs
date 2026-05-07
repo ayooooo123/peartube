@@ -101,12 +101,15 @@ test('vertical discovery hydrates beyond sparse previews without permanently poi
 
 test('vertical discovery preloads the next few videos into the playback URL cache', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
+  const controllerSource = readAppFile('lib/discover-feed-controller.js')
 
-  assert.match(source, /const nextVideos = videos\.slice\(activeIndex \+ 1, activeIndex \+ 5\)/, 'shorts should warm the next few videos, not only one or two')
-  assert.match(source, /const warmPlaybackUrl = async \(video: VideoData\)/, 'preload should use a named URL warming helper')
-  assert.match(source, /const result = await rpc\?\.preparePlayback\?\.\(playbackRequest\)/, 'preload should await preparePlayback so it can keep the resolved URL')
-  assert.match(source, /inflightPlaybackWarmups\.current\.has\(cacheKey\)/, 'preload should de-dupe overlapping preparePlayback warmups')
-  assert.match(source, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'preload should populate the playback URL cache for instant swipe playback')
+  assert.match(source, /warmNextPlaybackUrls\(\{[\s\S]*videos,[\s\S]*activeIndex,[\s\S]*makePlaybackRequest/, 'shorts should warm the next few videos through the feed controller')
+  assert.match(source, /preparePlayback:\s*rpc\.preparePlayback\?\.bind\(rpc\)/, 'preload should route through backend preparePlayback')
+  assert.match(source, /inflightPlaybackWarmups/, 'preload should keep de-dupe state in the screen')
+  assert.match(controllerSource, /const nextVideos = \(videos \|\| \[\]\)\.slice\(activeIndex \+ 1, activeIndex \+ 1 \+ windowSize\)/, 'controller should warm the next few videos, not only one or two')
+  assert.match(controllerSource, /inflightPlaybackWarmups\?\.current\?\.has\?\.\(cacheKey\)/, 'controller preload should de-dupe overlapping preparePlayback warmups')
+  assert.match(controllerSource, /const result = await preparePlayback\?\.\(playbackRequest\)/, 'controller preload should await preparePlayback so it can keep the resolved URL')
+  assert.match(controllerSource, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'controller preload should populate the playback URL cache for instant swipe playback')
 })
 
 test('Home Discover preloads visible feed playback URLs into the shared URL cache', () => {
@@ -127,11 +130,13 @@ test('vertical discovery subscribes to backend feed-update events instead of onl
   assert.match(source, /if \(typeof unsubscribe === 'function'\) unsubscribe\(\)/, 'Discover should unsubscribe from feed events on unmount')
 })
 
-test('vertical discovery calls getFeedPreviewVideos with the shared feed-preview signature', () => {
+test('vertical discovery calls getFeedPreviewVideos through the controller with the shared feed-preview signature', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
+  const controllerSource = readAppFile('lib/discover-feed-controller.js')
 
-  assert.match(source, /getFeedPreviewVideos\(\s*visibleEntries as any,\s*\{\},\s*identity\?\.driveKey \|\| undefined,\s*40,\s*\)/, 'Shorts route should pass channelMeta, identityDriveKey, and limit separately')
-  assert.doesNotMatch(source, /getFeedPreviewVideos\(visibleEntries as any, \{\s*identityDriveKey:/, 'Shorts route should not pass an options object into the shared helper')
+  assert.match(source, /getVerticalFeedPreviewVideos\(entries as any, \{[\s\S]*identityDriveKey:[\s\S]*channelMeta:[\s\S]*limit: 40/, 'Shorts route should delegate preview extraction to the feed controller')
+  assert.match(controllerSource, /getFeedPreviewVideos\(\s*visibleEntries,\s*channelMeta,\s*identityDriveKey,\s*limit,\s*\)/, 'controller should pass channelMeta, identityDriveKey, and limit separately')
+  assert.doesNotMatch(controllerSource, /getFeedPreviewVideos\(visibleEntries, \{\s*identityDriveKey:/, 'controller should not pass an options object into the shared helper')
 })
 
 
@@ -163,11 +168,13 @@ test('shorts player has functional playback buttons and a seekable progress bar'
 
 test('vertical discovery stabilizes card order across feed refreshes', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
+  const controllerSource = readAppFile('lib/discover-feed-controller.js')
 
   assert.match(source, /feedLoadInFlightRef/, 'Discover should ignore overlapping feed loads instead of racing state updates')
   assert.doesNotMatch(source, /hydratedChannelsRef\.current\.clear\(\)/, 'manual refresh should not clear hydrated channels and make cards disappear/reappear')
-  assert.match(source, /const existingKeys = new Set\(prev\.map\(\(video\) => `\$\{video\.channelKey\}:\$\{video\.id\}`\)\)/, 'feed merges should preserve the existing card order')
-  assert.match(source, /return \[\.\.\.prev, \.\.\.appended\]\.slice\(0, 80\)/, 'newly discovered cards should append rather than reorder the visible deck')
+  assert.match(source, /mergeUniqueFeedVideos\(prev, renderable, 80\)/, 'preview feed merges should preserve existing card order through the controller')
+  assert.match(source, /mergeUniqueFeedVideos\(prev, mapped, 80\)/, 'hydrated feed merges should preserve existing card order through the controller')
+  assert.match(controllerSource, /for \(const video of \[\.\.\.\(previousVideos \|\| \[\]\), \.\.\.\(incomingVideos \|\| \[\]\)\]\)/, 'controller merge should consider existing videos before incoming videos')
   assert.match(source, /prevKeys === nextKeys \? prev : entries/, 'unchanged feed entry order should avoid unnecessary list state churn')
   assert.match(source, /thumbnailCacheRef/, 'thumbnail cache reads should not recreate feed merge callbacks on every thumbnail resolution')
 })

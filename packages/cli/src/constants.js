@@ -37,6 +37,7 @@ export const DEFAULT_ARCHIVE_YT_DLP_PATH = 'yt-dlp'
 export const DEFAULT_ARCHIVE_FFMPEG_PATH = ''
 export const DEFAULT_ARCHIVE_JS_RUNTIME = ''
 export const DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS = []
+export const DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS = []
 
 export const DEFAULT_ARCHIVE_CONFIG = {
   enabled: false,
@@ -48,6 +49,7 @@ export const DEFAULT_ARCHIVE_CONFIG = {
   cookiesPath: null,
   jsRuntime: DEFAULT_ARCHIVE_JS_RUNTIME,
   ytDlpExtraArgs: DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS,
+  ytDlpRetryExtraArgs: DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS,
   maxRetries: DEFAULT_ARCHIVE_MAX_RETRIES,
   budgetReservePercent: DEFAULT_ARCHIVE_BUDGET_RESERVE_PERCENT,
   maxItems: DEFAULT_ARCHIVE_MAX_ITEMS,

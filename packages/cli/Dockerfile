@@ -50,7 +50,7 @@ RUN mkdir -p /usr/local/share/yt-dlp-plugins \
     -o /tmp/bgutil-ytdlp-pot-provider-rs.zip \
   && python3 -m zipfile -e /tmp/bgutil-ytdlp-pot-provider-rs.zip /usr/local/share/yt-dlp-plugins \
   && rm -f /tmp/bgutil-ytdlp-pot-provider-rs.zip \
-  && /usr/local/bin/yt-dlp --plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args "youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot" --version
+  && /usr/local/bin/yt-dlp --plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args "youtube:player_client=default,-android_vr,mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot" --version
 
 RUN case "${TARGETARCH}" in \
     amd64) DENO_ASSET=deno-x86_64-unknown-linux-gnu.zip ;; \
@@ -104,7 +104,8 @@ ENV PEARTUBE_LOG_LEVEL=info
 ENV PEARTUBE_ARCHIVE_YT_DLP_PATH=/usr/local/bin/yt-dlp
 ENV PEARTUBE_ARCHIVE_FFMPEG_PATH=/usr/local/bin/ffmpeg
 ENV PEARTUBE_ARCHIVE_JS_RUNTIME=deno:/usr/local/bin/deno
-ENV PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS="--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"
+ENV PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS="--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=default,-android_vr,mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"
+ENV PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS="--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=web_safari;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot || --plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=mweb;player_skip=webpage,configs;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"
 ENV PATH="/usr/local/bin:/usr/bin:${PATH}"
 
 WORKDIR /var/lib/peartube-relay

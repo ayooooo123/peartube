@@ -15,11 +15,50 @@ function safeArray(value) {
   return Array.isArray(value) ? value : []
 }
 
-function sanitizeUrl(value) {
+function safeArgsArray(value) {
+  return safeArray(value).map((entry) => String(entry)).filter(Boolean)
+}
+
+function parseArchiveUrl(value) {
   const url = String(value || '').trim()
   if (!url) throw new Error('archive url is required')
   if (!/^https?:\/\//i.test(url)) throw new Error('archive url must be http(s)')
-  return url
+  return new URL(url)
+}
+
+function sanitizeUrl(value) {
+  return parseArchiveUrl(value).toString()
+}
+
+function normalizeInvidiousInstance(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  const instance = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`)
+  if (!/^https?:$/i.test(instance.protocol)) throw new Error('Invidious instance must be http(s)')
+  instance.pathname = ''
+  instance.search = ''
+  instance.hash = ''
+  return instance.toString().replace(/\/$/, '')
+}
+
+function extractYouTubeVideoId(url) {
+  const host = url.hostname.toLowerCase().replace(/^www\./, '')
+  if (host === 'youtu.be') return url.pathname.split('/').filter(Boolean)[0] || null
+  if (host === 'youtube.com' || host === 'music.youtube.com' || host === 'm.youtube.com') {
+    if (url.pathname === '/watch') return url.searchParams.get('v')
+    const parts = url.pathname.split('/').filter(Boolean)
+    if (['shorts', 'embed', 'live'].includes(parts[0])) return parts[1] || null
+  }
+  return null
+}
+
+function rewriteToInvidiousUrl(sourceUrl, instance) {
+  const normalizedInstance = normalizeInvidiousInstance(instance)
+  if (!normalizedInstance) return null
+  const url = parseArchiveUrl(sourceUrl)
+  const videoId = extractYouTubeVideoId(url)
+  if (!videoId) return null
+  return `${normalizedInstance}/watch?v=${encodeURIComponent(videoId)}`
 }
 
 function sanitizeName(value) {
@@ -106,6 +145,7 @@ export async function enqueueArchiveJob(store, input = {}) {
 
   return store.addJob(job, {
     url,
+    invidiousInstance: input.invidiousInstance ? String(input.invidiousInstance).trim() : '',
     title: job.title,
     description: job.description,
     channelName: job.channelName,
@@ -122,6 +162,7 @@ export function createYtDlpDownloader({
   cookiesPath = null,
   jsRuntime = null,
   ytDlpExtraArgs = [],
+  ytDlpRetryExtraArgs = [],
   spawnFn = spawn,
   fs = { mkdirSync, rmSync, existsSync },
   path = { join }
@@ -134,33 +175,57 @@ export function createYtDlpDownloader({
       const targetDir = path.join(outputDir, id)
       fs.mkdirSync(targetDir, { recursive: true })
       const outputTemplate = path.join(targetDir, '%(title).200B [%(id)s].%(ext)s')
-      const args = [
-        '--no-playlist',
-        '--restrict-filenames',
-        '--write-info-json',
-        '--print', 'after_move:filepath',
-        '-f', format,
-        '--merge-output-format', 'mp4',
-        '-o', outputTemplate
-      ]
-      if (ffmpegPath) args.push('--ffmpeg-location', ffmpegPath)
-      if (cookiesPath) args.push('--cookies', cookiesPath)
-      if (jsRuntime) args.push('--js-runtimes', jsRuntime)
-      if (Array.isArray(ytDlpExtraArgs) && ytDlpExtraArgs.length) args.push(...ytDlpExtraArgs)
-      args.push(input.url)
+      const buildArgs = (extraArgs = [], sourceUrl = input.url) => {
+        const args = [
+          '--no-playlist',
+          '--restrict-filenames',
+          '--write-info-json',
+          '--print', 'after_move:filepath',
+          '-f', format,
+          '--merge-output-format', 'mp4',
+          '-o', outputTemplate
+        ]
+        if (ffmpegPath) args.push('--ffmpeg-location', ffmpegPath)
+        if (cookiesPath) args.push('--cookies', cookiesPath)
+        if (jsRuntime) args.push('--js-runtimes', jsRuntime)
+        if (Array.isArray(extraArgs) && extraArgs.length) args.push(...extraArgs)
+        args.push(sourceUrl)
+        return args
+      }
 
-      const { stdout, stderr } = await new Promise((resolve, reject) => {
-        const child = spawnFn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-        let out = ''
-        let err = ''
-        child.stdout?.on('data', (chunk) => { out += String(chunk) })
-        child.stderr?.on('data', (chunk) => { err += String(chunk) })
-        child.on('error', reject)
-        child.on('close', (code) => {
-          if (code === 0) resolve({ stdout: out, stderr: err })
-          else reject(new Error(`yt-dlp failed (${code}): ${err || out}`))
-        })
-      })
+      const invidiousUrl = rewriteToInvidiousUrl(input.url, input.invidiousInstance)
+      const attempts = [
+        { args: safeArgsArray(ytDlpExtraArgs), url: input.url },
+        ...safeArray(ytDlpRetryExtraArgs).map((args) => ({ args: safeArgsArray(args), url: input.url })),
+        ...(invidiousUrl ? [{ args: safeArgsArray(ytDlpExtraArgs), url: invidiousUrl }] : [])
+      ]
+      let stdout = ''
+
+      for (let attempt = 0; attempt < attempts.length; attempt += 1) {
+        const args = buildArgs(attempts[attempt].args, attempts[attempt].url)
+        try {
+          const result = await new Promise((resolve, reject) => {
+            const child = spawnFn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+            let out = ''
+            let err = ''
+            child.stdout?.on('data', (chunk) => { out += String(chunk) })
+            child.stderr?.on('data', (chunk) => { err += String(chunk) })
+            child.on('error', reject)
+            child.on('close', (code) => {
+              if (code === 0) resolve({ stdout: out, stderr: err })
+              else reject(new Error(`yt-dlp failed (${code}): ${err || out}`))
+            })
+          })
+          stdout = result.stdout
+          break
+        } catch (err) {
+          const message = err?.message || String(err)
+          const canRetry = /Sign in to confirm.*not a bot|LOGIN_REQUIRED|HTTP Error 403|Requested format is not available/i.test(message)
+          if (!canRetry || attempt === attempts.length - 1) throw err
+          fs.rmSync(targetDir, { recursive: true, force: true })
+          fs.mkdirSync(targetDir, { recursive: true })
+        }
+      }
 
       const lines = stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
       let filePath = null

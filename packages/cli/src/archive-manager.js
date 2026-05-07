@@ -52,13 +52,17 @@ function extractYouTubeVideoId(url) {
   return null
 }
 
-function rewriteToInvidiousUrl(sourceUrl, instance) {
+function buildInvidiousFallbackUrls(sourceUrl, instance) {
   const normalizedInstance = normalizeInvidiousInstance(instance)
-  if (!normalizedInstance) return null
+  if (!normalizedInstance) return []
   const url = parseArchiveUrl(sourceUrl)
   const videoId = extractYouTubeVideoId(url)
-  if (!videoId) return null
-  return `${normalizedInstance}/watch?v=${encodeURIComponent(videoId)}`
+  if (!videoId) return []
+  const encoded = encodeURIComponent(videoId)
+  return [
+    `${normalizedInstance}/latest_version?id=${encoded}&itag=18&local=true`,
+    `${normalizedInstance}/watch?v=${encoded}`
+  ]
 }
 
 function sanitizeName(value) {
@@ -193,11 +197,11 @@ export function createYtDlpDownloader({
         return args
       }
 
-      const invidiousUrl = rewriteToInvidiousUrl(input.url, input.invidiousInstance)
+      const invidiousFallbackUrls = buildInvidiousFallbackUrls(input.url, input.invidiousInstance)
       const attempts = [
         { args: safeArgsArray(ytDlpExtraArgs), url: input.url },
         ...safeArray(ytDlpRetryExtraArgs).map((args) => ({ args: safeArgsArray(args), url: input.url })),
-        ...(invidiousUrl ? [{ args: safeArgsArray(ytDlpExtraArgs), url: invidiousUrl }] : [])
+        ...invidiousFallbackUrls.map((url) => ({ args: [], url }))
       ]
       let stdout = ''
 
@@ -220,7 +224,7 @@ export function createYtDlpDownloader({
           break
         } catch (err) {
           const message = err?.message || String(err)
-          const canRetry = /Sign in to confirm.*not a bot|LOGIN_REQUIRED|HTTP Error 403|Requested format is not available/i.test(message)
+          const canRetry = /Sign in to confirm.*not a bot|LOGIN_REQUIRED|HTTP Error (?:400|403|418|429|500)|Requested format is not available/i.test(message)
           if (!canRetry || attempt === attempts.length - 1) throw err
           fs.rmSync(targetDir, { recursive: true, force: true })
           fs.mkdirSync(targetDir, { recursive: true })

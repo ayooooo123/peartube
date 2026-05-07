@@ -89,7 +89,7 @@ export function renderArchiveWebHome(model = {}) {
     </section>
     <form method="post" action="/archive">
       <label>Video or channel URL<input name="url" required placeholder="https://www.youtube.com/watch?v=..."></label>
-      <label>Invidious fallback instance<input name="invidiousInstance" placeholder="Optional, e.g. https://yewtu.be"><small>Used only if the direct YouTube archive hits a bot-check/403.</small></label>
+      <label>Invidious fallback instance<input name="invidiousInstance" placeholder="Optional, e.g. https://inv.thepixora.com"><small>Used only if direct YouTube archive hits a bot-check/403. The relay tries the instance's direct media endpoint before the watch page.</small></label>
       <label>Anonymous channel name<input name="channelName" value="Anonymous Archive"></label>
       <label>Title override<input name="title" placeholder="Optional"></label>
       <label>Description override<textarea name="description" rows="4" placeholder="Optional"></textarea></label>

@@ -16,7 +16,9 @@
 
 import Protomux from 'protomux';
 import c from 'compact-encoding';
-import { PROTOCOL_NAME } from './types.js';
+import crypto from 'hypercore-crypto'
+import b4a from 'b4a'
+import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
 
@@ -60,6 +62,8 @@ export class PublicFeedManager {
     this._nextAvailabilityRequestId = 1;
     /** @type {Map<string, { resolve: Function, timeout: any }>} */
     this.pendingAvailabilityRequests = new Map();
+    /** @type {any | null} */
+    this.feedDiscovery = null;
     /** @type {any | null} */
     this._gossipInterval = null;
     /** @type {number} */
@@ -378,6 +382,18 @@ export class PublicFeedManager {
       try { this.onFeedUpdate?.(); } catch {}
     }
 
+    const feedTopic = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
+    try {
+      this.feedDiscovery = this.swarm.join(feedTopic, { server: true, client: true })
+      this.feedDiscovery?.flushed?.().then(() => {
+        console.log('[PublicFeed] Shared network feed discovery flushed, connections:', this.swarm.connections?.size || 0)
+      }).catch(() => {})
+      console.log('[PublicFeed] Joined shared network feed topic:', b4a.toString(feedTopic, 'hex').slice(0, 16))
+    } catch (err) {
+      console.log('[PublicFeed] Shared network feed topic join failed:', err?.message)
+      this.feedDiscovery = null
+    }
+
     // Set up feed protocol on any existing connections.
     const existingConns = this.swarm.connections?.size || 0;
     console.log('[PublicFeed] Setting up feed protocol on', existingConns, 'existing connections');
@@ -432,9 +448,11 @@ export class PublicFeedManager {
       this.pendingAvailabilityRequests.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)
       if (this._gossipInterval) clearInterval(this._gossipInterval)
+      this.feedDiscovery?.destroy?.()
     } catch {}
     this._persistTimer = null
     this._gossipInterval = null
+    this.feedDiscovery = null
   }
 
   /**

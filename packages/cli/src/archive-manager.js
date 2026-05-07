@@ -65,6 +65,21 @@ function buildInvidiousFallbackUrls(sourceUrl, instance) {
   ]
 }
 
+function parseReportedFilePath(stdout) {
+  const lines = String(stdout || '').trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]
+    if (line === 'filepath') continue
+    if (line.startsWith('filepath ')) return line.slice('filepath '.length).trim()
+    return line
+  }
+  return null
+}
+
+function isSupportedArchiveVideoPath(filePath) {
+  return /\.(mp4|m4v|mov|webm|mkv)$/i.test(String(filePath || '').split('?')[0])
+}
+
 function sanitizeName(value) {
   const name = String(value || '').trim()
   return name || 'Anonymous Archive'
@@ -199,11 +214,12 @@ export function createYtDlpDownloader({
 
       const invidiousFallbackUrls = buildInvidiousFallbackUrls(input.url, input.invidiousInstance)
       const attempts = [
-        { args: safeArgsArray(ytDlpExtraArgs), url: input.url },
-        ...safeArray(ytDlpRetryExtraArgs).map((args) => ({ args: safeArgsArray(args), url: input.url })),
-        ...invidiousFallbackUrls.map((url) => ({ args: [], url }))
+        { args: safeArgsArray(ytDlpExtraArgs), url: input.url, allowUnknownExtension: false },
+        ...safeArray(ytDlpRetryExtraArgs).map((args) => ({ args: safeArgsArray(args), url: input.url, allowUnknownExtension: false })),
+        ...invidiousFallbackUrls.map((url) => ({ args: [], url, allowUnknownExtension: false }))
       ]
       let stdout = ''
+      let filePath = null
 
       for (let attempt = 0; attempt < attempts.length; attempt += 1) {
         const args = buildArgs(attempts[attempt].args, attempts[attempt].url)
@@ -221,28 +237,21 @@ export function createYtDlpDownloader({
             })
           })
           stdout = result.stdout
+          filePath = parseReportedFilePath(stdout)
+          if (!filePath) throw new Error('yt-dlp did not report an output file')
+          if (!attempts[attempt].allowUnknownExtension && !isSupportedArchiveVideoPath(filePath)) {
+            throw new Error(`yt-dlp reported unsupported archive output file: ${filePath}`)
+          }
           break
         } catch (err) {
           const message = err?.message || String(err)
-          const canRetry = /Sign in to confirm.*not a bot|LOGIN_REQUIRED|HTTP Error (?:400|403|418|429|500)|Requested format is not available/i.test(message)
+          const canRetry = /Sign in to confirm.*not a bot|LOGIN_REQUIRED|HTTP Error (?:400|403|418|429|500)|Requested format is not available|unsupported archive output file/i.test(message)
           if (!canRetry || attempt === attempts.length - 1) throw err
           fs.rmSync(targetDir, { recursive: true, force: true })
           fs.mkdirSync(targetDir, { recursive: true })
         }
       }
 
-      const lines = stdout.trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-      let filePath = null
-      for (let i = lines.length - 1; i >= 0; i -= 1) {
-        const line = lines[i]
-        if (line === 'filepath') continue
-        if (line.startsWith('filepath ')) {
-          filePath = line.slice('filepath '.length).trim()
-          break
-        }
-        filePath = line
-        break
-      }
       if (!filePath) throw new Error('yt-dlp did not report an output file')
       if (typeof fs.existsSync === 'function' && !fs.existsSync(filePath)) {
         throw new Error(`yt-dlp reported output file does not exist: ${filePath}`)

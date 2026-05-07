@@ -10,7 +10,7 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';

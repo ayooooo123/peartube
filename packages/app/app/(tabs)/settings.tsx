@@ -318,7 +318,8 @@ export default function SettingsScreen() {
               text: 'Publish',
               onPress: async () => {
                 try {
-                  await rpc.submitToFeed({})
+                  const result = await rpc.submitToFeed({})
+                  if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
                   Alert.alert('Published!', 'Your channel is now visible on the public feed.')
                 } catch (err) {
                   console.error('Failed to publish to feed:', err)
@@ -346,7 +347,8 @@ export default function SettingsScreen() {
       if (confirmed) {
         try {
           console.log('[Settings] Publishing to feed, driveKey:', identity.driveKey)
-          await rpc.submitToFeed()
+          const result = await rpc.submitToFeed()
+          if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
           setIsPublished(true)
           window.alert('Published! Your channel is now visible on the public feed.')
         } catch (err) {
@@ -364,7 +366,8 @@ export default function SettingsScreen() {
             text: 'Publish',
             onPress: async () => {
               try {
-                await rpc.submitToFeed()
+                const result = await rpc.submitToFeed()
+                if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
                 setIsPublished(true)
                 Alert.alert('Published!', 'Your channel is now visible on the public feed.')
               } catch (err) {
@@ -788,7 +791,7 @@ export default function SettingsScreen() {
           </View>
 
           <Text className="text-caption text-pear-text-muted">
-            Cached content from other channels. Higher limits help the network by seeding more content to other peers. Your own videos are stored separately and don't count toward this limit.
+            Cached content from other channels. Higher limits help the network by seeding more content to other peers. Your own videos are stored separately and do not count toward this limit.
           </Text>
         </View>
 

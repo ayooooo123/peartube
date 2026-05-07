@@ -76,6 +76,45 @@ test('PublicFeedManager explicitly dials peers discovered on the shared topic', 
   }
 })
 
+test('PublicFeedManager skips direct dials for known peers across swarm peer shapes', () => {
+  const publicKey = b4a.alloc(32, 8)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const cases = [
+    new Map([[keyHex, { publicKey }]]),
+    new Map([[publicKey, { publicKey }]]),
+    new Set([{ publicKey }]),
+    new Set([publicKey]),
+  ]
+
+  for (const peers of cases) {
+    const swarm = createSwarm()
+    swarm.peers = peers
+    const manager = new PublicFeedManager(swarm, createMetaDb())
+
+    try {
+      assert.equal(manager.handleDiscoveredPeer({ publicKey }), false)
+      assert.equal(swarm.joinPeerCalls.length, 0)
+    } finally {
+      manager.stop()
+    }
+  }
+})
+
+test('periodic gossip re-dials remembered shared-topic peers when sockets dropped', () => {
+  const publicKey = b4a.alloc(32, 10)
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(manager._redialDiscoveredPeers(), 1)
+    assert.equal(swarm.joinPeerCalls.length, 2)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('PublicFeedManager.start joins shared PearTube network topic for feed-peer discovery', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

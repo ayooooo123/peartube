@@ -37,6 +37,7 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
         online: runtimeStats.dht?.online ?? null
       },
       publicFeedDiscoveryJoined: Boolean(runtimeStats.publicFeedDiscoveryJoined),
+      blindPeer: runtimeStats.blindPeer || runtimeStats.seeding?.blindPeer || null,
       peerPoolJoined: Boolean(runtimeStats.peerPoolJoined),
       swarmOffline: Boolean(runtimeStats.swarmOffline),
       swarmOfflineReason: runtimeStats.swarmOfflineReason || null,
@@ -86,6 +87,7 @@ export function formatRelayStatus(status) {
     `feedEntries: ${status.runtime.feedEntries}`,
     `dht: bootstrapped=${status.runtime.dht.bootstrapped} firewalled=${status.runtime.dht.firewalled} online=${status.runtime.dht.online}`,
     `network: offline=${status.runtime.swarmOffline} reason=${status.runtime.swarmOfflineReason || 'none'} listenResolved=${status.runtime.swarmListenResolved} peerPoolJoined=${status.runtime.peerPoolJoined} publicFeedDiscoveryJoined=${status.runtime.publicFeedDiscoveryJoined}`,
+    `blindPeer: enabled=${Boolean(status.runtime.blindPeer?.enabled)} key=${status.runtime.blindPeer?.publicKey || 'none'} mirroredCores=${status.runtime.blindPeer?.mirroredCores || 0} mirroredAutobases=${status.runtime.blindPeer?.mirroredAutobases || 0}`,
     `seeding: channels=${status.runtime.seeding.channels} videos=${status.runtime.seeding.videos} publicBeeCores=${status.runtime.seeding.publicBeeCores} blobCores=${status.runtime.seeding.blobCores} discoveryHandles=${status.runtime.seeding.discoveryHandles}`
   ]
 

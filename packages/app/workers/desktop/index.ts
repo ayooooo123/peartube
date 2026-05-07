@@ -1,3 +1,4 @@
+/* eslint-disable no-restricted-imports, @typescript-eslint/ban-ts-comment, no-empty, no-extra-semi, @typescript-eslint/no-require-imports, @typescript-eslint/no-unused-expressions, prefer-const */
 /**
  * PearTube Desktop Worker — Thin HRPC Handler Shim
  * Initializes via createBackend() from @peartube/backend, which registers
@@ -531,7 +532,11 @@ B.getPublicFeed = async () => {
   }
 }
 B.refreshFeed = async () => { api.refreshFeed(); return { success: true } }
-B.submitToFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.submitToFeed(a.driveKey); return { success: true } }
+B.submitToFeed = async () => {
+  const a = identityManager.getActiveIdentity();
+  if (!a?.driveKey) return { success: false, error: 'No active channel to publish' }
+  return api.submitToFeed(a.driveKey)
+}
 B.unpublishFromFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.unpublishFromFeed(a.driveKey); return { success: true } }
 B.isChannelPublished = async () => { const a = identityManager.getActiveIdentity(); return a?.driveKey ? api.isChannelPublished(a.driveKey) : { published: false } }
 B.hideChannel = async (r: any) => { api.hideChannel(r.channelKey); return { success: true } }

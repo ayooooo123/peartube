@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 /**
  * PearTube shared app handler adapters.
  *
@@ -139,7 +140,11 @@ export function attachMobileHandlers(B, deps) {
     }
   }
   B.refreshFeed = async () => { await api.refreshFeed(); return { success: true } }
-  B.submitToFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.submitToFeed(a.driveKey); return { success: true } }
+  B.submitToFeed = async () => {
+    const a = identityManager.getActiveIdentity();
+    if (!a?.driveKey) return { success: false, error: 'No active channel to publish' }
+    return api.submitToFeed(a.driveKey)
+  }
   B.unpublishFromFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.unpublishFromFeed(a.driveKey); return { success: true } }
   B.isChannelPublished = async () => { const a = identityManager.getActiveIdentity(); return a?.driveKey ? api.isChannelPublished(a.driveKey) : { published: false } }
   B.hideChannel = async (r) => { await api.hideChannel(r.channelKey); return { success: true } }

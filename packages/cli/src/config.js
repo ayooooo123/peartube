@@ -255,10 +255,12 @@ function configFromEnv(env = {}) {
       config.discovery.maxChannelsPerOwner = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER)
     }
   }
-  if (env.PEARTUBE_NETWORK_ANNOUNCE || env.PEARTUBE_NETWORK_BOOTSTRAP) {
+  if (env.PEARTUBE_NETWORK_ANNOUNCE || env.PEARTUBE_NETWORK_BOOTSTRAP || env.PEARTUBE_RELAY_BLIND_PEER_ENABLED || env.PEARTUBE_RELAY_BLIND_PEER_TRUSTED_CLIENTS) {
     config.network = {}
     if (env.PEARTUBE_NETWORK_ANNOUNCE) config.network.announce = parseBoolean(env.PEARTUBE_NETWORK_ANNOUNCE)
     if (env.PEARTUBE_NETWORK_BOOTSTRAP) config.network.bootstrap = env.PEARTUBE_NETWORK_BOOTSTRAP
+    if (env.PEARTUBE_RELAY_BLIND_PEER_ENABLED) config.network.blindPeer = parseBoolean(env.PEARTUBE_RELAY_BLIND_PEER_ENABLED)
+    if (env.PEARTUBE_RELAY_BLIND_PEER_TRUSTED_CLIENTS) config.network.trustedBlindPeerClients = splitCommaList(env.PEARTUBE_RELAY_BLIND_PEER_TRUSTED_CLIENTS)
   }
   if (env.PEARTUBE_RETENTION_PROTECT_PRIVATE || env.PEARTUBE_RETENTION_PROTECT_ALLOWLIST) {
     config.retention = {}

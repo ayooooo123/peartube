@@ -4,12 +4,14 @@ export async function createRelayRuntime({ config, logger }) {
     { PublicFeedManager },
     { CacheManager },
     { createRelaySeeder },
+    { createRelayBlindPeer },
     { readPrimaryKeyFile, writePrimaryKeyFile }
   ] = await Promise.all([
     import('@peartube/backend/storage'),
     import('@peartube/backend/public-feed'),
     import('./cache-manager.js'),
     import('./seeding.js'),
+    import('@peartube/backend/relay-blind-peer'),
     import('../../backend/src/identity-key-file.js')
   ])
 
@@ -54,9 +56,17 @@ export async function createRelayRuntime({ config, logger }) {
 
   const publicFeed = new PublicFeedManager(ctx.swarm, ctx.metaDb)
   const cacheManager = new CacheManager(ctx.store, ctx.metaDb, config?.storage?.maxBytes || 0)
+  const blindPeer = await createRelayBlindPeer({
+    ctx,
+    storagePath: storageRoot,
+    enabled: config?.network?.blindPeer !== false,
+    trustedPeerKeys: config?.network?.trustedBlindPeerClients || [],
+    logger: logger.runtime || logger.relay || logger
+  })
   const seeder = createRelaySeeder({
     ctx,
     loadPublicBee,
+    blindPeer,
     logger: logger.runtime || logger.relay || logger
   })
   let candidateHandler = null
@@ -229,6 +239,7 @@ export async function createRelayRuntime({ config, logger }) {
           online: ctx.swarm?.dht?.online ?? null
         },
         publicFeedDiscoveryJoined: Boolean(publicFeed.feedDiscovery),
+        blindPeer: blindPeer.getStats?.() || null,
         peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
         swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
@@ -239,6 +250,7 @@ export async function createRelayRuntime({ config, logger }) {
     async close() {
       try { publicFeed.stop() } catch (err) { logger.runtime?.debug('Public feed close failed', { error: err?.message || String(err) }) }
       try { await seeder.close() } catch (err) { logger.runtime?.debug('Relay seeder close failed', { error: err?.message || String(err) }) }
+      try { await blindPeer.close?.() } catch (err) { logger.runtime?.debug('Relay blind peer close failed', { error: err?.message || String(err) }) }
       try { await ctx.swarm.destroy() } catch (err) { logger.runtime?.debug('Swarm close failed', { error: err?.message || String(err) }) }
       try { ctx.blobServer?.close?.() } catch (err) { logger.runtime?.debug('Blob server close failed', { error: err?.message || String(err) }) }
       try { await ctx.store.close() } catch (err) { logger.runtime?.debug('Store close failed', { error: err?.message || String(err) }) }

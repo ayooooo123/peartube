@@ -19,11 +19,10 @@ ARG TARGETARCH
 ARG YT_DLP_VERSION=2026.03.17
 ARG DENO_VERSION=v2.5.6
 ARG FFMPEG_VERSION=release
-ARG BGUTIL_POT_PROVIDER_VERSION=0.8.1
-ARG RUST_VERSION=1.91.1
+ARG BGUTIL_POT_PROVIDER_VERSION=v0.8.1
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl gcc libatomic1 libc6-dev libssl-dev pkg-config python3 tar xz-utils zlib1g \
+  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 python3 tar xz-utils zlib1g \
   && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \
@@ -37,25 +36,17 @@ RUN case "${TARGETARCH}" in \
   && /usr/local/bin/yt-dlp --version
 
 RUN case "${TARGETARCH}" in \
-    amd64) RUSTUP_ARCH=x86_64-unknown-linux-gnu ;; \
-    arm64) RUSTUP_ARCH=aarch64-unknown-linux-gnu ;; \
+    amd64) BGUTIL_POT_ASSET=bgutil-pot-linux-x86_64 ;; \
+    arm64) BGUTIL_POT_ASSET=bgutil-pot-linux-aarch64 ;; \
     *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
   esac \
-  && curl -fsSL "https://static.rust-lang.org/rustup/archive/1.28.2/${RUSTUP_ARCH}/rustup-init" \
-    -o /tmp/rustup-init \
-  && chmod 755 /tmp/rustup-init \
-  && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}" \
-  && rm -f /tmp/rustup-init
-
-ENV PATH="/root/.cargo/bin:/usr/local/bin:/usr/bin:${PATH}"
-
-RUN cargo install bgutil-ytdlp-pot-provider --version "${BGUTIL_POT_PROVIDER_VERSION}" --locked \
-  && cp /root/.cargo/bin/bgutil-pot /usr/local/bin/bgutil-pot \
+  && curl -fsSL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_POT_PROVIDER_VERSION}/${BGUTIL_POT_ASSET}" \
+    -o /usr/local/bin/bgutil-pot \
   && chmod 755 /usr/local/bin/bgutil-pot \
   && /usr/local/bin/bgutil-pot --version
 
 RUN mkdir -p /usr/local/share/yt-dlp-plugins \
-  && curl -fsSL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v${BGUTIL_POT_PROVIDER_VERSION}/bgutil-ytdlp-pot-provider-rs.zip" \
+  && curl -fsSL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_POT_PROVIDER_VERSION}/bgutil-ytdlp-pot-provider-rs.zip" \
     -o /tmp/bgutil-ytdlp-pot-provider-rs.zip \
   && python3 -m zipfile -e /tmp/bgutil-ytdlp-pot-provider-rs.zip /usr/local/share/yt-dlp-plugins \
   && rm -f /tmp/bgutil-ytdlp-pot-provider-rs.zip \

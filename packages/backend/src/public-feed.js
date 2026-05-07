@@ -18,7 +18,7 @@ import Protomux from 'protomux';
 import c from 'compact-encoding';
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
-import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
+import { LEGACY_FEED_TOPIC_STRING, NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
 
@@ -64,6 +64,8 @@ export class PublicFeedManager {
     this.pendingAvailabilityRequests = new Map();
     /** @type {any | null} */
     this.feedDiscovery = null;
+    /** @type {any | null} */
+    this.legacyFeedDiscovery = null;
     /** @type {any | null} */
     this._gossipInterval = null;
     /** @type {number} */
@@ -382,16 +384,24 @@ export class PublicFeedManager {
       try { this.onFeedUpdate?.(); } catch {}
     }
 
-    const feedTopic = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
-    try {
-      this.feedDiscovery = this.swarm.join(feedTopic, { server: true, client: true })
-      this.feedDiscovery?.flushed?.().then(() => {
-        console.log('[PublicFeed] Shared network feed discovery flushed, connections:', this.swarm.connections?.size || 0)
-      }).catch(() => {})
-      console.log('[PublicFeed] Joined shared network feed topic:', b4a.toString(feedTopic, 'hex').slice(0, 16))
-    } catch (err) {
-      console.log('[PublicFeed] Shared network feed topic join failed:', err?.message)
-      this.feedDiscovery = null
+    const joinDiscoveryTopic = (topicString, label) => {
+      const topic = crypto.data(b4a.from(topicString, 'utf-8'))
+      try {
+        const discovery = this.swarm.join(topic, { server: true, client: true })
+        discovery?.flushed?.().then(() => {
+          console.log(`[PublicFeed] ${label} discovery flushed, connections:`, this.swarm.connections?.size || 0)
+        }).catch(() => {})
+        console.log(`[PublicFeed] Joined ${label} topic:`, b4a.toString(topic, 'hex').slice(0, 16))
+        return discovery
+      } catch (err) {
+        console.log(`[PublicFeed] ${label} topic join failed:`, err?.message)
+        return null
+      }
+    }
+
+    this.feedDiscovery = joinDiscoveryTopic(NETWORK_TOPIC_STRING, 'shared network feed')
+    if (LEGACY_FEED_TOPIC_STRING && LEGACY_FEED_TOPIC_STRING !== NETWORK_TOPIC_STRING) {
+      this.legacyFeedDiscovery = joinDiscoveryTopic(LEGACY_FEED_TOPIC_STRING, 'legacy public-feed')
     }
 
     // Set up feed protocol on any existing connections.
@@ -449,10 +459,12 @@ export class PublicFeedManager {
       if (this._persistTimer) clearTimeout(this._persistTimer)
       if (this._gossipInterval) clearInterval(this._gossipInterval)
       this.feedDiscovery?.destroy?.()
+      this.legacyFeedDiscovery?.destroy?.()
     } catch {}
     this._persistTimer = null
     this._gossipInterval = null
     this.feedDiscovery = null
+    this.legacyFeedDiscovery = null
   }
 
   /**

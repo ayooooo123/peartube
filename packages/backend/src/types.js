@@ -126,4 +126,5 @@
  */
 
 export const NETWORK_TOPIC_STRING = 'peartube-network';
+export const LEGACY_FEED_TOPIC_STRING = 'peartube-public-feed-v1';
 export const PROTOCOL_NAME = 'peartube-feed';

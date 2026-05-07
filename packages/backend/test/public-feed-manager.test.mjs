@@ -7,7 +7,7 @@ import b4a from 'b4a'
 import Protomux from 'protomux'
 
 import { PublicFeedManager } from '../src/public-feed.js'
-import { NETWORK_TOPIC_STRING } from '../src/types.js'
+import { LEGACY_FEED_TOPIC_STRING, NETWORK_TOPIC_STRING } from '../src/types.js'
 const DRIVE_KEY = '11'.repeat(32)
 const PUBLIC_BEE_KEY = '22'.repeat(32)
 
@@ -55,15 +55,17 @@ function createConnection() {
   return new EventEmitter()
 }
 
-test('PublicFeedManager.start joins shared PearTube network topic for feed-peer discovery', async () => {
+test('PublicFeedManager.start joins current and legacy feed discovery topics', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
 
   try {
     await manager.start()
-    assert.equal(swarm.joinCalls.length, 1)
+    assert.equal(swarm.joinCalls.length, 2)
     assert.equal(b4a.toString(swarm.joinCalls[0].topic, 'hex'), b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex'))
     assert.deepEqual(swarm.joinCalls[0].opts, { server: true, client: true })
+    assert.equal(b4a.toString(swarm.joinCalls[1].topic, 'hex'), b4a.toString(crypto.data(b4a.from(LEGACY_FEED_TOPIC_STRING, 'utf-8')), 'hex'))
+    assert.deepEqual(swarm.joinCalls[1].opts, { server: true, client: true })
   } finally {
     manager.stop()
   }

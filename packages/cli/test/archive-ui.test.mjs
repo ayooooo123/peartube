@@ -353,9 +353,49 @@ test('yt-dlp downloader can retry through a UI-provided Invidious instance', asy
   await downloader.download({
     id: 'arch_inv',
     url: 'https://www.youtube.com/shorts/6ZVnOQ8DmFI',
-    invidiousInstance: 'https://yewtu.be/'
+    invidiousInstance: 'https://inv.thepixora.com/'
   })
 
   t.is(calls.length, 2, '403 failure triggers Invidious fallback when configured')
-  t.is(calls[1].args.at(-1), 'https://yewtu.be/watch?v=6ZVnOQ8DmFI')
+  t.is(calls[1].args.at(-1), 'https://inv.thepixora.com/latest_version?id=6ZVnOQ8DmFI&itag=18&local=true')
+  t.absent(calls[1].args.includes('--extractor-args'), 'direct Invidious media fallback does not reuse YouTube extractor args')
+})
+
+test('yt-dlp downloader falls back from Invidious direct media to watch page', async (t) => {
+  const calls = []
+  const existing = new Set(['/archive/tmp/arch_inv_watch/example.mp4'])
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync(path) { return existing.has(path) }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      const callNumber = calls.length
+      return {
+        stdout: { on(event, cb) { if (event === 'data' && callNumber === 3) cb('filepath\n/archive/tmp/arch_inv_watch/example.mp4\n') } },
+        stderr: { on(event, cb) {
+          if (event !== 'data') return
+          if (callNumber === 1) cb('ERROR: [youtube] 6ZVnOQ8DmFI: Sign in to confirm you’re not a bot')
+          if (callNumber === 2) cb('ERROR: [generic] Unable to download webpage: HTTP Error 400: Bad Request')
+        } },
+        on(event, cb) { if (event === 'close') cb(callNumber === 3 ? 0 : 1) }
+      }
+    }
+  })
+
+  await downloader.download({
+    id: 'arch_inv_watch',
+    url: 'https://youtu.be/6ZVnOQ8DmFI',
+    invidiousInstance: 'inv.thepixora.com'
+  })
+
+  t.is(calls.length, 3, 'direct media failure retries the Invidious watch page')
+  t.is(calls[1].args.at(-1), 'https://inv.thepixora.com/latest_version?id=6ZVnOQ8DmFI&itag=18&local=true')
+  t.is(calls[2].args.at(-1), 'https://inv.thepixora.com/watch?v=6ZVnOQ8DmFI')
 })

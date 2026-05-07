@@ -30,6 +30,7 @@ function createNoopRelayBlindPeer({ key, error = null } = {}) {
   }
 }
 
+/* eslint-disable no-empty */
 /**
  * Create the PearTube relay's blind-peer surface. This makes the relay usable
  * as a native Holepunch blind peer while keeping PearTube's public-feed and

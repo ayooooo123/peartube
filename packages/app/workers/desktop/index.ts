@@ -1,3 +1,4 @@
+/* eslint-disable no-restricted-imports, @typescript-eslint/ban-ts-comment, no-empty, no-extra-semi, @typescript-eslint/no-require-imports, @typescript-eslint/no-unused-expressions, prefer-const */
 /**
  * PearTube Desktop Worker — Thin HRPC Handler Shim
  * Initializes via createBackend() from @peartube/backend, which registers

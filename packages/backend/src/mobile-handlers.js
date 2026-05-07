@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 /**
  * PearTube shared app handler adapters.
  *

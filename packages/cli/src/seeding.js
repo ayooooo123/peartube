@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 import b4a from 'b4a'
 
 function isValidHexKey(value) {

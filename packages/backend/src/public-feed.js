@@ -64,6 +64,8 @@ export class PublicFeedManager {
     this.pendingAvailabilityRequests = new Map();
     /** @type {Map<string, number>} */
     this._directPeerRetryCounts = new Map();
+    /** @type {Map<string, any>} */
+    this._discoveredPeers = new Map();
     /** @type {number} */
     this._maxDirectPeerRetries = 3;
     /** @type {number} */
@@ -319,10 +321,21 @@ export class PublicFeedManager {
 
     const keyHex = b4a.toString(publicKey, 'hex')
     if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) return false
+    this._discoveredPeers.set(keyHex, publicKey)
     if (this.swarm.peers?.has?.(keyHex)) return false
     if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) return false
 
     const attempts = this._directPeerRetryCounts.get(keyHex) || 0
+    if (attempts >= this._maxDirectPeerRetries) return false
+
+    return this._dialDiscoveredPeer(keyHex, publicKey, attempts)
+  }
+
+  _dialDiscoveredPeer(keyHex, publicKey, attempts = this._directPeerRetryCounts.get(keyHex) || 0) {
+    if (!publicKey || !this.swarm || typeof this.swarm.joinPeer !== 'function') return false
+    if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) return false
+    if (this.swarm.peers?.has?.(keyHex)) return false
+    if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) return false
     if (attempts >= this._maxDirectPeerRetries) return false
 
     this._directPeerRetryCounts.set(keyHex, attempts + 1)
@@ -334,6 +347,16 @@ export class PublicFeedManager {
       console.log('[PublicFeed] Direct peer dial failed:', keyHex.slice(0, 16), err?.message)
       return false
     }
+  }
+
+  _redialDiscoveredPeers() {
+    if (!this._discoveredPeers.size || (this.swarm?.connections?.size || 0) >= this._maxDirectPeers) return 0
+    let dialed = 0
+    for (const [keyHex, publicKey] of this._discoveredPeers) {
+      if ((this.swarm?.connections?.size || 0) >= this._maxDirectPeers) break
+      if (this._dialDiscoveredPeer(keyHex, publicKey)) dialed++
+    }
+    return dialed
   }
 
   /**
@@ -447,7 +470,14 @@ export class PublicFeedManager {
     if (this._gossipInterval) return
     try {
       this._gossipInterval = setInterval(() => {
-        if (!this.started || this.peerChannels.size === 0) return
+        if (!this.started) return
+        const redialed = this._redialDiscoveredPeers()
+        if (this.peerChannels.size === 0) {
+          if (redialed) {
+            console.log('[PublicFeed] Periodic feed gossip announced= 0 requested= 0 redialed=', redialed)
+          }
+          return
+        }
         let announced = 0
         for (const conn of this.peerChannels.keys()) {
           try {
@@ -458,8 +488,8 @@ export class PublicFeedManager {
           }
         }
         const requested = this.requestFeedsFromPeers()
-        if (announced || requested) {
-          console.log('[PublicFeed] Periodic feed gossip announced=', announced, 'requested=', requested)
+        if (announced || requested || redialed) {
+          console.log('[PublicFeed] Periodic feed gossip announced=', announced, 'requested=', requested, 'redialed=', redialed)
         }
       }, this._gossipIntervalMs)
       if (typeof this._gossipInterval?.unref === 'function') this._gossipInterval.unref()
@@ -486,6 +516,7 @@ export class PublicFeedManager {
       }
       this.pendingAvailabilityRequests.clear()
       this._directPeerRetryCounts.clear()
+      this._discoveredPeers.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)
       if (this._gossipInterval) clearInterval(this._gossipInterval)
       this.feedDiscovery?.destroy?.()

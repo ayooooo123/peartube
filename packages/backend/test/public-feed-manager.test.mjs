@@ -405,6 +405,34 @@ test('periodic feed gossip resends HAVE_FEED and NEED_FEED on existing client co
   }
 })
 
+test('periodic feed gossip re-dials discovered peers after their connection closes', async () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const publicKey = b4a.alloc(32, 9)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const conn = createConnection()
+
+  manager._gossipIntervalMs = 10
+
+  try {
+    await manager.start()
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+
+    swarm.peers.set(keyHex, { publicKey })
+    manager.handleConnection(conn, {})
+    conn.emit('close')
+    swarm.peers.delete(keyHex)
+
+    await new Promise((resolve) => setTimeout(resolve, 35))
+
+    assert.ok(swarm.joinPeerCalls.length >= 2, 'gossip loop should re-dial a remembered peer after disconnect')
+    assert.equal(b4a.toString(swarm.joinPeerCalls.at(-1), 'hex'), keyHex)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('peer entries with publicBeeKey survive peer disconnect at peerCount zero', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

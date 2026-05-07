@@ -11,6 +11,7 @@ function emptyStats() {
     publicBeeCores: 0,
     blobCores: 0,
     discoveryHandles: 0,
+    blindPeer: null,
     lastSeededAt: null,
     lastError: null
   }
@@ -26,7 +27,7 @@ function addCoreKey(set, value) {
   return true
 }
 
-export function createRelaySeeder({ ctx, loadPublicBee, logger = {} }) {
+export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer = null }) {
   if (!ctx) throw new Error('ctx is required')
   if (typeof loadPublicBee !== 'function') throw new Error('loadPublicBee is required')
 
@@ -86,6 +87,7 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {} }) {
       const bee = await loadPublicBee(ctx, publicBeeKey)
       if (bee?.core?.discoveryKey) {
         retainDiscovery(bee.core.discoveryKey, `publicBee:${String(publicBeeKey).slice(0, 16)}`)
+        try { blindPeer?.addCore?.(bee.core, { announce: true, referrer: b4a.from(publicBeeKey, 'hex') }) } catch {}
         stats.publicBeeCores = 1
       }
 
@@ -103,6 +105,7 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {} }) {
         const core = await resolveBlobCore(keyHex)
         if (core?.discoveryKey) {
           retainDiscovery(core.discoveryKey, `blob:${keyHex.slice(0, 16)}`)
+          try { blindPeer?.addCore?.(core, { announce: true, referrer: b4a.from(publicBeeKey, 'hex') }) } catch {}
           stats.blobCores += 1
         }
       }
@@ -158,6 +161,8 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {} }) {
     const stats = emptyStats()
     stats.channels = seededChannels.size
     stats.discoveryHandles = handles.size
+    const blindPeerStats = blindPeer?.getStats?.() || null
+    if (blindPeerStats) stats.blindPeer = blindPeerStats
     for (const channel of seededChannels.values()) {
       stats.videos += Number(channel.videos || 0)
       stats.publicBeeCores += Number(channel.publicBeeCores || 0)

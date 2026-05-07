@@ -307,6 +307,37 @@ export class PublicFeedManager {
     return Array.from(merged.values())
   }
 
+  _swarmPeerEntries() {
+    const peers = this.swarm?.peers
+    if (!peers) return []
+    if (typeof peers.values === 'function') return Array.from(peers.values())
+    if (typeof peers[Symbol.iterator] === 'function') return Array.from(peers)
+    return []
+  }
+
+  _peerEntryMatchesKey(entry, keyHex) {
+    if (!entry) return false
+    if (typeof entry === 'string') return entry === keyHex
+    if (b4a.isBuffer(entry) || entry instanceof Uint8Array) {
+      return b4a.toString(entry, 'hex') === keyHex
+    }
+    const publicKey = entry.publicKey || entry.remotePublicKey || entry.key
+    if (publicKey && (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array)) {
+      return b4a.toString(publicKey, 'hex') === keyHex
+    }
+    return false
+  }
+
+  _hasKnownPeer(keyHex) {
+    const peers = this.swarm?.peers
+    if (!peers) return false
+    if (typeof peers.has === 'function' && peers.has(keyHex)) return true
+    for (const entry of this._swarmPeerEntries()) {
+      if (this._peerEntryMatchesKey(entry, keyHex)) return true
+    }
+    return false
+  }
+
   /**
    * Remember a discovered peer and explicitly dial it when the shared topic has
    * found peers but Hyperswarm has not promoted them into connections yet.
@@ -322,25 +353,21 @@ export class PublicFeedManager {
     const keyHex = b4a.toString(publicKey, 'hex')
     if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) return false
     this._discoveredPeers.set(keyHex, publicKey)
-    if (this.swarm.peers?.has?.(keyHex)) return false
-    if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) return false
+    if (this._hasKnownPeer(keyHex)) return false
 
-    const attempts = this._directPeerRetryCounts.get(keyHex) || 0
-    if (attempts >= this._maxDirectPeerRetries) return false
-
-    return this._dialDiscoveredPeer(keyHex, publicKey, attempts)
+    return this._dialDiscoveredPeer(keyHex, publicKey)
   }
 
-  _dialDiscoveredPeer(keyHex, publicKey, attempts = this._directPeerRetryCounts.get(keyHex) || 0) {
+  _dialDiscoveredPeer(keyHex, publicKey, attempts = this._directPeerRetryCounts.get(keyHex) || 0, { force = false } = {}) {
     if (!publicKey || !this.swarm || typeof this.swarm.joinPeer !== 'function') return false
     if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) return false
-    if (this.swarm.peers?.has?.(keyHex)) return false
+    if (this._hasKnownPeer(keyHex)) return false
     if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) return false
-    if (attempts >= this._maxDirectPeerRetries) return false
+    if (!force && attempts >= this._maxDirectPeerRetries) return false
 
-    this._directPeerRetryCounts.set(keyHex, attempts + 1)
     try {
       this.swarm.joinPeer(publicKey)
+      this._directPeerRetryCounts.set(keyHex, attempts + 1)
       console.log('[PublicFeed] Direct peer dial queued from shared topic:', keyHex.slice(0, 16), 'attempt=', attempts + 1)
       return true
     } catch (err) {
@@ -349,12 +376,13 @@ export class PublicFeedManager {
     }
   }
 
-  _redialDiscoveredPeers() {
-    if (!this._discoveredPeers.size || (this.swarm?.connections?.size || 0) >= this._maxDirectPeers) return 0
+  _redialDiscoveredPeers({ force = false } = {}) {
+    if (!this._discoveredPeers.size || !this.swarm || typeof this.swarm.joinPeer !== 'function') return 0
     let dialed = 0
     for (const [keyHex, publicKey] of this._discoveredPeers) {
-      if ((this.swarm?.connections?.size || 0) >= this._maxDirectPeers) break
-      if (this._dialDiscoveredPeer(keyHex, publicKey)) dialed++
+      if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) break
+      const attempts = this._directPeerRetryCounts.get(keyHex) || 0
+      if (this._dialDiscoveredPeer(keyHex, publicKey, attempts, { force })) dialed++
     }
     return dialed
   }

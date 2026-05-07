@@ -102,6 +102,8 @@ test('loadRelayConfig supports env-only relay configuration', async (t) => {
       PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER: '3',
       PEARTUBE_NETWORK_ANNOUNCE: 'false',
       PEARTUBE_NETWORK_BOOTSTRAP: 'local',
+      PEARTUBE_RELAY_BLIND_PEER_ENABLED: 'false',
+      PEARTUBE_RELAY_BLIND_PEER_TRUSTED_CLIENTS: 'aa,bb',
       PEARTUBE_RETENTION_PROTECT_PRIVATE: 'false',
       PEARTUBE_RETENTION_PROTECT_ALLOWLIST: 'false',
       PEARTUBE_LOG_LEVEL: 'debug'
@@ -120,6 +122,8 @@ test('loadRelayConfig supports env-only relay configuration', async (t) => {
   t.is(config.discovery.maxChannelsPerOwner, 3)
   t.is(config.network.announce, false)
   t.is(config.network.bootstrap, 'local')
+  t.is(config.network.blindPeer, false)
+  t.alike(config.network.trustedBlindPeerClients, ['aa', 'bb'])
   t.is(config.retention.protectPrivate, false)
   t.is(config.retention.protectAllowlist, false)
   t.is(config.logging.level, 'debug')

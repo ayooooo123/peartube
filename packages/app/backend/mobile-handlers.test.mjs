@@ -234,6 +234,53 @@ test('getPublicFeed preserves serving manifest fields from the backend api', asy
   })
 })
 
+test('submitToFeed returns backend failures instead of masking missing publicBeeKey', async () => {
+  const backend = {}
+  const deps = createDeps({
+    identityManager: {
+      getActiveIdentity() {
+        return { driveKey: 'channel-key' }
+      },
+    },
+    api: {
+      async submitToFeed(driveKey) {
+        assert.equal(driveKey, 'channel-key')
+        return { success: false, error: 'Unable to publish channel: missing publicBeeKey' }
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  assert.deepEqual(await backend.submitToFeed({}), {
+    success: false,
+    error: 'Unable to publish channel: missing publicBeeKey',
+  })
+})
+
+test('submitToFeed fails clearly when no active channel exists', async () => {
+  const backend = {}
+  const deps = createDeps({
+    identityManager: {
+      getActiveIdentity() {
+        return null
+      },
+    },
+    api: {
+      async submitToFeed() {
+        throw new Error('should not call submitToFeed without active channel')
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  assert.deepEqual(await backend.submitToFeed({}), {
+    success: false,
+    error: 'No active channel to publish',
+  })
+})
+
 test('transcodeStop and transcodeStatus await async transcoder adapters', async () => {
   const backend = {}
   const events = []

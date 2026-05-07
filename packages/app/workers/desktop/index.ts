@@ -531,7 +531,11 @@ B.getPublicFeed = async () => {
   }
 }
 B.refreshFeed = async () => { api.refreshFeed(); return { success: true } }
-B.submitToFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.submitToFeed(a.driveKey); return { success: true } }
+B.submitToFeed = async () => {
+  const a = identityManager.getActiveIdentity();
+  if (!a?.driveKey) return { success: false, error: 'No active channel to publish' }
+  return api.submitToFeed(a.driveKey)
+}
 B.unpublishFromFeed = async () => { const a = identityManager.getActiveIdentity(); if (a?.driveKey) await api.unpublishFromFeed(a.driveKey); return { success: true } }
 B.isChannelPublished = async () => { const a = identityManager.getActiveIdentity(); return a?.driveKey ? api.isChannelPublished(a.driveKey) : { published: false } }
 B.hideChannel = async (r: any) => { api.hideChannel(r.channelKey); return { success: true } }

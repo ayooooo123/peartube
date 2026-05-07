@@ -131,6 +131,50 @@ test('relay seeder refreshes all cached channels and deduplicates retained joins
   t.is(swarm.joins.length, 2)
 })
 
+test('relay seeder registers mirrored cores with relay blind peer', async (t) => {
+  const publicBeeCore = createCore('66')
+  const videoCore = createCore('77')
+  const thumbnailCore = createCore('88')
+  const swarm = createSwarm()
+  const blindPeerCalls = []
+  const ctx = {
+    swarm,
+    store: {
+      get(key) {
+        const keyHex = Buffer.isBuffer(key) ? key.toString('hex') : String(key)
+        if (keyHex.startsWith('77')) return videoCore
+        if (keyHex.startsWith('88')) return thumbnailCore
+        throw new Error(`unexpected core key ${keyHex}`)
+      }
+    }
+  }
+  const seeder = createRelaySeeder({
+    ctx,
+    loadPublicBee: async () => ({
+      core: publicBeeCore,
+      async listVideos() {
+        return [{
+          id: 'video-1',
+          blobsCoreKey: '77'.padEnd(64, '0'),
+          thumbnailBlobsCoreKey: '88'.padEnd(64, '0'),
+        }]
+      }
+    }),
+    blindPeer: {
+      addCore(core, opts) { blindPeerCalls.push({ core, opts }) },
+      getStats() { return { enabled: true, publicKey: 'relay-key', mirroredCores: blindPeerCalls.length, mirroredAutobases: 0, error: null } }
+    },
+    logger: { info() {}, warn() {}, debug() {} }
+  })
+
+  await seeder.seedChannel({ driveKey: 'aa'.padEnd(64, '0'), publicBeeKey: 'bb'.padEnd(64, '0') })
+
+  t.is(blindPeerCalls.length, 3)
+  t.alike(blindPeerCalls.map((call) => call.core), [publicBeeCore, videoCore, thumbnailCore])
+  t.ok(blindPeerCalls.every((call) => call.opts?.announce === true))
+  t.is(seeder.getStats().blindPeer.mirroredCores, 3)
+})
+
 test('relay status surfaces DHT and seeding stats for phone connectivity diagnostics', async (t) => {
   const status = buildRelayStatus({
     config: {
@@ -154,6 +198,7 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
       swarmOffline: false,
       swarmOfflineReason: null,
       swarmListenResolved: true,
+      blindPeer: { enabled: true, publicKey: 'abcd', mirroredCores: 4, mirroredAutobases: 0, error: null },
       seeding: { channels: 2, videos: 5, publicBeeCores: 2, blobCores: 8, discoveryHandles: 10 }
     }
   })
@@ -172,5 +217,6 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
   const formatted = formatRelayStatus(status)
   t.ok(formatted.includes('dht: bootstrapped=true firewalled=false online=true'))
   t.ok(formatted.includes('network: offline=false reason=none listenResolved=true peerPoolJoined=true publicFeedDiscoveryJoined=true'))
+  t.ok(formatted.includes('blindPeer: enabled=true key=abcd mirroredCores=4 mirroredAutobases=0'))
   t.ok(formatted.includes('seeding: channels=2 videos=5 publicBeeCores=2 blobCores=8 discoveryHandles=10'))
 })

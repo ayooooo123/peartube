@@ -318,7 +318,8 @@ export default function SettingsScreen() {
               text: 'Publish',
               onPress: async () => {
                 try {
-                  await rpc.submitToFeed({})
+                  const result = await rpc.submitToFeed({})
+                  if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
                   Alert.alert('Published!', 'Your channel is now visible on the public feed.')
                 } catch (err) {
                   console.error('Failed to publish to feed:', err)
@@ -346,7 +347,8 @@ export default function SettingsScreen() {
       if (confirmed) {
         try {
           console.log('[Settings] Publishing to feed, driveKey:', identity.driveKey)
-          await rpc.submitToFeed()
+          const result = await rpc.submitToFeed()
+          if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
           setIsPublished(true)
           window.alert('Published! Your channel is now visible on the public feed.')
         } catch (err) {
@@ -364,7 +366,8 @@ export default function SettingsScreen() {
             text: 'Publish',
             onPress: async () => {
               try {
-                await rpc.submitToFeed()
+                const result = await rpc.submitToFeed()
+                if (!result?.success) throw new Error(result?.error || 'Failed to publish channel')
                 setIsPublished(true)
                 Alert.alert('Published!', 'Your channel is now visible on the public feed.')
               } catch (err) {

@@ -81,7 +81,9 @@ export const DEFAULT_RELAY_CONFIG = {
   },
   network: {
     announce: true,
-    bootstrap: 'default'
+    bootstrap: 'default',
+    blindPeer: true,
+    trustedBlindPeerClients: []
   },
   archive: DEFAULT_ARCHIVE_CONFIG,
   logging: {

@@ -122,6 +122,16 @@ export async function createRelayRuntime({ config, logger }) {
       this.uploadManager = createUploadManager({ ctx })
       this.api = createApi({ ctx, publicFeed, seedingManager: null, videoStats: null })
 
+      // Use the same feed snapshot and availability-hint plumbing as the normal
+      // PearTube backend. Without these providers the relay can gossip channel
+      // keys, but phones do not learn that the relay has playable local bytes.
+      if (typeof this.api.getAvailabilityHints === 'function') {
+        publicFeed.setAvailabilityHintProvider((requests, conn) => this.api.getAvailabilityHints(requests, conn))
+      }
+      if (typeof this.api.getFeedSnapshotEntries === 'function') {
+        publicFeed.setFeedSnapshotProvider((entries) => this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
+      }
+
       // Restore mirrored/cached channels as actively served feed entries so the
       // relay behaves like a real serving peer even when original publishers are offline.
       for (const channel of cacheManager.getChannels()) {

@@ -128,14 +128,10 @@ test('feed channel open sends HAVE_FEED immediately', () => {
     manager.handleConnection(conn, {})
 
     assert.equal(sent.length, 2)
-    assert.deepEqual(sent[0], {
-      type: 'HAVE_FEED',
-      keys: [DRIVE_KEY],
-      entries: [{
-        driveKey: DRIVE_KEY,
-        publicBeeKey: PUBLIC_BEE_KEY
-      }]
-    })
+    assert.equal(sent[0].type, 'HAVE_FEED')
+    assert.deepEqual(sent[0].keys, [DRIVE_KEY])
+    assert.equal(sent[0].entries[0].driveKey, DRIVE_KEY)
+    assert.equal(sent[0].entries[0].publicBeeKey, PUBLIC_BEE_KEY)
     assert.deepEqual(sent[1], { type: 'NEED_FEED' })
   } finally {
     Protomux.from = originalFrom
@@ -190,10 +186,8 @@ test('feed channel open includes serving manifest snapshots when available', asy
 
     assert.equal(sent.length, 3)
     assert.equal(sent[0].type, 'HAVE_FEED')
-    assert.deepEqual(sent[0].entries[0], {
-      driveKey: DRIVE_KEY,
-      publicBeeKey: PUBLIC_BEE_KEY,
-    })
+    assert.equal(sent[0].entries[0].driveKey, DRIVE_KEY)
+    assert.equal(sent[0].entries[0].publicBeeKey, PUBLIC_BEE_KEY)
     assert.deepEqual(sent[1], { type: 'NEED_FEED' })
     assert.equal(sent[2].type, 'HAVE_FEED')
     assert.equal(sent[2].entries[0].channelName, 'Manifest Channel')
@@ -345,6 +339,41 @@ test('requestFeedsFromPeers sends NEED_FEED so peers reply with their feed', () 
     const count = manager.requestFeedsFromPeers()
     assert.equal(count, 1)
     assert.deepEqual(sent[sent.length - 1], { type: 'NEED_FEED' })
+  } finally {
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
+test('periodic feed gossip resends HAVE_FEED and NEED_FEED on existing client connections', async () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+  const sent = []
+
+  manager._gossipIntervalMs = 10
+  manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY)
+
+  const originalFrom = Protomux.from
+  Protomux.from = () => ({
+    pair() {},
+    createChannel(opts) {
+      return {
+        messages: [{ send(msg) { sent.push(msg) } }],
+        open() { opts.onopen() },
+      }
+    }
+  })
+
+  try {
+    await manager.start()
+    manager.handleConnection(conn, {})
+    sent.length = 0
+
+    await new Promise((resolve) => setTimeout(resolve, 35))
+
+    assert.ok(sent.some((msg) => msg.type === 'HAVE_FEED'), 'gossip loop should re-announce local feed entries')
+    assert.ok(sent.some((msg) => msg.type === 'NEED_FEED'), 'gossip loop should request peer feed refresh')
   } finally {
     Protomux.from = originalFrom
     manager.stop()

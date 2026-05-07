@@ -188,6 +188,16 @@ test('Dockerfile packages ffmpeg for yt-dlp archive merging', async (t) => {
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/ffprobe /usr/local/bin/ffprobe'), 'final image includes ffprobe executable')
 })
 
+test('relay runtime source wires client-equivalent feed availability providers', async (t) => {
+  const runtimePath = join(__dirname, '..', 'src', 'runtime.js')
+  const content = readFileSync(runtimePath, 'utf8')
+
+  t.ok(content.includes('publicFeed.setAvailabilityHintProvider'), 'relay runtime should answer availability hint requests over the feed protocol')
+  t.ok(content.includes('this.api.getAvailabilityHints(requests, conn)'), 'relay availability provider should use the same API path as clients')
+  t.ok(content.includes('publicFeed.setFeedSnapshotProvider'), 'relay runtime should gossip compact playable feed snapshots')
+  t.ok(content.includes('this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 })'), 'relay feed snapshot provider should use the same API path as clients')
+})
+
 test('Dockerfile packages the yt-dlp POT provider plugin for noninteractive YouTube bot checks', async (t) => {
   const dockerfile = readFileSync(join(__dirname, '..', 'Dockerfile'), 'utf8')
 

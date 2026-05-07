@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 /**
  * PublicFeedManager - P2P channel discovery over Hyperswarm
  *
@@ -59,6 +60,10 @@ export class PublicFeedManager {
     this._nextAvailabilityRequestId = 1;
     /** @type {Map<string, { resolve: Function, timeout: any }>} */
     this.pendingAvailabilityRequests = new Map();
+    /** @type {any | null} */
+    this._gossipInterval = null;
+    /** @type {number} */
+    this._gossipIntervalMs = 30000;
     /** @type {(() => void) | null} */
     this.onFeedUpdate = null;
     /** @type {((conn: any) => void) | null} */
@@ -379,7 +384,33 @@ export class PublicFeedManager {
     for (const conn of this.swarm.connections) {
       this.handleConnection(conn, {});
     }
+    this._startGossipLoop()
     console.log('[PublicFeed] ===== PUBLIC FEED STARTED =====');
+  }
+
+  _startGossipLoop() {
+    if (this._gossipInterval) return
+    try {
+      this._gossipInterval = setInterval(() => {
+        if (!this.started || this.peerChannels.size === 0) return
+        let announced = 0
+        for (const conn of this.peerChannels.keys()) {
+          try {
+            this.sendHaveFeed(conn)
+            announced++
+          } catch (err) {
+            console.log('[PublicFeed] periodic HAVE_FEED failed:', err?.message)
+          }
+        }
+        const requested = this.requestFeedsFromPeers()
+        if (announced || requested) {
+          console.log('[PublicFeed] Periodic feed gossip announced=', announced, 'requested=', requested)
+        }
+      }, this._gossipIntervalMs)
+      if (typeof this._gossipInterval?.unref === 'function') this._gossipInterval.unref()
+    } catch (err) {
+      console.log('[PublicFeed] Periodic feed gossip setup failed:', err?.message)
+    }
   }
 
   /**
@@ -400,8 +431,10 @@ export class PublicFeedManager {
       }
       this.pendingAvailabilityRequests.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)
+      if (this._gossipInterval) clearInterval(this._gossipInterval)
     } catch {}
     this._persistTimer = null
+    this._gossipInterval = null
   }
 
   /**
@@ -776,7 +809,7 @@ export class PublicFeedManager {
       }
     }
     else if (msg.type === 'AVAILABILITY_HINT_REQUEST' && msg.requestId && Array.isArray(msg.requests)) {
-      ;(async () => {
+      (async () => {
         try {
           const hints = this.availabilityHintProvider
             ? await this.availabilityHintProvider(msg.requests, conn)

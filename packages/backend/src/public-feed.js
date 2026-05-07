@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 /**
  * PublicFeedManager - P2P channel discovery over Hyperswarm
  *
@@ -808,7 +809,7 @@ export class PublicFeedManager {
       }
     }
     else if (msg.type === 'AVAILABILITY_HINT_REQUEST' && msg.requestId && Array.isArray(msg.requests)) {
-      ;(async () => {
+      (async () => {
         try {
           const hints = this.availabilityHintProvider
             ? await this.availabilityHintProvider(msg.requests, conn)

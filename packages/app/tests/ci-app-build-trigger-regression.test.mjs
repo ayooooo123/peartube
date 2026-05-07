@@ -19,7 +19,7 @@ function workflowHeader(workflow) {
   return workflow.slice(0, index)
 }
 
-test('app build workflows only run on main merges, version tags, or manual dispatch', () => {
+test('app build workflows only run on relevant main-path changes or manual dispatch', () => {
   const workflows = [
     ['build-mobile', readFile('.github/workflows/build-mobile.yml')],
     ['build-desktop', readFile('.github/workflows/build-desktop.yml')],
@@ -41,17 +41,44 @@ test('app build workflows only run on main merges, version tags, or manual dispa
     assert.match(
       header,
       /push:\s*\n\s*branches:\s*\[main\]/,
-      `${name} should build after merges into main`,
+      `${name} should build after relevant merges into main`,
+    )
+    assert.doesNotMatch(
+      header,
+      /push:[\s\S]*tags:/,
+      `${name} should not run redundant app builds when release tags are cut`,
     )
     assert.match(
       header,
-      /push:[\s\S]*tags:\s*\n\s*- 'v\*'/,
-      `${name} should build when version tags are cut`,
+      /paths:\s*\n(?:\s*- '[^']+'\s*\n)+/,
+      `${name} should limit main builds with path filters`,
     )
     assert.match(
       header,
       /workflow_dispatch:/,
       `${name} should still allow manual dispatch`,
+    )
+  }
+})
+
+test('expensive desktop and iOS release workflows are manual-only', () => {
+  const workflows = [
+    ['release-desktop', readFile('.github/workflows/release-desktop.yml')],
+    ['release-ios', readFile('.github/workflows/release-ios.yml')],
+  ]
+
+  for (const [name, workflow] of workflows) {
+    const header = workflowHeader(workflow)
+
+    assert.doesNotMatch(
+      header,
+      /push:/,
+      `${name} should not run automatically on tags`,
+    )
+    assert.match(
+      header,
+      /workflow_dispatch:/,
+      `${name} should remain available for manual releases`,
     )
   }
 })

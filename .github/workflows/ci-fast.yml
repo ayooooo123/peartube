@@ -3,8 +3,26 @@ name: Fast CI
 on:
   push:
     branches: [main]
+    paths:
+      - 'packages/backend/**'
+      - 'packages/cli/**'
+      - 'packages/platform/**'
+      - 'packages/spec/**'
+      - 'packages/app/tests/**'
+      - 'scripts/**'
+      - '.github/actions/**'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
+    paths:
+      - 'packages/backend/**'
+      - 'packages/cli/**'
+      - 'packages/platform/**'
+      - 'packages/spec/**'
+      - 'packages/app/tests/**'
+      - 'scripts/**'
+      - '.github/actions/**'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:

@@ -12,7 +12,8 @@ dist/
 # Generated HRPC schema (regenerate with `npm run schema`)
 spec/hrpc/
 spec/schema/
-packages/spec/spec/hrpc/
+packages/spec/spec/hrpc/*
+!packages/spec/spec/hrpc/app-rpc-adapter.mjs
 packages/spec/spec/schema/
 packages/spec/spec/swift-hrpc/
 packages/spec/spec/swift-schema/

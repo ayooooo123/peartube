@@ -50,8 +50,14 @@ export class PublicFeedManager {
     this.peerFeedKeys = new Map();
     /** @type {Map<string, number>} driveKey → live announcing peer count */
     this.entryPeerCounts = new Map();
-    /** @type {Set<any>} Active feed connections */
+    /** @type {Set<any>} Active/open feed connections */
     this.feedConnections = new Set();
+    /** @type {Map<any, string>} conn → short diagnostic id */
+    this._connectionIds = new Map();
+    /** @type {Map<any, number>} conn → first seen timestamp */
+    this._connectionStartedAt = new Map();
+    /** @type {number} */
+    this._nextConnectionId = 1;
     /** @type {Set<any>} Connections already wired for the feed protocol */
     this.wiredConnections = new Set();
     /** @type {((requests: any[], conn?: any) => Promise<any[]>) | null} */
@@ -338,6 +344,35 @@ export class PublicFeedManager {
     return false
   }
 
+  _connectionLabel(conn, info = null) {
+    if (!conn) return 'conn:unknown'
+    let label = this._connectionIds.get(conn)
+    if (!label) {
+      const remoteKey = info?.publicKey || conn.remotePublicKey || conn.publicKey
+      const remote = remoteKey && (b4a.isBuffer(remoteKey) || remoteKey instanceof Uint8Array)
+        ? b4a.toString(remoteKey, 'hex').slice(0, 16)
+        : 'unknown'
+      label = `conn:${this._nextConnectionId++}:${remote}`
+      this._connectionIds.set(conn, label)
+      this._connectionStartedAt.set(conn, Date.now())
+    }
+    return label
+  }
+
+  _connectionAgeMs(conn) {
+    const startedAt = this._connectionStartedAt.get(conn)
+    return startedAt ? Date.now() - startedAt : 0
+  }
+
+  _forgetConnection(conn) {
+    this._clearPeerFeedKeys(conn)
+    this.wiredConnections.delete(conn)
+    this.peerChannels.delete(conn)
+    this.feedConnections.delete(conn)
+    this._connectionIds.delete(conn)
+    this._connectionStartedAt.delete(conn)
+  }
+
   /**
    * Remember a discovered peer and explicitly dial it when the shared topic has
    * found peers but Hyperswarm has not promoted them into connections yet.
@@ -494,20 +529,28 @@ export class PublicFeedManager {
     console.log('[PublicFeed] ===== PUBLIC FEED STARTED =====');
   }
 
+  _openFeedConnections() {
+    return Array.from(this.feedConnections)
+      .filter((conn) => this.peerChannels.has(conn))
+  }
+
   _startGossipLoop() {
     if (this._gossipInterval) return
     try {
       this._gossipInterval = setInterval(() => {
         if (!this.started) return
         const redialed = this._redialDiscoveredPeers()
-        if (this.peerChannels.size === 0) {
-          if (redialed) {
+        const openConns = this._openFeedConnections()
+        if (openConns.length === 0) {
+          if (this.peerChannels.size > 0) {
+            console.log('[PublicFeed] Periodic feed gossip skipped unopened channels=', this.peerChannels.size, 'redialed=', redialed)
+          } else if (redialed) {
             console.log('[PublicFeed] Periodic feed gossip announced= 0 requested= 0 redialed=', redialed)
           }
           return
         }
         let announced = 0
-        for (const conn of this.peerChannels.keys()) {
+        for (const conn of openConns) {
           try {
             this.sendHaveFeed(conn)
             announced++
@@ -537,6 +580,8 @@ export class PublicFeedManager {
     this.peerFeedKeys.clear();
     this.entryPeerCounts.clear();
     this.feedConnections.clear();
+    this._connectionIds.clear();
+    this._connectionStartedAt.clear();
     try {
       for (const pending of this.pendingAvailabilityRequests.values()) {
         try { clearTimeout(pending.timeout) } catch {}
@@ -608,7 +653,8 @@ export class PublicFeedManager {
       return;
     }
 
-    console.log('[PublicFeed] handleConnection: setting up feed protocol on new connection');
+    const label = this._connectionLabel(conn, info)
+    console.log('[PublicFeed] handleConnection:', label, 'setting up feed protocol on new connection');
     this.wiredConnections.add(conn);
 
     let mux;
@@ -628,24 +674,19 @@ export class PublicFeedManager {
   }
 
   setupFeedProtocol(conn, mux) {
-    console.log('[PublicFeed] setupFeedProtocol: creating feed channel from our side');
+    const label = this._connectionLabel(conn)
+    console.log('[PublicFeed] setupFeedProtocol:', label, 'creating feed channel from our side');
     this.createFeedChannel(mux, conn);
 
     // Clean up on connection close
     conn.on('close', () => {
-      console.log('[PublicFeed] Connection closed');
-      this._clearPeerFeedKeys(conn);
-      this.wiredConnections.delete(conn);
-      this.peerChannels.delete(conn);
-      this.feedConnections.delete(conn);
+      console.log('[PublicFeed] Connection closed:', label, 'ageMs=', this._connectionAgeMs(conn));
+      this._forgetConnection(conn);
     });
 
     conn.on('error', (err) => {
-      console.error('[PublicFeed] Connection error:', err.message);
-      this._clearPeerFeedKeys(conn);
-      this.wiredConnections.delete(conn);
-      this.peerChannels.delete(conn);
-      this.feedConnections.delete(conn);
+      console.error('[PublicFeed] Connection error:', label, err.message, 'ageMs=', this._connectionAgeMs(conn));
+      this._forgetConnection(conn);
     });
   }
 
@@ -661,7 +702,8 @@ export class PublicFeedManager {
       return;
     }
 
-    console.log('[PublicFeed] createFeedChannel: creating channel with protocol:', PROTOCOL_NAME);
+    const label = this._connectionLabel(conn)
+    console.log('[PublicFeed] createFeedChannel:', label, 'creating channel with protocol:', PROTOCOL_NAME);
 
     // Create channel with messages defined in options
     let channel;
@@ -680,7 +722,7 @@ export class PublicFeedManager {
       }
       }],
       onopen: () => {
-        console.log('[PublicFeed] Feed channel opened! Total feed connections:', this.feedConnections.size + 1);
+        console.log('[PublicFeed] Feed channel opened:', label, 'Total feed connections:', this.feedConnections.size + 1, 'ageMs=', this._connectionAgeMs(conn));
         this.feedConnections.add(conn);
         try {
           this.onFeedConnectionOpen?.(conn);
@@ -701,7 +743,7 @@ export class PublicFeedManager {
         }
       },
       onclose: () => {
-        console.log('[PublicFeed] Feed channel closed');
+        console.log('[PublicFeed] Feed channel closed:', label, 'ageMs=', this._connectionAgeMs(conn));
         this._clearPeerFeedKeys(conn);
         this.peerChannels.delete(conn);
         this.feedConnections.delete(conn);
@@ -717,7 +759,7 @@ export class PublicFeedManager {
       return;
     }
 
-    console.log('[PublicFeed] createFeedChannel: channel created, storing and opening');
+    console.log('[PublicFeed] createFeedChannel:', label, 'channel created, storing and opening');
 
     // Store the channel
     this.peerChannels.set(conn, channel);
@@ -725,7 +767,7 @@ export class PublicFeedManager {
     // Open the channel
     try {
       channel.open();
-      console.log('[PublicFeed] createFeedChannel: channel.open() called');
+      console.log('[PublicFeed] createFeedChannel:', label, 'channel.open() called');
     } catch (err) {
       console.log('[PublicFeed] channel.open failed (non-fatal):', err?.message);
       this.peerChannels.delete(conn);
@@ -1140,7 +1182,9 @@ export class PublicFeedManager {
   requestFeedsFromPeers() {
     console.log('[PublicFeed] ===== REQUESTING FEEDS FROM PEERS =====');
     let sent = 0;
-    for (const [conn, channel] of this.peerChannels) {
+    for (const conn of this._openFeedConnections()) {
+      const channel = this.peerChannels.get(conn)
+      if (!channel) continue
       try {
         // Request the peer's current feed snapshot. Re-sending our own HAVE_FEED
         // here does not make the peer reply; NEED_FEED does.

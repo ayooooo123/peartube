@@ -163,6 +163,49 @@ test('handleConnection pairs and opens one feed channel per connection', () => {
   }
 })
 
+test('periodic gossip does not send on feed channels before they open', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+  const sent = []
+
+  manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY)
+
+  const originalFrom = Protomux.from
+  Protomux.from = () => ({
+    pair() {},
+    createChannel() {
+      return {
+        messages: [{
+          send(msg) {
+            sent.push(msg)
+          }
+        }],
+        open() {}
+      }
+    }
+  })
+
+  try {
+    manager.handleConnection(conn, {})
+
+    assert.equal(manager.peerChannels.size, 1)
+    assert.equal(manager.feedConnections.size, 0)
+    assert.equal(manager.requestFeedsFromPeers(), 0)
+    manager.sendHaveFeed(conn)
+    assert.equal(sent.length, 1, 'direct send still works for diagnostics/manual open paths')
+    sent.length = 0
+
+    const openConns = manager._openFeedConnections()
+    assert.deepEqual(openConns, [])
+    for (const openConn of openConns) manager.sendHaveFeed(openConn)
+    assert.equal(sent.length, 0)
+  } finally {
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
 test('feed channel open sends HAVE_FEED immediately', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
@@ -390,10 +433,10 @@ test('requestFeedsFromPeers sends NEED_FEED so peers reply with their feed', () 
   const originalFrom = Protomux.from
   Protomux.from = () => ({
     pair() {},
-    createChannel() {
+    createChannel(opts) {
       return {
         messages: [{ send(msg) { sent.push(msg) } }],
-        open() {},
+        open() { opts.onopen() },
       }
     }
   })

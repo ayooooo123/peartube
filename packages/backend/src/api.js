@@ -10,7 +10,8 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, retainSwarmDiscovery, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
+import { createBlobPlaybackService } from './blob-playback-service.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
@@ -43,6 +44,8 @@ export function createApi({
   loadChannel = storageLoadChannel,
   loadPublicBee = storageLoadPublicBee,
 }) {
+  const blobPlayback = createBlobPlaybackService(ctx)
+
   async function isMultiWriterChannelKey(channelKey) {
     try {
       const res = await ctx.metaDb.get(`mw-channel:${channelKey}`)
@@ -806,94 +809,26 @@ export function createApi({
     async getVideoUrl(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] getVideoUrl:', driveKey?.slice(0, 16), videoPath);
 
-      // INSTANT PATH: If we already have blobId and blobsCoreKey, skip metadata fetch entirely
+      // INSTANT PATH: If we already have blobId and blobsCoreKey, skip metadata fetch entirely.
       if (blobId && blobsCoreKey) {
         console.log('[API] getVideoUrl: INSTANT - using direct blobId/blobsCoreKey');
-
-        // Join swarm in background (don't wait)
-        if (ctx.swarm) {
-          try {
-            const keyBuf = b4a.from(blobsCoreKey, 'hex')
-            const discoveryKey = crypto.discoveryKey(keyBuf)
-            retainSwarmDiscovery(ctx, discoveryKey, {
-              label: `blobs:${String(blobsCoreKey).slice(0, 16)}`
-            })
-          } catch { /* best effort */ }
-        }
-
-        // Return URL instantly
-        return getVideoUrlFromBlob(ctx, blobsCoreKey, blobId, {
+        return blobPlayback.resolveDirectBlobUrl({
+          blobsCoreKey,
+          blobId,
           mimeType: mimeType || 'video/mp4',
-          instant: true
         })
       }
 
       const meta = await this.getVideoData(driveKey, videoPath, publicBeeKey)
       console.log('[API] getVideoUrl meta:', meta?.id, 'blobId:', meta?.blobId, 'blobsCoreKey:', meta?.blobsCoreKey?.slice(0, 16))
-      if (!meta) {
-        console.log('[API] getVideoUrl: no metadata found');
-        throw new Error('Video metadata not found')
+
+      let channel = null
+      if (meta?.blobId && !meta?.blobsCoreKey) {
+        console.log('[API] getVideoUrl: loading channel for blob entry (slow path)')
+        channel = await loadChannel(ctx, driveKey)
       }
 
-      if (!meta.blobId) {
-        console.log('[API] getVideoUrl: missing blobId');
-        throw new Error('Video is missing blobId (not synced yet)')
-      }
-
-      // Fast path: if we have blobsCoreKey from PublicBee, use it directly
-      // Use instant mode for zero-wait URL generation - blob server fetches on-demand
-      if (meta.blobsCoreKey) {
-        console.log('[API] getVideoUrl: INSTANT mode - generating URL immediately');
-        const blobsKeyHex = meta.blobsCoreKey;
-
-        // Join swarm in background (don't wait)
-        if (ctx.swarm) {
-          try {
-            const keyBuf = b4a.from(blobsKeyHex, 'hex')
-            const discoveryKey = crypto.discoveryKey(keyBuf)
-            retainSwarmDiscovery(ctx, discoveryKey, {
-              label: `blobs:${String(blobsKeyHex).slice(0, 16)}`
-            })
-          } catch { /* best effort */ }
-        }
-
-        // Return URL instantly - blob server handles fetching
-        return getVideoUrlFromBlob(ctx, blobsKeyHex, meta.blobId, {
-          mimeType: meta.mimeType,
-          instant: true
-        })
-      }
-
-      // Fallback: load channel to get blob entry (slower)
-      console.log('[API] getVideoUrl: loading channel for blob entry (slow path)');
-      const channel = await loadChannel(ctx, driveKey)
-      if (!channel) {
-        console.log('[API] getVideoUrl: failed to load channel');
-        throw new Error('Failed to load channel')
-      }
-
-      const blobEntry = await channel.getBlobEntry(meta)
-      if (!blobEntry?.blobsKey) {
-        console.log('[API] getVideoUrl: failed to get blob entry');
-        throw new Error('Video blob not accessible (not synced yet)')
-      }
-
-      const blobsKeyHex = b4a.toString(blobEntry.blobsKey, 'hex')
-
-      // Join swarm for blobs core to ensure we can download from peers
-      if (ctx.swarm && blobEntry.blobsKey) {
-        try {
-          const discoveryKey = crypto.discoveryKey(blobEntry.blobsKey)
-          retainSwarmDiscovery(ctx, discoveryKey, {
-            label: `blobs:${blobsKeyHex.slice(0, 16)}`
-          })
-        } catch { /* best effort */ }
-      }
-      console.log('[API] getVideoUrl: blobsKey:', blobsKeyHex.slice(0, 16), 'blobId:', meta.blobId);
-      return getVideoUrlFromBlob(ctx, blobsKeyHex, blobEntry.blobId, {
-        mimeType: meta.mimeType,
-        instant: true
-      })
+      return blobPlayback.resolveFromMetadata(meta, { channel })
     },
 
     /**
@@ -910,35 +845,17 @@ export function createApi({
     async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
 
-      let warmupStarted = true
-
-      try {
-        Promise.resolve(this.prefetchVideo(driveKey, videoPath, publicBeeKey)).catch((err) => {
-          warmupStarted = false
-          console.log('[API] preparePlayback warmup failed:', err?.message || err)
-        })
-      } catch (err) {
-        warmupStarted = false
-        console.log('[API] preparePlayback warmup failed:', err?.message || err)
-      }
-
-      const result = await this.getVideoUrl(
+      return blobPlayback.preparePlayback({
         driveKey,
         videoPath,
         publicBeeKey,
         blobId,
         blobsCoreKey,
-        mimeType
-      )
-
-      // Allow immediate async warmup failures to settle without waiting for the warmup itself.
-      await Promise.resolve()
-
-      return {
-        url: result.url,
-        stats: this.getVideoStats(driveKey, videoPath),
-        warmupStarted,
-      }
+        mimeType,
+        warmup: (...args) => this.prefetchVideo(...args),
+        resolveUrl: (...args) => this.getVideoUrl(...args),
+        getStats: (...args) => this.getVideoStats(...args),
+      })
     },
 
     /**

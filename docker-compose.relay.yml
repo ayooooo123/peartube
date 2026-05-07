@@ -24,6 +24,7 @@ services:
       PEARTUBE_ARCHIVE_UI_PORT: "8174"
       PEARTUBE_ARCHIVE_TMP_PATH: /var/lib/peartube-relay/archive-tmp
       PEARTUBE_ARCHIVE_FFMPEG_PATH: /usr/local/bin/ffmpeg
+      PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS: "--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"
       # Optional but often required by YouTube bot checks. Mount a Netscape-format
       # cookies.txt file at this path before enabling the variable.
       # PEARTUBE_ARCHIVE_COOKIES_PATH: /var/lib/peartube-relay/youtube-cookies.txt

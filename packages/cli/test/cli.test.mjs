@@ -154,6 +154,7 @@ test('Dockerfile copies yt-dlp shared libraries required by the distroless runti
   t.ok(content.includes('cp /lib/${archTriplet}/libz.so.1 /runtime-libs/libz.so.1'), 'runtime libs stage stages libz for the final image')
   t.ok(content.includes('cp /lib/${archTriplet}/${loader} /runtime-libs/${loader}'), 'runtime libs stage stages the architecture dynamic loader')
   t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/libz.so.1 /lib/libz.so.1'), 'final image copies libz into the distroless runtime')
+  t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/libc.so.6 /lib/libc.so.6'), 'final image copies libc into the distroless runtime for Python-based yt-dlp plugins')
   t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2'), 'final image copies the amd64 dynamic loader path')
   t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1'), 'final image copies the arm64 dynamic loader path')
 })
@@ -185,4 +186,18 @@ test('Dockerfile packages ffmpeg for yt-dlp archive merging', async (t) => {
   t.ok(dockerfile.includes('PEARTUBE_ARCHIVE_FFMPEG_PATH=/usr/local/bin/ffmpeg'), 'final image exposes configured ffmpeg path to archive jobs')
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg'), 'final image includes ffmpeg executable')
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/ffprobe /usr/local/bin/ffprobe'), 'final image includes ffprobe executable')
+})
+
+test('Dockerfile packages the yt-dlp POT provider plugin for noninteractive YouTube bot checks', async (t) => {
+  const dockerfile = readFileSync(join(__dirname, '..', 'Dockerfile'), 'utf8')
+
+  t.ok(dockerfile.includes('ARG BGUTIL_POT_PROVIDER_VERSION='), 'Dockerfile pins the bgutil POT provider release')
+  t.ok(dockerfile.includes('BGUTIL_POT_ASSET=bgutil-pot-linux-x86_64'), 'Dockerfile selects the bgutil POT CLI binary for amd64')
+  t.ok(dockerfile.includes('BGUTIL_POT_ASSET=bgutil-pot-linux-aarch64'), 'Dockerfile selects the bgutil POT CLI binary for arm64')
+  t.ok(dockerfile.includes('/usr/local/bin/bgutil-pot --version'), 'Dockerfile validates the bgutil POT CLI binary during image build')
+  t.ok(dockerfile.includes('bgutil-ytdlp-pot-provider-rs.zip'), 'Dockerfile downloads the yt-dlp POT provider plugin archive')
+  t.ok(dockerfile.includes('/usr/local/bin/yt-dlp --plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args "youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"'), 'Dockerfile validates yt-dlp can load the packaged plugin directory')
+  t.ok(dockerfile.includes('ENV PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS="--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"'), 'final image defaults YouTube archive jobs to the packaged plugin directory and CLI POT provider')
+  t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/bgutil-pot /usr/local/bin/bgutil-pot'), 'final image includes the bgutil POT CLI binary')
+  t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/share/yt-dlp-plugins /usr/local/share/yt-dlp-plugins'), 'final image includes yt-dlp plugins')
 })

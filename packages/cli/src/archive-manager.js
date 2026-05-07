@@ -121,6 +121,7 @@ export function createYtDlpDownloader({
   ffmpegPath = null,
   cookiesPath = null,
   jsRuntime = null,
+  ytDlpExtraArgs = [],
   spawnFn = spawn,
   fs = { mkdirSync, rmSync, existsSync },
   path = { join }
@@ -145,6 +146,7 @@ export function createYtDlpDownloader({
       if (ffmpegPath) args.push('--ffmpeg-location', ffmpegPath)
       if (cookiesPath) args.push('--cookies', cookiesPath)
       if (jsRuntime) args.push('--js-runtimes', jsRuntime)
+      if (Array.isArray(ytDlpExtraArgs) && ytDlpExtraArgs.length) args.push(...ytDlpExtraArgs)
       args.push(input.url)
 
       const { stdout, stderr } = await new Promise((resolve, reject) => {

@@ -23,6 +23,7 @@ test('archive UI commands and flags are exposed by the relay CLI', async (t) => 
   t.ok(compose.includes('8174:8174'), 'root relay compose exposes the local archive UI port')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_UI_ENABLED: "true"'), 'compose enables archive UI by default')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_FFMPEG_PATH: /usr/local/bin/ffmpeg'), 'compose configures ffmpeg for yt-dlp archive merging')
+  t.ok(compose.includes('PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS: "--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"'), 'compose configures the packaged POT plugin directory and CLI provider for archive retries')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_COOKIES_PATH'), 'compose documents optional YouTube cookies path for bot checks')
 })
 
@@ -251,4 +252,38 @@ test('yt-dlp WebUI downloader uses ffmpeg and prefers merged mp4-compatible arch
   t.ok(args.includes('--merge-output-format'), 'merge output stays mp4 when separate streams are selected')
   t.ok(args.includes('--ffmpeg-location'), 'ffmpeg location is passed when configured')
   t.is(args[args.indexOf('--ffmpeg-location') + 1], '/usr/local/bin/ffmpeg')
+})
+
+test('yt-dlp downloader appends configured extra args before the URL', async (t) => {
+  const calls = []
+  const existing = new Set(['/archive/tmp/arch_extra/example.mp4'])
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    ytDlpExtraArgs: ['--extractor-args', 'youtube:player_client=mweb', '--force-ipv4'],
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync(path) { return existing.has(path) }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_extra/example.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { if (event === 'close') cb(0) }
+      }
+    }
+  })
+
+  await downloader.download({ id: 'arch_extra', url: 'https://www.youtube.com/watch?v=ABbqy1VGeck' })
+
+  const args = calls[0].args
+  const urlIndex = args.indexOf('https://www.youtube.com/watch?v=ABbqy1VGeck')
+  t.ok(urlIndex > 0, 'source URL remains the final positional argument')
+  t.is(args[urlIndex - 3], '--extractor-args')
+  t.is(args[urlIndex - 2], 'youtube:player_client=mweb')
+  t.is(args[urlIndex - 1], '--force-ipv4')
 })

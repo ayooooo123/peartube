@@ -62,6 +62,21 @@ test('build workflows stay separate from publish workflows', () => {
   )
 })
 
+test('tagged Android releases only build the arm64-v8a APK', () => {
+  const releaseAndroid = readFile('.github/workflows/release-android.yml')
+
+  assert.match(
+    releaseAndroid,
+    /abi:\s*\[arm64-v8a\]/,
+    'release-android should only build the arm64-v8a APK for tagged releases',
+  )
+  assert.doesNotMatch(
+    releaseAndroid,
+    /abi:\s*\[[^\]]*(armeabi-v7a|x86|x86_64)/,
+    'release-android should skip armv7 and emulator APK builds for tagged releases',
+  )
+})
+
 test('GitHub Actions references use Node 24-compatible action majors', () => {
   const files = [
     ...fs.readdirSync(path.join(repoRoot, '.github/workflows')).map((name) => `.github/workflows/${name}`),

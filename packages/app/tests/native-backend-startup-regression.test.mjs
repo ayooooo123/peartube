@@ -104,6 +104,29 @@ test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
   }
 })
 
+test('desktop worker forwards feed update events and full swarm diagnostics', () => {
+  const source = readAppFile('workers/desktop/index.ts')
+
+  assert.match(source, /onFeedUpdate:\s*\(\) => \{[\s\S]*?eventFeedUpdate\?\.\(\{ channelKey: 'feed', action: 'update' \}\)/)
+
+  const swarmStatusBlock = source.match(/B\.getSwarmStatus = async \(\) => \{([\s\S]*?)\n\}/)?.[1] ?? ''
+  assert.ok(swarmStatusBlock, 'desktop getSwarmStatus handler should exist')
+  assert.match(swarmStatusBlock, /api\.getSwarmStatus\(\)/)
+  for (const field of [
+    'network',
+    'swarmOffline',
+    'swarmOfflineReason',
+    'swarmListenResolved',
+    'peerPoolJoined',
+    'publicFeedDiscoveryJoined',
+    'feedTopicHex',
+    'feedConnections',
+    'feedEntries',
+  ]) {
+    assert.match(swarmStatusBlock, new RegExp(field), `desktop getSwarmStatus should expose ${field}`)
+  }
+})
+
 test('backend orchestrator defers warm-up behind startup gates and does not force a boot-time feed sync request', () => {
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 

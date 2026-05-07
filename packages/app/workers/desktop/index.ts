@@ -423,6 +423,9 @@ const { rpc: _rpc, backend, destroy } = await createBackend({
   platform: 'desktop',
   onReady: (data: any) => { console.log('[Worker] Backend ready, blob port:', data?.blobServerPort) },
   onError: (err: any) => { console.error('[Worker] Backend error:', err?.message || err) },
+  onFeedUpdate: () => {
+    try { _rpc?.eventFeedUpdate?.({ channelKey: 'feed', action: 'update' }) } catch {}
+  },
   onVideoStats: (driveKey: string, videoPath: string, stats: any) => {
     try {
       _rpc?.eventVideoStats?.({ stats: { videoId: videoPath, channelKey: driveKey, status: stats?.status || 'unknown', progress: stats?.progress || 0, totalBlocks: stats?.totalBlocks || 0, downloadedBlocks: stats?.downloadedBlocks || 0, totalBytes: stats?.totalBytes || 0, downloadedBytes: stats?.downloadedBytes || 0, peerCount: stats?.peerCount || 0, speedMBps: stats?.speedMBps || '0', uploadSpeedMBps: stats?.uploadSpeedMBps || '0', elapsed: stats?.elapsed || 0, isComplete: Boolean(stats?.isComplete) } })
@@ -581,7 +584,25 @@ B.getVideoThumbnail = async (r: any) => {
 B.setVideoThumbnail = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(Buffer.from(r.imageData, 'base64')); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }
 B.setVideoThumbnailFromFile = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(fs.readFileSync(r.filePath)); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }
 B.getStatus = async () => ({ status: { ready: true, hasIdentity: identityManager.getIdentities().length > 0, blobServerPort: getBlobPort() } })
-B.getSwarmStatus = async () => ({ connected: ctx.swarm.connections.size > 0, peerCount: ctx.swarm.connections.size })
+B.getSwarmStatus = async () => {
+  const s = api.getSwarmStatus()
+  return {
+    connected: (s.swarmConnections || 0) > 0,
+    peerCount: s.swarmConnections || 0,
+    swarmConnections: s.swarmConnections || 0,
+    swarmPeers: s.swarmPeers || 0,
+    feedConnections: s.feedConnections || 0,
+    feedEntries: s.feedEntries || 0,
+    channelsLoaded: s.channelsLoaded || 0,
+    network: s.network || null,
+    swarmOffline: Boolean(s.swarmOffline),
+    swarmOfflineReason: s.swarmOfflineReason || null,
+    swarmListenResolved: Boolean(s.swarmListenResolved),
+    peerPoolJoined: Boolean(s.peerPoolJoined),
+    publicFeedDiscoveryJoined: Boolean(s.publicFeedDiscoveryJoined),
+    feedTopicHex: s.feedTopicHex || null,
+  }
+}
 B.getBlobServerPort = async () => ({ port: getBlobPort() })
 B.createDeviceInvite = async (r: any) => { const res = await api.createDeviceInvite(r.channelKey); return { inviteCode: res.inviteCode } }
 B.pairDevice = async (r: any) => { const res = await api.pairDevice(r.inviteCode, r.deviceName || ''); try { const ex = identityManager.getIdentities?.() || []; if (ex.length === 0 && res?.channelKey) await identityManager.addPairedChannelIdentity?.(res.channelKey, 'Paired Channel') } catch {} return { success: Boolean(res.success), channelKey: res.channelKey } }

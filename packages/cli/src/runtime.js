@@ -225,6 +225,11 @@ export async function createRelayRuntime({ config, logger }) {
           firewalled: ctx.swarm?.dht?.firewalled ?? null,
           online: ctx.swarm?.dht?.online ?? null
         },
+        publicFeedDiscoveryJoined: Boolean(publicFeed.feedDiscovery),
+        peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
+        swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
+        swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
+        swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),
         seeding: seeder.getStats()
       }
     },

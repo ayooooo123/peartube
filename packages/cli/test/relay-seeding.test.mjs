@@ -149,6 +149,11 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
       feedConnections: 1,
       feedEntries: 3,
       dht: { bootstrapped: true, firewalled: false, online: true },
+      publicFeedDiscoveryJoined: true,
+      peerPoolJoined: true,
+      swarmOffline: false,
+      swarmOfflineReason: null,
+      swarmListenResolved: true,
       seeding: { channels: 2, videos: 5, publicBeeCores: 2, blobCores: 8, discoveryHandles: 10 }
     }
   })
@@ -166,5 +171,6 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
 
   const formatted = formatRelayStatus(status)
   t.ok(formatted.includes('dht: bootstrapped=true firewalled=false online=true'))
+  t.ok(formatted.includes('network: offline=false reason=none listenResolved=true peerPoolJoined=true publicFeedDiscoveryJoined=true'))
   t.ok(formatted.includes('seeding: channels=2 videos=5 publicBeeCores=2 blobCores=8 discoveryHandles=10'))
 })

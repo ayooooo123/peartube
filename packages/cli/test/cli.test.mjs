@@ -175,3 +175,14 @@ test('Dockerfile packages deno for yt-dlp YouTube JavaScript extraction', async 
   t.ok(dockerfile.includes('PEARTUBE_ARCHIVE_JS_RUNTIME=deno:/usr/local/bin/deno'), 'final image configures yt-dlp to use Deno')
   t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/deno /usr/local/bin/deno'), 'final image includes Deno executable')
 })
+
+test('Dockerfile packages ffmpeg for yt-dlp archive merging', async (t) => {
+  const dockerfile = readFileSync(join(__dirname, '..', 'Dockerfile'), 'utf8')
+
+  t.ok(dockerfile.includes('ARG FFMPEG_VERSION='), 'Dockerfile pins an ffmpeg static build version')
+  t.ok(dockerfile.includes('johnvansickle.com/ffmpeg/releases'), 'Dockerfile downloads static ffmpeg release assets')
+  t.ok(dockerfile.includes('/usr/local/bin/ffmpeg -version'), 'Dockerfile validates ffmpeg during image build')
+  t.ok(dockerfile.includes('PEARTUBE_ARCHIVE_FFMPEG_PATH=/usr/local/bin/ffmpeg'), 'final image exposes configured ffmpeg path to archive jobs')
+  t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg'), 'final image includes ffmpeg executable')
+  t.ok(dockerfile.includes('COPY --from=runtime-libs /usr/local/bin/ffprobe /usr/local/bin/ffprobe'), 'final image includes ffprobe executable')
+})

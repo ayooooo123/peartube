@@ -22,6 +22,7 @@ test('archive UI commands and flags are exposed by the relay CLI', async (t) => 
   t.absent(readFileSync(join(__dirname, '..', 'src', 'archive-console.js'), 'utf8').includes('node:http'), 'archive console uses runtime HTTP shim')
   t.ok(compose.includes('8174:8174'), 'root relay compose exposes the local archive UI port')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_UI_ENABLED: "true"'), 'compose enables archive UI by default')
+  t.ok(compose.includes('PEARTUBE_ARCHIVE_FFMPEG_PATH: /usr/local/bin/ffmpeg'), 'compose configures ffmpeg for yt-dlp archive merging')
   t.ok(compose.includes('PEARTUBE_ARCHIVE_COOKIES_PATH'), 'compose documents optional YouTube cookies path for bot checks')
 })
 
@@ -217,4 +218,37 @@ test('yt-dlp downloader removes deprecated no-call-home and passes cookies/js ru
   t.is(args[args.indexOf('--cookies') + 1], '/var/lib/peartube-relay/youtube-cookies.txt')
   t.ok(args.includes('--js-runtimes'), 'JS runtime option is passed when configured')
   t.is(args[args.indexOf('--js-runtimes') + 1], 'deno:/usr/local/bin/deno')
+})
+
+test('yt-dlp WebUI downloader uses ffmpeg and prefers merged mp4-compatible archives', async (t) => {
+  const calls = []
+  const existing = new Set(['/archive/tmp/arch_ffmpeg/example.mp4'])
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    ffmpegPath: '/usr/local/bin/ffmpeg',
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync(path) { return existing.has(path) }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_ffmpeg/example.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { if (event === 'close') cb(0) }
+      }
+    }
+  })
+
+  await downloader.download({ id: 'arch_ffmpeg', url: 'https://www.youtube.com/watch?v=ABbqy1VGeck' })
+
+  const args = calls[0].args
+  t.is(args[args.indexOf('-f') + 1], 'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b', 'WebUI archive prefers bounded mp4-compatible video+audio with progressive fallback')
+  t.ok(args.includes('--merge-output-format'), 'merge output stays mp4 when separate streams are selected')
+  t.ok(args.includes('--ffmpeg-location'), 'ffmpeg location is passed when configured')
+  t.is(args[args.indexOf('--ffmpeg-location') + 1], '/usr/local/bin/ffmpeg')
 })

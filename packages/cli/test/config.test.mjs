@@ -137,3 +137,14 @@ test('resolveRelayConfig reads archive cookies and JS runtime env vars', async (
   t.is(config.archive.cookiesPath, '/var/lib/peartube-relay/youtube-cookies.txt')
   t.is(config.archive.jsRuntime, 'deno:/usr/local/bin/deno')
 })
+
+test('resolveRelayConfig reads archive ffmpeg path env var', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_ARCHIVE_UI_ENABLED: 'true',
+      PEARTUBE_ARCHIVE_FFMPEG_PATH: '/usr/local/bin/ffmpeg'
+    }
+  })
+
+  t.is(config.archive.ffmpegPath, '/usr/local/bin/ffmpeg')
+})

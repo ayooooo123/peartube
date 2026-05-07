@@ -18,9 +18,10 @@ FROM debian:12-slim AS runtime-libs
 ARG TARGETARCH
 ARG YT_DLP_VERSION=2026.03.17
 ARG DENO_VERSION=v2.5.6
+ARG FFMPEG_VERSION=release
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 python3 zlib1g \
+  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 python3 tar xz-utils zlib1g \
   && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \
@@ -45,6 +46,21 @@ RUN case "${TARGETARCH}" in \
   && chmod 755 /usr/local/bin/deno \
   && /usr/local/bin/deno --version
 
+RUN case "${TARGETARCH}" in \
+    amd64) FFMPEG_ASSET=ffmpeg-${FFMPEG_VERSION}-amd64-static.tar.xz ;; \
+    arm64) FFMPEG_ASSET=ffmpeg-${FFMPEG_VERSION}-arm64-static.tar.xz ;; \
+    *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSL "https://johnvansickle.com/ffmpeg/releases/${FFMPEG_ASSET}" \
+    -o /tmp/ffmpeg.tar.xz \
+  && mkdir -p /tmp/ffmpeg \
+  && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 \
+  && cp /tmp/ffmpeg/ffmpeg /usr/local/bin/ffmpeg \
+  && cp /tmp/ffmpeg/ffprobe /usr/local/bin/ffprobe \
+  && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar.xz \
+  && chmod 755 /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
+  && /usr/local/bin/ffmpeg -version
+
 RUN mkdir -p /runtime-libs \
   && case "${TARGETARCH}" in \
     amd64) archTriplet=x86_64-linux-gnu; loader=ld-linux-x86-64.so.2; loaderDir=/lib64 ;; \
@@ -67,6 +83,7 @@ ENV PEARTUBE_STORAGE_PATH=/var/lib/peartube-relay
 ENV PEARTUBE_STORAGE_MAX_BYTES=107374182400
 ENV PEARTUBE_LOG_LEVEL=info
 ENV PEARTUBE_ARCHIVE_YT_DLP_PATH=/usr/local/bin/yt-dlp
+ENV PEARTUBE_ARCHIVE_FFMPEG_PATH=/usr/local/bin/ffmpeg
 ENV PEARTUBE_ARCHIVE_JS_RUNTIME=deno:/usr/local/bin/deno
 ENV PATH="/usr/local/bin:/usr/bin:${PATH}"
 
@@ -79,6 +96,8 @@ COPY --from=runtime-libs /runtime-libs/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-
 COPY --from=runtime-libs /runtime-libs/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1
 COPY --from=runtime-libs /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 COPY --from=runtime-libs /usr/local/bin/deno /usr/local/bin/deno
+COPY --from=runtime-libs /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=runtime-libs /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 
 VOLUME ["/var/lib/peartube-relay"]
 

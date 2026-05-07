@@ -20,9 +20,10 @@ ARG YT_DLP_VERSION=2026.03.17
 ARG DENO_VERSION=v2.5.6
 ARG FFMPEG_VERSION=release
 ARG BGUTIL_POT_PROVIDER_VERSION=0.8.1
+ARG RUST_VERSION=1.85.1
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates cargo curl libatomic1 python3 tar xz-utils zlib1g \
+  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 python3 tar xz-utils zlib1g \
   && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \
@@ -34,6 +35,19 @@ RUN case "${TARGETARCH}" in \
     -o /usr/local/bin/yt-dlp \
   && chmod 755 /usr/local/bin/yt-dlp \
   && /usr/local/bin/yt-dlp --version
+
+RUN case "${TARGETARCH}" in \
+    amd64) RUSTUP_ARCH=x86_64-unknown-linux-gnu ;; \
+    arm64) RUSTUP_ARCH=aarch64-unknown-linux-gnu ;; \
+    *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSL "https://static.rust-lang.org/rustup/archive/1.28.2/${RUSTUP_ARCH}/rustup-init" \
+    -o /tmp/rustup-init \
+  && chmod 755 /tmp/rustup-init \
+  && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}" \
+  && rm -f /tmp/rustup-init
+
+ENV PATH="/root/.cargo/bin:/usr/local/bin:/usr/bin:${PATH}"
 
 RUN cargo install bgutil-ytdlp-pot-provider --version "${BGUTIL_POT_PROVIDER_VERSION}" --locked \
   && cp /usr/local/cargo/bin/bgutil-pot /usr/local/bin/bgutil-pot \

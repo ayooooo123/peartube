@@ -19,10 +19,10 @@ ARG TARGETARCH
 ARG YT_DLP_VERSION=2026.03.17
 ARG DENO_VERSION=v2.5.6
 ARG FFMPEG_VERSION=release
-ARG BGUTIL_POT_PROVIDER_VERSION=v0.8.1
+ARG BGUTIL_POT_PROVIDER_VERSION=0.8.1
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 python3 tar xz-utils zlib1g \
+  && apt-get install -y --no-install-recommends ca-certificates cargo curl libatomic1 python3 tar xz-utils zlib1g \
   && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \
@@ -35,18 +35,13 @@ RUN case "${TARGETARCH}" in \
   && chmod 755 /usr/local/bin/yt-dlp \
   && /usr/local/bin/yt-dlp --version
 
-RUN case "${TARGETARCH}" in \
-    amd64) BGUTIL_POT_ASSET=bgutil-pot-linux-x86_64 ;; \
-    arm64) BGUTIL_POT_ASSET=bgutil-pot-linux-aarch64 ;; \
-    *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-  esac \
-  && curl -fsSL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_POT_PROVIDER_VERSION}/${BGUTIL_POT_ASSET}" \
-    -o /usr/local/bin/bgutil-pot \
+RUN cargo install bgutil-ytdlp-pot-provider --version "${BGUTIL_POT_PROVIDER_VERSION}" --locked \
+  && cp /usr/local/cargo/bin/bgutil-pot /usr/local/bin/bgutil-pot \
   && chmod 755 /usr/local/bin/bgutil-pot \
   && /usr/local/bin/bgutil-pot --version
 
 RUN mkdir -p /usr/local/share/yt-dlp-plugins \
-  && curl -fsSL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_POT_PROVIDER_VERSION}/bgutil-ytdlp-pot-provider-rs.zip" \
+  && curl -fsSL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/v${BGUTIL_POT_PROVIDER_VERSION}/bgutil-ytdlp-pot-provider-rs.zip" \
     -o /tmp/bgutil-ytdlp-pot-provider-rs.zip \
   && python3 -m zipfile -e /tmp/bgutil-ytdlp-pot-provider-rs.zip /usr/local/share/yt-dlp-plugins \
   && rm -f /tmp/bgutil-ytdlp-pot-provider-rs.zip \

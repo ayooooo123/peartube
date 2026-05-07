@@ -319,6 +319,15 @@ export async function createBackendContext(config) {
       console.error('[Orchestrator] publicFeed.handleConnection failed:', err?.message);
     }
   });
+  ctx.swarm.on('peer', (peer) => {
+    try {
+      if (publicFeed.handleDiscoveredPeer(peer)) {
+        startupGate.noteSwarmPeer()
+      }
+    } catch (err) {
+      console.error('[Orchestrator] publicFeed.handleDiscoveredPeer failed:', err?.message)
+    }
+  })
   ipcLog('[orchestrator] seedingManager.init starting')
   await appendDebugLine('[orchestrator] seedingManager.init starting')
 

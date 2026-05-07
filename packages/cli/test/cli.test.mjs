@@ -196,6 +196,8 @@ test('relay runtime source wires client-equivalent feed availability providers',
   t.ok(content.includes('this.api.getAvailabilityHints(requests, conn)'), 'relay availability provider should use the same API path as clients')
   t.ok(content.includes('publicFeed.setFeedSnapshotProvider'), 'relay runtime should gossip compact playable feed snapshots')
   t.ok(content.includes('this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 })'), 'relay feed snapshot provider should use the same API path as clients')
+  t.ok(content.includes("ctx.swarm.on('peer'"), 'relay runtime should react to shared-topic peer discoveries')
+  t.ok(content.includes('publicFeed.handleDiscoveredPeer(peer)'), 'relay runtime should explicitly dial shared-topic discovered peers')
 })
 
 test('Dockerfile packages the yt-dlp POT provider plugin for noninteractive YouTube bot checks', async (t) => {

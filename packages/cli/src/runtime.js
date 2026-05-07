@@ -77,6 +77,9 @@ export async function createRelayRuntime({ config, logger }) {
   ctx.swarm.on('connection', (conn, info) => {
     publicFeed.handleConnection(conn, info)
   })
+  ctx.swarm.on('peer', (peer) => {
+    publicFeed.handleDiscoveredPeer(peer)
+  })
 
   publicFeed.setOnFeedUpdate(() => {
     try {

@@ -91,6 +91,7 @@ let globalSwarm = null;
 let globalBlobServer = null;
 let globalChannels = null;
 let globalPeerPoolDiscovery = null;
+let globalPeerPoolTopicHex = null;
 
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
@@ -662,6 +663,7 @@ export async function initializeStorage(config) {
   // Join the PearTube network topic for peer pool building
   // More connected peers = better relay options for symmetric NAT holepunching
   const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'));
+  globalPeerPoolTopicHex = b4a.toString(PEARTUBE_NETWORK_TOPIC, 'hex')
   if (!swarm._peartubeOffline) {
     try {
       const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
@@ -1861,6 +1863,11 @@ export function getNetworkStats() {
       return {
         connections: globalSwarm.connections?.size || 0,
         peers: globalSwarm.peers?.size || 0,
+        offline: Boolean(globalSwarm._peartubeOffline),
+        offlineReason: globalSwarm._peartubeOfflineReason || null,
+        listenResolved: Boolean(globalSwarm._peartubeListenResolved),
+        peerPoolJoined: Boolean(globalPeerPoolDiscovery),
+        peerPoolTopicHex: globalPeerPoolTopicHex,
         dht: {
           firewalled: globalSwarm.dht?.firewalled ?? null,
           bootstrapped: globalSwarm.dht?.bootstrapped ?? null,
@@ -1893,6 +1900,11 @@ export function getNetworkStatsReadable() {
       return [
         `Connections: ${globalSwarm.connections?.size || 0}`,
         `Peers discovered: ${globalSwarm.peers?.size || 0}`,
+        `Swarm offline: ${Boolean(globalSwarm._peartubeOffline)}`,
+        `Swarm offline reason: ${globalSwarm._peartubeOfflineReason || 'none'}`,
+        `Swarm listen resolved: ${Boolean(globalSwarm._peartubeListenResolved)}`,
+        `Peer pool joined: ${Boolean(globalPeerPoolDiscovery)}`,
+        `Peer pool topic: ${globalPeerPoolTopicHex || 'unknown'}`,
         `DHT firewalled: ${dht?.firewalled ?? 'unknown'}`,
         `DHT bootstrapped: ${dht?.bootstrapped ?? 'unknown'}`,
         `DHT online: ${dht?.online ?? 'unknown'}`

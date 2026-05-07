@@ -10,7 +10,7 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
@@ -2447,12 +2447,19 @@ export function createApi({
      */
     getSwarmStatus() {
       const topicHex = b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex')
+      const networkDebug = getNetworkStats()
       return {
         swarmConnections: ctx.swarm?.connections?.size || 0,
         swarmPeers: ctx.swarm?.peers?.size || 0,
         feedConnections: publicFeed?.feedConnections?.size || 0,
         feedEntries: publicFeed?.entries?.size || 0,
         feedTopicHex: topicHex,
+        network: networkDebug,
+        swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
+        swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
+        swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),
+        peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
+        publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
         swarmPublicKey: ctx.swarm?.keyPair?.publicKey
           ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
           : 'unknown',

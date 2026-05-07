@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 /**
  * PearTube Mobile Handler Adapters
  *
@@ -164,6 +165,13 @@ export function attachMobileHandlers(B, deps) {
       feedConnections: s.feedConnections || 0,
       feedEntries: s.feedEntries || 0,
       channelsLoaded: s.channelsLoaded || 0,
+      network: s.network || null,
+      swarmOffline: Boolean(s.swarmOffline),
+      swarmOfflineReason: s.swarmOfflineReason || null,
+      swarmListenResolved: Boolean(s.swarmListenResolved),
+      peerPoolJoined: Boolean(s.peerPoolJoined),
+      publicFeedDiscoveryJoined: Boolean(s.publicFeedDiscoveryJoined),
+      feedTopicHex: s.feedTopicHex || null,
     }
   }
 

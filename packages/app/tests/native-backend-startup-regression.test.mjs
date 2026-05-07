@@ -79,6 +79,24 @@ test('native root layout clears startup timeout and releases loading on explicit
   assert.match(catchBlock, /setLoading\(false\)/)
 })
 
+test('mobile getSwarmStatus forwards low-level network diagnostics', () => {
+  const source = readAppFile('backend/mobile-handlers.mjs')
+  const handlerBlock = source.match(/B\.getSwarmStatus = async \(\) => \{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
+
+  assert.ok(handlerBlock, 'mobile getSwarmStatus handler should exist')
+  for (const field of [
+    'network',
+    'swarmOffline',
+    'swarmOfflineReason',
+    'swarmListenResolved',
+    'peerPoolJoined',
+    'publicFeedDiscoveryJoined',
+    'feedTopicHex',
+  ]) {
+    assert.match(handlerBlock, new RegExp(field), `getSwarmStatus should expose ${field}`)
+  }
+})
+
 test('backend orchestrator defers warm-up behind startup gates and does not force a boot-time feed sync request', () => {
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 

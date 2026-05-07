@@ -148,3 +148,14 @@ test('resolveRelayConfig reads archive ffmpeg path env var', async (t) => {
 
   t.is(config.archive.ffmpegPath, '/usr/local/bin/ffmpeg')
 })
+
+test('resolveRelayConfig reads archive yt-dlp extra args env var', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_ARCHIVE_UI_ENABLED: 'true',
+      PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS: '--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot --force-ipv4'
+    }
+  })
+
+  t.alike(config.archive.ytDlpExtraArgs, ['--plugin-dirs', '/usr/local/share/yt-dlp-plugins', '--extractor-args', 'youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot', '--force-ipv4'])
+})

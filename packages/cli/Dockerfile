@@ -19,6 +19,7 @@ ARG TARGETARCH
 ARG YT_DLP_VERSION=2026.03.17
 ARG DENO_VERSION=v2.5.6
 ARG FFMPEG_VERSION=release
+ARG BGUTIL_POT_PROVIDER_VERSION=v0.8.1
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 python3 tar xz-utils zlib1g \
@@ -33,6 +34,23 @@ RUN case "${TARGETARCH}" in \
     -o /usr/local/bin/yt-dlp \
   && chmod 755 /usr/local/bin/yt-dlp \
   && /usr/local/bin/yt-dlp --version
+
+RUN case "${TARGETARCH}" in \
+    amd64) BGUTIL_POT_ASSET=bgutil-pot-linux-x86_64 ;; \
+    arm64) BGUTIL_POT_ASSET=bgutil-pot-linux-aarch64 ;; \
+    *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_POT_PROVIDER_VERSION}/${BGUTIL_POT_ASSET}" \
+    -o /usr/local/bin/bgutil-pot \
+  && chmod 755 /usr/local/bin/bgutil-pot \
+  && /usr/local/bin/bgutil-pot --version
+
+RUN mkdir -p /usr/local/share/yt-dlp-plugins \
+  && curl -fsSL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_POT_PROVIDER_VERSION}/bgutil-ytdlp-pot-provider-rs.zip" \
+    -o /tmp/bgutil-ytdlp-pot-provider-rs.zip \
+  && python3 -m zipfile -e /tmp/bgutil-ytdlp-pot-provider-rs.zip /usr/local/share/yt-dlp-plugins \
+  && rm -f /tmp/bgutil-ytdlp-pot-provider-rs.zip \
+  && /usr/local/bin/yt-dlp --plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args "youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot" --version
 
 RUN case "${TARGETARCH}" in \
     amd64) DENO_ASSET=deno-x86_64-unknown-linux-gnu.zip ;; \
@@ -69,11 +87,12 @@ RUN mkdir -p /runtime-libs \
   esac \
   && cp /usr/lib/${archTriplet}/libatomic.so.1 /runtime-libs/libatomic.so.1 \
   && cp /lib/${archTriplet}/libz.so.1 /runtime-libs/libz.so.1 \
+  && cp /lib/${archTriplet}/libc.so.6 /runtime-libs/libc.so.6 \
   && cp /lib/${archTriplet}/${loader} /runtime-libs/${loader} \
   && test -e /runtime-libs/ld-linux-x86-64.so.2 || cp /runtime-libs/${loader} /runtime-libs/ld-linux-x86-64.so.2 \
   && test -e /runtime-libs/ld-linux-aarch64.so.1 || cp /runtime-libs/${loader} /runtime-libs/ld-linux-aarch64.so.1 \
   && printf '%s' "${loaderDir}" > /runtime-libs/loader-dir \
-  && chmod 755 /runtime-libs/libatomic.so.1 /runtime-libs/libz.so.1 /runtime-libs/ld-linux-x86-64.so.2 /runtime-libs/ld-linux-aarch64.so.1
+  && chmod 755 /runtime-libs/libatomic.so.1 /runtime-libs/libz.so.1 /runtime-libs/libc.so.6 /runtime-libs/ld-linux-x86-64.so.2 /runtime-libs/ld-linux-aarch64.so.1
 
 FROM gcr.io/distroless/cc-debian12
 
@@ -85,6 +104,7 @@ ENV PEARTUBE_LOG_LEVEL=info
 ENV PEARTUBE_ARCHIVE_YT_DLP_PATH=/usr/local/bin/yt-dlp
 ENV PEARTUBE_ARCHIVE_FFMPEG_PATH=/usr/local/bin/ffmpeg
 ENV PEARTUBE_ARCHIVE_JS_RUNTIME=deno:/usr/local/bin/deno
+ENV PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS="--plugin-dirs /usr/local/share/yt-dlp-plugins --extractor-args youtube:player_client=mweb;youtubepot-bgutilcli:cli_path=/usr/local/bin/bgutil-pot"
 ENV PATH="/usr/local/bin:/usr/bin:${PATH}"
 
 WORKDIR /var/lib/peartube-relay
@@ -92,9 +112,12 @@ WORKDIR /var/lib/peartube-relay
 COPY --from=artifact /peartube-relay /peartube-relay
 COPY --from=runtime-libs /runtime-libs/libatomic.so.1 /lib/libatomic.so.1
 COPY --from=runtime-libs /runtime-libs/libz.so.1 /lib/libz.so.1
+COPY --from=runtime-libs /runtime-libs/libc.so.6 /lib/libc.so.6
 COPY --from=runtime-libs /runtime-libs/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2
 COPY --from=runtime-libs /runtime-libs/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1
 COPY --from=runtime-libs /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
+COPY --from=runtime-libs /usr/local/bin/bgutil-pot /usr/local/bin/bgutil-pot
+COPY --from=runtime-libs /usr/local/share/yt-dlp-plugins /usr/local/share/yt-dlp-plugins
 COPY --from=runtime-libs /usr/local/bin/deno /usr/local/bin/deno
 COPY --from=runtime-libs /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=runtime-libs /usr/local/bin/ffprobe /usr/local/bin/ffprobe

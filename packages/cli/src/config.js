@@ -9,6 +9,7 @@ import {
   DEFAULT_ARCHIVE_MAX_ITEMS,
   DEFAULT_ARCHIVE_MAX_RETRIES,
   DEFAULT_ARCHIVE_POLL_SECONDS,
+  DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS,
   DEFAULT_ARCHIVE_YT_DLP_PATH,
   DEFAULT_RELAY_CONFIG,
   RELAY_CATALOG_FILENAME,
@@ -59,6 +60,51 @@ function splitCommaList(value) {
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean)
+}
+
+function splitShellArgs(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => splitShellArgs(entry))
+  }
+  if (typeof value !== 'string') return []
+
+  const args = []
+  let current = ''
+  let quote = null
+  let escaped = false
+
+  for (const char of value.trim()) {
+    if (escaped) {
+      current += char
+      escaped = false
+      continue
+    }
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (char === quote) quote = null
+      else current += char
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        args.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += char
+  }
+
+  if (escaped) current += '\\'
+  if (current) args.push(current)
+  return args
 }
 
 function parseBoolean(value) {
@@ -237,6 +283,7 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_FFMPEG_PATH ||
     env.PEARTUBE_ARCHIVE_COOKIES_PATH ||
     env.PEARTUBE_ARCHIVE_JS_RUNTIME ||
+    env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS ||
     env.PEARTUBE_ARCHIVE_SOURCES
   ) {
     config.archive = {}
@@ -254,6 +301,7 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_ARCHIVE_FFMPEG_PATH) config.archive.ffmpegPath = env.PEARTUBE_ARCHIVE_FFMPEG_PATH
     if (env.PEARTUBE_ARCHIVE_COOKIES_PATH) config.archive.cookiesPath = env.PEARTUBE_ARCHIVE_COOKIES_PATH
     if (env.PEARTUBE_ARCHIVE_JS_RUNTIME) config.archive.jsRuntime = env.PEARTUBE_ARCHIVE_JS_RUNTIME
+    if (env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS) config.archive.ytDlpExtraArgs = splitShellArgs(env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS)
     if (env.PEARTUBE_ARCHIVE_SOURCES) {
       config.archive.sources = splitCommaList(env.PEARTUBE_ARCHIVE_SOURCES).map((url) => ({ url }))
     }
@@ -363,6 +411,11 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   merged.jsRuntime = typeof merged.jsRuntime === 'string' && merged.jsRuntime.trim()
     ? merged.jsRuntime.trim()
     : DEFAULT_ARCHIVE_JS_RUNTIME
+
+  merged.ytDlpExtraArgs = Array.isArray(merged.ytDlpExtraArgs)
+    ? merged.ytDlpExtraArgs.map((arg) => String(arg).trim()).filter(Boolean)
+    : splitShellArgs(String(merged.ytDlpExtraArgs || ''))
+  if (!merged.ytDlpExtraArgs.length) merged.ytDlpExtraArgs = [...DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS]
 
   merged.maxRetries = Number(merged.maxRetries)
   if (!Number.isFinite(merged.maxRetries) || merged.maxRetries < 0) {

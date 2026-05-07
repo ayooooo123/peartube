@@ -52,7 +52,9 @@ async function appendDebugLine(line) {
     const fs = fsModule?.default ?? fsModule
     if (typeof fs?.appendFileSync !== 'function') return
     fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
-  } catch {}
+  } catch (err) {
+    void err
+  }
 }
 
 // Shutdown flag to prevent deferred init from running during cleanup
@@ -184,7 +186,11 @@ export async function createBackendContext(config) {
                 _path.join(opts.storagePath, 'primary', 'LOCK')
               ]
               for (const lockFile of lockFiles) {
-                try { _fs.unlinkSync(lockFile) } catch {}
+                try {
+                  _fs.unlinkSync(lockFile)
+                } catch (err) {
+                  void err
+                }
               }
               const result = await initializeStorage(opts)
               console.log('[Orchestrator] Stale lock recovery succeeded')

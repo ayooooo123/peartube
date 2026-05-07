@@ -77,6 +77,23 @@ test('tagged Android releases only build the arm64-v8a APK', () => {
   )
 })
 
+test('routine validation workflows use path filters to avoid irrelevant runs', () => {
+  const workflows = [
+    ['ci-fast', readFile('.github/workflows/ci-fast.yml')],
+    ['build-relay', readFile('.github/workflows/build-relay.yml')],
+    ['build-mobile', readFile('.github/workflows/build-mobile.yml')],
+    ['build-desktop', readFile('.github/workflows/build-desktop.yml')],
+  ]
+
+  for (const [name, workflow] of workflows) {
+    assert.match(
+      workflow,
+      /paths:\s*\n(?:\s*- '[^']+'\s*\n)+/,
+      `${name} should use trigger-level paths filters`,
+    )
+  }
+})
+
 test('GitHub Actions references use Node 24-compatible action majors', () => {
   const files = [
     ...fs.readdirSync(path.join(repoRoot, '.github/workflows')).map((name) => `.github/workflows/${name}`),

@@ -3,8 +3,14 @@ name: Build Mobile
 on:
   push:
     branches: [main]
-    tags:
-      - 'v*'
+    paths:
+      - 'packages/app/**'
+      - 'packages/backend/**'
+      - 'packages/platform/**'
+      - 'packages/spec/**'
+      - 'packages/bare-*/**'
+      - '.github/actions/**'
+      - '.github/workflows/build-mobile.yml'
   workflow_dispatch:
 
 permissions:

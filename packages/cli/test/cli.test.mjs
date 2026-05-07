@@ -157,3 +157,11 @@ test('Dockerfile copies yt-dlp shared libraries required by the distroless runti
   t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/ld-linux-x86-64.so.2 /lib64/ld-linux-x86-64.so.2'), 'final image copies the amd64 dynamic loader path')
   t.ok(content.includes('COPY --from=runtime-libs /runtime-libs/ld-linux-aarch64.so.1 /lib/ld-linux-aarch64.so.1'), 'final image copies the arm64 dynamic loader path')
 })
+
+test('Dockerfile stages both dynamic loader filenames for each platform build', async (t) => {
+  const dockerfilePath = join(__dirname, '..', 'Dockerfile')
+  const content = readFileSync(dockerfilePath, 'utf8')
+
+  t.ok(content.includes('test -e /runtime-libs/ld-linux-x86-64.so.2 || cp /runtime-libs/${loader} /runtime-libs/ld-linux-x86-64.so.2'), 'amd64 build still exposes the arm64 loader COPY source placeholder')
+  t.ok(content.includes('test -e /runtime-libs/ld-linux-aarch64.so.1 || cp /runtime-libs/${loader} /runtime-libs/ld-linux-aarch64.so.1'), 'arm64 build still exposes the amd64 loader COPY source placeholder')
+})

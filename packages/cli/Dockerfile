@@ -41,8 +41,10 @@ RUN mkdir -p /runtime-libs \
   && cp /usr/lib/${archTriplet}/libatomic.so.1 /runtime-libs/libatomic.so.1 \
   && cp /lib/${archTriplet}/libz.so.1 /runtime-libs/libz.so.1 \
   && cp /lib/${archTriplet}/${loader} /runtime-libs/${loader} \
+  && test -e /runtime-libs/ld-linux-x86-64.so.2 || cp /runtime-libs/${loader} /runtime-libs/ld-linux-x86-64.so.2 \
+  && test -e /runtime-libs/ld-linux-aarch64.so.1 || cp /runtime-libs/${loader} /runtime-libs/ld-linux-aarch64.so.1 \
   && printf '%s' "${loaderDir}" > /runtime-libs/loader-dir \
-  && chmod 755 /runtime-libs/libatomic.so.1 /runtime-libs/libz.so.1 /runtime-libs/${loader}
+  && chmod 755 /runtime-libs/libatomic.so.1 /runtime-libs/libz.so.1 /runtime-libs/ld-linux-x86-64.so.2 /runtime-libs/ld-linux-aarch64.so.1
 
 FROM gcr.io/distroless/cc-debian12
 

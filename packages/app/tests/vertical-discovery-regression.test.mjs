@@ -116,6 +116,17 @@ test('shorts player has functional playback buttons and a seekable progress bar'
   assert.match(source, /accessibilityLabel="Shorts progress bar"/, 'progress bar should be accessible and testable')
 })
 
+test('vertical discovery stabilizes card order across feed refreshes', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /feedLoadInFlightRef/, 'Discover should ignore overlapping feed loads instead of racing state updates')
+  assert.doesNotMatch(source, /hydratedChannelsRef\.current\.clear\(\)/, 'manual refresh should not clear hydrated channels and make cards disappear/reappear')
+  assert.match(source, /const existingKeys = new Set\(prev\.map\(\(video\) => `\$\{video\.channelKey\}:\$\{video\.id\}`\)\)/, 'feed merges should preserve the existing card order')
+  assert.match(source, /return \[\.\.\.prev, \.\.\.appended\]\.slice\(0, 80\)/, 'newly discovered cards should append rather than reorder the visible deck')
+  assert.match(source, /prevKeys === nextKeys \? prev : entries/, 'unchanged feed entry order should avoid unnecessary list state churn')
+  assert.match(source, /thumbnailCacheRef/, 'thumbnail cache reads should not recreate feed merge callbacks on every thumbnail resolution')
+})
+
 test('vertical discovery stops inline Shorts playback when the route unmounts or loses focus', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 

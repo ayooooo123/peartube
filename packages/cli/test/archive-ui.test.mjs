@@ -399,3 +399,45 @@ test('yt-dlp downloader falls back from Invidious direct media to watch page', a
   t.is(calls[1].args.at(-1), 'https://inv.thepixora.com/latest_version?id=6ZVnOQ8DmFI&itag=18&local=true')
   t.is(calls[2].args.at(-1), 'https://inv.thepixora.com/watch?v=6ZVnOQ8DmFI')
 })
+
+test('yt-dlp downloader rejects bogus direct Invidious output and continues fallback attempts', async (t) => {
+  const calls = []
+  const existing = new Set(['/archive/tmp/arch_inv_bogus/example.mp4'])
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync(path) { return existing.has(path) }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn(binary, args) {
+      calls.push({ binary, args })
+      const callNumber = calls.length
+      return {
+        stdout: { on(event, cb) {
+          if (event !== 'data') return
+          if (callNumber === 2) cb('filepath\n/archive/tmp/arch_inv_bogus/latest_version [latest_version？id=6ZVnOQ8DmFI&itag=18&local=true].unknown_video\n')
+          if (callNumber === 3) cb('filepath\n/archive/tmp/arch_inv_bogus/example.mp4\n')
+        } },
+        stderr: { on(event, cb) {
+          if (event === 'data' && callNumber === 1) cb('ERROR: [youtube] 6ZVnOQ8DmFI: HTTP Error 403: Forbidden')
+        } },
+        on(event, cb) { if (event === 'close') cb(callNumber === 1 ? 1 : 0) }
+      }
+    }
+  })
+
+  const result = await downloader.download({
+    id: 'arch_inv_bogus',
+    url: 'https://www.youtube.com/watch?v=6ZVnOQ8DmFI',
+    invidiousInstance: 'https://invidious.projectsegfau.lt/'
+  })
+
+  t.is(result.filePath, '/archive/tmp/arch_inv_bogus/example.mp4')
+  t.is(calls.length, 3, 'bogus .unknown_video direct media result retries the watch page')
+  t.is(calls[1].args.at(-1), 'https://invidious.projectsegfau.lt/latest_version?id=6ZVnOQ8DmFI&itag=18&local=true')
+  t.is(calls[2].args.at(-1), 'https://invidious.projectsegfau.lt/watch?v=6ZVnOQ8DmFI')
+})

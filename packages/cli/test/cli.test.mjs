@@ -103,7 +103,7 @@ test('Dockerfile packages the standalone relay executable in a minimal runtime i
   t.ok(content.includes('FROM busybox:1.36.1 AS artifact'), 'artifact stage selects the prebuilt standalone relay binary')
   t.ok(content.includes('FROM debian:12-slim AS runtime-libs'), 'runtime libs stage installs missing shared libraries for native addons')
   t.ok(content.includes('ARG YT_DLP_VERSION='), 'Dockerfile pins the yt-dlp release version as a build arg')
-  t.ok(content.includes('ca-certificates curl libatomic1'), 'runtime libs stage installs curl and CA roots to download archive helpers')
+  t.ok(content.includes('ca-certificates curl gcc libatomic1 libc6-dev'), 'runtime libs stage installs curl, CA roots, and C toolchain needed to build archive helpers')
   t.ok(content.includes('YT_DLP_ASSET=yt-dlp_linux'), 'runtime libs stage selects the Linux standalone yt-dlp binary for amd64')
   t.ok(content.includes('YT_DLP_ASSET=yt-dlp_linux_aarch64'), 'runtime libs stage selects the Linux standalone yt-dlp binary for arm64')
   t.ok(content.includes('https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/${YT_DLP_ASSET}'), 'runtime libs stage downloads the pinned standalone yt-dlp release asset')

@@ -23,7 +23,7 @@ ARG BGUTIL_POT_PROVIDER_VERSION=0.8.1
 ARG RUST_VERSION=1.91.1
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl libatomic1 python3 tar xz-utils zlib1g \
+  && apt-get install -y --no-install-recommends ca-certificates curl gcc libatomic1 libc6-dev python3 tar xz-utils zlib1g \
   && rm -rf /var/lib/apt/lists/*
 
 RUN case "${TARGETARCH}" in \

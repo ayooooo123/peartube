@@ -200,6 +200,8 @@ export async function createRelayService({
           downloader: createYtDlpDownloader({
             bin: config.archive.ytDlpPath,
             outputDir: config.archive.tmpPath,
+            format: config.archive.format,
+            ffmpegPath: config.archive.ffmpegPath,
             cookiesPath: config.archive.cookiesPath,
             jsRuntime: config.archive.jsRuntime,
             spawnFn: spawnFn || undefined,
@@ -251,6 +253,8 @@ export async function createRelayService({
         downloader: createYtDlpDownloader({
           bin: config.archive?.ytDlpPath,
           outputDir: config.archive?.tmpPath || './peartube-relay/archive-tmp',
+          format: config.archive?.format,
+          ffmpegPath: config.archive?.ffmpegPath,
           cookiesPath: config.archive?.cookiesPath,
           jsRuntime: config.archive?.jsRuntime,
           spawnFn: spawnFn || undefined,

@@ -3,6 +3,7 @@ import { join } from '#path'
 import process from '#process'
 import {
   DEFAULT_ARCHIVE_CONFIG,
+  DEFAULT_ARCHIVE_FFMPEG_PATH,
   DEFAULT_ARCHIVE_FORMAT,
   DEFAULT_ARCHIVE_JS_RUNTIME,
   DEFAULT_ARCHIVE_MAX_ITEMS,
@@ -233,6 +234,7 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_POLL ||
     env.PEARTUBE_ARCHIVE_FORMAT ||
     env.PEARTUBE_ARCHIVE_YT_DLP_PATH ||
+    env.PEARTUBE_ARCHIVE_FFMPEG_PATH ||
     env.PEARTUBE_ARCHIVE_COOKIES_PATH ||
     env.PEARTUBE_ARCHIVE_JS_RUNTIME ||
     env.PEARTUBE_ARCHIVE_SOURCES
@@ -249,6 +251,7 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_ARCHIVE_POLL) config.archive.poll = Number(env.PEARTUBE_ARCHIVE_POLL)
     if (env.PEARTUBE_ARCHIVE_FORMAT) config.archive.format = env.PEARTUBE_ARCHIVE_FORMAT
     if (env.PEARTUBE_ARCHIVE_YT_DLP_PATH) config.archive.ytDlpPath = env.PEARTUBE_ARCHIVE_YT_DLP_PATH
+    if (env.PEARTUBE_ARCHIVE_FFMPEG_PATH) config.archive.ffmpegPath = env.PEARTUBE_ARCHIVE_FFMPEG_PATH
     if (env.PEARTUBE_ARCHIVE_COOKIES_PATH) config.archive.cookiesPath = env.PEARTUBE_ARCHIVE_COOKIES_PATH
     if (env.PEARTUBE_ARCHIVE_JS_RUNTIME) config.archive.jsRuntime = env.PEARTUBE_ARCHIVE_JS_RUNTIME
     if (env.PEARTUBE_ARCHIVE_SOURCES) {
@@ -348,6 +351,10 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
   merged.ytDlpPath = typeof merged.ytDlpPath === 'string' && merged.ytDlpPath.trim()
     ? merged.ytDlpPath.trim()
     : DEFAULT_ARCHIVE_YT_DLP_PATH
+
+  merged.ffmpegPath = typeof merged.ffmpegPath === 'string' && merged.ffmpegPath.trim()
+    ? merged.ffmpegPath.trim()
+    : DEFAULT_ARCHIVE_FFMPEG_PATH
 
   merged.cookiesPath = typeof merged.cookiesPath === 'string' && merged.cookiesPath.trim()
     ? merged.cookiesPath.trim()

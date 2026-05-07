@@ -117,6 +117,8 @@ export async function enqueueArchiveJob(store, input = {}) {
 export function createYtDlpDownloader({
   bin = 'yt-dlp',
   outputDir,
+  format = 'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b',
+  ffmpegPath = null,
   cookiesPath = null,
   jsRuntime = null,
   spawnFn = spawn,
@@ -136,10 +138,11 @@ export function createYtDlpDownloader({
         '--restrict-filenames',
         '--write-info-json',
         '--print', 'after_move:filepath',
-        '-f', 'bv*+ba/b',
+        '-f', format,
         '--merge-output-format', 'mp4',
         '-o', outputTemplate
       ]
+      if (ffmpegPath) args.push('--ffmpeg-location', ffmpegPath)
       if (cookiesPath) args.push('--cookies', cookiesPath)
       if (jsRuntime) args.push('--js-runtimes', jsRuntime)
       args.push(input.url)

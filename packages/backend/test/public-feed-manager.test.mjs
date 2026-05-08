@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { Duplex } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
 import crypto from 'hypercore-crypto'
@@ -60,6 +61,37 @@ function createPersistedMetaDb(seed = {}) {
 
 function createConnection() {
   return new EventEmitter()
+}
+
+class MemoryDuplex extends Duplex {
+  constructor() {
+    super()
+    this.other = null
+    this.userData = null
+    this.remotePublicKey = null
+  }
+
+  _read() {}
+
+  _write(chunk, _encoding, callback) {
+    this.other?.push(chunk)
+    callback()
+  }
+
+  _final(callback) {
+    this.other?.push(null)
+    callback()
+  }
+}
+
+function createMemoryConnectionPair() {
+  const a = new MemoryDuplex()
+  const b = new MemoryDuplex()
+  a.other = b
+  b.other = a
+  a.remotePublicKey = b4a.alloc(32, 2)
+  b.remotePublicKey = b4a.alloc(32, 1)
+  return [a, b]
 }
 
 test('PublicFeedManager explicitly dials peers discovered on the shared topic', () => {
@@ -157,6 +189,82 @@ test('handleConnection pairs and opens one feed channel per connection', () => {
 
     assert.equal(pairCalls.length, 1)
     assert.equal(createChannelCalls.length, 1)
+  } finally {
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
+test('real Protomux feed channel exchanges local feed entries between two managers', async () => {
+  const managerA = new PublicFeedManager(createSwarm(), createMetaDb())
+  const managerB = new PublicFeedManager(createSwarm(), createMetaDb())
+  const [connA, connB] = createMemoryConnectionPair()
+  let updatesB = 0
+
+  managerB.setOnFeedUpdate(() => { updatesB++ })
+  managerA.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY)
+
+  try {
+    managerA.handleConnection(connA, { publicKey: connA.remotePublicKey })
+    managerB.handleConnection(connB, { publicKey: connB.remotePublicKey })
+
+    const deadline = Date.now() + 2000
+    let received = null
+    while (Date.now() < deadline) {
+      received = managerB.getFeed().find((entry) => entry.driveKey === DRIVE_KEY)
+      if (received?.publicBeeKey === PUBLIC_BEE_KEY) break
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+
+    assert.ok(received, 'peer B should receive peer A feed entry over real Protomux messages')
+    assert.equal(received.publicBeeKey, PUBLIC_BEE_KEY)
+    assert.equal(received.source, 'peer')
+    assert.equal(updatesB > 0, true)
+  } finally {
+    managerA.stop()
+    managerB.stop()
+    connA.destroy()
+    connB.destroy()
+  }
+})
+
+test('periodic gossip does not send on feed channels before they open', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+  const sent = []
+
+  manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY)
+
+  const originalFrom = Protomux.from
+  Protomux.from = () => ({
+    pair() {},
+    createChannel() {
+      return {
+        messages: [{
+          send(msg) {
+            sent.push(msg)
+          }
+        }],
+        open() {}
+      }
+    }
+  })
+
+  try {
+    manager.handleConnection(conn, {})
+
+    assert.equal(manager.peerChannels.size, 1)
+    assert.equal(manager.feedConnections.size, 0)
+    assert.equal(manager.requestFeedsFromPeers(), 0)
+    manager.sendHaveFeed(conn)
+    assert.equal(sent.length, 1, 'direct send still works for diagnostics/manual open paths')
+    sent.length = 0
+
+    const openConns = manager._openFeedConnections()
+    assert.deepEqual(openConns, [])
+    for (const openConn of openConns) manager.sendHaveFeed(openConn)
+    assert.equal(sent.length, 0)
   } finally {
     Protomux.from = originalFrom
     manager.stop()
@@ -390,10 +498,10 @@ test('requestFeedsFromPeers sends NEED_FEED so peers reply with their feed', () 
   const originalFrom = Protomux.from
   Protomux.from = () => ({
     pair() {},
-    createChannel() {
+    createChannel(opts) {
       return {
         messages: [{ send(msg) { sent.push(msg) } }],
-        open() {},
+        open() { opts.onopen() },
       }
     }
   })

@@ -89,6 +89,14 @@ test('vertical discovery preloads the next few videos into the playback URL cach
   assert.match(source, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'preload should populate the playback URL cache for instant swipe playback')
 })
 
+test('vertical discovery subscribes to backend feed-update events instead of only loading once', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /platformEvents \} = useApp\(\)/, 'Discover should receive platform event hooks from app context')
+  assert.match(source, /platformEvents as any\)\?\.onFeedUpdate\?\.\(\(\) => \{[\s\S]*?void loadFeed\(\)/, 'Discover should reload the vertical feed when backend gossip announces feed updates')
+  assert.match(source, /if \(typeof unsubscribe === 'function'\) unsubscribe\(\)/, 'Discover should unsubscribe from feed events on unmount')
+})
+
 
 test('vertical discovery lets the shorts player hide card chrome', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')

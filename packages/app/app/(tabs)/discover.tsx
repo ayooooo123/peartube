@@ -90,7 +90,7 @@ export default function VerticalDiscoveryScreen() {
   const insets = useSafeAreaInsets()
   const { height: screenHeight, width: screenWidth } = useWindowDimensions()
   const { isDesktop } = usePlatform()
-  const { ready, identity, rpc, blobServerPort, backendError, startupStatus } = useApp()
+  const { ready, identity, rpc, blobServerPort, backendError, startupStatus, platformEvents } = useApp()
   const {
     currentVideo,
     playerMode,
@@ -256,6 +256,16 @@ export default function VerticalDiscoveryScreen() {
     if (!ready || !rpc) return
     loadFeed()
   }, [loadFeed, ready, rpc])
+
+  useEffect(() => {
+    if (!ready || !rpc) return
+    const unsubscribe = (platformEvents as any)?.onFeedUpdate?.(() => {
+      void loadFeed()
+    })
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe()
+    }
+  }, [loadFeed, platformEvents, ready, rpc])
 
   const stopShortsPlayback = useCallback(() => {
     void shortsPlayerRef.current?.stop?.()

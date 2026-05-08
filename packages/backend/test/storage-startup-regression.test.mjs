@@ -26,8 +26,9 @@ test('blob server watchdog lazily loads HTTP only when cast probing is needed', 
 })
 
 test('blob server startup does not await listen before storage init can finish', () => {
-  const blobServerBody =
-    storageSource.match(/try \{\n    const desiredPort = blobServerPortOverride \|\| 0;([\s\S]*?)\n  \} catch \(err\) \{/ )?.[1] ?? ''
+  const blobServerBody = storageSource.match(
+    /const desiredPort = blobServerPortOverride \|\| 0;([\s\S]*?)catch \(err\) \{/
+  )?.[1] ?? ''
 
   assert.ok(blobServerBody, 'blob server startup block should exist')
   assert.doesNotMatch(blobServerBody, /await blobServer\.listen\(\)/)
@@ -80,4 +81,13 @@ test('offline swarm fallback skips peer pool discovery instead of joining noop t
     /Skipping peer pool discovery; P2P networking is offline/,
     'offline swarm should skip peer pool discovery'
   )
+})
+
+
+test('storage exposes public bee content discovery retention for cached serving cores', () => {
+  assert.match(storageSource, /export async function retainPublicBeeContentDiscovery\(ctx, publicBeeKeyHex/)
+  assert.match(storageSource, /await loadPublicBee\(ctx, publicBeeKeyHex\)/)
+  assert.match(storageSource, /video\?\.blobsCoreKey/)
+  assert.match(storageSource, /video\?\.thumbnailBlobsCoreKey/)
+  assert.match(storageSource, /retainSwarmDiscovery\(ctx, core\.discoveryKey/)
 })

@@ -23,6 +23,8 @@ import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
 
 const log = logger('PublicFeed')
+const PUBLIC_FEED_CATALOG_VERSION = 1
+const PUBLIC_FEED_RELAY_CATALOG_KEY = 'public-feed-relay-catalog-v1'
 
 /**
  * @typedef {import('./types.js').PublicFeedEntry} PublicFeedEntry
@@ -180,8 +182,13 @@ export class PublicFeedManager {
 
   _serializeEntry(entry) {
     const serialized = {
+      schema: 'peartube.relayCatalog',
+      catalogVersion: entry.catalogVersion || PUBLIC_FEED_CATALOG_VERSION,
       driveKey: entry.driveKey,
       publicBeeKey: entry.publicBeeKey || null,
+      relayRole: entry.relayRole || (entry.source === 'relay-cache' ? 'cache' : 'publisher'),
+      relayServing: Boolean(entry.relayServing || entry.source === 'relay-cache' || entry.source === 'local'),
+      lastSeenAt: entry.lastSeenAt || entry.addedAt || Date.now(),
       version: Number(entry.version || 0) || 0,
     }
     if (entry.channelName) serialized.channelName = entry.channelName
@@ -206,6 +213,22 @@ export class PublicFeedManager {
     }
     if (typeof snapshot.channelName === 'string' && snapshot.channelName && snapshot.channelName !== entry.channelName) {
       entry.channelName = snapshot.channelName
+      changed = true
+    }
+    if (typeof snapshot.relayRole === 'string' && snapshot.relayRole && snapshot.relayRole !== entry.relayRole) {
+      entry.relayRole = snapshot.relayRole
+      changed = true
+    }
+    if (typeof snapshot.catalogVersion !== 'undefined' && snapshot.catalogVersion !== entry.catalogVersion) {
+      entry.catalogVersion = Number(snapshot.catalogVersion || PUBLIC_FEED_CATALOG_VERSION) || PUBLIC_FEED_CATALOG_VERSION
+      changed = true
+    }
+    if (typeof snapshot.relayServing !== 'undefined' && Boolean(snapshot.relayServing) !== Boolean(entry.relayServing)) {
+      entry.relayServing = Boolean(snapshot.relayServing)
+      changed = true
+    }
+    if (Number(snapshot.lastSeenAt || 0) > Number(entry.lastSeenAt || 0)) {
+      entry.lastSeenAt = Number(snapshot.lastSeenAt)
       changed = true
     }
     if (Number.isFinite(snapshot.videoCount) && Number(snapshot.videoCount) !== Number(entry.videoCount || 0)) {
@@ -617,6 +640,26 @@ export class PublicFeedManager {
       }
     }
 
+    // Restore first-class relay catalog entries after legacy feed entries so richer
+    // relay-serving metadata wins on restart.
+    if (this.metaDb) {
+      try {
+        const catalog = await this.metaDb.get(PUBLIC_FEED_RELAY_CATALOG_KEY).catch(() => null)
+        const entries = Array.isArray(catalog?.value?.entries) ? catalog.value.entries : []
+        let restoredCatalog = 0
+        for (const entry of entries) {
+          if (entry?.driveKey && this.addEntry(entry.driveKey, entry.source || 'relay-cache', entry.publicBeeKey, entry)) {
+            restoredCatalog++
+          } else if (entry?.driveKey && this._applyEntrySnapshot(entry.driveKey, entry)) {
+            restoredCatalog++
+          }
+        }
+        if (restoredCatalog > 0) console.log('[PublicFeed] Restored', restoredCatalog, 'relay catalog entries')
+      } catch (err) {
+        console.log('[PublicFeed] Relay catalog restore skipped:', err?.message)
+      }
+    }
+
     // If we loaded any entries from disk, notify listeners so UIs don't stay empty until the first peer message arrives.
     if (this.entries.size > 0) {
       console.log('[PublicFeed] Notifying listeners of', this.entries.size, 'restored entries');
@@ -741,6 +784,12 @@ export class PublicFeedManager {
         .map(e => ({
           driveKey: e.driveKey,
           publicBeeKey: e.publicBeeKey || null,
+          source: e.source || 'peer',
+          schema: e.schema || 'peartube.relayCatalog',
+          catalogVersion: Number(e.catalogVersion || PUBLIC_FEED_CATALOG_VERSION) || PUBLIC_FEED_CATALOG_VERSION,
+          relayRole: e.relayRole || null,
+          relayServing: Boolean(e.relayServing),
+          lastSeenAt: e.lastSeenAt || e.addedAt || Date.now(),
           channelName: e.channelName || null,
           videoCount: Number(e.videoCount || 0) || 0,
           manifestUpdatedAt: Number(e.manifestUpdatedAt || 0) || 0,
@@ -752,6 +801,22 @@ export class PublicFeedManager {
       const keys = entries.map(e => e.driveKey)
       await this.metaDb.put('discovered-channels', keys)
       await this.metaDb.put('public-feed-cache', keys)
+      const relayCatalogEntries = entries
+        .filter(e => e.relayServing || e.source === 'relay-cache' || e.relayRole === 'cache')
+        .map(e => ({
+          ...e,
+          schema: 'peartube.relayCatalog',
+          catalogVersion: PUBLIC_FEED_CATALOG_VERSION,
+          relayRole: e.relayRole || 'cache',
+          relayServing: Boolean(e.relayServing || e.source === 'relay-cache' || e.relayRole === 'cache'),
+          lastSeenAt: e.lastSeenAt || Date.now(),
+        }))
+      await this.metaDb.put(PUBLIC_FEED_RELAY_CATALOG_KEY, {
+        schema: 'peartube.relayCatalog',
+        version: PUBLIC_FEED_CATALOG_VERSION,
+        entries: relayCatalogEntries,
+        updatedAt: Date.now(),
+      })
     } catch (err) {
       console.log('[PublicFeed] Discovered-channel cache persist skipped:', err?.message)
     }
@@ -1052,7 +1117,8 @@ export class PublicFeedManager {
       console.log('[PublicFeed] SUBMIT_CHANNEL received:', msg.key?.slice(0, 16), 'publicBee:', msg.publicBeeKey?.slice(0, 16) || 'none');
       const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
       if (!isValidKey(msg.publicBeeKey)) return
-      if (this.addEntry(msg.key, 'peer', msg.publicBeeKey, msg)) {
+      const entrySource = msg.source === 'relay-cache' ? 'relay-cache' : 'peer'
+      if (this.addEntry(msg.key, entrySource, msg.publicBeeKey, msg)) {
         this.onFeedUpdate?.();
         this._schedulePersistDiscovered()
         // Re-gossip to other peers (exclude sender, include publicBeeKey)
@@ -1155,6 +1221,11 @@ export class PublicFeedManager {
       addedAt: Date.now(),
       source,
       peerCount: source === 'local' ? 1 : 0,
+      schema: snapshot?.schema || 'peartube.relayCatalog',
+      catalogVersion: Number(snapshot?.catalogVersion || PUBLIC_FEED_CATALOG_VERSION) || PUBLIC_FEED_CATALOG_VERSION,
+      relayRole: snapshot?.relayRole || (source === 'relay-cache' ? 'cache' : source === 'local' ? 'publisher' : null),
+      relayServing: Boolean(snapshot?.relayServing || source === 'relay-cache' || source === 'local'),
+      lastSeenAt: Number(snapshot?.lastSeenAt || Date.now()) || Date.now(),
       channelName: snapshot?.channelName || null,
       videoCount: Number(snapshot?.videoCount || 0) || 0,
       manifestUpdatedAt: Number(snapshot?.manifestUpdatedAt || 0) || 0,
@@ -1232,6 +1303,39 @@ export class PublicFeedManager {
   }
 
   /**
+   * Submit relay-owned/cache-serving catalog inventory without marking it as a
+   * user-published channel.
+   * @param {Object} entry
+   */
+  async submitRelayCatalogEntry(entry = {}) {
+    const driveKey = entry.driveKey || entry.channelKey
+    const publicBeeKey = entry.publicBeeKey || null
+    if (!driveKey || !publicBeeKey) return false
+
+    const snapshot = {
+      ...entry,
+      schema: 'peartube.relayCatalog',
+      catalogVersion: PUBLIC_FEED_CATALOG_VERSION,
+      source: 'relay-cache',
+      relayRole: entry.relayRole || 'cache',
+      relayServing: true,
+      lastSeenAt: Date.now(),
+      previewVideos: this._sanitizePreviewVideos(entry.previewVideos),
+    }
+
+    const added = this.addEntry(driveKey, 'relay-cache', publicBeeKey, snapshot)
+    const updated = !added && this._applyEntrySnapshot(driveKey, snapshot)
+    if (added || updated) {
+      console.log('[PublicFeed] Submitted relay catalog entry:', driveKey.slice(0, 16), 'videos=', snapshot.previewVideos.length)
+      this.onFeedUpdate?.()
+    }
+    this.broadcastSubmitChannel(driveKey, null, publicBeeKey, snapshot)
+    this._schedulePersistDiscovered()
+    await this._persistDiscoveredNow().catch(() => {})
+    return true
+  }
+
+  /**
    * Unpublish a channel from the public feed
    * @param {string} driveKey
    */
@@ -1270,6 +1374,12 @@ export class PublicFeedManager {
       type: 'SUBMIT_CHANNEL',
       key: driveKey,
       publicBeeKey: publicBeeKey || null,
+      schema: snapshot?.schema || 'peartube.relayCatalog',
+      catalogVersion: Number(snapshot?.catalogVersion || PUBLIC_FEED_CATALOG_VERSION) || PUBLIC_FEED_CATALOG_VERSION,
+      source: snapshot?.source || null,
+      relayRole: snapshot?.relayRole || null,
+      relayServing: Boolean(snapshot?.relayServing),
+      lastSeenAt: snapshot?.lastSeenAt || Date.now(),
       channelName: snapshot?.channelName || null,
       videoCount: Number(snapshot?.videoCount || 0) || 0,
       manifestUpdatedAt: Number(snapshot?.manifestUpdatedAt || 0) || 0,
@@ -1330,6 +1440,7 @@ export class PublicFeedManager {
    * @returns {PublicFeedEntry[]}
    */
   getFeed() {
+    const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
     return Array.from(this.entries.values())
       .filter(e => !this.hiddenKeys.has(e.driveKey))
       .map((entry) => ({
@@ -1343,6 +1454,9 @@ export class PublicFeedManager {
         if (entry.source === 'local') return true
         // Peer-discovered channels with live peers are visible.
         if ((entry.peerCount || 0) > 0) return true
+        // Relay catalog entries are explicit cache-serving inventory and must
+        // remain visible even when no live feed socket is currently open.
+        if (entry.relayServing && (isValidKey(entry.publicBeeKey) || this._sanitizePreviewVideos(entry.previewVideos).some(v => v.blobId && v.blobsCoreKey))) return true
         // IMPORTANT: keep cached peer-discovered channels visible if they carry
         // a valid publicBeeKey. This is what allows the app to hydrate/feed-load
         // instantly on restart instead of coming up empty until a live gossip peer

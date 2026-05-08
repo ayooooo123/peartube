@@ -371,6 +371,89 @@ export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
   return handle
 }
 
+
+function isValidCoreKeyHex(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
+}
+
+/**
+ * Retain discovery for a PublicBee and the video/thumbnail blob cores it advertises.
+ * This restores the old relay-style cache behavior for any runtime: once we know a
+ * publicBeeKey, cached content is announced as content cores without waiting for a
+ * full channel Autobase load.
+ *
+ * @param {import('./types.js').StorageContext} ctx
+ * @param {string} publicBeeKeyHex
+ * @param {{ label?: string, maxVideos?: number }} [options]
+ * @returns {Promise<{publicBeeKey: string, videos: number, blobCores: number, thumbnailBlobCores: number, discoveryHandles: number, retained: number, errors: number, lastError: string | null}>}
+ */
+export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, options = {}) {
+  const stats = {
+    publicBeeKey: publicBeeKeyHex,
+    videos: 0,
+    blobCores: 0,
+    thumbnailBlobCores: 0,
+    discoveryHandles: getSwarmDiscoveryHandles(ctx).size,
+    retained: 0,
+    errors: 0,
+    lastError: null,
+  }
+
+  if (!isValidCoreKeyHex(publicBeeKeyHex)) {
+    stats.errors += 1
+    stats.lastError = 'invalid-publicBeeKey'
+    return stats
+  }
+
+  let publicBee = null
+  try {
+    publicBee = await loadPublicBee(ctx, publicBeeKeyHex)
+  } catch (err) {
+    stats.errors += 1
+    stats.lastError = err?.message || String(err)
+    return stats
+  }
+
+  let videos = []
+  try {
+    videos = await publicBee?.listVideos?.().catch(() => [])
+  } catch (err) {
+    stats.errors += 1
+    stats.lastError = err?.message || String(err)
+    videos = []
+  }
+
+  const maxVideos = Number.isFinite(options.maxVideos) && options.maxVideos > 0
+    ? Math.floor(options.maxVideos)
+    : 200
+  const coreKeys = new Map()
+  for (const video of (Array.isArray(videos) ? videos.slice(0, maxVideos) : [])) {
+    stats.videos += 1
+    if (isValidCoreKeyHex(video?.blobsCoreKey)) coreKeys.set(video.blobsCoreKey.toLowerCase(), 'blob')
+    if (isValidCoreKeyHex(video?.thumbnailBlobsCoreKey)) coreKeys.set(video.thumbnailBlobsCoreKey.toLowerCase(), 'thumbnail')
+  }
+
+  for (const [coreKeyHex, kind] of coreKeys) {
+    try {
+      const core = ctx.store?.get?.(b4a.from(coreKeyHex, 'hex'))
+      await core?.ready?.()
+      if (core?.discoveryKey && retainSwarmDiscovery(ctx, core.discoveryKey, {
+        label: `${options.label || 'publicBee'}:${kind}:${coreKeyHex.slice(0, 16)}`
+      })) {
+        stats.retained += 1
+        if (kind === 'thumbnail') stats.thumbnailBlobCores += 1
+        else stats.blobCores += 1
+      }
+    } catch (err) {
+      stats.errors += 1
+      stats.lastError = err?.message || String(err)
+    }
+  }
+
+  stats.discoveryHandles = getSwarmDiscoveryHandles(ctx).size
+  return stats
+}
+
 /**
  * Initialize core storage components.
  *

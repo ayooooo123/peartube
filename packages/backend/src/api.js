@@ -170,6 +170,54 @@ export function createApi({
     } catch { /* best effort */ }
   }
 
+
+  function normalizeVideoId(value) {
+    if (!value || typeof value !== 'string') return value
+    if (value.startsWith('/videos/')) {
+      const match = value.match(/\/videos\/([^./]+)/)
+      if (match?.[1]) return match[1]
+    }
+    const base = value.split('/').pop() || value
+    return base.replace(/\.[^./]+$/, '') || value
+  }
+
+  function getPublicFeedEntry(driveKey) {
+    try {
+      const feed = typeof publicFeed?.getFeed === 'function' ? publicFeed.getFeed() : []
+      if (!Array.isArray(feed)) return null
+      return feed.find((entry) => (entry?.driveKey || entry?.channelKey) === driveKey) || null
+    } catch {
+      return null
+    }
+  }
+
+  function previewVideosFromFeedEntry(driveKey, publicBeeKey = null) {
+    const entry = getPublicFeedEntry(driveKey)
+    const previews = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
+    if (previews.length === 0) return []
+    const resolvedPublicBeeKey = publicBeeKey || entry?.publicBeeKey || null
+    return previews
+      .filter((video) => video?.id || video?.path)
+      .map((video) => {
+        const id = normalizeVideoId(video.id || video.path)
+        return {
+          ...video,
+          id,
+          path: video.path || `/videos/${id}.mp4`,
+          channelKey: driveKey,
+          publicBeeKey: resolvedPublicBeeKey,
+          relayBacked: Boolean(entry?.relayServing || entry?.relayRole === 'cache' || entry?.source === 'relay-cache'),
+          mimeType: video.mimeType || 'video/mp4',
+        }
+      })
+  }
+
+  function getPreviewVideoFromFeed(driveKey, videoId, publicBeeKey = null) {
+    const targetId = normalizeVideoId(videoId)
+    const previews = previewVideosFromFeedEntry(driveKey, publicBeeKey)
+    return previews.find((video) => normalizeVideoId(video?.id || video?.path) === targetId) || null
+  }
+
   // ============================================
   // Download Intent Persistence Helpers
   // ============================================
@@ -706,6 +754,14 @@ export function createApi({
             const videos = await publicBee.listVideos()
             console.log('[API] LIST_VIDEOS: PublicBee returned', videos?.length, 'videos')
             if ((videos?.length || 0) === 0) {
+              const previewVideos = previewVideosFromFeedEntry(driveKey, publicBeeKey)
+              if (previewVideos.length > 0) {
+                console.log('[API] LIST_VIDEOS: PublicBee empty, using relay/feed preview direct refs')
+                const previewWithAvailability = await attachVideoAvailability(previewVideos)
+                listVideosCache.set(driveKey, { ts: Date.now(), value: previewWithAvailability })
+                backgroundIndexVideos(previewWithAvailability, driveKey)
+                return cloneArrayOfObjects(previewWithAvailability)
+              }
               console.log('[API] LIST_VIDEOS: PublicBee returned no videos, trying channel fallback')
               const channel = await loadChannel(ctx, driveKey)
               const fallbackVideos = await channel.listVideos()
@@ -725,6 +781,14 @@ export function createApi({
             backgroundIndexVideos(withAvailability, driveKey)
             return cloneArrayOfObjects(withAvailability)
           } catch (err) {
+            const previewVideos = previewVideosFromFeedEntry(driveKey, publicBeeKey)
+            if (previewVideos.length > 0) {
+              console.log('[API] LIST_VIDEOS: PublicBee failed, using relay/feed preview direct refs:', err.message)
+              const previewWithAvailability = await attachVideoAvailability(previewVideos)
+              listVideosCache.set(driveKey, { ts: Date.now(), value: previewWithAvailability })
+              backgroundIndexVideos(previewWithAvailability, driveKey)
+              return cloneArrayOfObjects(previewWithAvailability)
+            }
             console.log('[API] LIST_VIDEOS: PublicBee fast path failed:', err.message, '- trying channel directly')
             // If PublicBee fails, try loading the channel directly (for paired devices or when PublicBee isn't synced)
             try {
@@ -972,7 +1036,20 @@ export function createApi({
           const v = await publicBee.getVideo(id)
           console.log('[API] GET_VIDEO_DATA PublicBee result:', v?.id, 'blobId:', v?.blobId, 'blobsCoreKey:', v?.blobsCoreKey?.slice(0, 16))
           if (v) return { ...v, channelKey: driveKey }
-          // Fall through to other methods if not found
+          // Fall through to feed previews/channel methods if not found
+        }
+
+        const previewVideo = getPreviewVideoFromFeed(driveKey, id, publicBeeKey)
+        if (previewVideo?.blobId && previewVideo?.blobsCoreKey) {
+          console.log('[API] GET_VIDEO_DATA: using relay/feed preview direct refs')
+          return {
+            ...previewVideo,
+            id,
+            path: previewVideo.path || `/videos/${id}.mp4`,
+            channelKey: driveKey,
+            publicBeeKey: previewVideo.publicBeeKey || publicBeeKey || null,
+            mimeType: previewVideo.mimeType || mimeType || 'video/mp4',
+          }
         }
 
       const channel = await loadChannel(ctx, driveKey)
@@ -1418,10 +1495,14 @@ export function createApi({
             channelKey: entry?.channelKey || entry?.driveKey || '',
             source: entry?.source || 'peer',
             publicBeeKey: entry?.publicBeeKey || null,
+            relayRole: entry?.relayRole || null,
+            relayServing: Boolean(entry?.relayServing),
+            catalogVersion: entry?.catalogVersion || null,
+            previewVideosHash: entry?.previewVideosHash || null,
             channelName: entry?.channelName || null,
             videoCount: entry?.videoCount || 0,
             peerCount: entry?.peerCount || 0,
-            lastSeen: entry?.lastSeen || entry?.addedAt || 0,
+            lastSeen: entry?.lastSeen || entry?.lastSeenAt || entry?.addedAt || 0,
             manifestUpdatedAt: entry?.manifestUpdatedAt || 0,
             previewVideos: Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
           }
@@ -1891,7 +1972,14 @@ export function createApi({
                 if (seedingManager) {
                   seedingManager.addSeed(driveKey, videoPath, 'watched', {
                     blockLength: totalBlocks,
-                    byteLength: totalBytes
+                    byteLength: totalBytes,
+                    publicBeeKey: publicBeeKey || v?.publicBeeKey || null,
+                    blobId: blobMeta.blobId,
+                    blobsCoreKey: blobMeta.blobsCoreKey,
+                    thumbnailBlobId: v?.thumbnailBlobId || null,
+                    thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || null,
+                    mimeType: v?.mimeType || existingIntent?.mimeType || null,
+                    thumbnailMimeType: v?.thumbnailMimeType || null
                   }).catch(err => console.log('[API] Failed to register seed:', err?.message))
                 }
               }).catch(err => {
@@ -1982,7 +2070,14 @@ export function createApi({
             if (seedingManager) {
               seedingManager.addSeed(driveKey, videoPath, 'watched', {
                 blockLength: totalBlocks,
-                byteLength: totalBytes
+                byteLength: totalBytes,
+                publicBeeKey: publicBeeKey || v?.publicBeeKey || null,
+                blobId: blobMeta.blobId,
+                blobsCoreKey: blobMeta.blobsCoreKey,
+                thumbnailBlobId: v?.thumbnailBlobId || null,
+                thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || null,
+                mimeType: v?.mimeType || existingIntent?.mimeType || null,
+                thumbnailMimeType: v?.thumbnailMimeType || null
               }).catch(() => {})
             }
           }

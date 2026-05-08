@@ -62,7 +62,11 @@ export function swarmHasConnection(swarm, keyHex, publicKey = null) {
   if (peers && typeof peers.get === 'function') {
     let peerInfo = peers.get(keyHex)
     if (!peerInfo && publicKey) {
-      try { peerInfo = peers.get(publicKey) } catch {}
+      try {
+        peerInfo = peers.get(publicKey)
+      } catch {
+        peerInfo = null
+      }
     }
     if (swarmConnectionLike(peerInfo)) return true
   }

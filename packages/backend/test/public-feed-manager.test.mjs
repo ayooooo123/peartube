@@ -147,6 +147,49 @@ test('periodic gossip re-dials remembered shared-topic peers when sockets droppe
   }
 })
 
+test('forceRedialDiscoveredPeers keeps trying known discovered peers after normal retry cap', () => {
+  const publicKey = b4a.alloc(32, 11)
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    assert.equal(manager._redialDiscoveredPeers(), 1)
+    assert.equal(manager._redialDiscoveredPeers(), 1)
+    assert.equal(manager._redialDiscoveredPeers(), 0)
+    assert.equal(swarm.joinPeerCalls.length, 3)
+
+    assert.equal(manager.forceRedialDiscoveredPeers(), 1)
+    assert.equal(swarm.joinPeerCalls.length, 4)
+
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.discoveredPeers, 1)
+    assert.equal(stats.queued, 4)
+    assert.equal(stats.lastReason, 'queued')
+    assert.equal(stats.peers[0].attempts, 4)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('direct peer dial diagnostics expose skipped joinPeer failures', () => {
+  const publicKey = b4a.alloc(32, 12)
+  const swarm = createSwarm()
+  swarm.joinPeer = () => { throw new Error('dial unavailable') }
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), false)
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.discoveredPeers, 1)
+    assert.equal(stats.failed, 1)
+    assert.equal(stats.lastReason, 'joinPeer-error')
+    assert.equal(stats.peers[0].lastError, 'dial unavailable')
+  } finally {
+    manager.stop()
+  }
+})
+
 test('PublicFeedManager.start joins shared PearTube network topic for feed-peer discovery', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

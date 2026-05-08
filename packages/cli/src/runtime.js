@@ -241,6 +241,7 @@ export async function createRelayRuntime({ config, logger }) {
         publicFeedDiscoveryJoined: Boolean(publicFeed.feedDiscovery),
         blindPeer: blindPeer.getStats?.() || null,
         peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
+        directPeerDial: feedStats.directPeerDial || null,
         swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
         swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),

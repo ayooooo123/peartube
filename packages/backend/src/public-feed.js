@@ -72,6 +72,19 @@ export class PublicFeedManager {
     this._directPeerRetryCounts = new Map();
     /** @type {Map<string, any>} */
     this._discoveredPeers = new Map();
+    /** @type {Map<string, number>} */
+    this._directPeerLastDialedAt = new Map();
+    /** @type {Map<string, string>} */
+    this._directPeerLastDialError = new Map();
+    /** @type {{attempted: number, queued: number, skipped: number, failed: number, lastReason: string | null, lastDialedAt: number | null}} */
+    this._directPeerDialStats = {
+      attempted: 0,
+      queued: 0,
+      skipped: 0,
+      failed: 0,
+      lastReason: null,
+      lastDialedAt: null,
+    };
     /** @type {number} */
     this._maxDirectPeerRetries = 3;
     /** @type {number} */
@@ -394,19 +407,50 @@ export class PublicFeedManager {
   }
 
   _dialDiscoveredPeer(keyHex, publicKey, attempts = this._directPeerRetryCounts.get(keyHex) || 0, { force = false } = {}) {
-    if (!publicKey || !this.swarm || typeof this.swarm.joinPeer !== 'function') return false
-    if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) return false
-    if (this._hasKnownPeer(keyHex)) return false
-    if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) return false
-    if (!force && attempts >= this._maxDirectPeerRetries) return false
+    this._directPeerDialStats.attempted++
+    if (!publicKey || !this.swarm || typeof this.swarm.joinPeer !== 'function') {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'joinPeer-unavailable'
+      return false
+    }
+    if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'self-or-missing-key'
+      return false
+    }
+    if (this._hasKnownPeer(keyHex)) {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'already-known-peer'
+      return false
+    }
+    if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'max-direct-peers'
+      return false
+    }
+    if (!force && attempts >= this._maxDirectPeerRetries) {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'max-retries'
+      return false
+    }
 
     try {
       this.swarm.joinPeer(publicKey)
+      const now = this._now()
       this._directPeerRetryCounts.set(keyHex, attempts + 1)
+      this._directPeerLastDialedAt.set(keyHex, now)
+      this._directPeerLastDialError.delete(keyHex)
+      this._directPeerDialStats.queued++
+      this._directPeerDialStats.lastReason = 'queued'
+      this._directPeerDialStats.lastDialedAt = now
       console.log('[PublicFeed] Direct peer dial queued from shared topic:', keyHex.slice(0, 16), 'attempt=', attempts + 1)
       return true
     } catch (err) {
-      console.log('[PublicFeed] Direct peer dial failed:', keyHex.slice(0, 16), err?.message)
+      const message = err?.message || String(err)
+      this._directPeerDialStats.failed++
+      this._directPeerDialStats.lastReason = 'joinPeer-error'
+      this._directPeerLastDialError.set(keyHex, message)
+      console.log('[PublicFeed] Direct peer dial failed:', keyHex.slice(0, 16), message)
       return false
     }
   }
@@ -420,6 +464,31 @@ export class PublicFeedManager {
       if (this._dialDiscoveredPeer(keyHex, publicKey, attempts, { force })) dialed++
     }
     return dialed
+  }
+
+  forceRedialDiscoveredPeers() {
+    return this._redialDiscoveredPeers({ force: true })
+  }
+
+  getDirectPeerDialStats() {
+    const peers = []
+    for (const [keyHex] of this._discoveredPeers) {
+      peers.push({
+        key: keyHex.slice(0, 16),
+        attempts: this._directPeerRetryCounts.get(keyHex) || 0,
+        lastDialedAt: this._directPeerLastDialedAt.get(keyHex) || null,
+        lastError: this._directPeerLastDialError.get(keyHex) || null,
+        connected: this._hasKnownPeer(keyHex),
+      })
+    }
+
+    return {
+      ...this._directPeerDialStats,
+      discoveredPeers: this._discoveredPeers.size,
+      maxDirectPeers: this._maxDirectPeers,
+      maxDirectPeerRetries: this._maxDirectPeerRetries,
+      peers,
+    }
   }
 
   /**
@@ -1244,7 +1313,9 @@ export class PublicFeedManager {
     return {
       totalEntries: this.entries.size,
       hiddenCount: this.hiddenKeys.size,
-      peerCount: this.peerChannels.size
+      peerCount: this.peerChannels.size,
+      feedConnections: this.feedConnections.size,
+      directPeerDial: this.getDirectPeerDialStats(),
     };
   }
 }

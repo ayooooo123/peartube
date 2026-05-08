@@ -224,13 +224,32 @@ export async function createRelayService({
       heartbeatTimer = setIntervalFn(async () => {
         try {
           const heartbeatStatus = await persistStatus()
+          const directPeerDial = heartbeatStatus.runtime.directPeerDial || {}
+          if ((heartbeatStatus.runtime.peers || 0) > 0 && (heartbeatStatus.runtime.connections || 0) === 0) {
+            const redialed = runtime.publicFeed?.forceRedialDiscoveredPeers?.() || 0
+            logger.status.warn('Relay discovered peers without sockets; forced direct redial', {
+              peers: heartbeatStatus.runtime.peers,
+              connections: heartbeatStatus.runtime.connections,
+              discoveredPeers: directPeerDial.discoveredPeers || 0,
+              queued: directPeerDial.queued || 0,
+              skipped: directPeerDial.skipped || 0,
+              failed: directPeerDial.failed || 0,
+              lastReason: directPeerDial.lastReason || null,
+              redialed
+            })
+          }
           logger.status.info('Relay heartbeat', {
             peers: heartbeatStatus.runtime.peers,
             connections: heartbeatStatus.runtime.connections,
             feedPeers: heartbeatStatus.runtime.feedPeers,
             feedConnections: heartbeatStatus.runtime.feedConnections,
             feedEntries: heartbeatStatus.runtime.feedEntries,
-            mirroredChannels: heartbeatStatus.summary.totalChannels
+            mirroredChannels: heartbeatStatus.summary.totalChannels,
+            discoveredPeers: directPeerDial.discoveredPeers || 0,
+            dialQueued: directPeerDial.queued || 0,
+            dialSkipped: directPeerDial.skipped || 0,
+            dialFailed: directPeerDial.failed || 0,
+            dialLastReason: directPeerDial.lastReason || null
           })
         } catch (err) {
           logger.status.error('Relay heartbeat failed', {

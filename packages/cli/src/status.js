@@ -39,6 +39,7 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
       publicFeedDiscoveryJoined: Boolean(runtimeStats.publicFeedDiscoveryJoined),
       blindPeer: runtimeStats.blindPeer || runtimeStats.seeding?.blindPeer || null,
       peerPoolJoined: Boolean(runtimeStats.peerPoolJoined),
+      directPeerDial: runtimeStats.directPeerDial || null,
       swarmOffline: Boolean(runtimeStats.swarmOffline),
       swarmOfflineReason: runtimeStats.swarmOfflineReason || null,
       swarmListenResolved: Boolean(runtimeStats.swarmListenResolved),
@@ -87,6 +88,7 @@ export function formatRelayStatus(status) {
     `feedEntries: ${status.runtime.feedEntries}`,
     `dht: bootstrapped=${status.runtime.dht.bootstrapped} firewalled=${status.runtime.dht.firewalled} online=${status.runtime.dht.online}`,
     `network: offline=${status.runtime.swarmOffline} reason=${status.runtime.swarmOfflineReason || 'none'} listenResolved=${status.runtime.swarmListenResolved} peerPoolJoined=${status.runtime.peerPoolJoined} publicFeedDiscoveryJoined=${status.runtime.publicFeedDiscoveryJoined}`,
+    `directPeerDial: discovered=${status.runtime.directPeerDial?.discoveredPeers || 0} queued=${status.runtime.directPeerDial?.queued || 0} skipped=${status.runtime.directPeerDial?.skipped || 0} failed=${status.runtime.directPeerDial?.failed || 0} lastReason=${status.runtime.directPeerDial?.lastReason || 'none'}`,
     `blindPeer: enabled=${Boolean(status.runtime.blindPeer?.enabled)} key=${status.runtime.blindPeer?.publicKey || 'none'} mirroredCores=${status.runtime.blindPeer?.mirroredCores || 0} mirroredAutobases=${status.runtime.blindPeer?.mirroredAutobases || 0}`,
     `seeding: channels=${status.runtime.seeding.channels} videos=${status.runtime.seeding.videos} publicBeeCores=${status.runtime.seeding.publicBeeCores} blobCores=${status.runtime.seeding.blobCores} discoveryHandles=${status.runtime.seeding.discoveryHandles}`
   ]

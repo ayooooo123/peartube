@@ -136,10 +136,13 @@ test('periodic gossip re-dials remembered shared-topic peers when sockets droppe
   const publicKey = b4a.alloc(32, 10)
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
+  let now = 1000
+  manager._now = () => now
 
   try {
     assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
     assert.equal(swarm.joinPeerCalls.length, 1)
+    now += manager._directPeerPendingTimeoutMs + 1
     assert.equal(manager._redialDiscoveredPeers(), 1)
     assert.equal(swarm.joinPeerCalls.length, 2)
   } finally {
@@ -147,26 +150,35 @@ test('periodic gossip re-dials remembered shared-topic peers when sockets droppe
   }
 })
 
-test('forceRedialDiscoveredPeers keeps trying known discovered peers after normal retry cap', () => {
+test('forceRedialDiscoveredPeers keeps trying known discovered peers after pending dial windows expire', () => {
   const publicKey = b4a.alloc(32, 11)
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
+  let now = 1000
+  manager._now = () => now
 
   try {
     assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(manager._redialDiscoveredPeers(), 1)
-    assert.equal(manager._redialDiscoveredPeers(), 1)
     assert.equal(manager._redialDiscoveredPeers(), 0)
-    assert.equal(swarm.joinPeerCalls.length, 3)
-
-    assert.equal(manager.forceRedialDiscoveredPeers(), 1)
+    now += manager._directPeerPendingTimeoutMs + 1
+    assert.equal(manager._redialDiscoveredPeers(), 1)
+    now += manager._directPeerPendingTimeoutMs + 1
+    assert.equal(manager._redialDiscoveredPeers(), 1)
+    now += manager._directPeerPendingTimeoutMs + 1
+    assert.equal(manager._redialDiscoveredPeers(), 1)
     assert.equal(swarm.joinPeerCalls.length, 4)
+
+    assert.equal(manager.forceRedialDiscoveredPeers(), 0)
+    assert.equal(swarm.joinPeerCalls.length, 4)
+    now += manager._directPeerPendingTimeoutMs + 1
+    assert.equal(manager.forceRedialDiscoveredPeers(), 1)
+    assert.equal(swarm.joinPeerCalls.length, 5)
 
     const stats = manager.getStats().directPeerDial
     assert.equal(stats.discoveredPeers, 1)
-    assert.equal(stats.queued, 4)
+    assert.equal(stats.queued, 5)
     assert.equal(stats.lastReason, 'queued')
-    assert.equal(stats.peers[0].attempts, 4)
+    assert.equal(stats.peers[0].attempts, 5)
   } finally {
     manager.stop()
   }
@@ -222,7 +234,60 @@ test('PublicFeedManager.start joins shared PearTube network topic for feed-peer 
   }
 })
 
-test('handleConnection pairs and opens one feed channel per connection', () => {
+test('discovered peer dials remain pending until the Hyperswarm socket arrives', () => {
+  const publicKey = b4a.alloc(32, 14)
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  manager._now = () => 12345
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), false)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+
+    const pendingStats = manager.getStats().directPeerDial
+    assert.equal(pendingStats.pending, 1)
+    assert.equal(pendingStats.lastReason, 'dial-already-pending')
+    assert.equal(pendingStats.peers[0].pending, true)
+    assert.equal(pendingStats.peers[0].connected, false)
+
+    const conn = createConnection()
+    conn.remotePublicKey = publicKey
+    manager.handleConnection(conn, { publicKey })
+
+    const connectedStats = manager.getStats().directPeerDial
+    assert.equal(connectedStats.pending, 0)
+    assert.equal(connectedStats.peers[0].pending, false)
+    assert.equal(connectedStats.lastReason, 'connected')
+    assert.equal(connectedStats.connected, 1)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('expired pending discovered peer dials are retried', () => {
+  const publicKey = b4a.alloc(32, 15)
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  let now = 1000
+  manager._now = () => now
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    assert.equal(manager._redialDiscoveredPeers(), 0)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+
+    now += manager._directPeerPendingTimeoutMs + 1
+    assert.equal(manager._redialDiscoveredPeers(), 1)
+    assert.equal(swarm.joinPeerCalls.length, 2)
+    assert.equal(manager.getStats().directPeerDial.pending, 1)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('handleConnection immediately opens Protomux feed channel for connected discovered peer', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
   const conn = createConnection()
@@ -619,8 +684,10 @@ test('periodic feed gossip re-dials discovered peers after their connection clos
   const publicKey = b4a.alloc(32, 9)
   const keyHex = b4a.toString(publicKey, 'hex')
   const conn = createConnection()
+  let now = 1000
 
   manager._gossipIntervalMs = 10
+  manager._now = () => now
 
   try {
     await manager.start()
@@ -631,6 +698,7 @@ test('periodic feed gossip re-dials discovered peers after their connection clos
     manager.handleConnection(conn, {})
     conn.emit('close')
     swarm.peers.delete(keyHex)
+    now += manager._directPeerPendingTimeoutMs + 1
 
     await new Promise((resolve) => setTimeout(resolve, 35))
 

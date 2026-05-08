@@ -78,15 +78,22 @@ export class PublicFeedManager {
     this._directPeerLastDialedAt = new Map();
     /** @type {Map<string, string>} */
     this._directPeerLastDialError = new Map();
-    /** @type {{attempted: number, queued: number, skipped: number, failed: number, lastReason: string | null, lastDialedAt: number | null}} */
+    /** @type {Map<string, number>} */
+    this._directPeerLastQueuedAt = new Map();
+    /** @type {Set<string>} */
+    this._directPeerPending = new Set();
+    /** @type {{attempted: number, queued: number, skipped: number, failed: number, connected: number, lastReason: string | null, lastDialedAt: number | null}} */
     this._directPeerDialStats = {
       attempted: 0,
       queued: 0,
       skipped: 0,
       failed: 0,
+      connected: 0,
       lastReason: null,
       lastDialedAt: null,
     };
+    /** @type {number} */
+    this._directPeerPendingTimeoutMs = 15000;
     /** @type {number} */
     this._maxDirectPeerRetries = 3;
     /** @type {number} */
@@ -392,6 +399,23 @@ export class PublicFeedManager {
     return false
   }
 
+  _markPeerConnected(publicKey) {
+    const remembered = this._rememberPeerPublicKey(publicKey)
+    if (!remembered) return
+    this._directPeerPending.delete(remembered.keyHex)
+    this._directPeerLastQueuedAt.delete(remembered.keyHex)
+    this._directPeerRetryCounts.delete(remembered.keyHex)
+    this._directPeerLastDialError.delete(remembered.keyHex)
+    this._directPeerDialStats.connected++
+    this._directPeerDialStats.lastReason = 'connected'
+  }
+
+  _pendingDialExpired(keyHex) {
+    if (!this._directPeerPending.has(keyHex)) return true
+    const queuedAt = this._directPeerLastQueuedAt.get(keyHex) || 0
+    return this._now() - queuedAt >= this._directPeerPendingTimeoutMs
+  }
+
   _connectionLabel(conn, info = null) {
     if (!conn) return 'conn:unknown'
     let label = this._connectionIds.get(conn)
@@ -486,8 +510,15 @@ export class PublicFeedManager {
       return false
     }
     if (this._hasKnownPeer(keyHex)) {
+      this._directPeerPending.delete(keyHex)
+      this._directPeerLastQueuedAt.delete(keyHex)
       this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'already-known-peer'
+      this._directPeerDialStats.lastReason = 'already-connected-peer'
+      return false
+    }
+    if (this._directPeerPending.has(keyHex) && !this._pendingDialExpired(keyHex)) {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'dial-already-pending'
       return false
     }
     if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) {
@@ -495,17 +526,17 @@ export class PublicFeedManager {
       this._directPeerDialStats.lastReason = 'max-direct-peers'
       return false
     }
-    if (!force && attempts >= this._maxDirectPeerRetries) {
-      this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'max-retries'
-      return false
-    }
-
+    // Discovered peers are part of the app protocol surface. There is no hard
+    // retry cap here: a peer that remains on the shared topic should keep being
+    // dialed after the pending dial window expires until Hyperswarm gives us a
+    // socket, at which point handleConnection opens the Protomux feed channel.
     try {
       this.swarm.joinPeer(publicKey)
       const now = this._now()
       this._directPeerRetryCounts.set(keyHex, attempts + 1)
       this._directPeerLastDialedAt.set(keyHex, now)
+      this._directPeerLastQueuedAt.set(keyHex, now)
+      this._directPeerPending.add(keyHex)
       this._directPeerLastDialError.delete(keyHex)
       this._directPeerDialStats.queued++
       this._directPeerDialStats.lastReason = 'queued'
@@ -543,11 +574,14 @@ export class PublicFeedManager {
   getDirectPeerDialStats() {
     const peers = []
     for (const [keyHex] of this._discoveredPeers) {
+      const pending = this._directPeerPending.has(keyHex) && !this._pendingDialExpired(keyHex)
       peers.push({
         key: keyHex.slice(0, 16),
         attempts: this._directPeerRetryCounts.get(keyHex) || 0,
         lastDialedAt: this._directPeerLastDialedAt.get(keyHex) || null,
+        lastQueuedAt: this._directPeerLastQueuedAt.get(keyHex) || null,
         lastError: this._directPeerLastDialError.get(keyHex) || null,
+        pending,
         connected: this._hasKnownPeer(keyHex),
       })
     }
@@ -555,6 +589,9 @@ export class PublicFeedManager {
     return {
       ...this._directPeerDialStats,
       discoveredPeers: this._discoveredPeers.size,
+      pending: Array.from(this._discoveredPeers.keys())
+        .filter((keyHex) => this._directPeerPending.has(keyHex) && !this._pendingDialExpired(keyHex))
+        .length,
       maxDirectPeers: this._maxDirectPeers,
       maxDirectPeerRetries: this._maxDirectPeerRetries,
       peers,
@@ -749,6 +786,10 @@ export class PublicFeedManager {
       this.pendingAvailabilityRequests.clear()
       this._directPeerRetryCounts.clear()
       this._discoveredPeers.clear()
+      this._directPeerLastDialedAt.clear()
+      this._directPeerLastDialError.clear()
+      this._directPeerLastQueuedAt.clear()
+      this._directPeerPending.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)
       if (this._gossipInterval) clearInterval(this._gossipInterval)
       this.feedDiscovery?.destroy?.()
@@ -835,6 +876,8 @@ export class PublicFeedManager {
     }
 
     const label = this._connectionLabel(conn, info)
+    const remoteKey = info?.publicKey || conn.remotePublicKey || conn.publicKey
+    this._markPeerConnected(remoteKey)
     console.log('[PublicFeed] handleConnection:', label, 'setting up feed protocol on new connection');
     this.wiredConnections.add(conn);
 

@@ -138,23 +138,50 @@ export function isConfirmedFeedHydrationResult({ entry, resolved, videos = [] })
   if (Array.isArray(videos) && videos.length > 0) return true
   const previewVideos = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
   const manifestUpdatedAt = Number(entry?.manifestUpdatedAt || 0) || 0
+
+  // An empty `listVideos()` result is only authoritative if the feed snapshot
+  // itself says the channel manifest is empty. If the public feed still carries
+  // preview videos, the channel/PublicBee load was partial or stale and must not
+  // delete already-renderable preview cards. Desktop startup commonly hits this:
+  // previews render first, then overloaded GET_CHANNEL_META/listVideos calls time
+  // out or return empty for the same channel.
   return manifestUpdatedAt > 0 && previewVideos.length === 0
+}
+
+function isPreviewBackedByFeedEntry(video, feedEntryByChannel) {
+  const channelKey = video?.channelKey || video?.driveKey || null
+  if (!channelKey) return false
+  const entry = feedEntryByChannel?.get(channelKey)
+  const previewVideos = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
+  const identifier = video?.id || video?.path || ''
+  if (!identifier || previewVideos.length === 0) return false
+
+  return previewVideos.some((preview) => {
+    const previewIdentifier = preview?.id || preview?.path || ''
+    return previewIdentifier === identifier
+  })
 }
 
 export function mergeHydratedFeedVideos({
   previousVideos = /** @type {any[]} */ ([]),
   incomingVideos = /** @type {any[]} */ ([]),
   refreshedChannelKeys = /** @type {string[]} */ ([]),
+  feedEntries = /** @type {any[]} */ ([]),
   identityDriveKey = undefined,
   limit = 50,
 }) {
   const refreshed = new Set((refreshedChannelKeys || []).filter(Boolean))
+  const feedEntryByChannel = new Map()
+  for (const entry of feedEntries || []) {
+    const channelKey = entry?.channelKey || entry?.driveKey || null
+    if (channelKey && !feedEntryByChannel.has(channelKey)) feedEntryByChannel.set(channelKey, entry)
+  }
   const byKey = new Map()
 
   for (const video of previousVideos || []) {
     if (!video) continue
     const channelKey = video?.channelKey || video?.driveKey || null
-    if (channelKey && refreshed.has(channelKey)) continue
+    if (channelKey && refreshed.has(channelKey) && !isPreviewBackedByFeedEntry(video, feedEntryByChannel)) continue
     const identifier = video?.id || video?.path || ''
     if (!identifier) continue
     const key = `${channelKey || ''}:${identifier}`

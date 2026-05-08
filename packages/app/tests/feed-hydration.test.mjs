@@ -226,12 +226,40 @@ test('mergeHydratedFeedVideos replaces stale channel cards when a refreshed chan
     ],
     incomingVideos: [],
     refreshedChannelKeys: ['remote-a'],
+    feedEntries: [
+      { driveKey: 'remote-a', manifestUpdatedAt: 123, previewVideos: [] },
+    ],
     identityDriveKey: 'local',
     limit: 50,
   })
 
   assert.deepEqual(merged.map((video) => ({ id: video.id, channelKey: video.channelKey })), [
     { id: 'keep-remote', channelKey: 'remote-b' },
+  ])
+})
+
+test('mergeHydratedFeedVideos preserves preview-backed cards when channel hydration returns an empty partial result', () => {
+  const merged = mergeHydratedFeedVideos({
+    previousVideos: [
+      { id: 'preview-a', channelKey: 'remote-a', uploadedAt: 30, availability: 'playable', __feedSource: 'preview' },
+      { id: 'keep-remote', channelKey: 'remote-b', uploadedAt: 20, availability: 'playable' },
+    ],
+    incomingVideos: [],
+    refreshedChannelKeys: ['remote-a'],
+    feedEntries: [
+      {
+        driveKey: 'remote-a',
+        manifestUpdatedAt: 123,
+        previewVideos: [{ id: 'preview-a', availability: 'playable' }],
+      },
+    ],
+    identityDriveKey: 'local',
+    limit: 50,
+  })
+
+  assert.deepEqual(merged.map((video) => ({ id: video.id, channelKey: video.channelKey, source: video.__feedSource || 'hydrated' })), [
+    { id: 'preview-a', channelKey: 'remote-a', source: 'preview' },
+    { id: 'keep-remote', channelKey: 'remote-b', source: 'hydrated' },
   ])
 })
 
@@ -247,6 +275,12 @@ test('isConfirmedFeedHydrationResult only treats empty results as authoritative 
     resolved: true,
     videos: [],
   }), true)
+
+  assert.equal(isConfirmedFeedHydrationResult({
+    entry: { manifestUpdatedAt: 123, previewVideos: [{ id: 'preview-a' }] },
+    resolved: true,
+    videos: [],
+  }), false)
 
   assert.equal(isConfirmedFeedHydrationResult({
     entry: { manifestUpdatedAt: 123, previewVideos: [{ id: 'preview-a' }] },

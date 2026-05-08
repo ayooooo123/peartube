@@ -21,6 +21,7 @@ function createSwarm() {
     peers: new Map(),
     joinCalls: [],
     joinPeerCalls: [],
+    fallbackJoinPeerCalls: [],
     join(topic, opts) {
       this.joinCalls.push({ topic, opts })
       return {
@@ -31,6 +32,7 @@ function createSwarm() {
     },
     joinPeer(publicKey) {
       this.joinPeerCalls.push(publicKey)
+      this.fallbackJoinPeerCalls.push(publicKey)
       return {}
     },
     _handlePeer(peer, topic) {
@@ -51,6 +53,7 @@ function createSwarm() {
     _enqueue(peerInfo) {
       peerInfo.queued = true
       this.joinPeerCalls.push(peerInfo.publicKey)
+      return true
     }
   }
 }

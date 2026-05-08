@@ -167,6 +167,22 @@ function createOfflineSwarm(keyPair, reason = 'unavailable') {
   return swarm
 }
 
+function installSwarmPeerDiscoveryEmitter(swarm) {
+  if (!swarm || swarm._peartubePeerDiscoveryEmitterInstalled) return false
+  if (typeof swarm._handlePeer !== 'function' || typeof swarm.emit !== 'function') return false
+
+  const handlePeer = swarm._handlePeer
+  swarm._handlePeer = function peartubeHandlePeer(peer, topic) {
+    const result = handlePeer.call(this, peer, topic)
+    try {
+      swarm.emit('peer', peer, topic)
+    } catch { /* best effort */ }
+    return result
+  }
+  swarm._peartubePeerDiscoveryEmitterInstalled = true
+  return true
+}
+
 async function ensureHttpModule() {
   if (http) return http
   try {
@@ -729,6 +745,7 @@ export async function initializeStorage(config) {
   }
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
   await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
+  installSwarmPeerDiscoveryEmitter(swarm)
 
   // Set global references for suspend/resume and stats
   globalSwarm = swarm;

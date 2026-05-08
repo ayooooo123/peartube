@@ -25,6 +25,8 @@ import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
 const log = logger('PublicFeed')
 const PUBLIC_FEED_CATALOG_VERSION = 1
 const PUBLIC_FEED_RELAY_CATALOG_KEY = 'public-feed-relay-catalog-v1'
+const NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
+const NETWORK_TOPIC_HEX = b4a.toString(NETWORK_TOPIC, 'hex')
 
 /**
  * @typedef {import('./types.js').PublicFeedEntry} PublicFeedEntry
@@ -365,37 +367,105 @@ export class PublicFeedManager {
     return []
   }
 
+  _topicToHex(topic) {
+    if (!topic) return null
+    if (typeof topic === 'string') return /^[a-f0-9]{64}$/i.test(topic) ? topic.toLowerCase() : null
+    if (b4a.isBuffer(topic) || topic instanceof Uint8Array) return b4a.toString(topic, 'hex')
+    return null
+  }
+
+  _isNetworkTopic(topic) {
+    const topicHex = this._topicToHex(topic)
+    return topicHex === NETWORK_TOPIC_HEX
+  }
+
+  _peerEntryHasNetworkTopic(peer) {
+    if (!peer || typeof peer !== 'object') return false
+    const nestedPeer = peer.value || peer.peer || peer[1]
+    const topics = [
+      peer.topic,
+      ...(Array.isArray(peer.topics) ? peer.topics : []),
+      nestedPeer?.topic,
+      ...(Array.isArray(nestedPeer?.topics) ? nestedPeer.topics : []),
+    ].filter(Boolean)
+    if (topics.length === 0) return false
+    return topics.some((topic) => this._isNetworkTopic(topic))
+  }
+
+  _peerEntryPublicKey(peer) {
+    if (!peer) return null
+    if (typeof peer === 'string' && /^[a-f0-9]{64}$/i.test(peer)) return b4a.from(peer, 'hex')
+    if (b4a.isBuffer(peer) || peer instanceof Uint8Array) return peer
+
+    const publicKey =
+      peer.publicKey ||
+      peer.remotePublicKey ||
+      peer.key ||
+      peer.value?.publicKey ||
+      peer.value?.remotePublicKey ||
+      peer.value?.key ||
+      peer.peer?.publicKey ||
+      peer.peer?.remotePublicKey ||
+      peer[1]?.publicKey ||
+      peer[1]?.remotePublicKey ||
+      peer[1]?.key
+
+    if (typeof publicKey === 'string' && /^[a-f0-9]{64}$/i.test(publicKey)) return b4a.from(publicKey, 'hex')
+    if (publicKey && (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array)) return publicKey
+    return null
+  }
+
   _peerEntryIsConnected(entry) {
     if (!entry || typeof entry !== 'object') return false
-    const nestedPeer = entry.value || entry.peer
-    return entry.connected === true || nestedPeer?.connected === true || Boolean(entry.stream || nestedPeer?.stream)
+    const nestedPeer = entry.value || entry.peer || entry[1]
+    return (
+      entry.connected === true ||
+      entry.opened === true ||
+      (Number.isFinite(entry.connectedTime) && entry.connectedTime >= 0) ||
+      nestedPeer?.connected === true ||
+      nestedPeer?.opened === true ||
+      (Number.isFinite(nestedPeer?.connectedTime) && nestedPeer.connectedTime >= 0) ||
+      Boolean(entry.stream || nestedPeer?.stream)
+    )
   }
 
   _peerEntryMatchesKey(entry, keyHex, { requireConnected = false } = {}) {
-    if (!entry) return false
-    if (typeof entry === 'string') return entry === keyHex
-    if (b4a.isBuffer(entry) || entry instanceof Uint8Array) {
-      return b4a.toString(entry, 'hex') === keyHex
-    }
-    const publicKey = entry.publicKey || entry.remotePublicKey || entry.key || entry.value?.publicKey || entry.value?.remotePublicKey
-    if (publicKey && (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array)) {
-      if (b4a.toString(publicKey, 'hex') !== keyHex) return false
-      return !requireConnected || this._peerEntryIsConnected(entry)
-    }
-    return false
+    const publicKey = this._peerEntryPublicKey(entry)
+    if (!publicKey) return false
+    if (b4a.toString(publicKey, 'hex') !== keyHex) return false
+    return !requireConnected || this._peerEntryIsConnected(entry)
   }
 
-  _hasKnownPeer(keyHex) {
-    const peers = this.swarm?.peers
-    if (!peers) return false
-    if (typeof peers.has === 'function' && peers.has(keyHex)) {
-      const entry = typeof peers.get === 'function' ? peers.get(keyHex) : null
-      if (entry && this._peerEntryIsConnected({ key: keyHex, value: entry })) return true
-      if (!entry && this._discoveredPeers.has(keyHex)) return true
+  _hasActivePeerConnection(keyHex, publicKey = null) {
+    if (!this.swarm || !keyHex) return false
+
+    const allConnections = this.swarm._allConnections
+    if (publicKey && allConnections && typeof allConnections.has === 'function') {
+      try {
+        if (allConnections.has(publicKey)) return true
+      } catch {}
     }
+
+    const connections = this.swarm.connections
+    if (connections && typeof connections[Symbol.iterator] === 'function') {
+      for (const conn of connections) {
+        if (this._peerEntryMatchesKey(conn, keyHex)) return true
+      }
+    }
+
+    const peers = this.swarm.peers
+    if (peers && typeof peers.get === 'function') {
+      let peerInfo = peers.get(keyHex)
+      if (!peerInfo && publicKey) {
+        try { peerInfo = peers.get(publicKey) } catch {}
+      }
+      if (peerInfo && this._peerEntryIsConnected({ key: keyHex, value: peerInfo })) return true
+    }
+
     for (const entry of this._swarmPeerEntries()) {
       if (this._peerEntryMatchesKey(entry, keyHex, { requireConnected: true })) return true
     }
+
     return false
   }
 
@@ -456,6 +526,7 @@ export class PublicFeedManager {
   _harvestSwarmPeersForDial() {
     let remembered = 0
     for (const peer of this._swarmPeerEntries()) {
+      if (!this._peerEntryHasNetworkTopic(peer)) continue
       const publicKey = this._peerEntryPublicKey(peer)
       const keyHex = publicKey ? b4a.toString(publicKey, 'hex') : null
       const wasRemembered = keyHex ? this._discoveredPeers.has(keyHex) : false
@@ -465,34 +536,23 @@ export class PublicFeedManager {
     return remembered
   }
 
-  _peerEntryPublicKey(peer) {
-    if (!peer) return null
-    if (b4a.isBuffer(peer)) return peer
-    if (peer.publicKey) return peer.publicKey
-    if (peer.remotePublicKey) return peer.remotePublicKey
-    if (peer.value?.publicKey) return peer.value.publicKey
-    if (peer.value?.remotePublicKey) return peer.value.remotePublicKey
-    if (peer[1]?.publicKey) return peer[1].publicKey
-    if (peer[1]?.remotePublicKey) return peer[1].remotePublicKey
-    if (typeof peer === 'string' && /^[a-f0-9]{64}$/i.test(peer)) return b4a.from(peer, 'hex')
-    return null
-  }
-
   /**
    * Remember a discovered peer and explicitly dial it when the shared topic has
    * found peers but Hyperswarm has not promoted them into connections yet.
    * This keeps the hard-cutover architecture on one topic while making the
    * Protomux feed channel less dependent on passive connection timing.
    * @param {any} peer
+   * @param {Buffer | Uint8Array | string | null} [topic]
    * @returns {boolean}
    */
-  handleDiscoveredPeer(peer) {
-    const publicKey = peer?.publicKey
+  handleDiscoveredPeer(peer, topic = null) {
+    if (topic && !this._isNetworkTopic(topic)) return false
+    const publicKey = this._peerEntryPublicKey(peer)
     if (!publicKey || !this.swarm || typeof this.swarm.joinPeer !== 'function') return false
 
     const remembered = this._rememberPeerPublicKey(publicKey)
     if (!remembered) return false
-    if (this._hasKnownPeer(remembered.keyHex)) return false
+    if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) return false
 
     return this._dialDiscoveredPeer(remembered.keyHex, remembered.publicKey)
   }
@@ -509,7 +569,7 @@ export class PublicFeedManager {
       this._directPeerDialStats.lastReason = 'self-or-missing-key'
       return false
     }
-    if (this._hasKnownPeer(keyHex)) {
+    if (this._hasActivePeerConnection(keyHex, publicKey)) {
       this._directPeerPending.delete(keyHex)
       this._directPeerLastQueuedAt.delete(keyHex)
       this._directPeerDialStats.skipped++
@@ -571,6 +631,28 @@ export class PublicFeedManager {
     return this._redialDiscoveredPeers({ force: true })
   }
 
+  _swarmDialState(keyHex) {
+    const peers = this.swarm?.peers
+    const peerInfo = peers && typeof peers.get === 'function' ? peers.get(keyHex) : null
+    if (!peerInfo || typeof peerInfo !== 'object') return null
+
+    const relayAddresses = Array.isArray(peerInfo.relayAddresses) ? peerInfo.relayAddresses : []
+    const topics = Array.isArray(peerInfo.topics) ? peerInfo.topics : []
+    return {
+      attempts: Number(peerInfo.attempts || 0),
+      queued: Boolean(peerInfo.queued),
+      waiting: Boolean(peerInfo.waiting),
+      explicit: Boolean(peerInfo.explicit),
+      banned: Boolean(peerInfo.banned),
+      proven: Boolean(peerInfo.proven),
+      client: Boolean(peerInfo.client),
+      connectedTime: Number(peerInfo.connectedTime ?? -1),
+      disconnectedTime: Number(peerInfo.disconnectedTime || 0),
+      relayAddresses: relayAddresses.length,
+      topics: topics.length,
+    }
+  }
+
   getDirectPeerDialStats() {
     const peers = []
     for (const [keyHex] of this._discoveredPeers) {
@@ -582,7 +664,8 @@ export class PublicFeedManager {
         lastQueuedAt: this._directPeerLastQueuedAt.get(keyHex) || null,
         lastError: this._directPeerLastDialError.get(keyHex) || null,
         pending,
-        connected: this._hasKnownPeer(keyHex),
+        connected: this._hasActivePeerConnection(keyHex, this._discoveredPeers.get(keyHex)),
+        swarm: this._swarmDialState(keyHex),
       })
     }
 
@@ -594,6 +677,12 @@ export class PublicFeedManager {
         .length,
       maxDirectPeers: this._maxDirectPeers,
       maxDirectPeerRetries: this._maxDirectPeerRetries,
+      swarmPeers: this.swarm?.peers?.size || 0,
+      swarmConnections: this.swarm?.connections?.size || 0,
+      swarmAllConnections: this.swarm?._allConnections?.size || 0,
+      swarmConnecting: Number(this.swarm?.connecting || 0),
+      swarmExplicitPeers: this.swarm?.explicitPeers?.size || 0,
+      swarmQueueSize: this.swarm?._queue?.length || 0,
       peers,
     }
   }
@@ -703,13 +792,12 @@ export class PublicFeedManager {
       try { this.onFeedUpdate?.(); } catch {}
     }
 
-    const feedTopic = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
     try {
-      this.feedDiscovery = this.swarm.join(feedTopic, { server: true, client: true })
+      this.feedDiscovery = this.swarm.join(NETWORK_TOPIC, { server: true, client: true })
       this.feedDiscovery?.flushed?.().then(() => {
         console.log('[PublicFeed] Shared network feed discovery flushed, connections:', this.swarm.connections?.size || 0)
       }).catch(() => {})
-      console.log('[PublicFeed] Joined shared network feed topic:', b4a.toString(feedTopic, 'hex').slice(0, 16))
+      console.log('[PublicFeed] Joined shared network feed topic:', NETWORK_TOPIC_HEX.slice(0, 16))
     } catch (err) {
       console.log('[PublicFeed] Shared network feed topic join failed:', err?.message)
       this.feedDiscovery = null
@@ -720,6 +808,10 @@ export class PublicFeedManager {
     console.log('[PublicFeed] Setting up feed protocol on', existingConns, 'existing connections');
     for (const conn of this.swarm.connections) {
       this.handleConnection(conn, {});
+    }
+    const redialedPeers = this._redialDiscoveredPeers()
+    if (redialedPeers) {
+      console.log('[PublicFeed] Redialed shared-topic peers on startup:', redialedPeers)
     }
     this._startGossipLoop()
     console.log('[PublicFeed] ===== PUBLIC FEED STARTED =====');

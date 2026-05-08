@@ -237,6 +237,11 @@ export async function createRelayService({
               failed: directPeerDial.failed || 0,
               connected: directPeerDial.connected || 0,
               lastReason: directPeerDial.lastReason || null,
+              swarmConnecting: directPeerDial.swarmConnecting || 0,
+              swarmAllConnections: directPeerDial.swarmAllConnections || 0,
+              swarmExplicitPeers: directPeerDial.swarmExplicitPeers || 0,
+              swarmQueueSize: directPeerDial.swarmQueueSize || 0,
+              dialPeers: Array.isArray(directPeerDial.peers) ? directPeerDial.peers : [],
               redialed
             })
           }

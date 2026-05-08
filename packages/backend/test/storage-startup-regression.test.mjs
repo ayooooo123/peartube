@@ -83,11 +83,28 @@ test('offline swarm fallback skips peer pool discovery instead of joining noop t
   )
 })
 
-
 test('storage exposes public bee content discovery retention for cached serving cores', () => {
   assert.match(storageSource, /export async function retainPublicBeeContentDiscovery\(ctx, publicBeeKeyHex/)
   assert.match(storageSource, /await loadPublicBee\(ctx, publicBeeKeyHex\)/)
   assert.match(storageSource, /video\?\.blobsCoreKey/)
   assert.match(storageSource, /video\?\.thumbnailBlobsCoreKey/)
   assert.match(storageSource, /retainSwarmDiscovery\(ctx, core\.discoveryKey/)
+})
+
+test('storage exposes Hyperswarm peer discovery as a peer event for feed fallback dialing', () => {
+  assert.match(
+    storageSource,
+    /function installSwarmPeerDiscoveryEmitter\(swarm\)/,
+    'storage should install a peer discovery event adapter'
+  )
+  assert.match(
+    storageSource,
+    /installSwarmPeerDiscoveryEmitter\(swarm\)/,
+    'real swarm startup should install the peer discovery event adapter'
+  )
+  assert.match(
+    storageSource,
+    /swarm\.emit\('peer', peer, topic\)/,
+    'adapter should emit peer events with the discovered peer and topic'
+  )
 })

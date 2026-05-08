@@ -474,7 +474,9 @@ export async function createBackendContext(config) {
               const core = ctx.store.get(Buffer.from(seed.blobsCoreKey, 'hex'))
               await core?.ready?.()
               if (core?.discoveryKey) retainSwarmDiscovery(ctx, core.discoveryKey, { label: `seed:${seed.blobsCoreKey.slice(0, 16)}` })
-            } catch {}
+            } catch {
+              // Discovery retention is best-effort during startup warmup.
+            }
           }
           if (seed?.publicBeeKey) {
             retainPublicBeeContentDiscovery(ctx, seed.publicBeeKey, { label: `seed:${seed.driveKey?.slice?.(0, 16) || 'channel'}` }).catch(() => {})

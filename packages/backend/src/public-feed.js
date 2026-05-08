@@ -21,6 +21,7 @@ import b4a from 'b4a'
 import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
+import { ensureSwarmPeerConnection, peerPublicKey, swarmHasConnection } from './swarm-peer-dial.js'
 
 const log = logger('PublicFeed')
 const PUBLIC_FEED_CATALOG_VERSION = 1
@@ -448,33 +449,7 @@ export class PublicFeedManager {
   }
 
   _hasActivePeerConnection(keyHex, publicKey = null) {
-    if (!this.swarm || !keyHex) return false
-
-    const connections = this.swarm.connections
-    if (connections && typeof connections[Symbol.iterator] === 'function') {
-      for (const conn of connections) {
-        if (this._peerEntryMatchesKey(conn, keyHex)) return true
-      }
-    }
-
-    for (const entry of this._activeSwarmConnectionEntries()) {
-      if (this._peerEntryMatchesKey(entry, keyHex)) return true
-    }
-
-    const peers = this.swarm.peers
-    if (peers && typeof peers.get === 'function') {
-      let peerInfo = peers.get(keyHex)
-      if (!peerInfo && publicKey) {
-        try { peerInfo = peers.get(publicKey) } catch {}
-      }
-      if (peerInfo && this._peerEntryIsConnected({ key: keyHex, value: peerInfo })) return true
-    }
-
-    for (const entry of this._swarmPeerEntries()) {
-      if (this._peerEntryMatchesKey(entry, keyHex, { requireConnected: true })) return true
-    }
-
-    return false
+    return swarmHasConnection(this.swarm, keyHex, publicKey)
   }
 
   _markPeerConnected(publicKey) {
@@ -556,46 +531,25 @@ export class PublicFeedManager {
   _queueDiscoveredPeer(peer, topic) {
     const publicKey = this._peerEntryPublicKey(peer)
     if (!publicKey || !this.swarm) return null
-    if (topic && typeof this.swarm._handlePeer === 'function') {
-      try {
-        this.swarm._handlePeer(peer, topic)
-      } catch (err) {
-        console.log('[PublicFeed] Failed to preserve discovered peer relay hints:', err?.message || String(err))
-      }
-    }
     return this._rememberPeerPublicKey(publicKey)
-  }
-
-  _explicitlyQueuePeer(keyHex, publicKey) {
-    const peerInfo = this.swarm?.peers?.get?.(keyHex)
-    if (peerInfo && typeof this.swarm?._enqueue === 'function' && typeof peerInfo._updatePriority === 'function') {
-      peerInfo.explicit = true
-      this.swarm.explicitPeers?.add?.(peerInfo)
-      if (!this.swarm._allConnections?.has?.(publicKey) && peerInfo._updatePriority()) {
-        return this.swarm._enqueue(peerInfo) !== false
-      }
-      return false
-    }
-    this.swarm.joinPeer(publicKey)
-    return true
   }
 
   handleDiscoveredPeer(peer, topic = null) {
     if (topic && !this._isNetworkTopic(topic)) return false
-    if (!this.swarm || typeof this.swarm.joinPeer !== 'function') return false
+    if (!this.swarm) return false
 
     const remembered = this._queueDiscoveredPeer(peer, topic)
     if (!remembered) return false
     if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) return false
 
-    return this._dialDiscoveredPeer(remembered.keyHex, remembered.publicKey)
+    return this._dialDiscoveredPeer(remembered.keyHex, remembered.publicKey, peer, topic)
   }
 
-  _dialDiscoveredPeer(keyHex, publicKey, attempts = this._directPeerRetryCounts.get(keyHex) || 0, { force = false } = {}) {
+  _dialDiscoveredPeer(keyHex, publicKey, peer = publicKey, topic = null) {
     this._directPeerDialStats.attempted++
-    if (!publicKey || !this.swarm || typeof this.swarm.joinPeer !== 'function') {
+    if (!publicKey || !this.swarm) {
       this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'joinPeer-unavailable'
+      this._directPeerDialStats.lastReason = 'swarm-unavailable'
       return false
     }
     if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) {
@@ -625,7 +579,13 @@ export class PublicFeedManager {
     // dialed after the pending dial window expires until Hyperswarm gives us a
     // socket, at which point handleConnection opens the Protomux feed channel.
     try {
-      this._explicitlyQueuePeer(keyHex, publicKey)
+      const attempts = this._directPeerRetryCounts.get(keyHex) || 0
+      const result = ensureSwarmPeerConnection(this.swarm, peer || publicKey, topic)
+      if (!result.queued) {
+        this._directPeerDialStats.skipped++
+        this._directPeerDialStats.lastReason = result.reason || 'queue-skipped'
+        return false
+      }
       const now = this._now()
       this._directPeerRetryCounts.set(keyHex, attempts + 1)
       this._directPeerLastDialedAt.set(keyHex, now)
@@ -655,8 +615,7 @@ export class PublicFeedManager {
     let dialed = 0
     for (const [keyHex, publicKey] of this._discoveredPeers) {
       if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) break
-      const attempts = this._directPeerRetryCounts.get(keyHex) || 0
-      if (this._dialDiscoveredPeer(keyHex, publicKey, attempts, { force })) dialed++
+      if (this._dialDiscoveredPeer(keyHex, publicKey)) dialed++
     }
     return dialed
   }

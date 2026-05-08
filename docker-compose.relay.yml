@@ -14,13 +14,11 @@ services:
     restart: unless-stopped
     ports:
       - "8174:8174"
-      - "49737:49737/udp"
     environment:
       PEARTUBE_MODE: public
       PEARTUBE_POLICY: discovery
       PEARTUBE_DISCOVERY_ENABLED: "true"
       PEARTUBE_NETWORK_ANNOUNCE: "true"
-      PEARTUBE_NETWORK_PORT: "49737"
       PEARTUBE_ARCHIVE_UI_ENABLED: "true"
       PEARTUBE_ARCHIVE_UI_HOST: 0.0.0.0
       PEARTUBE_ARCHIVE_UI_PORT: "8174"

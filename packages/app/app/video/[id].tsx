@@ -744,6 +744,8 @@ function MobileVideoPlayerScreen() {
               channelKey: videoData.channelKey,
               videoId: id,
               publicBeeKey: videoData?.publicBeeKey || undefined,
+              blobId: videoData?.blobId || undefined,
+              blobsCoreKey: videoData?.blobsCoreKey || undefined,
             }).then((result: any) => {
               if (result) setVideoData((prev: any) => ({ ...prev, ...result }))
             }).catch(() => {})

@@ -27,6 +27,12 @@ test('native channel page video cards navigate to the video route with channel c
     'native channel videos should open /video/[id] with channel and videoData params',
   )
 
+  assert.match(
+    source,
+    /publicBeeKey: channelPublicBeeKey \|\| undefined,[\s\S]*?videoData: JSON\.stringify/s,
+    'native channel videos should pass publicBeeKey as a route param before serialized videoData',
+  )
+
   assert.doesNotMatch(
     source,
     /<PressableFeedback className="mb-4" onPress=\{\(\) => \{\}\}/,
@@ -95,6 +101,7 @@ test('channel view preserves publicBeeKey across native and web navigation/data 
   )
   assert.match(nativeVideo, /const rawPublicBeeParam = params\.publicBeeKey \?\? params\.publicBee/, 'native watch route should accept both publicBeeKey and legacy publicBee route params')
   assert.match(nativeVideo, /const fetchedVideoData = result\?\.video \|\| result/, 'native watch route should unwrap backend getVideoData responses before playback')
+  assert.match(nativeVideo, /rpc\.getVideoData\(\{[\s\S]*?blobId: videoData\?\.blobId \|\| undefined,[\s\S]*?blobsCoreKey: videoData\?\.blobsCoreKey \|\| undefined,/s, 'native watch route should pass direct blob refs when refreshing video metadata')
   assert.match(nativeChannel, /const channelPublicBeeKey = useMemo/, 'native channel view should resolve publicBeeKey route params')
   assert.match(nativeChannel, /rpc\.getChannelMeta\(\{ channelKey, publicBeeKey: channelPublicBeeKey \|\| undefined \}(?: as any)?\)/, 'native channel metadata should pass publicBeeKey')
   assert.match(nativeChannel, /rpc\.listVideos\(\{ channelKey, publicBeeKey: channelPublicBeeKey \|\| undefined \}(?: as any)?\)/, 'native channel video list should pass publicBeeKey')

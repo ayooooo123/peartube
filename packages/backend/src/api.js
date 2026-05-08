@@ -941,7 +941,7 @@ export function createApi({
      * @param {string} [publicBeeKey] - PublicBee key for fast viewer access
      * @returns {Promise<VideoMetadata|null>}
      */
-    async getVideoData(driveKey, videoId, publicBeeKey) {
+    async getVideoData(driveKey, videoId, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] GET_VIDEO_DATA:', driveKey?.slice(0, 16), videoId, 'publicBeeKey:', publicBeeKey?.slice(0, 16));
       try {
         // Parse videoId to extract the actual ID
@@ -949,6 +949,20 @@ export function createApi({
         if (typeof videoId === 'string' && videoId.startsWith('/videos/')) {
           const match = videoId.match(/\/videos\/([^.]+)/)
           if (match) id = match[1]
+        }
+
+        if (blobId && blobsCoreKey) {
+          console.log('[API] GET_VIDEO_DATA: INSTANT metadata from direct blobId/blobsCoreKey')
+          return {
+            id,
+            path: typeof videoId === 'string' && videoId.startsWith('/videos/') ? videoId : `/videos/${id}.mp4`,
+            channelKey: driveKey,
+            publicBeeKey: publicBeeKey || null,
+            blobId,
+            blobsCoreKey,
+            mimeType: mimeType || 'video/mp4',
+            title: id,
+          }
         }
 
         // Fast path: use PublicBee if we have the key (for viewers)

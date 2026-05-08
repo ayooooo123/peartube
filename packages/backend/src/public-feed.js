@@ -329,20 +329,28 @@ export class PublicFeedManager {
   _swarmPeerEntries() {
     const peers = this.swarm?.peers
     if (!peers) return []
+    if (peers instanceof Map) return Array.from(peers, ([key, value]) => ({ key, value }))
     if (typeof peers.values === 'function') return Array.from(peers.values())
     if (typeof peers[Symbol.iterator] === 'function') return Array.from(peers)
     return []
   }
 
-  _peerEntryMatchesKey(entry, keyHex) {
+  _peerEntryIsConnected(entry) {
+    if (!entry || typeof entry !== 'object') return false
+    const nestedPeer = entry.value || entry.peer
+    return entry.connected === true || nestedPeer?.connected === true || Boolean(entry.stream || nestedPeer?.stream)
+  }
+
+  _peerEntryMatchesKey(entry, keyHex, { requireConnected = false } = {}) {
     if (!entry) return false
     if (typeof entry === 'string') return entry === keyHex
     if (b4a.isBuffer(entry) || entry instanceof Uint8Array) {
       return b4a.toString(entry, 'hex') === keyHex
     }
-    const publicKey = entry.publicKey || entry.remotePublicKey || entry.key
+    const publicKey = entry.publicKey || entry.remotePublicKey || entry.key || entry.value?.publicKey || entry.value?.remotePublicKey
     if (publicKey && (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array)) {
-      return b4a.toString(publicKey, 'hex') === keyHex
+      if (b4a.toString(publicKey, 'hex') !== keyHex) return false
+      return !requireConnected || this._peerEntryIsConnected(entry)
     }
     return false
   }
@@ -350,9 +358,13 @@ export class PublicFeedManager {
   _hasKnownPeer(keyHex) {
     const peers = this.swarm?.peers
     if (!peers) return false
-    if (typeof peers.has === 'function' && peers.has(keyHex)) return true
+    if (typeof peers.has === 'function' && peers.has(keyHex)) {
+      const entry = typeof peers.get === 'function' ? peers.get(keyHex) : null
+      if (entry && this._peerEntryIsConnected({ key: keyHex, value: entry })) return true
+      if (!entry && this._discoveredPeers.has(keyHex)) return true
+    }
     for (const entry of this._swarmPeerEntries()) {
-      if (this._peerEntryMatchesKey(entry, keyHex)) return true
+      if (this._peerEntryMatchesKey(entry, keyHex, { requireConnected: true })) return true
     }
     return false
   }
@@ -386,6 +398,39 @@ export class PublicFeedManager {
     this._connectionStartedAt.delete(conn)
   }
 
+  _rememberPeerPublicKey(publicKey) {
+    if (!publicKey) return null
+    const keyHex = b4a.toString(publicKey, 'hex')
+    if (!keyHex || keyHex === b4a.toString(this.swarm?.keyPair?.publicKey || [], 'hex')) return null
+    this._discoveredPeers.set(keyHex, publicKey)
+    return { keyHex, publicKey }
+  }
+
+  _harvestSwarmPeersForDial() {
+    let remembered = 0
+    for (const peer of this._swarmPeerEntries()) {
+      const publicKey = this._peerEntryPublicKey(peer)
+      const keyHex = publicKey ? b4a.toString(publicKey, 'hex') : null
+      const wasRemembered = keyHex ? this._discoveredPeers.has(keyHex) : false
+      const rememberedPeer = this._rememberPeerPublicKey(publicKey)
+      if (rememberedPeer && !wasRemembered && !this._peerEntryIsConnected(peer)) remembered++
+    }
+    return remembered
+  }
+
+  _peerEntryPublicKey(peer) {
+    if (!peer) return null
+    if (b4a.isBuffer(peer)) return peer
+    if (peer.publicKey) return peer.publicKey
+    if (peer.remotePublicKey) return peer.remotePublicKey
+    if (peer.value?.publicKey) return peer.value.publicKey
+    if (peer.value?.remotePublicKey) return peer.value.remotePublicKey
+    if (peer[1]?.publicKey) return peer[1].publicKey
+    if (peer[1]?.remotePublicKey) return peer[1].remotePublicKey
+    if (typeof peer === 'string' && /^[a-f0-9]{64}$/i.test(peer)) return b4a.from(peer, 'hex')
+    return null
+  }
+
   /**
    * Remember a discovered peer and explicitly dial it when the shared topic has
    * found peers but Hyperswarm has not promoted them into connections yet.
@@ -398,12 +443,11 @@ export class PublicFeedManager {
     const publicKey = peer?.publicKey
     if (!publicKey || !this.swarm || typeof this.swarm.joinPeer !== 'function') return false
 
-    const keyHex = b4a.toString(publicKey, 'hex')
-    if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) return false
-    this._discoveredPeers.set(keyHex, publicKey)
-    if (this._hasKnownPeer(keyHex)) return false
+    const remembered = this._rememberPeerPublicKey(publicKey)
+    if (!remembered) return false
+    if (this._hasKnownPeer(remembered.keyHex)) return false
 
-    return this._dialDiscoveredPeer(keyHex, publicKey)
+    return this._dialDiscoveredPeer(remembered.keyHex, remembered.publicKey)
   }
 
   _dialDiscoveredPeer(keyHex, publicKey, attempts = this._directPeerRetryCounts.get(keyHex) || 0, { force = false } = {}) {
@@ -456,7 +500,10 @@ export class PublicFeedManager {
   }
 
   _redialDiscoveredPeers({ force = false } = {}) {
-    if (!this._discoveredPeers.size || !this.swarm || typeof this.swarm.joinPeer !== 'function') return 0
+    if (!this.swarm || typeof this.swarm.joinPeer !== 'function') return 0
+    const harvested = this._harvestSwarmPeersForDial()
+    if (harvested > 0) console.log('[PublicFeed] Harvested swarm peers for direct dial:', harvested)
+    if (!this._discoveredPeers.size) return 0
     let dialed = 0
     for (const [keyHex, publicKey] of this._discoveredPeers) {
       if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) break

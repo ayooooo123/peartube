@@ -31,6 +31,19 @@ test('fallback channel blob-entry playback is centralized in the playback servic
   assert.match(fallbackBlock, /return this\.resolveDirectBlobUrl\(\{[\s\S]*blobsCoreKey,[\s\S]*blobId,/, 'fallback blob-entry path should use the centralized instant URL generator')
 })
 
+test('getVideoData has direct blob metadata fallback before channel load', async () => {
+  const src = await source(apiPath)
+  const getVideoDataStart = src.indexOf('async getVideoData')
+  assert.notEqual(getVideoDataStart, -1, 'expected getVideoData implementation')
+  const channelLoadIndex = src.indexOf('const channel = await loadChannel(ctx, driveKey)', getVideoDataStart)
+  assert.notEqual(channelLoadIndex, -1, 'expected channel-load fallback')
+  const directBlock = src.slice(getVideoDataStart, channelLoadIndex)
+
+  assert.match(directBlock, /if \(blobId && blobsCoreKey\)/, 'getVideoData should accept direct blob refs')
+  assert.match(directBlock, /GET_VIDEO_DATA: INSTANT metadata from direct blobId\/blobsCoreKey/, 'direct metadata path should be logged')
+  assert.match(directBlock, /blobId,[\s\S]*blobsCoreKey,/, 'direct metadata path should return blob metadata without loadChannel')
+})
+
 test('instant blob URL path generates the blob-server link before background core readiness/update', async () => {
   const src = await source(servicePath)
   const start = src.indexOf('resolveDirectBlobUrl')

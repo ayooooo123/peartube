@@ -553,12 +553,24 @@ export class PublicFeedManager {
    * @param {Buffer | Uint8Array | string | null} [topic]
    * @returns {boolean}
    */
+  _queueDiscoveredPeer(peer, topic) {
+    const publicKey = this._peerEntryPublicKey(peer)
+    if (!publicKey || !this.swarm) return null
+    if (topic && typeof this.swarm._handlePeer === 'function') {
+      try {
+        this.swarm._handlePeer(peer, topic)
+      } catch (err) {
+        console.log('[PublicFeed] Failed to preserve discovered peer relay hints:', err?.message || String(err))
+      }
+    }
+    return this._rememberPeerPublicKey(publicKey)
+  }
+
   handleDiscoveredPeer(peer, topic = null) {
     if (topic && !this._isNetworkTopic(topic)) return false
-    const publicKey = this._peerEntryPublicKey(peer)
-    if (!publicKey || !this.swarm || typeof this.swarm.joinPeer !== 'function') return false
+    if (!this.swarm || typeof this.swarm.joinPeer !== 'function') return false
 
-    const remembered = this._rememberPeerPublicKey(publicKey)
+    const remembered = this._queueDiscoveredPeer(peer, topic)
     if (!remembered) return false
     if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) return false
 

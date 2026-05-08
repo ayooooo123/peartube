@@ -17,8 +17,8 @@ export async function initPeer ({ storagePath, maxBytes, pinnedChannels = [] }) 
   ctx.swarm.on('connection', (conn, info) => {
     publicFeed.handleConnection(conn, info)
   })
-  ctx.swarm.on('peer', (peer) => {
-    publicFeed.handleDiscoveredPeer(peer)
+  ctx.swarm.on('peer', (peer, topic) => {
+    publicFeed.handleDiscoveredPeer(peer, topic)
   })
 
   publicFeed.setOnFeedUpdate(() => {

@@ -4,6 +4,7 @@ import { resolveRelayConfig } from '../src/config.js'
 import { buildSourceId, buildWriterKeyName, classifySourceUrl } from '../src/archive/source-id.js'
 import { ARCHIVE_STATUS, createArchiveState } from '../src/archive/state.js'
 import { createArchiver } from '../src/archive/index.js'
+import { announceArchiveChannel } from '../src/archive/publisher.js'
 
 function makeFakeMetaDb() {
   const map = new Map()
@@ -63,6 +64,55 @@ function makeFakeRuntime({ metaDb, totalBytes = 0 } = {}) {
     seeder: { seedChannel: async () => {} }
   }
 }
+
+test('archive publisher announces and seeds after public bee content changes', async (t) => {
+  const logger = makeFakeLogger()
+  const calls = []
+  let videoCount = 0
+  const channelEntry = {
+    channelKey: 'aa'.repeat(32),
+    publicBeeKey: null,
+    channel: {
+      async getPublicBeeKey() {
+        return 'bb'.repeat(32)
+      },
+      async getMetadata() {
+        return { publicBeeKey: 'bb'.repeat(32) }
+      }
+    }
+  }
+  const runtime = {
+    publicFeed: {
+      async submitChannel(driveKey, publicBeeKey) {
+        calls.push(['submit', driveKey, publicBeeKey, videoCount])
+      }
+    },
+    cacheManager: {
+      async pinChannel(driveKey, publicBeeKey) {
+        calls.push(['pin', driveKey, publicBeeKey, videoCount])
+      }
+    },
+    seeder: {
+      async seedChannel(channel) {
+        calls.push(['seed', channel.driveKey, channel.publicBeeKey, videoCount])
+      }
+    }
+  }
+
+  await announceArchiveChannel(runtime, channelEntry, logger, 'youtube:source')
+  videoCount = 1
+  await announceArchiveChannel(runtime, channelEntry, logger, 'youtube:source')
+
+  t.is(channelEntry.publicBeeKey, 'bb'.repeat(32))
+  t.alike(calls, [
+    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 0],
+    ['pin', 'aa'.repeat(32), 'bb'.repeat(32), 0],
+    ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 0],
+    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 1],
+    ['pin', 'aa'.repeat(32), 'bb'.repeat(32), 1],
+    ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 1],
+  ])
+})
 
 test('classifySourceUrl recognises YouTube channels, handles, and playlists', (t) => {
   t.alike(classifySourceUrl('https://www.youtube.com/@somechannel'), {

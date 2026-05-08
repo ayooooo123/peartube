@@ -24,11 +24,66 @@ function defaultChannelDescription(source) {
   return `Auto-archived from ${source.url} by a PearTube relay.${buildSourceMarker(source)}`
 }
 
+async function resolvePublicBeeKey(channel) {
+  let publicBeeKey = channel?.publicBeeKey
+    ? (b4a.isBuffer(channel.publicBeeKey) ? b4a.toString(channel.publicBeeKey, 'hex') : String(channel.publicBeeKey))
+    : null
+
+  if (!publicBeeKey && typeof channel?.getPublicBeeKey === 'function') {
+    const resolved = await channel.getPublicBeeKey().catch(() => null)
+    if (resolved) publicBeeKey = b4a.isBuffer(resolved) ? b4a.toString(resolved, 'hex') : String(resolved)
+  }
+
+  if (!publicBeeKey) {
+    const meta = await channel?.getMetadata?.().catch(() => null)
+    if (meta?.publicBeeKey) publicBeeKey = String(meta.publicBeeKey)
+  }
+
+  return typeof publicBeeKey === 'string' && publicBeeKey.length > 0 ? publicBeeKey : null
+}
+
+async function announceArchiveChannel(runtime, channelEntry, logger, sourceId) {
+  const { channel, channelKey } = channelEntry || {}
+  if (!channel || !channelKey) return
+
+  const publicBeeKey = await resolvePublicBeeKey(channel)
+  channelEntry.publicBeeKey = publicBeeKey
+
+  if (!publicBeeKey) return
+
+  try {
+    await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey)
+  } catch (err) {
+    logger?.archive?.debug?.('Public-feed submit failed', {
+      sourceId,
+      error: err?.message || String(err)
+    })
+  }
+  try {
+    await runtime.cacheManager?.pinChannel?.(channelKey, publicBeeKey)
+  } catch (err) {
+    logger?.archive?.debug?.('Pin channel failed', {
+      sourceId,
+      error: err?.message || String(err)
+    })
+  }
+  try {
+    await runtime.seeder?.seedChannel?.({ driveKey: channelKey, publicBeeKey })
+  } catch (err) {
+    logger?.archive?.debug?.('Seed channel failed', {
+      sourceId,
+      error: err?.message || String(err)
+    })
+  }
+}
+
 /**
  * Loads the per-source PearTube channel for this relay (creating it on first use).
  * The channel keypair is deterministic from the relay's persistent corestore primaryKey
  * and the source identifier, so restarting the relay reopens the same channel.
  */
+export { resolvePublicBeeKey, announceArchiveChannel }
+
 export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger, state = null }) {
   if (!ctx) throw new Error('ctx is required')
   if (!uploadManager) throw new Error('uploadManager is required')
@@ -70,13 +125,7 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
         await channel.ensureLocalBlobDrive({ deviceName: 'archive' }).catch(() => {})
       }
 
-      publicBeeKey = channel.publicBeeKey
-        ? (b4a.isBuffer(channel.publicBeeKey) ? b4a.toString(channel.publicBeeKey, 'hex') : String(channel.publicBeeKey))
-        : null
-      if (!publicBeeKey) {
-        const refreshed = await channel.getMetadata().catch(() => null)
-        publicBeeKey = refreshed?.publicBeeKey || null
-      }
+      publicBeeKey = await resolvePublicBeeKey(channel)
     } catch (err) {
       logger?.archive?.warn?.('Channel metadata setup failed', {
         sourceId: source.sourceId,
@@ -84,32 +133,9 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
       })
     }
 
-    if (publicBeeKey) {
-      try {
-        await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey)
-      } catch (err) {
-        logger?.archive?.debug?.('Public-feed submit failed', {
-          sourceId: source.sourceId,
-          error: err?.message || String(err)
-        })
-      }
-      try {
-        await runtime.cacheManager?.pinChannel?.(channelKey, publicBeeKey)
-      } catch (err) {
-        logger?.archive?.debug?.('Pin channel failed', {
-          sourceId: source.sourceId,
-          error: err?.message || String(err)
-        })
-      }
-      try {
-        await runtime.seeder?.seedChannel?.({ driveKey: channelKey, publicBeeKey })
-      } catch (err) {
-        logger?.archive?.debug?.('Seed channel failed', {
-          sourceId: source.sourceId,
-          error: err?.message || String(err)
-        })
-      }
-    }
+    const entry = { channel, channelKey, publicBeeKey }
+
+    await announceArchiveChannel(runtime, entry, logger, source.sourceId)
 
     if (state && typeof state.putSource === 'function') {
       try {
@@ -120,7 +146,7 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
           type: source.type,
           label: source.label || null,
           channelKey,
-          publicBeeKey: publicBeeKey || existing?.publicBeeKey || null
+          publicBeeKey: entry.publicBeeKey || existing?.publicBeeKey || null
         })
       } catch (err) {
         logger?.archive?.debug?.('Persist source channel keys failed', {
@@ -130,7 +156,6 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
       }
     }
 
-    const entry = { channel, channelKey, publicBeeKey }
     channelCache.set(source.sourceId, entry)
     return entry
   }
@@ -175,6 +200,8 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
         })
       }
     }
+
+    await announceArchiveChannel(runtime, channelEntry, logger, source.sourceId)
 
     return {
       videoId: result.videoId,

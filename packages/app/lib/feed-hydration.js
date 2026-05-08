@@ -51,12 +51,18 @@ export function getFeedVideoLoadEntries(feedEntries, limit = 15) {
   return getVisibleSeededFeedEntries(feedEntries, limit)
 }
 
+function hasDirectBlobRef(video) {
+  return typeof video?.blobId === 'string' && video.blobId.length > 0 &&
+    typeof video?.blobsCoreKey === 'string' && /^[a-f0-9]{64}$/i.test(video.blobsCoreKey)
+}
+
 function canUseFeedPreviewVideos(entry, identityDriveKey) {
   const channelKey = entry?.channelKey || entry?.driveKey || null
   if (!channelKey) return false
   if (identityDriveKey && channelKey === identityDriveKey) return true
   if (entry?.source === 'local') return true
-  return (entry?.peerCount ?? 0) > 0
+  if ((entry?.peerCount ?? 0) > 0) return true
+  return Boolean(entry?.publicBeeKey && Array.isArray(entry?.previewVideos) && entry.previewVideos.some(hasDirectBlobRef))
 }
 
 export function getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey, limit = 15) {

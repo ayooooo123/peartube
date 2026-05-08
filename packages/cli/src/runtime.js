@@ -36,7 +36,6 @@ export async function createRelayRuntime({ config, logger }) {
     storagePath: storageRoot,
     primaryKey,
     wrapTimeout: true,
-    swarmPort: config?.network?.port || null,
     // Docker/bind-mounted relay volumes can trip device-file inode/mtime validation
     // across clean container restarts even with the same persisted primary key.
     // The relay is a single-writer service, so disable device-file enforcement here.

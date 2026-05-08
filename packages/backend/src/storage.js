@@ -784,8 +784,7 @@ export async function initializeStorage(config) {
     blobServerBindHost: blobServerBindHostOverride,
     primaryKey = null,
     corestoreWaitForLock = false,
-    corestoreAllowBackup = false,
-    swarmPort = null
+    corestoreAllowBackup = false
   } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
@@ -1025,11 +1024,7 @@ export async function initializeStorage(config) {
     swarm = createOfflineSwarm(keyPair, 'module-unavailable')
   } else {
     try {
-      const swarmOptions = { keyPair }
-      if (Number.isFinite(Number(swarmPort)) && Number(swarmPort) > 0) {
-        swarmOptions.port = Number(swarmPort)
-      }
-      swarm = new Hyperswarm(swarmOptions);
+      swarm = new Hyperswarm({ keyPair });
     } catch (err) {
       console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
       await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)
@@ -1037,12 +1032,11 @@ export async function initializeStorage(config) {
     }
   }
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
-  if (swarmPort) console.log('[Storage] Requested Hyperswarm/DHT port:', Number(swarmPort))
   const initialDhtState = describeDhtState(swarm.dht)
   if (initialDhtState) {
     console.log('[Storage] Initial DHT bind state:', JSON.stringify(initialDhtState))
   }
-  await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)} port=${swarmPort || 'auto'}`)
+  await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
   globalSwarmDiagnostics = createSwarmDiagnostics(swarm)
   installSwarmConnectDiagnostics(swarm, globalSwarmDiagnostics)
   installSwarmPeerDiscoveryEmitter(swarm)

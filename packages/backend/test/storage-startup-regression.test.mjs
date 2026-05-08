@@ -131,9 +131,3 @@ test('storage captures pre-open DHT connect close diagnostics', () => {
   assert.match(storageSource, /remoteHost: rawStream\.remoteHost/)
   assert.match(storageSource, /event, \.\.\.detail/)
 })
-
-test('storage accepts an optional fixed swarm port for relay diagnostics', () => {
-  assert.match(storageSource, /swarmPort = null/)
-  assert.match(storageSource, /swarmOptions\.port = Number\(swarmPort\)/)
-  assert.match(storageSource, /Requested Hyperswarm\/DHT port/)
-})

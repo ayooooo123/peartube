@@ -82,7 +82,6 @@ export const DEFAULT_RELAY_CONFIG = {
   network: {
     announce: true,
     bootstrap: 'default',
-    port: 0,
     blindPeer: true,
     trustedBlindPeerClients: []
   },

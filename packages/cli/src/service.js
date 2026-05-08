@@ -231,9 +231,11 @@ export async function createRelayService({
               peers: heartbeatStatus.runtime.peers,
               connections: heartbeatStatus.runtime.connections,
               discoveredPeers: directPeerDial.discoveredPeers || 0,
+              pending: directPeerDial.pending || 0,
               queued: directPeerDial.queued || 0,
               skipped: directPeerDial.skipped || 0,
               failed: directPeerDial.failed || 0,
+              connected: directPeerDial.connected || 0,
               lastReason: directPeerDial.lastReason || null,
               redialed
             })
@@ -246,9 +248,11 @@ export async function createRelayService({
             feedEntries: heartbeatStatus.runtime.feedEntries,
             mirroredChannels: heartbeatStatus.summary.totalChannels,
             discoveredPeers: directPeerDial.discoveredPeers || 0,
+            dialPending: directPeerDial.pending || 0,
             dialQueued: directPeerDial.queued || 0,
             dialSkipped: directPeerDial.skipped || 0,
             dialFailed: directPeerDial.failed || 0,
+            dialConnected: directPeerDial.connected || 0,
             dialLastReason: directPeerDial.lastReason || null
           })
         } catch (err) {

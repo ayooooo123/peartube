@@ -200,7 +200,7 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
       swarmListenResolved: true,
       blindPeer: { enabled: true, publicKey: 'abcd', mirroredCores: 4, mirroredAutobases: 0, error: null },
       seeding: { channels: 2, videos: 5, publicBeeCores: 2, blobCores: 8, discoveryHandles: 10 },
-      directPeerDial: { discoveredPeers: 2, queued: 3, skipped: 1, failed: 0, lastReason: 'queued' }
+      directPeerDial: { discoveredPeers: 2, pending: 1, queued: 3, skipped: 1, failed: 0, connected: 1, lastReason: 'queued' }
     }
   })
 
@@ -218,7 +218,7 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
   const formatted = formatRelayStatus(status)
   t.ok(formatted.includes('dht: bootstrapped=true firewalled=false online=true'))
   t.ok(formatted.includes('network: offline=false reason=none listenResolved=true peerPoolJoined=true publicFeedDiscoveryJoined=true'))
-  t.ok(formatted.includes('directPeerDial: discovered=2 queued=3 skipped=1 failed=0 lastReason=queued'))
+  t.ok(formatted.includes('directPeerDial: discovered=2 pending=1 queued=3 skipped=1 failed=0 connected=1 lastReason=queued'))
   t.ok(formatted.includes('blindPeer: enabled=true key=abcd mirroredCores=4 mirroredAutobases=0'))
   t.ok(formatted.includes('seeding: channels=2 videos=5 publicBeeCores=2 blobCores=8 discoveryHandles=10'))
 })

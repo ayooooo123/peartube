@@ -83,7 +83,7 @@ test('backend orchestrator explicitly dials peers discovered on the single share
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 
   assert.match(source, /ctx\.swarm\.on\('peer'/)
-  assert.match(source, /publicFeed\.handleDiscoveredPeer\(peer\)/)
+  assert.match(source, /publicFeed\.handleDiscoveredPeer\(peer, topic\)/)
 })
 
 test('mobile getSwarmStatus forwards low-level network diagnostics', () => {

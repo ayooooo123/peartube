@@ -325,9 +325,9 @@ export async function createBackendContext(config) {
       console.error('[Orchestrator] publicFeed.handleConnection failed:', err?.message);
     }
   });
-  ctx.swarm.on('peer', (peer) => {
+  ctx.swarm.on('peer', (peer, topic) => {
     try {
-      if (publicFeed.handleDiscoveredPeer(peer)) {
+      if (publicFeed.handleDiscoveredPeer(peer, topic)) {
         startupGate.noteSwarmPeer()
       }
     } catch (err) {

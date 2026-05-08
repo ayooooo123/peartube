@@ -299,6 +299,86 @@ test('createRelayService installs and clears a heartbeat interval', async (t) =>
   }
 })
 
+test('relay heartbeat logs Hyperswarm dial diagnostics when peers have no sockets', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-dial-diagnostics-')
+  const runtime = createFakeRuntime()
+  runtime.getNetworkStats = () => ({
+    peers: 2,
+    connections: 0,
+    directPeerDial: {
+      discoveredPeers: 2,
+      queued: 4,
+      skipped: 1,
+      failed: 0,
+      lastReason: 'queued',
+      swarmConnecting: 1,
+      swarmAllConnections: 1,
+      swarmExplicitPeers: 2,
+      swarmQueueSize: 1,
+      peers: [{ key: 'peer-a', swarm: { attempts: 2, relayAddresses: 1 } }]
+    }
+  })
+  runtime.publicFeed = {
+    forceRedialDiscoveredPeers() {
+      return 2
+    }
+  }
+  const logger = createFakeLogger()
+  let scheduled = null
+
+  function setIntervalFn(fn, ms) {
+    scheduled = { fn, ms, timer: {} }
+    return scheduled.timer
+  }
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: {
+          channels: [],
+          owners: []
+        },
+        discovery: {
+          enabled: true,
+          maxChannels: 5,
+          maxChannelsPerOwner: 2
+        }
+      },
+      logger,
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {},
+      setIntervalFn
+    })
+
+    await service.start()
+    await scheduled.fn()
+
+    const warning = logger.entries.find((entry) => (
+      entry.component === 'status' &&
+      entry.level === 'warn' &&
+      entry.msg === 'Relay discovered peers without sockets; forced direct redial'
+    ))
+    t.ok(warning)
+    t.is(warning.data.swarmConnecting, 1)
+    t.is(warning.data.swarmAllConnections, 1)
+    t.is(warning.data.swarmExplicitPeers, 2)
+    t.is(warning.data.swarmQueueSize, 1)
+    t.alike(warning.data.dialPeers, [{ key: 'peer-a', swarm: { attempts: 2, relayAddresses: 1 } }])
+
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('archive job uses configured yt-dlp binary when started from the WebUI relay service', async (t) => {
   const dir = makeTempDir('peartube-relay-service-archive-bin-')
   const runtime = createFakeRuntime()

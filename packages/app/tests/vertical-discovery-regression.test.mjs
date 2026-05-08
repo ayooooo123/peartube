@@ -97,6 +97,13 @@ test('vertical discovery subscribes to backend feed-update events instead of onl
   assert.match(source, /if \(typeof unsubscribe === 'function'\) unsubscribe\(\)/, 'Discover should unsubscribe from feed events on unmount')
 })
 
+test('vertical discovery calls getFeedPreviewVideos with the shared feed-preview signature', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /getFeedPreviewVideos\(\s*visibleEntries as any,\s*\{\},\s*identity\?\.driveKey \|\| undefined,\s*40,\s*\)/, 'Shorts route should pass channelMeta, identityDriveKey, and limit separately')
+  assert.doesNotMatch(source, /getFeedPreviewVideos\(visibleEntries as any, \{\s*identityDriveKey:/, 'Shorts route should not pass an options object into the shared helper')
+})
+
 
 test('vertical discovery lets the shorts player hide card chrome', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')

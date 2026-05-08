@@ -411,6 +411,7 @@ export default function HomeScreen() {
         previousVideos: prev,
         incomingVideos: incoming,
         refreshedChannelKeys,
+        feedEntries,
         identityDriveKey: identity?.driveKey || undefined,
         limit: 50,
       }))

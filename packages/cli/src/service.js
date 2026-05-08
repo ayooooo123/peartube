@@ -246,6 +246,23 @@ export async function createRelayService({
               redialed
             })
           }
+          const dht = heartbeatStatus.runtime.dht || {}
+          if ((heartbeatStatus.runtime.peers || 0) === 0 && dht.bootstrapped === false) {
+            logger.status.warn('Relay DHT has no discovered peers and is not bootstrapped', {
+              peers: heartbeatStatus.runtime.peers || 0,
+              connections: heartbeatStatus.runtime.connections || 0,
+              bootstrapped: dht.bootstrapped,
+              firewalled: dht.firewalled ?? null,
+              online: dht.online ?? null,
+              ephemeral: dht.ephemeral ?? null,
+              publicFeedDiscoveryJoined: Boolean(heartbeatStatus.runtime.publicFeedDiscoveryJoined),
+              peerPoolJoined: Boolean(heartbeatStatus.runtime.peerPoolJoined),
+              swarmListenResolved: Boolean(heartbeatStatus.runtime.swarmListenResolved),
+              swarmOffline: Boolean(heartbeatStatus.runtime.swarmOffline),
+              swarmOfflineReason: heartbeatStatus.runtime.swarmOfflineReason || null,
+              hyperswarm: heartbeatStatus.runtime.hyperswarm || null
+            })
+          }
           logger.status.info('Relay heartbeat', {
             peers: heartbeatStatus.runtime.peers,
             connections: heartbeatStatus.runtime.connections,

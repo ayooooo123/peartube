@@ -33,7 +33,16 @@ function createFakeRuntime() {
       }
     },
     getNetworkStats() {
-      return { peers: 3, connections: 2 }
+      return {
+        peers: 3,
+        connections: 2,
+        dht: {
+          bootstrapped: true,
+          firewalled: false,
+          online: true,
+          ephemeral: null
+        }
+      }
     },
     async close() {},
     ctx: {
@@ -379,6 +388,102 @@ test('relay heartbeat logs Hyperswarm dial diagnostics when peers have no socket
     t.alike(warning.data.hyperswarm, {
       recentPeers: [{ key: 'peer-a', relayAddresses: 0 }],
       allConnections: [{ key: 'peer-a', opened: false, destroyed: false }]
+    })
+
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('relay heartbeat logs DHT bootstrap diagnostics when no peers are discovered', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-dht-bootstrap-')
+  const runtime = createFakeRuntime()
+  runtime.getNetworkStats = () => ({
+    peers: 0,
+    connections: 0,
+    dht: {
+      bootstrapped: false,
+      firewalled: true,
+      online: true,
+      ephemeral: true
+    },
+    publicFeedDiscoveryJoined: true,
+    peerPoolJoined: true,
+    swarmListenResolved: true,
+    swarmOffline: false,
+    hyperswarm: {
+      recentPeers: [],
+      recentUpdates: [],
+      recentConnections: [],
+      peerStates: [],
+      allConnections: []
+    },
+    directPeerDial: {
+      discoveredPeers: 0,
+      queued: 0,
+      skipped: 0,
+      failed: 0
+    }
+  })
+  const logger = createFakeLogger()
+  let scheduled = null
+
+  function setIntervalFn(fn, ms) {
+    scheduled = { fn, ms, timer: {} }
+    return scheduled.timer
+  }
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: {
+          channels: [],
+          owners: []
+        },
+        discovery: {
+          enabled: true,
+          maxChannels: 5,
+          maxChannelsPerOwner: 2
+        }
+      },
+      logger,
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {},
+      setIntervalFn
+    })
+
+    await service.start()
+    await scheduled.fn()
+
+    const warning = logger.entries.find((entry) => (
+      entry.component === 'status' &&
+      entry.level === 'warn' &&
+      entry.msg === 'Relay DHT has no discovered peers and is not bootstrapped'
+    ))
+    t.ok(warning)
+    t.is(warning.data.peers, 0)
+    t.is(warning.data.bootstrapped, false)
+    t.is(warning.data.firewalled, true)
+    t.is(warning.data.online, true)
+    t.is(warning.data.ephemeral, null)
+    t.is(warning.data.publicFeedDiscoveryJoined, true)
+    t.is(warning.data.peerPoolJoined, true)
+    t.is(warning.data.swarmListenResolved, true)
+    t.alike(warning.data.hyperswarm, {
+      recentPeers: [],
+      recentUpdates: [],
+      recentConnections: [],
+      peerStates: [],
+      allConnections: []
     })
 
     await service.close()

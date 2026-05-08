@@ -248,7 +248,8 @@ export async function createRelayRuntime({ config, logger }) {
         dht: {
           bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
           firewalled: ctx.swarm?.dht?.firewalled ?? null,
-          online: ctx.swarm?.dht?.online ?? null
+          online: ctx.swarm?.dht?.online ?? null,
+          ephemeral: ctx.swarm?.dht?.ephemeral ?? null
         },
         publicFeedDiscoveryJoined: Boolean(publicFeed.feedDiscovery),
         blindPeer: blindPeer.getStats?.() || null,

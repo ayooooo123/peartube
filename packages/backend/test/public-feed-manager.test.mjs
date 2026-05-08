@@ -149,7 +149,7 @@ test('PublicFeedManager skips direct dials for actively connected peers across s
     (swarm) => { swarm.peers = new Set([{ publicKey, connected: true }]) },
     (swarm) => { swarm.peers = new Set([{ publicKey, stream: {} }]) },
     (swarm) => { swarm.connections.add({ remotePublicKey: publicKey }) },
-    (swarm) => { swarm._allConnections = { has: (key) => b4a.equals(key, publicKey) } },
+    (swarm) => { swarm._allConnections = new Set([{ remotePublicKey: publicKey }]) },
     (swarm) => { swarm.peers.set(keyHex, { publicKey, connectedTime: Date.now() }) },
   ]
 
@@ -164,6 +164,21 @@ test('PublicFeedManager skips direct dials for actively connected peers across s
     } finally {
       manager.stop()
     }
+  }
+})
+
+test('PublicFeedManager does not treat stale Hyperswarm _allConnections keys as active sockets', () => {
+  const publicKey = b4a.alloc(32, 9)
+  const swarm = createSwarm()
+  swarm._allConnections = new Set([publicKey])
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(manager.getStats().directPeerDial.lastReason, 'queued')
+  } finally {
+    manager.stop()
   }
 })
 

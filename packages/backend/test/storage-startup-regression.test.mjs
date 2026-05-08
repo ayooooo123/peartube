@@ -121,3 +121,19 @@ test('storage captures Hyperswarm connection lifecycle diagnostics', () => {
   assert.match(storageSource, /globalSwarmDiagnostics\?\.recordConnection\?\.\(conn, info\)/)
   assert.match(storageSource, /hyperswarm: diagnostics/)
 })
+
+test('storage captures pre-open DHT connect close diagnostics', () => {
+  assert.match(storageSource, /function installSwarmConnectDiagnostics\(swarm, diagnostics\)/)
+  assert.match(storageSource, /installSwarmConnectDiagnostics\(swarm, globalSwarmDiagnostics\)/)
+  assert.match(storageSource, /recordClientConnect\(conn, peerInfo\)/)
+  assert.match(storageSource, /type: 'client-attempt'/)
+  assert.match(storageSource, /rawStream: rawStream \? \{/)
+  assert.match(storageSource, /remoteHost: rawStream\.remoteHost/)
+  assert.match(storageSource, /event, \.\.\.detail/)
+})
+
+test('storage accepts an optional fixed swarm port for relay diagnostics', () => {
+  assert.match(storageSource, /swarmPort = null/)
+  assert.match(storageSource, /swarmOptions\.port = Number\(swarmPort\)/)
+  assert.match(storageSource, /Requested Hyperswarm\/DHT port/)
+})

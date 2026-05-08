@@ -46,6 +46,10 @@ test('getPublicFeed returns peer entries even when publicBeeKey is absent', (t) 
     channelKey: '11'.repeat(32),
     source: 'peer',
     publicBeeKey: null,
+    relayRole: null,
+    relayServing: false,
+    catalogVersion: null,
+    previewVideosHash: null,
     channelName: null,
     videoCount: 0,
     peerCount: 0,
@@ -699,4 +703,133 @@ test('submitToFeed fails closed when the channel cannot provide a publicBeeKey',
   t.is(result.success, false)
   t.is(submitted, false)
   t.ok(/publicBeeKey/i.test(result.error || ''))
+})
+
+
+test('listVideos uses relay catalog preview refs without channel load when PublicBee is empty', async (t) => {
+  let publicBeeLoads = 0
+  let channelLoads = 0
+  const driveKey = 'ab'.repeat(32)
+  const publicBeeKey = 'bc'.repeat(32)
+
+  const api = createApi({
+    ctx: {
+      store: {
+        get() {
+          return {
+            async ready() {},
+            async has() { return true },
+          }
+        },
+      },
+      metaDb: { async get() { return null }, async put() {} },
+    },
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey,
+          publicBeeKey,
+          source: 'relay-cache',
+          relayRole: 'cache',
+          relayServing: true,
+          previewVideos: [{
+            id: 'relay-video',
+            title: 'Relay Video',
+            blobId: '0:8:0:1024',
+            blobsCoreKey: 'cd'.repeat(32),
+            mimeType: 'video/mp4',
+            availability: 'playable',
+          }],
+        }]
+      },
+      async requestAvailabilityHints() { return [] },
+    },
+    loadPublicBee: async () => {
+      publicBeeLoads += 1
+      return { async listVideos() { return [] } }
+    },
+    loadChannel: async () => {
+      channelLoads += 1
+      throw new Error('loadChannel should not be called')
+    },
+  })
+
+  const videos = await api.listVideos(driveKey, publicBeeKey)
+  t.is(publicBeeLoads, 1)
+  t.is(channelLoads, 0)
+  t.is(videos.length, 1)
+  t.is(videos[0].id, 'relay-video')
+  t.is(videos[0].channelKey, driveKey)
+  t.is(videos[0].publicBeeKey, publicBeeKey)
+  t.is(videos[0].relayBacked, true)
+})
+
+test('getVideoData resolves relay catalog preview refs without channel load', async (t) => {
+  let channelLoads = 0
+  const driveKey = 'de'.repeat(32)
+  const publicBeeKey = 'ef'.repeat(32)
+
+  const api = createApi({
+    ctx: { metaDb: { async get() { return null }, async put() {} } },
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey,
+          publicBeeKey,
+          source: 'relay-cache',
+          relayRole: 'cache',
+          relayServing: true,
+          previewVideos: [{
+            id: 'preview-only',
+            title: 'Preview Only',
+            blobId: '0:4:0:512',
+            blobsCoreKey: 'fa'.repeat(32),
+            mimeType: 'video/mp4',
+            availability: 'playable',
+          }],
+        }]
+      },
+    },
+    loadPublicBee: async () => ({ async getVideo() { return null } }),
+    loadChannel: async () => {
+      channelLoads += 1
+      throw new Error('loadChannel should not be called')
+    },
+  })
+
+  const video = await api.getVideoData(driveKey, 'preview-only', publicBeeKey)
+  t.is(channelLoads, 0)
+  t.is(video.id, 'preview-only')
+  t.is(video.blobId, '0:4:0:512')
+  t.is(video.blobsCoreKey, 'fa'.repeat(32))
+  t.is(video.relayBacked, true)
+})
+
+test('getPublicFeed exposes relay catalog fields', (t) => {
+  const api = createApi({
+    ctx: {},
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey: '12'.repeat(32),
+          publicBeeKey: '34'.repeat(32),
+          addedAt: 9,
+          source: 'relay-cache',
+          relayRole: 'cache',
+          relayServing: true,
+          catalogVersion: 1,
+          previewVideosHash: 'hash-value',
+          previewVideos: [],
+        }]
+      },
+      getStats() { return { totalEntries: 1, hiddenCount: 0, peerCount: 0 } },
+    },
+  })
+
+  const result = api.getPublicFeed()
+  t.is(result.entries[0].source, 'relay-cache')
+  t.is(result.entries[0].relayRole, 'cache')
+  t.is(result.entries[0].relayServing, true)
+  t.is(result.entries[0].catalogVersion, 1)
+  t.is(result.entries[0].previewVideosHash, 'hash-value')
 })

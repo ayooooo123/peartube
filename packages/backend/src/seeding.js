@@ -67,7 +67,7 @@ export class SeedingManager {
    * @param {string} driveKey
    * @param {string} videoPath
    * @param {'watched'|'pinned'|'subscribed'} reason
-   * @param {{blockLength?: number, byteLength?: number}} [blobInfo]
+   * @param {{blockLength?: number, byteLength?: number, publicBeeKey?: string | null, blobId?: string | null, blobsCoreKey?: string | null, thumbnailBlobId?: string | null, thumbnailBlobsCoreKey?: string | null, mimeType?: string | null, thumbnailMimeType?: string | null}} [blobInfo]
    * @returns {Promise<boolean>}
    */
   async addSeed(driveKey, videoPath, reason, blobInfo) {
@@ -91,7 +91,14 @@ export class SeedingManager {
       reason,
       addedAt: Date.now(),
       blocks: blobInfo?.blockLength || 0,
-      bytes: blobInfo?.byteLength || 0
+      bytes: blobInfo?.byteLength || 0,
+      publicBeeKey: blobInfo?.publicBeeKey || null,
+      blobId: blobInfo?.blobId || null,
+      blobsCoreKey: blobInfo?.blobsCoreKey || null,
+      thumbnailBlobId: blobInfo?.thumbnailBlobId || null,
+      thumbnailBlobsCoreKey: blobInfo?.thumbnailBlobsCoreKey || null,
+      mimeType: blobInfo?.mimeType || null,
+      thumbnailMimeType: blobInfo?.thumbnailMimeType || null
     };
 
     this.activeSeeds.set(key, seedInfo);
@@ -169,7 +176,14 @@ export class SeedingManager {
         videoPath: s.videoPath,
         reason: s.reason,
         bytes: s.bytes,
-        addedAt: s.addedAt
+        addedAt: s.addedAt,
+        publicBeeKey: s.publicBeeKey || null,
+        blobId: s.blobId || null,
+        blobsCoreKey: s.blobsCoreKey || null,
+        thumbnailBlobId: s.thumbnailBlobId || null,
+        thumbnailBlobsCoreKey: s.thumbnailBlobsCoreKey || null,
+        mimeType: s.mimeType || null,
+        thumbnailMimeType: s.thumbnailMimeType || null
       }))
     };
   }

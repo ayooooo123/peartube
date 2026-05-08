@@ -74,12 +74,14 @@ export async function createRelayRuntime({ config, logger }) {
   function emitFeedEntries() {
     if (typeof candidateHandler !== 'function') return
 
-    for (const entry of publicFeed.entries.values()) {
-      if (!entry?.driveKey) continue
+    for (const entry of publicFeed.getFeed?.() || publicFeed.entries.values()) {
+      if (!entry?.driveKey || !entry?.publicBeeKey) continue
       candidateHandler({
         channelKey: entry.driveKey,
         publicBeeKey: entry.publicBeeKey || null,
-        source: 'discovered'
+        source: entry.relayRole === 'cache' || entry.source === 'relay-cache' ? 'relay-cache' : 'discovered',
+        relayServing: Boolean(entry.relayServing),
+        previewVideos: Array.isArray(entry.previewVideos) ? entry.previewVideos : []
       })
     }
   }
@@ -145,14 +147,23 @@ export async function createRelayRuntime({ config, logger }) {
         publicFeed.setFeedSnapshotProvider((entries) => this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
       }
 
-      // Restore mirrored/cached channels as actively served feed entries so the
-      // relay behaves like a real serving peer even when original publishers are offline.
+      // Restore mirrored/cached channels as relay catalog entries, not as
+      // user-published channels. This keeps the relay contract explicit: it is
+      // serving/cache infrastructure for these publicBee/blob cores.
       for (const channel of cacheManager.getChannels()) {
         if (!channel?.driveKey || !channel?.publicBeeKey) continue
         try {
-          await loadPublicBee(ctx, channel.publicBeeKey)
-          await publicFeed.submitChannel(channel.driveKey, channel.publicBeeKey)
-          await seeder.seedChannel(channel)
+          const seedStats = await seeder.seedChannel(channel)
+          await publicFeed.submitRelayCatalogEntry({
+            ...(seedStats?.catalogEntry || {}),
+            driveKey: channel.driveKey,
+            publicBeeKey: channel.publicBeeKey,
+            channelName: seedStats?.catalogEntry?.channelName || channel.channelName || null,
+            videoCount: seedStats?.videos || channel.videoCount || 0,
+            previewVideos: seedStats?.catalogEntry?.previewVideos || channel.previewVideos || [],
+            relayRole: 'cache',
+            relayServing: true,
+          })
         } catch (err) {
           logger.runtime?.debug('Failed to restore cached mirrored channel', {
             channelKey: channel.driveKey,
@@ -245,7 +256,13 @@ export async function createRelayRuntime({ config, logger }) {
         swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
         swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),
-        seeding: seeder.getStats()
+        seeding: seeder.getStats(),
+        relayCatalogEntries: Array.from(publicFeed.entries?.values?.() || []).filter(e => e?.relayRole === 'cache' || e?.source === 'relay-cache').length,
+        relayServingEntries: Array.from(publicFeed.entries?.values?.() || []).filter(e => e?.relayServing).length,
+        relayPlayablePreviewVideos: Array.from(publicFeed.entries?.values?.() || []).reduce((total, e) => {
+          const videos = Array.isArray(e?.previewVideos) ? e.previewVideos : []
+          return total + videos.filter(v => v?.availability === 'playable' && v?.blobId && v?.blobsCoreKey).length
+        }, 0)
       }
     },
     async close() {

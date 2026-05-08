@@ -763,3 +763,34 @@ test('requestAvailabilityHints merges playable responses from feed peers (includ
     manager.stop()
   }
 })
+
+
+test('relay catalog entries stay visible and do not become published channels', async (t) => {
+  const feed = new PublicFeedManager({
+    connections: new Set(),
+    peers: new Set(),
+    join() { return { flushed: async () => {} } },
+  }, {
+    async get() { return null },
+    async put() {},
+  })
+
+  await feed.submitRelayCatalogEntry({
+    driveKey: 'aa'.repeat(32),
+    publicBeeKey: 'bb'.repeat(32),
+    previewVideos: [{
+      id: 'relay-video',
+      blobId: '0:4:0:512',
+      blobsCoreKey: 'cc'.repeat(32),
+      availability: 'playable',
+    }],
+  })
+
+  assert.equal(feed.isChannelPublished('aa'.repeat(32)), false)
+  const entries = feed.getFeed()
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0].source, 'relay-cache')
+  assert.equal(entries[0].relayRole, 'cache')
+  assert.equal(entries[0].relayServing, true)
+  assert.equal(entries[0].peerCount, 0)
+})

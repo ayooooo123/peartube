@@ -9,7 +9,7 @@
  *   const { ctx, api, identityManager, uploadManager, publicFeed, seedingManager, videoStats } = backend;
  */
 
-import { initializeStorage, loadChannel } from './storage.js';
+import { initializeStorage, loadChannel, retainPublicBeeContentDiscovery, retainSwarmDiscovery } from './storage.js';
 import { PublicFeedManager } from './public-feed.js';
 import { VideoStatsTracker } from './video-stats.js';
 import { SeedingManager } from './seeding.js';
@@ -462,7 +462,25 @@ export async function createBackendContext(config) {
         const subs = (await ctx.metaDb.get('subscriptions').catch(() => null))?.value || []
         const subscriptionKeys = subs.map((s) => s.driveKey).filter(Boolean)
         const pinnedKeys = seedingManager.getPinnedChannels?.() || []
-        const seedKeys = seedingManager.getActiveSeeds?.().map((s) => s.driveKey).filter(Boolean) || []
+        const seeds = seedingManager.getActiveSeeds?.() || []
+        const seedKeys = seeds.map((s) => s.driveKey).filter(Boolean) || []
+
+        // Restore old relay-like serving behavior for normal clients: persisted
+        // watched/seeded entries retain their blob-core discovery immediately,
+        // without waiting for full channel hydration.
+        for (const seed of seeds) {
+          if (seed?.blobsCoreKey && ctx.store) {
+            try {
+              const core = ctx.store.get(Buffer.from(seed.blobsCoreKey, 'hex'))
+              await core?.ready?.()
+              if (core?.discoveryKey) retainSwarmDiscovery(ctx, core.discoveryKey, { label: `seed:${seed.blobsCoreKey.slice(0, 16)}` })
+            } catch {}
+          }
+          if (seed?.publicBeeKey) {
+            retainPublicBeeContentDiscovery(ctx, seed.publicBeeKey, { label: `seed:${seed.driveKey?.slice?.(0, 16) || 'channel'}` }).catch(() => {})
+          }
+        }
+
         await warmChannels(ctx, [...subscriptionKeys, ...pinnedKeys, ...seedKeys], 'subscriptions/pins/seeds')
         // Skip prefetch - it was causing errors and slowing things down
       } catch (e) {

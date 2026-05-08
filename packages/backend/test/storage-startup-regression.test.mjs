@@ -81,3 +81,12 @@ test('offline swarm fallback skips peer pool discovery instead of joining noop t
     'offline swarm should skip peer pool discovery'
   )
 })
+
+
+test('storage exposes public bee content discovery retention for cached serving cores', () => {
+  assert.match(storageSource, /export async function retainPublicBeeContentDiscovery\(ctx, publicBeeKeyHex/)
+  assert.match(storageSource, /await loadPublicBee\(ctx, publicBeeKeyHex\)/)
+  assert.match(storageSource, /video\?\.blobsCoreKey/)
+  assert.match(storageSource, /video\?\.thumbnailBlobsCoreKey/)
+  assert.match(storageSource, /retainSwarmDiscovery\(ctx, core\.discoveryKey/)
+})

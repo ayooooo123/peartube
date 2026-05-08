@@ -93,12 +93,30 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
       }
 
       const videos = await bee?.listVideos?.().catch(() => [])
+      const meta = await bee?.getMetadata?.().catch(() => null)
       const blobCoreKeys = new Set()
+      const previewVideos = []
       if (Array.isArray(videos)) {
         stats.videos = videos.length
         for (const video of videos) {
           addCoreKey(blobCoreKeys, video?.blobsCoreKey)
           addCoreKey(blobCoreKeys, video?.thumbnailBlobsCoreKey)
+          if (previewVideos.length < 3 && video?.id && video?.blobId && video?.blobsCoreKey) {
+            previewVideos.push({
+              id: String(video.id),
+              title: video?.title ? String(video.title) : 'Untitled',
+              uploadedAt: Number(video?.uploadedAt || 0) || 0,
+              duration: Number(video?.duration || 0) || 0,
+              thumbnail: video?.thumbnail || null,
+              blobId: String(video.blobId),
+              blobsCoreKey: String(video.blobsCoreKey),
+              mimeType: video?.mimeType || 'video/mp4',
+              availability: 'playable',
+              thumbnailBlobId: video?.thumbnailBlobId || null,
+              thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey || null,
+              thumbnailMimeType: video?.thumbnailMimeType || null
+            })
+          }
         }
       }
 
@@ -129,6 +147,19 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
         blobCores: stats.blobCores,
         discoveryHandles: handles.size
       })
+      stats.catalogEntry = {
+        schema: 'peartube.relayCatalog',
+        catalogVersion: 1,
+        driveKey,
+        publicBeeKey,
+        source: 'relay-cache',
+        relayRole: 'cache',
+        relayServing: true,
+        channelName: meta?.name || channel?.channelName || null,
+        videoCount: stats.videos,
+        manifestUpdatedAt: Number(meta?.updatedAt || meta?.createdAt || 0) || Date.now(),
+        previewVideos
+      }
       return stats
     } catch (err) {
       stats.lastError = err?.message || String(err)

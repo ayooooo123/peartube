@@ -164,10 +164,12 @@ export default function VerticalDiscoveryScreen() {
 
   const seedFromFeedEntries = useCallback((entries: FeedEntry[]) => {
     const visibleEntries = getVisibleSeededFeedEntries(entries as any)
-    const previewVideos = getFeedPreviewVideos(visibleEntries as any, {
-      identityDriveKey: identity?.driveKey || undefined,
-      channelMeta: {},
-    }) as VideoData[]
+    const previewVideos = getFeedPreviewVideos(
+      visibleEntries as any,
+      {},
+      identity?.driveKey || undefined,
+      40,
+    ) as VideoData[]
 
     const renderable = previewVideos
       .filter((video) => shouldRenderFeedVideo({

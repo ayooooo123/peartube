@@ -32,6 +32,25 @@ function createSwarm() {
     joinPeer(publicKey) {
       this.joinPeerCalls.push(publicKey)
       return {}
+    },
+    _handlePeer(peer, topic) {
+      const keyHex = b4a.toString(peer.publicKey, 'hex')
+      let peerInfo = this.peers.get(keyHex)
+      if (!peerInfo) {
+        peerInfo = {
+          publicKey: peer.publicKey,
+          topics: [],
+          _updatePriority() { return true }
+        }
+        this.peers.set(keyHex, peerInfo)
+      }
+      peerInfo.relayAddresses = peer.relayAddresses
+      if (topic) peerInfo.topics.push(topic)
+      return peerInfo
+    },
+    _enqueue(peerInfo) {
+      peerInfo.queued = true
+      this.joinPeerCalls.push(peerInfo.publicKey)
     }
   }
 }
@@ -135,6 +154,24 @@ test('PublicFeedManager directly dials discovered peers that are known but not c
     assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
     assert.equal(swarm.joinPeerCalls.length, 1)
     assert.equal(b4a.toString(swarm.joinPeerCalls[0], 'hex'), keyHex)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('PublicFeedManager keeps discovered relay address hints before explicit joinPeer redial', () => {
+  const publicKey = b4a.alloc(32, 14)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const relayAddresses = [{ host: '167.86.111.230', port: 49737 }]
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses }, NETWORK_TOPIC), true)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(swarm.peers.get(keyHex).relayAddresses, relayAddresses)
+    assert.deepEqual(swarm.peers.get(keyHex).topics, [NETWORK_TOPIC])
+    assert.equal(manager.getStats().directPeerDial.peers[0].swarm.relayAddresses, 1)
   } finally {
     manager.stop()
   }

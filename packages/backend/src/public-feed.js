@@ -429,6 +429,17 @@ export class PublicFeedManager {
     )
   }
 
+  _activeSwarmConnectionEntries() {
+    const allConnections = this.swarm?._allConnections
+    if (!allConnections || typeof allConnections[Symbol.iterator] !== 'function') return []
+    return Array.from(allConnections).filter((entry) => (
+      entry &&
+      typeof entry === 'object' &&
+      !b4a.isBuffer(entry) &&
+      !(entry instanceof Uint8Array)
+    ))
+  }
+
   _peerEntryMatchesKey(entry, keyHex, { requireConnected = false } = {}) {
     const publicKey = this._peerEntryPublicKey(entry)
     if (!publicKey) return false
@@ -439,18 +450,15 @@ export class PublicFeedManager {
   _hasActivePeerConnection(keyHex, publicKey = null) {
     if (!this.swarm || !keyHex) return false
 
-    const allConnections = this.swarm._allConnections
-    if (publicKey && allConnections && typeof allConnections.has === 'function') {
-      try {
-        if (allConnections.has(publicKey)) return true
-      } catch {}
-    }
-
     const connections = this.swarm.connections
     if (connections && typeof connections[Symbol.iterator] === 'function') {
       for (const conn of connections) {
         if (this._peerEntryMatchesKey(conn, keyHex)) return true
       }
+    }
+
+    for (const entry of this._activeSwarmConnectionEntries()) {
+      if (this._peerEntryMatchesKey(entry, keyHex)) return true
     }
 
     const peers = this.swarm.peers

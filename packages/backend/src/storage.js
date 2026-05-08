@@ -148,8 +148,53 @@ function describeRelayAddresses(relayAddresses) {
   })
 }
 
+function describeStreamError(stream) {
+  try {
+    const err = stream?.errored || stream?._error || stream?.error || null
+    if (!err) return null
+    return {
+      name: err.name || null,
+      code: err.code || null,
+      message: err.message || String(err)
+    }
+  } catch {
+    return { message: 'unreadable' }
+  }
+}
+
+function describeSocketAddress(socket) {
+  try {
+    const address = socket?.address?.()
+    if (!address) return null
+    return {
+      host: address.host || address.address || null,
+      port: Number(address.port || 0) || null,
+      family: address.family || null
+    }
+  } catch {
+    return null
+  }
+}
+
+function describeAddress(address) {
+  try {
+    if (!address) return null
+    if (typeof address === 'string') return { host: address, port: null }
+    return {
+      host: address.host || address.address || null,
+      port: Number(address.port || 0) || null,
+      family: address.family || null
+    }
+  } catch {
+    return null
+  }
+}
+
 function describeTrackedConnection(conn) {
   if (!conn || typeof conn !== 'object') return null
+  const rawStream = conn.rawStream || conn._rawStream || null
+  const socket = rawStream?.socket || rawStream?._socket || conn.socket || null
+  const remoteAddress = rawStream?.remoteAddress || rawStream?.remote || conn.remoteAddress || null
   return {
     constructor: conn.constructor?.name || null,
     destroyed: Boolean(conn.destroyed),
@@ -159,8 +204,20 @@ function describeTrackedConnection(conn) {
     readable: Boolean(conn.readable),
     writable: Boolean(conn.writable),
     connecting: Boolean(conn.connecting),
-    bytesRead: Number(conn.bytesRead || conn.rawStream?.bytesRead || 0),
-    bytesWritten: Number(conn.bytesWritten || conn.rawStream?.bytesWritten || 0)
+    error: describeStreamError(conn),
+    rawStream: rawStream ? {
+      constructor: rawStream.constructor?.name || null,
+      connected: Boolean(rawStream.connected),
+      destroyed: Boolean(rawStream.destroyed),
+      errored: describeStreamError(rawStream),
+      id: rawStream.id ? shortKeyHex(rawStream.id) : null,
+      remoteHost: rawStream.remoteHost || null,
+      remotePort: Number(rawStream.remotePort || 0) || null,
+      remoteAddress: describeAddress(remoteAddress),
+      socketLocal: describeSocketAddress(socket)
+    } : null,
+    bytesRead: Number(conn.bytesRead || rawStream?.bytesRead || 0),
+    bytesWritten: Number(conn.bytesWritten || rawStream?.bytesWritten || 0)
   }
 }
 
@@ -182,6 +239,50 @@ function describePeerInfo(peerInfo) {
     relayAddresses: relayAddresses.length,
     relayAddressHints: describeRelayAddresses(relayAddresses),
     topics: topics.length
+  }
+}
+
+function attachConnectionDiagnostics(conn, entry) {
+  if (!conn || !entry) return
+  const recordEvent = (event, detail = {}) => {
+    entry.events.push({ at: Date.now(), event, ...detail })
+    while (entry.events.length > 20) entry.events.shift()
+    entry.stream = describeTrackedConnection(conn)
+  }
+
+  try { conn.once?.('open', () => recordEvent('open')) } catch { /* diagnostics only */ }
+  try { conn.once?.('close', () => recordEvent('close', { error: describeStreamError(conn) })) } catch { /* diagnostics only */ }
+  try { conn.once?.('error', (err) => recordEvent('error', { error: describeStreamError({ errored: err }) })) } catch { /* diagnostics only */ }
+
+  const rawStream = conn.rawStream || conn._rawStream || null
+  try { rawStream?.once?.('connect', () => recordEvent('raw-connect')) } catch { /* diagnostics only */ }
+  try { rawStream?.once?.('close', () => recordEvent('raw-close', { error: describeStreamError(rawStream) })) } catch { /* diagnostics only */ }
+  try { rawStream?.once?.('error', (err) => recordEvent('raw-error', { error: describeStreamError({ errored: err }) })) } catch { /* diagnostics only */ }
+}
+
+function describeDhtState(dht) {
+  if (!dht) return null
+  let socketAddress = null
+  let localAddress = null
+  let remoteAddress = null
+  try {
+    socketAddress = dht.address?.() || null
+    if (!socketAddress && dht.io?.serverSocket?.address) socketAddress = dht.io.serverSocket.address()
+  } catch { socketAddress = null }
+  try { localAddress = dht.localAddress?.() || null } catch { localAddress = null }
+  try { remoteAddress = dht.remoteAddress?.() || null } catch { remoteAddress = null }
+  return {
+    bootstrapped: dht.bootstrapped ?? null,
+    firewalled: dht.firewalled ?? null,
+    ephemeral: dht.ephemeral ?? null,
+    online: dht.online ?? null,
+    host: dht.host || null,
+    port: Number(dht.port || 0) || null,
+    socketAddress,
+    localAddress,
+    remoteAddress,
+    serverSocket: describeSocketAddress(dht.io?.serverSocket),
+    clientSocket: describeSocketAddress(dht.io?.clientSocket)
   }
 }
 
@@ -215,7 +316,8 @@ function createSwarmDiagnostics(swarm) {
         connections: swarm?.connections?.size || 0,
         allConnections: swarm?._allConnections?.size || 0,
         connecting: Number(swarm?.connecting || 0),
-        queueSize: swarm?._queue?.length || 0
+        queueSize: swarm?._queue?.length || 0,
+        dht: describeDhtState(swarm?.dht)
       })
     },
     recordConnection(conn, info) {
@@ -226,26 +328,29 @@ function createSwarmDiagnostics(swarm) {
         type: info?.type || null,
         topics: Array.isArray(info?.topics) ? info.topics.length : null,
         stream: describeTrackedConnection(conn),
+        events: [],
         closedAt: null,
         error: null
       }
       record(recentConnections, entry)
-      try {
-        conn?.once?.('close', () => {
-          entry.closedAt = Date.now()
-          entry.stream = describeTrackedConnection(conn)
-        })
-      } catch {
-        // Diagnostics must never break swarm connection handling.
+      attachConnectionDiagnostics(conn, entry)
+    },
+    recordClientConnect(conn, peerInfo) {
+      const entry = {
+        key: shortKeyHex(peerInfo?.publicKey || conn?.remotePublicKey),
+        openedAt: Date.now(),
+        initiator: true,
+        type: 'client-attempt',
+        topics: Array.isArray(peerInfo?.topics) ? peerInfo.topics.length : null,
+        stream: describeTrackedConnection(conn),
+        relayAddresses: Array.isArray(peerInfo?.relayAddresses) ? peerInfo.relayAddresses.length : 0,
+        relayAddressHints: describeRelayAddresses(peerInfo?.relayAddresses),
+        events: [],
+        closedAt: null,
+        error: null
       }
-      try {
-        conn?.once?.('error', (err) => {
-          entry.error = err?.message || String(err)
-          entry.stream = describeTrackedConnection(conn)
-        })
-      } catch {
-        // Diagnostics must never break swarm connection handling.
-      }
+      record(recentConnections, entry)
+      attachConnectionDiagnostics(conn, entry)
     },
     snapshot() {
       const peerStates = []
@@ -325,6 +430,28 @@ function createOfflineSwarm(keyPair, reason = 'unavailable') {
     }
   }
   return swarm
+}
+
+function installSwarmConnectDiagnostics(swarm, diagnostics) {
+  if (!swarm || swarm._peartubeConnectDiagnosticsInstalled) return false
+  if (typeof swarm._connect !== 'function') return false
+
+  const connect = swarm._connect
+  swarm._connect = function peartubeDiagnosedConnect(peerInfo, queued) {
+    const before = this._allConnections?.size || 0
+    const result = connect.call(this, peerInfo, queued)
+    try {
+      const after = this._allConnections?.size || 0
+      if (after > before && this._allConnections && typeof this._allConnections.values === 'function') {
+        let latest = null
+        for (const conn of this._allConnections.values()) latest = conn
+        diagnostics?.recordClientConnect?.(latest, peerInfo)
+      }
+    } catch { /* diagnostics only */ }
+    return result
+  }
+  swarm._peartubeConnectDiagnosticsInstalled = true
+  return true
 }
 
 function installSwarmPeerDiscoveryEmitter(swarm) {
@@ -657,7 +784,8 @@ export async function initializeStorage(config) {
     blobServerBindHost: blobServerBindHostOverride,
     primaryKey = null,
     corestoreWaitForLock = false,
-    corestoreAllowBackup = false
+    corestoreAllowBackup = false,
+    swarmPort = null
   } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
@@ -897,7 +1025,11 @@ export async function initializeStorage(config) {
     swarm = createOfflineSwarm(keyPair, 'module-unavailable')
   } else {
     try {
-      swarm = new Hyperswarm({ keyPair });
+      const swarmOptions = { keyPair }
+      if (Number.isFinite(Number(swarmPort)) && Number(swarmPort) > 0) {
+        swarmOptions.port = Number(swarmPort)
+      }
+      swarm = new Hyperswarm(swarmOptions);
     } catch (err) {
       console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
       await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)
@@ -905,8 +1037,14 @@ export async function initializeStorage(config) {
     }
   }
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
-  await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
+  if (swarmPort) console.log('[Storage] Requested Hyperswarm/DHT port:', Number(swarmPort))
+  const initialDhtState = describeDhtState(swarm.dht)
+  if (initialDhtState) {
+    console.log('[Storage] Initial DHT bind state:', JSON.stringify(initialDhtState))
+  }
+  await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)} port=${swarmPort || 'auto'}`)
   globalSwarmDiagnostics = createSwarmDiagnostics(swarm)
+  installSwarmConnectDiagnostics(swarm, globalSwarmDiagnostics)
   installSwarmPeerDiscoveryEmitter(swarm)
 
   // Set global references for suspend/resume and stats
@@ -975,9 +1113,10 @@ export async function initializeStorage(config) {
   const logDhtState = () => {
     const dht = swarm.dht
     if (dht) {
-      console.log('[Storage] DHT state: bootstrapped=', dht.bootstrapped, 'firewalled=', dht.firewalled, 'ephemeral=', dht.ephemeral, 'online=', dht.online)
+      const state = describeDhtState(dht)
+      console.log('[Storage] DHT state: bootstrapped=', dht.bootstrapped, 'firewalled=', dht.firewalled, 'ephemeral=', dht.ephemeral, 'online=', dht.online, 'address=', state?.socketAddress, 'remoteAddress=', state?.remoteAddress)
       void appendDebugLine(
-        `[storage] dht state bootstrapped=${dht.bootstrapped} firewalled=${dht.firewalled} ephemeral=${dht.ephemeral} online=${dht.online}`
+        `[storage] dht state bootstrapped=${dht.bootstrapped} firewalled=${dht.firewalled} ephemeral=${dht.ephemeral} online=${dht.online} address=${JSON.stringify(state?.socketAddress || null)} remoteAddress=${JSON.stringify(state?.remoteAddress || null)}`
       )
     }
   }

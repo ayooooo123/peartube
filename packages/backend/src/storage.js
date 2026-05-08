@@ -235,13 +235,17 @@ function createSwarmDiagnostics(swarm) {
           entry.closedAt = Date.now()
           entry.stream = describeTrackedConnection(conn)
         })
-      } catch {}
+      } catch {
+        // Diagnostics must never break swarm connection handling.
+      }
       try {
         conn?.once?.('error', (err) => {
           entry.error = err?.message || String(err)
           entry.stream = describeTrackedConnection(conn)
         })
-      } catch {}
+      } catch {
+        // Diagnostics must never break swarm connection handling.
+      }
     },
     snapshot() {
       const peerStates = []
@@ -252,7 +256,9 @@ function createSwarmDiagnostics(swarm) {
             if (peerStates.length >= 20) break
           }
         }
-      } catch {}
+      } catch {
+        // Diagnostics must never break status rendering.
+      }
 
       const allConnections = []
       try {
@@ -262,7 +268,9 @@ function createSwarmDiagnostics(swarm) {
             if (allConnections.length >= 20) break
           }
         }
-      } catch {}
+      } catch {
+        // Diagnostics must never break status rendering.
+      }
 
       return {
         recentPeers: recentPeers.slice(-10),

@@ -40,6 +40,7 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
       blindPeer: runtimeStats.blindPeer || runtimeStats.seeding?.blindPeer || null,
       peerPoolJoined: Boolean(runtimeStats.peerPoolJoined),
       directPeerDial: runtimeStats.directPeerDial || null,
+      hyperswarm: runtimeStats.hyperswarm || null,
       swarmOffline: Boolean(runtimeStats.swarmOffline),
       swarmOfflineReason: runtimeStats.swarmOfflineReason || null,
       swarmListenResolved: Boolean(runtimeStats.swarmListenResolved),

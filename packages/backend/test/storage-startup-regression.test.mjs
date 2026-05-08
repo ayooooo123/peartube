@@ -108,3 +108,11 @@ test('storage exposes Hyperswarm peer discovery as a peer event for feed fallbac
     'adapter should emit peer events with the discovered peer and topic'
   )
 })
+
+test('storage captures Hyperswarm connection lifecycle diagnostics', () => {
+  assert.match(storageSource, /function createSwarmDiagnostics\(swarm\)/)
+  assert.match(storageSource, /globalSwarmDiagnostics = createSwarmDiagnostics\(swarm\)/)
+  assert.match(storageSource, /globalSwarmDiagnostics\?\.recordPeer\?\.\(peer, topic\)/)
+  assert.match(storageSource, /globalSwarmDiagnostics\?\.recordConnection\?\.\(conn, info\)/)
+  assert.match(storageSource, /hyperswarm: diagnostics/)
+})

@@ -566,6 +566,20 @@ export class PublicFeedManager {
     return this._rememberPeerPublicKey(publicKey)
   }
 
+  _explicitlyQueuePeer(keyHex, publicKey) {
+    const peerInfo = this.swarm?.peers?.get?.(keyHex)
+    if (peerInfo && typeof this.swarm?._enqueue === 'function' && typeof peerInfo._updatePriority === 'function') {
+      peerInfo.explicit = true
+      this.swarm.explicitPeers?.add?.(peerInfo)
+      if (!this.swarm._allConnections?.has?.(publicKey) && peerInfo._updatePriority()) {
+        return this.swarm._enqueue(peerInfo) !== false
+      }
+      return false
+    }
+    this.swarm.joinPeer(publicKey)
+    return true
+  }
+
   handleDiscoveredPeer(peer, topic = null) {
     if (topic && !this._isNetworkTopic(topic)) return false
     if (!this.swarm || typeof this.swarm.joinPeer !== 'function') return false
@@ -611,7 +625,7 @@ export class PublicFeedManager {
     // dialed after the pending dial window expires until Hyperswarm gives us a
     // socket, at which point handleConnection opens the Protomux feed channel.
     try {
-      this.swarm.joinPeer(publicKey)
+      this._explicitlyQueuePeer(keyHex, publicKey)
       const now = this._now()
       this._directPeerRetryCounts.set(keyHex, attempts + 1)
       this._directPeerLastDialedAt.set(keyHex, now)

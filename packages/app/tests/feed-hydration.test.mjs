@@ -144,7 +144,38 @@ test('getFeedPreviewVideos only uses local or live-peer manifest previews', () =
       publicBeeKey: 'bee-live',
       channelName: 'Live channel',
     },
-  ])
+  ], 'stale cached remote preview without blob refs is ignored before a live peer proves availability')
+})
+
+test('getFeedPreviewVideos keeps relay manifest previews with direct blob refs even when peer count temporarily drops', () => {
+  const previews = getFeedPreviewVideos([
+    {
+      driveKey: 'relay-archive',
+      peerCount: 0,
+      publicBeeKey: 'bee-relay',
+      channelName: 'Relay archive',
+      previewVideos: [{
+        id: 'archived-video',
+        title: 'Archived video',
+        uploadedAt: 40,
+        availability: 'playable',
+        blobId: '0:8:0:1024',
+        blobsCoreKey: 'aa'.repeat(32),
+      }],
+    },
+  ], {}, 'local', 5)
+
+  assert.deepEqual(previews.map((video) => ({
+    id: video.id,
+    channelKey: video.channelKey,
+    publicBeeKey: video.publicBeeKey,
+    channelName: video.channel?.name,
+  })), [{
+    id: 'archived-video',
+    channelKey: 'relay-archive',
+    publicBeeKey: 'bee-relay',
+    channelName: 'Relay archive',
+  }])
 })
 
 test('shouldKeepFeedVideoForVisibleEntries keeps restored snapshot cards until their channels are refreshed', () => {

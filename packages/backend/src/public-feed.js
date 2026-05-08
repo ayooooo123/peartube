@@ -81,6 +81,8 @@ export class PublicFeedManager {
     this._directPeerLastDialedAt = new Map();
     /** @type {Map<string, string>} */
     this._directPeerLastDialError = new Map();
+    /** @type {Map<string, string>} */
+    this._directPeerLastDialErrorStack = new Map();
     /** @type {Map<string, number>} */
     this._directPeerLastQueuedAt = new Map();
     /** @type {Set<string>} */
@@ -459,6 +461,7 @@ export class PublicFeedManager {
     this._directPeerLastQueuedAt.delete(remembered.keyHex)
     this._directPeerRetryCounts.delete(remembered.keyHex)
     this._directPeerLastDialError.delete(remembered.keyHex)
+    this._directPeerLastDialErrorStack.delete(remembered.keyHex)
     this._directPeerDialStats.connected++
     this._directPeerDialStats.lastReason = 'connected'
   }
@@ -574,16 +577,24 @@ export class PublicFeedManager {
       this._directPeerDialStats.lastReason = 'max-direct-peers'
       return false
     }
-    // Discovered peers are part of the app protocol surface. There is no hard
-    // retry cap here: a peer that remains on the shared topic should keep being
-    // dialed after the pending dial window expires until Hyperswarm gives us a
-    // socket, at which point handleConnection opens the Protomux feed channel.
+    const attempts = this._directPeerRetryCounts.get(keyHex) || 0
+    if (this._maxDirectPeerRetries > 0 && attempts >= this._maxDirectPeerRetries) {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'max-direct-peer-retries'
+      return false
+    }
+    // Once a peer is marked explicit, Hyperswarm owns transport retry/backoff.
+    // The app-level nudge is capped so relay heartbeats do not create noisy
+    // redial loops when the DHT transport is failing below the feed protocol.
     try {
-      const attempts = this._directPeerRetryCounts.get(keyHex) || 0
       const result = ensureSwarmPeerConnection(this.swarm, peer || publicKey, topic)
       if (!result.queued) {
         this._directPeerDialStats.skipped++
         this._directPeerDialStats.lastReason = result.reason || 'queue-skipped'
+        if (result.error) {
+          this._directPeerLastDialError.set(keyHex, result.errorMessage || result.error)
+          this._directPeerLastDialErrorStack.set(keyHex, result.error)
+        }
         return false
       }
       const now = this._now()
@@ -592,6 +603,7 @@ export class PublicFeedManager {
       this._directPeerLastQueuedAt.set(keyHex, now)
       this._directPeerPending.add(keyHex)
       this._directPeerLastDialError.delete(keyHex)
+      this._directPeerLastDialErrorStack.delete(keyHex)
       this._directPeerDialStats.queued++
       this._directPeerDialStats.lastReason = 'queued'
       this._directPeerDialStats.lastDialedAt = now
@@ -602,6 +614,7 @@ export class PublicFeedManager {
       this._directPeerDialStats.failed++
       this._directPeerDialStats.lastReason = 'joinPeer-error'
       this._directPeerLastDialError.set(keyHex, message)
+      if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
       console.log('[PublicFeed] Direct peer dial failed:', keyHex.slice(0, 16), message)
       return false
     }
@@ -656,6 +669,7 @@ export class PublicFeedManager {
         lastDialedAt: this._directPeerLastDialedAt.get(keyHex) || null,
         lastQueuedAt: this._directPeerLastQueuedAt.get(keyHex) || null,
         lastError: this._directPeerLastDialError.get(keyHex) || null,
+        lastErrorStack: this._directPeerLastDialErrorStack.get(keyHex) || null,
         pending,
         connected: this._hasActivePeerConnection(keyHex, this._discoveredPeers.get(keyHex)),
         swarm: this._swarmDialState(keyHex),
@@ -873,6 +887,7 @@ export class PublicFeedManager {
       this._discoveredPeers.clear()
       this._directPeerLastDialedAt.clear()
       this._directPeerLastDialError.clear()
+      this._directPeerLastDialErrorStack.clear()
       this._directPeerLastQueuedAt.clear()
       this._directPeerPending.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)

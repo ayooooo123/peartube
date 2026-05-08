@@ -75,6 +75,9 @@ export function readRelayStatus(statusPath) {
 }
 
 export function formatRelayStatus(status) {
+  const firstDialError = status.runtime.directPeerDial?.peers
+    ?.find((peer) => peer?.lastError)
+    ?.lastError || null
   const lines = [
     `mode: ${status.mode}`,
     `policy: ${status.policy}`,
@@ -89,7 +92,7 @@ export function formatRelayStatus(status) {
     `feedEntries: ${status.runtime.feedEntries}`,
     `dht: bootstrapped=${status.runtime.dht.bootstrapped} firewalled=${status.runtime.dht.firewalled} online=${status.runtime.dht.online}`,
     `network: offline=${status.runtime.swarmOffline} reason=${status.runtime.swarmOfflineReason || 'none'} listenResolved=${status.runtime.swarmListenResolved} peerPoolJoined=${status.runtime.peerPoolJoined} publicFeedDiscoveryJoined=${status.runtime.publicFeedDiscoveryJoined}`,
-    `directPeerDial: discovered=${status.runtime.directPeerDial?.discoveredPeers || 0} pending=${status.runtime.directPeerDial?.pending || 0} queued=${status.runtime.directPeerDial?.queued || 0} skipped=${status.runtime.directPeerDial?.skipped || 0} failed=${status.runtime.directPeerDial?.failed || 0} connected=${status.runtime.directPeerDial?.connected || 0} lastReason=${status.runtime.directPeerDial?.lastReason || 'none'}`,
+    `directPeerDial: discovered=${status.runtime.directPeerDial?.discoveredPeers || 0} pending=${status.runtime.directPeerDial?.pending || 0} queued=${status.runtime.directPeerDial?.queued || 0} skipped=${status.runtime.directPeerDial?.skipped || 0} failed=${status.runtime.directPeerDial?.failed || 0} connected=${status.runtime.directPeerDial?.connected || 0} lastReason=${status.runtime.directPeerDial?.lastReason || 'none'} lastError=${firstDialError || 'none'}`,
     `blindPeer: enabled=${Boolean(status.runtime.blindPeer?.enabled)} key=${status.runtime.blindPeer?.publicKey || 'none'} mirroredCores=${status.runtime.blindPeer?.mirroredCores || 0} mirroredAutobases=${status.runtime.blindPeer?.mirroredAutobases || 0}`,
     `seeding: channels=${status.runtime.seeding.channels} videos=${status.runtime.seeding.videos} publicBeeCores=${status.runtime.seeding.publicBeeCores} blobCores=${status.runtime.seeding.blobCores} discoveryHandles=${status.runtime.seeding.discoveryHandles}`
   ]

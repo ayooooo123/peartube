@@ -332,6 +332,7 @@ function installSwarmPeerDiscoveryEmitter(swarm) {
   if (typeof swarm._handlePeer !== 'function' || typeof swarm.emit !== 'function') return false
 
   const handlePeer = swarm._handlePeer
+  swarm._peartubeHandlePeerWithoutEmit = handlePeer
   swarm._handlePeer = function peartubeHandlePeer(peer, topic) {
     const result = handlePeer.call(this, peer, topic)
     try {

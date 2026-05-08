@@ -44,6 +44,36 @@ export function swarmConnectionLike(entry) {
   )
 }
 
+function relayAddressesFromPeer(peer) {
+  return Array.isArray(peer?.relayAddresses) && peer.relayAddresses.length > 0 ? peer.relayAddresses : null
+}
+
+function upsertPeerWithoutEmit(swarm, peer, publicKey, topic) {
+  if (!swarm || !publicKey || !peer || typeof peer !== 'object') return null
+  if (b4a.isBuffer(peer) || peer instanceof Uint8Array) return null
+
+  const relayAddresses = relayAddressesFromPeer(peer)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const existing = swarm.peers?.get?.(keyHex) || null
+  if (!relayAddresses) {
+    if (existing && topic && typeof existing._topic === 'function') existing._topic(topic)
+    return existing
+  }
+
+  if (typeof swarm._upsertPeer === 'function') {
+    const peerInfo = swarm._upsertPeer(publicKey, relayAddresses)
+    if (peerInfo && topic && typeof peerInfo._topic === 'function') peerInfo._topic(topic)
+    return peerInfo
+  }
+
+  const handlePeer = swarm._peartubeHandlePeerWithoutEmit
+  if (topic && typeof handlePeer === 'function') {
+    return handlePeer.call(swarm, { publicKey, relayAddresses }, topic) || null
+  }
+
+  return null
+}
+
 export function swarmHasConnection(swarm, keyHex, publicKey = null) {
   if (!swarm || !keyHex) return false
   const connections = swarm.connections
@@ -55,7 +85,7 @@ export function swarmHasConnection(swarm, keyHex, publicKey = null) {
   const all = swarm._allConnections
   if (all && typeof all[Symbol.iterator] === 'function') {
     for (const entry of all) {
-      if (entry && typeof entry === 'object' && (swarmConnectionLike(entry) || entry.remotePublicKey || entry.publicKey) && peerMatchesKey(entry, keyHex)) return true
+      if (entry && typeof entry === 'object' && swarmConnectionLike(entry) && peerMatchesKey(entry, keyHex)) return true
     }
   }
   const peers = swarm.peers
@@ -89,24 +119,38 @@ export function ensureSwarmPeerConnection(swarm, peer, topic = null) {
     return { queued: false, reason: 'already-connected-peer', keyHex, publicKey }
   }
 
-  if (topic && typeof swarm._handlePeer === 'function' && peer && typeof peer === 'object') {
-    swarm._handlePeer(peer, topic)
-  }
+  try {
+    const preservedPeerInfo = topic ? upsertPeerWithoutEmit(swarm, peer, publicKey, topic) : null
 
-  const peerInfo = swarm.peers?.get?.(keyHex)
-  if (peerInfo && typeof swarm._enqueue === 'function' && typeof peerInfo._updatePriority === 'function') {
-    peerInfo.explicit = true
-    swarm.explicitPeers?.add?.(peerInfo)
-    if (!swarm._allConnections?.has?.(publicKey) && peerInfo._updatePriority()) {
-      const queued = swarm._enqueue(peerInfo) !== false
-      return { queued, reason: queued ? 'queued' : 'enqueue-skipped', keyHex, publicKey }
+    const peerInfo = preservedPeerInfo || swarm.peers?.get?.(keyHex)
+    if (peerInfo?.queued) {
+      peerInfo.explicit = true
+      swarm.explicitPeers?.add?.(peerInfo)
+      return { queued: true, reason: 'queued', keyHex, publicKey }
     }
-    return { queued: false, reason: 'already-connecting', keyHex, publicKey }
-  }
+    if (peerInfo && typeof swarm._enqueue === 'function' && typeof peerInfo._updatePriority === 'function') {
+      peerInfo.explicit = true
+      swarm.explicitPeers?.add?.(peerInfo)
+      if (!swarm._allConnections?.has?.(publicKey) && peerInfo._updatePriority()) {
+        const queued = swarm._enqueue(peerInfo) !== false
+        return { queued, reason: queued ? 'queued' : 'enqueue-skipped', keyHex, publicKey }
+      }
+      return { queued: false, reason: 'already-connecting', keyHex, publicKey }
+    }
 
-  if (typeof swarm.joinPeer === 'function') {
-    swarm.joinPeer(publicKey)
-    return { queued: true, reason: 'queued', keyHex, publicKey }
+    if (typeof swarm.joinPeer === 'function') {
+      swarm.joinPeer(publicKey)
+      return { queued: true, reason: 'queued', keyHex, publicKey }
+    }
+    return { queued: false, reason: 'joinPeer-unavailable', keyHex, publicKey }
+  } catch (err) {
+    return {
+      queued: false,
+      reason: 'queue-error',
+      keyHex,
+      publicKey,
+      errorMessage: err?.message || String(err),
+      error: err?.stack || err?.message || String(err)
+    }
   }
-  return { queued: false, reason: 'joinPeer-unavailable', keyHex, publicKey }
 }

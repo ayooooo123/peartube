@@ -92,6 +92,7 @@ let globalBlobServer = null;
 let globalChannels = null;
 let globalPeerPoolDiscovery = null;
 let globalPeerPoolTopicHex = null;
+let globalSwarmDiagnostics = null;
 
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
@@ -120,6 +121,157 @@ function createNoopDiscoveryHandle() {
     flushed: async () => {},
     destroy() {},
     close() {}
+  }
+}
+
+function shortKeyHex(value) {
+  try {
+    if (!value) return 'unknown'
+    if (typeof value === 'string') return value.slice(0, 16)
+    return b4a.toString(value, 'hex').slice(0, 16)
+  } catch {
+    return 'unknown'
+  }
+}
+
+function describeRelayAddresses(relayAddresses) {
+  if (!Array.isArray(relayAddresses)) return []
+  return relayAddresses.slice(0, 4).map((address) => {
+    try {
+      if (typeof address === 'string') return address
+      if (address?.host && address?.port) return `${address.host}:${address.port}`
+      if (address?.publicKey) return `relay:${shortKeyHex(address.publicKey)}`
+      return String(address)
+    } catch {
+      return 'unreadable'
+    }
+  })
+}
+
+function describeTrackedConnection(conn) {
+  if (!conn || typeof conn !== 'object') return null
+  return {
+    constructor: conn.constructor?.name || null,
+    destroyed: Boolean(conn.destroyed),
+    opened: Boolean(conn.opened),
+    opening: Boolean(conn.opening),
+    closed: Boolean(conn.closed),
+    readable: Boolean(conn.readable),
+    writable: Boolean(conn.writable),
+    connecting: Boolean(conn.connecting),
+    bytesRead: Number(conn.bytesRead || conn.rawStream?.bytesRead || 0),
+    bytesWritten: Number(conn.bytesWritten || conn.rawStream?.bytesWritten || 0)
+  }
+}
+
+function describePeerInfo(peerInfo) {
+  if (!peerInfo || typeof peerInfo !== 'object') return null
+  const relayAddresses = Array.isArray(peerInfo.relayAddresses) ? peerInfo.relayAddresses : []
+  const topics = Array.isArray(peerInfo.topics) ? peerInfo.topics : []
+  return {
+    key: shortKeyHex(peerInfo.publicKey),
+    attempts: Number(peerInfo.attempts || 0),
+    queued: Boolean(peerInfo.queued),
+    waiting: Boolean(peerInfo.waiting),
+    explicit: Boolean(peerInfo.explicit),
+    banned: Boolean(peerInfo.banned),
+    proven: Boolean(peerInfo.proven),
+    client: Boolean(peerInfo.client),
+    connectedTime: Number(peerInfo.connectedTime ?? -1),
+    disconnectedTime: Number(peerInfo.disconnectedTime || 0),
+    relayAddresses: relayAddresses.length,
+    relayAddressHints: describeRelayAddresses(relayAddresses),
+    topics: topics.length
+  }
+}
+
+function createSwarmDiagnostics(swarm) {
+  const recentConnections = []
+  const recentPeers = []
+  const recentUpdates = []
+  const maxRecent = 20
+
+  const record = (items, entry) => {
+    items.push({ at: Date.now(), ...entry })
+    while (items.length > maxRecent) items.shift()
+  }
+
+  return {
+    recordPeer(peer, topic) {
+      record(recentPeers, {
+        key: shortKeyHex(peer?.publicKey),
+        topic: shortKeyHex(topic),
+        relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0,
+        relayAddressHints: describeRelayAddresses(peer?.relayAddresses),
+        queueSize: swarm?._queue?.length || 0,
+        connecting: Number(swarm?.connecting || 0),
+        connections: swarm?.connections?.size || 0,
+        allConnections: swarm?._allConnections?.size || 0
+      })
+    },
+    recordUpdate() {
+      record(recentUpdates, {
+        peers: swarm?.peers?.size || 0,
+        connections: swarm?.connections?.size || 0,
+        allConnections: swarm?._allConnections?.size || 0,
+        connecting: Number(swarm?.connecting || 0),
+        queueSize: swarm?._queue?.length || 0
+      })
+    },
+    recordConnection(conn, info) {
+      const entry = {
+        key: shortKeyHex(info?.publicKey),
+        openedAt: Date.now(),
+        initiator: Boolean(info?.client),
+        type: info?.type || null,
+        topics: Array.isArray(info?.topics) ? info.topics.length : null,
+        stream: describeTrackedConnection(conn),
+        closedAt: null,
+        error: null
+      }
+      record(recentConnections, entry)
+      try {
+        conn?.once?.('close', () => {
+          entry.closedAt = Date.now()
+          entry.stream = describeTrackedConnection(conn)
+        })
+      } catch {}
+      try {
+        conn?.once?.('error', (err) => {
+          entry.error = err?.message || String(err)
+          entry.stream = describeTrackedConnection(conn)
+        })
+      } catch {}
+    },
+    snapshot() {
+      const peerStates = []
+      try {
+        if (swarm?.peers && typeof swarm.peers.values === 'function') {
+          for (const peerInfo of swarm.peers.values()) {
+            peerStates.push(describePeerInfo(peerInfo))
+            if (peerStates.length >= 20) break
+          }
+        }
+      } catch {}
+
+      const allConnections = []
+      try {
+        if (swarm?._allConnections && typeof swarm._allConnections.entries === 'function') {
+          for (const [key, conn] of swarm._allConnections.entries()) {
+            allConnections.push({ key: shortKeyHex(key), ...describeTrackedConnection(conn) })
+            if (allConnections.length >= 20) break
+          }
+        }
+      } catch {}
+
+      return {
+        recentPeers: recentPeers.slice(-10),
+        recentUpdates: recentUpdates.slice(-10),
+        recentConnections: recentConnections.slice(-10),
+        peerStates,
+        allConnections
+      }
+    }
   }
 }
 
@@ -745,6 +897,7 @@ export async function initializeStorage(config) {
   }
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
   await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
+  globalSwarmDiagnostics = createSwarmDiagnostics(swarm)
   installSwarmPeerDiscoveryEmitter(swarm)
 
   // Set global references for suspend/resume and stats
@@ -826,14 +979,17 @@ export async function initializeStorage(config) {
 
   // Log swarm events for debugging mobile connectivity
   swarm.on('update', () => {
+    globalSwarmDiagnostics?.recordUpdate?.()
     log.debug('Swarm update event', { connections: swarm.connections?.size || 0, peers: swarm.peers?.size || 0 })
   });
 
   // Log peer discovery events (DHT found a peer)
-  swarm.on('peer', (peer) => {
+  swarm.on('peer', (peer, topic) => {
+    globalSwarmDiagnostics?.recordPeer?.(peer, topic)
     const peerKey = peer?.publicKey ? b4a.toString(peer.publicKey, 'hex').slice(0, 16) : 'unknown'
-    console.log('[Storage] PEER DISCOVERED:', peerKey, 'total peers:', swarm.peers?.size || 0)
-    void appendDebugLine(`[storage] peer discovered ${peerKey} totalPeers=${swarm.peers?.size || 0}`)
+    const relayAddresses = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0
+    console.log('[Storage] PEER DISCOVERED:', peerKey, 'total peers:', swarm.peers?.size || 0, 'relayAddresses:', relayAddresses, 'connecting:', swarm.connecting || 0)
+    void appendDebugLine(`[storage] peer discovered ${peerKey} totalPeers=${swarm.peers?.size || 0} relayAddresses=${relayAddresses} connecting=${swarm.connecting || 0}`)
   })
 
   const channels = new Map();
@@ -843,8 +999,9 @@ export async function initializeStorage(config) {
     try {
       if (!conn || conn.destroyed) return
       const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
-      console.log('[Storage] Peer connected:', remoteKey);
-      void appendDebugLine(`[storage] peer connected ${remoteKey}`)
+      globalSwarmDiagnostics?.recordConnection?.(conn, info)
+      console.log('[Storage] Peer connected:', remoteKey, 'connections:', swarm.connections?.size || 0, 'connecting:', swarm.connecting || 0);
+      void appendDebugLine(`[storage] peer connected ${remoteKey} connections=${swarm.connections?.size || 0} connecting=${swarm.connecting || 0}`)
 
       // Register stream with wakeup protocol for content announcements
       if (wakeup) {
@@ -1957,6 +2114,7 @@ export async function resumeNetworking() {
  * @returns {Object|null} Stats object or null if stats not available
  */
 export function getNetworkStats() {
+  const diagnostics = globalSwarmDiagnostics?.snapshot?.() || null
   if (!networkStats) {
     // Fallback: return basic stats from swarm
     if (globalSwarm) {
@@ -1973,17 +2131,19 @@ export function getNetworkStats() {
           bootstrapped: globalSwarm.dht?.bootstrapped ?? null,
           ephemeral: globalSwarm.dht?.ephemeral ?? null,
           online: globalSwarm.dht?.online ?? null
-        }
+        },
+        hyperswarm: diagnostics
       };
     }
     return null;
   }
 
   try {
-    return networkStats.toJson();
+    const stats = networkStats.toJson();
+    return diagnostics ? { ...stats, hyperswarm: diagnostics } : stats
   } catch (err) {
     console.log('[Network] Stats toJson error:', err?.message);
-    return null;
+    return diagnostics ? { hyperswarm: diagnostics } : null;
   }
 }
 

@@ -1,6 +1,6 @@
 export async function createRelayRuntime({ config, logger }) {
   const [
-    { initializeStorage, loadChannel, loadPublicBee },
+    { initializeStorage, loadChannel, loadPublicBee, getNetworkStats },
     { PublicFeedManager },
     { CacheManager },
     { createRelaySeeder },
@@ -238,6 +238,7 @@ export async function createRelayRuntime({ config, logger }) {
     },
     getNetworkStats() {
       const feedStats = publicFeed.getStats?.() || {}
+      const storageStats = getNetworkStats?.() || {}
       return {
         peers: ctx.swarm?.peers?.size || 0,
         connections: ctx.swarm?.connections?.size || 0,
@@ -253,6 +254,7 @@ export async function createRelayRuntime({ config, logger }) {
         blindPeer: blindPeer.getStats?.() || null,
         peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
         directPeerDial: feedStats.directPeerDial || null,
+        hyperswarm: storageStats?.hyperswarm || null,
         swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
         swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),

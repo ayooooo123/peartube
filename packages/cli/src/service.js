@@ -242,6 +242,7 @@ export async function createRelayService({
               swarmExplicitPeers: directPeerDial.swarmExplicitPeers || 0,
               swarmQueueSize: directPeerDial.swarmQueueSize || 0,
               dialPeers: Array.isArray(directPeerDial.peers) ? directPeerDial.peers : [],
+              hyperswarm: heartbeatStatus.runtime.hyperswarm || null,
               redialed
             })
           }

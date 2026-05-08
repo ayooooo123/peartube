@@ -305,6 +305,10 @@ test('relay heartbeat logs Hyperswarm dial diagnostics when peers have no socket
   runtime.getNetworkStats = () => ({
     peers: 2,
     connections: 0,
+    hyperswarm: {
+      recentPeers: [{ key: 'peer-a', relayAddresses: 0 }],
+      allConnections: [{ key: 'peer-a', opened: false, destroyed: false }]
+    },
     directPeerDial: {
       discoveredPeers: 2,
       queued: 4,
@@ -372,6 +376,10 @@ test('relay heartbeat logs Hyperswarm dial diagnostics when peers have no socket
     t.is(warning.data.swarmExplicitPeers, 2)
     t.is(warning.data.swarmQueueSize, 1)
     t.alike(warning.data.dialPeers, [{ key: 'peer-a', swarm: { attempts: 2, relayAddresses: 1 } }])
+    t.alike(warning.data.hyperswarm, {
+      recentPeers: [{ key: 'peer-a', relayAddresses: 0 }],
+      allConnections: [{ key: 'peer-a', opened: false, destroyed: false }]
+    })
 
     await service.close()
   } finally {

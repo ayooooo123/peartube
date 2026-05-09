@@ -568,9 +568,15 @@ test('createRelayService watches configured local mirror directory', async (t) =
     getActiveIdentity() { return { driveKey: 'drive-key' } },
     getActiveChannel() { return { blobs: true, publicBeeKey: 'public-bee' } }
   }
+  let releaseUpload = null
+  let uploadGate = new Promise((resolve) => {
+    releaseUpload = resolve
+  })
+
   runtime.uploadManager = {
     async uploadFromPath(_channel, filePath) {
       imports.push(filePath)
+      await uploadGate
       return {
         success: true,
         videoId: `video-${imports.length}`,
@@ -650,15 +656,25 @@ test('createRelayService watches configured local mirror directory', async (t) =
     })
 
     await service.start()
-    t.is(imports.length, 1)
-    t.is(submitCalls, 1)
+    t.ok(logger.entries.some((entry) => entry.component === 'relay' && entry.msg === 'Relay started'))
+    t.ok(logger.entries.some((entry) => entry.component === 'archive' && entry.msg === 'Local directory mirror started'))
     t.ok(intervals.some((entry) => entry.ms === 5000))
+
+    await Promise.resolve()
+    await Promise.resolve()
+    t.is(imports.length, 1, 'initial local mirror scan starts in the background')
+    t.is(submitCalls, 0, 'startup does not wait for initial local mirror publish')
+
+    releaseUpload()
+    await new Promise((resolve) => setImmediate(resolve))
+    t.is(submitCalls, 1)
 
     const localMirrorInterval = intervals.find((entry) => entry.ms === 5000)
     await localMirrorInterval.fn()
     t.is(imports.length, 1, 'unchanged file is not re-imported')
 
     sizes['/videos/one.mp4'] = 101
+    uploadGate = Promise.resolve()
     await localMirrorInterval.fn()
     t.is(imports.length, 2, 'changed fingerprint is imported again')
 

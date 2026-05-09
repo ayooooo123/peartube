@@ -281,12 +281,14 @@ export async function createRelayService({
       }
 
       if (config.archive?.localMirror?.enabled) {
-        await runLocalMirrorOnce()
         const pollMs = Math.max(1, Number(config.archive.localMirror.poll || 30)) * 1000
-        localMirrorTimer = setIntervalFn(() => runLocalMirrorOnce().catch((err) => {
+        const triggerLocalMirrorScan = () => runLocalMirrorOnce().catch((err) => {
           logger.archive.error('Local mirror periodic scan failed', { error: err?.message || String(err) })
-        }), pollMs)
+          return { error: err?.message || String(err) }
+        })
+        localMirrorTimer = setIntervalFn(triggerLocalMirrorScan, pollMs)
         localMirrorTimer?.unref?.()
+        triggerLocalMirrorScan()
         logger.archive.info('Local directory mirror started', {
           path: config.archive.localMirror.path,
           pollSeconds: Math.round(pollMs / 1000),

@@ -249,7 +249,9 @@ export default function HomeScreen() {
           hasBee: !!e.publicBeeKey,
         })))
         setFeedEntries(mergedEntries)
-        for (const request of getMissingChannelMetaRequests(mergedEntries, channelMetaRef.current, 15)) {
+        const CONCURRENT_META_LOADS = 3
+        const metaRequests = getMissingChannelMetaRequests(mergedEntries, channelMetaRef.current, 6)
+        for (const request of metaRequests.slice(0, CONCURRENT_META_LOADS)) {
           loadChannelMeta(request.channelKey, request.publicBeeKey)
         }
       }
@@ -418,15 +420,15 @@ export default function HomeScreen() {
     // Only merge in fresher results; do not blank the whole feed on every cycle.
 
     // Smaller initial tranche for fast first paint, then background-fill more.
-    const PER_CHANNEL_TIMEOUT = hydrationMode === 'network' ? 4000 : 1500
-    const FIRST_PASS_ATTEMPT_TIMEOUT = hydrationMode === 'network' ? 1200 : 900
-    const LATER_PASS_ATTEMPT_TIMEOUT = hydrationMode === 'network' ? 1800 : 1200
-    const FIRST_PASS_ATTEMPTS = hydrationMode === 'network' ? 2 : 1
-    const LATER_PASS_ATTEMPTS = hydrationMode === 'network' ? 1 : 1
-    const LIST_RETRY_DELAY_MS = 500
-    const entries = getFeedVideoLoadEntries(feedEntries, 15)
-    const initialEntries = entries.slice(0, 6)
-    const laterEntries = entries.slice(6)
+    const PER_CHANNEL_TIMEOUT = hydrationMode === 'network' ? 2500 : 1200
+    const FIRST_PASS_ATTEMPT_TIMEOUT = hydrationMode === 'network' ? 1000 : 800
+    const LATER_PASS_ATTEMPT_TIMEOUT = hydrationMode === 'network' ? 1200 : 900
+    const FIRST_PASS_ATTEMPTS = 1
+    const LATER_PASS_ATTEMPTS = 1
+    const LIST_RETRY_DELAY_MS = 250
+    const entries = getFeedVideoLoadEntries(feedEntries, 8)
+    const initialEntries = entries.slice(0, 3)
+    const laterEntries = entries.slice(3)
 
     const mergeVideos = (incoming: VideoData[], refreshedChannelKeys: string[] = []) => {
       if (feedLoadRunIdRef.current !== runId) return
@@ -489,11 +491,12 @@ export default function HomeScreen() {
             rpc.listVideos({ channelKey, publicBeeKey }),
             new Promise((resolve) => setTimeout(() => resolve(timeoutToken), attemptTimeout)),
           ])
+          const previewFallback = getFeedPreviewVideos([entry], channelMetaRef.current, identity?.driveKey || undefined, 50) as VideoData[]
           if (result !== timeoutToken) {
             resolved = true
             loadedVideos = (result as any)?.videos || []
           } else {
-            loadedVideos = []
+            loadedVideos = previewFallback
           }
           if (Array.isArray(loadedVideos) && loadedVideos.length > 0) break
           if (hydrationMode === 'network' && attempt < attempts - 1) {

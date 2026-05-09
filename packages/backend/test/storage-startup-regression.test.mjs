@@ -91,7 +91,7 @@ test('storage exposes public bee content discovery retention for cached serving 
   assert.match(storageSource, /retainSwarmDiscovery\(ctx, core\.discoveryKey/)
 })
 
-test('storage exposes Hyperswarm peer discovery as a peer event for feed fallback dialing', () => {
+test('storage exposes Hyperswarm peer discovery as a diagnostic peer event', () => {
   assert.match(
     storageSource,
     /function installSwarmPeerDiscoveryEmitter\(swarm\)/,
@@ -106,11 +106,6 @@ test('storage exposes Hyperswarm peer discovery as a peer event for feed fallbac
     storageSource,
     /swarm\.emit\('peer', peer, topic\)/,
     'adapter should emit peer events with the discovered peer and topic'
-  )
-  assert.match(
-    storageSource,
-    /_peartubeHandlePeerWithoutEmit/,
-    'adapter should retain the raw Hyperswarm handler for internal relay hint upserts'
   )
 })
 

@@ -21,7 +21,7 @@ import b4a from 'b4a'
 import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
-import { ensureSwarmPeerConnection, peerPublicKey, swarmHasConnection } from './swarm-peer-dial.js'
+import { peerPublicKey, swarmHasConnection } from './swarm-peer-dial.js'
 
 const log = logger('PublicFeed')
 const PUBLIC_FEED_CATALOG_VERSION = 1
@@ -73,9 +73,7 @@ export class PublicFeedManager {
     this._nextAvailabilityRequestId = 1;
     /** @type {Map<string, { resolve: Function, timeout: any }>} */
     this.pendingAvailabilityRequests = new Map();
-    /** @type {Map<string, number>} */
-    this._directPeerRetryCounts = new Map();
-    /** @type {Map<string, any>} */
+    /** @type {Map<string, any>} Remembered Hyperswarm peer candidates for diagnostics only. */
     this._discoveredPeers = new Map();
     /** @type {Map<string, number>} */
     this._directPeerLastDialedAt = new Map();
@@ -83,10 +81,6 @@ export class PublicFeedManager {
     this._directPeerLastDialError = new Map();
     /** @type {Map<string, string>} */
     this._directPeerLastDialErrorStack = new Map();
-    /** @type {Map<string, number>} */
-    this._directPeerLastQueuedAt = new Map();
-    /** @type {Set<string>} */
-    this._directPeerPending = new Set();
     /** @type {{attempted: number, queued: number, skipped: number, failed: number, connected: number, lastReason: string | null, lastDialedAt: number | null}} */
     this._directPeerDialStats = {
       attempted: 0,
@@ -97,12 +91,6 @@ export class PublicFeedManager {
       lastReason: null,
       lastDialedAt: null,
     };
-    /** @type {number} */
-    this._directPeerPendingTimeoutMs = 15000;
-    /** @type {number} */
-    this._maxDirectPeerRetries = 3;
-    /** @type {number} */
-    this._maxDirectPeers = 16;
     /** @type {() => number} */
     this._now = () => Date.now();
     /** @type {any | null} */
@@ -457,19 +445,10 @@ export class PublicFeedManager {
   _markPeerConnected(publicKey) {
     const remembered = this._rememberPeerPublicKey(publicKey)
     if (!remembered) return
-    this._directPeerPending.delete(remembered.keyHex)
-    this._directPeerLastQueuedAt.delete(remembered.keyHex)
-    this._directPeerRetryCounts.delete(remembered.keyHex)
     this._directPeerLastDialError.delete(remembered.keyHex)
     this._directPeerLastDialErrorStack.delete(remembered.keyHex)
     this._directPeerDialStats.connected++
     this._directPeerDialStats.lastReason = 'connected'
-  }
-
-  _pendingDialExpired(keyHex) {
-    if (!this._directPeerPending.has(keyHex)) return true
-    const queuedAt = this._directPeerLastQueuedAt.get(keyHex) || 0
-    return this._now() - queuedAt >= this._directPeerPendingTimeoutMs
   }
 
   _connectionLabel(conn, info = null) {
@@ -509,132 +488,28 @@ export class PublicFeedManager {
     return { keyHex, publicKey }
   }
 
-  _harvestSwarmPeersForDial() {
-    let remembered = 0
-    for (const peer of this._swarmPeerEntries()) {
-      if (!this._peerEntryHasNetworkTopic(peer)) continue
-      const publicKey = this._peerEntryPublicKey(peer)
-      const keyHex = publicKey ? b4a.toString(publicKey, 'hex') : null
-      const wasRemembered = keyHex ? this._discoveredPeers.has(keyHex) : false
-      const rememberedPeer = this._rememberPeerPublicKey(publicKey)
-      if (rememberedPeer && !wasRemembered && !this._peerEntryIsConnected(peer)) remembered++
-    }
-    return remembered
-  }
-
   /**
-   * Remember a discovered peer and explicitly dial it when the shared topic has
-   * found peers but Hyperswarm has not promoted them into connections yet.
-   * This keeps the hard-cutover architecture on one topic while making the
-   * Protomux feed channel less dependent on passive connection timing.
+   * Remember a shared-topic peer candidate. Hyperswarm owns dialing and retry
+   * lifecycle after discovery; PublicFeedManager only uses opened sockets.
    * @param {any} peer
    * @param {Buffer | Uint8Array | string | null} [topic]
    * @returns {boolean}
    */
-  _queueDiscoveredPeer(peer, topic) {
-    const publicKey = this._peerEntryPublicKey(peer)
-    if (!publicKey || !this.swarm) return null
-    return this._rememberPeerPublicKey(publicKey)
-  }
-
   handleDiscoveredPeer(peer, topic = null) {
     if (topic && !this._isNetworkTopic(topic)) return false
     if (!this.swarm) return false
-
-    const remembered = this._queueDiscoveredPeer(peer, topic)
-    if (!remembered) return false
-    if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) return false
-
-    return this._dialDiscoveredPeer(remembered.keyHex, remembered.publicKey, peer, topic)
-  }
-
-  _dialDiscoveredPeer(keyHex, publicKey, peer = publicKey, topic = null) {
-    this._directPeerDialStats.attempted++
-    if (!publicKey || !this.swarm) {
-      this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'swarm-unavailable'
-      return false
-    }
-    if (!keyHex || keyHex === b4a.toString(this.swarm.keyPair?.publicKey || [], 'hex')) {
+    const publicKey = this._peerEntryPublicKey(peer)
+    const remembered = this._rememberPeerPublicKey(publicKey)
+    if (!remembered) {
       this._directPeerDialStats.skipped++
       this._directPeerDialStats.lastReason = 'self-or-missing-key'
       return false
     }
-    if (this._hasActivePeerConnection(keyHex, publicKey)) {
-      this._directPeerPending.delete(keyHex)
-      this._directPeerLastQueuedAt.delete(keyHex)
+    if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) {
       this._directPeerDialStats.skipped++
       this._directPeerDialStats.lastReason = 'already-connected-peer'
-      return false
     }
-    if (this._directPeerPending.has(keyHex) && !this._pendingDialExpired(keyHex)) {
-      this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'dial-already-pending'
-      return false
-    }
-    if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) {
-      this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'max-direct-peers'
-      return false
-    }
-    const attempts = this._directPeerRetryCounts.get(keyHex) || 0
-    if (this._maxDirectPeerRetries > 0 && attempts >= this._maxDirectPeerRetries) {
-      this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'max-direct-peer-retries'
-      return false
-    }
-    // Once a peer is marked explicit, Hyperswarm owns transport retry/backoff.
-    // The app-level nudge is capped so relay heartbeats do not create noisy
-    // redial loops when the DHT transport is failing below the feed protocol.
-    try {
-      const result = ensureSwarmPeerConnection(this.swarm, peer || publicKey, topic)
-      if (!result.queued) {
-        this._directPeerDialStats.skipped++
-        this._directPeerDialStats.lastReason = result.reason || 'queue-skipped'
-        if (result.error) {
-          this._directPeerLastDialError.set(keyHex, result.errorMessage || result.error)
-          this._directPeerLastDialErrorStack.set(keyHex, result.error)
-        }
-        return false
-      }
-      const now = this._now()
-      this._directPeerRetryCounts.set(keyHex, attempts + 1)
-      this._directPeerLastDialedAt.set(keyHex, now)
-      this._directPeerLastQueuedAt.set(keyHex, now)
-      this._directPeerPending.add(keyHex)
-      this._directPeerLastDialError.delete(keyHex)
-      this._directPeerLastDialErrorStack.delete(keyHex)
-      this._directPeerDialStats.queued++
-      this._directPeerDialStats.lastReason = 'queued'
-      this._directPeerDialStats.lastDialedAt = now
-      console.log('[PublicFeed] Direct peer dial queued from shared topic:', keyHex.slice(0, 16), 'attempt=', attempts + 1)
-      return true
-    } catch (err) {
-      const message = err?.message || String(err)
-      this._directPeerDialStats.failed++
-      this._directPeerDialStats.lastReason = 'joinPeer-error'
-      this._directPeerLastDialError.set(keyHex, message)
-      if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
-      console.log('[PublicFeed] Direct peer dial failed:', keyHex.slice(0, 16), message)
-      return false
-    }
-  }
-
-  _redialDiscoveredPeers({ force = false } = {}) {
-    if (!this.swarm || typeof this.swarm.joinPeer !== 'function') return 0
-    const harvested = this._harvestSwarmPeersForDial()
-    if (harvested > 0) console.log('[PublicFeed] Harvested swarm peers for direct dial:', harvested)
-    if (!this._discoveredPeers.size) return 0
-    let dialed = 0
-    for (const [keyHex, publicKey] of this._discoveredPeers) {
-      if ((this.swarm.connections?.size || 0) >= this._maxDirectPeers) break
-      if (this._dialDiscoveredPeer(keyHex, publicKey)) dialed++
-    }
-    return dialed
-  }
-
-  forceRedialDiscoveredPeers() {
-    return this._redialDiscoveredPeers({ force: true })
+    return true
   }
 
   _swarmDialState(keyHex) {
@@ -662,28 +537,26 @@ export class PublicFeedManager {
   getDirectPeerDialStats() {
     const peers = []
     for (const [keyHex] of this._discoveredPeers) {
-      const pending = this._directPeerPending.has(keyHex) && !this._pendingDialExpired(keyHex)
+      const swarm = this._swarmDialState(keyHex)
       peers.push({
         key: keyHex.slice(0, 16),
-        attempts: this._directPeerRetryCounts.get(keyHex) || 0,
+        attempts: swarm?.attempts || 0,
         lastDialedAt: this._directPeerLastDialedAt.get(keyHex) || null,
-        lastQueuedAt: this._directPeerLastQueuedAt.get(keyHex) || null,
+        lastQueuedAt: null,
         lastError: this._directPeerLastDialError.get(keyHex) || null,
         lastErrorStack: this._directPeerLastDialErrorStack.get(keyHex) || null,
-        pending,
+        pending: Boolean(swarm?.queued || swarm?.waiting),
         connected: this._hasActivePeerConnection(keyHex, this._discoveredPeers.get(keyHex)),
-        swarm: this._swarmDialState(keyHex),
+        swarm,
       })
     }
 
     return {
       ...this._directPeerDialStats,
       discoveredPeers: this._discoveredPeers.size,
-      pending: Array.from(this._discoveredPeers.keys())
-        .filter((keyHex) => this._directPeerPending.has(keyHex) && !this._pendingDialExpired(keyHex))
-        .length,
-      maxDirectPeers: this._maxDirectPeers,
-      maxDirectPeerRetries: this._maxDirectPeerRetries,
+      pending: peers.filter((peer) => peer.pending).length,
+      maxDirectPeers: null,
+      maxDirectPeerRetries: null,
       swarmPeers: this.swarm?.peers?.size || 0,
       swarmConnections: this.swarm?.connections?.size || 0,
       swarmAllConnections: this.swarm?._allConnections?.size || 0,
@@ -816,10 +689,6 @@ export class PublicFeedManager {
     for (const conn of this.swarm.connections) {
       this.handleConnection(conn, {});
     }
-    const redialedPeers = this._redialDiscoveredPeers()
-    if (redialedPeers) {
-      console.log('[PublicFeed] Redialed shared-topic peers on startup:', redialedPeers)
-    }
     this._startGossipLoop()
     console.log('[PublicFeed] ===== PUBLIC FEED STARTED =====');
   }
@@ -834,13 +703,10 @@ export class PublicFeedManager {
     try {
       this._gossipInterval = setInterval(() => {
         if (!this.started) return
-        const redialed = this._redialDiscoveredPeers()
         const openConns = this._openFeedConnections()
         if (openConns.length === 0) {
           if (this.peerChannels.size > 0) {
-            console.log('[PublicFeed] Periodic feed gossip skipped unopened channels=', this.peerChannels.size, 'redialed=', redialed)
-          } else if (redialed) {
-            console.log('[PublicFeed] Periodic feed gossip announced= 0 requested= 0 redialed=', redialed)
+            console.log('[PublicFeed] Periodic feed gossip skipped unopened channels=', this.peerChannels.size)
           }
           return
         }
@@ -854,8 +720,8 @@ export class PublicFeedManager {
           }
         }
         const requested = this.requestFeedsFromPeers()
-        if (announced || requested || redialed) {
-          console.log('[PublicFeed] Periodic feed gossip announced=', announced, 'requested=', requested, 'redialed=', redialed)
+        if (announced || requested) {
+          console.log('[PublicFeed] Periodic feed gossip announced=', announced, 'requested=', requested)
         }
       }, this._gossipIntervalMs)
       if (typeof this._gossipInterval?.unref === 'function') this._gossipInterval.unref()
@@ -883,13 +749,10 @@ export class PublicFeedManager {
         try { pending.resolve([]) } catch {}
       }
       this.pendingAvailabilityRequests.clear()
-      this._directPeerRetryCounts.clear()
       this._discoveredPeers.clear()
       this._directPeerLastDialedAt.clear()
       this._directPeerLastDialError.clear()
       this._directPeerLastDialErrorStack.clear()
-      this._directPeerLastQueuedAt.clear()
-      this._directPeerPending.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)
       if (this._gossipInterval) clearInterval(this._gossipInterval)
       this.feedDiscovery?.destroy?.()

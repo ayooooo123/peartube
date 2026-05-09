@@ -79,7 +79,7 @@ test('native root layout clears startup timeout and releases loading on explicit
   assert.match(catchBlock, /setLoading\(false\)/)
 })
 
-test('backend orchestrator explicitly dials peers discovered on the single shared topic', () => {
+test('backend orchestrator records peers discovered on the single shared topic', () => {
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 
   assert.match(source, /ctx\.swarm\.on\('peer'/)

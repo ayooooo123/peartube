@@ -22,9 +22,45 @@ function cloneStats(stats) {
   return { ...stats }
 }
 
-function addCoreKey(set, value) {
+function addCoreKey(set, value, kind = 'blob') {
   if (!isValidHexKey(value)) return false
-  set.add(value.toLowerCase())
+  const key = value.toLowerCase()
+  if (!set.has(key)) set.set(key, kind)
+  return true
+}
+
+function addPreviewCoreKeys(set, previews) {
+  if (!Array.isArray(previews)) return 0
+  let added = 0
+  for (const video of previews) {
+    if (addCoreKey(set, video?.blobsCoreKey, 'blob')) added += 1
+    if (addCoreKey(set, video?.thumbnailBlobsCoreKey, 'thumbnail')) added += 1
+  }
+  return added
+}
+
+function getVideoKey(video) {
+  return String(video?.id || video?.path || video?.videoId || video?.blobId || '')
+}
+
+function pushPreview(previews, video) {
+  if (!video?.id || !video?.blobId || !video?.blobsCoreKey) return false
+  const id = getVideoKey(video)
+  if (previews.some((existing) => getVideoKey(existing) === id)) return false
+  previews.push({
+    id: String(video.id),
+    title: video?.title ? String(video.title) : 'Untitled',
+    uploadedAt: Number(video?.uploadedAt || 0) || 0,
+    duration: Number(video?.duration || 0) || 0,
+    thumbnail: video?.thumbnail || null,
+    blobId: String(video.blobId),
+    blobsCoreKey: String(video.blobsCoreKey),
+    mimeType: video?.mimeType || 'video/mp4',
+    availability: 'playable',
+    thumbnailBlobId: video?.thumbnailBlobId || null,
+    thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey || null,
+    thumbnailMimeType: video?.thumbnailMimeType || null
+  })
   return true
 }
 
@@ -94,36 +130,38 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
 
       const videos = await bee?.listVideos?.().catch(() => [])
       const meta = await bee?.getMetadata?.().catch(() => null)
-      const blobCoreKeys = new Set()
+      const blobCoreKeys = new Map()
       const previewVideos = []
-      if (Array.isArray(videos)) {
-        stats.videos = videos.length
-        for (const video of videos) {
-          addCoreKey(blobCoreKeys, video?.blobsCoreKey)
-          addCoreKey(blobCoreKeys, video?.thumbnailBlobsCoreKey)
-          if (previewVideos.length < 3 && video?.id && video?.blobId && video?.blobsCoreKey) {
-            previewVideos.push({
-              id: String(video.id),
-              title: video?.title ? String(video.title) : 'Untitled',
-              uploadedAt: Number(video?.uploadedAt || 0) || 0,
-              duration: Number(video?.duration || 0) || 0,
-              thumbnail: video?.thumbnail || null,
-              blobId: String(video.blobId),
-              blobsCoreKey: String(video.blobsCoreKey),
-              mimeType: video?.mimeType || 'video/mp4',
-              availability: 'playable',
-              thumbnailBlobId: video?.thumbnailBlobId || null,
-              thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey || null,
-              thumbnailMimeType: video?.thumbnailMimeType || null
-            })
-          }
+
+      // Seed every core reference we know, not only what PublicBee.listVideos() returns.
+      // Playback often starts from public-feed/catalog previews; if those refs are
+      // newer than a slow/stale PublicBee read, the relay still needs to advertise
+      // the exact blob cores the phone will dial.
+      addPreviewCoreKeys(blobCoreKeys, channel?.previewVideos)
+      addPreviewCoreKeys(blobCoreKeys, channel?.videos)
+      addPreviewCoreKeys(blobCoreKeys, channel?.catalogEntry?.previewVideos)
+      addPreviewCoreKeys(blobCoreKeys, channel?.feedEntry?.previewVideos)
+
+      if (Array.isArray(channel?.previewVideos)) {
+        for (const video of channel.previewVideos) {
+          if (previewVideos.length >= 3) break
+          pushPreview(previewVideos, video)
         }
       }
 
-      for (const keyHex of blobCoreKeys) {
+      if (Array.isArray(videos)) {
+        stats.videos = Math.max(videos.length, previewVideos.length)
+        for (const video of videos) {
+          addCoreKey(blobCoreKeys, video?.blobsCoreKey, 'blob')
+          addCoreKey(blobCoreKeys, video?.thumbnailBlobsCoreKey, 'thumbnail')
+          if (previewVideos.length < 3) pushPreview(previewVideos, video)
+        }
+      }
+
+      for (const [keyHex, kind] of blobCoreKeys) {
         const core = await resolveBlobCore(keyHex)
         if (core?.discoveryKey) {
-          retainDiscovery(core.discoveryKey, `blob:${keyHex.slice(0, 16)}`)
+          retainDiscovery(core.discoveryKey, `${kind}:${keyHex.slice(0, 16)}`)
           try { blindPeer?.addCore?.(core, { announce: true, referrer: b4a.from(publicBeeKey, 'hex') }) } catch {}
           stats.blobCores += 1
         }

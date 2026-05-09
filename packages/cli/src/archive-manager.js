@@ -323,11 +323,15 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
     async publishChannel({ channelKey }) {
       return api.submitToFeed(channelKey)
     },
-    async seedChannel({ channelKey, publicBeeKey }) {
+    async seedChannel({ channelKey, publicBeeKey, previewVideos }) {
       if (channelKey && publicBeeKey) {
         await runtime?.cacheManager?.addChannel?.(channelKey, publicBeeKey, 'private').catch(() => {})
         await runtime?.publicFeed?.submitChannel?.(channelKey, publicBeeKey).catch(() => {})
-        await runtime?.seeder?.seedChannel?.({ driveKey: channelKey, publicBeeKey }).catch(() => {})
+        await runtime?.seeder?.seedChannel?.({
+          driveKey: channelKey,
+          publicBeeKey,
+          previewVideos: Array.isArray(previewVideos) ? previewVideos : []
+        }).catch(() => {})
       }
     }
   }
@@ -366,11 +370,6 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
         })
         const importedMetadata = imported?.metadata || imported
 
-        if (privateInput.publish !== false) {
-          await publisher.publishChannel(channelInfo)
-          await publisher.seedChannel(channelInfo)
-        }
-
         const previewVideo = imported?.videoId ? {
           id: imported.videoId,
           title: privateInput.title || downloaded.title || imported.videoId,
@@ -387,6 +386,11 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           thumbnailBlobsCoreKey: importedMetadata.thumbnailBlobsCoreKey || null,
           thumbnailMimeType: importedMetadata.thumbnailMimeType || null
         } : null
+        if (privateInput.publish !== false) {
+          await publisher.publishChannel(channelInfo)
+          await publisher.seedChannel({ ...channelInfo, previewVideos: previewVideo ? [previewVideo] : [] })
+        }
+
         const completed = await store.updateJob(id, {
           status: 'completed',
           title: privateInput.title || downloaded.title,

@@ -118,7 +118,8 @@ export async function createRelayService({
         await runtime.publicFeed?.submitChannel?.(resolved.channelKey, resolved.publicBeeKey).catch(() => {})
         await runtime.seeder?.seedChannel?.({
           driveKey: resolved.channelKey,
-          publicBeeKey: resolved.publicBeeKey
+          publicBeeKey: resolved.publicBeeKey,
+          previewVideos: Array.isArray(mirrorStats?.previewVideos) ? mirrorStats.previewVideos : []
         }).catch(() => {})
       }
 

@@ -131,6 +131,69 @@ test('relay seeder refreshes all cached channels and deduplicates retained joins
   t.is(swarm.joins.length, 2)
 })
 
+
+test('relay seeder also seeds preview/catalog blob refs when PublicBee is sparse', async (t) => {
+  const publicBeeCore = createCore('99')
+  const previewVideoCore = createCore('aa')
+  const previewThumbnailCore = createCore('ab')
+  const catalogVideoCore = createCore('ac')
+  const swarm = createSwarm()
+  const ctx = {
+    swarm,
+    store: {
+      get(key) {
+        const keyHex = Buffer.isBuffer(key) ? key.toString('hex') : String(key)
+        if (keyHex.startsWith('aa')) return previewVideoCore
+        if (keyHex.startsWith('ab')) return previewThumbnailCore
+        if (keyHex.startsWith('ac')) return catalogVideoCore
+        throw new Error(`unexpected core key ${keyHex}`)
+      }
+    }
+  }
+  const seeder = createRelaySeeder({
+    ctx,
+    loadPublicBee: async () => ({
+      core: publicBeeCore,
+      async listVideos() {
+        return []
+      }
+    }),
+    logger: { info() {}, warn() {}, debug() {} }
+  })
+
+  const stats = await seeder.seedChannel({
+    driveKey: 'aa'.padEnd(64, '0'),
+    publicBeeKey: 'bb'.padEnd(64, '0'),
+    previewVideos: [{
+      id: 'preview-video',
+      blobId: '0:1:0:10',
+      blobsCoreKey: 'aa'.padEnd(64, '0'),
+      thumbnailBlobId: '1:1:0:5',
+      thumbnailBlobsCoreKey: 'ab'.padEnd(64, '0')
+    }],
+    catalogEntry: {
+      previewVideos: [{
+        id: 'catalog-video',
+        blobId: '2:1:0:10',
+        blobsCoreKey: 'ac'.padEnd(64, '0')
+      }]
+    }
+  })
+
+  t.is(stats.channels, 1)
+  t.is(stats.publicBeeCores, 1)
+  t.is(stats.blobCores, 3)
+  t.is(stats.discoveryHandles, 4)
+  t.is(stats.catalogEntry.previewVideos.length, 1)
+  t.is(stats.catalogEntry.previewVideos[0].id, 'preview-video')
+  t.alike(swarm.joins.map((join) => join.discoveryKey), [
+    publicBeeCore.discoveryKey,
+    previewVideoCore.discoveryKey,
+    previewThumbnailCore.discoveryKey,
+    catalogVideoCore.discoveryKey
+  ])
+})
+
 test('relay seeder registers mirrored cores with relay blind peer', async (t) => {
   const publicBeeCore = createCore('66')
   const videoCore = createCore('77')

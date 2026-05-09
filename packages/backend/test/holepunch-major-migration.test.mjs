@@ -17,18 +17,17 @@ function readPackageJson(relativePath) {
 test('major Holepunch dependency migrations are applied consistently', () => {
   const rootPkg = readPackageJson('package.json')
   const appPkg = readPackageJson('packages/app/package.json')
-  const pearPkg = readPackageJson('packages/app/pear-src/package.json')
   const backendPkg = readPackageJson('packages/backend/package.json')
   const cliPkg = readPackageJson('packages/cli/package.json')
 
   assert.equal(
     appPkg.devDependencies['bare-build'],
-    '^0.4.6',
+    '^0.5.3',
     'app should use the current bare-build line',
   )
   assert.equal(
     cliPkg.devDependencies['bare-build'],
-    '^0.4.6',
+    '^0.5.3',
     'cli should use the current bare-build line',
   )
   assert.equal(
@@ -37,17 +36,17 @@ test('major Holepunch dependency migrations are applied consistently', () => {
     'app should use the current bare-pack major line',
   )
   assert.equal(
-    pearPkg.dependencies['bare-subprocess'],
-    '^5.2.3',
-    'pear worker should use the current bare-subprocess line',
+    cliPkg.dependencies['bare-subprocess'],
+    '^6.0.0',
+    'cli should use the current bare-subprocess line',
   )
   assert.ok(
     !('hyperdb' in appPkg.devDependencies),
     'app should not keep an unused direct hyperdb dependency',
   )
   assert.ok(
-    !('hyperdb' in pearPkg.dependencies),
-    'pear worker should not keep an unused direct hyperdb dependency',
+    !('hyperdb' in cliPkg.dependencies),
+    'cli should not keep an unused direct hyperdb dependency',
   )
   assert.ok(
     !('hyperdb' in backendPkg.dependencies),
@@ -55,7 +54,7 @@ test('major Holepunch dependency migrations are applied consistently', () => {
   )
   assert.equal(
     rootPkg.dependencies['bare-runtime'],
-    '^1.28.1',
+    '^1.28.4',
     'root runtime should stay on the latest compatible bare-runtime line',
   )
 })

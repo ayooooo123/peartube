@@ -19,7 +19,9 @@ async function appendDebugLine(line) {
     const fs = fsModule?.default ?? fsModule
     if (typeof fs?.appendFileSync !== 'function') return
     fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
-  } catch {}
+  } catch {
+    // Debug logging must never affect backend startup.
+  }
 }
 
 function getBlobServerPort(backend) {
@@ -86,7 +88,7 @@ function buildSharedSystemHandlers(backend) {
   }
 }
 
-async function attachSharedAppHandlers(options) {
+export async function attachSharedAppHandlers(options) {
   const {
     backend,
     api,
@@ -243,7 +245,9 @@ export function createBackendRuntime(opts = {}) {
         readyCallback(readyPayload)
         try {
           rpc.eventReady?.(readyPayload)
-        } catch {}
+        } catch {
+          // Older HRPC shims may not expose ready events.
+        }
 
         return { backend, rpc, dispose }
       } catch (err) {
@@ -255,7 +259,9 @@ export function createBackendRuntime(opts = {}) {
             message: err?.message || String(err),
             retryable: false
           })
-        } catch {}
+        } catch {
+          // Preserve the original startup error if event emission fails.
+        }
         throw err
       } finally {
         initPromise = null

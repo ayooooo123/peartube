@@ -1,4 +1,4 @@
-import { createBackendRuntime } from './runtime.js'
+import { attachSharedAppHandlers, createBackendRuntime } from './runtime.js'
 
 export async function createBackend(opts = {}) {
   const runtime = createBackendRuntime(opts)
@@ -11,6 +11,9 @@ export async function createBackend(opts = {}) {
   }
 }
 
+export { attachSharedAppHandlers }
+
 export default {
-  createBackend
+  createBackend,
+  attachSharedAppHandlers
 }

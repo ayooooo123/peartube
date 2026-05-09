@@ -60,7 +60,8 @@ export async function createRelayBlindPeer({
   }
 
   try {
-    const blindPeer = new BlindPeer(`${storagePath}/blind-peer`, {
+    const blindPeerPath = `${storagePath}/corestore/blind-peer`
+    const blindPeer = new BlindPeer(blindPeerPath, {
       store: ctx.store,
       swarm: ctx.swarm,
       wakeup: ctx.wakeup || undefined,

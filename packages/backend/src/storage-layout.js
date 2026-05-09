@@ -1,6 +1,6 @@
-function createArchiveDirPath(storagePath, pathModule, fsModule) {
+function createArchiveDirPath(storagePath, pathModule, fsModule, prefix = 'logs-legacy') {
   const dbDir = pathModule.join(storagePath, 'db')
-  const baseName = `logs-legacy-${Date.now()}`
+  const baseName = `${prefix}-${Date.now()}`
   let candidate = pathModule.join(dbDir, baseName)
   let counter = 1
 
@@ -38,6 +38,33 @@ function moveDirectoryContents(srcDir, destDir, fsModule, pathModule) {
 
     moveFileWithFallback(srcPath, destPath, fsModule)
   }
+}
+
+export function relocateLegacyBlindPeerDir(storagePath, fsModule, pathModule) {
+  if (!storagePath || !fsModule || !pathModule) return null
+
+  const legacyBlindPeerDir = pathModule.join(storagePath, 'blind-peer')
+  const corestoreBlindPeerDir = pathModule.join(storagePath, 'corestore', 'blind-peer')
+  const dbBlindPeerDir = pathModule.join(storagePath, 'db', 'blind-peer')
+
+  let legacyStats = null
+  try {
+    legacyStats = fsModule.statSync(legacyBlindPeerDir)
+  } catch {}
+
+  if (!legacyStats?.isDirectory?.()) return null
+  fsModule.mkdirSync(pathModule.dirname(corestoreBlindPeerDir), { recursive: true })
+
+  if (!fsModule.existsSync(corestoreBlindPeerDir) && !fsModule.existsSync(dbBlindPeerDir)) {
+    fsModule.renameSync(legacyBlindPeerDir, corestoreBlindPeerDir)
+    return corestoreBlindPeerDir
+  }
+
+  fsModule.mkdirSync(pathModule.join(storagePath, 'db'), { recursive: true })
+  const archiveDir = createArchiveDirPath(storagePath, pathModule, fsModule, 'blind-peer-legacy')
+  moveDirectoryContents(legacyBlindPeerDir, archiveDir, fsModule, pathModule)
+  fsModule.rmdirSync(legacyBlindPeerDir)
+  return archiveDir
 }
 
 export function relocateLegacyLogsDir(storagePath, fsModule, pathModule) {

@@ -22,6 +22,10 @@ import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
 import { swarmHasConnection, swarmRememberPeer } from './swarm-peer-dial.js'
+import {
+  SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
+  CHANNEL_ROOT_DESCRIPTOR_SCHEMA
+} from './channel-descriptor.js'
 
 const log = logger('PublicFeed')
 const PUBLIC_FEED_CATALOG_VERSION = 1
@@ -188,6 +192,41 @@ export class PublicFeedManager {
       }))
   }
 
+  _normalizeSignedDescriptor(signed) {
+    if (!signed || typeof signed !== 'object') return null
+    if (signed.schema !== SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA) return null
+    const descriptor = signed.descriptor
+    if (!descriptor || descriptor.schema !== CHANNEL_ROOT_DESCRIPTOR_SCHEMA) return null
+    const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
+    if (!isValidKey(descriptor.channelId)) return null
+    if (!isValidKey(descriptor.identityPublicKey)) return null
+    if (!isValidKey(descriptor.metadataKey)) return null
+    if (!isValidKey(descriptor.mediaKey)) return null
+    const seq = Number(descriptor.seq || 0)
+    if (!Number.isSafeInteger(seq) || seq < 0) return null
+    return {
+      schema: SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
+      descriptor: {
+        ...descriptor,
+        channelId: descriptor.channelId.toLowerCase(),
+        identityPublicKey: descriptor.identityPublicKey.toLowerCase(),
+        metadataKey: descriptor.metadataKey.toLowerCase(),
+        mediaKey: descriptor.mediaKey.toLowerCase(),
+        seq,
+      },
+      proof: typeof signed.proof === 'string' ? signed.proof : null,
+      attestation: typeof signed.attestation === 'string' ? signed.attestation : null,
+    }
+  }
+
+  _shouldApplySignedDescriptor(current, next) {
+    if (!next) return false
+    if (!current) return true
+    const currentSeq = Number(current?.descriptor?.seq || 0)
+    const nextSeq = Number(next?.descriptor?.seq || 0)
+    return nextSeq >= currentSeq
+  }
+
   _serializeEntry(entry) {
     const serialized = {
       schema: 'peartube.relayCatalog',
@@ -206,6 +245,8 @@ export class PublicFeedManager {
     if (previewVideos.length > 0) serialized.previewVideos = previewVideos
     const previewVideosHash = entry.previewVideosHash || hashPreviewVideos(previewVideos)
     if (previewVideosHash) serialized.previewVideosHash = previewVideosHash
+    const signedDescriptor = this._normalizeSignedDescriptor(entry.signedDescriptor)
+    if (signedDescriptor) serialized.signedDescriptor = signedDescriptor
     return serialized
   }
 
@@ -269,6 +310,16 @@ export class PublicFeedManager {
         changed = true
       } else if (!entry.manifestUpdatedAt && incomingPreviewVideos.length > 0) {
         entry.manifestUpdatedAt = Date.now()
+        changed = true
+      }
+    }
+
+    const nextSignedDescriptor = this._normalizeSignedDescriptor(snapshot.signedDescriptor)
+    if (this._shouldApplySignedDescriptor(entry.signedDescriptor, nextSignedDescriptor)) {
+      const currentSeq = Number(entry.signedDescriptor?.descriptor?.seq || -1)
+      const nextSeq = Number(nextSignedDescriptor?.descriptor?.seq || -1)
+      if (nextSeq !== currentSeq || JSON.stringify(entry.signedDescriptor) !== JSON.stringify(nextSignedDescriptor)) {
+        entry.signedDescriptor = nextSignedDescriptor
         changed = true
       }
     }
@@ -857,6 +908,7 @@ export class PublicFeedManager {
           videoCount: Number(e.videoCount || 0) || 0,
           manifestUpdatedAt: Number(e.manifestUpdatedAt || 0) || 0,
           previewVideos: this._sanitizePreviewVideos(e.previewVideos),
+          signedDescriptor: this._normalizeSignedDescriptor(e.signedDescriptor),
         }))
       await this.metaDb.put('discovered-channels-v2', entries)
 
@@ -1295,6 +1347,7 @@ export class PublicFeedManager {
       videoCount: Number(snapshot?.videoCount || 0) || 0,
       manifestUpdatedAt: Number(snapshot?.manifestUpdatedAt || 0) || 0,
       previewVideos: this._sanitizePreviewVideos(snapshot?.previewVideos),
+      signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor),
     });
 
     // Persist (debounced) so restarts retain discovered keys.
@@ -1356,6 +1409,7 @@ export class PublicFeedManager {
           videoCount: Number(entry?.videoCount || 0) || 0,
           manifestUpdatedAt: Number(entry?.manifestUpdatedAt || 0) || 0,
           previewVideos: this._sanitizePreviewVideos(entry?.previewVideos),
+          signedDescriptor: this._normalizeSignedDescriptor(entry?.signedDescriptor),
         });
       }
       await this.metaDb.put('published-channels-v2', publishedArray);
@@ -1449,6 +1503,7 @@ export class PublicFeedManager {
       videoCount: Number(snapshot?.videoCount || 0) || 0,
       manifestUpdatedAt: Number(snapshot?.manifestUpdatedAt || 0) || 0,
       previewVideos: this._sanitizePreviewVideos(snapshot?.previewVideos),
+      signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor),
     };
 
     let sent = 0;

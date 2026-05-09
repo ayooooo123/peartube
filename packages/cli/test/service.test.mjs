@@ -552,3 +552,119 @@ test('archive job uses configured yt-dlp binary when started from the WebUI rela
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+
+test('createRelayService watches configured local mirror directory', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-local-mirror-')
+  const runtime = createFakeRuntime()
+  const logger = createFakeLogger()
+  const sizes = { '/videos/one.mp4': 100 }
+  const intervals = []
+  const cleared = []
+  const imports = []
+  let submitCalls = 0
+
+  runtime.identityManager = {
+    getActiveIdentity() { return { driveKey: 'drive-key' } },
+    getActiveChannel() { return { blobs: true, publicBeeKey: 'public-bee' } }
+  }
+  runtime.uploadManager = {
+    async uploadFromPath(_channel, filePath) {
+      imports.push(filePath)
+      return {
+        success: true,
+        videoId: `video-${imports.length}`,
+        metadata: {
+          size: sizes[filePath],
+          blobId: `blob-${imports.length}`,
+          blobsCoreKey: 'cc'.repeat(32),
+          mimeType: 'video/mp4'
+        }
+      }
+    }
+  }
+  runtime.api = {
+    async submitToFeed() {
+      submitCalls += 1
+      return { success: true }
+    }
+  }
+  runtime.cacheManager = { async pinChannel() {} }
+  runtime.publicFeed = { async submitChannel() {} }
+  runtime.seeder = { async seedChannel() {} }
+
+  const fsModule = {
+    readdirSync() {
+      return [{ name: 'one.mp4', isDirectory: () => false, isFile: () => true }]
+    },
+    statSync(path) {
+      return { size: sizes[path], mtimeMs: sizes[path] }
+    }
+  }
+  const pathModule = {
+    join(...parts) {
+      return parts.join('/').replace(/\/+/g, '/')
+    }
+  }
+  function setIntervalFn(fn, ms) {
+    const timer = { ms, unref() {} }
+    intervals.push({ fn, ms, timer })
+    return timer
+  }
+  function clearIntervalFn(timer) {
+    cleared.push(timer)
+  }
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 },
+        archive: {
+          localMirror: {
+            enabled: true,
+            path: '/videos',
+            poll: 5,
+            channelName: 'Camera Roll',
+            description: '',
+            recursive: true,
+            maxFiles: 50
+          }
+        }
+      },
+      logger,
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({ bytesDownloaded: 0, videosFound: 0, videosDownloaded: 0 }),
+      writeStatusFile: async () => {},
+      setIntervalFn,
+      clearIntervalFn,
+      fsModule,
+      pathModule
+    })
+
+    await service.start()
+    t.is(imports.length, 1)
+    t.is(submitCalls, 1)
+    t.ok(intervals.some((entry) => entry.ms === 5000))
+
+    const localMirrorInterval = intervals.find((entry) => entry.ms === 5000)
+    await localMirrorInterval.fn()
+    t.is(imports.length, 1, 'unchanged file is not re-imported')
+
+    sizes['/videos/one.mp4'] = 101
+    await localMirrorInterval.fn()
+    t.is(imports.length, 2, 'changed fingerprint is imported again')
+
+    await service.close()
+    t.ok(cleared.includes(localMirrorInterval.timer))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

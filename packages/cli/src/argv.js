@@ -131,6 +131,21 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    if (arg === '--local-mirror-path') {
+      flags.localMirrorPath = consumeValue()
+      continue
+    }
+
+    if (arg === '--local-mirror-poll') {
+      flags.localMirrorPoll = consumeValue()
+      continue
+    }
+
+    if (arg === '--local-mirror-channel-name') {
+      flags.localMirrorChannelName = consumeValue()
+      continue
+    }
+
     if (arg === '--channel-name') {
       flags.channelName = consumeValue()
       continue

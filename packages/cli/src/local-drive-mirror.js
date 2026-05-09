@@ -28,6 +28,16 @@ function mimeTypeForPath(filePath) {
   return MIME_BY_EXT[extname(String(filePath || '')).toLowerCase()] || 'video/mp4'
 }
 
+function fingerprintVideo(video) {
+  return `${video.filePath}:${video.size}:${video.mtimeMs}`
+}
+
+export function createLocalDriveMirrorState(seed = null) {
+  return {
+    seen: new Map(seed?.seen || [])
+  }
+}
+
 export function listLocalDriveVideos(rootPath, {
   fs = { readdirSync, statSync },
   path = defaultPath,
@@ -79,15 +89,19 @@ export async function mirrorLocalDriveToRelayChannel({
   maxFiles = Infinity,
   fs = { readdirSync, statSync },
   path = defaultPath,
+  state = null,
   logger = null
 } = {}) {
   if (!publisher) throw new Error('publisher is required')
   const videos = listLocalDriveVideos(rootPath, { fs, path, recursive, maxFiles })
+  const pendingVideos = state?.seen
+    ? videos.filter((video) => state.seen.get(video.filePath) !== fingerprintVideo(video))
+    : videos
   const channelInfo = await publisher.ensureAnonymousChannel({ channelName })
   const imported = []
   const failed = []
 
-  for (const video of videos) {
+  for (const video of pendingVideos) {
     try {
       const result = await publisher.importVideo({
         channel: channelInfo.channel,
@@ -114,6 +128,7 @@ export async function mirrorLocalDriveToRelayChannel({
         thumbnailMimeType: metadata.thumbnailMimeType || null
       } : null
       imported.push({ ...video, videoId: result?.videoId || null, previewVideo })
+      state?.seen?.set(video.filePath, fingerprintVideo(video))
       logger?.archive?.info?.('Local drive video imported', { file: video.filePath, videoId: result?.videoId || null })
     } catch (err) {
       failed.push({ ...video, error: err?.message || String(err) })
@@ -132,6 +147,7 @@ export async function mirrorLocalDriveToRelayChannel({
     publicBeeKey: channelInfo.publicBeeKey || null,
     scanned: videos.length,
     imported: imported.length,
+    skipped: videos.length - pendingVideos.length,
     failed: failed.length,
     videos: imported.map(({ filePath, title, size, mimeType, videoId }) => ({ filePath, title, size, mimeType, videoId })),
     failures: failed.map(({ filePath, error }) => ({ filePath, error }))

@@ -94,3 +94,40 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
     ['seed', ['cc'.repeat(32), 'dd'.repeat(32)]]
   ])
 })
+
+
+test('mirrorLocalDriveToRelayChannel skips already mirrored file fingerprints', async (t) => {
+  const sizes = { '/drive/one.mp4': 100 }
+  const fs = {
+    readdirSync() {
+      return [dirent('one.mp4', 'file')]
+    },
+    statSync(path) {
+      return { size: sizes[path], mtimeMs: sizes[path] }
+    }
+  }
+  const state = createLocalDriveMirrorState()
+  const imports = []
+  const publisher = {
+    async ensureAnonymousChannel() {
+      return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
+    },
+    async importVideo({ filePath }) {
+      imports.push(filePath)
+      return { videoId: `video-${imports.length}`, metadata: { size: sizes[filePath], blobId: `blob-${imports.length}`, blobsCoreKey: 'cc'.repeat(32) } }
+    },
+    async publishChannel() {},
+    async seedChannel() {}
+  }
+
+  const first = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state })
+  const second = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state })
+  sizes['/drive/one.mp4'] = 101
+  const third = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state })
+
+  t.is(first.imported, 1)
+  t.is(second.imported, 0)
+  t.is(second.skipped, 1)
+  t.is(third.imported, 1)
+  t.alike(imports, ['/drive/one.mp4', '/drive/one.mp4'])
+})

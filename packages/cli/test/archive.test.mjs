@@ -78,13 +78,27 @@ test('archive publisher announces and seeds after public bee content changes', a
       },
       async getMetadata() {
         return { publicBeeKey: 'bb'.repeat(32) }
+      },
+      async listVideos() {
+        return videoCount > 0
+          ? [{
+              id: 'local-1',
+              title: 'Local 1',
+              path: '/videos/local-1.mp4',
+              uploadedAt: 123,
+              size: 4096,
+              mimeType: 'video/mp4',
+              blobId: '0:4:0:4096',
+              blobsCoreKey: 'cc'.repeat(32)
+            }]
+          : []
       }
     }
   }
   const runtime = {
     publicFeed: {
-      async submitChannel(driveKey, publicBeeKey) {
-        calls.push(['submit', driveKey, publicBeeKey, videoCount])
+      async submitChannel(driveKey, publicBeeKey, options) {
+        calls.push(['submit', driveKey, publicBeeKey, videoCount, options?.previewVideos?.map((video) => video.blobId) || []])
       }
     },
     cacheManager: {
@@ -94,7 +108,7 @@ test('archive publisher announces and seeds after public bee content changes', a
     },
     seeder: {
       async seedChannel(channel) {
-        calls.push(['seed', channel.driveKey, channel.publicBeeKey, videoCount])
+        calls.push(['seed', channel.driveKey, channel.publicBeeKey, videoCount, channel.previewVideos?.map((video) => video.blobId) || []])
       }
     }
   }
@@ -105,12 +119,12 @@ test('archive publisher announces and seeds after public bee content changes', a
 
   t.is(channelEntry.publicBeeKey, 'bb'.repeat(32))
   t.alike(calls, [
-    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 0],
+    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 0, []],
     ['pin', 'aa'.repeat(32), 'bb'.repeat(32), 0],
-    ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 0],
-    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 1],
+    ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 0, []],
+    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 1, ['0:4:0:4096']],
     ['pin', 'aa'.repeat(32), 'bb'.repeat(32), 1],
-    ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 1],
+    ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 1, ['0:4:0:4096']],
   ])
 })
 

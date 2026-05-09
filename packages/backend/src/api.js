@@ -77,6 +77,27 @@ export function createApi({
     } catch { /* best effort */ }
   }
 
+  const withTimeout = (promise, timeoutMs, label) => {
+    let timeout
+    const timeoutPromise = new Promise((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(`${label} timeout`)), timeoutMs)
+    })
+    return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout))
+  }
+
+  const listPublicBeeVideosBounded = async ({ publicBee, driveKey, publicBeeKey, timeoutMs = 1500 }) => {
+    try {
+      return await withTimeout(publicBee.listVideos(), timeoutMs, `PublicBee listVideos ${driveKey?.slice?.(0, 16) || ''} ${publicBeeKey?.slice?.(0, 16) || ''}`)
+    } catch (err) {
+      console.warn('[API] PublicBee listVideos bounded timeout/failure:', driveKey?.slice?.(0, 16), publicBeeKey?.slice?.(0, 16), err?.message)
+      return []
+    }
+  }
+
+  const loadChannelBounded = async (channelKey, timeoutMs = 2500) => {
+    return withTimeout(loadChannel(ctx, channelKey), timeoutMs, `loadChannel ${channelKey?.slice?.(0, 16) || ''}`)
+  }
+
   /**
    * Ensure SemanticFinder is initialized with persistence
    * YouTube-Fast: loads persisted index on first use for instant search
@@ -488,8 +509,11 @@ export function createApi({
         // Viewers should be able to list metadata/videos via the auto-replicating PublicBee.
         if (publicBeeKey) {
           const publicBee = await loadPublicBee(ctx, publicBeeKey)
-          const meta = await publicBee.getMetadata().catch(() => null)
-          const videos = await publicBee.listVideos().catch(() => [])
+          const meta = await withTimeout(publicBee.getMetadata().catch(() => null), 1000, `PublicBee getMetadata ${driveKey?.slice?.(0, 16) || ''}`).catch(() => null)
+          const previewVideos = previewVideosFromFeedEntry(driveKey, publicBeeKey)
+          const videos = previewVideos.length > 0
+            ? previewVideos
+            : await listPublicBeeVideosBounded({ publicBee, driveKey, publicBeeKey, timeoutMs: 1200 })
           const result = {
             driveKey,
             name: meta?.name || 'Channel',
@@ -503,10 +527,10 @@ export function createApi({
           return cloneObject(result)
         }
 
-        const channel = await loadChannel(ctx, driveKey)
+        const channel = await loadChannelBounded(driveKey)
         await markAsMultiWriterChannel(driveKey)
         const meta = await channel.getMetadata().catch(() => null)
-        const videos = await channel.listVideos().catch(() => [])
+        const videos = await withTimeout(channel.listVideos().catch(() => []), 1200, `channel meta listVideos ${driveKey?.slice?.(0, 16) || ''}`).catch(() => [])
         const result = {
           driveKey,
           name: meta?.name || 'Channel',
@@ -762,16 +786,8 @@ export function createApi({
                 backgroundIndexVideos(previewWithAvailability, driveKey)
                 return cloneArrayOfObjects(previewWithAvailability)
               }
-              console.log('[API] LIST_VIDEOS: PublicBee returned no videos, trying channel fallback')
-              const channel = await loadChannel(ctx, driveKey)
-              const fallbackVideos = await channel.listVideos()
-              console.log('[API] LIST_VIDEOS: channel fallback returned', fallbackVideos?.length, 'videos')
-              const fallbackResult = (fallbackVideos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
-              const fallbackEnriched = await enrichMissingBlobMeta(fallbackResult, (id) => channel.getVideo(id))
-              const fallbackWithAvailability = await attachVideoAvailability(fallbackEnriched)
-              listVideosCache.set(driveKey, { ts: Date.now(), value: fallbackWithAvailability })
-              backgroundIndexVideos(fallbackWithAvailability, driveKey)
-              return cloneArrayOfObjects(fallbackWithAvailability)
+              console.log('[API] LIST_VIDEOS: PublicBee returned no videos, skipping slow channel fallback')
+              return []
             }
             const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
             const enriched = await enrichMissingBlobMeta(result, (id) => publicBee.getVideo(id))
@@ -789,28 +805,12 @@ export function createApi({
               backgroundIndexVideos(previewWithAvailability, driveKey)
               return cloneArrayOfObjects(previewWithAvailability)
             }
-            console.log('[API] LIST_VIDEOS: PublicBee fast path failed:', err.message, '- trying channel directly')
-            // If PublicBee fails, try loading the channel directly (for paired devices or when PublicBee isn't synced)
-            try {
-              const channel = await loadChannel(ctx, driveKey)
-              const videos = await channel.listVideos()
-              console.log('[API] LIST_VIDEOS: channel fallback returned', videos?.length, 'videos')
-              const result = (videos || []).map(v => ({ ...v, channelKey: driveKey, publicBeeKey }))
-              const enriched = await enrichMissingBlobMeta(result, (id) => channel.getVideo(id))
-              const withAvailability = await attachVideoAvailability(enriched)
-              listVideosCache.set(driveKey, { ts: Date.now(), value: withAvailability })
-              // YouTube-Fast: background index for search
-              backgroundIndexVideos(withAvailability, driveKey)
-              return cloneArrayOfObjects(withAvailability)
-            } catch (channelErr) {
-              console.log('[API] LIST_VIDEOS: channel fallback also failed:', channelErr.message)
-              // Return empty - do NOT fall through to legacy paths since this is a multi-writer channel
-              return []
-            }
+            console.log('[API] LIST_VIDEOS: PublicBee fast path failed:', err.message, '- returning preview/cache only')
+            return []
           }
         }
 
-        const channel = await loadChannel(ctx, driveKey)
+        const channel = await loadChannelBounded(driveKey)
         await markAsMultiWriterChannel(driveKey)
         console.log('[API] LIST_VIDEOS channel loaded, calling listVideos...')
 
@@ -822,7 +822,12 @@ export function createApi({
         let resolvedPublicBeeKey = null
         if ((videos?.length || 0) === 0 && channel?.publicBee && typeof channel.publicBee.listVideos === 'function') {
           try {
-            const publicBeeVideos = await channel.publicBee.listVideos()
+            const publicBeeVideos = await listPublicBeeVideosBounded({
+              publicBee: channel.publicBee,
+              driveKey,
+              publicBeeKey: channel.publicBeeKey || null,
+              timeoutMs: 1200,
+            })
             if ((publicBeeVideos?.length || 0) > 0) {
               videos = publicBeeVideos
               usedOwnerPublicBeeFallback = true

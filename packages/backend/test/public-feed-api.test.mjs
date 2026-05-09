@@ -175,7 +175,7 @@ test('getPublicFeed omits stale peer entries with zero live seeders but keeps lo
   t.is(result.entries[0].channelKey, '66'.repeat(32))
 })
 
-test('listVideos falls back to channel reads when a keyed public bee returns no videos', async (t) => {
+test('listVideos uses feed previews instead of slow channel fallback when keyed public bee is empty', async (t) => {
   let publicBeeLoads = 0
   let channelLoads = 0
 
@@ -191,6 +191,26 @@ test('listVideos falls back to channel reads when a keyed public bee returns no 
         async put() {},
       },
     },
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey: 'aa'.repeat(32),
+          publicBeeKey: 'bb'.repeat(32),
+          addedAt: 1,
+          source: 'peer',
+          peerCount: 1,
+          previewVideos: [{
+            id: 'video-1',
+            title: 'Recovered from preview',
+            uploadedAt: 1,
+            availability: 'playable',
+            blobId: '0:8:0:1024',
+            blobsCoreKey: 'cc'.repeat(32),
+          }],
+        }]
+      },
+      getStats() { return { totalEntries: 1, hiddenCount: 0, peerCount: 1 } },
+    },
     loadPublicBee: async () => {
       publicBeeLoads += 1
       return {
@@ -204,29 +224,14 @@ test('listVideos falls back to channel reads when a keyed public bee returns no 
     },
     loadChannel: async () => {
       channelLoads += 1
-      return {
-        async listVideos() {
-          return [{
-            id: 'video-1',
-            title: 'Recovered from channel',
-            uploadedAt: 1,
-          }]
-        },
-        async getVideo(id) {
-          return {
-            id,
-            title: 'Recovered from channel',
-            uploadedAt: 1,
-          }
-        },
-      }
+      throw new Error('should not load channel for preview-backed peer feed')
     },
   })
 
   const videos = await api.listVideos('aa'.repeat(32), 'bb'.repeat(32))
 
   t.is(publicBeeLoads, 1)
-  t.is(channelLoads, 1)
+  t.is(channelLoads, 0)
   t.is(videos.length, 1)
   t.is(videos[0]?.id, 'video-1')
   t.is(videos[0]?.channelKey, 'aa'.repeat(32))

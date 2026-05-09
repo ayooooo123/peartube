@@ -65,6 +65,8 @@ export async function createRelayService({
         path: runtimePathModule,
         logger,
         state: localMirrorState,
+        ffmpegPath: config.archive?.ffmpegPath,
+        spawnFn: spawnFn || undefined,
         publisher: createLocalDrivePublisher(runtimeFsModule)
       })
       if (result?.imported || result?.failed) {

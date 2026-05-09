@@ -605,11 +605,17 @@ test('createRelayService watches configured local mirror directory', async (t) =
     },
     statSync(path) {
       return { size: sizes[path], mtimeMs: sizes[path] }
-    }
+    },
+    rmSync() {}
   }
   const pathModule = {
     join(...parts) {
       return parts.join('/').replace(/\/+/g, '/')
+    },
+    dirname(path) {
+      const parts = String(path).split('/')
+      parts.pop()
+      return parts.join('/') || '/'
     }
   }
   function setIntervalFn(fn, ms) {
@@ -660,8 +666,7 @@ test('createRelayService watches configured local mirror directory', async (t) =
     t.ok(logger.entries.some((entry) => entry.component === 'archive' && entry.msg === 'Local directory mirror started'))
     t.ok(intervals.some((entry) => entry.ms === 5000))
 
-    await Promise.resolve()
-    await Promise.resolve()
+    await new Promise((resolve) => setImmediate(resolve))
     t.is(imports.length, 1, 'initial local mirror scan starts in the background')
     t.is(submitCalls, 0, 'startup does not wait for initial local mirror publish')
 

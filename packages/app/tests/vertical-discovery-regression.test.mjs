@@ -69,6 +69,20 @@ test('vertical discovery keeps channel navigation and detail escape hatches', ()
   assert.match(source, /Feather name="user"/, 'vertical player should include a channel affordance')
 })
 
+test('vertical discovery preserves a last-known-good cache across remounts and feed timeouts', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+  const cacheSource = readAppFile('lib/discover-feed-cache.ts')
+
+  assert.match(source, /readDiscoverFeedCache\(\)/, 'Discover should initialize from the route-local last-known-good cache')
+  assert.match(source, /useState<FeedEntry\[\]>\(\(\) => \(cachedDiscoverFeed\?\.feedEntries \|\| \[\]\) as FeedEntry\[\]\)/, 'cached feed entries should seed route state before live P2P refresh')
+  assert.match(source, /useState<VideoData\[\]>\(\(\) => \(cachedDiscoverFeed\?\.videos \|\| \[\]\) as VideoData\[\]\)/, 'cached videos should seed the vertical deck on remount')
+  assert.match(source, /writeDiscoverFeedCache\(\{ feedEntries, videos \}\)/, 'known-good vertical cards should be cached while mounted')
+  assert.match(source, /const timeoutToken = Symbol\('vertical-feed-timeout'\)/, 'public-feed timeouts should be non-authoritative')
+  assert.match(source, /if \(result === timeoutToken\) return[\s\S]*const entries = Array\.isArray/, 'timed-out feed refreshes must not overwrite cached entries with empty lists')
+  assert.match(cacheSource, /const MAX_CACHE_AGE_MS = 30 \* 60 \* 1000/, 'vertical cache should be short-lived and route-local')
+  assert.doesNotMatch(cacheSource, /videoUrl|shortsVideoUrl|url:/, 'vertical cache must not persist transient playback URLs')
+})
+
 test('vertical discovery hydrates beyond sparse previews without permanently poisoning timed-out channels', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
   const hydrateBlock = source.slice(source.indexOf('const hydrateChannelVideos'), source.indexOf('const loadFeed'))

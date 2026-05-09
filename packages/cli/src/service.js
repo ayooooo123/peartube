@@ -338,8 +338,8 @@ export async function createRelayService({
           }
           if ((heartbeatStatus.runtime.peers || 0) > 0 && (heartbeatStatus.runtime.connections || 0) === 0) {
             const recovery = runtime.runPeerRecovery?.('relay-heartbeat') || null
-            if (recovery && recovery.reason !== 'cooldown' && recovery.reason !== 'already-connected') {
-              logger.status.warn('Relay attempted bounded peer recovery', recovery)
+            if (recovery) {
+              logger.status.warn('Relay observed peers without sockets; leaving dialing to Hyperswarm', recovery)
             }
           }
           logger.status.info('Relay heartbeat', {

@@ -42,7 +42,7 @@ test('createRelayBlindPeer starts a native blind peer on the relay swarm/store',
   assert.equal(relay.enabled, true)
   assert.equal(relay.publicKey, '07'.repeat(32))
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].path, '/tmp/relay/blind-peer')
+  assert.equal(calls[0].path, '/tmp/relay/corestore/blind-peer')
   assert.equal(calls[0].opts.store, ctx.store)
   assert.equal(calls[0].opts.swarm, ctx.swarm)
   assert.equal(calls[0].opts.wakeup, ctx.wakeup)

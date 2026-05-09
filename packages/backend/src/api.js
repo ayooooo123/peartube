@@ -2760,13 +2760,32 @@ export function createApi({
       const results = await finder.globalSearch(query, topK)
       console.log('[API] globalSearchVideos: found', results.length, 'results in global index')
 
-      // Validate results exist and lazily prune stale entries
+      // Validate/enrich results when cheap, but do not prune preview/direct-ref
+      // entries just because PublicBee/channel hydration timed out. Search may
+      // have a durable preview record while loadChannel/listVideos is currently
+      // unproductive over P2P.
       const validated = []
       const staleIds = []
       for (const r of results) {
         const meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {})
         const channelKey = meta.channelKey || meta.driveKey
         if (!channelKey) { validated.push(r); continue }
+        const hasDirectRefs = Boolean(meta.blobId && meta.blobsCoreKey)
+        const previewVideo = getPreviewVideoFromFeed(channelKey, r.id, meta.publicBeeKey)
+        if (hasDirectRefs || previewVideo?.blobId) {
+          validated.push({
+            ...r,
+            metadata: {
+              ...meta,
+              ...(previewVideo || {}),
+              channelKey,
+              publicBeeKey: meta.publicBeeKey || previewVideo?.publicBeeKey || null,
+              blobId: meta.blobId || previewVideo?.blobId || null,
+              blobsCoreKey: meta.blobsCoreKey || previewVideo?.blobsCoreKey || null,
+            },
+          })
+          continue
+        }
         try {
           const video = await this.getVideoData(channelKey, r.id, meta.publicBeeKey)
           if (video) { validated.push(r); continue }

@@ -21,7 +21,7 @@ import b4a from 'b4a'
 import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
-import { peerPublicKey, swarmHasConnection, swarmQueuePeer, swarmRememberPeer } from './swarm-peer-dial.js'
+import { swarmHasConnection, swarmRememberPeer } from './swarm-peer-dial.js'
 
 const log = logger('PublicFeed')
 const PUBLIC_FEED_CATALOG_VERSION = 1
@@ -544,65 +544,15 @@ export class PublicFeedManager {
     }
   }
 
-  _queueRememberedPeer(keyHex, peerInfo, reason = 'recovery') {
-    if (!peerInfo || this._hasActivePeerConnection(keyHex, this._discoveredPeers.get(keyHex))) return false
-    if (peerInfo.queued || peerInfo.waiting) return false
-    try {
-      const queued = swarmQueuePeer(this.swarm, peerInfo)
-      if (queued) {
-        this._directPeerDialStats.attempted++
-        this._directPeerDialStats.queued++
-        this._directPeerDialStats.lastReason = reason
-        this._directPeerDialStats.lastDialedAt = this._now()
-        this._directPeerLastDialedAt.set(keyHex, this._now())
-        return true
-      }
-    } catch (err) {
-      this._directPeerDialStats.failed++
-      this._directPeerDialStats.lastReason = 'queue-error'
-      this._directPeerLastDialError.set(keyHex, err?.message || String(err))
-      if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
-    }
-    return false
-  }
-
   runBoundedPeerRecovery(reason = 'heartbeat') {
-    if (!this.swarm || this._discoveredPeers.size === 0) return { queued: 0, reason: 'no-discovered-peers' }
-    const now = this._now()
-    if (now - this._lastRecoveryAt < this._recoveryCooldownMs) return { queued: 0, reason: 'cooldown' }
-    if ((this.swarm.connections?.size || 0) > 0 || this.feedConnections.size > 0) return { queued: 0, reason: 'already-connected' }
-    this._lastRecoveryAt = now
-    let queued = 0
-    for (const [keyHex, publicKey] of this._discoveredPeers) {
-      let peerInfo = this.swarm.peers?.get?.(keyHex) || null
-      const hint = this._discoveredPeerHints.get(keyHex)
-      if (!peerInfo && hint?.peer) peerInfo = this._rememberDiscoveredPeerInSwarm(hint.peer, hint.topic, keyHex)
-      if (!peerInfo && typeof this.swarm.joinPeer === 'function') {
-        try {
-          this.swarm.joinPeer(publicKey)
-          this._directPeerDialStats.attempted++
-          this._directPeerDialStats.queued++
-          this._directPeerDialStats.lastReason = reason
-          this._directPeerDialStats.lastDialedAt = now
-          this._directPeerLastDialedAt.set(keyHex, now)
-          queued++
-          continue
-        } catch (err) {
-          this._directPeerDialStats.failed++
-          this._directPeerLastDialError.set(keyHex, err?.message || String(err))
-          if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
-        }
-      }
-      if (peerInfo && this._queueRememberedPeer(keyHex, peerInfo, reason)) queued++
-      if (queued >= 8) break
-    }
     const event = {
-      at: now,
-      action: 'bounded-peer-recovery',
-      reason,
+      at: this._now(),
+      action: 'observed-peers-without-sockets',
+      reason: 'hyperswarm-owned-dialing',
+      requestedReason: reason,
       discoveredPeers: this._discoveredPeers.size,
-      connections: this.swarm.connections?.size || 0,
-      queued,
+      connections: this.swarm?.connections?.size || 0,
+      queued: 0,
     }
     this._recoveryEvents.push(event)
     while (this._recoveryEvents.length > 10) this._recoveryEvents.shift()

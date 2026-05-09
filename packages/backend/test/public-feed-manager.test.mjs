@@ -338,7 +338,7 @@ test('direct peer diagnostics include Hyperswarm queue state', () => {
 })
 
 
-test('PublicFeedManager preserves relay-address hints and queues remembered peer without joinPeer fallback', () => {
+test('PublicFeedManager preserves relay-address hints without app-level joinPeer fallback', () => {
   const publicKey = b4a.alloc(32, 21)
   const keyHex = b4a.toString(publicKey, 'hex')
   const relayAddresses = [{ host: 'relay.test', port: 49737 }]
@@ -362,7 +362,7 @@ test('PublicFeedManager preserves relay-address hints and queues remembered peer
   }
 })
 
-test('PublicFeedManager bounded recovery requeues remembered peers when discovery has no socket', () => {
+test('PublicFeedManager recovery is observational and does not requeue remembered peers', () => {
   const publicKey = b4a.alloc(32, 22)
   const keyHex = b4a.toString(publicKey, 'hex')
   const swarm = createSwarm()
@@ -374,12 +374,14 @@ test('PublicFeedManager bounded recovery requeues remembered peers when discover
     peerInfo.queued = false
     swarm.joinPeerCalls.length = 0
     const recovery = manager.runBoundedPeerRecovery('test-recovery')
-    assert.equal(recovery.queued, 1)
-    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(recovery.queued, 0)
+    assert.equal(recovery.reason, 'hyperswarm-owned-dialing')
+    assert.equal(swarm.joinPeerCalls.length, 0)
+    assert.equal(peerInfo.queued, false)
     const stats = manager.getStats().directPeerDial
     assert.equal(stats.recoveryEvents.length, 1)
-    assert.equal(stats.recoveryEvents[0].reason, 'test-recovery')
-    assert.equal(stats.lastReason, 'test-recovery')
+    assert.equal(stats.recoveryEvents[0].requestedReason, 'test-recovery')
+    assert.equal(stats.lastReason, null)
   } finally {
     manager.stop()
   }

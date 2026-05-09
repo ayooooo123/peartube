@@ -177,3 +177,27 @@ test('resolveRelayConfig reads archive yt-dlp retry extra args env var', async (
     ['--extractor-args', 'youtube:player_client=mweb;player_skip=webpage,configs']
   ])
 })
+
+
+test('resolveRelayConfig reads local mirror env vars', async (t) => {
+  const config = resolveRelayConfig({}, {
+    env: {
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED: 'true',
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH: '/videos',
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL: '7',
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME: 'Camera Roll',
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE: 'false',
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES: '12'
+    }
+  })
+
+  t.alike(config.archive.localMirror, {
+    enabled: true,
+    path: '/videos',
+    poll: 7,
+    channelName: 'Camera Roll',
+    description: '',
+    recursive: false,
+    maxFiles: 12
+  })
+})

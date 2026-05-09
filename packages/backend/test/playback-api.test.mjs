@@ -2,7 +2,7 @@ import test from 'brittle'
 
 import { createApi } from '../src/api.js'
 
-test('preparePlayback returns a playable URL even when warmup fails', async (t) => {
+test('preparePlayback returns a playable URL before warmup settles or fails', async (t) => {
   const api = createApi({ ctx: {} })
   const calls = []
 
@@ -57,12 +57,12 @@ test('preparePlayback returns a playable URL even when warmup fails', async (t) 
       elapsed: 0,
       isComplete: false,
     },
-    warmupStarted: false,
+    warmupStarted: true,
   })
 
   t.alike(calls, [
-    ['prefetchVideo', ['channel-key', 'videos/demo.mp4', 'public-bee-key']],
     ['getVideoUrl', ['channel-key', 'videos/demo.mp4', 'public-bee-key', 'blob-id', 'blobs-core-key', 'video/mp4']],
+    ['prefetchVideo', ['channel-key', 'videos/demo.mp4', 'public-bee-key']],
     ['getVideoStats', ['channel-key', 'videos/demo.mp4']],
   ])
 })

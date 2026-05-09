@@ -134,8 +134,22 @@ function destroyAllWorkers() {
 // to/from the Bare worker's IPC stream. No JSON serialization.
 const BACKEND_WORKER = '/pear/build/workers/core/index.js'
 let ipcWsPort = 0
+let ipcWsServer: any = null
+
+function removeWorkerDataListener(worker: any, listener: (d: Buffer) => void) {
+  if (!worker || !listener) return
+  if (typeof worker.off === 'function') {
+    worker.off('data', listener)
+    return
+  }
+  if (typeof worker.removeListener === 'function') {
+    worker.removeListener('data', listener)
+  }
+}
 
 function startIPCWebSocket() {
+  if (ipcWsServer) return ipcWsPort
+
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
@@ -146,12 +160,21 @@ function startIPCWebSocket() {
     websocket: {
       open(ws) {
         console.log('[main] IPC WebSocket connected')
-        const worker = getWorker(BACKEND_WORKER)
+        let worker: any = null
+        try {
+          worker = getWorker(BACKEND_WORKER)
+        } catch (err: any) {
+          console.error('[main] IPC WebSocket worker startup failed:', err?.message || err)
+          try { ws.close(1011, 'worker startup failed') } catch {}
+          return
+        }
 
         // Pipe: worker IPC → WebSocket → renderer
-        worker.on('data', (d: Buffer) => {
+        const forwardWorkerData = (d: Buffer) => {
           if (ws.readyState === 1) ws.sendBinary(d)
-        })
+        }
+        ;(ws as any).data = { worker, forwardWorkerData }
+        worker.on('data', forwardWorkerData)
       },
       message(ws, message) {
         // Pipe: renderer → WebSocket → worker IPC
@@ -163,14 +186,29 @@ function startIPCWebSocket() {
           worker.write(buf)
         }
       },
-      close() {
+      close(ws) {
+        const data = (ws as any).data || {}
+        const worker = data.worker || workers.get(BACKEND_WORKER)
+        const forwardWorkerData = data.forwardWorkerData
+        if (worker && forwardWorkerData) {
+          removeWorkerDataListener(worker, forwardWorkerData)
+        }
         console.log('[main] IPC WebSocket closed')
       },
     },
   })
 
-  ipcWsPort = server.port
+  ipcWsServer = server
+  ipcWsPort = server.port ?? 0
   console.log('[main] IPC WebSocket on ws://127.0.0.1:' + ipcWsPort)
+  return ipcWsPort
+}
+
+function stopIPCWebSocket() {
+  if (!ipcWsServer) return
+  try { ipcWsServer.stop?.(true) } catch {}
+  ipcWsServer = null
+  ipcWsPort = 0
 }
 
 // ── Electrobun RPC (minimal — just for view lifecycle) ──────────────────
@@ -207,8 +245,11 @@ const MIME_TYPES: Record<string, string> = {
 }
 
 let staticPort = 0
+let staticServer: any = null
 
 async function startStaticServer() {
+  if (staticServer) return staticPort
+
   const viewsDir = join(appCodeDir, 'views', 'app')
   const server = Bun.serve({
     port: 0, // auto-assign
@@ -227,14 +268,18 @@ async function startStaticServer() {
       // mediabunny's UrlSource uses fetch() which enforces CORS.
       // Proxying through the static server avoids cross-origin issues.
       if (url.pathname === '/__blob') {
-        const port = url.searchParams.get('__port') || blobServerPort
+        const rawPort = url.searchParams.get('__port') || blobServerPort
+        const port = Number(rawPort)
+        if (!Number.isInteger(port) || port <= 0) {
+          return new Response('Blob server is not ready', { status: 503 })
+        }
         url.searchParams.delete('__port')
         const blobUrl = `http://127.0.0.1:${port}/?${url.searchParams.toString()}`
         const headers: Record<string, string> = {}
         const range = req.headers.get('range')
         if (range) headers['Range'] = range
         try {
-          const blobRes = await fetch(blobUrl, { headers })
+          const blobRes = await fetch(blobUrl, { headers, signal: req.signal })
           const respHeaders = new Headers(blobRes.headers)
           respHeaders.set('Access-Control-Allow-Origin', '*')
           respHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
@@ -283,9 +328,17 @@ async function startStaticServer() {
     },
   })
 
-  staticPort = server.port
+  staticServer = server
+  staticPort = server.port ?? 0
   console.log('[main] Static server on http://127.0.0.1:' + staticPort)
   return staticPort
+}
+
+function stopStaticServer() {
+  if (!staticServer) return
+  try { staticServer.stop?.(true) } catch {}
+  staticServer = null
+  staticPort = 0
 }
 
 // ── Create Window ───────────────────────────────────────────────────────
@@ -304,6 +357,8 @@ async function createWindow() {
 
   mainWindow.on('close', () => {
     destroyAllWorkers()
+    stopIPCWebSocket()
+    stopStaticServer()
     mainWindow = null
     rendererReady = false
   })

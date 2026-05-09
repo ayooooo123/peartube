@@ -41,6 +41,8 @@ const isPear = typeof window !== 'undefined' && (
   !!(window as any).Pear ||      // legacy pear run
   !!(window as any).bridge        // standalone Electron with pear-runtime
 )
+const isBridgeDesktop = typeof window !== 'undefined' && !!(window as any).bridge
+const shouldUseStatsPollingFallback = !isBridgeDesktop
 
 // Types from shared package
 import type { Identity, Video } from '@peartube/core'
@@ -94,43 +96,45 @@ export default function RootLayout() {
           }
         }).catch(() => {})
 
-        // Fallback: poll getVideoStats and feed into the context emitter.
-        // Some mobile runtimes can be flaky with push events (eventVideoStats) over BareKit IPC.
-        // Polling keeps the UI stats bar updated regardless.
-        const pollKey = `${video.channelKey}:${videoRef}`
-        if (!statsPollersRef.current.has(pollKey)) {
-          let attempts = 0
-          const poll = async () => {
-            attempts++
-            try {
-              const res = await platformRPC.rpc.getVideoStats({ channelKey: video.channelKey, videoId: videoRef })
-              const stats = res?.stats
-              if (stats) {
-                // Normalize identifiers (some backends include them in stats, some don't)
-                videoStatsEventEmitter.emit(video.channelKey, videoRef, {
-                  ...stats,
-                  channelKey: stats.channelKey || video.channelKey,
-                  videoId: stats.videoId || videoRef,
-                })
-                if (stats.isComplete) return true
+        if (shouldUseStatsPollingFallback) {
+          // Fallback: poll getVideoStats and feed into the context emitter.
+          // Some mobile runtimes can be flaky with push events (eventVideoStats) over BareKit IPC.
+          // Polling keeps the UI stats bar updated regardless.
+          const pollKey = `${video.channelKey}:${videoRef}`
+          if (!statsPollersRef.current.has(pollKey)) {
+            let attempts = 0
+            const poll = async () => {
+              attempts++
+              try {
+                const res = await platformRPC.rpc.getVideoStats({ channelKey: video.channelKey, videoId: videoRef })
+                const stats = res?.stats
+                if (stats) {
+                  // Normalize identifiers (some backends include them in stats, some don't)
+                  videoStatsEventEmitter.emit(video.channelKey, videoRef, {
+                    ...stats,
+                    channelKey: stats.channelKey || video.channelKey,
+                    videoId: stats.videoId || videoRef,
+                  })
+                  if (stats.isComplete) return true
+                }
+              } catch (err) {
+                // Ignore polling errors
               }
-            } catch (err) {
-              // Ignore polling errors
+              // Stop after ~60s to avoid background polling forever.
+              if (attempts >= 60) return true
+              return false
             }
-            // Stop after ~60s to avoid background polling forever.
-            if (attempts >= 60) return true
-            return false
-          }
 
-          const interval = setInterval(async () => {
-            const done = await poll()
-            if (done) {
-              const t = statsPollersRef.current.get(pollKey)
-              if (t) clearInterval(t)
-              statsPollersRef.current.delete(pollKey)
-            }
-          }, 1000)
-          statsPollersRef.current.set(pollKey, interval)
+            const interval = setInterval(async () => {
+              const done = await poll()
+              if (done) {
+                const t = statsPollersRef.current.get(pollKey)
+                if (t) clearInterval(t)
+                statsPollersRef.current.delete(pollKey)
+              }
+            }, 1000)
+            statsPollersRef.current.set(pollKey, interval)
+          }
         }
       } catch (err) {
         console.error('[App] Failed to start prefetch:', err)

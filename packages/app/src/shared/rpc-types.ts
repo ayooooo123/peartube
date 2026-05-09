@@ -7,7 +7,7 @@
  */
 export type PearTubeRPC = {
   // Handled by Bun (renderer calls these)
-  main: {
+  bun: {
     requests: {
       startWorker: { params: { specifier: string }; response: { ok: boolean } }
       viewReady: { params: {}; response: { blobServerPort: number | null } }

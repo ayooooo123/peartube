@@ -27,6 +27,7 @@ import { colors } from '@/lib/colors'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { getFeedPreviewVideos, getVisibleSeededFeedEntries, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
+import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-feed-cache'
 import { formatTimeAgo } from '@/lib/formatters'
 import { VerticalShortsPlayer } from '@/components/discovery/VerticalShortsPlayer'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
@@ -99,10 +100,11 @@ export default function VerticalDiscoveryScreen() {
   } = useVideoPlayerContext()
 
   const pageHeight = Math.max(1, screenHeight - insets.top)
+  const cachedDiscoverFeed = useMemo(() => readDiscoverFeedCache(), [])
   const [refreshing, setRefreshing] = useState(false)
   const [feedLoading, setFeedLoading] = useState(false)
-  const [feedEntries, setFeedEntries] = useState<FeedEntry[]>([])
-  const [videos, setVideos] = useState<VideoData[]>([])
+  const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(() => (cachedDiscoverFeed?.feedEntries || []) as FeedEntry[])
+  const [videos, setVideos] = useState<VideoData[]>(() => (cachedDiscoverFeed?.videos || []) as VideoData[])
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const thumbnailCacheRef = useRef<Record<string, string>>({})
   thumbnailCacheRef.current = thumbnailCache
@@ -190,6 +192,17 @@ export default function VerticalDiscoveryScreen() {
     }
   }, [fetchThumbnailsForVideos, identity?.driveKey])
 
+  useEffect(() => {
+    if (cachedDiscoverFeed?.videos?.length) {
+      void fetchThumbnailsForVideos(cachedDiscoverFeed.videos as VideoData[])
+    }
+  }, [cachedDiscoverFeed, fetchThumbnailsForVideos])
+
+  useEffect(() => {
+    if (videos.length === 0 && feedEntries.length === 0) return
+    writeDiscoverFeedCache({ feedEntries, videos })
+  }, [feedEntries, videos])
+
   const hydrateChannelVideos = useCallback(async (entry: FeedEntry) => {
     if (!rpc) return
     const channelKey = entry.channelKey || entry.driveKey
@@ -236,7 +249,9 @@ export default function VerticalDiscoveryScreen() {
     feedLoadInFlightRef.current = true
     setFeedLoading(true)
     try {
-      const result = await withTimeout(rpc.getPublicFeed({}), 4000, { entries: [] } as any)
+      const timeoutToken = Symbol('vertical-feed-timeout')
+      const result = await withTimeout(rpc.getPublicFeed({}), 4000, timeoutToken as any)
+      if (result === timeoutToken) return
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
       setFeedEntries((prev) => {
         const prevKeys = prev.map((entry) => entry.channelKey || entry.driveKey).join('|')

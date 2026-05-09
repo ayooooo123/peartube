@@ -21,7 +21,7 @@ import b4a from 'b4a'
 import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
-import { peerPublicKey, swarmHasConnection } from './swarm-peer-dial.js'
+import { peerPublicKey, swarmHasConnection, swarmQueuePeer, swarmRememberPeer } from './swarm-peer-dial.js'
 
 const log = logger('PublicFeed')
 const PUBLIC_FEED_CATALOG_VERSION = 1
@@ -73,8 +73,16 @@ export class PublicFeedManager {
     this._nextAvailabilityRequestId = 1;
     /** @type {Map<string, { resolve: Function, timeout: any }>} */
     this.pendingAvailabilityRequests = new Map();
-    /** @type {Map<string, any>} Remembered Hyperswarm peer candidates for diagnostics only. */
+    /** @type {Map<string, any>} Remembered Hyperswarm peer candidates for diagnostics/recovery. */
     this._discoveredPeers = new Map();
+    /** @type {Map<string, any>} Remembered discovered peer objects with relay-address hints. */
+    this._discoveredPeerHints = new Map();
+    /** @type {Array<{at: number, action: string, reason?: string, discoveredPeers: number, connections: number, queued: number}>} */
+    this._recoveryEvents = [];
+    /** @type {number} */
+    this._lastRecoveryAt = 0;
+    /** @type {number} */
+    this._recoveryCooldownMs = 30000;
     /** @type {Map<string, number>} */
     this._directPeerLastDialedAt = new Map();
     /** @type {Map<string, string>} */
@@ -480,11 +488,23 @@ export class PublicFeedManager {
     this._connectionStartedAt.delete(conn)
   }
 
-  _rememberPeerPublicKey(publicKey) {
+  _rememberPeerPublicKey(publicKey, peer = null, topic = null) {
     if (!publicKey) return null
     const keyHex = b4a.toString(publicKey, 'hex')
     if (!keyHex || keyHex === b4a.toString(this.swarm?.keyPair?.publicKey || [], 'hex')) return null
     this._discoveredPeers.set(keyHex, publicKey)
+    if (peer && typeof peer === 'object') {
+      const relayAddresses = Array.isArray(peer.relayAddresses) ? peer.relayAddresses : []
+      const existing = this._discoveredPeerHints.get(keyHex) || {}
+      this._discoveredPeerHints.set(keyHex, {
+        peer,
+        topic,
+        relayAddresses,
+        relayAddressesSeen: Math.max(Number(existing.relayAddressesSeen || 0), relayAddresses.length),
+        firstSeenAt: existing.firstSeenAt || this._now(),
+        lastSeenAt: this._now(),
+      })
+    }
     return { keyHex, publicKey }
   }
 
@@ -499,12 +519,13 @@ export class PublicFeedManager {
     if (topic && !this._isNetworkTopic(topic)) return false
     if (!this.swarm) return false
     const publicKey = this._peerEntryPublicKey(peer)
-    const remembered = this._rememberPeerPublicKey(publicKey)
+    const remembered = this._rememberPeerPublicKey(publicKey, peer, topic)
     if (!remembered) {
       this._directPeerDialStats.skipped++
       this._directPeerDialStats.lastReason = 'self-or-missing-key'
       return false
     }
+    this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
     if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) {
       this._directPeerDialStats.skipped++
       this._directPeerDialStats.lastReason = 'already-connected-peer'
@@ -512,9 +533,88 @@ export class PublicFeedManager {
     return true
   }
 
-  _swarmDialState(keyHex) {
+  _rememberDiscoveredPeerInSwarm(peer, topic, keyHex) {
+    if (!this.swarm || !peer || typeof peer !== 'object') return null
+    try {
+      return swarmRememberPeer(this.swarm, peer, topic) || this.swarm.peers?.get?.(keyHex) || null
+    } catch (err) {
+      this._directPeerLastDialError.set(keyHex, err?.message || String(err))
+      if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
+      return null
+    }
+  }
+
+  _queueRememberedPeer(keyHex, peerInfo, reason = 'recovery') {
+    if (!peerInfo || this._hasActivePeerConnection(keyHex, this._discoveredPeers.get(keyHex))) return false
+    if (peerInfo.queued || peerInfo.waiting) return false
+    try {
+      const queued = swarmQueuePeer(this.swarm, peerInfo)
+      if (queued) {
+        this._directPeerDialStats.attempted++
+        this._directPeerDialStats.queued++
+        this._directPeerDialStats.lastReason = reason
+        this._directPeerDialStats.lastDialedAt = this._now()
+        this._directPeerLastDialedAt.set(keyHex, this._now())
+        return true
+      }
+    } catch (err) {
+      this._directPeerDialStats.failed++
+      this._directPeerDialStats.lastReason = 'queue-error'
+      this._directPeerLastDialError.set(keyHex, err?.message || String(err))
+      if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
+    }
+    return false
+  }
+
+  runBoundedPeerRecovery(reason = 'heartbeat') {
+    if (!this.swarm || this._discoveredPeers.size === 0) return { queued: 0, reason: 'no-discovered-peers' }
+    const now = this._now()
+    if (now - this._lastRecoveryAt < this._recoveryCooldownMs) return { queued: 0, reason: 'cooldown' }
+    if ((this.swarm.connections?.size || 0) > 0 || this.feedConnections.size > 0) return { queued: 0, reason: 'already-connected' }
+    this._lastRecoveryAt = now
+    let queued = 0
+    for (const [keyHex, publicKey] of this._discoveredPeers) {
+      let peerInfo = this.swarm.peers?.get?.(keyHex) || null
+      const hint = this._discoveredPeerHints.get(keyHex)
+      if (!peerInfo && hint?.peer) peerInfo = this._rememberDiscoveredPeerInSwarm(hint.peer, hint.topic, keyHex)
+      if (!peerInfo && typeof this.swarm.joinPeer === 'function') {
+        try {
+          this.swarm.joinPeer(publicKey)
+          this._directPeerDialStats.attempted++
+          this._directPeerDialStats.queued++
+          this._directPeerDialStats.lastReason = reason
+          this._directPeerDialStats.lastDialedAt = now
+          this._directPeerLastDialedAt.set(keyHex, now)
+          queued++
+          continue
+        } catch (err) {
+          this._directPeerDialStats.failed++
+          this._directPeerLastDialError.set(keyHex, err?.message || String(err))
+          if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
+        }
+      }
+      if (peerInfo && this._queueRememberedPeer(keyHex, peerInfo, reason)) queued++
+      if (queued >= 8) break
+    }
+    const event = {
+      at: now,
+      action: 'bounded-peer-recovery',
+      reason,
+      discoveredPeers: this._discoveredPeers.size,
+      connections: this.swarm.connections?.size || 0,
+      queued,
+    }
+    this._recoveryEvents.push(event)
+    while (this._recoveryEvents.length > 10) this._recoveryEvents.shift()
+    return event
+  }
+
+  _swarmDialState(keyHex, publicKey = null) {
     const peers = this.swarm?.peers
-    const peerInfo = peers && typeof peers.get === 'function' ? peers.get(keyHex) : null
+    let peerInfo = peers && typeof peers.get === 'function' ? peers.get(keyHex) : null
+    if (!peerInfo && peers && typeof peers.get === 'function' && publicKey) {
+      try { peerInfo = peers.get(publicKey) } catch { peerInfo = null }
+    }
     if (!peerInfo || typeof peerInfo !== 'object') return null
 
     const relayAddresses = Array.isArray(peerInfo.relayAddresses) ? peerInfo.relayAddresses : []
@@ -537,16 +637,20 @@ export class PublicFeedManager {
   getDirectPeerDialStats() {
     const peers = []
     for (const [keyHex] of this._discoveredPeers) {
-      const swarm = this._swarmDialState(keyHex)
+      const publicKey = this._discoveredPeers.get(keyHex)
+      const swarm = this._swarmDialState(keyHex, publicKey)
+      const hint = this._discoveredPeerHints.get(keyHex)
       peers.push({
         key: keyHex.slice(0, 16),
         attempts: swarm?.attempts || 0,
+        discoveredRelayAddresses: Number(hint?.relayAddressesSeen || 0),
+        lastSeenAt: hint?.lastSeenAt || null,
         lastDialedAt: this._directPeerLastDialedAt.get(keyHex) || null,
         lastQueuedAt: null,
         lastError: this._directPeerLastDialError.get(keyHex) || null,
         lastErrorStack: this._directPeerLastDialErrorStack.get(keyHex) || null,
         pending: Boolean(swarm?.queued || swarm?.waiting),
-        connected: this._hasActivePeerConnection(keyHex, this._discoveredPeers.get(keyHex)),
+        connected: this._hasActivePeerConnection(keyHex, publicKey),
         swarm,
       })
     }
@@ -563,6 +667,9 @@ export class PublicFeedManager {
       swarmConnecting: Number(this.swarm?.connecting || 0),
       swarmExplicitPeers: this.swarm?.explicitPeers?.size || 0,
       swarmQueueSize: this.swarm?._queue?.length || 0,
+      recoveryEvents: this._recoveryEvents.slice(-5),
+      recoveryCooldownMs: this._recoveryCooldownMs,
+      lastRecoveryAt: this._lastRecoveryAt || null,
       peers,
     }
   }
@@ -750,6 +857,8 @@ export class PublicFeedManager {
       }
       this.pendingAvailabilityRequests.clear()
       this._discoveredPeers.clear()
+      this._discoveredPeerHints.clear()
+      this._recoveryEvents.length = 0
       this._directPeerLastDialedAt.clear()
       this._directPeerLastDialError.clear()
       this._directPeerLastDialErrorStack.clear()

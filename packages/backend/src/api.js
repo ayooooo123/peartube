@@ -2562,6 +2562,39 @@ export function createApi({
     getSwarmStatus() {
       const topicHex = b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex')
       const networkDebug = getNetworkStats()
+      const feedStats = publicFeed?.getStats?.() || {}
+      const doctor = {
+        dht: {
+          bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
+          firewalled: ctx.swarm?.dht?.firewalled ?? null,
+          online: ctx.swarm?.dht?.online ?? null,
+          ephemeral: ctx.swarm?.dht?.ephemeral ?? null,
+        },
+        discovery: {
+          peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
+          publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
+          discoveredPeers: feedStats.directPeerDial?.discoveredPeers || 0,
+          recentPeers: networkDebug?.hyperswarm?.recentPeers || [],
+        },
+        socket: {
+          swarmPeers: ctx.swarm?.peers?.size || 0,
+          swarmConnections: ctx.swarm?.connections?.size || 0,
+          connecting: Number(ctx.swarm?.connecting || 0),
+          recentConnections: networkDebug?.hyperswarm?.recentConnections || [],
+          peerStates: networkDebug?.hyperswarm?.peerStates || [],
+        },
+        feed: {
+          feedConnections: publicFeed?.feedConnections?.size || 0,
+          feedEntries: publicFeed?.entries?.size || 0,
+          directPeerDial: feedStats.directPeerDial || null,
+        },
+        recommendedBoundary: null,
+      }
+      if (doctor.discovery.discoveredPeers === 0 && doctor.dht.bootstrapped === false) doctor.recommendedBoundary = 'dht-bootstrap'
+      else if (doctor.discovery.discoveredPeers > 0 && doctor.socket.swarmConnections === 0) doctor.recommendedBoundary = 'transport-socket'
+      else if (doctor.socket.swarmConnections > 0 && doctor.feed.feedConnections === 0) doctor.recommendedBoundary = 'protomux-feed-open'
+      else if (doctor.feed.feedConnections > 0 && doctor.feed.feedEntries === 0) doctor.recommendedBoundary = 'feed-gossip'
+      else doctor.recommendedBoundary = 'content-playback-or-ui'
       return {
         swarmConnections: ctx.swarm?.connections?.size || 0,
         swarmPeers: ctx.swarm?.peers?.size || 0,
@@ -2569,6 +2602,7 @@ export function createApi({
         feedEntries: publicFeed?.entries?.size || 0,
         feedTopicHex: topicHex,
         network: networkDebug,
+        doctor,
         swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
         swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),

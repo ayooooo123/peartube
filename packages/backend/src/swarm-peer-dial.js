@@ -77,3 +77,57 @@ export function swarmHasConnection(swarm, keyHex, publicKey = null) {
   }
   return false
 }
+
+
+export function swarmRememberPeer(swarm, peer, topic = null) {
+  if (!swarm || !peer) return null
+  const publicKey = peerPublicKey(peer)
+  const keyHex = publicKey ? b4a.toString(publicKey, 'hex') : null
+  if (!publicKey || !keyHex) return null
+  let peerInfo = swarm.peers?.get?.(keyHex) || null
+  if (!peerInfo && swarm.peers && typeof swarm.peers.get === 'function') {
+    try { peerInfo = swarm.peers.get(publicKey) || null } catch { peerInfo = null }
+  }
+  if (!peerInfo && typeof swarm._upsertPeer === 'function') {
+    try {
+      peerInfo = swarm._upsertPeer(publicKey, Array.isArray(peer.relayAddresses) ? peer.relayAddresses : undefined)
+    } catch {
+      peerInfo = null
+    }
+  }
+  if (!peerInfo && swarm.peers && typeof swarm.peers.set === 'function') {
+    peerInfo = {
+      publicKey,
+      relayAddresses: Array.isArray(peer.relayAddresses) ? peer.relayAddresses : [],
+      topics: [],
+    }
+    swarm.peers.set(keyHex, peerInfo)
+  }
+  if (!peerInfo) return null
+  const relayAddresses = Array.isArray(peer.relayAddresses) ? peer.relayAddresses : []
+  if (relayAddresses.length > 0 && (!Array.isArray(peerInfo.relayAddresses) || peerInfo.relayAddresses.length === 0)) {
+    peerInfo.relayAddresses = relayAddresses
+  }
+  if (topic) {
+    if (typeof peerInfo._topic === 'function') peerInfo._topic(topic)
+    else {
+      if (!Array.isArray(peerInfo.topics)) peerInfo.topics = []
+      if (!peerInfo.topics.some((seen) => b4a.equals(seen, topic))) peerInfo.topics.push(topic)
+    }
+  }
+  return peerInfo
+}
+
+export function swarmQueuePeer(swarm, peerInfo) {
+  if (!swarm || !peerInfo) return false
+  peerInfo.explicit = true
+  if (typeof peerInfo._updatePriority === 'function') {
+    try { peerInfo._updatePriority() } catch { /* best effort */ }
+  }
+  if (typeof swarm._enqueue === 'function') return Boolean(swarm._enqueue(peerInfo))
+  if (typeof swarm.joinPeer === 'function' && peerInfo.publicKey) {
+    swarm.joinPeer(peerInfo.publicKey)
+    return true
+  }
+  return false
+}

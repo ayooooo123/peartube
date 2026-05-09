@@ -86,7 +86,18 @@ test('vertical discovery preloads the next few videos into the playback URL cach
   assert.match(source, /const nextVideos = videos\.slice\(activeIndex \+ 1, activeIndex \+ 5\)/, 'shorts should warm the next few videos, not only one or two')
   assert.match(source, /const warmPlaybackUrl = async \(video: VideoData\)/, 'preload should use a named URL warming helper')
   assert.match(source, /const result = await rpc\?\.preparePlayback\?\.\(playbackRequest\)/, 'preload should await preparePlayback so it can keep the resolved URL')
+  assert.match(source, /inflightPlaybackWarmups\.current\.has\(cacheKey\)/, 'preload should de-dupe overlapping preparePlayback warmups')
   assert.match(source, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'preload should populate the playback URL cache for instant swipe playback')
+})
+
+test('Home Discover preloads visible feed playback URLs into the shared URL cache', () => {
+  const source = readAppFile('app/(tabs)/index.tsx')
+
+  assert.match(source, /const warmPlaybackUrl = useCallback\(async \(video: VideoData\)/, 'Home should use a named playback URL warming helper')
+  assert.match(source, /inflightPlaybackWarmups\.current\.has\(cacheKey\)/, 'Home warmups should be de-duped')
+  assert.match(source, /const nextVideos = feedVideosWithThumbs\.slice\(0, 4\)/, 'Home should warm the first few visible Discover cards')
+  assert.match(source, /const result = await rpc\.preparePlayback\(\{[\s\S]*blobId:[\s\S]*blobsCoreKey:[\s\S]*mimeType:/, 'Home warmups should preserve direct blob playback refs')
+  assert.match(source, /if \(result\?\.url\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'Home warmups should populate the shared playback URL cache')
 })
 
 test('vertical discovery subscribes to backend feed-update events instead of only loading once', () => {

@@ -336,6 +336,12 @@ export async function createRelayService({
               hyperswarm: heartbeatStatus.runtime.hyperswarm || null
             })
           }
+          if ((heartbeatStatus.runtime.peers || 0) > 0 && (heartbeatStatus.runtime.connections || 0) === 0) {
+            const recovery = runtime.runPeerRecovery?.('relay-heartbeat') || null
+            if (recovery && recovery.reason !== 'cooldown' && recovery.reason !== 'already-connected') {
+              logger.status.warn('Relay attempted bounded peer recovery', recovery)
+            }
+          }
           logger.status.info('Relay heartbeat', {
             peers: heartbeatStatus.runtime.peers,
             connections: heartbeatStatus.runtime.connections,

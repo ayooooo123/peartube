@@ -115,6 +115,7 @@ export default function VerticalDiscoveryScreen() {
   const pendingPlayKeyRef = useRef<string | null>(null)
   const hydratedChannelsRef = useRef<Set<string>>(new Set())
   const feedLoadInFlightRef = useRef(false)
+  const inflightPlaybackWarmups = useRef<Set<string>>(new Set())
 
   const activeVideo = videos[activeIndex]
   const activeVideoKey = activeVideo ? `${activeVideo.channelKey}:${activeVideo.id}` : null
@@ -330,9 +331,14 @@ export default function VerticalDiscoveryScreen() {
   useEffect(() => {
     const warmPlaybackUrl = async (video: VideoData) => {
       const { cacheKey, playbackRequest } = makePlaybackRequest(video)
-      if (cacheKey && getCachedVideoUrl(cacheKey)) return
-      const result = await rpc?.preparePlayback?.(playbackRequest)
-      if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
+      if (!cacheKey || getCachedVideoUrl(cacheKey) || inflightPlaybackWarmups.current.has(cacheKey)) return
+      inflightPlaybackWarmups.current.add(cacheKey)
+      try {
+        const result = await rpc?.preparePlayback?.(playbackRequest)
+        if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
+      } finally {
+        inflightPlaybackWarmups.current.delete(cacheKey)
+      }
     }
 
     const nextVideos = videos.slice(activeIndex + 1, activeIndex + 5)

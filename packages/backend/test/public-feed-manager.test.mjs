@@ -7,7 +7,6 @@ import b4a from 'b4a'
 
 import Protomux from 'protomux'
 
-import { ensureSwarmPeerConnection } from '../src/swarm-peer-dial.js'
 import { PublicFeedManager } from '../src/public-feed.js'
 import { NETWORK_TOPIC_STRING } from '../src/types.js'
 const DRIVE_KEY = '11'.repeat(32)
@@ -130,15 +129,19 @@ function createMemoryConnectionPair() {
   return [a, b]
 }
 
-test('PublicFeedManager explicitly dials peers discovered on the shared topic', () => {
+test('PublicFeedManager records peers discovered on the shared topic without app-level redialing', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
   const publicKey = b4a.alloc(32, 7)
 
   try {
     assert.equal(manager.handleDiscoveredPeer({ publicKey }, NETWORK_TOPIC), true)
-    assert.equal(swarm.joinPeerCalls.length, 1)
-    assert.equal(b4a.toString(swarm.joinPeerCalls[0], 'hex'), b4a.toString(publicKey, 'hex'))
+    assert.equal(swarm.joinPeerCalls.length, 0)
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.discoveredPeers, 1)
+    assert.equal(stats.queued, 0)
+    assert.equal(stats.pending, 0)
+    assert.equal(stats.peers[0].key, b4a.toString(publicKey, 'hex').slice(0, 16))
   } finally {
     manager.stop()
   }
@@ -158,70 +161,24 @@ test('PublicFeedManager ignores peers discovered on non-app topics', () => {
   }
 })
 
-test('PublicFeedManager directly dials discovered peers that are known but not connected', () => {
-  const publicKey = b4a.alloc(32, 13)
-  const keyHex = b4a.toString(publicKey, 'hex')
-  const swarm = createSwarm()
-  swarm.peers.set(keyHex, { publicKey })
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-
-  try {
-    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(swarm.joinPeerCalls.length, 1)
-    assert.equal(b4a.toString(swarm.joinPeerCalls[0], 'hex'), keyHex)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('PublicFeedManager keeps discovered relay address hints before explicit joinPeer redial', () => {
+test('PublicFeedManager keeps discovered relay address hints as Hyperswarm diagnostics', () => {
   const publicKey = b4a.alloc(32, 14)
   const keyHex = b4a.toString(publicKey, 'hex')
   const relayAddresses = [{ host: '167.86.111.230', port: 49737 }]
   const swarm = createSwarm()
+  swarm._handlePeer({ publicKey, relayAddresses }, NETWORK_TOPIC)
   const manager = new PublicFeedManager(swarm, createMetaDb())
+  swarm.joinPeerCalls.length = 0
 
   try {
     assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses }, NETWORK_TOPIC), true)
-    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(swarm.joinPeerCalls.length, 0)
     assert.equal(swarm.peers.get(keyHex).relayAddresses, relayAddresses)
     assert.deepEqual(swarm.peers.get(keyHex).topics, [NETWORK_TOPIC])
     assert.equal(manager.getStats().directPeerDial.peers[0].swarm.relayAddresses, 1)
   } finally {
     manager.stop()
   }
-})
-
-test('ensureSwarmPeerConnection preserves relay hints without calling wrapped _handlePeer', () => {
-  const publicKey = b4a.alloc(32, 15)
-  const keyHex = b4a.toString(publicKey, 'hex')
-  const relayAddresses = [{ host: '150.136.237.154', port: 38619 }]
-  const swarm = createSwarm()
-  let handled = 0
-  const originalHandlePeer = swarm._handlePeer
-  swarm._handlePeer = (peer, topic) => {
-    handled++
-    return originalHandlePeer.call(swarm, peer, topic)
-  }
-
-  const rawResult = ensureSwarmPeerConnection(swarm, { publicKey, relayAddresses }, NETWORK_TOPIC)
-  assert.equal(rawResult.queued, true)
-  assert.equal(handled, 0)
-  assert.equal(swarm.peers.get(keyHex).relayAddresses, relayAddresses)
-
-  const peerInfo = swarm.peers.get(keyHex)
-  peerInfo.queued = false
-  peerInfo.attempts = 0
-  const peerInfoResult = ensureSwarmPeerConnection(swarm, peerInfo, NETWORK_TOPIC)
-  assert.equal(peerInfoResult.queued, true)
-  assert.equal(handled, 0)
-
-  const mapEntry = { key: keyHex, value: peerInfo }
-  peerInfo.queued = false
-  peerInfo.attempts = 0
-  const mapEntryResult = ensureSwarmPeerConnection(swarm, mapEntry, NETWORK_TOPIC)
-  assert.equal(mapEntryResult.queued, true)
-  assert.equal(handled, 0)
 })
 
 test('PublicFeedManager does not recurse through the storage peer emitter wrapper', () => {
@@ -247,7 +204,6 @@ test('PublicFeedManager does not recurse through the storage peer emitter wrappe
     for (const listener of listeners.get(event) || []) listener(...args)
     return true
   }
-  swarm._peartubeHandlePeerWithoutEmit = originalHandlePeer
   swarm._handlePeer = function wrappedHandlePeer(peer, topic) {
     const result = originalHandlePeer.call(this, peer, topic)
     this.emit('peer', peer, topic)
@@ -264,18 +220,18 @@ test('PublicFeedManager does not recurse through the storage peer emitter wrappe
 
     const stats = manager.getStats().directPeerDial
     assert.equal(emitted, 1)
-    assert.equal(stats.queued, 1)
+    assert.equal(stats.queued, 0)
     assert.equal(stats.failed, 0)
-    assert.equal(stats.skipped, 0)
+    assert.equal(stats.discoveredPeers, 1)
     assert.equal(stats.peers[0].lastError, null)
     assert.equal(swarm.peers.get(keyHex).relayAddresses, relayAddresses)
-    assert.equal(manager.getStats().directPeerDial.peers[0].swarm.relayAddresses, 3)
+    assert.equal(stats.peers[0].swarm.relayAddresses, 3)
   } finally {
     manager.stop()
   }
 })
 
-test('PublicFeedManager skips direct dials for actively connected peers across swarm shapes', () => {
+test('PublicFeedManager reports active peer connections across swarm shapes without dialing', () => {
   const publicKey = b4a.alloc(32, 8)
   const keyHex = b4a.toString(publicKey, 'hex')
   const cases = [
@@ -294,8 +250,9 @@ test('PublicFeedManager skips direct dials for actively connected peers across s
     const manager = new PublicFeedManager(swarm, createMetaDb())
 
     try {
-      assert.equal(manager.handleDiscoveredPeer({ publicKey }), false)
+      assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
       assert.equal(swarm.joinPeerCalls.length, 0)
+      assert.equal(manager.getStats().directPeerDial.peers[0].connected, true)
     } finally {
       manager.stop()
     }
@@ -310,8 +267,8 @@ test('PublicFeedManager does not treat stale Hyperswarm _allConnections keys as 
 
   try {
     assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(swarm.joinPeerCalls.length, 1)
-    assert.equal(manager.getStats().directPeerDial.lastReason, 'queued')
+    assert.equal(swarm.joinPeerCalls.length, 0)
+    assert.equal(manager.getStats().directPeerDial.peers[0].connected, false)
   } finally {
     manager.stop()
   }
@@ -325,135 +282,14 @@ test('PublicFeedManager does not treat pending Hyperswarm _allConnections entrie
 
   try {
     assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(swarm.joinPeerCalls.length, 0)
     assert.equal(manager.getStats().directPeerDial.peers[0].connected, false)
   } finally {
     manager.stop()
   }
 })
 
-test('PublicFeedManager.start remembers existing discovered swarm peers for direct dialing', async () => {
-  const publicKey = b4a.alloc(32, 14)
-  const keyHex = b4a.toString(publicKey, 'hex')
-  const swarm = createSwarm()
-  swarm.peers.set(keyHex, { publicKey, topics: [NETWORK_TOPIC] })
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-
-  try {
-    await manager.start()
-    assert.equal(swarm.joinPeerCalls.length, 1)
-    assert.equal(b4a.toString(swarm.joinPeerCalls[0], 'hex'), keyHex)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('periodic gossip re-dials remembered shared-topic peers when sockets dropped', () => {
-  const publicKey = b4a.alloc(32, 10)
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  let now = 1000
-  manager._now = () => now
-
-  try {
-    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(swarm.joinPeerCalls.length, 1)
-    now += manager._directPeerPendingTimeoutMs + 1
-    assert.equal(manager._redialDiscoveredPeers(), 1)
-    assert.equal(swarm.joinPeerCalls.length, 2)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('forceRedialDiscoveredPeers caps app-level redials after pending dial windows expire', () => {
-  const publicKey = b4a.alloc(32, 11)
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  let now = 1000
-  manager._now = () => now
-
-  try {
-    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(manager._redialDiscoveredPeers(), 0)
-    now += manager._directPeerPendingTimeoutMs + 1
-    assert.equal(manager._redialDiscoveredPeers(), 1)
-    now += manager._directPeerPendingTimeoutMs + 1
-    assert.equal(manager._redialDiscoveredPeers(), 1)
-    now += manager._directPeerPendingTimeoutMs + 1
-    assert.equal(manager._redialDiscoveredPeers(), 0)
-    assert.equal(swarm.joinPeerCalls.length, 3)
-
-    assert.equal(manager.forceRedialDiscoveredPeers(), 0)
-    assert.equal(swarm.joinPeerCalls.length, 3)
-    now += manager._directPeerPendingTimeoutMs + 1
-    assert.equal(manager.forceRedialDiscoveredPeers(), 0)
-    assert.equal(swarm.joinPeerCalls.length, 3)
-
-    const stats = manager.getStats().directPeerDial
-    assert.equal(stats.discoveredPeers, 1)
-    assert.equal(stats.queued, 3)
-    assert.equal(stats.lastReason, 'max-direct-peer-retries')
-    assert.equal(stats.peers[0].attempts, 3)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('forceRedialDiscoveredPeers harvests swarm.peers candidates when no peer event was remembered', () => {
-  const publicKey = b4a.alloc(32, 13)
-  const swarm = createSwarm()
-  swarm.peers.set(b4a.toString(publicKey, 'hex'), { publicKey, topics: [NETWORK_TOPIC] })
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-
-  try {
-    assert.equal(manager.forceRedialDiscoveredPeers(), 1)
-    assert.equal(swarm.joinPeerCalls.length, 1)
-    const stats = manager.getStats().directPeerDial
-    assert.equal(stats.discoveredPeers, 1)
-    assert.equal(stats.queued, 1)
-    assert.equal(stats.peers[0].key, b4a.toString(publicKey, 'hex').slice(0, 16))
-  } finally {
-    manager.stop()
-  }
-})
-
-test('forceRedialDiscoveredPeers skips swarm.peers candidates from non-app topics', () => {
-  const publicKey = b4a.alloc(32, 18)
-  const swarm = createSwarm()
-  swarm.peers.set(b4a.toString(publicKey, 'hex'), { publicKey, topics: [OTHER_TOPIC] })
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-
-  try {
-    assert.equal(manager.forceRedialDiscoveredPeers(), 0)
-    assert.equal(swarm.joinPeerCalls.length, 0)
-    assert.equal(manager.getStats().directPeerDial.discoveredPeers, 0)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('direct peer dial diagnostics expose skipped joinPeer failures', () => {
-  const publicKey = b4a.alloc(32, 12)
-  const swarm = createSwarm()
-  swarm.joinPeer = () => { throw new Error('dial unavailable') }
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-
-  try {
-    assert.equal(manager.handleDiscoveredPeer({ publicKey }), false)
-    const stats = manager.getStats().directPeerDial
-    assert.equal(stats.discoveredPeers, 1)
-    assert.equal(stats.failed, 0)
-    assert.equal(stats.skipped, 1)
-    assert.equal(stats.lastReason, 'queue-error')
-    assert.match(stats.peers[0].lastError, /dial unavailable/)
-    assert.match(stats.peers[0].lastErrorStack, /dial unavailable/)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('direct peer dial diagnostics include Hyperswarm queue state', () => {
+test('direct peer diagnostics include Hyperswarm queue state', () => {
   const publicKey = b4a.alloc(32, 13)
   const keyHex = b4a.toString(publicKey, 'hex')
   const swarm = createSwarm()
@@ -482,6 +318,7 @@ test('direct peer dial diagnostics include Hyperswarm queue state', () => {
     assert.equal(stats.swarmAllConnections, 1)
     assert.equal(stats.swarmExplicitPeers, 1)
     assert.equal(stats.swarmQueueSize, 2)
+    assert.equal(stats.pending, 1)
     assert.deepEqual(stats.peers[0].swarm, {
       attempts: 2,
       queued: true,
@@ -514,54 +351,30 @@ test('PublicFeedManager.start joins shared PearTube network topic for feed-peer 
   }
 })
 
-test('discovered peer dials remain pending until the Hyperswarm socket arrives', () => {
+test('discovered peer diagnostics become connected when the Hyperswarm socket arrives', () => {
   const publicKey = b4a.alloc(32, 14)
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
-  manager._now = () => 12345
 
   try {
     assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(swarm.joinPeerCalls.length, 1)
-    assert.equal(manager.handleDiscoveredPeer({ publicKey }), false)
-    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(swarm.joinPeerCalls.length, 0)
 
-    const pendingStats = manager.getStats().directPeerDial
-    assert.equal(pendingStats.pending, 1)
-    assert.equal(pendingStats.lastReason, 'dial-already-pending')
-    assert.equal(pendingStats.peers[0].pending, true)
-    assert.equal(pendingStats.peers[0].connected, false)
+    const discoveredStats = manager.getStats().directPeerDial
+    assert.equal(discoveredStats.pending, 0)
+    assert.equal(discoveredStats.peers[0].connected, false)
 
     const conn = createConnection()
     conn.remotePublicKey = publicKey
+    swarm.connections.add(conn)
     manager.handleConnection(conn, { publicKey })
 
     const connectedStats = manager.getStats().directPeerDial
     assert.equal(connectedStats.pending, 0)
     assert.equal(connectedStats.peers[0].pending, false)
+    assert.equal(connectedStats.peers[0].connected, true)
     assert.equal(connectedStats.lastReason, 'connected')
     assert.equal(connectedStats.connected, 1)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('expired pending discovered peer dials are retried', () => {
-  const publicKey = b4a.alloc(32, 15)
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  let now = 1000
-  manager._now = () => now
-
-  try {
-    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(manager._redialDiscoveredPeers(), 0)
-    assert.equal(swarm.joinPeerCalls.length, 1)
-
-    now += manager._directPeerPendingTimeoutMs + 1
-    assert.equal(manager._redialDiscoveredPeers(), 1)
-    assert.equal(swarm.joinPeerCalls.length, 2)
-    assert.equal(manager.getStats().directPeerDial.pending, 1)
   } finally {
     manager.stop()
   }
@@ -958,32 +771,26 @@ test('periodic feed gossip resends HAVE_FEED and NEED_FEED on existing client co
   }
 })
 
-test('periodic feed gossip re-dials discovered peers after their connection closes', async () => {
+test('periodic feed gossip does not perform app-level redials after sockets close', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
   const publicKey = b4a.alloc(32, 9)
-  const keyHex = b4a.toString(publicKey, 'hex')
   const conn = createConnection()
-  let now = 1000
 
   manager._gossipIntervalMs = 10
-  manager._now = () => now
 
   try {
     await manager.start()
     assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.equal(swarm.joinPeerCalls.length, 0)
 
-    swarm.peers.set(keyHex, { publicKey })
-    manager.handleConnection(conn, {})
+    manager.handleConnection(conn, { publicKey })
     conn.emit('close')
-    swarm.peers.delete(keyHex)
-    now += manager._directPeerPendingTimeoutMs + 1
 
     await new Promise((resolve) => setTimeout(resolve, 35))
 
-    assert.ok(swarm.joinPeerCalls.length >= 2, 'gossip loop should re-dial a remembered peer after disconnect')
-    assert.equal(b4a.toString(swarm.joinPeerCalls.at(-1), 'hex'), keyHex)
+    assert.equal(swarm.joinPeerCalls.length, 0, 'gossip loop should not redial; Hyperswarm owns socket retry')
+    assert.equal(manager.getStats().directPeerDial.discoveredPeers, 1)
   } finally {
     manager.stop()
   }

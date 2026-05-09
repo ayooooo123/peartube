@@ -197,15 +197,15 @@ test('relay runtime source wires client-equivalent feed availability providers',
   t.ok(content.includes('publicFeed.setFeedSnapshotProvider'), 'relay runtime should gossip compact playable feed snapshots')
   t.ok(content.includes('this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 })'), 'relay feed snapshot provider should use the same API path as clients')
   t.ok(content.includes("ctx.swarm.on('peer'"), 'relay runtime should react to shared-topic peer discoveries')
-  t.ok(content.includes('publicFeed.handleDiscoveredPeer(peer, topic)'), 'relay runtime should explicitly dial shared-topic discovered peers with discovery topic context')
+  t.ok(content.includes('publicFeed.handleDiscoveredPeer(peer, topic)'), 'relay runtime should record shared-topic discovered peers with discovery topic context')
 })
 
-test('legacy relay init passes discovery topic context into public feed dialing', async (t) => {
+test('legacy relay init passes discovery topic context into public feed diagnostics', async (t) => {
   const initPath = join(__dirname, '..', 'src', 'init.js')
   const content = readFileSync(initPath, 'utf8')
 
   t.ok(content.includes("ctx.swarm.on('peer', (peer, topic)"), 'legacy relay init should keep the Hyperswarm discovery topic')
-  t.ok(content.includes('publicFeed.handleDiscoveredPeer(peer, topic)'), 'legacy relay init should preserve relay address hints before redialing')
+  t.ok(content.includes('publicFeed.handleDiscoveredPeer(peer, topic)'), 'legacy relay init should preserve discovery topic context in peer diagnostics')
 })
 
 test('Dockerfile packages the yt-dlp POT provider plugin for noninteractive YouTube bot checks', async (t) => {

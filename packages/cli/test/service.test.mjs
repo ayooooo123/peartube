@@ -320,10 +320,10 @@ test('relay heartbeat logs Hyperswarm dial diagnostics when peers have no socket
     },
     directPeerDial: {
       discoveredPeers: 2,
-      queued: 4,
+      queued: 0,
       skipped: 1,
       failed: 0,
-      lastReason: 'queued',
+      lastReason: 'observed',
       swarmConnecting: 1,
       swarmAllConnections: 1,
       swarmExplicitPeers: 2,
@@ -331,11 +331,6 @@ test('relay heartbeat logs Hyperswarm dial diagnostics when peers have no socket
       peers: [{ key: 'peer-a', swarm: { attempts: 2, relayAddresses: 1 } }]
     }
   })
-  runtime.publicFeed = {
-    forceRedialDiscoveredPeers() {
-      return 2
-    }
-  }
   const logger = createFakeLogger()
   let scheduled = null
 
@@ -377,7 +372,7 @@ test('relay heartbeat logs Hyperswarm dial diagnostics when peers have no socket
     const warning = logger.entries.find((entry) => (
       entry.component === 'status' &&
       entry.level === 'warn' &&
-      entry.msg === 'Relay discovered peers without sockets; forced direct redial'
+      entry.msg === 'Relay discovered peers without sockets'
     ))
     t.ok(warning)
     t.is(warning.data.swarmConnecting, 1)

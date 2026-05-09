@@ -226,8 +226,7 @@ export async function createRelayService({
           const heartbeatStatus = await persistStatus()
           const directPeerDial = heartbeatStatus.runtime.directPeerDial || {}
           if ((heartbeatStatus.runtime.peers || 0) > 0 && (heartbeatStatus.runtime.connections || 0) === 0) {
-            const redialed = runtime.publicFeed?.forceRedialDiscoveredPeers?.() || 0
-            logger.status.warn('Relay discovered peers without sockets; forced direct redial', {
+            logger.status.warn('Relay discovered peers without sockets', {
               peers: heartbeatStatus.runtime.peers,
               connections: heartbeatStatus.runtime.connections,
               discoveredPeers: directPeerDial.discoveredPeers || 0,
@@ -242,8 +241,7 @@ export async function createRelayService({
               swarmExplicitPeers: directPeerDial.swarmExplicitPeers || 0,
               swarmQueueSize: directPeerDial.swarmQueueSize || 0,
               dialPeers: Array.isArray(directPeerDial.peers) ? directPeerDial.peers : [],
-              hyperswarm: heartbeatStatus.runtime.hyperswarm || null,
-              redialed
+              hyperswarm: heartbeatStatus.runtime.hyperswarm || null
             })
           }
           const dht = heartbeatStatus.runtime.dht || {}

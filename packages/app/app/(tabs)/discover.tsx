@@ -105,6 +105,7 @@ export default function VerticalDiscoveryScreen() {
   const [feedLoading, setFeedLoading] = useState(false)
   const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(() => (cachedDiscoverFeed?.feedEntries || []) as FeedEntry[])
   const [videos, setVideos] = useState<VideoData[]>(() => (cachedDiscoverFeed?.videos || []) as VideoData[])
+  const [cacheRestoredOnly, setCacheRestoredOnly] = useState(() => Boolean(cachedDiscoverFeed?.videos?.length || cachedDiscoverFeed?.feedEntries?.length))
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const thumbnailCacheRef = useRef<Record<string, string>>({})
   thumbnailCacheRef.current = thumbnailCache
@@ -188,6 +189,7 @@ export default function VerticalDiscoveryScreen() {
         if (appended.length === 0) return prev
         return [...prev, ...appended].slice(0, 80)
       })
+      if (renderable.length > 0) setCacheRestoredOnly(false)
       void fetchThumbnailsForVideos(renderable)
     }
   }, [fetchThumbnailsForVideos, identity?.driveKey])
@@ -199,9 +201,9 @@ export default function VerticalDiscoveryScreen() {
   }, [cachedDiscoverFeed, fetchThumbnailsForVideos])
 
   useEffect(() => {
-    if (videos.length === 0 && feedEntries.length === 0) return
+    if (cacheRestoredOnly || (videos.length === 0 && feedEntries.length === 0)) return
     writeDiscoverFeedCache({ feedEntries, videos })
-  }, [feedEntries, videos])
+  }, [cacheRestoredOnly, feedEntries, videos])
 
   const hydrateChannelVideos = useCallback(async (entry: FeedEntry) => {
     if (!rpc) return
@@ -237,6 +239,7 @@ export default function VerticalDiscoveryScreen() {
           if (appended.length === 0) return prev
           return [...prev, ...appended].slice(0, 80)
         })
+        if (mapped.length > 0) setCacheRestoredOnly(false)
         void fetchThumbnailsForVideos(mapped)
       }
     } catch (err) {
@@ -253,6 +256,7 @@ export default function VerticalDiscoveryScreen() {
       const result = await withTimeout(rpc.getPublicFeed({}), 4000, timeoutToken as any)
       if (result === timeoutToken) return
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
+      if (entries.length > 0) setCacheRestoredOnly(false)
       setFeedEntries((prev) => {
         const prevKeys = prev.map((entry) => entry.channelKey || entry.driveKey).join('|')
         const nextKeys = entries.map((entry: FeedEntry) => entry.channelKey || entry.driveKey).join('|')

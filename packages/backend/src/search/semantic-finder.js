@@ -187,7 +187,9 @@ export class SemanticFinder {
         channel.base?.update?.(),
         new Promise((resolve) => setTimeout(resolve, 1000))
       ])
-    } catch {}
+    } catch (err) {
+      // Ignore best-effort catch-up failures; indexing can use the current view.
+    }
 
     const viewLen = channel.view?.core?.length || 0
     const lastLen = this._channelVectorViewLengths.get(channelKey) || 0
@@ -211,7 +213,11 @@ export class SemanticFinder {
 
       let meta = {}
       if (typeof value.metadata === 'string') {
-        try { meta = JSON.parse(value.metadata) } catch {}
+        try {
+          meta = JSON.parse(value.metadata)
+        } catch (err) {
+          // Ignore malformed optional metadata during indexing.
+        }
       }
 
       idx.add(value.videoId, vec, {
@@ -239,7 +245,9 @@ export class SemanticFinder {
         channel.base?.update?.(),
         new Promise((resolve) => setTimeout(resolve, 1000))
       ])
-    } catch {}
+    } catch (err) {
+      // Ignore best-effort catch-up failures; indexing can use the current view.
+    }
 
     const viewLen = channel.view?.core?.length || 0
     const lastLen = this._globalVectorViewLengths.get(channelKey) || 0
@@ -262,7 +270,11 @@ export class SemanticFinder {
 
       let meta = {}
       if (typeof value.metadata === 'string') {
-        try { meta = JSON.parse(value.metadata) } catch {}
+        try {
+          meta = JSON.parse(value.metadata)
+        } catch (err) {
+          // Ignore malformed optional metadata during indexing.
+        }
       }
 
       idx.add(value.videoId, vec, {
@@ -412,6 +424,14 @@ export class SemanticFinder {
         category: video.category,
         createdAt: video.createdAt || video.uploadedAt,
         size: video.size,
+        path: video.path || null,
+        mimeType: video.mimeType || null,
+        blobId: video.blobId || null,
+        blobsCoreKey: video.blobsCoreKey || null,
+        thumbnailBlobId: video.thumbnailBlobId || null,
+        thumbnailBlobsCoreKey: video.thumbnailBlobsCoreKey || null,
+        thumbnailMimeType: video.thumbnailMimeType || null,
+        availability: video.availability || null,
         publicBeeKey: video.publicBeeKey || null
       })
       this._indexedVideoIds.add(video.id)

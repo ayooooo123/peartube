@@ -5,6 +5,9 @@
  * Uses pure HTML/CSS for desktop instead of React Native components.
  * Includes hash-based routing for /watch/{channelKey}/{videoId} on Pear desktop.
  */
+// Desktop file has legacy React Native Web div click handlers; this change only
+// touches feed/search plumbing and keeps existing markup intact.
+/* eslint-disable jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */
 import { useCallback, useState, useEffect, useMemo, useRef } from 'react'
 import { ActivityIndicator } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -23,7 +26,7 @@ import { DevicePickerModal } from '@/components/cast'
 import ChannelPageWeb from '../channel/[key].web'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatTimeAgo, formatBytes, formatDuration } from '@/lib/formatters'
-import { shouldRenderFeedVideo } from '@/lib/feed-hydration'
+import { mergePreviewFeedVideos, mergeHydratedFeedVideos, shouldRenderFeedVideo } from '@/lib/feed-hydration'
 import { getFeedThumbnailResolveKey } from '@/lib/feed-thumbnail-resolve-key.mjs'
 import { getWatchPageKey, shouldUseMsePlayerForWatch } from '@/lib/watch-page-player-mode.mjs'
 
@@ -799,7 +802,9 @@ function WatchPageView({
         setReactionCounts(toCountMap(rRes.counts || {}))
         setUserReaction(rRes.userReaction || null)
       }
-    } catch {}
+    } catch (err) {
+      console.debug('[WatchPage] Toggle reaction failed:', err)
+    }
   }
 
   async function postComment() {
@@ -2112,7 +2117,12 @@ export default function HomeScreen() {
         if (foundVideo) {
           setWatchVideo({ ...foundVideo, channelKey: route.channelKey })
         } else {
-          loadVideoInfoRef.current(route.channelKey, route.videoId)
+          const pendingVideo = (window as any).__peartubePendingWatchVideo
+          if (pendingVideo?.id === route.videoId && (pendingVideo.channelKey === route.channelKey || pendingVideo.driveKey === route.channelKey)) {
+            setWatchVideo({ ...pendingVideo, channelKey: route.channelKey })
+          } else {
+            loadVideoInfoRef.current(route.channelKey, route.videoId)
+          }
         }
       } else {
         setWatchVideo(null)
@@ -2252,8 +2262,15 @@ export default function HomeScreen() {
     }))
 
     if (playablePreviews.length > 0) {
-      setFeedVideos(playablePreviews)
-      feedCache.feedVideos = playablePreviews
+      setFeedVideos((prev) => {
+        const merged = mergePreviewFeedVideos({
+          previousVideos: prev,
+          previewVideos: playablePreviews,
+          limit: 50,
+        }) as VideoData[]
+        feedCache.feedVideos = merged
+        return merged
+      })
       setFeedVideosLoading(false)
     }
 
@@ -2292,32 +2309,39 @@ export default function HomeScreen() {
     const results = await Promise.all(channelPromises)
     const backfilledVideos: VideoData[] = results.flat()
 
-    // Merge: backfilled data has richer metadata but preview data has blob refs
-    // for fast thumbnail resolution. Carry over blob refs from previews.
+    // Merge: backfilled data has richer metadata but preview data has direct
+    // blob refs. Preserve currently advertised preview cards when PublicBee or
+    // channel hydration times out/returns sparse data; those previews are still
+    // the browse/playback contract.
     const previewsByKey = new Map(previewVideos.map((v: any) => [`${v.channelKey}:${v.id}`, v]))
-    const merged = backfilledVideos.length > 0
-      ? backfilledVideos.map((v: any) => {
-          const preview = previewsByKey.get(`${v.channelKey}:${v.id}`)
-          return {
-            ...v,
-            thumbnailBlobId: v.thumbnailBlobId || preview?.thumbnailBlobId || null,
-            thumbnailBlobsCoreKey: v.thumbnailBlobsCoreKey || preview?.thumbnailBlobsCoreKey || null,
-            // Don't use v.thumbnail directly — it's from the remote peer's blob server
-            thumbnailUrl: null,
-          }
-        })
-      : previewVideos
-
-    // Filter out unwatchable videos (match Android behavior)
-    const watchableVideos = merged.filter((v: any) => shouldRenderFeedVideo({
-      video: v,
+    const enrichedBackfilled = backfilledVideos.map((v: any) => {
+      const preview = previewsByKey.get(`${v.channelKey}:${v.id}`)
+      return {
+        ...v,
+        blobId: v.blobId || preview?.blobId || null,
+        blobsCoreKey: v.blobsCoreKey || preview?.blobsCoreKey || null,
+        publicBeeKey: v.publicBeeKey || preview?.publicBeeKey || null,
+        mimeType: v.mimeType || preview?.mimeType || null,
+        thumbnailBlobId: v.thumbnailBlobId || preview?.thumbnailBlobId || null,
+        thumbnailBlobsCoreKey: v.thumbnailBlobsCoreKey || preview?.thumbnailBlobsCoreKey || null,
+        availability: v.availability || preview?.availability || null,
+        // Don't use v.thumbnail directly — it's from the remote peer's blob server
+        thumbnailUrl: null,
+      }
+    })
+    const confirmedChannelKeys = Array.from(new Set(enrichedBackfilled.map((v: any) => v.channelKey || v.driveKey).filter(Boolean)))
+    const sortedVideos = mergeHydratedFeedVideos({
+      previousVideos: mergePreviewFeedVideos({
+        previousVideos: feedCache.feedVideos || [],
+        previewVideos: playablePreviews,
+        limit: 50,
+      }),
+      incomingVideos: enrichedBackfilled,
+      refreshedChannelKeys: confirmedChannelKeys,
+      feedEntries,
       identityDriveKey: identity?.driveKey || null,
-    }))
-
-    // Sort by upload time and take top 50
-    const sortedVideos = watchableVideos
-      .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
-      .slice(0, 50)
+      limit: 50,
+    }) as VideoData[]
 
     setFeedVideos(sortedVideos)
     feedCache.feedVideos = sortedVideos
@@ -2360,7 +2384,9 @@ export default function HomeScreen() {
           if (result?.url && result.exists) {
             updates.set(video.id, result.url)
           }
-        } catch {}
+        } catch (err) {
+          console.debug('[Home.web] Failed to resolve feed thumbnail:', err)
+        }
       }
 
       if (!cancelled && updates.size > 0) {

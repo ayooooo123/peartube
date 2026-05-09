@@ -19,7 +19,7 @@ import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
 
 function computeTextRelevance(query: string, title: string): number {
-  const normalize = (s: string) => s.toLowerCase().replace(/[._\-\[\]\(\)]/g, ' ').replace(/\s+/g, ' ').trim()
+  const normalize = (s: string) => s.toLowerCase().replace(/[._\-[\]()]/g, ' ').replace(/\s+/g, ' ').trim()
   const q = normalize(query)
   const t = normalize(title)
 
@@ -184,6 +184,14 @@ export default function SearchScreen() {
               driveKey: channelKey,
               channelKey: channelKey,
               publicBeeKey: metadata.publicBeeKey || r.publicBeeKey,
+              path: metadata.path || undefined,
+              mimeType: metadata.mimeType || undefined,
+              blobId: metadata.blobId || undefined,
+              blobsCoreKey: metadata.blobsCoreKey || undefined,
+              thumbnailBlobId: metadata.thumbnailBlobId || undefined,
+              thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || undefined,
+              thumbnailMimeType: metadata.thumbnailMimeType || undefined,
+              availability: metadata.availability || undefined,
               score,
             }
             console.log('[Search] Parsed video:', video.title, 'channelKey:', video.channelKey)
@@ -260,6 +268,13 @@ export default function SearchScreen() {
 
       const setWatchHash = () => {
         console.log('[Search] Setting hash to watch:', channelKey, video.id)
+        try {
+          const pendingWatch = { ...video, channelKey }
+          ;(window as any).__peartubePendingWatchVideo = pendingWatch
+          window.dispatchEvent(new CustomEvent('peartube:watch-video', { detail: { video: pendingWatch } }))
+        } catch (err) {
+          console.debug('[Search] Failed to stage pending watch video:', err)
+        }
         window.location.hash = `/watch/${encodeURIComponent(channelKey)}/${encodeURIComponent(video.id)}`
       }
 
@@ -373,7 +388,7 @@ export default function SearchScreen() {
       {isDesktop && (
         <View style={{ paddingHorizontal: 24, paddingTop: 24, paddingBottom: 8 }}>
           <Text style={{ color: colors.text, fontSize: 24, fontWeight: '600' }}>
-            Search results for "{query}"
+            Search results for &quot;{query}&quot;
           </Text>
         </View>
       )}
@@ -421,7 +436,7 @@ export default function SearchScreen() {
           <View style={{ alignItems: 'center', paddingVertical: 48 }}>
             <Feather name="search" size={48} color={colors.textSecondary} />
             <Text style={{ color: colors.textSecondary, marginTop: 16, textAlign: 'center' }}>
-              No results found for "{query}"
+              No results found for &quot;{query}&quot;
             </Text>
             <Text style={{ color: colors.textSecondary, marginTop: 8, textAlign: 'center', fontSize: 13 }}>
               Try a different search term or wait for more channels to be indexed

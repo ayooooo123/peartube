@@ -13,7 +13,7 @@ import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
 import { loadPublicBeeFromCache } from './public-bee-loader.js'
 import { logger } from './logger.js'
-import { relocateLegacyLogsDir } from './storage-layout.js'
+import { relocateLegacyBlindPeerDir, relocateLegacyLogsDir } from './storage-layout.js'
 import { cleanupFailedCorestoreOpen } from './corestore-cleanup.js'
 import {
   loadBareOrNodeFsModule,
@@ -797,6 +797,18 @@ export async function initializeStorage(config) {
   if (isEmbeddedBareKitStoragePath()) {
     await appendDebugLine('[storage] relocateLegacyLogsDir skipped for embedded BareKit storage')
   } else {
+    try {
+      await appendDebugLine('[storage] relocateLegacyBlindPeerDir start')
+      const relocatedBlindPeerDir = relocateLegacyBlindPeerDir(storagePath, fs, path)
+      await appendDebugLine(`[storage] relocateLegacyBlindPeerDir done moved=${relocatedBlindPeerDir || 'none'}`)
+      if (relocatedBlindPeerDir) {
+        console.log('[Storage] Relocated legacy blind-peer dir to avoid Corestore migration conflict:', relocatedBlindPeerDir)
+      }
+    } catch (error) {
+      await appendDebugLine(`[storage] relocateLegacyBlindPeerDir failed ${describeDebugError(error)}`)
+      console.warn('[Storage] Failed to relocate legacy blind-peer dir before Corestore init:', error?.message)
+    }
+
     try {
       await appendDebugLine('[storage] relocateLegacyLogsDir start')
       const relocatedLogsDir = relocateLegacyLogsDir(storagePath, fs, path)

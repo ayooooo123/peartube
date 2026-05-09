@@ -151,6 +151,7 @@ export default function HomeScreen() {
   const thumbnailCacheRef = useRef(thumbnailCache)
   thumbnailCacheRef.current = thumbnailCache
   const inflightThumbnailFetches = useRef<Set<string>>(new Set())
+  const inflightPlaybackWarmups = useRef<Set<string>>(new Set())
   const appState = useRef<AppStateStatus>(AppState.currentState)
 
   // Fetch thumbnail for a video (non-blocking)
@@ -192,6 +193,37 @@ export default function HomeScreen() {
       }
     }
   }, [fetchThumbnail])
+
+  const warmPlaybackUrl = useCallback(async (video: VideoData) => {
+    if (!rpc || !video?.channelKey) return
+    const videoRef = (video.path && typeof video.path === 'string' && video.path.startsWith('/'))
+      ? video.path
+      : video.id
+    const videoAny = video as any
+    const cacheKey = makeVideoUrlCacheKey(
+      video.channelKey,
+      videoRef,
+      videoAny.blobId || undefined,
+      videoAny.blobsCoreKey || undefined,
+    )
+    if (!cacheKey || getCachedVideoUrl(cacheKey) || inflightPlaybackWarmups.current.has(cacheKey)) return
+    inflightPlaybackWarmups.current.add(cacheKey)
+    try {
+      const result = await rpc.preparePlayback({
+        channelKey: video.channelKey,
+        videoId: videoRef,
+        publicBeeKey: videoAny.publicBeeKey || undefined,
+        blobId: videoAny.blobId || undefined,
+        blobsCoreKey: videoAny.blobsCoreKey || undefined,
+        mimeType: videoAny.mimeType || undefined,
+      })
+      if (result?.url) setCachedVideoUrl(cacheKey, result.url)
+    } catch {
+      // Best-effort URL warming; playback still resolves on tap.
+    } finally {
+      inflightPlaybackWarmups.current.delete(cacheKey)
+    }
+  }, [rpc])
 
   // Effects that depend on loadPublicFeed/refreshFeed are declared below those callbacks.
 
@@ -846,6 +878,13 @@ export default function HomeScreen() {
         thumbnailUrl: thumbnailCache[cacheKey] || v.thumbnailUrl || v.thumbnail || null
       }
     })
+
+  useEffect(() => {
+    const nextVideos = feedVideosWithThumbs.slice(0, 4)
+    for (const video of nextVideos) {
+      void warmPlaybackUrl(video)
+    }
+  }, [feedVideosWithThumbs, warmPlaybackUrl])
 
   const backendConnecting = !ready
   const backendLoading = Boolean(loading)

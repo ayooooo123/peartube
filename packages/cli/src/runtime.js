@@ -1,3 +1,50 @@
+function buildNetworkDoctor({
+  dht,
+  peerPoolJoined,
+  publicFeedDiscoveryJoined,
+  directPeerDial,
+  networkDebug,
+  swarmPeers,
+  swarmConnections,
+  connecting,
+  feedConnections,
+  feedEntries
+}) {
+  const doctor = {
+    dht: {
+      bootstrapped: dht?.bootstrapped ?? null,
+      firewalled: dht?.firewalled ?? null,
+      online: dht?.online ?? null,
+      ephemeral: dht?.ephemeral ?? null,
+    },
+    discovery: {
+      peerPoolJoined: Boolean(peerPoolJoined),
+      publicFeedDiscoveryJoined: Boolean(publicFeedDiscoveryJoined),
+      discoveredPeers: directPeerDial?.discoveredPeers || 0,
+      recentPeers: networkDebug?.hyperswarm?.recentPeers || [],
+    },
+    socket: {
+      swarmPeers: swarmPeers || 0,
+      swarmConnections: swarmConnections || 0,
+      connecting: connecting || 0,
+      recentConnections: networkDebug?.hyperswarm?.recentConnections || [],
+      peerStates: networkDebug?.hyperswarm?.peerStates || [],
+    },
+    feed: {
+      feedConnections: feedConnections || 0,
+      feedEntries: feedEntries || 0,
+      directPeerDial: directPeerDial || null,
+    },
+    recommendedBoundary: null,
+  }
+  if (doctor.discovery.discoveredPeers === 0 && doctor.dht.bootstrapped === false) doctor.recommendedBoundary = 'dht-bootstrap'
+  else if (doctor.discovery.discoveredPeers > 0 && doctor.socket.swarmConnections === 0) doctor.recommendedBoundary = 'transport-socket'
+  else if (doctor.socket.swarmConnections > 0 && doctor.feed.feedConnections === 0) doctor.recommendedBoundary = 'protomux-feed-open'
+  else if (doctor.feed.feedConnections > 0 && doctor.feed.feedEntries === 0) doctor.recommendedBoundary = 'feed-gossip'
+  else doctor.recommendedBoundary = 'content-playback-or-ui'
+  return doctor
+}
+
 export async function createRelayRuntime({ config, logger }) {
   const [
     { initializeStorage, loadChannel, loadPublicBee, getNetworkStats },
@@ -236,6 +283,9 @@ export async function createRelayRuntime({ config, logger }) {
 
       return resolved
     },
+    runPeerRecovery(reason = 'relay-runtime') {
+      return publicFeed.runBoundedPeerRecovery?.(reason) || { queued: 0, reason: 'unsupported' }
+    },
     getNetworkStats() {
       const feedStats = publicFeed.getStats?.() || {}
       const storageStats = getNetworkStats?.() || {}
@@ -255,6 +305,18 @@ export async function createRelayRuntime({ config, logger }) {
         blindPeer: blindPeer.getStats?.() || null,
         peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
         directPeerDial: feedStats.directPeerDial || null,
+        doctor: buildNetworkDoctor({
+          dht: ctx.swarm?.dht,
+          peerPoolJoined: Boolean(ctx.peerPoolDiscovery),
+          publicFeedDiscoveryJoined: Boolean(publicFeed?.feedDiscovery),
+          directPeerDial: feedStats.directPeerDial || null,
+          networkDebug: storageStats,
+          swarmPeers: ctx.swarm?.peers?.size || 0,
+          swarmConnections: ctx.swarm?.connections?.size || 0,
+          connecting: Number(ctx.swarm?.connecting || 0),
+          feedConnections: publicFeed.feedConnections?.size || 0,
+          feedEntries: feedStats.totalEntries || 0,
+        }),
         hyperswarm: storageStats?.hyperswarm || null,
         swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,

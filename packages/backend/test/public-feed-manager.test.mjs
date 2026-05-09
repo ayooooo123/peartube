@@ -337,6 +337,54 @@ test('direct peer diagnostics include Hyperswarm queue state', () => {
   }
 })
 
+
+test('PublicFeedManager preserves relay-address hints and queues remembered peer without joinPeer fallback', () => {
+  const publicKey = b4a.alloc(32, 21)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const relayAddresses = [{ host: 'relay.test', port: 49737 }]
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses }, NETWORK_TOPIC), true)
+    assert.equal(swarm.fallbackJoinPeerCalls.length, 0)
+    assert.equal(swarm.joinPeerCalls.length, 0)
+    const peerInfo = swarm.peers.get(keyHex)
+    assert.equal(peerInfo.relayAddresses.length, 1)
+    assert.equal(peerInfo.topics.length, 1)
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.discoveredPeers, 1)
+    assert.equal(stats.peers[0].discoveredRelayAddresses, 1)
+    assert.equal(stats.peers[0].swarm.relayAddresses, 1)
+    assert.equal(stats.lastReason, null)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('PublicFeedManager bounded recovery requeues remembered peers when discovery has no socket', () => {
+  const publicKey = b4a.alloc(32, 22)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses: [{ host: 'relay.test', port: 1 }] }, NETWORK_TOPIC), true)
+    const peerInfo = swarm.peers.get(keyHex)
+    peerInfo.queued = false
+    swarm.joinPeerCalls.length = 0
+    const recovery = manager.runBoundedPeerRecovery('test-recovery')
+    assert.equal(recovery.queued, 1)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.recoveryEvents.length, 1)
+    assert.equal(stats.recoveryEvents[0].reason, 'test-recovery')
+    assert.equal(stats.lastReason, 'test-recovery')
+  } finally {
+    manager.stop()
+  }
+})
+
 test('PublicFeedManager.start joins shared PearTube network topic for feed-peer discovery', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

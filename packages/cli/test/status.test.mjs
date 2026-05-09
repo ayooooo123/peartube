@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { RelayCatalog } from '../src/catalog.js'
-import { buildRelayStatus, readRelayStatus, writeRelayStatus } from '../src/status.js'
+import { buildRelayStatus, formatRelayStatus, readRelayStatus, writeRelayStatus } from '../src/status.js'
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -125,6 +125,40 @@ test('readRelayStatus returns persisted runtime stats when present', async (t) =
     t.is(loaded.runtime.feedPeers, 4)
     t.is(loaded.runtime.feedConnections, 4)
     t.is(loaded.runtime.feedEntries, 12)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+
+test('buildRelayStatus surfaces network doctor boundary diagnostics', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-doctor-')
+
+  try {
+    const catalog = await RelayCatalog.open({ storagePath: dir })
+    const status = buildRelayStatus({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 16_384 }
+      },
+      catalog,
+      runtimeStats: {
+        peers: 2,
+        connections: 0,
+        feedConnections: 0,
+        doctor: {
+          recommendedBoundary: 'transport-socket',
+          discovery: { discoveredPeers: 2 },
+          socket: { swarmConnections: 0 },
+          feed: { feedConnections: 0 }
+        }
+      }
+    })
+
+    t.is(status.runtime.doctor.recommendedBoundary, 'transport-socket')
+    const formatted = formatRelayStatus(status)
+    t.ok(formatted.includes('doctor: boundary=transport-socket discovered=2 sockets=0 feedConnections=0'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

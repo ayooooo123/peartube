@@ -4,7 +4,7 @@ import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from './archive-manager.js'
-import { mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
+import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 
 export async function createRelayService({
   config,
@@ -33,7 +33,61 @@ export async function createRelayService({
   let currentStatus = null
   let queue = Promise.resolve()
   let heartbeatTimer = null
+  let localMirrorTimer = null
+  let localMirrorRunning = false
   let archiveConsole = null
+  const localMirrorState = createLocalDriveMirrorState()
+
+  function createLocalDrivePublisher(runtimeFsModule) {
+    return createArchivePublisher({
+      identityManager: runtime.identityManager,
+      uploadManager: runtime.uploadManager,
+      api: runtime.api,
+      runtime,
+      fs: runtimeFsModule
+    })
+  }
+
+  async function runLocalMirrorOnce(localMirrorConfig = config.archive?.localMirror || {}) {
+    if (!localMirrorConfig?.enabled) return null
+    if (localMirrorRunning) return { skipped: true, reason: 'already-running' }
+    localMirrorRunning = true
+    try {
+      const runtimeFsModule = fsModule || await import('#fs')
+      const runtimePathModule = pathModule || await import('#path')
+      const result = await mirrorLocalDriveToRelayChannel({
+        rootPath: localMirrorConfig.path,
+        channelName: localMirrorConfig.channelName || 'Local Drive Mirror',
+        description: localMirrorConfig.description || '',
+        recursive: localMirrorConfig.recursive !== false,
+        maxFiles: Number.isFinite(Number(localMirrorConfig.maxFiles)) ? Number(localMirrorConfig.maxFiles) : Infinity,
+        fs: runtimeFsModule,
+        path: runtimePathModule,
+        logger,
+        state: localMirrorState,
+        publisher: createLocalDrivePublisher(runtimeFsModule)
+      })
+      if (result?.imported || result?.failed) {
+        logger.archive.info('Local mirror scan complete', {
+          path: localMirrorConfig.path,
+          scanned: result.scanned,
+          imported: result.imported,
+          skipped: result.skipped,
+          failed: result.failed
+        })
+        await persistStatus()
+      }
+      return result
+    } catch (err) {
+      logger.archive.error('Local mirror scan failed', {
+        path: localMirrorConfig.path || null,
+        error: err?.message || String(err)
+      })
+      return { error: err?.message || String(err) }
+    } finally {
+      localMirrorRunning = false
+    }
+  }
 
   async function persistStatus() {
     currentStatus = buildRelayStatus({
@@ -226,6 +280,22 @@ export async function createRelayService({
         await archiveConsole.start()
       }
 
+      if (config.archive?.localMirror?.enabled) {
+        await runLocalMirrorOnce()
+        const pollMs = Math.max(1, Number(config.archive.localMirror.poll || 30)) * 1000
+        localMirrorTimer = setIntervalFn(() => {
+          runLocalMirrorOnce().catch((err) => {
+            logger.archive.error('Local mirror periodic scan failed', { error: err?.message || String(err) })
+          })
+        }, pollMs)
+        localMirrorTimer?.unref?.()
+        logger.archive.info('Local directory mirror started', {
+          path: config.archive.localMirror.path,
+          pollSeconds: Math.round(pollMs / 1000),
+          channelName: config.archive.localMirror.channelName
+        })
+      }
+
       heartbeatTimer = setIntervalFn(async () => {
         try {
           const heartbeatStatus = await persistStatus()
@@ -327,24 +397,13 @@ export async function createRelayService({
       return job
     },
     async mirrorLocalDrive(input = {}) {
-      const runtimeFsModule = fsModule || await import('#fs')
-      const runtimePathModule = pathModule || await import('#path')
-      return mirrorLocalDriveToRelayChannel({
-        rootPath: input.path || input.rootPath,
+      return runLocalMirrorOnce({
+        enabled: true,
+        path: input.path || input.rootPath,
         channelName: input.channelName || 'Local Drive Mirror',
         description: input.description || '',
         recursive: input.recursive !== false,
-        maxFiles: Number.isFinite(Number(input.maxFiles)) ? Number(input.maxFiles) : Infinity,
-        fs: runtimeFsModule,
-        path: runtimePathModule,
-        logger,
-        publisher: createArchivePublisher({
-          identityManager: runtime.identityManager,
-          uploadManager: runtime.uploadManager,
-          api: runtime.api,
-          runtime,
-          fs: runtimeFsModule
-        })
+        maxFiles: Number.isFinite(Number(input.maxFiles)) ? Number(input.maxFiles) : Infinity
       })
     },
     getStatus() {
@@ -359,6 +418,10 @@ export async function createRelayService({
       if (heartbeatTimer) {
         clearIntervalFn(heartbeatTimer)
         heartbeatTimer = null
+      }
+      if (localMirrorTimer) {
+        clearIntervalFn(localMirrorTimer)
+        localMirrorTimer = null
       }
       if (archiveConsole) {
         await archiveConsole.close().catch(() => {})

@@ -38,6 +38,7 @@ export const DEFAULT_ARCHIVE_FFMPEG_PATH = ''
 export const DEFAULT_ARCHIVE_JS_RUNTIME = ''
 export const DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS = []
 export const DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS = []
+export const DEFAULT_LOCAL_MIRROR_POLL_SECONDS = 30
 
 export const DEFAULT_ARCHIVE_CONFIG = {
   enabled: false,
@@ -54,6 +55,15 @@ export const DEFAULT_ARCHIVE_CONFIG = {
   budgetReservePercent: DEFAULT_ARCHIVE_BUDGET_RESERVE_PERCENT,
   maxItems: DEFAULT_ARCHIVE_MAX_ITEMS,
   sources: [],
+  localMirror: {
+    enabled: false,
+    path: null,
+    poll: DEFAULT_LOCAL_MIRROR_POLL_SECONDS,
+    channelName: 'Local Drive Mirror',
+    description: '',
+    recursive: true,
+    maxFiles: DEFAULT_ARCHIVE_MAX_ITEMS
+  },
   uiEnabled: false,
   uiHost: '127.0.0.1',
   uiPort: 8174

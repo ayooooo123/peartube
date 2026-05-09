@@ -12,6 +12,7 @@ import {
   DEFAULT_ARCHIVE_YT_DLP_EXTRA_ARGS,
   DEFAULT_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS,
   DEFAULT_ARCHIVE_YT_DLP_PATH,
+  DEFAULT_LOCAL_MIRROR_POLL_SECONDS,
   DEFAULT_RELAY_CONFIG,
   RELAY_CATALOG_FILENAME,
   RELAY_MODE_PRIVATE,
@@ -288,7 +289,14 @@ function configFromEnv(env = {}) {
     env.PEARTUBE_ARCHIVE_JS_RUNTIME ||
     env.PEARTUBE_ARCHIVE_YT_DLP_EXTRA_ARGS ||
     env.PEARTUBE_ARCHIVE_YT_DLP_RETRY_EXTRA_ARGS ||
-    env.PEARTUBE_ARCHIVE_SOURCES
+    env.PEARTUBE_ARCHIVE_SOURCES ||
+    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED ||
+    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH ||
+    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL ||
+    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME ||
+    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION ||
+    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE ||
+    env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES
   ) {
     config.archive = {}
     if (env.PEARTUBE_ARCHIVE_UI_ENABLED) config.archive.uiEnabled = parseBoolean(env.PEARTUBE_ARCHIVE_UI_ENABLED)
@@ -314,6 +322,24 @@ function configFromEnv(env = {}) {
     }
     if (env.PEARTUBE_ARCHIVE_SOURCES) {
       config.archive.sources = splitCommaList(env.PEARTUBE_ARCHIVE_SOURCES).map((url) => ({ url }))
+    }
+    if (
+      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED ||
+      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH ||
+      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL ||
+      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME ||
+      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION ||
+      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE ||
+      env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES
+    ) {
+      config.archive.localMirror = {}
+      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED) config.archive.localMirror.enabled = parseBoolean(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED)
+      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH) config.archive.localMirror.path = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH
+      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL) config.archive.localMirror.poll = Number(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL)
+      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME) config.archive.localMirror.channelName = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME
+      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION) config.archive.localMirror.description = env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION
+      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE) config.archive.localMirror.recursive = parseBoolean(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE)
+      if (env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES) config.archive.localMirror.maxFiles = Number(env.PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES)
     }
   }
 
@@ -350,6 +376,17 @@ function configFromCli(cli = {}) {
     config.archive = config.archive || {}
     if (cli.host) config.archive.uiHost = cli.host
     if (cli.port) config.archive.uiPort = Number(cli.port)
+  }
+
+  if (cli.localMirrorPath || cli.localMirrorPoll || cli.localMirrorChannelName) {
+    config.archive = config.archive || {}
+    config.archive.localMirror = config.archive.localMirror || {}
+    if (cli.localMirrorPath) {
+      config.archive.localMirror.enabled = true
+      config.archive.localMirror.path = cli.localMirrorPath
+    }
+    if (cli.localMirrorPoll) config.archive.localMirror.poll = Number(cli.localMirrorPoll)
+    if (cli.localMirrorChannelName) config.archive.localMirror.channelName = cli.localMirrorChannelName
   }
 
   return config
@@ -485,6 +522,28 @@ function resolveArchiveConfig(rawArchive, { storagePath }) {
 
   if (merged.enabled && merged.sources.length === 0) {
     throw new Error('archive.enabled is true but archive.sources is empty')
+  }
+
+  const localMirror = isPlainObject(merged.localMirror) ? merged.localMirror : {}
+  merged.localMirror = {
+    enabled: Boolean(localMirror.enabled),
+    path: typeof localMirror.path === 'string' && localMirror.path.trim() ? localMirror.path.trim() : null,
+    poll: Number(localMirror.poll),
+    channelName: typeof localMirror.channelName === 'string' && localMirror.channelName.trim()
+      ? localMirror.channelName.trim()
+      : 'Local Drive Mirror',
+    description: typeof localMirror.description === 'string' ? localMirror.description : '',
+    recursive: localMirror.recursive !== false,
+    maxFiles: Number(localMirror.maxFiles)
+  }
+  if (!Number.isFinite(merged.localMirror.poll) || merged.localMirror.poll <= 0) {
+    merged.localMirror.poll = DEFAULT_LOCAL_MIRROR_POLL_SECONDS
+  }
+  if (!Number.isFinite(merged.localMirror.maxFiles) || merged.localMirror.maxFiles <= 0) {
+    merged.localMirror.maxFiles = DEFAULT_ARCHIVE_MAX_ITEMS
+  }
+  if (merged.localMirror.enabled && !merged.localMirror.path) {
+    throw new Error('archive.localMirror.enabled is true but archive.localMirror.path is empty')
   }
 
   return merged
@@ -624,6 +683,17 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
     `  maxItems: ${archive.maxItems || DEFAULT_ARCHIVE_MAX_ITEMS}`,
     `  maxRetries: ${archive.maxRetries ?? DEFAULT_ARCHIVE_MAX_RETRIES}`,
     `  format: "${archive.format || DEFAULT_ARCHIVE_FORMAT}"`
+  )
+  const localMirror = archive.localMirror || {}
+  lines.push(
+    '  localMirror:',
+    `    enabled: ${Boolean(localMirror.enabled)}`,
+    `    path: ${localMirror.path || ''}`,
+    `    poll: ${localMirror.poll || DEFAULT_LOCAL_MIRROR_POLL_SECONDS}`,
+    `    channelName: "${localMirror.channelName || 'Local Drive Mirror'}"`,
+    `    description: "${localMirror.description || ''}"`,
+    `    recursive: ${localMirror.recursive !== false}`,
+    `    maxFiles: ${localMirror.maxFiles || DEFAULT_ARCHIVE_MAX_ITEMS}`
   )
   if (Array.isArray(archive.sources) && archive.sources.length) {
     lines.push('  sources:')

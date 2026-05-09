@@ -73,6 +73,37 @@ export async function createArchiveConsole({
         return
       }
 
+      if (req.method === 'GET' && req.url === '/catalog.json') {
+        const channels = service.catalog?.getChannels?.() || []
+        const previewsByChannel = await store.getCompletedVideoPreviewsByChannel?.()
+        const catalogChannels = channels.map((channel) => {
+          const previewVideos = Array.isArray(channel.previewVideos) && channel.previewVideos.length > 0
+            ? channel.previewVideos
+            : (previewsByChannel?.get?.(channel.channelKey) || [])
+          return {
+            ...channel,
+            source: channel.source || 'relay-cache',
+            relayRole: channel.relayRole || 'cache',
+            relayServing: true,
+            videoCount: Number(channel.videoCount || previewVideos.length || channel.videosDownloaded || channel.videosFound || 0) || 0,
+            manifestUpdatedAt: Number(channel.manifestUpdatedAt || channel.mirroredAt || channel.lastSeenAt || Date.now()) || Date.now(),
+            previewVideos
+          }
+        })
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'access-control-allow-origin': '*',
+          'cache-control': 'no-store'
+        })
+        res.end(JSON.stringify({
+          schema: 'peartube.simpleRelayCatalog',
+          version: 1,
+          updatedAt: Date.now(),
+          channels: catalogChannels
+        }, null, 2))
+        return
+      }
+
       if (req.method === 'POST' && req.url === '/archive') {
         const form = parseForm(await collectBody(req))
         await manager.enqueue(form)

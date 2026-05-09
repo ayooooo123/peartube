@@ -38,6 +38,8 @@ export function renderArchiveWebHome(model = {}) {
   const status = model.status || {}
   const seeding = status.seeding || {}
   const jobs = Array.isArray(model.jobs) ? model.jobs : []
+  const publicBaseUrl = typeof model.publicBaseUrl === 'string' ? model.publicBaseUrl : ''
+  const catalogUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}/catalog.json` : '/catalog.json'
   const rows = jobs.length
     ? jobs.map((job) => `
         <li>
@@ -61,8 +63,9 @@ export function renderArchiveWebHome(model = {}) {
     main { max-width: 980px; margin: 0 auto; padding: 42px 20px 80px; }
     h1 { margin: 0 0 8px; font-size: clamp(32px, 5vw, 58px); letter-spacing: -0.05em; }
     p { color: #aab3c5; line-height: 1.55; }
+    a { color: #9effd0; }
     .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 28px 0; }
-    .stat, form, .queue { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
+    .stat, form, .queue, .catalog { border: 1px solid rgba(255,255,255,0.12); background: rgba(12,15,25,0.76); border-radius: 18px; padding: 18px; box-shadow: 0 20px 80px rgba(0,0,0,0.24); }
     .stat b { display: block; font-size: 28px; }
     form { display: grid; gap: 14px; margin: 24px 0; }
     label { display: grid; gap: 6px; color: #c8d1e4; font-weight: 650; }
@@ -86,6 +89,12 @@ export function renderArchiveWebHome(model = {}) {
       <div class="stat"><span>Peers</span><b>${escapeHtml(status.peers || 0)}</b></div>
       <div class="stat"><span>Feed entries</span><b>${escapeHtml(status.feedEntries || 0)}</b></div>
       <div class="stat"><span>Seeded videos</span><b>${escapeHtml(seeding.videos || 0)}</b></div>
+    </section>
+    <section class="catalog">
+      <h2>Simple relay catalog</h2>
+      <p>Clients can import this URL directly instead of waiting for live P2P feed gossip. This is the fallback path for unreliable relay discovery.</p>
+      <p><a href="${escapeHtml(catalogUrl)}">${escapeHtml(catalogUrl)}</a></p>
+      <code>${escapeHtml(catalogUrl)}</code>
     </section>
     <form method="post" action="/archive">
       <label>Video or channel URL<input name="url" required placeholder="https://www.youtube.com/watch?v=..."></label>

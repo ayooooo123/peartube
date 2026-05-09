@@ -72,8 +72,8 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
         }
       }
     },
-    async publishChannel(channelInfo) {
-      calls.push(['publish', channelInfo.channelKey])
+    async publishChannel(channelInfo, options) {
+      calls.push(['publish', channelInfo.channelKey, options.previewVideos.map((video) => video.blobId)])
     },
     async seedChannel(channelInfo) {
       calls.push(['seed', channelInfo.previewVideos.map((video) => video.blobsCoreKey)])
@@ -90,7 +90,7 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
     ['ensure', 'Mirror'],
     ['import', '/drive/one.mp4', 'one', 'video/mp4'],
     ['import', '/drive/two.webm', 'two', 'video/webm'],
-    ['publish', 'aa'.repeat(32)],
+    ['publish', 'aa'.repeat(32), ['blob:one', 'blob:two']],
     ['seed', ['cc'.repeat(32), 'dd'.repeat(32)]]
   ])
 })

@@ -42,7 +42,32 @@ async function resolvePublicBeeKey(channel) {
   return typeof publicBeeKey === 'string' && publicBeeKey.length > 0 ? publicBeeKey : null
 }
 
-async function announceArchiveChannel(runtime, channelEntry, logger, sourceId) {
+async function listChannelPreviewVideos(channel, limit = 3) {
+  if (!channel || typeof channel.listVideos !== 'function') return []
+  const videos = await channel.listVideos().catch(() => [])
+  if (!Array.isArray(videos)) return []
+  return videos
+    .filter((video) => video?.id && video?.blobId && video?.blobsCoreKey)
+    .slice(0, limit)
+    .map((video) => ({
+      id: String(video.id),
+      title: video?.title ? String(video.title) : 'Untitled',
+      description: video?.description || '',
+      path: video?.path || `/videos/${video.id}.mp4`,
+      uploadedAt: Number(video?.uploadedAt || 0) || 0,
+      duration: Number(video?.duration || 0) || 0,
+      size: Number(video?.size || 0) || 0,
+      mimeType: video?.mimeType || 'video/mp4',
+      availability: 'playable',
+      blobId: String(video.blobId),
+      blobsCoreKey: String(video.blobsCoreKey),
+      thumbnailBlobId: video?.thumbnailBlobId || null,
+      thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey || null,
+      thumbnailMimeType: video?.thumbnailMimeType || null
+    }))
+}
+
+async function announceArchiveChannel(runtime, channelEntry, logger, sourceId, options = {}) {
   const { channel, channelKey } = channelEntry || {}
   if (!channel || !channelKey) return
 
@@ -51,8 +76,16 @@ async function announceArchiveChannel(runtime, channelEntry, logger, sourceId) {
 
   if (!publicBeeKey) return
 
+  const previewVideos = Array.isArray(options.previewVideos)
+    ? options.previewVideos.filter(Boolean)
+    : await listChannelPreviewVideos(channel)
+
   try {
-    await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey)
+    if (previewVideos.length > 0) {
+      await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey, { previewVideos })
+    } else {
+      await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey)
+    }
   } catch (err) {
     logger?.archive?.debug?.('Public-feed submit failed', {
       sourceId,
@@ -68,7 +101,10 @@ async function announceArchiveChannel(runtime, channelEntry, logger, sourceId) {
     })
   }
   try {
-    await runtime.seeder?.seedChannel?.({ driveKey: channelKey, publicBeeKey })
+    const seedEntry = previewVideos.length > 0
+      ? { driveKey: channelKey, publicBeeKey, previewVideos }
+      : { driveKey: channelKey, publicBeeKey }
+    await runtime.seeder?.seedChannel?.(seedEntry)
   } catch (err) {
     logger?.archive?.debug?.('Seed channel failed', {
       sourceId,

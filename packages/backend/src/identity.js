@@ -14,6 +14,10 @@ import {
   validateMnemonic as validatePearTubeMnemonic,
   deriveIdentity
 } from './peartube-identity.js'
+import {
+  createChannelRootDescriptor,
+  signChannelRootDescriptor
+} from './channel-descriptor.js'
 
 // Lazy load IdentityKey to support both Node.js and Bare runtime
 let IdentityKey = null
@@ -201,6 +205,44 @@ export function createIdentityManager({ ctx }) {
         log.info(' Local blob drive ready')
       }
 
+      if (!channel.blobsKeyHex) {
+        await channel.ensureLocalBlobDrive({ deviceName: name })
+      }
+
+      let signedDescriptor = null
+      try {
+        const metadataKey = channel.publicBeeKey || await channel.getPublicBeeKey()
+        const mediaKey = channel.blobsKeyHex
+        if (metadataKey && mediaKey) {
+          const descriptor = createChannelRootDescriptor({
+            identityPublicKey: publicKey,
+            metadataKey,
+            mediaKey,
+            seq: 1,
+            createdAt,
+            updatedAt: Date.now(),
+            profile: { name }
+          })
+          const deviceProof = await this.attestDevice(keypair, ctx.swarm.keyPair.publicKey)
+          signedDescriptor = await signChannelRootDescriptor({
+            descriptor,
+            deviceKeyPair: ctx.swarm.keyPair,
+            deviceProof
+          })
+          if (channel.publicBee?.writable) {
+            await channel.publicBee.bee.put('channel/root', signedDescriptor)
+            await channel.publicBee.setMetadata({
+              channelId: descriptor.channelId,
+              identityPublicKey: publicKey,
+              mediaKey,
+              signedDescriptor
+            })
+          }
+        }
+      } catch (err) {
+        log.warn(' Signed channel root descriptor skipped:', err?.message)
+      }
+
       // Create identity record
       // SECURITY: Do NOT persist secretKey - it can be re-derived from mnemonic if needed.
       // The mnemonic is shown once at creation time and should be backed up by the user.
@@ -216,7 +258,9 @@ export function createIdentityManager({ ctx }) {
         createdAt,
         // secretKey removed for security - derive from mnemonic when needed
         isActive: false,
-        hdDerived
+        hdDerived,
+        channelId: signedDescriptor?.descriptor?.channelId || publicKey,
+        signedDescriptor
       };
 
       identities.push(identity);
@@ -241,6 +285,8 @@ export function createIdentityManager({ ctx }) {
         success: true,
         publicKey,
         driveKey: channelKeyHex,
+        channelId: signedDescriptor?.descriptor?.channelId || publicKey,
+        signedDescriptor,
         mnemonic
       };
     },
@@ -261,7 +307,9 @@ export function createIdentityManager({ ctx }) {
       // Ensure we have the channel cached/loaded (best-effort)
       try {
         await loadChannel(ctx, channelKeyHex)
-      } catch {}
+      } catch (err) {
+        log.debug(' Paired channel preload skipped:', err?.message)
+      }
 
       const keypair = crypto.keyPair()
       const publicKey = b4a.toString(keypair.publicKey, 'hex')

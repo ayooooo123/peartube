@@ -81,7 +81,7 @@ async function remuxLocalVideoForWebPlayback(filePath, {
   return {
     filePath: outputPath,
     cleanup: () => {
-      try { fs.rmSync?.(outputPath, { force: true }) } catch {}
+      try { fs.rmSync?.(outputPath, { force: true }) } catch { /* best effort cleanup */ }
     },
     remuxed: true,
     mimeType: 'video/mp4'
@@ -217,7 +217,7 @@ export async function mirrorLocalDriveToRelayChannel({
       failed.push({ ...video, error: err?.message || String(err) })
       logger?.archive?.error?.('Local drive video import failed', { file: video.filePath, error: err?.message || String(err) })
     } finally {
-      try { prepared?.cleanup?.() } catch {}
+      try { prepared?.cleanup?.() } catch { /* best effort cleanup */ }
     }
   }
 

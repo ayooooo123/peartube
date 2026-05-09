@@ -1,6 +1,6 @@
 import test from 'brittle'
 
-import { listLocalDriveVideos, mirrorLocalDriveToRelayChannel } from '../src/local-drive-mirror.js'
+import { createLocalDriveMirrorState, listLocalDriveVideos, mirrorLocalDriveToRelayChannel } from '../src/local-drive-mirror.js'
 
 function dirent(name, type) {
   return {
@@ -85,6 +85,7 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
   t.is(result.scanned, 2)
   t.is(result.imported, 2)
   t.is(result.failed, 0)
+  t.is(result.skipped, 0)
   t.alike(calls, [
     ['ensure', 'Mirror'],
     ['import', '/drive/one.mp4', 'one', 'video/mp4'],

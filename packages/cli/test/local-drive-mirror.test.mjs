@@ -19,34 +19,13 @@ function makeFs(tree, sizes = {}) {
     },
     statSync(path) {
       return { size: sizes[path] ?? 1024, mtimeMs: 1 }
-    },
-    rmSync(path) {
-      delete sizes[path]
     }
-  }
-}
-
-function makeSpawn({ onSpawn } = {}) {
-  return (bin, args) => {
-    const listeners = new Map()
-    const child = {
-      stderr: { on() {} },
-      on(event, cb) { listeners.set(event, cb) }
-    }
-    onSpawn?.(bin, args)
-    queueMicrotask(() => listeners.get('close')?.(0))
-    return child
   }
 }
 
 const pathShim = {
   join(...parts) {
     return parts.join('/').replace(/\/+/g, '/')
-  },
-  dirname(path) {
-    const parts = String(path).split('/')
-    parts.pop()
-    return parts.join('/') || '/'
   }
 }
 
@@ -115,58 +94,6 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
     ['seed', ['cc'.repeat(32), 'dd'.repeat(32)]]
   ])
 })
-test('mirrorLocalDriveToRelayChannel remuxes non-web containers before import', async (t) => {
-  const sizes = {
-    '/drive/movie.mkv': 300,
-    '/drive/.peartube-remux-movie.mp4': 240
-  }
-  const fs = makeFs({
-    '/drive': [dirent('movie.mkv', 'file')]
-  }, sizes)
-  const spawns = []
-  const imports = []
-  const publisher = {
-    async ensureAnonymousChannel() {
-      return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
-    },
-    async importVideo({ filePath, mimeType }) {
-      imports.push({ filePath, mimeType })
-      return {
-        videoId: 'movie',
-        metadata: {
-          uploadedAt: 123,
-          size: sizes[filePath],
-          mimeType,
-          blobId: '0:3:0:240',
-          blobsCoreKey: 'cc'.repeat(32)
-        }
-      }
-    },
-    async publishChannel(channelInfo, options) {
-      t.is(options.previewVideos[0].mimeType, 'video/mp4')
-      t.is(options.previewVideos[0].size, 240)
-    },
-    async seedChannel(channelInfo) {
-      t.is(channelInfo.previewVideos[0].mimeType, 'video/mp4')
-    }
-  }
-
-  const result = await mirrorLocalDriveToRelayChannel({
-    rootPath: '/drive',
-    publisher,
-    fs,
-    path: pathShim,
-    spawnFn: makeSpawn({ onSpawn: (bin, args) => spawns.push({ bin, args }) }),
-    ffmpegPath: '/usr/bin/ffmpeg'
-  })
-
-  t.is(result.imported, 1)
-  t.alike(imports, [{ filePath: '/drive/.peartube-remux-movie.mp4', mimeType: 'video/mp4' }])
-  t.is(spawns.length, 1)
-  t.is(spawns[0].bin, '/usr/bin/ffmpeg')
-  t.ok(spawns[0].args.includes('-movflags'))
-  t.ok(spawns[0].args.includes('+faststart'))
-})
 
 
 test('mirrorLocalDriveToRelayChannel skips already mirrored file fingerprints', async (t) => {
@@ -177,9 +104,6 @@ test('mirrorLocalDriveToRelayChannel skips already mirrored file fingerprints', 
     },
     statSync(path) {
       return { size: sizes[path], mtimeMs: sizes[path] }
-    },
-    rmSync(path) {
-      delete sizes[path]
     }
   }
   const state = createLocalDriveMirrorState()
@@ -190,7 +114,7 @@ test('mirrorLocalDriveToRelayChannel skips already mirrored file fingerprints', 
     },
     async importVideo({ filePath }) {
       imports.push(filePath)
-      return { videoId: `video-${imports.length}`, metadata: { size: sizes[filePath], blobId: `blob-${imports.length}`, blobsCoreKey: 'cc'.repeat(32), mimeType: 'video/mp4' } }
+      return { videoId: `video-${imports.length}`, metadata: { size: sizes[filePath], blobId: `blob-${imports.length}`, blobsCoreKey: 'cc'.repeat(32) } }
     },
     async publishChannel() {},
     async seedChannel() {}

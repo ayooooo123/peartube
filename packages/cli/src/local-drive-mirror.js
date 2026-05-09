@@ -1,18 +1,8 @@
 import { readdirSync, statSync } from '#fs'
 import { basename, extname, join } from '#path'
-import { spawn as defaultSpawn } from '#subprocess'
-
-const defaultPath = {
-  join,
-  dirname(path) {
-    const parts = String(path || '').split('/')
-    parts.pop()
-    return parts.join('/') || '/'
-  }
-}
+const defaultPath = { join }
 
 const DEFAULT_VIDEO_EXTENSIONS = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi'])
-const DIRECT_PLAY_EXTENSIONS = new Set(['.mp4', '.m4v', '.mov', '.webm'])
 
 const MIME_BY_EXT = {
   '.mp4': 'video/mp4',
@@ -21,71 +11,6 @@ const MIME_BY_EXT = {
   '.webm': 'video/webm',
   '.mkv': 'video/x-matroska',
   '.avi': 'video/x-msvideo'
-}
-
-function isDirectPlayPath(filePath) {
-  return DIRECT_PLAY_EXTENSIONS.has(extname(String(filePath || '')).toLowerCase())
-}
-
-function remuxedOutputPath(filePath, { path = defaultPath } = {}) {
-  const source = String(filePath || '')
-  const ext = extname(source)
-  const base = ext ? basename(source).slice(0, -ext.length) : basename(source)
-  return path.join(path.dirname(source), `.peartube-remux-${base || 'video'}.mp4`)
-}
-
-async function remuxLocalVideoForWebPlayback(filePath, {
-  ffmpegPath = null,
-  fs = { statSync },
-  path = defaultPath,
-  spawnFn = defaultSpawn,
-  logger = null
-} = {}) {
-  if (isDirectPlayPath(filePath)) {
-    return { filePath, cleanup: null, remuxed: false, mimeType: mimeTypeForPath(filePath) }
-  }
-
-  const bin = ffmpegPath || 'ffmpeg'
-  const outputPath = remuxedOutputPath(filePath, { path })
-  const args = [
-    '-hide_banner',
-    '-loglevel', 'error',
-    '-y',
-    '-i', filePath,
-    '-map', '0:v:0',
-    '-map', '0:a:0?',
-    '-c:v', 'copy',
-    '-c:a', 'aac',
-    '-b:a', '160k',
-    '-movflags', '+faststart',
-    outputPath
-  ]
-
-  await new Promise((resolve, reject) => {
-    const child = spawnFn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] })
-    let stderr = ''
-    child.stderr?.on?.('data', (chunk) => { stderr += String(chunk) })
-    child.on?.('error', reject)
-    child.on?.('close', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`ffmpeg remux failed (${code}): ${stderr.trim() || 'unknown error'}`))
-    })
-  })
-
-  const stat = fs.statSync(outputPath)
-  if (!Number.isFinite(Number(stat?.size)) || Number(stat.size) <= 0) {
-    throw new Error('ffmpeg remux produced empty output')
-  }
-
-  logger?.archive?.info?.('Local drive video remuxed for web playback', { source: filePath, output: outputPath })
-  return {
-    filePath: outputPath,
-    cleanup: () => {
-      try { fs.rmSync?.(outputPath, { force: true }) } catch { /* best effort cleanup */ }
-    },
-    remuxed: true,
-    mimeType: 'video/mp4'
-  }
 }
 
 function normalizeExtensions(extensions = DEFAULT_VIDEO_EXTENSIONS) {
@@ -165,9 +90,7 @@ export async function mirrorLocalDriveToRelayChannel({
   fs = { readdirSync, statSync },
   path = defaultPath,
   state = null,
-  logger = null,
-  ffmpegPath = null,
-  spawnFn = defaultSpawn
+  logger = null
 } = {}) {
   if (!publisher) throw new Error('publisher is required')
   const videos = listLocalDriveVideos(rootPath, { fs, path, recursive, maxFiles })
@@ -179,19 +102,13 @@ export async function mirrorLocalDriveToRelayChannel({
   const failed = []
 
   for (const video of pendingVideos) {
-    let prepared = null
     try {
-      prepared = await remuxLocalVideoForWebPlayback(video.filePath, { ffmpegPath, fs, path, spawnFn, logger })
-      const importPath = prepared.filePath
-      const importMimeType = prepared.mimeType || video.mimeType
-      const importStat = importPath === video.filePath ? null : fs.statSync(importPath)
-      const importSize = Number(importStat?.size || video.size || 0) || video.size
       const result = await publisher.importVideo({
         channel: channelInfo.channel,
-        filePath: importPath,
+        filePath: video.filePath,
         title: video.title,
         description,
-        mimeType: importMimeType
+        mimeType: video.mimeType
       })
       const metadata = result?.metadata || result || {}
       const previewVideo = result?.videoId ? {
@@ -201,8 +118,8 @@ export async function mirrorLocalDriveToRelayChannel({
         path: metadata.path || `/videos/${result.videoId}.mp4`,
         uploadedAt: metadata.uploadedAt || Date.now(),
         duration: Number(metadata.duration || 0) || 0,
-        size: Number(metadata.size || importSize || 0) || 0,
-        mimeType: metadata.mimeType || importMimeType,
+        size: Number(metadata.size || video.size || 0) || 0,
+        mimeType: metadata.mimeType || video.mimeType,
         availability: 'playable',
         blobId: metadata.blobId || null,
         blobsCoreKey: metadata.blobsCoreKey || null,
@@ -210,14 +127,12 @@ export async function mirrorLocalDriveToRelayChannel({
         thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || null,
         thumbnailMimeType: metadata.thumbnailMimeType || null
       } : null
-      imported.push({ ...video, videoId: result?.videoId || null, previewVideo, remuxed: Boolean(prepared.remuxed) })
+      imported.push({ ...video, videoId: result?.videoId || null, previewVideo })
       state?.seen?.set(video.filePath, fingerprintVideo(video))
-      logger?.archive?.info?.('Local drive video imported', { file: video.filePath, videoId: result?.videoId || null, remuxed: Boolean(prepared.remuxed) })
+      logger?.archive?.info?.('Local drive video imported', { file: video.filePath, videoId: result?.videoId || null })
     } catch (err) {
       failed.push({ ...video, error: err?.message || String(err) })
       logger?.archive?.error?.('Local drive video import failed', { file: video.filePath, error: err?.message || String(err) })
-    } finally {
-      try { prepared?.cleanup?.() } catch { /* best effort cleanup */ }
     }
   }
 

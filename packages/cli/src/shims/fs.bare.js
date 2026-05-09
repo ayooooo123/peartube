@@ -2,6 +2,7 @@ export {
   createReadStream,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,

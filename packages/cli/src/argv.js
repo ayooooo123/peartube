@@ -121,6 +121,16 @@ export function parseArgv(argv = []) {
       continue
     }
 
+    if (arg === '--path') {
+      flags.path = consumeValue()
+      continue
+    }
+
+    if (arg === '--max-files') {
+      flags.maxFiles = consumeValue()
+      continue
+    }
+
     if (arg === '--channel-name') {
       flags.channelName = consumeValue()
       continue

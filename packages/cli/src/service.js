@@ -4,6 +4,7 @@ import { RelayCatalog } from './catalog.js'
 import { buildRelayStatus, writeRelayStatus } from './status.js'
 import { createArchiveConsole } from './archive-console.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from './archive-manager.js'
+import { mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 
 export async function createRelayService({
   config,
@@ -324,6 +325,27 @@ export async function createRelayService({
       const job = await manager.enqueue(input)
       if (runNow) return manager.runJob(job.id)
       return job
+    },
+    async mirrorLocalDrive(input = {}) {
+      const runtimeFsModule = fsModule || await import('#fs')
+      const runtimePathModule = pathModule || await import('#path')
+      return mirrorLocalDriveToRelayChannel({
+        rootPath: input.path || input.rootPath,
+        channelName: input.channelName || 'Local Drive Mirror',
+        description: input.description || '',
+        recursive: input.recursive !== false,
+        maxFiles: Number.isFinite(Number(input.maxFiles)) ? Number(input.maxFiles) : Infinity,
+        fs: runtimeFsModule,
+        path: runtimePathModule,
+        logger,
+        publisher: createArchivePublisher({
+          identityManager: runtime.identityManager,
+          uploadManager: runtime.uploadManager,
+          api: runtime.api,
+          runtime,
+          fs: runtimeFsModule
+        })
+      })
     },
     getStatus() {
       return currentStatus || buildRelayStatus({

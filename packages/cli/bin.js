@@ -38,6 +38,7 @@ function printHelp() {
     '  run       Run the relay service',
     '  ui       Run the relay archive WebUI',
     '  archive  Queue or run anonymous YouTube archive jobs',
+    '  mirror-local  Import local video files into the relay channel',
     '  validate  Validate and print the normalized relay config',
     '  status    Print relay status from the local catalog',
     '  init      Write an example config file',
@@ -52,6 +53,8 @@ function printHelp() {
     '  --channel <key>',
     '  --owner <key>',
     '  --url <youtube-url>',
+    '  --path <local-directory>',
+    '  --max-files <n>',
     '  --channel-name <name>',
     '  --title <title>',
     '  --description <text>',
@@ -133,6 +136,25 @@ async function archiveCommand(flags) {
   }
 }
 
+async function mirrorLocalCommand(flags) {
+  if (!flags.path) throw new Error('--path is required')
+  const config = await loadRelayConfig(flags)
+  const { startRelay } = await import('./src/index.js')
+  const relay = await startRelay({ config })
+  try {
+    const result = await relay.mirrorLocalDrive({
+      path: flags.path,
+      channelName: flags.channelName || flags.title || 'Local Drive Mirror',
+      description: flags.description || '',
+      recursive: flags.recursive !== false,
+      maxFiles: flags.maxFiles
+    })
+    writeLine(JSON.stringify(result, null, 2) + '\n')
+  } finally {
+    await relay.close()
+  }
+}
+
 async function validateCommand(flags) {
   const config = await loadRelayConfig(flags)
   const output = JSON.stringify(config, null, 2)
@@ -181,6 +203,9 @@ async function main() {
       break
     case 'archive':
       await archiveCommand(flags)
+      break
+    case 'mirror-local':
+      await mirrorLocalCommand(flags)
       break
     case 'validate':
       await validateCommand(flags)

@@ -107,7 +107,10 @@ export async function createRelayService({
         videosFound: mirrorStats?.videosFound || 0,
         videosDownloaded: mirrorStats?.videosDownloaded || 0,
         mirroredAt: Date.now(),
-        lastError: null
+        lastError: null,
+        previewVideos: Array.isArray(mirrorStats?.previewVideos) ? mirrorStats.previewVideos : undefined,
+        videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || 0) || 0,
+        manifestUpdatedAt: Date.now()
       })
 
       if (resolved.publicBeeKey) {

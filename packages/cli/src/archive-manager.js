@@ -142,6 +142,23 @@ export function createArchiveJobStore({ metaDb }) {
       const updated = jobs.map((job) => job.id === id ? publicJob({ ...job, ...patch, updatedAt: now() }) : job)
       await writeJobsRaw(updated)
       return updated.find((job) => job.id === id) || null
+    },
+    async getCompletedVideoPreviewsByChannel() {
+      const jobs = await readJobsRaw()
+      const byChannel = new Map()
+      for (const job of jobs) {
+        if (job?.status !== 'completed') continue
+        if (!job?.channelKey || !job?.previewVideo?.id) continue
+        const list = byChannel.get(job.channelKey) || []
+        list.push({
+          ...job.previewVideo,
+          publicBeeKey: job.publicBeeKey || job.previewVideo.publicBeeKey || null,
+          channelKey: job.channelKey,
+          driveKey: job.channelKey,
+        })
+        byChannel.set(job.channelKey, list)
+      }
+      return byChannel
     }
   }
 }
@@ -347,18 +364,36 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           title: privateInput.title || downloaded.title,
           description: privateInput.description || downloaded.description
         })
+        const importedMetadata = imported?.metadata || imported
 
         if (privateInput.publish !== false) {
           await publisher.publishChannel(channelInfo)
           await publisher.seedChannel(channelInfo)
         }
 
+        const previewVideo = imported?.videoId ? {
+          id: imported.videoId,
+          title: privateInput.title || downloaded.title || imported.videoId,
+          description: privateInput.description || downloaded.description || '',
+          path: importedMetadata.path || `/videos/${imported.videoId}.mp4`,
+          uploadedAt: importedMetadata.uploadedAt || now(),
+          duration: Number(importedMetadata.duration || downloaded.duration || 0) || 0,
+          size: Number(importedMetadata.size || downloaded.size || 0) || 0,
+          mimeType: importedMetadata.mimeType || downloaded.mimeType || 'video/mp4',
+          availability: 'playable',
+          blobId: importedMetadata.blobId || null,
+          blobsCoreKey: importedMetadata.blobsCoreKey || null,
+          thumbnailBlobId: importedMetadata.thumbnailBlobId || null,
+          thumbnailBlobsCoreKey: importedMetadata.thumbnailBlobsCoreKey || null,
+          thumbnailMimeType: importedMetadata.thumbnailMimeType || null
+        } : null
         const completed = await store.updateJob(id, {
           status: 'completed',
           title: privateInput.title || downloaded.title,
           videoId: imported.videoId,
           channelKey: channelInfo.channelKey,
           publicBeeKey: channelInfo.publicBeeKey || null,
+          previewVideo,
           completedAt: now(),
           error: null
         })

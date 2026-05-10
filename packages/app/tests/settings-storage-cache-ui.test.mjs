@@ -7,8 +7,16 @@ const __dirname = path.dirname(new URL(import.meta.url).pathname)
 const settingsSource = fs.readFileSync(path.join(__dirname, '..', 'app', '(tabs)', 'settings.tsx'), 'utf8')
 
 test('settings renders storage controls before account onboarding', () => {
-  const noIdentityBlock = settingsSource.match(/if \(!identity\) \{([\s\S]*?)\n  return \(/)?.[1] ?? ''
-  const storageSection = settingsSource.match(/const renderStorageSection = \(\) => \(([\s\S]*?)\n  \)\n\n  \/\/ Onboarding/)?.[1] ?? ''
+  const noIdentityStart = settingsSource.indexOf('if (!identity) {')
+  const signedInStart = settingsSource.indexOf('  return (', noIdentityStart + 20)
+  const noIdentityBlock = noIdentityStart >= 0 && signedInStart >= 0
+    ? settingsSource.slice(noIdentityStart, signedInStart)
+    : ''
+  const storageStart = settingsSource.indexOf('const renderStorageSection = () => (')
+  const storageEnd = settingsSource.indexOf('// Onboarding', storageStart + 1)
+  const storageSection = storageStart >= 0 && storageEnd >= 0
+    ? settingsSource.slice(storageStart, storageEnd)
+    : ''
 
   assert.match(noIdentityBlock, /renderStorageSection\(\)/)
   assert.match(storageSection, /Storage/)

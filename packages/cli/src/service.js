@@ -170,12 +170,24 @@ export async function createRelayService({
 
       if (resolved.publicBeeKey) {
         await runtime.cacheManager?.addChannel?.(resolved.channelKey, resolved.publicBeeKey, 'discovered').catch(() => {})
-        await runtime.publicFeed?.submitChannel?.(resolved.channelKey, resolved.publicBeeKey).catch(() => {})
-        await runtime.seeder?.seedChannel?.({
+        const seedStats = await runtime.seeder?.seedChannel?.({
           driveKey: resolved.channelKey,
           publicBeeKey: resolved.publicBeeKey,
           previewVideos: Array.isArray(mirrorStats?.previewVideos) ? mirrorStats.previewVideos : []
-        }).catch(() => {})
+        }).catch(() => null)
+        const catalogEntry = seedStats?.catalogEntry || {
+          schema: 'peartube.relayCatalog',
+          catalogVersion: 1,
+          driveKey: resolved.channelKey,
+          publicBeeKey: resolved.publicBeeKey,
+          source: 'relay-cache',
+          relayRole: 'cache',
+          relayServing: true,
+          previewVideos: Array.isArray(mirrorStats?.previewVideos) ? mirrorStats.previewVideos : [],
+          videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || 0) || 0,
+          manifestUpdatedAt: Date.now()
+        }
+        await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
       }
 
       logger.mirror.info('Channel mirrored', {

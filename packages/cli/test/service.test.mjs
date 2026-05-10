@@ -181,6 +181,89 @@ test('createRelayService accepts discovered channels in public discovery mode', 
   }
 })
 
+
+test('createRelayService publishes discovered relay inventory as relay catalog feed entries', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-catalog-feed-')
+  const runtime = createFakeRuntime()
+  const submitChannelCalls = []
+  const relayCatalogCalls = []
+  const seedCalls = []
+  const previewVideos = [{ id: 'video-1', blobId: 'blob-1', blobsCoreKey: 'cc'.repeat(32) }]
+
+  runtime.cacheManager = {
+    async addChannel(driveKey, publicBeeKey, source) {
+      t.is(driveKey, 'chan-relay')
+      t.is(publicBeeKey, 'bee-chan-relay')
+      t.is(source, 'discovered')
+    }
+  }
+  runtime.publicFeed = {
+    async submitChannel(...args) {
+      submitChannelCalls.push(args)
+    }
+  }
+  runtime.publishRelayCatalogEntry = async (entry) => {
+    relayCatalogCalls.push(entry)
+  }
+  runtime.seeder = {
+    async seedChannel(channel) {
+      seedCalls.push(channel)
+      return {
+        catalogEntry: {
+          schema: 'peartube.relayCatalog',
+          catalogVersion: 1,
+          driveKey: channel.driveKey,
+          publicBeeKey: channel.publicBeeKey,
+          source: 'relay-cache',
+          relayRole: 'cache',
+          relayServing: true,
+          previewVideos
+        }
+      }
+    }
+  }
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({
+        bytesDownloaded: 4096,
+        videosFound: 1,
+        videosDownloaded: 1,
+        previewVideos,
+        videoCount: 1
+      }),
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-relay', source: 'discovered' })
+
+    t.is(seedCalls.length, 1, 'accepted relay candidate should be seeded')
+    t.is(submitChannelCalls.length, 0, 'relay-cache candidates should not be submitted as local published channels')
+    t.is(relayCatalogCalls.length, 1, 'relay-cache candidate should be published through relay catalog feed path')
+    t.is(relayCatalogCalls[0].source, 'relay-cache')
+    t.is(relayCatalogCalls[0].relayRole, 'cache')
+    t.is(relayCatalogCalls[0].relayServing, true)
+    t.alike(relayCatalogCalls[0].previewVideos, previewVideos)
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService starts without forcing an eager feed sync', async (t) => {
   const dir = makeTempDir('peartube-relay-service-logs-')
   const runtime = createFakeRuntime()
@@ -597,6 +680,7 @@ test('createRelayService watches configured local mirror directory', async (t) =
   }
   runtime.cacheManager = { async pinChannel() {} }
   runtime.publicFeed = { async submitChannel() {} }
+  runtime.publishRelayCatalogEntry = async () => {}
   runtime.seeder = { async seedChannel() {} }
 
   const fsModule = {

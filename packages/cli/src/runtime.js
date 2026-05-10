@@ -159,7 +159,22 @@ export async function createRelayRuntime({ config, logger }) {
     seeder,
     identityManager: null,
     uploadManager: null,
-    api: null,
+    async publishRelayCatalogEntry(entry) {
+      if (!entry?.driveKey || !entry?.publicBeeKey) return null
+      const catalogEntry = {
+        schema: 'peartube.relayCatalog',
+        catalogVersion: 1,
+        source: 'relay-cache',
+        relayRole: 'cache',
+        relayServing: true,
+        ...entry,
+        driveKey: entry.driveKey,
+        publicBeeKey: entry.publicBeeKey,
+        previewVideos: Array.isArray(entry.previewVideos) ? entry.previewVideos : []
+      }
+      await publicFeed.submitRelayCatalogEntry?.(catalogEntry)
+      return catalogEntry
+    },
     setCandidateHandler(handler) {
       candidateHandler = handler
     },
@@ -171,7 +186,6 @@ export async function createRelayRuntime({ config, logger }) {
         policy: config.policy
       })
       await cacheManager.init()
-      await publicFeed.start()
 
       const [{ createIdentityManager }, { createUploadManager }, { createApi }] = await Promise.all([
         import('@peartube/backend/identity'),
@@ -184,14 +198,16 @@ export async function createRelayRuntime({ config, logger }) {
       this.api = createApi({ ctx, publicFeed, seedingManager: null, videoStats: null })
 
       // Use the same feed snapshot and availability-hint plumbing as the normal
-      // PearTube backend. Without these providers the relay can gossip channel
-      // keys, but phones do not learn that the relay has playable local bytes.
+      // PearTube backend before joining the feed swarm. Otherwise initial
+      // HAVE_FEED messages can omit playable relay-cache preview refs.
       if (typeof this.api.getAvailabilityHints === 'function') {
         publicFeed.setAvailabilityHintProvider((requests, conn) => this.api.getAvailabilityHints(requests, conn))
       }
       if (typeof this.api.getFeedSnapshotEntries === 'function') {
         publicFeed.setFeedSnapshotProvider((entries) => this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
       }
+
+      await publicFeed.start()
 
       logger.runtime?.info('Relay runtime started', this.getNetworkStats())
       await seeder.seedCachedChannels(cacheManager).catch((err) => {

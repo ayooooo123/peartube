@@ -1,0 +1,35 @@
+services:
+  relay:
+    image: ghcr.io/ayooooo123/peartube-relay:latest
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - "8174:8174"
+    environment:
+      PEARTUBE_MODE: public
+      PEARTUBE_POLICY: discovery
+      PEARTUBE_STORAGE_PATH: /var/lib/peartube-relay
+      PEARTUBE_STORAGE_MAX_BYTES: "107374182400"
+      PEARTUBE_DISCOVERY_ENABLED: "true"
+      PEARTUBE_DISCOVERY_MAX_CHANNELS: "500"
+      PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER: "20"
+      PEARTUBE_NETWORK_ANNOUNCE: "true"
+      PEARTUBE_NETWORK_BOOTSTRAP: default
+      PEARTUBE_ARCHIVE_UI_ENABLED: "true"
+      PEARTUBE_ARCHIVE_UI_HOST: 0.0.0.0
+      PEARTUBE_ARCHIVE_UI_PORT: "8174"
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_ENABLED: "true"
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_PATH: /mirror
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_POLL: "30"
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_CHANNEL_NAME: Local Archive Mirror
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_DESCRIPTION: Local videos mirrored from desktop ~/peartube-local-videos
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_RECURSIVE: "true"
+      PEARTUBE_ARCHIVE_LOCAL_MIRROR_MAX_FILES: "10000"
+      PEARTUBE_LOG_LEVEL: info
+    volumes:
+      - peartube-relay-data:/var/lib/peartube-relay
+      - /home/user/peartube-local-videos:/mirror:ro
+    command: ["ui", "--host", "0.0.0.0", "--port", "8174"]
+
+volumes:
+  peartube-relay-data:

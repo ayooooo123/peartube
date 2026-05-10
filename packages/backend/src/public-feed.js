@@ -1362,23 +1362,43 @@ export class PublicFeedManager {
    * @param {string} driveKey - The Autobase channel key
    * @param {string} [publicBeeKey] - The public Hyperbee key (for viewers)
    */
-  async submitChannel(driveKey, publicBeeKey = null) {
-    if (this.addEntry(driveKey, 'local', publicBeeKey)) {
+  async submitChannel(driveKey, publicBeeKey = null, options = {}) {
+    let snapshot = null
+    if (this.feedSnapshotProvider) {
+      const resolved = await this._resolveFeedSnapshots([{ driveKey, publicBeeKey }], null).catch(() => null)
+      snapshot = Array.isArray(resolved) ? resolved[0] || null : null
+    }
+
+    const explicitSnapshot = options && typeof options === 'object'
+      ? {
+          channelName: typeof options.channelName === 'string' ? options.channelName.trim() : null,
+          videoCount: Number.isFinite(options.videoCount) ? Number(options.videoCount) : undefined,
+          manifestUpdatedAt: Number.isFinite(options.manifestUpdatedAt) ? Number(options.manifestUpdatedAt) : undefined,
+          previewVideos: Array.isArray(options.previewVideos) ? this._sanitizePreviewVideos(options.previewVideos) : undefined,
+        }
+      : null
+
+    snapshot = {
+      ...(explicitSnapshot || {}),
+      ...(snapshot || {}),
+    }
+
+    if (this.addEntry(driveKey, 'local', publicBeeKey, snapshot)) {
       console.log('[PublicFeed] Submitted local channel:', driveKey.slice(0, 16), 'publicBee:', publicBeeKey?.slice(0, 16) || 'none');
       this.onFeedUpdate?.();
     } else if (publicBeeKey) {
       // Entry existed but we're adding publicBeeKey
       const entry = this.entries.get(driveKey)
+      let changed = false
       if (entry && !entry.publicBeeKey) {
         entry.publicBeeKey = publicBeeKey
+        changed = true
         console.log('[PublicFeed] Updated existing entry with publicBeeKey:', publicBeeKey.slice(0, 16));
       }
-    }
-
-    let snapshot = null
-    if (this.feedSnapshotProvider) {
-      const resolved = await this._resolveFeedSnapshots([{ driveKey, publicBeeKey }], null).catch(() => null)
-      snapshot = Array.isArray(resolved) ? resolved[0] || null : null
+      if (entry && this._applyEntrySnapshot(driveKey, { ...snapshot, publicBeeKey: entry.publicBeeKey || publicBeeKey })) {
+        changed = true
+      }
+      if (changed) this.onFeedUpdate?.();
     }
 
     // Persist to database so it survives restart (use v2 format with publicBeeKey)

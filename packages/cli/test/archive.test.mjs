@@ -4,7 +4,7 @@ import { resolveRelayConfig } from '../src/config.js'
 import { buildSourceId, buildWriterKeyName, classifySourceUrl } from '../src/archive/source-id.js'
 import { ARCHIVE_STATUS, createArchiveState } from '../src/archive/state.js'
 import { createArchiver } from '../src/archive/index.js'
-import { announceArchiveChannel } from '../src/archive/publisher.js'
+import { announceArchiveChannel, createArchivePublisher } from '../src/archive/publisher.js'
 
 function makeFakeMetaDb() {
   const map = new Map()
@@ -72,6 +72,7 @@ test('archive publisher announces and seeds after public bee content changes', a
   const channelEntry = {
     channelKey: 'aa'.repeat(32),
     publicBeeKey: null,
+    channelName: 'Configured Label',
     channel: {
       async getPublicBeeKey() {
         return 'bb'.repeat(32)
@@ -98,7 +99,7 @@ test('archive publisher announces and seeds after public bee content changes', a
   const runtime = {
     publicFeed: {
       async submitChannel(driveKey, publicBeeKey, options) {
-        calls.push(['submit', driveKey, publicBeeKey, videoCount, options?.previewVideos?.map((video) => video.blobId) || []])
+        calls.push(['submit', driveKey, publicBeeKey, videoCount, options?.previewVideos?.map((video) => video.blobId) || [], options?.channelName || null, options?.previewVideos?.map((video) => video.channelName || null) || []])
       }
     },
     cacheManager: {
@@ -119,15 +120,59 @@ test('archive publisher announces and seeds after public bee content changes', a
 
   t.is(channelEntry.publicBeeKey, 'bb'.repeat(32))
   t.alike(calls, [
-    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 0, []],
+    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 0, [], 'Configured Label', []],
     ['pin', 'aa'.repeat(32), 'bb'.repeat(32), 0],
     ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 0, []],
-    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 1, ['0:4:0:4096']],
+    ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 1, ['0:4:0:4096'], 'Configured Label', ['Configured Label']],
     ['pin', 'aa'.repeat(32), 'bb'.repeat(32), 1],
     ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 1, ['0:4:0:4096']],
   ])
 })
 
+test('archive publisher derives YouTube channel name from yt-dlp uploader metadata', async (t) => {
+  const channels = []
+  const source = {
+    sourceId: 'youtube:UCactual',
+    url: 'https://www.youtube.com/channel/UCactual',
+    type: 'youtube',
+    kind: 'channel',
+    identifier: 'UCactual'
+  }
+  const channel = {
+    writable: true,
+    async getMetadata() { return {} },
+    async updateMetadata(meta) { channels.push(meta) },
+    async ensureLocalBlobDrive() {},
+    async getPublicBeeKey() { return 'bb'.repeat(32) },
+    async listVideos() { return [] }
+  }
+  const publisher = createArchivePublisher({
+    ctx: {},
+    uploadManager: {
+      async uploadFromPath(_channel, _filePath, options) {
+        return { success: true, videoId: options.title }
+      },
+    },
+    runtime: {
+      publicFeed: { async submitChannel() {} },
+      cacheManager: { async pinChannel() {} },
+      seeder: { async seedChannel() {} },
+    },
+    fs: makeFakeFs({ '/tmp/video.mp4': 'video bytes' }),
+    logger: makeFakeLogger(),
+    state: null,
+    createChannelFn: async () => ({ channel, channelKeyHex: 'aa'.repeat(32) })
+  })
+
+  await publisher.publishVideo({
+    source,
+    ytEntry: { id: 'yt1', title: 'Video', uploader: 'Actual Creator', duration: 1 },
+    files: { videoFile: '/tmp/video.mp4' }
+  })
+
+  t.is(channels.length, 1)
+  t.is(channels[0].name, 'Actual Creator')
+})
 test('classifySourceUrl recognises YouTube channels, handles, and playlists', (t) => {
   t.alike(classifySourceUrl('https://www.youtube.com/@somechannel'), {
     type: 'youtube',

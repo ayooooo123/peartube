@@ -470,6 +470,7 @@ B.listVideos = async (r: any) => {
       blobsCoreKey: v?.blobsCoreKey ? String(v.blobsCoreKey) : null,
       mimeType: v?.mimeType ? String(v.mimeType) : null,
       availability: v?.availability ? String(v.availability) : null,
+      playbackSupport: v?.playbackSupport ? String(v.playbackSupport) : null,
       publicBeeKey: v?.publicBeeKey ? String(v.publicBeeKey) : null,
       width: Number(v?.width) || 0,
       height: Number(v?.height) || 0,

@@ -13,6 +13,14 @@ const MIME_BY_EXT = {
   '.avi': 'video/x-msvideo'
 }
 
+const DIRECT_PLAYABLE_MIME_TYPES = new Set(['video/mp4', 'video/webm'])
+
+function getPlaybackSupportForMimeType(mimeType) {
+  const normalized = String(mimeType || '').toLowerCase()
+  if (DIRECT_PLAYABLE_MIME_TYPES.has(normalized)) return { availability: 'playable', playbackSupport: 'direct' }
+  return { availability: 'playable', playbackSupport: 'unverified-container' }
+}
+
 function normalizeExtensions(extensions = DEFAULT_VIDEO_EXTENSIONS) {
   const values = extensions instanceof Set ? [...extensions] : extensions
   return new Set([...values].map((ext) => String(ext || '').trim().toLowerCase()).filter(Boolean).map((ext) => ext.startsWith('.') ? ext : `.${ext}`))
@@ -122,6 +130,7 @@ export async function mirrorLocalDriveToRelayChannel({
         mimeType: video.mimeType
       })
       const metadata = result?.metadata || result || {}
+      const playbackSupport = getPlaybackSupportForMimeType(metadata.mimeType || video.mimeType)
       const previewVideo = result?.videoId ? {
         id: result.videoId,
         title: video.title,
@@ -131,7 +140,8 @@ export async function mirrorLocalDriveToRelayChannel({
         duration: Number(metadata.duration || 0) || 0,
         size: Number(metadata.size || video.size || 0) || 0,
         mimeType: metadata.mimeType || video.mimeType,
-        availability: 'playable',
+        availability: playbackSupport.availability,
+        playbackSupport: playbackSupport.playbackSupport,
         blobId: metadata.blobId || null,
         blobsCoreKey: metadata.blobsCoreKey || null,
         thumbnailBlobId: metadata.thumbnailBlobId || null,

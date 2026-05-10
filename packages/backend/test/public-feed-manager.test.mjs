@@ -928,6 +928,33 @@ test('handle HAVE_FEED stores serving manifest data on the entry', () => {
   }
 })
 
+test('serving manifest snapshots preserve unverified playback metadata', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+
+  try {
+    manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY, {
+      previewVideos: [{
+        id: 'preview-mkv',
+        title: 'MKV Preview',
+        uploadedAt: 99,
+        blobId: '0:8:0:1024',
+        blobsCoreKey: '44'.repeat(32),
+        mimeType: 'video/x-matroska',
+        availability: 'playable',
+        playbackSupport: 'unverified-container',
+      }],
+    })
+
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].previewVideos[0].availability, 'playable')
+    assert.equal(feed[0].previewVideos[0].playbackSupport, 'unverified-container')
+  } finally {
+    manager.stop()
+  }
+})
+
+
 test('requestAvailabilityHints merges playable responses from feed peers (including relayed peers on same channel)', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

@@ -78,6 +78,7 @@ export function attachMobileHandlers(B, deps) {
         blobsCoreKey: v?.blobsCoreKey ? String(v.blobsCoreKey) : null,
         mimeType: v?.mimeType ? String(v.mimeType) : null,
         availability: v?.availability ? String(v.availability) : null,
+        playbackSupport: v?.playbackSupport ? String(v.playbackSupport) : null,
         thumbnailBlobId: v?.thumbnailBlobId ? String(v.thumbnailBlobId) : null,
         thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey ? String(v.thumbnailBlobsCoreKey) : null,
         thumbnailMimeType: v?.thumbnailMimeType ? String(v.thumbnailMimeType) : null,

@@ -96,6 +96,43 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
 })
 
 
+test('mirrorLocalDriveToRelayChannel marks local containers playable with unverified playback support', async (t) => {
+  const fs = makeFs({
+    '/drive': [dirent('movie.mkv', 'file')]
+  }, {
+    '/drive/movie.mkv': 100
+  })
+  let publishedPreview = null
+  const publisher = {
+    async ensureAnonymousChannel() {
+      return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
+    },
+    async importVideo({ title, mimeType }) {
+      return {
+        videoId: title,
+        metadata: {
+          uploadedAt: 123,
+          size: 100,
+          mimeType,
+          blobId: `blob:${title}`,
+          blobsCoreKey: 'cc'.repeat(32)
+        }
+      }
+    },
+    async publishChannel(_channelInfo, options) {
+      publishedPreview = options.previewVideos[0]
+    },
+    async seedChannel() {}
+  }
+
+  await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim })
+
+  t.is(publishedPreview.mimeType, 'video/x-matroska')
+  t.is(publishedPreview.availability, 'playable')
+  t.is(publishedPreview.playbackSupport, 'unverified-container')
+})
+
+
 test('mirrorLocalDriveToRelayChannel republishes and reseeds cached local previews on unchanged scans', async (t) => {
   const sizes = { '/drive/one.mp4': 100 }
   const fs = {

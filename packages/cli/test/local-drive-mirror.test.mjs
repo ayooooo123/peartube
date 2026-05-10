@@ -96,7 +96,7 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
 })
 
 
-test('mirrorLocalDriveToRelayChannel skips already mirrored file fingerprints', async (t) => {
+test('mirrorLocalDriveToRelayChannel republishes and reseeds cached local previews on unchanged scans', async (t) => {
   const sizes = { '/drive/one.mp4': 100 }
   const fs = {
     readdirSync() {
@@ -108,6 +108,8 @@ test('mirrorLocalDriveToRelayChannel skips already mirrored file fingerprints', 
   }
   const state = createLocalDriveMirrorState()
   const imports = []
+  const published = []
+  const seeded = []
   const publisher = {
     async ensureAnonymousChannel() {
       return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
@@ -116,8 +118,12 @@ test('mirrorLocalDriveToRelayChannel skips already mirrored file fingerprints', 
       imports.push(filePath)
       return { videoId: `video-${imports.length}`, metadata: { size: sizes[filePath], blobId: `blob-${imports.length}`, blobsCoreKey: 'cc'.repeat(32) } }
     },
-    async publishChannel() {},
-    async seedChannel() {}
+    async publishChannel(_channelInfo, options) {
+      published.push(options.previewVideos.map((video) => video.blobId))
+    },
+    async seedChannel(channelInfo) {
+      seeded.push(channelInfo.previewVideos.map((video) => video.blobsCoreKey))
+    }
   }
 
   const first = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, state })
@@ -130,4 +136,6 @@ test('mirrorLocalDriveToRelayChannel skips already mirrored file fingerprints', 
   t.is(second.skipped, 1)
   t.is(third.imported, 1)
   t.alike(imports, ['/drive/one.mp4', '/drive/one.mp4'])
+  t.alike(published, [['blob-1'], ['blob-1'], ['blob-2']])
+  t.alike(seeded, [['cc'.repeat(32)], ['cc'.repeat(32)], ['cc'.repeat(32)]])
 })

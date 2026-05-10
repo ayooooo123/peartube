@@ -166,6 +166,27 @@ test('shorts player has functional playback buttons and a seekable progress bar'
   assert.match(source, /accessibilityLabel="Shorts progress bar"/, 'progress bar should be accessible and testable')
 })
 
+test('shorts progress bar keeps prop seekPosition normalized while imperative seek uses seconds', () => {
+  const source = readAppFile('components/discovery/VerticalShortsPlayer.tsx')
+  const seekBlock = source.slice(source.indexOf('const handleProgressBarPress'), source.indexOf('const showPlayer'))
+
+  assert.match(seekBlock, /const progress = clampProgress\(locationX \/ progressBarWidth\)/, 'tap position should be converted to a normalized 0..1 progress value')
+  assert.match(seekBlock, /setSeekPosition\(progress\)/, 'PearInlineVideoView seekPosition prop expects a normalized ratio')
+  assert.match(seekBlock, /playerRef\.current\?\.seek\?\.\(nextTime \/ 1000\)/, 'imperative player seek should still use seconds')
+  assert.doesNotMatch(seekBlock, /setSeekPosition\(nextTime \/ 1000\)/, 'seconds must not be passed to the normalized seekPosition prop')
+  assert.match(source, /pendingSeekMs/, 'pending seek completion should compare progress events using milliseconds, not the normalized ratio')
+})
+
+test('vertical discovery ignores stale preparePlayback completions after fast swipes', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+  const playBlock = source.slice(source.indexOf('const playVideo = useCallback'), source.indexOf('useEffect(() => {\n    if (!activeVideo'))
+
+  assert.match(source, /const playbackRequestSeqRef = useRef\(0\)/, 'Shorts playback should track request generations')
+  assert.match(playBlock, /const requestSeq = \+\+playbackRequestSeqRef\.current/, 'each playback attempt should get a newer generation id')
+  assert.match(playBlock, /pendingPlayKeyRef\.current !== playKey \|\| playbackRequestSeqRef\.current !== requestSeq/, 'stale async preparePlayback completions should be ignored')
+  assert.match(playBlock, /if \(isStalePlaybackRequest\(\)\) return/, 'resolved stale playback URLs must not attach to the active card')
+})
+
 test('vertical discovery stabilizes card order across feed refreshes', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
   const controllerSource = readAppFile('lib/discover-feed-controller.js')
@@ -175,8 +196,19 @@ test('vertical discovery stabilizes card order across feed refreshes', () => {
   assert.match(source, /mergeUniqueFeedVideos\(prev, renderable, 80\)/, 'preview feed merges should preserve existing card order through the controller')
   assert.match(source, /mergeUniqueFeedVideos\(prev, mapped, 80\)/, 'hydrated feed merges should preserve existing card order through the controller')
   assert.match(controllerSource, /for \(const video of \[\.\.\.\(previousVideos \|\| \[\]\), \.\.\.\(incomingVideos \|\| \[\]\)\]\)/, 'controller merge should consider existing videos before incoming videos')
-  assert.match(source, /prevKeys === nextKeys \? prev : entries/, 'unchanged feed entry order should avoid unnecessary list state churn')
+  assert.match(source, /getFeedEntrySignature/, 'Discover should compare feed-entry content, not only channel order')
+  assert.doesNotMatch(source, /prevKeys === nextKeys \? prev : entries/, 'same-channel feed updates must not discard changed previews or blob refs')
   assert.match(source, /thumbnailCacheRef/, 'thumbnail cache reads should not recreate feed merge callbacks on every thumbnail resolution')
+})
+
+test('vertical discovery updates feed entries when previews change without channel order changing', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /function getFeedEntrySignature\(entry: FeedEntry\)/, 'feed-entry signature helper should exist')
+  assert.match(source, /previewVideos/, 'signature should include preview video state')
+  assert.match(source, /blobId/, 'signature should include direct blob ids')
+  assert.match(source, /blobsCoreKey/, 'signature should include direct blob core keys')
+  assert.match(source, /prevSignature === nextSignature \? prev : entries/, 'unchanged signatures may preserve state, changed previews must update entries')
 })
 
 test('vertical discovery stops inline Shorts playback when the route unmounts or loses focus', () => {

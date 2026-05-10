@@ -58,6 +58,24 @@ interface FeedEntry {
     thumbnailMimeType?: string | null
   }>
 }
+function getFeedEntrySignature(entry: FeedEntry) {
+  const previewSignature = (entry.previewVideos || []).map((video) => [
+    video.id,
+    video.uploadedAt || 0,
+    video.duration || 0,
+    video.blobId || '',
+    video.blobsCoreKey || '',
+    video.availability || '',
+    video.thumbnailBlobId || '',
+    video.thumbnailBlobsCoreKey || '',
+  ].join(':')).join(',')
+  return [
+    entry.channelKey || entry.driveKey,
+    entry.publicBeeKey || '',
+    entry.channelName || '',
+    previewSignature,
+  ].join('|')
+}
 
 
 function getVideoRef(video: VideoData) {
@@ -116,6 +134,7 @@ export default function VerticalDiscoveryScreen() {
   const [shortsChromeVisible, setShortsChromeVisible] = useState(true)
   const shortsPlayerRef = useRef<any>(null)
   const pendingPlayKeyRef = useRef<string | null>(null)
+  const playbackRequestSeqRef = useRef(0)
   const hydratedChannelsRef = useRef<Set<string>>(new Set())
   const feedLoadInFlightRef = useRef(false)
   const inflightPlaybackWarmups = useRef<Set<string>>(new Set())
@@ -231,9 +250,9 @@ export default function VerticalDiscoveryScreen() {
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
       if (entries.length > 0) setCacheRestoredOnly(false)
       setFeedEntries((prev) => {
-        const prevKeys = prev.map((entry) => entry.channelKey || entry.driveKey).join('|')
-        const nextKeys = entries.map((entry: FeedEntry) => entry.channelKey || entry.driveKey).join('|')
-        return prevKeys === nextKeys ? prev : entries
+        const prevSignature = prev.map(getFeedEntrySignature).join('\n')
+        const nextSignature = entries.map(getFeedEntrySignature).join('\n')
+        return prevSignature === nextSignature ? prev : entries
       })
       seedFromFeedEntries(entries)
       for (const entry of entries.slice(0, 24)) {
@@ -266,6 +285,7 @@ export default function VerticalDiscoveryScreen() {
     void shortsPlayerRef.current?.stop?.()
     void shortsPlayerRef.current?.pause?.()
     pendingPlayKeyRef.current = null
+    playbackRequestSeqRef.current += 1
     setShortsVideoUrl(null)
     setShortsLoading(false)
   }, [])
@@ -288,12 +308,15 @@ export default function VerticalDiscoveryScreen() {
     const playKey = `${video.channelKey}:${video.id}`
     if (pendingPlayKeyRef.current === playKey) return
     pendingPlayKeyRef.current = playKey
+    const requestSeq = ++playbackRequestSeqRef.current
+    const isStalePlaybackRequest = () => pendingPlayKeyRef.current !== playKey || playbackRequestSeqRef.current !== requestSeq
 
     try {
       handoffToShorts()
       const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).catch(() => undefined)
+        if (isStalePlaybackRequest()) return
         setShortsVideoUrl(cachedUrl)
         setShortsPlaybackSession((prev) => prev + 1)
         setShortsLoading(false)
@@ -301,16 +324,21 @@ export default function VerticalDiscoveryScreen() {
       }
       setShortsLoading(true)
       const result = await rpc.preparePlayback(playbackRequest)
+      if (isStalePlaybackRequest()) return
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
         setShortsVideoUrl(result.url)
         setShortsPlaybackSession((prev) => prev + 1)
       }
     } catch (err) {
-      console.log('[VerticalDiscovery] Playback failed:', (err as any)?.message || err)
+      if (!isStalePlaybackRequest()) {
+        console.log('[VerticalDiscovery] Playback failed:', (err as any)?.message || err)
+      }
     } finally {
-      pendingPlayKeyRef.current = null
-      setShortsLoading(false)
+      if (!isStalePlaybackRequest()) {
+        pendingPlayKeyRef.current = null
+        setShortsLoading(false)
+      }
     }
   }, [handoffToShorts, makePlaybackRequest, rpc])
 

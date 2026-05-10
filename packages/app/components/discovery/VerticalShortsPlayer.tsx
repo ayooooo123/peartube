@@ -46,6 +46,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
   const [hasPlaybackError, setHasPlaybackError] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
   const [seekPosition, setSeekPosition] = useState<number | undefined>(undefined)
+  const [pendingSeekMs, setPendingSeekMs] = useState<number | undefined>(undefined)
   const [progressBarWidth, setProgressBarWidth] = useState(0)
   const [playbackProgress, setPlaybackProgress] = useState({ currentTime: 0, duration: 0 })
   const videoKey = getShortsVideoKey(video, videoUrl)
@@ -55,6 +56,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
     setVideoSize(null)
     setIsPaused(false)
     setSeekPosition(undefined)
+    setPendingSeekMs(undefined)
     setPlaybackProgress({ currentTime: 0, duration: 0 })
   }, [videoKey])
 
@@ -76,10 +78,11 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
     const currentTime = Math.max(0, Number(event?.currentTime || 0))
     const duration = Math.max(0, Number(event?.duration || 0))
     setPlaybackProgress({ currentTime, duration })
-    if (duration > 0 && seekPosition !== undefined && Math.abs(currentTime - seekPosition) < 900) {
+    if (duration > 0 && pendingSeekMs !== undefined && Math.abs(currentTime - pendingSeekMs) < 900) {
       setSeekPosition(undefined)
+      setPendingSeekMs(undefined)
     }
-  }, [seekPosition])
+  }, [pendingSeekMs])
 
   const handleError = useCallback((error: any) => {
     setHasPlaybackError(true)
@@ -103,6 +106,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
   const restartShorts = useCallback(() => {
     setIsPaused(false)
     setSeekPosition(0)
+    setPendingSeekMs(0)
     setPlaybackProgress((prev) => ({ ...prev, currentTime: 0 }))
     void playerRef.current?.seek?.(0)
     void playerRef.current?.play?.()
@@ -117,7 +121,8 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
     const locationX = Number(event?.nativeEvent?.locationX || 0)
     const progress = clampProgress(locationX / progressBarWidth)
     const nextTime = progress * playbackProgress.duration
-    setSeekPosition(nextTime / 1000)
+    setSeekPosition(progress)
+    setPendingSeekMs(nextTime)
     setPlaybackProgress((prev) => ({ ...prev, currentTime: nextTime }))
     void playerRef.current?.seek?.(nextTime / 1000)
   }, [playbackProgress.duration, playerRef, progressBarWidth])

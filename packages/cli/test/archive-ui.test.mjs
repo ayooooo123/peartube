@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { parseArgv } from '../src/argv.js'
-import { createArchiveJobStore, enqueueArchiveJob, createArchiveManager, createYtDlpDownloader } from '../src/archive-manager.js'
+import { createArchiveJobStore, enqueueArchiveJob, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from '../src/archive-manager.js'
 import { renderArchiveTui, renderArchiveWebHome } from '../src/archive-ui.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -440,4 +440,71 @@ test('yt-dlp downloader rejects bogus direct Invidious output and continues fall
   t.is(calls.length, 3, 'bogus .unknown_video direct media result retries the watch page')
   t.is(calls[1].args.at(-1), 'https://invidious.projectsegfau.lt/latest_version?id=6ZVnOQ8DmFI&itag=18&local=true')
   t.is(calls[2].args.at(-1), 'https://invidious.projectsegfau.lt/watch?v=6ZVnOQ8DmFI')
+})
+
+
+test('archive publisher opens separate relay-owned channels for source identities', async (t) => {
+  const created = []
+  const uploadOptions = []
+  const channels = new Map()
+  const identityManager = {
+    getActiveIdentity() { return { publicKey: 'relay', driveKey: 'relay-drive' } },
+    async createIdentity(name) {
+      created.push({ name })
+      const driveKey = `drive-${created.length}`
+      channels.set(driveKey, { blobs: true, publicBeeKey: `bee-${created.length}` })
+      return { publicKey: `pub-${created.length}`, driveKey }
+    },
+    async getChannelForIdentity(identity) {
+      return channels.get(identity.driveKey)
+    },
+    async getActiveChannel() {
+      return { blobs: true, publicBeeKey: 'relay-bee' }
+    }
+  }
+  const publisher = createArchivePublisher({
+    identityManager,
+    uploadManager: {
+      async uploadFromPath(_channel, _filePath, options) {
+        uploadOptions.push(options)
+        return { success: true, videoId: `video-${uploadOptions.length}` }
+      }
+    },
+    api: { async submitToFeed() {} },
+    runtime: {},
+    fs: {}
+  })
+
+  const oneA = await publisher.ensureAnonymousChannel({
+    channelName: 'Creator One',
+    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null }
+  })
+  const two = await publisher.ensureAnonymousChannel({
+    channelName: 'Creator Two',
+    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC2', creatorName: 'Creator Two', creatorHandle: null }
+  })
+  const oneB = await publisher.ensureAnonymousChannel({
+    channelName: 'Creator One',
+    sourceIdentity: { platform: 'youtube', sourceId: 'youtube:channel:UC1', creatorName: 'Creator One', creatorHandle: null }
+  })
+
+  await publisher.importVideo({
+    channel: oneA.channel,
+    filePath: '/tmp/one.mp4',
+    title: 'One',
+    description: '',
+    mimeType: 'video/mp4',
+    sourceType: 'yt-dlp',
+    sourceUrl: 'https://www.youtube.com/watch?v=one',
+    sourceVideoId: 'one',
+    creatorSourceId: 'youtube:channel:UC1',
+    creatorName: 'Creator One'
+  })
+
+  t.alike(created.map((entry) => entry.name), ['Creator One', 'Creator Two'])
+  t.is(oneA.channelKey, 'drive-1')
+  t.is(two.channelKey, 'drive-2')
+  t.is(oneB.channelKey, 'drive-1')
+  t.is(uploadOptions[0].creatorSourceId, 'youtube:channel:UC1')
+  t.is(uploadOptions[0].sourceVideoId, 'one')
 })

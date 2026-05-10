@@ -85,6 +85,43 @@ function readYtDlpInfo(filePath, fs) {
   }
 }
 
+function creatorSourceIdentityForInfo(info) {
+  if (!info || typeof info !== 'object') return null
+  const channelId = normalizeText(info.channel_id || info.channelId || '', 120)
+  const uploaderId = normalizeText(info.uploader_id || info.uploaderId || '', 120)
+  const channelName = normalizeText(info.channel || info.uploader || '', 160)
+  const creatorHandle = uploaderId.startsWith('@') ? uploaderId : null
+
+  if (channelId) {
+    return {
+      platform: 'youtube',
+      sourceId: `youtube:channel:${channelId}`,
+      creatorName: channelName || channelId,
+      creatorHandle
+    }
+  }
+
+  if (creatorHandle) {
+    return {
+      platform: 'youtube',
+      sourceId: `youtube:handle:${creatorHandle}`,
+      creatorName: channelName || creatorHandle,
+      creatorHandle
+    }
+  }
+
+  if (channelName) {
+    return {
+      platform: 'youtube',
+      sourceId: `youtube:creator:${safeTag(channelName)}`,
+      creatorName: channelName,
+      creatorHandle: null
+    }
+  }
+
+  return null
+}
+
 function metadataForLocalVideo(video, fs) {
   const info = readYtDlpInfo(video.filePath, fs)
   if (!info) {
@@ -95,6 +132,11 @@ function metadataForLocalVideo(video, fs) {
       tags: ['local'],
       sourceType: 'local',
       sourceUrl: null,
+      sourceVideoId: null,
+      creatorSourceId: null,
+      creatorName: null,
+      creatorHandle: null,
+      sourceIdentity: null,
       duration: 0,
       thumbnailUrl: null
     }
@@ -102,6 +144,7 @@ function metadataForLocalVideo(video, fs) {
   const categories = Array.isArray(info.categories) ? info.categories : []
   const ytDlpTags = Array.isArray(info.tags) ? info.tags : []
   const category = normalizeText(categories[0] || info.category || 'YouTube', 80)
+  const sourceIdentity = creatorSourceIdentityForInfo(info)
   return {
     title: normalizeText(info.title, 200) || video.title,
     description: normalizeText(info.description || info.fulltitle || '', 5000),
@@ -109,6 +152,11 @@ function metadataForLocalVideo(video, fs) {
     tags: uniqueTags(['youtube', 'yt-dlp', category, ...(info.uploader ? [info.uploader] : []), ...(info.channel ? [info.channel] : []), ...ytDlpTags]),
     sourceType: 'yt-dlp',
     sourceUrl: info.sourceUrl || null,
+    sourceVideoId: normalizeText(info.id || info.display_id || '', 160) || null,
+    creatorSourceId: sourceIdentity?.sourceId || null,
+    creatorName: sourceIdentity?.creatorName || null,
+    creatorHandle: sourceIdentity?.creatorHandle || null,
+    sourceIdentity,
     duration: Number(info.duration || 0) || 0,
     thumbnailUrl: normalizeText(info.thumbnail || '', 1000) || null
   }
@@ -194,13 +242,37 @@ export async function mirrorLocalDriveToRelayChannel({
   const pendingVideos = state?.seen
     ? videos.filter((video) => getSeenFingerprint(state.seen.get(video.filePath)) !== fingerprintVideo(video))
     : videos
-  const channelInfo = await publisher.ensureAnonymousChannel({ channelName })
+  const metadataByPath = new Map(videos.map((video) => [video.filePath, metadataForLocalVideo(video, fs)]))
+  const channelInfoByKey = new Map()
   const imported = []
   const failed = []
 
+  function channelKeyForMetadata(localMetadata) {
+    return localMetadata.sourceIdentity?.sourceId || 'local'
+  }
+
+  async function channelForMetadata(localMetadata) {
+    const key = channelKeyForMetadata(localMetadata)
+    if (channelInfoByKey.has(key)) return channelInfoByKey.get(key)
+    const sourceIdentity = localMetadata.sourceIdentity || null
+    const info = await publisher.ensureAnonymousChannel({
+      channelName: sourceIdentity?.creatorName || channelName,
+      sourceIdentity
+    })
+    const entry = {
+      ...info,
+      channelName: sourceIdentity?.creatorName || channelName,
+      sourceIdentity,
+      previewVideos: []
+    }
+    channelInfoByKey.set(key, entry)
+    return entry
+  }
+
   for (const video of pendingVideos) {
     try {
-      const localMetadata = metadataForLocalVideo(video, fs)
+      const localMetadata = metadataByPath.get(video.filePath) || metadataForLocalVideo(video, fs)
+      const channelInfo = await channelForMetadata(localMetadata)
       const result = await publisher.importVideo({
         channel: channelInfo.channel,
         filePath: video.filePath,
@@ -211,6 +283,10 @@ export async function mirrorLocalDriveToRelayChannel({
         tags: localMetadata.tags,
         sourceType: localMetadata.sourceType,
         sourceUrl: localMetadata.sourceUrl,
+        sourceVideoId: localMetadata.sourceVideoId,
+        creatorSourceId: localMetadata.creatorSourceId,
+        creatorName: localMetadata.creatorName,
+        creatorHandle: localMetadata.creatorHandle,
         duration: localMetadata.duration,
         thumbnailUrl: localMetadata.thumbnailUrl
       })
@@ -229,7 +305,10 @@ export async function mirrorLocalDriveToRelayChannel({
         tags: localMetadata.tags,
         sourceType: localMetadata.sourceType,
         sourceUrl: localMetadata.sourceUrl,
-        thumbnailUrl: localMetadata.thumbnailUrl,
+        sourceVideoId: localMetadata.sourceVideoId,
+        creatorSourceId: localMetadata.creatorSourceId,
+        creatorName: localMetadata.creatorName,
+        creatorHandle: localMetadata.creatorHandle,
         availability: playbackSupport.availability,
         playbackSupport: playbackSupport.playbackSupport,
         blobId: metadata.blobId || null,
@@ -238,11 +317,15 @@ export async function mirrorLocalDriveToRelayChannel({
         thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || null,
         thumbnailMimeType: metadata.thumbnailMimeType || null
       } : null
-      imported.push({ ...video, title: localMetadata.title, videoId: result?.videoId || null, previewVideo })
+      if (previewVideo) channelInfo.previewVideos.push(previewVideo)
+      imported.push({ ...video, title: localMetadata.title, videoId: result?.videoId || null, previewVideo, channelKey: channelInfo.channelKey })
       if (state?.seen) {
         state.seen.set(video.filePath, {
           fingerprint: fingerprintVideo(video),
-          previewVideo
+          previewVideo,
+          channelKey: channelInfo.channelKey,
+          publicBeeKey: channelInfo.publicBeeKey || null,
+          sourceIdentity: channelInfo.sourceIdentity || null
         })
       }
       logger?.archive?.info?.('Local drive video imported', { file: video.filePath, videoId: result?.videoId || null })
@@ -252,23 +335,41 @@ export async function mirrorLocalDriveToRelayChannel({
     }
   }
 
-  const importedPreviewByPath = new Map(imported.map((entry) => [entry.filePath, entry.previewVideo]).filter(([, preview]) => Boolean(preview)))
-  const previewVideos = videos
-    .map((video) => importedPreviewByPath.get(video.filePath) || getSeenPreviewVideo(state?.seen?.get(video.filePath)))
-    .filter(Boolean)
-  if (previewVideos.length > 0) {
-    await publisher.publishChannel(channelInfo, { previewVideos })
-    await publisher.seedChannel({ ...channelInfo, previewVideos })
+  for (const video of videos) {
+    const localMetadata = metadataByPath.get(video.filePath)
+    const cachedPreview = getSeenPreviewVideo(state?.seen?.get(video.filePath))
+    if (!cachedPreview) continue
+    const channelInfo = await channelForMetadata(localMetadata)
+    if (!channelInfo.previewVideos.some((preview) => preview.id === cachedPreview.id)) {
+      channelInfo.previewVideos.push(cachedPreview)
+    }
   }
 
+  for (const channelInfo of channelInfoByKey.values()) {
+    if (channelInfo.previewVideos.length > 0) {
+      await publisher.publishChannel(channelInfo, { previewVideos: channelInfo.previewVideos })
+      await publisher.seedChannel({ ...channelInfo, previewVideos: channelInfo.previewVideos })
+    }
+  }
+
+  const channels = [...channelInfoByKey.values()].map((entry) => ({
+    channelKey: entry.channelKey,
+    publicBeeKey: entry.publicBeeKey || null,
+    channelName: entry.channelName,
+    sourceIdentity: entry.sourceIdentity || null,
+    imported: imported.filter((video) => video.channelKey === entry.channelKey).length,
+    videos: entry.previewVideos
+  }))
+
   return {
-    channelKey: channelInfo.channelKey,
-    publicBeeKey: channelInfo.publicBeeKey || null,
+    channelKey: channels[0]?.channelKey || null,
+    publicBeeKey: channels[0]?.publicBeeKey || null,
     scanned: videos.length,
     imported: imported.length,
     skipped: videos.length - pendingVideos.length,
     failed: failed.length,
-    videos: imported.map(({ filePath, title, size, mimeType, videoId }) => ({ filePath, title, size, mimeType, videoId })),
+    channels,
+    videos: imported.map(({ filePath, title, size, mimeType, videoId, channelKey }) => ({ filePath, title, size, mimeType, videoId, channelKey })),
     failures: failed.map(({ filePath, error }) => ({ filePath, error }))
   }
 }

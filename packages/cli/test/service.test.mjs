@@ -746,6 +746,7 @@ test('createRelayService watches configured local mirror directory', async (t) =
 
     await Promise.resolve()
     await Promise.resolve()
+    await new Promise((resolve) => setImmediate(resolve))
     t.is(imports.length, 1, 'initial local mirror scan starts in the background')
     t.is(submitCalls, 0, 'startup does not wait for initial local mirror publish')
 

@@ -954,6 +954,32 @@ test('serving manifest snapshots preserve unverified playback metadata', async (
   }
 })
 
+test('submitChannel stores explicit channel names before provider hydration', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+
+  try {
+    await manager.submitChannel(DRIVE_KEY, PUBLIC_BEE_KEY, {
+      channelName: 'Actual YouTube Creator',
+      previewVideos: [{
+        id: 'preview-named',
+        title: 'Named Preview',
+        uploadedAt: 99,
+        blobId: '0:8:0:1024',
+        blobsCoreKey: '55'.repeat(32),
+        mimeType: 'video/mp4',
+        availability: 'playable',
+      }],
+    })
+
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].channelName, 'Actual YouTube Creator')
+    assert.equal(feed[0].previewVideos[0].id, 'preview-named')
+  } finally {
+    manager.stop()
+  }
+})
+
 
 test('requestAvailabilityHints merges playable responses from feed peers (including relayed peers on same channel)', async () => {
   const swarm = createSwarm()

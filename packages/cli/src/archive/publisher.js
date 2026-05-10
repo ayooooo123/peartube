@@ -14,6 +14,9 @@ function buildSourceMarker(source) {
 
 function defaultChannelName(source) {
   if (source.label) return source.label
+  if (source.creatorName) return source.creatorName
+  if (source.channelName) return source.channelName
+  if (source.uploader) return source.uploader
   if (source.kind === 'handle') return source.identifier
   if (source.kind === 'channel') return `YouTube channel ${source.identifier.slice(0, 12)}`
   if (source.kind === 'playlist') return `YouTube playlist ${source.identifier.slice(0, 12)}`
@@ -42,9 +45,12 @@ async function resolvePublicBeeKey(channel) {
   return typeof publicBeeKey === 'string' && publicBeeKey.length > 0 ? publicBeeKey : null
 }
 
-async function listChannelPreviewVideos(channel, limit = 3) {
+async function listChannelPreviewVideos(channelEntry, limit = 3) {
+  const channel = channelEntry?.channel || channelEntry
   if (!channel || typeof channel.listVideos !== 'function') return []
   const videos = await channel.listVideos().catch(() => [])
+  const channelMeta = await channel.getMetadata?.().catch(() => null)
+  const channelName = channelEntry?.channelName || channelMeta?.name || null
   if (!Array.isArray(videos)) return []
   return videos
     .filter((video) => video?.id && video?.blobId && video?.blobsCoreKey)
@@ -63,7 +69,8 @@ async function listChannelPreviewVideos(channel, limit = 3) {
       blobsCoreKey: String(video.blobsCoreKey),
       thumbnailBlobId: video?.thumbnailBlobId || null,
       thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey || null,
-      thumbnailMimeType: video?.thumbnailMimeType || null
+      thumbnailMimeType: video?.thumbnailMimeType || null,
+      channelName
     }))
 }
 
@@ -77,14 +84,22 @@ async function announceArchiveChannel(runtime, channelEntry, logger, sourceId, o
   if (!publicBeeKey) return
 
   const previewVideos = Array.isArray(options.previewVideos)
-    ? options.previewVideos.filter(Boolean)
-    : await listChannelPreviewVideos(channel)
+    ? options.previewVideos.filter(Boolean).map((video) => ({
+        ...video,
+        channelName: video?.channelName || channelEntry.channelName || null,
+      }))
+    : await listChannelPreviewVideos(channelEntry)
 
   try {
     if (previewVideos.length > 0) {
-      await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey, { previewVideos })
+      await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey, {
+        channelName: channelEntry.channelName || null,
+        previewVideos,
+      })
     } else {
-      await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey)
+      await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey, {
+        channelName: channelEntry.channelName || null,
+      })
     }
   } catch (err) {
     logger?.archive?.debug?.('Public-feed submit failed', {
@@ -120,7 +135,7 @@ async function announceArchiveChannel(runtime, channelEntry, logger, sourceId, o
  */
 export { resolvePublicBeeKey, announceArchiveChannel }
 
-export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger, state = null }) {
+export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger, state = null, createChannelFn = null }) {
   if (!ctx) throw new Error('ctx is required')
   if (!uploadManager) throw new Error('uploadManager is required')
   if (!runtime) throw new Error('runtime is required')
@@ -132,7 +147,7 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
     if (channelCache.has(source.sourceId)) return channelCache.get(source.sourceId)
 
     const writerKeyName = buildWriterKeyName(source.sourceId)
-    const { createChannel } = await import('@peartube/backend/storage')
+    const createChannel = createChannelFn || (await import('@peartube/backend/storage')).createChannel
 
     const created = await createChannel(ctx, {
       encrypt: false,
@@ -169,7 +184,12 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
       })
     }
 
-    const entry = { channel, channelKey, publicBeeKey }
+    const entry = {
+      channel,
+      channelKey,
+      publicBeeKey,
+      channelName: defaultChannelName(source)
+    }
 
     await announceArchiveChannel(runtime, entry, logger, source.sourceId)
 
@@ -197,7 +217,11 @@ export function createArchivePublisher({ ctx, uploadManager, runtime, fs, logger
   }
 
   async function publishVideo({ source, ytEntry, files }) {
-    const channelEntry = await ensureSourceChannel(source)
+    const sourceForChannel = {
+      ...source,
+      creatorName: ytEntry?.uploader || source?.creatorName || null
+    }
+    const channelEntry = await ensureSourceChannel(sourceForChannel)
     const { channel } = channelEntry
 
     if (!files?.videoFile) {

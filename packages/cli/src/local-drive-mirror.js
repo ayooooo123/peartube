@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from '#fs'
+import { existsSync, readFileSync, readdirSync, statSync } from '#fs'
 import { basename, extname, join } from '#path'
 const defaultPath = { join }
 
@@ -36,6 +36,84 @@ function mimeTypeForPath(filePath) {
   return MIME_BY_EXT[extname(String(filePath || '')).toLowerCase()] || 'video/mp4'
 }
 
+
+function normalizeText(value, maxLength = 5000) {
+  return String(value || '').split('').map((char) => {
+    const code = char.charCodeAt(0)
+    return code < 32 || code === 127 ? ' ' : char
+  }).join('').replace(/\s+/g, ' ').trim().slice(0, maxLength)
+}
+
+function safeTag(value) {
+  const tag = normalizeText(value, 48).toLowerCase().replace(/[^a-z0-9._ -]+/g, '').replace(/\s+/g, '-').replace(/^-+|-+$/g, '')
+  return tag || null
+}
+
+function uniqueTags(values) {
+  const seen = new Set()
+  const tags = []
+  for (const value of values || []) {
+    const tag = safeTag(value)
+    if (!tag || seen.has(tag)) continue
+    seen.add(tag)
+    tags.push(tag)
+    if (tags.length >= 12) break
+  }
+  return tags
+}
+
+function infoJsonPathForVideo(filePath) {
+  const value = String(filePath || '')
+  const ext = extname(value)
+  return `${ext ? value.slice(0, -ext.length) : value}.info.json`
+}
+
+function readYtDlpInfo(filePath, fs) {
+  const infoPath = infoJsonPathForVideo(filePath)
+  try {
+    if (typeof fs.existsSync === 'function' && !fs.existsSync(infoPath)) return null
+    if (typeof fs.readFileSync !== 'function') return null
+    const parsed = JSON.parse(String(fs.readFileSync(infoPath, 'utf8') || '{}'))
+    if (!parsed || typeof parsed !== 'object') return null
+    const sourceUrl = normalizeText(parsed.webpage_url || parsed.original_url || parsed.url || '', 1000)
+    const extractor = normalizeText(parsed.extractor_key || parsed.extractor || '', 80).toLowerCase()
+    const looksLikeYtDlp = Boolean(sourceUrl || parsed.id || parsed.title || extractor)
+    if (!looksLikeYtDlp) return null
+    return { ...parsed, sourceUrl, infoPath }
+  } catch {
+    return null
+  }
+}
+
+function metadataForLocalVideo(video, fs) {
+  const info = readYtDlpInfo(video.filePath, fs)
+  if (!info) {
+    return {
+      title: video.title,
+      description: '',
+      category: 'Local',
+      tags: ['local'],
+      sourceType: 'local',
+      sourceUrl: null,
+      duration: 0,
+      thumbnailUrl: null
+    }
+  }
+  const categories = Array.isArray(info.categories) ? info.categories : []
+  const ytDlpTags = Array.isArray(info.tags) ? info.tags : []
+  const category = normalizeText(categories[0] || info.category || 'YouTube', 80)
+  return {
+    title: normalizeText(info.title, 200) || video.title,
+    description: normalizeText(info.description || info.fulltitle || '', 5000),
+    category,
+    tags: uniqueTags(['youtube', 'yt-dlp', category, ...(info.uploader ? [info.uploader] : []), ...(info.channel ? [info.channel] : []), ...ytDlpTags]),
+    sourceType: 'yt-dlp',
+    sourceUrl: info.sourceUrl || null,
+    duration: Number(info.duration || 0) || 0,
+    thumbnailUrl: normalizeText(info.thumbnail || '', 1000) || null
+  }
+}
+
 function fingerprintVideo(video) {
   return `${video.filePath}:${video.size}:${video.mtimeMs}`
 }
@@ -58,7 +136,7 @@ export function createLocalDriveMirrorState(seed = null) {
 }
 
 export function listLocalDriveVideos(rootPath, {
-  fs = { readdirSync, statSync },
+  fs = { existsSync, readFileSync, readdirSync, statSync },
   path = defaultPath,
   recursive = true,
   extensions = DEFAULT_VIDEO_EXTENSIONS,
@@ -106,7 +184,7 @@ export async function mirrorLocalDriveToRelayChannel({
   description = '',
   recursive = true,
   maxFiles = Infinity,
-  fs = { readdirSync, statSync },
+  fs = { existsSync, readFileSync, readdirSync, statSync },
   path = defaultPath,
   state = null,
   logger = null
@@ -122,24 +200,36 @@ export async function mirrorLocalDriveToRelayChannel({
 
   for (const video of pendingVideos) {
     try {
+      const localMetadata = metadataForLocalVideo(video, fs)
       const result = await publisher.importVideo({
         channel: channelInfo.channel,
         filePath: video.filePath,
-        title: video.title,
-        description,
-        mimeType: video.mimeType
+        title: localMetadata.title,
+        description: localMetadata.description || description,
+        mimeType: video.mimeType,
+        category: localMetadata.category,
+        tags: localMetadata.tags,
+        sourceType: localMetadata.sourceType,
+        sourceUrl: localMetadata.sourceUrl,
+        duration: localMetadata.duration,
+        thumbnailUrl: localMetadata.thumbnailUrl
       })
       const metadata = result?.metadata || result || {}
       const playbackSupport = getPlaybackSupportForMimeType(metadata.mimeType || video.mimeType)
       const previewVideo = result?.videoId ? {
         id: result.videoId,
-        title: video.title,
-        description,
+        title: localMetadata.title,
+        description: localMetadata.description || description,
         path: metadata.path || `/videos/${result.videoId}.mp4`,
         uploadedAt: metadata.uploadedAt || Date.now(),
-        duration: Number(metadata.duration || 0) || 0,
+        duration: Number(metadata.duration || localMetadata.duration || 0) || 0,
         size: Number(metadata.size || video.size || 0) || 0,
         mimeType: metadata.mimeType || video.mimeType,
+        category: metadata.category || localMetadata.category,
+        tags: localMetadata.tags,
+        sourceType: localMetadata.sourceType,
+        sourceUrl: localMetadata.sourceUrl,
+        thumbnailUrl: localMetadata.thumbnailUrl,
         availability: playbackSupport.availability,
         playbackSupport: playbackSupport.playbackSupport,
         blobId: metadata.blobId || null,
@@ -148,7 +238,7 @@ export async function mirrorLocalDriveToRelayChannel({
         thumbnailBlobsCoreKey: metadata.thumbnailBlobsCoreKey || null,
         thumbnailMimeType: metadata.thumbnailMimeType || null
       } : null
-      imported.push({ ...video, videoId: result?.videoId || null, previewVideo })
+      imported.push({ ...video, title: localMetadata.title, videoId: result?.videoId || null, previewVideo })
       if (state?.seen) {
         state.seen.set(video.filePath, {
           fingerprint: fingerprintVideo(video),

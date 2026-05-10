@@ -315,8 +315,19 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
       const publicBeeKey = channel.publicBeeKey || meta?.publicBeeKey || null
       return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey }
     },
-    async importVideo({ channel, filePath, title, description, mimeType }) {
-      const result = await uploadManager.uploadFromPath(channel, filePath, { title, description, mimeType, category: 'archive' }, fs)
+    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, tags, sourceType, sourceUrl, thumbnailUrl }) {
+      const result = await uploadManager.uploadFromPath(channel, filePath, {
+        title,
+        description,
+        mimeType,
+        category: category || 'archive',
+        duration,
+        thumbnail,
+        tags,
+        sourceType,
+        sourceUrl,
+        thumbnailUrl
+      }, fs)
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
       return result
     },

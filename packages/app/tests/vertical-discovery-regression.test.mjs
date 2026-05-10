@@ -150,7 +150,7 @@ test('vertical discovery lets the shorts player hide card chrome without hiding 
   assert.match(source, /\{shortsChromeVisible \? \([\s\S]*styles\.bottomMeta/, 'channel/details/replay buttons should hide when Shorts controls are hidden')
   assert.match(playerSource, /toggleControlsVisibility/, 'Shorts player should toggle controls on tap')
   assert.match(playerSource, /onControlsVisibleChange\?\.\(!controlsVisible\)/, 'Shorts player should notify the parent when controls are toggled')
-  assert.match(playerSource, /pointerEvents=\"box-none\"/, 'overlay chrome must not swallow card taps outside actual controls')
+  assert.match(playerSource, /pointerEvents="box-none"/, 'overlay chrome must not swallow card taps outside actual controls')
   assert.match(playerSource, /showPlayer \? \([\s\S]*styles\.progressDock/, 'every active Shorts card should keep a progress bar mounted')
   assert.match(playerSource, /\{controlsVisible \? \([\s\S]*styles\.controlButtons/, 'buttons should be the part that hides when controls are tapped away')
   assert.doesNotMatch(playerSource, /showPlayer && controlsVisible \? \([\s\S]*progressTrack/, 'progress bar should not disappear with the rest of the controls')

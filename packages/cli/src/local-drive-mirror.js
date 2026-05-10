@@ -38,7 +38,10 @@ function mimeTypeForPath(filePath) {
 
 
 function normalizeText(value, maxLength = 5000) {
-  return String(value || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLength)
+  return String(value || '').split('').map((char) => {
+    const code = char.charCodeAt(0)
+    return code < 32 || code === 127 ? ' ' : char
+  }).join('').replace(/\s+/g, ' ').trim().slice(0, maxLength)
 }
 
 function safeTag(value) {

@@ -176,3 +176,79 @@ test('mirrorLocalDriveToRelayChannel republishes and reseeds cached local previe
   t.alike(published, [['blob-1'], ['blob-1'], ['blob-2']])
   t.alike(seeded, [['cc'.repeat(32)], ['cc'.repeat(32)], ['cc'.repeat(32)]])
 })
+
+
+test('mirrorLocalDriveToRelayChannel derives safe metadata and tags from mixed local and yt-dlp files', async (t) => {
+  const fs = makeFs({
+    '/drive': [dirent('random clip 01.mp4', 'file'), dirent('abc123.webm', 'file'), dirent('abc123.info.json', 'file'), dirent('notes.txt', 'file')]
+  }, {
+    '/drive/random clip 01.mp4': 100,
+    '/drive/abc123.webm': 200,
+    '/drive/abc123.info.json': 50
+  })
+  fs.existsSync = (filePath) => filePath === '/drive/abc123.info.json'
+  fs.readFileSync = (filePath, encoding) => {
+    t.is(encoding, 'utf8')
+    if (filePath !== '/drive/abc123.info.json') throw new Error(`ENOENT: ${filePath}`)
+    return JSON.stringify({
+      title: 'YT Title',
+      description: 'Original YouTube description',
+      uploader: 'Uploader Name',
+      channel: 'Channel Name',
+      webpage_url: 'https://www.youtube.com/watch?v=abc123',
+      categories: ['Education'],
+      tags: ['demo', 'Demo', '  ', 'very-long-tag-name-that-should-be-clipped-to-a-sed-to-a-safe-length'],
+      duration: 42,
+      thumbnail: 'https://i.ytimg.com/vi/abc123/hqdefault.jpg'
+    })
+  }
+
+  const imports = []
+  let publishedPreviews = null
+  const publisher = {
+    async ensureAnonymousChannel() {
+      return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
+    },
+    async importVideo(input) {
+      imports.push(input)
+      return {
+        videoId: input.title.replace(/\s+/g, '-').toLowerCase(),
+        metadata: {
+          uploadedAt: 123,
+          size: input.filePath.endsWith('.webm') ? 200 : 100,
+          mimeType: input.mimeType,
+          duration: input.duration || 0,
+          category: input.category || '',
+          blobId: `blob:${input.title}`,
+          blobsCoreKey: input.filePath.endsWith('.webm') ? 'dd'.repeat(32) : 'cc'.repeat(32)
+        }
+      }
+    },
+    async publishChannel(_channelInfo, options) {
+      publishedPreviews = options.previewVideos
+    },
+    async seedChannel() {}
+  }
+
+  const result = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim })
+
+  t.is(result.scanned, 2)
+  t.is(imports[0].title, 'YT Title')
+  t.is(imports[0].description, 'Original YouTube description')
+  t.is(imports[0].category, 'Education')
+  t.alike(imports[0].tags, ['youtube', 'yt-dlp', 'education', 'uploader-name', 'channel-name', 'demo', 'very-long-tag-name-that-should-be-clipped-to-a-s'])
+  t.is(imports[0].sourceUrl, 'https://www.youtube.com/watch?v=abc123')
+  t.is(imports[0].sourceType, 'yt-dlp')
+  t.is(imports[0].duration, 42)
+
+  t.is(imports[1].title, 'random clip 01')
+  t.is(imports[1].description, '')
+  t.is(imports[1].category, 'Local')
+  t.alike(imports[1].tags, ['local'])
+  t.is(imports[1].sourceType, 'local')
+
+  t.is(publishedPreviews[0].sourceType, 'yt-dlp')
+  t.alike(publishedPreviews[0].tags, ['youtube', 'yt-dlp', 'education', 'uploader-name', 'channel-name', 'demo', 'very-long-tag-name-that-should-be-clipped-to-a-s'])
+  t.is(publishedPreviews[1].sourceType, 'local')
+  t.alike(publishedPreviews[1].tags, ['local'])
+})

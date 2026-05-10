@@ -1448,6 +1448,7 @@ export function createApi({
                 blobId: video?.blobId ? String(video.blobId) : null,
                 blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
                 mimeType: video?.mimeType ? String(video.mimeType) : null,
+                playbackSupport: video?.playbackSupport ? String(video.playbackSupport) : null,
                 // Trust the per-video availability hint if present. Previously
                 // this fell back to "playable" whenever the swarm had any peer
                 // connection, which surfaced truly-unavailable videos. Now we
@@ -1461,7 +1462,7 @@ export function createApi({
                 thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
               }
             })
-            .filter((video) => video && video.availability === 'playable')
+            .filter((video) => video && (video.availability === 'playable' || video.playbackSupport === 'unsupported-container'))
             .slice(0, limitPerChannel)
 
           return {

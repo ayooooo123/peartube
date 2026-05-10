@@ -218,6 +218,28 @@ test('shouldRenderFeedVideo only accepts proven-playable remote videos but keeps
   }), true)
 })
 
+
+test('feed preview videos keep unsupported mirrored media visible without marking it playable', () => {
+  const videos = getFeedPreviewVideos([{
+    driveKey: 'remote-a',
+    publicBeeKey: 'bb'.repeat(32),
+    previewVideos: [{
+      id: 'mkv-preview',
+      title: 'MKV Preview',
+      uploadedAt: 10,
+      availability: 'unknown',
+      playbackSupport: 'unsupported-container',
+      blobId: '0:1:0:32',
+      blobsCoreKey: 'cc'.repeat(32),
+    }],
+  }], {}, undefined, 5)
+
+  assert.equal(videos.length, 1)
+  assert.equal(videos[0].id, 'mkv-preview')
+  assert.equal(videos[0].availability, 'unknown')
+  assert.equal(videos[0].playbackSupport, 'unsupported-container')
+})
+
 test('mergeHydratedFeedVideos replaces stale channel cards when a refreshed channel no longer has watchable videos', () => {
   const merged = mergeHydratedFeedVideos({
     previousVideos: [

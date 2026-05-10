@@ -91,6 +91,14 @@ function detectMimeType(buffer) {
  * @param {string} mimeType - MIME type
  * @returns {string} File extension without dot
  */
+export function getPlaybackSupportForMimeType(mimeType) {
+  const normalized = String(mimeType || '').toLowerCase();
+  if (normalized === 'video/mp4' || normalized === 'video/webm') {
+    return { availability: 'playable', playbackSupport: 'direct' };
+  }
+  return { availability: 'unknown', playbackSupport: 'unsupported-container' };
+}
+
 function getExtensionForMime(mimeType) {
   const mimeToExt = {
     'video/mp4': 'mp4',
@@ -255,6 +263,7 @@ export function createUploadManager({ ctx }) {
 
         // Create video metadata and store in Autobase
         // Ensure all string fields are actually strings to pass validation
+        const playbackSupport = getPlaybackSupportForMimeType(mimeType);
         const metadata = {
           id: videoId,
           title: String(title || ''),
@@ -269,7 +278,9 @@ export function createUploadManager({ ctx }) {
           thumbnail,
           category: String(category || ''),
           width,
-          height
+          height,
+          availability: playbackSupport.availability,
+          playbackSupport: playbackSupport.playbackSupport
         };
 
         // Store metadata in Autobase
@@ -327,6 +338,7 @@ export function createUploadManager({ ctx }) {
 
         // Create video metadata and store in Autobase
         // Ensure all string fields are actually strings to pass validation
+        const playbackSupport = getPlaybackSupportForMimeType(mimeType);
         const metadata = {
           id: videoId,
           title: String(title || ''),
@@ -341,7 +353,9 @@ export function createUploadManager({ ctx }) {
           thumbnail,
           category: String(category || ''),
           width,
-          height
+          height,
+          availability: playbackSupport.availability,
+          playbackSupport: playbackSupport.playbackSupport
         };
 
         // Store metadata in Autobase

@@ -339,7 +339,8 @@ export function VideoPlayerOverlay() {
     if (playerLogKeyRef.current === logKey) return
     playerLogKeyRef.current = logKey
     if (typeof window !== 'undefined') {
-      ;(window as any).__PEARTUBE_PLAYER__ = {
+      const windowState = window as any
+      windowState.__PEARTUBE_PLAYER__ = {
         player,
         videoId: currentVideo.id,
         channelKey,
@@ -2143,6 +2144,9 @@ export function VideoPlayerOverlay() {
       >
         {/* Drag handle - top bar */}
         <div
+          role="button"
+          tabIndex={0}
+          aria-label="Move mini player"
           style={{
             position: 'absolute',
             top: 0,
@@ -2151,6 +2155,11 @@ export function VideoPlayerOverlay() {
             height: 32,
             cursor: isDraggingMiniPlayer ? 'grabbing' : 'grab',
             zIndex: 10,
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              maximizeFromMini()
+            }
           }}
           onMouseDown={handleMiniPlayerDragStart}
         />
@@ -2201,6 +2210,9 @@ export function VideoPlayerOverlay() {
 
           {/* Hover overlay with play/pause */}
           <div
+            role="button"
+            tabIndex={0}
+            aria-label={effectiveIsPlaying ? 'Pause video' : 'Play video'}
             style={{
               position: 'absolute',
               top: 0,
@@ -2216,6 +2228,12 @@ export function VideoPlayerOverlay() {
             }}
             className="mini-player-overlay"
             onClick={handlePlayPause}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                handlePlayPause()
+              }
+            }}
           >
             <div
               style={{
@@ -2271,7 +2289,18 @@ export function VideoPlayerOverlay() {
           }}
         >
           {/* Title and channel */}
-          <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={maximizeFromMini}>
+          <div
+            role="button"
+            tabIndex={0}
+            style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
+            onClick={maximizeFromMini}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                maximizeFromMini()
+              }
+            }}
+          >
             <div
               style={{
                 fontSize: 13,

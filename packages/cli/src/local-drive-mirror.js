@@ -32,6 +32,17 @@ function fingerprintVideo(video) {
   return `${video.filePath}:${video.size}:${video.mtimeMs}`
 }
 
+function getSeenFingerprint(record) {
+  if (!record) return null
+  if (typeof record === 'string') return record
+  return record.fingerprint || null
+}
+
+function getSeenPreviewVideo(record) {
+  if (!record || typeof record !== 'object') return null
+  return record.previewVideo || null
+}
+
 export function createLocalDriveMirrorState(seed = null) {
   return {
     seen: new Map(seed?.seen || [])
@@ -95,7 +106,7 @@ export async function mirrorLocalDriveToRelayChannel({
   if (!publisher) throw new Error('publisher is required')
   const videos = listLocalDriveVideos(rootPath, { fs, path, recursive, maxFiles })
   const pendingVideos = state?.seen
-    ? videos.filter((video) => state.seen.get(video.filePath) !== fingerprintVideo(video))
+    ? videos.filter((video) => getSeenFingerprint(state.seen.get(video.filePath)) !== fingerprintVideo(video))
     : videos
   const channelInfo = await publisher.ensureAnonymousChannel({ channelName })
   const imported = []
@@ -128,7 +139,12 @@ export async function mirrorLocalDriveToRelayChannel({
         thumbnailMimeType: metadata.thumbnailMimeType || null
       } : null
       imported.push({ ...video, videoId: result?.videoId || null, previewVideo })
-      state?.seen?.set(video.filePath, fingerprintVideo(video))
+      if (state?.seen) {
+        state.seen.set(video.filePath, {
+          fingerprint: fingerprintVideo(video),
+          previewVideo
+        })
+      }
       logger?.archive?.info?.('Local drive video imported', { file: video.filePath, videoId: result?.videoId || null })
     } catch (err) {
       failed.push({ ...video, error: err?.message || String(err) })
@@ -136,7 +152,10 @@ export async function mirrorLocalDriveToRelayChannel({
     }
   }
 
-  const previewVideos = imported.map((entry) => entry.previewVideo).filter(Boolean)
+  const importedPreviewByPath = new Map(imported.map((entry) => [entry.filePath, entry.previewVideo]).filter(([, preview]) => Boolean(preview)))
+  const previewVideos = videos
+    .map((video) => importedPreviewByPath.get(video.filePath) || getSeenPreviewVideo(state?.seen?.get(video.filePath)))
+    .filter(Boolean)
   if (previewVideos.length > 0) {
     await publisher.publishChannel(channelInfo, { previewVideos })
     await publisher.seedChannel({ ...channelInfo, previewVideos })

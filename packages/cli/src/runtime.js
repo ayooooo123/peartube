@@ -126,8 +126,7 @@ export async function createRelayRuntime({ config, logger }) {
       candidateHandler({
         channelKey: entry.driveKey,
         publicBeeKey: entry.publicBeeKey || null,
-        source: entry.relayRole === 'cache' || entry.source === 'relay-cache' ? 'relay-cache' : 'discovered',
-        relayServing: Boolean(entry.relayServing),
+        source: entry.source === 'relay-cache' ? 'relay-cache' : 'discovered',
         previewVideos: Array.isArray(entry.previewVideos) ? entry.previewVideos : []
       })
     }
@@ -192,31 +191,6 @@ export async function createRelayRuntime({ config, logger }) {
       }
       if (typeof this.api.getFeedSnapshotEntries === 'function') {
         publicFeed.setFeedSnapshotProvider((entries) => this.api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
-      }
-
-      // Restore mirrored/cached channels as relay catalog entries, not as
-      // user-published channels. This keeps the relay contract explicit: it is
-      // serving/cache infrastructure for these publicBee/blob cores.
-      for (const channel of cacheManager.getChannels()) {
-        if (!channel?.driveKey || !channel?.publicBeeKey) continue
-        try {
-          const seedStats = await seeder.seedChannel(channel)
-          await publicFeed.submitRelayCatalogEntry({
-            ...(seedStats?.catalogEntry || {}),
-            driveKey: channel.driveKey,
-            publicBeeKey: channel.publicBeeKey,
-            channelName: seedStats?.catalogEntry?.channelName || channel.channelName || null,
-            videoCount: seedStats?.videos || channel.videoCount || 0,
-            previewVideos: seedStats?.catalogEntry?.previewVideos || channel.previewVideos || [],
-            relayRole: 'cache',
-            relayServing: true,
-          })
-        } catch (err) {
-          logger.runtime?.debug('Failed to restore cached mirrored channel', {
-            channelKey: channel.driveKey,
-            error: err?.message || String(err)
-          })
-        }
       }
 
       logger.runtime?.info('Relay runtime started', this.getNetworkStats())
@@ -322,12 +296,6 @@ export async function createRelayRuntime({ config, logger }) {
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
         swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),
         seeding: seeder.getStats(),
-        relayCatalogEntries: Array.from(publicFeed.entries?.values?.() || []).filter(e => e?.relayRole === 'cache' || e?.source === 'relay-cache').length,
-        relayServingEntries: Array.from(publicFeed.entries?.values?.() || []).filter(e => e?.relayServing).length,
-        relayPlayablePreviewVideos: Array.from(publicFeed.entries?.values?.() || []).reduce((total, e) => {
-          const videos = Array.isArray(e?.previewVideos) ? e.previewVideos : []
-          return total + videos.filter(v => v?.availability === 'playable' && v?.blobId && v?.blobsCoreKey).length
-        }, 0)
       }
     },
     async close() {

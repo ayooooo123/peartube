@@ -59,7 +59,7 @@ export function attachMobileHandlers(B, deps) {
 
   B.listVideos = async (r) => {
     const ck = r?.channelKey || ''; if (!ck) return { videos: [] }
-    let raw = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch { return { videos: [] } }
+    let raw = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch (err) { return { success: false, error: err?.message || String(err), stale: true, videos: [] } }
     return { videos: (raw || []).map((v) => {
       const id = v?.id ? String(v.id) : ''; if (!id) return null
       return {

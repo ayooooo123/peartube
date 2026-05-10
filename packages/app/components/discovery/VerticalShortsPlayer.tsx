@@ -189,20 +189,22 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
         </Pressable>
       ) : null}
 
-      {showPlayer && controlsVisible ? (
-        <View style={styles.controlsOverlay} pointerEvents="box-none">
-          <View style={styles.controlButtons}>
-            <Pressable
-              onPress={isPaused ? playShorts : pauseShorts}
-              style={styles.controlButton}
-              accessibilityLabel={isPaused ? 'Play Shorts video' : 'Pause Shorts video'}
-            >
-              <Feather name={isPaused ? 'play' : 'pause'} color="#fff" size={24} />
-            </Pressable>
-            <Pressable onPress={restartShorts} style={styles.controlButton} accessibilityLabel="Restart Shorts video">
-              <Feather name="rotate-cw" color="#fff" size={22} />
-            </Pressable>
-          </View>
+      {showPlayer ? (
+        <View style={styles.progressDock} pointerEvents="box-none">
+          {controlsVisible ? (
+            <View style={styles.controlButtons} pointerEvents="box-none">
+              <Pressable
+                onPress={isPaused ? playShorts : pauseShorts}
+                style={styles.controlButton}
+                accessibilityLabel={isPaused ? 'Play Shorts video' : 'Pause Shorts video'}
+              >
+                <Feather name={isPaused ? 'play' : 'pause'} color="#fff" size={24} />
+              </Pressable>
+              <Pressable onPress={restartShorts} style={styles.controlButton} accessibilityLabel="Restart Shorts video">
+                <Feather name="rotate-cw" color="#fff" size={22} />
+              </Pressable>
+            </View>
+          ) : null}
           <Pressable
             onPress={handleProgressBarPress}
             onLayout={handleProgressBarLayout}
@@ -210,7 +212,9 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
             accessibilityRole="adjustable"
             accessibilityLabel="Shorts progress bar"
           >
-            <View style={[styles.progressFill, { width: `${effectiveProgress * 100}%` }]} />
+            <View style={[styles.progressRail]}>
+              <View style={[styles.progressFill, { width: `${effectiveProgress * 100}%` }]} />
+            </View>
           </Pressable>
         </View>
       ) : null}
@@ -253,7 +257,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.2)',
   },
-  controlsOverlay: {
+  progressDock: {
     position: 'absolute',
     left: 0,
     right: 0,
@@ -281,8 +285,14 @@ const styles = StyleSheet.create({
     height: 18,
     justifyContent: 'center',
   },
-  progressFill: {
+  progressRail: {
     height: 3,
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,255,255,0.26)',
+  },
+  progressFill: {
+    height: '100%',
     borderRadius: 999,
     backgroundColor: colors.primary,
   },

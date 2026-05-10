@@ -38,11 +38,6 @@ import {
   readFeedSnapshotFromDisk,
   writeFeedSnapshotToDisk,
 } from '@/lib/feed-snapshot-storage'
-import {
-  fetchRelayCatalogEntries,
-  readRelayCatalogUrlFromDisk,
-} from '@/lib/simple-relay-catalog'
-
 // Public feed types
 interface FeedEntry {
   driveKey: string
@@ -257,22 +252,9 @@ export default function HomeScreen() {
       const result = await Promise.race([feedPromise, timeoutPromise])
 
       if (result?.entries) {
-        const entries = Array.isArray(result.entries) ? result.entries : []
-        let relayEntries: any[] = []
-        const relayCatalogUrl = await readRelayCatalogUrlFromDisk()
-        if (relayCatalogUrl) {
-          relayEntries = await fetchRelayCatalogEntries(relayCatalogUrl)
-        }
-        const p2pByKey = new Map(entries.map((entry: any) => [entry?.channelKey || entry?.driveKey, entry]))
-        const mergedEntries = [...relayEntries, ...entries].filter((entry, index, all) => {
+        const mergedEntries = (Array.isArray(result.entries) ? result.entries : []).filter((entry, index, all) => {
           const key = entry?.channelKey || entry?.driveKey
           return key && all.findIndex((candidate) => (candidate?.channelKey || candidate?.driveKey) === key) === index
-        }).map((entry: any) => {
-          const key = entry?.channelKey || entry?.driveKey
-          const p2pEntry = key ? p2pByKey.get(key) : null
-          return entry.source === 'relay-cache' && p2pEntry
-            ? { ...entry, ...p2pEntry, previewVideos: entry.previewVideos || p2pEntry.previewVideos }
-            : entry
         }) as FeedEntry[]
         console.log('[Home] getPublicFeed entries:', mergedEntries.map((e: any) => ({
           channelKey: e.channelKey || e.driveKey,

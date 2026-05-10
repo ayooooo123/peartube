@@ -9,13 +9,6 @@ import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
-import {
-  clearRelayCatalogUrlFromDisk,
-  normalizeRelayCatalogUrl,
-  readRelayCatalogUrlFromDisk,
-  writeRelayCatalogUrlToDisk,
-} from '@/lib/simple-relay-catalog'
-
 interface StorageStats {
   usedBytes: number
   maxBytes: number
@@ -62,8 +55,6 @@ export default function SettingsScreen() {
   const canManageTranscodeSettings = isPear && typeof (rpc as any)?.getTranscodeSettings === 'function'
   const [transcodeSettings, setTranscodeSettings] = useState<TranscodeSettings | null>(null)
   const [transcodeSettingsLoading, setTranscodeSettingsLoading] = useState(false)
-  const [relayCatalogUrl, setRelayCatalogUrl] = useState('')
-  const [relayCatalogSaving, setRelayCatalogSaving] = useState(false)
 
   // Check if channel is published
   const checkPublishStatus = useCallback(async () => {
@@ -129,43 +120,6 @@ export default function SettingsScreen() {
   useEffect(() => {
     loadTranscodeSettings()
   }, [loadTranscodeSettings])
-
-  useEffect(() => {
-    let mounted = true
-    void readRelayCatalogUrlFromDisk().then((url) => {
-      if (mounted && url) setRelayCatalogUrl(url)
-    })
-    return () => { mounted = false }
-  }, [])
-
-  const saveRelayCatalogUrl = useCallback(async () => {
-    const normalized = normalizeRelayCatalogUrl(relayCatalogUrl)
-    if (!normalized) {
-      Alert.alert('Invalid relay catalog URL', 'Use the relay WebUI catalog URL, e.g. http://server:8174/catalog.json')
-      return
-    }
-    setRelayCatalogSaving(true)
-    try {
-      const ok = await writeRelayCatalogUrlToDisk(normalized)
-      if (!ok) throw new Error('save failed')
-      setRelayCatalogUrl(normalized)
-      Alert.alert('Saved', 'Discover will merge this relay catalog into the feed.')
-    } catch {
-      Alert.alert('Error', 'Failed to save relay catalog URL')
-    } finally {
-      setRelayCatalogSaving(false)
-    }
-  }, [relayCatalogUrl])
-
-  const clearRelayCatalogUrl = useCallback(async () => {
-    setRelayCatalogSaving(true)
-    try {
-      await clearRelayCatalogUrlFromDisk()
-      setRelayCatalogUrl('')
-    } finally {
-      setRelayCatalogSaving(false)
-    }
-  }, [])
 
   const handleVideoToolboxDecodeToggle = async (enabled: boolean) => {
     if (!canManageTranscodeSettings) return
@@ -661,50 +615,6 @@ export default function SettingsScreen() {
             </>
           )}
         </View>
-
-        {/* Divider */}
-        <View className="h-2 bg-pear-bg-card" />
-
-        {/* Simple Relay Catalog */}
-        <View className="px-5 py-5">
-          <Text className="text-caption-medium text-pear-text-muted mb-4 uppercase tracking-wide">Relay Catalog</Text>
-          <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
-            <Text className="text-label text-pear-text mb-2">Simple relay catalog URL</Text>
-            <Text className="text-caption text-pear-text-muted mb-3">
-              Paste the relay WebUI catalog URL here to show archived relay videos without relying on live P2P feed discovery.
-            </Text>
-            <TextInput
-              placeholder="http://server:8174/catalog.json"
-              value={relayCatalogUrl}
-              onChangeText={setRelayCatalogUrl}
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
-            />
-            <View className="flex-row gap-3">
-              <Pressable
-                onPress={saveRelayCatalogUrl}
-                disabled={relayCatalogSaving || !relayCatalogUrl.trim()}
-                className={`flex-1 flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-2.5 ${(relayCatalogSaving || !relayCatalogUrl.trim()) ? 'opacity-50' : ''}`}
-              >
-                <Feather name="save" color="white" size={16} />
-                <Text className="text-white text-label">{relayCatalogSaving ? 'Saving...' : 'Save'}</Text>
-              </Pressable>
-              <Pressable
-                onPress={clearRelayCatalogUrl}
-                disabled={relayCatalogSaving || !relayCatalogUrl.trim()}
-                className={`flex-1 flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5 ${(relayCatalogSaving || !relayCatalogUrl.trim()) ? 'opacity-50' : ''}`}
-              >
-                <Feather name="x" color={colors.textMuted} size={16} />
-                <Text className="text-pear-text-muted text-label">Clear</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-
-        {/* Divider */}
-        <View className="h-2 bg-pear-bg-card" />
 
         {/* Devices Section */}
         <View className="px-5 py-5">

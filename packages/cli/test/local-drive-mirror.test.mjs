@@ -96,7 +96,7 @@ test('mirrorLocalDriveToRelayChannel imports, publishes, and seeds preview refs'
 })
 
 
-test('mirrorLocalDriveToRelayChannel marks unsupported local containers as not directly playable', async (t) => {
+test('mirrorLocalDriveToRelayChannel marks local containers playable with unverified playback support', async (t) => {
   const fs = makeFs({
     '/drive': [dirent('movie.mkv', 'file')]
   }, {
@@ -128,8 +128,8 @@ test('mirrorLocalDriveToRelayChannel marks unsupported local containers as not d
   await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim })
 
   t.is(publishedPreview.mimeType, 'video/x-matroska')
-  t.not(publishedPreview.availability, 'playable')
-  t.is(publishedPreview.playbackSupport, 'unsupported-container')
+  t.is(publishedPreview.availability, 'playable')
+  t.is(publishedPreview.playbackSupport, 'unverified-container')
 })
 
 

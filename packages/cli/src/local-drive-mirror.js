@@ -18,7 +18,7 @@ const DIRECT_PLAYABLE_MIME_TYPES = new Set(['video/mp4', 'video/webm'])
 function getPlaybackSupportForMimeType(mimeType) {
   const normalized = String(mimeType || '').toLowerCase()
   if (DIRECT_PLAYABLE_MIME_TYPES.has(normalized)) return { availability: 'playable', playbackSupport: 'direct' }
-  return { availability: 'unknown', playbackSupport: 'unsupported-container' }
+  return { availability: 'playable', playbackSupport: 'unverified-container' }
 }
 
 function normalizeExtensions(extensions = DEFAULT_VIDEO_EXTENSIONS) {

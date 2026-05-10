@@ -96,7 +96,7 @@ export function getPlaybackSupportForMimeType(mimeType) {
   if (normalized === 'video/mp4' || normalized === 'video/webm') {
     return { availability: 'playable', playbackSupport: 'direct' };
   }
-  return { availability: 'unknown', playbackSupport: 'unsupported-container' };
+  return { availability: 'playable', playbackSupport: 'unverified-container' };
 }
 
 function getExtensionForMime(mimeType) {

@@ -130,7 +130,7 @@ export function shouldAutoLoadFeedVideos({ feedEntries, swarmStatus }) {
 export function shouldRenderFeedVideo({ video, identityDriveKey }) {
   const channelKey = video?.channelKey || video?.driveKey || null
   if (identityDriveKey && channelKey === identityDriveKey) return true
-  return video?.availability === 'playable' || video?.playbackSupport === 'unsupported-container'
+  return video?.availability === 'playable' || video?.playbackSupport === 'unverified-container'
 }
 
 export function isConfirmedFeedHydrationResult({ entry, resolved, videos = [] }) {

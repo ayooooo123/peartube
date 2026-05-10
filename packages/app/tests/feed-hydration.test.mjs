@@ -219,7 +219,7 @@ test('shouldRenderFeedVideo only accepts proven-playable remote videos but keeps
 })
 
 
-test('feed preview videos keep unsupported mirrored media visible without marking it playable', () => {
+test('feed preview videos keep unverified mirrored media visible while marked playable', () => {
   const videos = getFeedPreviewVideos([{
     driveKey: 'remote-a',
     publicBeeKey: 'bb'.repeat(32),
@@ -227,8 +227,8 @@ test('feed preview videos keep unsupported mirrored media visible without markin
       id: 'mkv-preview',
       title: 'MKV Preview',
       uploadedAt: 10,
-      availability: 'unknown',
-      playbackSupport: 'unsupported-container',
+      availability: 'playable',
+      playbackSupport: 'unverified-container',
       blobId: '0:1:0:32',
       blobsCoreKey: 'cc'.repeat(32),
     }],
@@ -236,8 +236,8 @@ test('feed preview videos keep unsupported mirrored media visible without markin
 
   assert.equal(videos.length, 1)
   assert.equal(videos[0].id, 'mkv-preview')
-  assert.equal(videos[0].availability, 'unknown')
-  assert.equal(videos[0].playbackSupport, 'unsupported-container')
+  assert.equal(videos[0].availability, 'playable')
+  assert.equal(videos[0].playbackSupport, 'unverified-container')
 })
 
 test('mergeHydratedFeedVideos replaces stale channel cards when a refreshed channel no longer has watchable videos', () => {

@@ -1462,7 +1462,7 @@ export function createApi({
                 thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
               }
             })
-            .filter((video) => video && (video.availability === 'playable' || video.playbackSupport === 'unsupported-container'))
+            .filter((video) => video && (video.availability === 'playable' || video.playbackSupport === 'unverified-container'))
             .slice(0, limitPerChannel)
 
           return {

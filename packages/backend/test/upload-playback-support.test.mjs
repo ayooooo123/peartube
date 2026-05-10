@@ -26,7 +26,7 @@ function makeChannel() {
   }
 }
 
-test('uploadFromBuffer marks Matroska uploads as unsupported for direct playback', async () => {
+test('uploadFromBuffer marks Matroska uploads playable with unverified playback support', async () => {
   const manager = createUploadManager({ ctx: {} })
   const channel = makeChannel()
   const header = Buffer.concat([
@@ -39,7 +39,7 @@ test('uploadFromBuffer marks Matroska uploads as unsupported for direct playback
 
   assert.equal(result.success, true)
   assert.equal(result.metadata.mimeType, 'video/x-matroska')
-  assert.equal(result.metadata.availability, 'unknown')
-  assert.equal(result.metadata.playbackSupport, 'unsupported-container')
-  assert.equal(channel.videos[0].playbackSupport, 'unsupported-container')
+  assert.equal(result.metadata.availability, 'playable')
+  assert.equal(result.metadata.playbackSupport, 'unverified-container')
+  assert.equal(channel.videos[0].playbackSupport, 'unverified-container')
 })

@@ -204,7 +204,7 @@ test('mirrorLocalDriveToRelayChannel derives safe metadata and tags from mixed l
   }
 
   const imports = []
-  let publishedPreviews = null
+  const publishedPreviews = []
   const publisher = {
     async ensureAnonymousChannel() {
       return { channel: { id: 'channel' }, channelKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32) }
@@ -225,7 +225,7 @@ test('mirrorLocalDriveToRelayChannel derives safe metadata and tags from mixed l
       }
     },
     async publishChannel(_channelInfo, options) {
-      publishedPreviews = options.previewVideos
+      publishedPreviews.push(...options.previewVideos)
     },
     async seedChannel() {}
   }
@@ -251,4 +251,91 @@ test('mirrorLocalDriveToRelayChannel derives safe metadata and tags from mixed l
   t.alike(publishedPreviews[0].tags, ['youtube', 'yt-dlp', 'education', 'uploader-name', 'channel-name', 'demo', 'very-long-tag-name-that-should-be-clipped-to-a-s'])
   t.is(publishedPreviews[1].sourceType, 'local')
   t.alike(publishedPreviews[1].tags, ['local'])
+})
+
+
+test('mirrorLocalDriveToRelayChannel groups yt-dlp imports by creator channel identity', async (t) => {
+  const fs = makeFs({
+    '/drive': [dirent('alpha.mp4', 'file'), dirent('alpha.info.json', 'file'), dirent('beta.mp4', 'file'), dirent('beta.info.json', 'file')]
+  }, {
+    '/drive/alpha.mp4': 100,
+    '/drive/alpha.info.json': 50,
+    '/drive/beta.mp4': 200,
+    '/drive/beta.info.json': 50
+  })
+  fs.existsSync = (filePath) => filePath.endsWith('.info.json')
+  fs.readFileSync = (filePath) => JSON.stringify(filePath.includes('alpha')
+    ? {
+        id: 'alpha',
+        title: 'Alpha',
+        channel: 'Creator One',
+        channel_id: 'UCcreatorone',
+        uploader: 'Creator One',
+        webpage_url: 'https://www.youtube.com/watch?v=alpha'
+      }
+    : {
+        id: 'beta',
+        title: 'Beta',
+        channel: 'Creator Two',
+        channel_id: 'UCcreatortwo',
+        uploader: 'Creator Two',
+        webpage_url: 'https://www.youtube.com/watch?v=beta'
+      })
+
+  const ensured = []
+  const imports = []
+  const published = []
+  const seeded = []
+  const publisher = {
+    async ensureAnonymousChannel({ channelName, sourceIdentity }) {
+      ensured.push({ channelName, sourceIdentity })
+      const suffix = sourceIdentity.sourceId.endsWith('UCcreatorone') ? '11' : '22'
+      return { channel: { id: sourceIdentity.sourceId }, channelKey: suffix.repeat(32), publicBeeKey: suffix.repeat(32) }
+    },
+    async importVideo(input) {
+      imports.push(input)
+      return {
+        videoId: input.sourceVideoId,
+        metadata: {
+          size: input.filePath.endsWith('alpha.mp4') ? 100 : 200,
+          mimeType: input.mimeType,
+          blobId: `blob:${input.sourceVideoId}`,
+          blobsCoreKey: input.sourceVideoId === 'alpha' ? 'aa'.repeat(32) : 'bb'.repeat(32)
+        }
+      }
+    },
+    async publishChannel(channelInfo, options) {
+      published.push({ channelKey: channelInfo.channelKey, titles: options.previewVideos.map((video) => video.title) })
+    },
+    async seedChannel(channelInfo) {
+      seeded.push({ channelKey: channelInfo.channelKey, refs: channelInfo.previewVideos.map((video) => video.blobsCoreKey) })
+    }
+  }
+
+  const result = await mirrorLocalDriveToRelayChannel({ rootPath: '/drive', publisher, fs, path: pathShim, channelName: 'Fallback Mirror' })
+
+  t.is(result.scanned, 2)
+  t.is(result.imported, 2)
+  t.is(ensured.length, 2)
+  t.alike(ensured.map((entry) => entry.channelName), ['Creator One', 'Creator Two'])
+  t.alike(ensured.map((entry) => entry.sourceIdentity), [
+    { platform: 'youtube', sourceId: 'youtube:channel:UCcreatorone', creatorName: 'Creator One', creatorHandle: null },
+    { platform: 'youtube', sourceId: 'youtube:channel:UCcreatortwo', creatorName: 'Creator Two', creatorHandle: null }
+  ])
+  t.alike(imports.map((entry) => [entry.title, entry.creatorName, entry.creatorSourceId, entry.sourceVideoId]), [
+    ['Alpha', 'Creator One', 'youtube:channel:UCcreatorone', 'alpha'],
+    ['Beta', 'Creator Two', 'youtube:channel:UCcreatortwo', 'beta']
+  ])
+  t.alike(published, [
+    { channelKey: '11'.repeat(32), titles: ['Alpha'] },
+    { channelKey: '22'.repeat(32), titles: ['Beta'] }
+  ])
+  t.alike(seeded, [
+    { channelKey: '11'.repeat(32), refs: ['aa'.repeat(32)] },
+    { channelKey: '22'.repeat(32), refs: ['bb'.repeat(32)] }
+  ])
+  t.alike(result.channels.map((channel) => ({ channelName: channel.channelName, imported: channel.imported })), [
+    { channelName: 'Creator One', imported: 1 },
+    { channelName: 'Creator Two', imported: 1 }
+  ])
 })

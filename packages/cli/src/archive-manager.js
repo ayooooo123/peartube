@@ -296,26 +296,38 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
   if (!uploadManager) throw new Error('uploadManager is required')
   if (!api) throw new Error('api is required')
 
+  const sourceChannels = new Map()
+  const previousActiveIdentity = identityManager.getActiveIdentity?.()
+
   return {
-    async ensureAnonymousChannel({ channelName }) {
-      let identity = identityManager.getActiveIdentity?.()
-      if (!identity?.driveKey) {
-        const created = await identityManager.createIdentity(channelName || 'Anonymous Archive', true)
+    async ensureAnonymousChannel({ channelName, sourceIdentity = null } = {}) {
+      const sourceKey = sourceIdentity?.sourceId || null
+      if (sourceKey && sourceChannels.has(sourceKey)) return sourceChannels.get(sourceKey)
+
+      let identity = sourceKey ? previousActiveIdentity : identityManager.getActiveIdentity?.()
+      if (!identity?.driveKey || sourceKey) {
+        const created = sourceKey && typeof identityManager.createSourceIdentity === 'function'
+          ? await identityManager.createSourceIdentity(sourceIdentity, channelName || sourceIdentity.creatorName || 'Anonymous Archive')
+          : await identityManager.createIdentity(channelName || sourceIdentity?.creatorName || 'Anonymous Archive', true)
         identity = {
           publicKey: created.publicKey,
           driveKey: created.driveKey,
           channelKey: created.driveKey,
-          name: channelName || 'Anonymous Archive'
+          name: channelName || sourceIdentity?.creatorName || 'Anonymous Archive'
         }
       }
 
-      const channel = await identityManager.getActiveChannel?.()
+      const channel = sourceKey && typeof identityManager.getChannelForIdentity === 'function'
+        ? await identityManager.getChannelForIdentity(identity)
+        : await identityManager.getActiveChannel?.()
       if (!channel?.blobs) throw new Error('Anonymous channel blobs not initialized')
       const meta = await channel.getMetadata?.().catch(() => null)
       const publicBeeKey = channel.publicBeeKey || meta?.publicBeeKey || null
-      return { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey }
+      const entry = { channel, channelKey: identity.driveKey || identity.channelKey, publicBeeKey }
+      if (sourceKey) sourceChannels.set(sourceKey, entry)
+      return entry
     },
-    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, tags, sourceType, sourceUrl, thumbnailUrl }) {
+    async importVideo({ channel, filePath, title, description, mimeType, category, duration, thumbnail, tags, sourceType, sourceUrl, sourceVideoId, creatorSourceId, creatorName, creatorHandle, thumbnailUrl }) {
       const result = await uploadManager.uploadFromPath(channel, filePath, {
         title,
         description,
@@ -326,6 +338,10 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
         tags,
         sourceType,
         sourceUrl,
+        sourceVideoId,
+        creatorSourceId,
+        creatorName,
+        creatorHandle,
         thumbnailUrl
       }, fs)
       if (!result?.success) throw new Error(result?.error || 'Archive import failed')
@@ -390,6 +406,10 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           duration: Number(importedMetadata.duration || downloaded.duration || 0) || 0,
           size: Number(importedMetadata.size || downloaded.size || 0) || 0,
           mimeType: importedMetadata.mimeType || downloaded.mimeType || 'video/mp4',
+          sourceVideoId: privateInput.sourceVideoId || downloaded.sourceVideoId || null,
+          creatorSourceId: privateInput.creatorSourceId || downloaded.creatorSourceId || null,
+          creatorName: privateInput.creatorName || downloaded.creatorName || null,
+          creatorHandle: privateInput.creatorHandle || downloaded.creatorHandle || null,
           availability: 'playable',
           blobId: importedMetadata.blobId || null,
           blobsCoreKey: importedMetadata.blobsCoreKey || null,

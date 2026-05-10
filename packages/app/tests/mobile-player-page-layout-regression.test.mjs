@@ -146,24 +146,30 @@ test('Android mini-player layout is only disabled when split-player playback is 
 
 test('mobile mini-player drag snaps to safe-area corners', () => {
   const overlaySource = readAppFile('components/VideoPlayerOverlayImpl.tsx')
+  const derivedSource = readAppFile('components/video-player/overlayDerivedState.ts')
 
   assert.match(
     overlaySource,
-    /function getMobileMiniPlayerSnapPosition\(\{\s*corner,\s*screenWidth,\s*screenHeight,\s*topInset,\s*rightInset,\s*bottomInset,\s*leftInset,\s*bottomOffset,\s*aspectRatio,\s*sizeMode,/,
+    /getMobileMiniPlayerSnapPosition/,
+    'overlay should use the dedicated corner snap helper',
+  )
+  assert.match(
+    derivedSource,
+    /export function getMobileMiniPlayerSnapPosition\(\{\s*corner,\s*screenWidth,\s*screenHeight,\s*topInset,\s*rightInset,\s*bottomInset,\s*leftInset,\s*bottomOffset,\s*aspectRatio,\s*sizeMode,/,
     'mobile mini-player placement should be derived from a dedicated corner snap helper',
   )
   assert.match(
-    overlaySource,
+    derivedSource,
     /const bounds = computeMiniBounds\(\s*screenWidth,\s*screenHeight,\s*topInset,\s*rightInset,\s*bottomInset,\s*leftInset,\s*bottomOffset,\s*miniWidth,\s*miniHeight,/,
     'mobile snap helper should derive bounds from safe-area insets, tab bar offset, and dynamic mini-player size',
   )
   assert.match(
-    overlaySource,
+    derivedSource,
     /topBound: insetTop \+ margin,/,
     'mobile top-corner snapping should stay below the safe-area inset',
   )
   assert.match(
-    overlaySource,
+    derivedSource,
     /bottomBound: screenHeight - bottomMargin - miniHeight,/,
     'mobile bottom-corner snapping should stay above the tab bar and bottom inset',
   )

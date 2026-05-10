@@ -451,7 +451,7 @@ B.updateVideoMetadata = async (r: any) => { const a = identityManager.getActiveI
 B.updateChannelAvatar = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }; const buf = fs.readFileSync(r.filePath); return api.updateChannelAvatar(a.driveKey, buf, r.mimeType || 'image/jpeg') }
 B.listVideos = async (r: any) => {
   const ck = r?.channelKey || ''; if (!ck) return { videos: [] }
-  let raw: any[] = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch { return { videos: [] } }
+  let raw: any[] = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch (err: any) { return { success: false, error: err?.message || String(err), stale: true, videos: [] } }
   return { videos: (raw || []).map((v: any) => {
     const id = v?.id ? String(v.id) : ''; if (!id) return null
     return {

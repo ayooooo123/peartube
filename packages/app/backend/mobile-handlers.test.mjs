@@ -133,6 +133,28 @@ test('listVideos forwards video availability metadata from backend api', async (
   })
 })
 
+test('listVideos returns explicit stale error when backend api list fails', async () => {
+  const backend = {}
+  const deps = createDeps({
+    api: {
+      async listVideos(channelKey, publicBeeKey) {
+        assert.equal(channelKey, 'channel-key')
+        assert.equal(publicBeeKey, 'public-bee-key')
+        throw new Error('manifest unavailable')
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  assert.deepEqual(await backend.listVideos({ channelKey: 'channel-key', publicBeeKey: 'public-bee-key' }), {
+    success: false,
+    error: 'manifest unavailable',
+    stale: true,
+    videos: [],
+  })
+})
+
 test('preparePlayback forwards direct blob playback fields to the backend api', async () => {
   const backend = {}
   const captured = []

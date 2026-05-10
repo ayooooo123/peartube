@@ -37,6 +37,8 @@ export default function SettingsScreen() {
   const [creating, setCreating] = useState(false)
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [storageLimit, setStorageLimit] = useState(5)
+  const [customStorageLimit, setCustomStorageLimit] = useState('5')
+  const [storageLimitSaving, setStorageLimitSaving] = useState(false)
   const [clearingCache, setClearingCache] = useState(false)
   const [isPublished, setIsPublished] = useState(false)
   const [publishLoading, setPublishLoading] = useState(false)
@@ -78,6 +80,7 @@ export default function SettingsScreen() {
       const stats = await rpc.getStorageStats()
       setStorageStats(stats)
       setStorageLimit(stats.maxGB)
+      setCustomStorageLimit(String(stats.maxGB))
     } catch (err) {
       console.error('[Settings] Failed to load storage stats:', err)
     }
@@ -220,15 +223,41 @@ export default function SettingsScreen() {
     }
   }
 
+  const parseStorageLimitGB = (value: string): number | null => {
+    const parsed = Number(value.trim())
+    if (!Number.isFinite(parsed)) return null
+    return Math.max(1, Math.min(100, Math.round(parsed)))
+  }
+
   const handleStorageLimitChange = async (newLimit: number) => {
     if (!rpc) return
-    setStorageLimit(newLimit)
+    const boundedLimit = Math.max(1, Math.min(100, Math.round(newLimit)))
+    setStorageLimit(boundedLimit)
+    setCustomStorageLimit(String(boundedLimit))
+    setStorageLimitSaving(true)
     try {
-      await rpc.setStorageLimit(newLimit)
+      const result = await rpc.setStorageLimit(boundedLimit)
+      if (result?.success === false) throw new Error('Failed to set storage limit')
       await loadStorageStats()
-    } catch (err) {
+    } catch (err: any) {
       console.error('[Settings] Failed to set storage limit:', err)
+      if (Platform.OS === 'web') window.alert(err?.message || 'Failed to set storage limit')
+      else Alert.alert('Error', err?.message || 'Failed to set storage limit')
+      await loadStorageStats()
+    } finally {
+      setStorageLimitSaving(false)
     }
+  }
+
+  const handleCustomStorageLimitApply = async () => {
+    const parsed = parseStorageLimitGB(customStorageLimit)
+    if (!parsed) {
+      if (Platform.OS === 'web') window.alert('Enter a cache limit from 1 to 100 GB')
+      else Alert.alert('Invalid Limit', 'Enter a cache limit from 1 to 100 GB')
+      setCustomStorageLimit(String(storageLimit))
+      return
+    }
+    await handleStorageLimitChange(parsed)
   }
 
   const handleClearCache = async () => {
@@ -425,69 +454,169 @@ export default function SettingsScreen() {
     setPublishLoading(false)
   }
 
+  const renderStorageSection = () => (
+    <View className="px-5 py-5">
+      <Text className="text-caption-medium text-pear-text-muted mb-4 uppercase tracking-wide">Storage</Text>
+
+      <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
+        <View className="flex-row items-center mb-3">
+          <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
+            <Feather name="hard-drive" color={colors.primary} size={20} />
+          </View>
+          <View className="flex-1 ml-4">
+            <Text className="text-label text-pear-text">Peer Content Cache</Text>
+            <Text className="text-caption text-pear-text-muted mt-0.5">
+              {storageStats ? `${storageStats.usedGB} GB / ${storageStats.maxGB} GB used` : 'Loading...'}
+            </Text>
+          </View>
+        </View>
+
+        {storageStats && (
+          <View className="mb-4">
+            <View className="h-2 bg-pear-bg-card rounded-full overflow-hidden">
+              <View
+                className="h-full bg-pear-primary rounded-full"
+                style={{ width: `${Math.min(100, storageStats.maxBytes > 0 ? (storageStats.usedBytes / storageStats.maxBytes) * 100 : 0)}%` }}
+              />
+            </View>
+            <Text className="text-caption text-pear-text-muted mt-2">
+              {storageStats.seedCount} cached videos • {storageStats.pinnedCount} pinned channels
+            </Text>
+          </View>
+        )}
+
+        <View className="mb-4">
+          <Text className="text-caption text-pear-text-muted mb-2">Storage Limit</Text>
+          <View className="flex-row gap-2 mb-3">
+            {[5, 10, 20, 50].map((gb) => (
+              <Pressable
+                key={gb}
+                onPress={() => handleStorageLimitChange(gb)}
+                disabled={storageLimitSaving}
+                className={`flex-1 py-2 rounded-lg items-center ${storageLimit === gb ? 'bg-pear-primary' : 'bg-pear-bg-card border border-pear-border'} ${storageLimitSaving ? 'opacity-50' : ''}`}
+              >
+                <Text className={`text-label ${storageLimit === gb ? 'text-white' : 'text-pear-text'}`}>
+                  {gb} GB
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <View className="flex-row gap-2">
+            <TextInput
+              value={customStorageLimit}
+              onChangeText={setCustomStorageLimit}
+              onSubmitEditing={handleCustomStorageLimitApply}
+              keyboardType="numeric"
+              placeholder="Custom GB"
+              placeholderTextColor={colors.textMuted}
+              className="flex-1 bg-pear-bg-input border border-pear-border rounded-lg px-4 py-2.5 text-body text-pear-text"
+            />
+            <Pressable
+              onPress={handleCustomStorageLimitApply}
+              disabled={storageLimitSaving}
+              className={`px-4 py-2.5 rounded-lg items-center justify-center bg-pear-primary ${storageLimitSaving ? 'opacity-50' : ''}`}
+            >
+              <Text className="text-white text-label">{storageLimitSaving ? 'Saving...' : 'Apply Limit'}</Text>
+            </Pressable>
+          </View>
+          <Text className="text-caption text-pear-text-muted mt-2">
+            Set any cache budget from 1 to 100 GB. No channel/account is required.
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={handleClearCache}
+          disabled={clearingCache}
+          className={`flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5 ${clearingCache ? 'opacity-50' : ''}`}
+        >
+          <Feather name="trash-2" color={colors.text} size={16} />
+          <Text className="text-pear-text text-label">
+            {clearingCache ? 'Clearing...' : 'Clear Cache'}
+          </Text>
+        </Pressable>
+      </View>
+
+      <Text className="text-caption text-pear-text-muted">
+        Cached content from other channels. Higher limits help the network by seeding more content to other peers. Your own videos are stored separately and do not count toward this limit.
+      </Text>
+    </View>
+  )
+
   // Onboarding - no identity yet
   if (!identity) {
     return (
-      <View className="flex-1 bg-pear-bg justify-center items-center px-6">
-        <View className="items-center mb-12">
-          <Text className="text-display text-pear-text mb-2">PearTube</Text>
-          <Text className="text-body text-pear-text-muted text-center">P2P Video Streaming</Text>
-        </View>
-
-        <View className="w-full max-w-sm gap-4">
-          <View className="bg-pear-bg-elevated border border-pear-border rounded-xl p-4">
-            <Text className="text-label text-pear-text mb-2">Already have an invite code?</Text>
-            <Text className="text-caption text-pear-text-muted mb-3">
-              Pair this device to an existing channel so it can sync and upload from multiple devices.
-            </Text>
-            <TextInput
-              placeholder="Paste invite code"
-              value={pairInviteCode}
-              onChangeText={setPairInviteCode}
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
-            />
-            <TextInput
-              placeholder="Optional device name"
-              value={pairDeviceName}
-              onChangeText={setPairDeviceName}
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
-            />
-            <Pressable
-              onPress={async () => {
-                await pairDevice()
-                await loadIdentity()
-              }}
-              disabled={pairing || !pairInviteCode.trim()}
-              className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(pairing || !pairInviteCode.trim()) ? 'opacity-50' : ''}`}
-            >
-              <Text className="text-white text-label">
-                {pairing ? 'Pairing...' : 'Pair & Continue'}
-              </Text>
-            </Pressable>
+      <View className="flex-1 bg-pear-bg">
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: bottomPadding, paddingTop: Math.max(insets.top + 32, 48) }}
+          showsVerticalScrollIndicator={false}
+        >
+          <View className="items-center mb-8 px-6">
+            <Text className="text-display text-pear-text mb-2">PearTube</Text>
+            <Text className="text-body text-pear-text-muted text-center">P2P Video Streaming</Text>
           </View>
 
-          <TextInput
-            placeholder="Enter your channel name"
-            value={newName}
-            onChangeText={setNewName}
-            placeholderTextColor={colors.textMuted}
-            autoCapitalize="none"
-            className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-          />
-          <Pressable
-            onPress={handleCreateIdentity}
-            disabled={creating || !newName.trim()}
-            className={`bg-pear-primary rounded-lg py-3.5 items-center ${(creating || !newName.trim()) ? 'opacity-50' : ''}`}
-          >
-            <Text className="text-white text-label">
-              {creating ? 'Creating...' : 'Create Channel'}
-            </Text>
-          </Pressable>
-        </View>
+          {renderStorageSection()}
+
+          <View className="h-2 bg-pear-bg-card" />
+
+          <View className="px-5 py-5">
+            <Text className="text-caption-medium text-pear-text-muted mb-4 uppercase tracking-wide">Channel</Text>
+            <View className="gap-4">
+              <View className="bg-pear-bg-elevated border border-pear-border rounded-xl p-4">
+                <Text className="text-label text-pear-text mb-2">Already have an invite code?</Text>
+                <Text className="text-caption text-pear-text-muted mb-3">
+                  Pair this device to an existing channel so it can sync and upload from multiple devices.
+                </Text>
+                <TextInput
+                  placeholder="Paste invite code"
+                  value={pairInviteCode}
+                  onChangeText={setPairInviteCode}
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
+                />
+                <TextInput
+                  placeholder="Optional device name"
+                  value={pairDeviceName}
+                  onChangeText={setPairDeviceName}
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
+                />
+                <Pressable
+                  onPress={async () => {
+                    await pairDevice()
+                    await loadIdentity()
+                  }}
+                  disabled={pairing || !pairInviteCode.trim()}
+                  className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(pairing || !pairInviteCode.trim()) ? 'opacity-50' : ''}`}
+                >
+                  <Text className="text-white text-label">
+                    {pairing ? 'Pairing...' : 'Pair & Continue'}
+                  </Text>
+                </Pressable>
+              </View>
+
+              <TextInput
+                placeholder="Enter your channel name"
+                value={newName}
+                onChangeText={setNewName}
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="none"
+                className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
+              />
+              <Pressable
+                onPress={handleCreateIdentity}
+                disabled={creating || !newName.trim()}
+                className={`bg-pear-primary rounded-lg py-3.5 items-center ${(creating || !newName.trim()) ? 'opacity-50' : ''}`}
+              >
+                <Text className="text-white text-label">
+                  {creating ? 'Creating...' : 'Create Channel'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </ScrollView>
       </View>
     )
   }
@@ -723,73 +852,7 @@ export default function SettingsScreen() {
         <View className="h-2 bg-pear-bg-card" />
 
         {/* Storage Section */}
-        <View className="px-5 py-5">
-          <Text className="text-caption-medium text-pear-text-muted mb-4 uppercase tracking-wide">Storage</Text>
-
-          {/* Storage Usage */}
-          <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
-            <View className="flex-row items-center mb-3">
-              <View className="w-10 h-10 rounded-lg bg-pear-primary-muted items-center justify-center">
-                <Feather name="hard-drive" color={colors.primary} size={20} />
-              </View>
-              <View className="flex-1 ml-4">
-                <Text className="text-label text-pear-text">Peer Content Cache</Text>
-                <Text className="text-caption text-pear-text-muted mt-0.5">
-                  {storageStats ? `${storageStats.usedGB} GB / ${storageStats.maxGB} GB used` : 'Loading...'}
-                </Text>
-              </View>
-            </View>
-
-            {/* Progress bar */}
-            {storageStats && (
-              <View className="mb-4">
-                <View className="h-2 bg-pear-bg-card rounded-full overflow-hidden">
-                  <View
-                    className="h-full bg-pear-primary rounded-full"
-                    style={{ width: `${Math.min(100, (storageStats.usedBytes / storageStats.maxBytes) * 100)}%` }}
-                  />
-                </View>
-                <Text className="text-caption text-pear-text-muted mt-2">
-                  {storageStats.seedCount} cached videos • {storageStats.pinnedCount} pinned channels
-                </Text>
-              </View>
-            )}
-
-            {/* Storage limit selector */}
-            <View className="mb-4">
-              <Text className="text-caption text-pear-text-muted mb-2">Storage Limit</Text>
-              <View className="flex-row gap-2">
-                {[5, 10, 20, 50].map((gb) => (
-                  <Pressable
-                    key={gb}
-                    onPress={() => handleStorageLimitChange(gb)}
-                    className={`flex-1 py-2 rounded-lg items-center ${storageLimit === gb ? 'bg-pear-primary' : 'bg-pear-bg-card border border-pear-border'}`}
-                  >
-                    <Text className={`text-label ${storageLimit === gb ? 'text-white' : 'text-pear-text'}`}>
-                      {gb} GB
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-
-            {/* Clear cache button */}
-            <Pressable
-              onPress={handleClearCache}
-              disabled={clearingCache}
-              className={`flex-row items-center justify-center gap-2 bg-pear-bg-card border border-pear-border rounded-lg py-2.5 ${clearingCache ? 'opacity-50' : ''}`}
-            >
-              <Feather name="trash-2" color={colors.text} size={16} />
-              <Text className="text-pear-text text-label">
-                {clearingCache ? 'Clearing...' : 'Clear Cache'}
-              </Text>
-            </Pressable>
-          </View>
-
-          <Text className="text-caption text-pear-text-muted">
-            Cached content from other channels. Higher limits help the network by seeding more content to other peers. Your own videos are stored separately and do not count toward this limit.
-          </Text>
-        </View>
+        {renderStorageSection()}
 
         {/* Divider */}
         <View className="h-2 bg-pear-bg-card" />

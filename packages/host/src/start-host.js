@@ -89,6 +89,15 @@ function normalizeHostError(error, fallbackCode = HOST_ERROR_CODES.HOST_START_FA
   return createHostError(fallbackCode, message, { cause: error })
 }
 
+function normalizeReadyPayload(payload = {}) {
+  return {
+    blobServerPort: payload?.blobServerPort ?? null,
+    blobServerReady: Boolean(payload?.blobServerReady),
+    blobServerError: payload?.blobServerError ?? null,
+    protocolVersion: payload?.protocolVersion ?? PROTOCOL_VERSION
+  }
+}
+
 export async function startHost(options = {}) {
   validateStartOptions(options)
 
@@ -140,10 +149,7 @@ export async function startHost(options = {}) {
       onFeedUpdate,
       onVideoStats,
       onReady(payload = {}) {
-        const readyData = {
-          blobServerPort: payload?.blobServerPort ?? null,
-          protocolVersion: payload?.protocolVersion ?? PROTOCOL_VERSION
-        }
+        const readyData = normalizeReadyPayload(payload)
 
         settleReady(readyData)
         emitLifecycle({ type: 'host.ready', data: readyData })

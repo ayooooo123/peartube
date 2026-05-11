@@ -1,7 +1,12 @@
 import { PROTOCOL_EVENTS } from '@peartube/protocol/events'
 
-export type HostReadyData = {
+type BlobServerStatus = {
   blobServerPort: number | null
+  blobServerReady?: boolean
+  blobServerError?: string | null
+}
+
+export type HostReadyData = BlobServerStatus & {
   protocolVersion: 2
 }
 
@@ -143,6 +148,8 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
     if (
       lastReady &&
       lastReady.blobServerPort === data.blobServerPort &&
+      lastReady.blobServerReady === data.blobServerReady &&
+      lastReady.blobServerError === data.blobServerError &&
       lastReady.protocolVersion === data.protocolVersion
     ) {
       return

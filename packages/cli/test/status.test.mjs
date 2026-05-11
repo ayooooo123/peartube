@@ -92,6 +92,8 @@ test('buildRelayStatus orders eviction candidates by retention class', async (t)
     t.is(status.runtime.peers, 2)
     t.is(status.runtime.feedPeers, 2)
     t.is(status.runtime.feedConnections, 2)
+    t.is(status.runtime.feedChannelCandidates, 2)
+    t.is(status.runtime.candidateConnections, 2)
     t.is(status.runtime.feedEntries, 3)
     t.is(status.evictionCandidates[0].channelKey, 'discover-1')
     t.is(status.evictionCandidates[1].channelKey, 'allow-1')
@@ -125,6 +127,45 @@ test('readRelayStatus returns persisted runtime stats when present', async (t) =
     t.is(loaded.runtime.feedPeers, 4)
     t.is(loaded.runtime.feedConnections, 4)
     t.is(loaded.runtime.feedEntries, 12)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('buildRelayStatus distinguishes feed candidates from open feed connections', async (t) => {
+  const dir = makeTempDir('peartube-relay-status-feed-semantics-')
+
+  try {
+    const catalog = await RelayCatalog.open({ storagePath: dir })
+    const status = buildRelayStatus({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 16_384 }
+      },
+      catalog,
+      runtimeStats: {
+        peers: 3,
+        connections: 1,
+        feedPeers: 4,
+        feedConnections: 1,
+        feedChannelCandidates: 4,
+        candidateConnections: 4,
+        rememberedPeerCandidates: 6,
+        feedEntries: 5
+      }
+    })
+
+    t.is(status.runtime.feedPeers, 4, 'legacy feedPeers field remains available')
+    t.is(status.runtime.feedChannelCandidates, 4)
+    t.is(status.runtime.candidateConnections, 4)
+    t.is(status.runtime.feedConnections, 1)
+    t.is(status.runtime.rememberedPeerCandidates, 6)
+
+    const formatted = formatRelayStatus(status)
+    t.ok(formatted.includes('feedPeerCandidates: 4'))
+    t.ok(formatted.includes('feedConnections: 1'))
+    t.ok(formatted.includes('rememberedPeerCandidates: 6'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -39,14 +39,36 @@ test('startHost forwards ready payload with protocolVersion and lifecycle event'
     stream: createFakeStream(),
     onLifecycle: (event) => lifecycleEvents.push(event),
     createBackendImpl: async ({ onReady }) => {
-      onReady({ blobServerPort: 7777 })
+      onReady({ blobServerPort: 7777, blobServerReady: true, blobServerError: null })
       return { destroy: async () => {} }
     }
   })
 
   const ready = await session.waitUntilReady()
 
-  t.alike(ready, { blobServerPort: 7777, protocolVersion: 2 })
+  t.alike(ready, { blobServerPort: 7777, blobServerReady: true, blobServerError: null, protocolVersion: 2 })
+  t.alike(lifecycleEvents, [{ type: 'host.ready', data: ready }])
+})
+
+test('startHost forwards degraded blob server readiness details', async (t) => {
+  const lifecycleEvents = []
+
+  const session = await startHost({
+    platform: 'desktop',
+    storagePath: '/tmp/peartube-host',
+    entrypoint: 'sidecar-entry',
+    args: [],
+    stream: createFakeStream(),
+    onLifecycle: (event) => lifecycleEvents.push(event),
+    createBackendImpl: async ({ onReady }) => {
+      onReady({ blobServerPort: null, blobServerReady: false, blobServerError: 'address in use', protocolVersion: 2 })
+      return { destroy: async () => {} }
+    }
+  })
+
+  const ready = await session.waitUntilReady()
+
+  t.alike(ready, { blobServerPort: null, blobServerReady: false, blobServerError: 'address in use', protocolVersion: 2 })
   t.alike(lifecycleEvents, [{ type: 'host.ready', data: ready }])
 })
 

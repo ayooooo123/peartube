@@ -22,6 +22,7 @@ type PearInlineVideoViewProps = {
   isInPipMode?: boolean
   pipWindowSize?: { width: number; height: number } | null
   pipEnabled?: boolean
+  autoEnterPipOnLeave?: boolean
   videoTitle?: string
   channelName?: string
   thumbnailUrl?: string | null
@@ -91,6 +92,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   onError,
   onVideoStateChange,
   onPictureInPictureChanged,
+  autoEnterPipOnLeave = true,
   videoTitle,
   channelName,
   thumbnailUrl,
@@ -424,8 +426,9 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         playWhenInactive={true}
         // showNotificationControls: react-native-video handles notification controls natively
         showNotificationControls={true}
-        // Auto-enter PiP when user presses home / leaves the app
-        enterPictureInPictureOnLeave={true}
+        // Auto-enter PiP when enabled by the caller. Shorts/Discover owns its
+        // route-local player and should not spawn a system PiP window on leave.
+        enterPictureInPictureOnLeave={autoEnterPipOnLeave}
         // Buffer config for Android ExoPlayer
         bufferConfig={Platform.OS === 'android' ? ANDROID_BUFFER_CONFIG : undefined}
         // Suppress HLS "LIVE" indicator (PearTube uses HLS for VOD)

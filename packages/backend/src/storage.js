@@ -858,6 +858,11 @@ export async function initializeStorage(config) {
   // Initialize blob server for video streaming only after metadata cores are open.
   let blobServer = null;
   let blobServerPort = 0;
+  let blobServerError = null;
+  let resolveBlobServerReady;
+  const blobServerReady = new Promise((resolve) => {
+    resolveBlobServerReady = resolve
+  })
   let blobServerHost = blobServerHostOverride || '127.0.0.1';
   let blobServerBindHost = blobServerBindHostOverride || blobServerHost;
 
@@ -963,28 +968,47 @@ export async function initializeStorage(config) {
     console.log('[Storage] Starting blob server listen...');
     await appendDebugLine('[storage] blob server listen start')
     globalBlobServer = blobServer;
+    const markBlobServerReady = (port, error = null) => {
+      blobServerPort = Number(port || 0) || 0
+      blobServerError = error || null
+      blobServer._peartubeListenResolved = true
+      blobServer._peartubeReady = blobServerPort > 0 && !blobServerError
+      blobServer._peartubeListenError = blobServerError
+      if (!blobServerError) {
+        console.log('[Storage] Blob server listening on port:', blobServerPort)
+        void appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
+      }
+      resolveBlobServerReady?.({ port: blobServerPort, error: blobServerError })
+    }
+
     blobServer._peartubeListenResolved = false
+    blobServer._peartubeReady = false
+    blobServer._peartubeListenError = null
     const blobServerListenPromise = blobServer.listen()
 
     if (blobServerListenPromise && typeof blobServerListenPromise.then === 'function') {
       blobServerListenPromise
         .then(() => {
-          blobServer._peartubeListenResolved = true
-          blobServerPort = blobServer.port || 0
-          console.log('[Storage] Blob server listening on port:', blobServerPort)
-          void appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
+          const resolvedPort = Number(blobServer.port || 0) || 0
+          if (!resolvedPort) {
+            markBlobServerReady(0, new Error('Blob server listen resolved without an assigned port'))
+            return
+          }
+          markBlobServerReady(resolvedPort)
         })
         .catch((err) => {
-          console.error('[Storage] Blob server listen failed:', err?.message)
-          void appendDebugLine(`[storage] blob server listen failed ${err?.message || String(err)}`)
+          markBlobServerReady(0, err)
         })
     } else {
-      blobServer._peartubeListenResolved = true
-      blobServerPort = blobServer.port || 0
-      console.log('[Storage] Blob server listening on port:', blobServerPort)
-      await appendDebugLine(`[storage] blob server listening port=${blobServerPort}`)
+      const resolvedPort = Number(blobServer.port || 0) || 0
+      markBlobServerReady(
+        resolvedPort,
+        resolvedPort ? null : new Error('Blob server listen returned before an assigned port was available')
+      )
     }
   } catch (err) {
+    blobServerError = err
+    resolveBlobServerReady?.({ port: 0, error: err })
     console.error('[Storage] Failed to initialize blob server:', err.message);
     await appendDebugLine(`[storage] blob server init failed ${err?.message || String(err)}`)
     // Continue without blob server - will need alternative video streaming
@@ -1238,6 +1262,8 @@ export async function initializeStorage(config) {
     swarm,
     blobServer,
     blobServerPort,
+    blobServerReady,
+    blobServerError,
     blobServerHost,
     blobServerBindHost,
     blobSessionToken, // Session token for URL authentication

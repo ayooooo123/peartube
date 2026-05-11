@@ -212,6 +212,29 @@ export function createApi({
     }
   }
 
+  function getVideoCorePeerCount(driveKey, videoPath) {
+    try {
+      const channel = ctx.channels?.get?.(driveKey)
+      const normalizedId = normalizeVideoId(videoPath)
+      const candidates = [
+        videoPath,
+        normalizedId,
+        normalizedId ? `/videos/${normalizedId}.mp4` : null,
+        normalizedId ? `videos/${normalizedId}.mp4` : null,
+      ].filter(Boolean)
+
+      for (const candidate of candidates) {
+        const core = channel?.videoCores?.get?.(candidate) || channel?.cores?.get?.(candidate)
+        const peers = core?.peers
+        if (Array.isArray(peers)) return peers.length
+        if (typeof peers?.length === 'number') return peers.length
+        if (typeof peers?.size === 'number') return peers.size
+      }
+    } catch { /* best effort */ }
+
+    return 0
+  }
+
   function previewVideosFromFeedEntry(driveKey, publicBeeKey = null) {
     const entry = getPublicFeedEntry(driveKey)
     const previews = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
@@ -1439,6 +1462,9 @@ export function createApi({
               const id = extractVideoId(video)
               if (!id) return null
               const hint = hintById.get(id)
+              const availability = hint?.availability === 'playable' ? 'playable'
+                : (hint?.availability || 'unknown') !== 'unknown' ? (hint?.availability || 'unknown')
+                : 'unknown'
               return {
                 id,
                 title: video?.title ? String(video.title) : 'Untitled',
@@ -1449,20 +1475,20 @@ export function createApi({
                 blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
                 mimeType: video?.mimeType ? String(video.mimeType) : null,
                 playbackSupport: video?.playbackSupport ? String(video.playbackSupport) : null,
+                containerSupport: video?.containerSupport ? String(video.containerSupport) : (video?.playbackSupport ? String(video.playbackSupport) : null),
                 // Trust the per-video availability hint if present. Previously
                 // this fell back to "playable" whenever the swarm had any peer
                 // connection, which surfaced truly-unavailable videos. Now we
                 // only surface 'playable' if the hint system actually confirmed
                 // it — matching the stricter listVideos path.
-                availability: hint?.availability === 'playable' ? 'playable'
-                  : (hint?.availability || 'unknown') !== 'unknown' ? (hint?.availability || 'unknown')
-                  : 'unknown',
+                availability,
+                byteAvailability: availability,
                 thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
                 thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
                 thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
               }
             })
-            .filter((video) => video && (video.availability === 'playable' || video.playbackSupport === 'unverified-container'))
+            .filter((video) => video && video.byteAvailability === 'playable')
             .slice(0, limitPerChannel)
 
           return {
@@ -1508,6 +1534,10 @@ export function createApi({
             channelName: entry?.channelName || null,
             videoCount: entry?.videoCount || 0,
             peerCount: entry?.peerCount || 0,
+            discoveryOnly: Boolean(entry?.discoveryOnly),
+            restoredFromCache: Boolean(entry?.restoredFromCache),
+            restoredFrom: entry?.restoredFrom || null,
+            requiresAvailabilityProbe: Boolean(entry?.requiresAvailabilityProbe),
             lastSeen: entry?.lastSeen || entry?.lastSeenAt || entry?.addedAt || 0,
             manifestUpdatedAt: entry?.manifestUpdatedAt || 0,
             previewVideos: Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
@@ -2192,10 +2222,12 @@ export function createApi({
      * @returns {Object}
      */
     getVideoStats(driveKey, videoPath) {
+      const videoPeerCount = getVideoCorePeerCount(driveKey, videoPath);
       if (videoStats) {
         const stats = videoStats.getStats(driveKey, videoPath);
         if (stats) {
           stats.swarmConnections = ctx.swarm?.connections?.size || 0;
+          stats.peerCount = videoPeerCount || stats.peerCount || 0;
           return stats;
         }
       }
@@ -2207,7 +2239,7 @@ export function createApi({
         downloadedBlocks: 0,
         totalBytes: 0,
         downloadedBytes: 0,
-        peerCount: ctx.swarm?.connections?.size || 0,
+        peerCount: videoPeerCount,
         swarmConnections: ctx.swarm?.connections?.size || 0,
         speedMBps: '0',
         elapsed: 0,

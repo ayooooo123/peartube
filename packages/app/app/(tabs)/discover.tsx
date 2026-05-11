@@ -27,8 +27,10 @@ import { colors } from '@/lib/colors'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import {
   getVerticalFeedPreviewVideos,
+  hasRichVerticalFeedSnapshot,
   mapHydratedVerticalFeedVideos,
   mergeUniqueFeedVideos,
+  mergeVerticalFeedEntries,
   warmNextPlaybackUrls,
   withFeedTimeout,
 } from '@/lib/discover-feed-controller'
@@ -129,6 +131,11 @@ export default function VerticalDiscoveryScreen() {
   const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(() => (cachedDiscoverFeed?.feedEntries || []) as FeedEntry[])
   const [videos, setVideos] = useState<VideoData[]>(() => (cachedDiscoverFeed?.videos || []) as VideoData[])
   const [cacheRestoredOnly, setCacheRestoredOnly] = useState(() => Boolean(cachedDiscoverFeed?.videos?.length || cachedDiscoverFeed?.feedEntries?.length))
+  const [feedError, setFeedError] = useState<string | null>(null)
+  const [feedTimedOut, setFeedTimedOut] = useState(false)
+  const [lastSuccessfulFeedAt, setLastSuccessfulFeedAt] = useState<number | null>(null)
+  const [usingCachedSnapshot, setUsingCachedSnapshot] = useState(() => Boolean(cachedDiscoverFeed?.videos?.length || cachedDiscoverFeed?.feedEntries?.length))
+  const [hydrationErrors, setHydrationErrors] = useState<Record<string, { error: string; lastAttempt: number }>>({})
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
   const thumbnailCacheRef = useRef<Record<string, string>>({})
   thumbnailCacheRef.current = thumbnailCache
@@ -213,6 +220,7 @@ export default function VerticalDiscoveryScreen() {
 
   useEffect(() => {
     if (cacheRestoredOnly || (videos.length === 0 && feedEntries.length === 0)) return
+    if (!hasRichVerticalFeedSnapshot(feedEntries, videos)) return
     writeDiscoverFeedCache({ feedEntries, videos })
   }, [cacheRestoredOnly, feedEntries, videos])
 
@@ -228,7 +236,14 @@ export default function VerticalDiscoveryScreen() {
         3500,
         timeoutToken as any,
       )
-      if (result === timeoutToken) return
+      if (result === timeoutToken) {
+        setHydrationErrors((prev) => ({ ...prev, [channelKey]: { error: 'Channel refresh timed out; showing cached previews.', lastAttempt: Date.now() } }))
+        return
+      }
+      if ((result as any)?.success === false || (result as any)?.error) {
+        setHydrationErrors((prev) => ({ ...prev, [channelKey]: { error: (result as any)?.error || 'Channel refresh failed; showing cached previews.', lastAttempt: Date.now() } }))
+        return
+      }
       hydratedChannelsRef.current.add(channelKey)
       const channelVideos = Array.isArray((result as any)?.videos) ? (result as any).videos : []
       const mapped = mapHydratedVerticalFeedVideos(entry, channelVideos, {
@@ -238,9 +253,16 @@ export default function VerticalDiscoveryScreen() {
       if (mapped.length > 0) {
         setVideos((prev) => mergeUniqueFeedVideos(prev, mapped, 80))
         if (mapped.length > 0) setCacheRestoredOnly(false)
+        setHydrationErrors((prev) => {
+          if (!prev[channelKey]) return prev
+          const next = { ...prev }
+          delete next[channelKey]
+          return next
+        })
         void fetchThumbnailsForVideos(mapped)
       }
     } catch (err) {
+      setHydrationErrors((prev) => ({ ...prev, [channelKey]: { error: (err as any)?.message || String(err), lastAttempt: Date.now() } }))
       console.log('[VerticalDiscovery] Channel hydration failed:', (err as any)?.message || err)
     }
   }, [fetchThumbnailsForVideos, identity?.driveKey, rpc])
@@ -252,25 +274,45 @@ export default function VerticalDiscoveryScreen() {
     try {
       const timeoutToken = Symbol('vertical-feed-timeout')
       const result = await withFeedTimeout(rpc.getPublicFeed({}), 4000, timeoutToken as any)
-      if (result === timeoutToken) return
+      if (result === timeoutToken) {
+        setFeedTimedOut(true)
+        setFeedError('Feed refresh timed out; showing cached snapshot.')
+        setUsingCachedSnapshot(hasRichVerticalFeedSnapshot(feedEntries, videos))
+        return
+      }
+      if ((result as any)?.success === false || (result as any)?.error) {
+        setFeedTimedOut(false)
+        setFeedError((result as any)?.error || 'Feed refresh failed; showing cached snapshot.')
+        setUsingCachedSnapshot(hasRichVerticalFeedSnapshot(feedEntries, videos))
+        return
+      }
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
-      if (entries.length > 0) setCacheRestoredOnly(false)
+      setFeedTimedOut(false)
+      setFeedError(null)
+      setLastSuccessfulFeedAt(Date.now())
+      setUsingCachedSnapshot(false)
+      if (entries.length > 0 && hasRichVerticalFeedSnapshot(entries, [])) setCacheRestoredOnly(false)
+      let mergedEntries = entries
       setFeedEntries((prev) => {
+        mergedEntries = mergeVerticalFeedEntries(prev, entries) as FeedEntry[]
         const prevSignature = prev.map(getFeedEntrySignature).join('\n')
-        const nextSignature = entries.map(getFeedEntrySignature).join('\n')
-        return prevSignature === nextSignature ? prev : entries
+        const nextSignature = mergedEntries.map(getFeedEntrySignature).join('\n')
+        return prevSignature === nextSignature ? prev : mergedEntries
       })
-      seedFromFeedEntries(entries)
-      for (const entry of entries.slice(0, 24)) {
+      seedFromFeedEntries(mergedEntries)
+      for (const entry of mergedEntries.slice(0, 24)) {
         void hydrateChannelVideos(entry)
       }
     } catch (err) {
+      setFeedTimedOut(false)
+      setFeedError((err as any)?.message || String(err))
+      setUsingCachedSnapshot(hasRichVerticalFeedSnapshot(feedEntries, videos))
       console.log('[VerticalDiscovery] Feed load failed:', (err as any)?.message || err)
     } finally {
       feedLoadInFlightRef.current = false
       setFeedLoading(false)
     }
-  }, [hydrateChannelVideos, rpc, seedFromFeedEntries])
+  }, [feedEntries, hydrateChannelVideos, rpc, seedFromFeedEntries, videos])
 
   useEffect(() => {
     if (!ready || !rpc) return
@@ -431,6 +473,16 @@ export default function VerticalDiscoveryScreen() {
       thumbnailUrl: thumbnailCache[cacheKey] || video.thumbnailUrl || (video as any).thumbnail || null,
     }
   }), [thumbnailCache, videos])
+  const hydrationErrorCount = Object.keys(hydrationErrors).length
+  const degradedCopy = feedTimedOut
+    ? 'Feed refresh timed out — showing cached previews.'
+    : feedError
+      ? feedError
+      : hydrationErrorCount > 0
+        ? `${hydrationErrorCount} channel${hydrationErrorCount === 1 ? '' : 's'} could not refresh; cached previews remain visible.`
+        : usingCachedSnapshot && verticalVideos.length > 0
+          ? 'Showing cached Discover snapshot while peers refresh.'
+          : null
 
   if (isDesktop) {
     return (
@@ -455,6 +507,12 @@ export default function VerticalDiscoveryScreen() {
               <Text style={styles.feedPillText}>{feedEntries.length}</Text>
             </View>
           ) : null}
+          {degradedCopy ? (
+            <View style={styles.feedPill}>
+              <Feather name="alert-circle" color={colors.primary} size={12} />
+              <Text style={styles.feedPillText}>Cached</Text>
+            </View>
+          ) : null}
           <Pressable onPress={onRefresh} style={styles.roundButton} disabled={refreshing || feedLoading}>
             <Feather name="refresh-cw" color={colors.text} size={18} />
           </Pressable>
@@ -469,10 +527,10 @@ export default function VerticalDiscoveryScreen() {
         <View style={styles.centerState}>
           {feedLoading || !ready ? <ActivityIndicator color={colors.primary} size="large" /> : null}
           <Text style={styles.centerTitle}>
-            {backendError ? 'Backend error' : ready ? 'No videos discovered yet' : (startupStatus || 'Connecting to P2P network…')}
+            {backendError ? 'Backend error' : ready ? (feedTimedOut || feedError || usingCachedSnapshot ? 'Showing cached Discover' : 'No videos discovered yet') : (startupStatus || 'Connecting to P2P network…')}
           </Text>
           <Text style={styles.centerBody}>
-            {backendError || 'Pull down to refresh, or wait for peers to announce channels.'}
+            {backendError || degradedCopy || 'Pull down to refresh, or wait for peers to announce channels.'}
           </Text>
         </View>
       ) : (

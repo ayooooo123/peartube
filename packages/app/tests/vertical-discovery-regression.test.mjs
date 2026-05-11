@@ -79,10 +79,10 @@ test('vertical discovery preserves a last-known-good cache across remounts and f
   assert.match(source, /useState<VideoData\[\]>\(\(\) => \(cachedDiscoverFeed\?\.videos \|\| \[\]\) as VideoData\[\]\)/, 'cached videos should seed the vertical deck on remount')
   assert.match(source, /writeDiscoverFeedCache\(\{ feedEntries, videos \}\)/, 'known-good vertical cards should be cached while mounted')
   assert.match(source, /const timeoutToken = Symbol\('vertical-feed-timeout'\)/, 'public-feed timeouts should be non-authoritative')
-  assert.match(source, /if \(result === timeoutToken\) return[\s\S]*const entries = Array\.isArray/, 'timed-out feed refreshes must not overwrite cached entries with empty lists')
+  assert.match(source, /if \(result === timeoutToken\) \{[\s\S]*return[\s\S]*const entries = Array\.isArray/, 'timed-out feed refreshes must not overwrite cached entries with empty lists')
   assert.match(source, /const \[cacheRestoredOnly, setCacheRestoredOnly\] = useState\(\(\) => Boolean\(cachedDiscoverFeed\?\.videos\?\.length \|\| cachedDiscoverFeed\?\.feedEntries\?\.length\)\)/, 'Discover should track restored-only cache state')
   assert.match(source, /if \(cacheRestoredOnly \|\| \(videos\.length === 0 && feedEntries\.length === 0\)\) return/, 'restored-only cache state should not be immediately re-saved as fresh')
-  assert.match(source, /if \(entries\.length > 0\) setCacheRestoredOnly\(false\)/, 'fresh public-feed entries should clear restored-only state')
+  assert.match(source, /if \(entries\.length > 0 && hasRichVerticalFeedSnapshot\(entries, \[\]\)\) setCacheRestoredOnly\(false\)/, 'fresh rich public-feed entries should clear restored-only state')
   assert.match(source, /if \(renderable\.length > 0\) setCacheRestoredOnly\(false\)/, 'fresh preview videos should clear restored-only state')
   assert.match(source, /if \(mapped\.length > 0\) setCacheRestoredOnly\(false\)/, 'fresh hydrated videos should clear restored-only state')
   assert.match(cacheSource, /const MAX_CACHE_AGE_MS = 30 \* 60 \* 1000/, 'vertical cache should be short-lived and route-local')
@@ -94,10 +94,12 @@ test('vertical discovery hydrates beyond sparse previews without permanently poi
   const hydrateBlock = source.slice(source.indexOf('const hydrateChannelVideos'), source.indexOf('const loadFeed'))
 
   assert.doesNotMatch(source, /entries\.slice\(0, 8\)/, 'shorts should not cap channel hydration to the first few feed entries')
-  assert.match(source, /entries\.slice\(0, 24\)/, 'shorts should fan out across enough feed channels to expose more than preview videos')
+  assert.match(source, /for \(const entry of mergedEntries\.slice\(0, 24\)\)/, 'shorts should fan out across enough feed channels to expose more than preview videos')
   assert.doesNotMatch(hydrateBlock, /hydratedChannelsRef\.current\.add\(channelKey\)[\s\S]*?const result = await withTimeout/, 'timed-out channel list calls must remain retryable')
   assert.match(hydrateBlock, /const timeoutToken = Symbol\('vertical-channel-timeout'\)/, 'channel hydration should distinguish timeout from an authoritative empty video list')
-  assert.match(hydrateBlock, /if \(result === timeoutToken\) return[\s\S]*hydratedChannelsRef\.current\.add\(channelKey\)/, 'channel hydration should only mark the channel hydrated after a real response')
+  assert.match(source, /if \(result === timeoutToken\) \{[\s\S]*setHydrationErrors[\s\S]*return[\s\S]*hydratedChannelsRef\.current\.add\(channelKey\)/, 'channel hydration should only mark the channel hydrated after a real response')
+  assert.match(source, /\(result as any\)\?\.success === false \|\| \(result as any\)\?\.error/, 'failed channel list responses must not be treated as authoritative empty hydration')
+  assert.match(source, /setHydrationErrors/, 'channel hydration failures should be represented in degraded UI state')
 })
 
 test('vertical discovery preloads the next few videos into the playback URL cache', () => {
@@ -201,9 +203,11 @@ test('vertical discovery stabilizes card order across feed refreshes', () => {
   assert.match(source, /mergeUniqueFeedVideos\(prev, renderable, 80\)/, 'preview feed merges should preserve existing card order through the controller')
   assert.match(source, /mergeUniqueFeedVideos\(prev, mapped, 80\)/, 'hydrated feed merges should preserve existing card order through the controller')
   assert.match(controllerSource, /for \(const video of \[\.\.\.\(previousVideos \|\| \[\]\), \.\.\.\(incomingVideos \|\| \[\]\)\]\)/, 'controller merge should consider existing videos before incoming videos')
-  assert.match(source, /getFeedEntrySignature/, 'Discover should compare feed-entry content, not only channel order')
-  assert.doesNotMatch(source, /prevKeys === nextKeys \? prev : entries/, 'same-channel feed updates must not discard changed previews or blob refs')
-  assert.match(source, /thumbnailCacheRef/, 'thumbnail cache reads should not recreate feed merge callbacks on every thumbnail resolution')
+  assert.match(source, /mergeVerticalFeedEntries\(prev, entries\)/, 'feed refreshes should merge by channel and preserve richer cached snapshots')
+  assert.match(source, /hasRichVerticalFeedSnapshot\(feedEntries, videos\)/, 'cache writes and degraded state should be gated on rich snapshots')
+  assert.match(source, /feedError/, 'Discover should track feed errors separately from empty results')
+  assert.match(source, /feedTimedOut/, 'Discover should expose feed timeout state')
+  assert.match(source, /usingCachedSnapshot/, 'Discover should distinguish cached/degraded display from genuine empty feed')
 })
 
 test('vertical discovery updates feed entries when previews change without channel order changing', () => {
@@ -213,7 +217,7 @@ test('vertical discovery updates feed entries when previews change without chann
   assert.match(source, /previewVideos/, 'signature should include preview video state')
   assert.match(source, /blobId/, 'signature should include direct blob ids')
   assert.match(source, /blobsCoreKey/, 'signature should include direct blob core keys')
-  assert.match(source, /prevSignature === nextSignature \? prev : entries/, 'unchanged signatures may preserve state, changed previews must update entries')
+  assert.match(source, /prevSignature === nextSignature \? prev : mergedEntries/, 'unchanged signatures may preserve state, changed previews must update entries')
 })
 
 test('vertical discovery keeps the global watch/mini overlay off the Shorts route', () => {

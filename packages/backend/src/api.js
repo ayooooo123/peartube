@@ -2168,9 +2168,9 @@ export function createApi({
       console.log('[API] prefetchNextVideos: channel:', channelKey?.slice(0, 16), 'current:', currentVideoId, 'count:', count)
 
       try {
-        // Get list of videos for this channel
-        const videosResult = await this.listVideos({ channelKey })
-        const videos = videosResult?.videos || []
+        // Get list of videos for this channel. listVideos returns the
+        // normalized video array directly.
+        const videos = await this.listVideos(channelKey)
 
         if (videos.length === 0) {
           console.log('[API] prefetchNextVideos: no videos found')

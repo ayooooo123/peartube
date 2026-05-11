@@ -48,12 +48,12 @@
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-jsx-a11y": "^6.10.0",
     "eslint-plugin-react": "^7.37.0",
-    "eslint-plugin-react-hooks": "^4.6.2",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "hypercore-blob-server": "^1.12.0",
     "typescript": "^5.9.0"
   },
   "overrides": {
-    "eslint-plugin-react-hooks": "^4.6.2",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "@peartube/spec": "file:packages/spec"
   },
   "engines": {

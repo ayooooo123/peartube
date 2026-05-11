@@ -82,6 +82,7 @@ const log = logger('Storage')
 // Network stats for debugging connection issues
 let HyperswarmStats = null
 let optionalStorageDepsReady = null
+let hyperswarmModuleReady = null
 
 // Global network stats instance (set after swarm is created)
 let networkStats = null;
@@ -480,7 +481,7 @@ async function ensureHttpModule() {
   return http
 }
 
-async function initOptionalStorageDeps() {
+function initOptionalStorageDeps() {
   if (optionalStorageDepsReady) return optionalStorageDepsReady
 
   optionalStorageDepsReady = (async () => {
@@ -517,8 +518,7 @@ async function initOptionalStorageDeps() {
 }
 
 async function initStorageModules() {
-  await initOptionalStorageDeps()
-  if (fs && path && Hyperswarm) return;
+  if (fs && path) return;
   fs = resolveBareOrNodeFsModuleSync()
   path = resolveBareOrNodePathModuleSync()
   if (!fs) {
@@ -527,9 +527,29 @@ async function initStorageModules() {
   if (!path) {
     try { path = await loadBareOrNodePathModule(); } catch { /* best effort */ }
   }
-  if (!Hyperswarm) {
-    try { Hyperswarm = await loadHyperswarmModule(); } catch { /* best effort */ }
+}
+
+function warmOptionalStorageDeps() {
+  void initOptionalStorageDeps()
+    .catch((error) => {
+      log.debug('optional storage dependency warm-up failed', { error: error?.message || String(error) })
+    })
+}
+
+function warmHyperswarmModule() {
+  if (Hyperswarm) return hyperswarmModuleReady || Promise.resolve(Hyperswarm)
+  if (!hyperswarmModuleReady) {
+    hyperswarmModuleReady = loadHyperswarmModule()
+      .then((LoadedHyperswarm) => {
+        if (!Hyperswarm) Hyperswarm = LoadedHyperswarm
+        return Hyperswarm
+      })
+      .catch(async (error) => {
+        await appendDebugLine(`[storage] hyperswarm module unavailable during background warm-up ${error?.message || String(error)}`)
+        return null
+      })
   }
+  return hyperswarmModuleReady
 }
 
 async function migrateLegacyCorestoreLayout(storagePath) {
@@ -771,6 +791,8 @@ export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, opti
  */
 export async function initializeStorage(config) {
   await appendDebugLine('[storage] initializeStorage entry')
+  warmOptionalStorageDeps()
+  warmHyperswarmModule()
   await initStorageModules();
   await appendDebugLine('[storage] initStorageModules complete')
 
@@ -1052,14 +1074,18 @@ export async function initializeStorage(config) {
 
   console.log('[Storage] Creating Hyperswarm...');
   await appendDebugLine('[storage] creating hyperswarm')
+  const LoadedHyperswarm = Hyperswarm || (hyperswarmModuleReady ? await Promise.race([
+    hyperswarmModuleReady,
+    new Promise((resolve) => setTimeout(() => resolve(null), 100))
+  ]) : null)
   let swarm
-  if (typeof Hyperswarm !== 'function') {
+  if (typeof LoadedHyperswarm !== 'function') {
     console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
     await appendDebugLine('[storage] hyperswarm unavailable; using offline swarm')
     swarm = createOfflineSwarm(keyPair, 'module-unavailable')
   } else {
     try {
-      swarm = new Hyperswarm({ keyPair });
+      swarm = new LoadedHyperswarm({ keyPair });
     } catch (err) {
       console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
       await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)

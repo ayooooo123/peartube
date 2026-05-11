@@ -16,6 +16,19 @@ test('storage startup does not eagerly load HTTP before backend ready', () => {
   assert.doesNotMatch(initStorageModulesBody, /loadBareOrNodeHttpModule\(\)/)
 })
 
+test('storage startup does not await optional network dependencies before local readiness', () => {
+  const initStorageModulesBody =
+    storageSource.match(/async function initStorageModules\(\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
+
+  assert.ok(initStorageModulesBody, 'initStorageModules should exist')
+  assert.doesNotMatch(initStorageModulesBody, /await initOptionalStorageDeps\(\)/)
+  assert.doesNotMatch(initStorageModulesBody, /await loadHyperswarmModule\(\)/)
+  assert.match(storageSource, /function warmOptionalStorageDeps\(\)/)
+  assert.match(storageSource, /function warmHyperswarmModule\(\)/)
+  assert.match(storageSource, /warmOptionalStorageDeps\(\)[\s\S]*?warmHyperswarmModule\(\)[\s\S]*?await initStorageModules\(\)/)
+  assert.match(storageSource, /Promise\.race\(\[[\s\S]*?hyperswarmModuleReady[\s\S]*?setTimeout\(\(\) => resolve\(null\), 100\)/)
+})
+
 test('blob server watchdog lazily loads HTTP only when cast probing is needed', () => {
   const watchdogBody =
     storageSource.match(/export function startBlobServerWatchdog\(\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
@@ -44,7 +57,7 @@ test('storage creates an offline swarm fallback when Hyperswarm is unavailable',
   )
   assert.match(
     storageSource,
-    /typeof Hyperswarm !== 'function'[\s\S]*?createOfflineSwarm\(keyPair, 'module-unavailable'\)/,
+    /typeof LoadedHyperswarm !== 'function'[\s\S]*?createOfflineSwarm\(keyPair, 'module-unavailable'\)/,
     'storage init should continue with offline swarm when Hyperswarm module did not load'
   )
   assert.match(

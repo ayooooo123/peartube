@@ -36,6 +36,7 @@ import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/li
 import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-feed-cache'
 import { formatTimeAgo } from '@/lib/formatters'
 import { VerticalShortsPlayer } from '@/components/discovery/VerticalShortsPlayer'
+import { ShortsCommentsSheet } from '@/components/discovery/ShortsCommentsSheet'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 
 interface FeedEntry {
@@ -115,6 +116,7 @@ export default function VerticalDiscoveryScreen() {
     playerMode,
     pauseVideo,
     closeVideo,
+    setAmbientVideoContext,
   } = useVideoPlayerContext()
 
   const pageHeight = Math.max(1, screenHeight - insets.top)
@@ -132,6 +134,7 @@ export default function VerticalDiscoveryScreen() {
   const [shortsPlaybackSession, setShortsPlaybackSession] = useState(0)
   const [shortsLoading, setShortsLoading] = useState(false)
   const [shortsChromeVisible, setShortsChromeVisible] = useState(true)
+  const [commentsSheetVisible, setCommentsSheetVisible] = useState(false)
   const shortsPlayerRef = useRef<any>(null)
   const pendingPlayKeyRef = useRef<string | null>(null)
   const playbackRequestSeqRef = useRef(0)
@@ -287,6 +290,7 @@ export default function VerticalDiscoveryScreen() {
     pendingPlayKeyRef.current = null
     playbackRequestSeqRef.current += 1
     setShortsVideoUrl(null)
+    setCommentsSheetVisible(false)
     setShortsLoading(false)
   }, [])
 
@@ -317,6 +321,7 @@ export default function VerticalDiscoveryScreen() {
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).catch(() => undefined)
         if (isStalePlaybackRequest()) return
+        setAmbientVideoContext(video, cachedUrl)
         setShortsVideoUrl(cachedUrl)
         setShortsPlaybackSession((prev) => prev + 1)
         setShortsLoading(false)
@@ -327,6 +332,7 @@ export default function VerticalDiscoveryScreen() {
       if (isStalePlaybackRequest()) return
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
+        setAmbientVideoContext(video, result.url)
         setShortsVideoUrl(result.url)
         setShortsPlaybackSession((prev) => prev + 1)
       }
@@ -340,7 +346,7 @@ export default function VerticalDiscoveryScreen() {
         setShortsLoading(false)
       }
     }
-  }, [handoffToShorts, makePlaybackRequest, rpc])
+  }, [handoffToShorts, makePlaybackRequest, rpc, setAmbientVideoContext])
 
   useEffect(() => {
     if (!activeVideo || !ready) return
@@ -407,6 +413,12 @@ export default function VerticalDiscoveryScreen() {
       },
     })
   }, [router])
+
+  const openComments = useCallback((video: VideoData) => {
+    setAmbientVideoContext(video, activeVideoKey === `${video.channelKey}:${video.id}` ? shortsVideoUrl : null)
+    setShortsChromeVisible(true)
+    setCommentsSheetVisible(true)
+  }, [activeVideoKey, setAmbientVideoContext, shortsVideoUrl])
 
   const verticalVideos = useMemo(() => videos.map((video) => {
     const cacheKey = `${video.channelKey}:${video.id}`
@@ -487,6 +499,7 @@ export default function VerticalDiscoveryScreen() {
                     isLoading={shortsLoading && activeVideoKey === `${video.channelKey}:${video.id}`}
                     thumbnailUrl={video.thumbnailUrl || null}
                     controlsVisible={shortsChromeVisible}
+                    progressBottomOffset={Math.max(insets.bottom + 140, 158)}
                     onControlsVisibleChange={setShortsChromeVisible}
                     onReplay={() => playVideo(video)}
                   />
@@ -507,9 +520,9 @@ export default function VerticalDiscoveryScreen() {
                         <Feather name="user" color="#fff" size={24} />
                         <Text style={styles.sideLabel}>Channel</Text>
                       </Pressable>
-                      <Pressable onPress={() => openDetails(video)} style={styles.sideButton}>
+                      <Pressable onPress={() => openComments(video)} style={styles.sideButton}>
                         <Feather name="message-circle" color="#fff" size={24} />
-                        <Text style={styles.sideLabel}>Details</Text>
+                        <Text style={styles.sideLabel}>Comments</Text>
                       </Pressable>
                       <Pressable onPress={() => playVideo(video)} style={styles.sideButton}>
                         <Feather name="rotate-cw" color="#fff" size={24} />
@@ -523,6 +536,7 @@ export default function VerticalDiscoveryScreen() {
           )}
         />
       )}
+      <ShortsCommentsSheet visible={commentsSheetVisible} onClose={() => setCommentsSheetVisible(false)} />
     </View>
   )
 }

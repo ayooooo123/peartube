@@ -78,6 +78,7 @@ interface VideoPlayerContextType {
 
   // Actions
   loadAndPlayVideo: (video: VideoData, url: string) => void
+  setAmbientVideoContext: (video: VideoData | null, url?: string | null) => void
   pauseVideo: () => void
   resumeVideo: () => void
   closeVideo: () => void
@@ -846,6 +847,25 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     startInActivityPlayback(video, url, 'direct-load')
   }, [startInActivityPlayback])
 
+  const setAmbientVideoContext = useCallback((video: VideoData | null, url: string | null = null) => {
+    const currentKey = currentVideoRef.current
+      ? `${currentVideoRef.current.channelKey || ''}:${currentVideoRef.current.id || currentVideoRef.current.path || ''}`
+      : null
+    const nextKey = video ? `${video.channelKey || ''}:${video.id || video.path || ''}` : null
+
+    currentVideoRef.current = video
+    videoUrlRef.current = url
+    dispatch({ type: 'SET_AMBIENT_VIDEO_CONTEXT', source: 'setAmbientVideoContext', video, url })
+
+    if (video && currentKey !== nextKey) {
+      setVideoStats(null)
+      setCurrentTime(0)
+      setDuration(0)
+      setVideoAspectRatio(null)
+      _videoLoadEventEmitter.emit(video)
+    }
+  }, [dispatch])
+
   // Pause video
   const pauseVideo = useCallback(() => {
     console.log('[VideoPlayerContext] Pausing video')
@@ -1226,6 +1246,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     seekPosition,
     playerRef,
     loadAndPlayVideo,
+    setAmbientVideoContext,
     pauseVideo,
     resumeVideo,
     closeVideo,
@@ -1258,7 +1279,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // High-frequency dependencies (progress - NOTE: this still causes re-renders at 4Hz)
     currentTime, duration, progress,
     // Callbacks (stable references via useCallback)
-    loadAndPlayVideo, pauseVideo, resumeVideo,
+    loadAndPlayVideo, setAmbientVideoContext, pauseVideo, resumeVideo,
     closeVideo, enterBackgroundAudio, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo, minimizePlayer, maximizePlayer, seekTo, seekBy, setPlaybackRate,
     setIsInPipMode,
     onProgress, onLoaded, onPlaying, onPaused, onBuffering,

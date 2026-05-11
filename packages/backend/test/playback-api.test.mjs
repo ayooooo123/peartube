@@ -67,6 +67,62 @@ test('preparePlayback returns a playable URL before warmup settles or fails', as
   ])
 })
 
+test('prefetchNextVideos lists channel videos with the correct signature', async (t) => {
+  const api = createApi({ ctx: {} })
+  const calls = []
+
+  api.listVideos = async (...args) => {
+    calls.push(['listVideos', args])
+    return [
+      { id: 'current', title: 'Current' },
+      { id: 'next-one', title: 'Next one' },
+      { videoId: 'next-two', title: 'Next two' },
+      { path: 'videos/next-three.mp4', title: 'Next three' },
+    ]
+  }
+
+  api.prefetchVideo = async (...args) => {
+    calls.push(['prefetchVideo', args])
+    return { success: true }
+  }
+
+  const result = await api.prefetchNextVideos('channel-key', 'current', 2)
+
+  t.alike(result, { success: true, prefetchedCount: 2 })
+  t.alike(calls, [
+    ['listVideos', ['channel-key']],
+    ['prefetchVideo', ['channel-key', 'next-one']],
+    ['prefetchVideo', ['channel-key', 'next-two']],
+  ])
+})
+
+test('prefetchNextVideos prefetches first videos when current video is absent', async (t) => {
+  const api = createApi({ ctx: {} })
+  const calls = []
+
+  api.listVideos = async (...args) => {
+    calls.push(['listVideos', args])
+    return [
+      { path: 'videos/first.mp4', title: 'First' },
+      { id: 'second', title: 'Second' },
+    ]
+  }
+
+  api.prefetchVideo = async (...args) => {
+    calls.push(['prefetchVideo', args])
+    return { success: true }
+  }
+
+  const result = await api.prefetchNextVideos('channel-key', 'missing', 2)
+
+  t.alike(result, { success: true, prefetchedCount: 2 })
+  t.alike(calls, [
+    ['listVideos', ['channel-key']],
+    ['prefetchVideo', ['channel-key', 'videos/first.mp4']],
+    ['prefetchVideo', ['channel-key', 'second']],
+  ])
+})
+
 test('getVideoStats keeps video peer count separate from global swarm connections', (t) => {
   const videoCore = { peers: [1, 2] }
   const api = createApi({

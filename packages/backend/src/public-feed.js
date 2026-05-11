@@ -176,21 +176,52 @@ export class PublicFeedManager {
     return videos
       .filter((video) => video && typeof video === 'object' && typeof video.id === 'string' && video.id.length > 0)
       .slice(0, 3)
-      .map((video) => ({
-        id: String(video.id),
-        title: video?.title ? String(video.title) : 'Untitled',
-        uploadedAt: Number(video?.uploadedAt || 0) || 0,
-        duration: Number(video?.duration || 0) || 0,
-        thumbnail: video?.thumbnail ? String(video.thumbnail) : null,
-        blobId: video?.blobId ? String(video.blobId) : null,
-        blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
-        mimeType: video?.mimeType ? String(video.mimeType) : null,
-        availability: video?.availability === 'playable' ? 'playable' : (video?.availability === 'unknown' ? 'unknown' : 'unavailable'),
-        playbackSupport: video?.playbackSupport ? String(video.playbackSupport) : null,
-        thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
-        thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
-        thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
+      .map((video) => {
+        const availability = video?.byteAvailability || video?.availability
+        const containerSupport = video?.containerSupport || video?.playbackSupport
+        return {
+          id: String(video.id),
+          title: video?.title ? String(video.title) : 'Untitled',
+          uploadedAt: Number(video?.uploadedAt || 0) || 0,
+          duration: Number(video?.duration || 0) || 0,
+          thumbnail: video?.thumbnail ? String(video.thumbnail) : null,
+          blobId: video?.blobId ? String(video.blobId) : null,
+          blobsCoreKey: video?.blobsCoreKey ? String(video.blobsCoreKey) : null,
+          mimeType: video?.mimeType ? String(video.mimeType) : null,
+          availability: availability === 'playable' ? 'playable' : (availability === 'unknown' ? 'unknown' : 'unavailable'),
+          byteAvailability: availability === 'playable' ? 'playable' : (availability === 'unknown' ? 'unknown' : 'unavailable'),
+          playbackSupport: video?.playbackSupport ? String(video.playbackSupport) : null,
+          containerSupport: containerSupport ? String(containerSupport) : null,
+          thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
+          thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
+          thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
+          discoveryOnly: Boolean(video?.discoveryOnly),
+          restoredFromCache: Boolean(video?.restoredFromCache),
+          requiresAvailabilityProbe: Boolean(video?.requiresAvailabilityProbe),
+        }
+      })
+  }
+
+  _markRestoredDiscoveryOnly(entry, restoredFrom) {
+    if (!entry || typeof entry !== 'object') return entry
+    const marked = {
+      ...entry,
+      discoveryOnly: true,
+      restoredFromCache: true,
+      restoredFrom,
+      requiresAvailabilityProbe: true,
+    }
+    if (Array.isArray(marked.previewVideos)) {
+      marked.previewVideos = marked.previewVideos.map((video) => ({
+        ...video,
+        availability: video?.availability === 'playable' ? 'unknown' : (video?.availability || 'unknown'),
+        byteAvailability: video?.byteAvailability === 'playable' ? 'unknown' : (video?.byteAvailability || 'unknown'),
+        discoveryOnly: true,
+        restoredFromCache: true,
+        requiresAvailabilityProbe: true,
       }))
+    }
+    return marked
   }
 
   _normalizeSignedDescriptor(signed) {
@@ -236,6 +267,10 @@ export class PublicFeedManager {
       publicBeeKey: entry.publicBeeKey || null,
       relayRole: entry.relayRole || (entry.source === 'relay-cache' ? 'cache' : 'publisher'),
       relayServing: Boolean(entry.relayServing || entry.source === 'relay-cache' || entry.source === 'local'),
+      discoveryOnly: Boolean(entry.discoveryOnly),
+      restoredFromCache: Boolean(entry.restoredFromCache),
+      restoredFrom: entry.restoredFrom || null,
+      requiresAvailabilityProbe: Boolean(entry.requiresAvailabilityProbe),
       lastSeenAt: entry.lastSeenAt || entry.addedAt || Date.now(),
       version: Number(entry.version || 0) || 0,
     }
@@ -279,6 +314,16 @@ export class PublicFeedManager {
     }
     if (Number(snapshot.lastSeenAt || 0) > Number(entry.lastSeenAt || 0)) {
       entry.lastSeenAt = Number(snapshot.lastSeenAt)
+      changed = true
+    }
+    for (const flag of ['discoveryOnly', 'restoredFromCache', 'requiresAvailabilityProbe']) {
+      if (typeof snapshot[flag] !== 'undefined' && Boolean(snapshot[flag]) !== Boolean(entry[flag])) {
+        entry[flag] = Boolean(snapshot[flag])
+        changed = true
+      }
+    }
+    if (typeof snapshot.restoredFrom === 'string' && snapshot.restoredFrom !== entry.restoredFrom) {
+      entry.restoredFrom = snapshot.restoredFrom
       changed = true
     }
     if (Number.isFinite(snapshot.videoCount) && Number(snapshot.videoCount) !== Number(entry.videoCount || 0)) {
@@ -728,7 +773,8 @@ export class PublicFeedManager {
         const cachedV2 = await this.metaDb.get('discovered-channels-v2').catch(() => null)
         if (cachedV2?.value && Array.isArray(cachedV2.value) && cachedV2.value.length) {
           for (const entry of cachedV2.value) {
-            if (entry.driveKey && this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey, entry)) {
+            const restoredEntry = this._markRestoredDiscoveryOnly(entry, 'discovered-channels-v2')
+            if (entry.driveKey && this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey, restoredEntry)) {
               restored++
             }
           }
@@ -743,7 +789,7 @@ export class PublicFeedManager {
           const keys = cached?.value || []
           if (Array.isArray(keys) && keys.length) {
             for (const key of keys) {
-              if (this.addEntry(key, 'peer')) restored++
+              if (this.addEntry(key, 'peer', null, this._markRestoredDiscoveryOnly({ driveKey: key }, 'legacy-discovered-channels'))) restored++
             }
             if (restored > 0) {
               console.log('[PublicFeed] Restored', restored, 'cached discovered channels (legacy format)')
@@ -763,9 +809,10 @@ export class PublicFeedManager {
         const entries = Array.isArray(catalog?.value?.entries) ? catalog.value.entries : []
         let restoredCatalog = 0
         for (const entry of entries) {
-          if (entry?.driveKey && this.addEntry(entry.driveKey, entry.source || 'relay-cache', entry.publicBeeKey, entry)) {
+          const restoredEntry = this._markRestoredDiscoveryOnly(entry, PUBLIC_FEED_RELAY_CATALOG_KEY)
+          if (entry?.driveKey && this.addEntry(entry.driveKey, entry.source || 'relay-cache', entry.publicBeeKey, restoredEntry)) {
             restoredCatalog++
-          } else if (entry?.driveKey && this._applyEntrySnapshot(entry.driveKey, entry)) {
+          } else if (entry?.driveKey && this._applyEntrySnapshot(entry.driveKey, restoredEntry)) {
             restoredCatalog++
           }
         }
@@ -914,6 +961,10 @@ export class PublicFeedManager {
           catalogVersion: Number(e.catalogVersion || PUBLIC_FEED_CATALOG_VERSION) || PUBLIC_FEED_CATALOG_VERSION,
           relayRole: e.relayRole || null,
           relayServing: Boolean(e.relayServing),
+          discoveryOnly: Boolean(e.discoveryOnly),
+          restoredFromCache: Boolean(e.restoredFromCache),
+          restoredFrom: e.restoredFrom || null,
+          requiresAvailabilityProbe: Boolean(e.requiresAvailabilityProbe),
           lastSeenAt: e.lastSeenAt || e.addedAt || Date.now(),
           channelName: e.channelName || null,
           videoCount: Number(e.videoCount || 0) || 0,
@@ -1353,6 +1404,10 @@ export class PublicFeedManager {
       catalogVersion: Number(snapshot?.catalogVersion || PUBLIC_FEED_CATALOG_VERSION) || PUBLIC_FEED_CATALOG_VERSION,
       relayRole: snapshot?.relayRole || (source === 'relay-cache' ? 'cache' : source === 'local' ? 'publisher' : null),
       relayServing: Boolean(snapshot?.relayServing || source === 'relay-cache' || source === 'local'),
+      discoveryOnly: Boolean(snapshot?.discoveryOnly),
+      restoredFromCache: Boolean(snapshot?.restoredFromCache),
+      restoredFrom: typeof snapshot?.restoredFrom === 'string' ? snapshot.restoredFrom : null,
+      requiresAvailabilityProbe: Boolean(snapshot?.requiresAvailabilityProbe),
       lastSeenAt: Number(snapshot?.lastSeenAt || Date.now()) || Date.now(),
       channelName: snapshot?.channelName || null,
       videoCount: Number(snapshot?.videoCount || 0) || 0,
@@ -1529,6 +1584,10 @@ export class PublicFeedManager {
       source: snapshot?.source || null,
       relayRole: snapshot?.relayRole || null,
       relayServing: Boolean(snapshot?.relayServing),
+      discoveryOnly: Boolean(snapshot?.discoveryOnly),
+      restoredFromCache: Boolean(snapshot?.restoredFromCache),
+      restoredFrom: snapshot?.restoredFrom || null,
+      requiresAvailabilityProbe: Boolean(snapshot?.requiresAvailabilityProbe),
       lastSeenAt: snapshot?.lastSeenAt || Date.now(),
       channelName: snapshot?.channelName || null,
       videoCount: Number(snapshot?.videoCount || 0) || 0,

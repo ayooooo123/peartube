@@ -122,8 +122,8 @@ export default function VerticalDiscoveryScreen() {
   } = useVideoPlayerContext()
 
   const bottomChromePadding = Math.max(insets.bottom + 86, 104)
-  const metaBottomPadding = bottomChromePadding + 56
-  const progressBottomOffset = bottomChromePadding + 16
+  const metaBottomPadding = bottomChromePadding + 72
+  const progressBottomOffset = bottomChromePadding + 26
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const cachedDiscoverFeed = useMemo(() => readDiscoverFeedCache(), [])
   const [refreshing, setRefreshing] = useState(false)
@@ -504,7 +504,7 @@ export default function VerticalDiscoveryScreen() {
           {feedEntries.length > 0 ? (
             <View style={styles.feedPill}>
               <Feather name="radio" color={colors.primary} size={12} />
-              <Text style={styles.feedPillText}>{feedEntries.length}</Text>
+              <Text style={styles.feedPillText}>{feedEntries.length} feeds</Text>
             </View>
           ) : null}
           {degradedCopy ? (
@@ -577,22 +577,22 @@ export default function VerticalDiscoveryScreen() {
                       <Text style={styles.videoMeta} numberOfLines={1}>
                         {video.channel?.name || 'Channel'} · {formatTimeAgo(video.uploadedAt || Date.now())}
                       </Text>
-                      {video.description ? (
+                      {video.description && !/^\s*source\s*:/i.test(video.description) ? (
                         <Text style={styles.videoDescription} numberOfLines={1}>{video.description}</Text>
                       ) : null}
                     </Pressable>
                     <View style={styles.sideRail}>
                       <Pressable onPress={() => openChannel(video)} style={styles.sideButton}>
                         <Feather name="user" color="#fff" size={24} />
-                        <Text style={styles.sideLabel}>Channel</Text>
+                        <Text style={styles.sideLabel} numberOfLines={1}>Channel</Text>
                       </Pressable>
                       <Pressable onPress={() => openComments(video)} style={styles.sideButton}>
                         <Feather name="message-circle" color="#fff" size={24} />
-                        <Text style={styles.sideLabel}>Comments</Text>
+                        <Text style={styles.sideLabel} numberOfLines={1}>Chat</Text>
                       </Pressable>
                       <Pressable onPress={() => playVideo(video)} style={styles.sideButton}>
                         <Feather name="rotate-cw" color="#fff" size={24} />
-                        <Text style={styles.sideLabel}>Replay</Text>
+                        <Text style={styles.sideLabel} numberOfLines={1}>Replay</Text>
                       </Pressable>
                     </View>
                   </View>
@@ -732,19 +732,22 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   sideRail: {
-    width: 58,
+    width: 62,
     alignItems: 'center',
-    gap: 14,
+    gap: 16,
   },
   sideButton: {
     alignItems: 'center',
     gap: 4,
+    minHeight: 48,
   },
   sideLabel: {
+    width: 62,
     color: 'rgba(255,255,255,0.82)',
     fontSize: 10,
     lineHeight: 12,
     fontWeight: '700',
+    textAlign: 'center',
   },
   centerState: {
     flex: 1,

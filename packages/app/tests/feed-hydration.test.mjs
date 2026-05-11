@@ -213,13 +213,23 @@ test('shouldRenderFeedVideo only accepts proven-playable remote videos but keeps
   }), false)
 
   assert.equal(shouldRenderFeedVideo({
+    video: { channelKey: 'remote', availability: 'unknown', playbackSupport: 'unverified-container' },
+    identityDriveKey: 'local',
+  }), false)
+
+  assert.equal(shouldRenderFeedVideo({
+    video: { channelKey: 'remote', byteAvailability: 'playable', playbackSupport: 'unverified-container' },
+    identityDriveKey: 'local',
+  }), true)
+
+  assert.equal(shouldRenderFeedVideo({
     video: { channelKey: 'local', availability: 'unknown' },
     identityDriveKey: 'local',
   }), true)
 })
 
 
-test('feed preview videos keep unverified mirrored media visible while marked playable', () => {
+test('feed preview videos keep unverified mirrored media visible when byte availability is marked playable', () => {
   const videos = getFeedPreviewVideos([{
     driveKey: 'remote-a',
     publicBeeKey: 'bb'.repeat(32),

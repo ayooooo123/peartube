@@ -735,6 +735,79 @@ test('keyed peer entries survive persistence and restart even when peerCount is 
   }
 })
 
+
+test('restored discovered entries are marked discovery-only and previews require availability probes', async () => {
+  const metaDb = createPersistedMetaDb({
+    'discovered-channels-v2': [{
+      driveKey: DRIVE_KEY,
+      publicBeeKey: PUBLIC_BEE_KEY,
+      channelName: 'Cached Channel',
+      previewVideos: [{
+        id: 'cached-mkv',
+        title: 'Cached MKV',
+        availability: 'playable',
+        playbackSupport: 'unverified-container',
+        blobId: '0:8:0:1024',
+        blobsCoreKey: '44'.repeat(32),
+      }],
+    }],
+  })
+  const manager = new PublicFeedManager(createSwarm(), metaDb)
+
+  try {
+    await manager.start()
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].discoveryOnly, true)
+    assert.equal(feed[0].restoredFromCache, true)
+    assert.equal(feed[0].requiresAvailabilityProbe, true)
+    assert.equal(feed[0].restoredFrom, 'discovered-channels-v2')
+    assert.equal(feed[0].previewVideos[0].availability, 'unknown')
+    assert.equal(feed[0].previewVideos[0].byteAvailability, 'unknown')
+    assert.equal(feed[0].previewVideos[0].playbackSupport, 'unverified-container')
+    assert.equal(feed[0].previewVideos[0].containerSupport, 'unverified-container')
+    assert.equal(feed[0].previewVideos[0].requiresAvailabilityProbe, true)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('restored relay catalog entries are visible but discovery-only until re-probed', async () => {
+  const metaDb = createPersistedMetaDb({
+    'public-feed-relay-catalog-v1': {
+      entries: [{
+        driveKey: 'aa'.repeat(32),
+        publicBeeKey: 'bb'.repeat(32),
+        source: 'relay-cache',
+        relayServing: true,
+        relayRole: 'cache',
+        previewVideos: [{
+          id: 'relay-cached-video',
+          availability: 'playable',
+          blobId: '0:4:0:512',
+          blobsCoreKey: 'cc'.repeat(32),
+        }],
+      }],
+    },
+  })
+  const manager = new PublicFeedManager(createSwarm(), metaDb)
+
+  try {
+    await manager.start()
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].source, 'relay-cache')
+    assert.equal(feed[0].relayServing, true)
+    assert.equal(feed[0].discoveryOnly, true)
+    assert.equal(feed[0].restoredFromCache, true)
+    assert.equal(feed[0].requiresAvailabilityProbe, true)
+    assert.equal(feed[0].previewVideos[0].availability, 'unknown')
+    assert.equal(feed[0].previewVideos[0].byteAvailability, 'unknown')
+  } finally {
+    manager.stop()
+  }
+})
+
 test('addEntry accepts legacy peer entries without publicBeeKey', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

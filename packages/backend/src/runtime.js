@@ -24,8 +24,19 @@ async function appendDebugLine(line) {
   }
 }
 
+function getBlobServerStatus(backend) {
+  const ctx = backend?.ctx
+  const port = Number(ctx?.blobServer?.port || ctx?.blobServerPort || 0) || 0
+  const error = ctx?.blobServer?._peartubeListenError || ctx?.blobServerError || null
+  return {
+    blobServerPort: port > 0 ? port : null,
+    blobServerReady: port > 0 && !error,
+    blobServerError: error ? (error?.message || String(error)) : null
+  }
+}
+
 function getBlobServerPort(backend) {
-  return backend?.ctx?.blobServer?.port || backend?.ctx?.blobServerPort || 0
+  return getBlobServerStatus(backend).blobServerPort || 0
 }
 
 function getIdentityCount(backend) {
@@ -42,7 +53,7 @@ function buildSharedSystemHandlers(backend) {
         state: { subscriptionChannelKeys: [], identityChannelKeys: [], activeIdentityName: '', activeIdentityChannelKey: '', activeChannelPublished: false }
       }
       return {
-        blobServerPort: getBlobServerPort(backend),
+        ...getBlobServerStatus(backend),
         protocolVersion: PROTOCOL_VERSION,
         storagePath: req?.storagePath || '',
         snapshot: emptySnapshot
@@ -69,7 +80,7 @@ function buildSharedSystemHandlers(backend) {
         status: {
           ready: true,
           hasIdentity: getIdentityCount(backend) > 0,
-          blobServerPort: getBlobServerPort(backend)
+          ...getBlobServerStatus(backend)
         }
       }
     },
@@ -241,8 +252,20 @@ export function createBackendRuntime(opts = {}) {
 
         registerSharedHandlers(rpc, backend)
 
-        const readyPayload = { blobServerPort: getBlobServerPort(backend), protocolVersion: PROTOCOL_VERSION }
+        const blobStatus = getBlobServerStatus(backend)
+        const readyPayload = { ...blobStatus, protocolVersion: PROTOCOL_VERSION }
         readyCallback(readyPayload)
+        if (blobStatus.blobServerError) {
+          try {
+            rpc.eventError?.({
+              code: 'BLOB_SERVER_UNAVAILABLE',
+              message: blobStatus.blobServerError,
+              retryable: true
+            })
+          } catch {
+            // Preserve backend readiness if degraded error emission fails.
+          }
+        }
         try {
           rpc.eventReady?.(readyPayload)
         } catch {

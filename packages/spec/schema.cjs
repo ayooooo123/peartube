@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 /**
  * PearTube HRPC Schema Definition
  *

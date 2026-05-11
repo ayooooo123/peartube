@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 /**
  * Root Layout (Web/Pear) - Wraps app with providers
  *

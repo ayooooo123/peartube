@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from '@peartube/host'
 import DefaultHRPC from '@peartube/spec'
 

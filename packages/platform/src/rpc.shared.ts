@@ -124,7 +124,8 @@ function createCallbackStore(): PlatformCallbacks {
 function safeDispatch<T>(callbacks: T[], value: Parameters<Extract<T, (...args: any[]) => unknown>>[0]) {
   for (const callback of callbacks) {
     try {
-      ;(callback as (data: typeof value) => void)(value)
+      const typedCallback = callback as (data: typeof value) => void
+      typedCallback(value)
     } catch (error) {
       console.error('[Platform RPC] Event callback failed:', error)
     }

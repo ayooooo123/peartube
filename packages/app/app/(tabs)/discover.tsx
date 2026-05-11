@@ -119,6 +119,7 @@ export default function VerticalDiscoveryScreen() {
     setAmbientVideoContext,
   } = useVideoPlayerContext()
 
+  const bottomChromePadding = Math.max(insets.bottom + 86, 104)
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const cachedDiscoverFeed = useMemo(() => readDiscoverFeedCache(), [])
   const [refreshing, setRefreshing] = useState(false)
@@ -304,7 +305,8 @@ export default function VerticalDiscoveryScreen() {
     if (!currentVideo || playerMode === 'hidden') return
     pauseVideo()
     closeVideo()
-  }, [closeVideo, currentVideo, pauseVideo, playerMode])
+    setAmbientVideoContext(null, null)
+  }, [closeVideo, currentVideo, pauseVideo, playerMode, setAmbientVideoContext])
 
   const playVideo = useCallback(async (video: VideoData) => {
     if (!rpc) return
@@ -499,13 +501,13 @@ export default function VerticalDiscoveryScreen() {
                     isLoading={shortsLoading && activeVideoKey === `${video.channelKey}:${video.id}`}
                     thumbnailUrl={video.thumbnailUrl || null}
                     controlsVisible={shortsChromeVisible}
-                    progressBottomOffset={Math.max(insets.bottom + 140, 158)}
+                    progressBottomOffset={bottomChromePadding}
                     onControlsVisibleChange={setShortsChromeVisible}
                     onReplay={() => playVideo(video)}
                   />
                 </View>
                 {shortsChromeVisible ? (
-                  <View style={[styles.bottomMeta, { paddingBottom: Math.max(insets.bottom + 116, 134) }]}>
+                  <View style={[styles.bottomMeta, { paddingBottom: bottomChromePadding + 22 }]}>
                     <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
                       <Text style={styles.videoTitle} numberOfLines={2}>{video.title || 'Untitled'}</Text>
                       <Text style={styles.videoMeta} numberOfLines={1}>

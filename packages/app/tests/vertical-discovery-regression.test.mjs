@@ -215,6 +215,25 @@ test('vertical discovery updates feed entries when previews change without chann
   assert.match(source, /prevSignature === nextSignature \? prev : entries/, 'unchanged signatures may preserve state, changed previews must update entries')
 })
 
+test('vertical discovery keeps the global watch/mini overlay off the Shorts route', () => {
+  const discoverSource = readAppFile('app/(tabs)/discover.tsx')
+  const overlaySource = readAppFile('components/VideoPlayerOverlayImpl.tsx')
+
+  assert.match(discoverSource, /closeVideo\(\)\n\s*setAmbientVideoContext\(null, null\)/, 'handoff should clear ambient player context after closing the global player')
+  assert.match(overlaySource, /usePathname\(\)/, 'global overlay should know the active route')
+  assert.match(overlaySource, /const hideGlobalOverlayOnDiscover = !isDesktop && isDiscoverPathActive/, 'mobile Discover should suppress the global watch overlay')
+  assert.match(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden' && !isInPipMode/, 'Discover should not show stale mini/fullscreen overlays over Shorts')
+})
+
+test('vertical discovery positions progress above bottom chrome without colliding with metadata', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /const bottomChromePadding = Math\.max\(insets\.bottom \+ 86, 104\)/, 'Discover should compute a tab-safe bottom chrome inset')
+  assert.match(source, /progressBottomOffset=\{bottomChromePadding\}/, 'Shorts progress should sit just above the tab bar, not under metadata')
+  assert.match(source, /paddingBottom: bottomChromePadding \+ 22/, 'metadata should reserve extra space above the progress bar')
+  assert.doesNotMatch(source, /progressBottomOffset=\{Math\.max\(insets\.bottom \+ 140, 158\)\}/, 'old low progress offset caused title/source overlap')
+})
+
 test('vertical discovery stops inline Shorts playback when the route unmounts or loses focus', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 

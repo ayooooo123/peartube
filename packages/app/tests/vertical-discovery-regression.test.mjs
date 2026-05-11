@@ -226,12 +226,18 @@ test('vertical discovery keeps the global watch/mini overlay off the Shorts rout
   assert.match(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden' && !isInPipMode/, 'Discover should not show stale mini/fullscreen overlays over Shorts')
 })
 
-test('vertical discovery positions progress above bottom chrome without colliding with metadata', () => {
+test('vertical discovery positions progress and chrome without clumping metadata/actions', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
   assert.match(source, /const bottomChromePadding = Math\.max\(insets\.bottom \+ 86, 104\)/, 'Discover should compute a tab-safe bottom chrome inset')
-  assert.match(source, /progressBottomOffset=\{bottomChromePadding\}/, 'Shorts progress should sit just above the tab bar, not under metadata')
-  assert.match(source, /paddingBottom: bottomChromePadding \+ 22/, 'metadata should reserve extra space above the progress bar')
+  assert.match(source, /const metaBottomPadding = bottomChromePadding \+ 56/, 'metadata should sit well above progress and nav chrome')
+  assert.match(source, /const progressBottomOffset = bottomChromePadding \+ 16/, 'progress should sit between metadata and bottom chrome')
+  assert.match(source, /progressBottomOffset=\{progressBottomOffset\}/, 'Shorts progress should use the separated progress offset')
+  assert.match(source, /paddingBottom: metaBottomPadding/, 'metadata should reserve its own larger bottom offset')
+  assert.match(source, /numberOfLines=\{1\}>\{video\.description\}/, 'description/source copy should not grow into controls while playing')
+  assert.match(source, /styles\.topChromeFade/, 'header should have a subtle backing fade over active video')
+  assert.match(source, /sideRail:\s*\{[\s\S]*width: 58[\s\S]*gap: 14/, 'side action rail should stay compact enough to avoid title overlap')
+  assert.match(source, /metaTextBlock:\s*\{[\s\S]*minWidth: 0/, 'metadata text should shrink instead of pushing into action controls')
   assert.doesNotMatch(source, /progressBottomOffset=\{Math\.max\(insets\.bottom \+ 140, 158\)\}/, 'old low progress offset caused title/source overlap')
 })
 

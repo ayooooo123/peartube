@@ -158,6 +158,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
           playbackSession={playbackSession}
           currentVideoKey={videoKey}
           isPlaying={isActive && !isPaused}
+          autoEnterPipOnLeave={false}
           playbackRate={1}
           seekPosition={seekPosition}
           videoTitle={video.title}

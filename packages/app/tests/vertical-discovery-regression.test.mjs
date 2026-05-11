@@ -54,6 +54,7 @@ test('vertical discovery uses a dedicated shorts player surface instead of the w
   const source = readAppFile('components/discovery/VerticalShortsPlayer.tsx')
 
   assert.match(source, /PearInlineVideoView/, 'shorts player should paint the native inline video surface directly')
+  assert.match(source, /autoEnterPipOnLeave=\{false\}/, 'shorts mode should not auto-trigger system PiP when leaving the app')
   assert.doesNotMatch(source, /VideoContainer/, 'shorts player must not wrap the normal watch player container')
   assert.match(source, /\.\.\.StyleSheet\.absoluteFillObject/, 'shorts player should own the full vertical card surface')
   assert.match(source, /landscapeVideoSurface/, 'shorts player should have a landscape-specific presentation mode')

@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useState, useRef, useMemo } from 'react'
 import { View, Text, Pressable, StyleSheet, useWindowDimensions, Platform, ScrollView, ActivityIndicator, Alert, StatusBar, Dimensions, TextInput, AppState } from 'react-native'
+import { usePathname } from 'expo-router'
 import { rpc } from '@peartube/platform/rpc'
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context'
 import { GestureDetector, Gesture } from 'react-native-gesture-handler'
@@ -97,6 +98,7 @@ const ZERO_EDGE_INSETS = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 })
 
 export function VideoPlayerOverlay() {
   const insets = useContext(SafeAreaInsetsContext) ?? ZERO_EDGE_INSETS
+  const pathname = usePathname()
   const { width: windowWidth, height: windowHeight } = useWindowDimensions()
   const screenMetrics = Dimensions.get('screen')
   const { isDesktop, isPear } = usePlatform()
@@ -371,10 +373,13 @@ export function VideoPlayerOverlay() {
   // Mini player corner/drag state
   const [pendingLandscapeExit, setPendingLandscapeExit] = useState(false)
   const disableMiniLayoutOnAndroidSplit = Platform.OS === 'android' && androidSplitPlayerEnabled
+  const isDiscoverPathActive = pathname === '/discover' || pathname === '/(tabs)/discover'
+  const hideGlobalOverlayOnDiscover = !isDesktop && isDiscoverPathActive
   const showLegacyMiniUi =
     playerMode === 'mini' &&
     !isLandscapeFullscreen &&
     !isInPipMode &&
+    !hideGlobalOverlayOnDiscover &&
     !disableMiniLayoutOnAndroidSplit
   const isLandscapeFullscreenShared = useSharedValue(false)
   const [channelMetaName, setChannelMetaName] = useState<string | null>(null)
@@ -2050,6 +2055,10 @@ export function VideoPlayerOverlay() {
   }, [currentVideo, playerMode, videoUrl, isPear, isDesktop])
 
   if (!currentVideo) {
+    return null
+  }
+
+  if (hideGlobalOverlayOnDiscover && playerMode !== 'hidden' && !isInPipMode) {
     return null
   }
 

@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 import { createHostError, HOST_ERROR_CODES, PROTOCOL_VERSION } from '@peartube/host'
 import DefaultHRPC from '@peartube/spec'
 
@@ -147,6 +148,8 @@ function normalizeReadyPayload(payload = {}) {
 
   return {
     blobServerPort: status?.blobServerPort ?? null,
+    blobServerReady: Boolean(status?.blobServerReady),
+    blobServerError: status?.blobServerError ?? null,
     protocolVersion: status?.protocolVersion ?? PROTOCOL_VERSION
   }
 }
@@ -246,6 +249,8 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     if (
       lastReady &&
       lastReady.blobServerPort === normalized.blobServerPort &&
+      lastReady.blobServerReady === normalized.blobServerReady &&
+      lastReady.blobServerError === normalized.blobServerError &&
       lastReady.protocolVersion === normalized.protocolVersion
     ) {
       return normalized

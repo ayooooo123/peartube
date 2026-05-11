@@ -25,6 +25,75 @@ export function mergeUniqueFeedVideos(previousVideos = [], incomingVideos = [], 
   return Array.from(byKey.values()).slice(0, limit)
 }
 
+function hasNonEmpty(value) {
+  if (Array.isArray(value)) return value.length > 0
+  return value !== undefined && value !== null && value !== ''
+}
+
+function getEntryKey(entry) {
+  return entry?.channelKey || entry?.driveKey || ''
+}
+
+function getEntryFreshness(entry) {
+  return Number(entry?.manifestUpdatedAt || entry?.lastSeen || 0) || 0
+}
+
+function mergeFeedEntry(previous, incoming) {
+  if (!previous) return incoming
+  if (!incoming) return previous
+
+  const previousFreshness = getEntryFreshness(previous)
+  const incomingFreshness = getEntryFreshness(incoming)
+  const incomingIsNewer = incomingFreshness >= previousFreshness
+  const merged = { ...previous, ...incoming }
+
+  if (!hasNonEmpty(incoming.previewVideos) || !incomingIsNewer) {
+    merged.previewVideos = previous.previewVideos || []
+  }
+
+  if (!hasNonEmpty(incoming.channelName) || !incomingIsNewer) {
+    merged.channelName = previous.channelName || incoming.channelName || null
+  }
+
+  if (!hasNonEmpty(incoming.manifestUpdatedAt) || !incomingIsNewer) {
+    merged.manifestUpdatedAt = previous.manifestUpdatedAt || incoming.manifestUpdatedAt || 0
+  }
+
+  if (!hasNonEmpty(incoming.publicBeeKey)) {
+    merged.publicBeeKey = previous.publicBeeKey || incoming.publicBeeKey || null
+  }
+
+  return merged
+}
+
+export function mergeVerticalFeedEntries(previousEntries = [], incomingEntries = []) {
+  const byKey = new Map()
+  const order = []
+
+  for (const entry of previousEntries || []) {
+    const key = getEntryKey(entry)
+    if (!key) continue
+    byKey.set(key, entry)
+    order.push(key)
+  }
+
+  for (const entry of incomingEntries || []) {
+    const key = getEntryKey(entry)
+    if (!key) continue
+    if (!byKey.has(key)) order.push(key)
+    byKey.set(key, mergeFeedEntry(byKey.get(key), entry))
+  }
+
+  return order.map((key) => byKey.get(key)).filter(Boolean)
+}
+
+export function hasRichVerticalFeedSnapshot(entries = [], videos = []) {
+  return Boolean(
+    (videos || []).length > 0 ||
+    (entries || []).some((entry) => Array.isArray(entry?.previewVideos) && entry.previewVideos.length > 0)
+  )
+}
+
 export function getVerticalFeedPreviewVideos(entries, { identityDriveKey, channelMeta = {}, limit = 40 } = {}) {
   const visibleEntries = getVisibleSeededFeedEntries(entries || [], Infinity)
   const previewVideos = getFeedPreviewVideos(

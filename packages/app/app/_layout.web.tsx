@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 /**
  * Root Layout (Web/Pear) - Wraps app with providers
  *
@@ -43,6 +44,8 @@ const isPear = typeof window !== 'undefined' && (
 )
 const isBridgeDesktop = typeof window !== 'undefined' && !!(window as any).bridge
 const shouldUseStatsPollingFallback = !isBridgeDesktop
+const isValidBlobServerPort = (port: unknown): port is number =>
+  typeof port === 'number' && Number.isFinite(port) && port > 0
 
 // Types from shared package
 import type { Identity, Video } from '@peartube/core'
@@ -156,8 +159,6 @@ export default function RootLayout() {
     if (!platformRPC) return
 
     try {
-      setLoading(true)
-
       // Load identities
       const result = await platformRPC.rpc.getIdentities()
       const identities = result?.identities || []
@@ -190,8 +191,6 @@ export default function RootLayout() {
       }
     } catch (err) {
       console.error('[App] Failed to load initial data:', err)
-    } finally {
-      setLoading(false)
     }
   }, [])
 
@@ -209,8 +208,12 @@ export default function RootLayout() {
         // Subscribe to events only on first init
         platformRPC.events.onReady(async (data: any) => {
           console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
-          setBlobServerPort(data?.blobServerPort || null)
-          await loadInitialData()
+          setBlobServerPort(isValidBlobServerPort(data?.blobServerPort) ? data.blobServerPort : null)
+          setReady(true)
+          setLoading(false)
+          loadInitialData().catch((err: any) => {
+            console.error('[App] Background initial data load failed:', err?.message || err)
+          })
         })
 
         platformRPC.events.onVideoStats((data: any) => {
@@ -228,7 +231,8 @@ export default function RootLayout() {
       } else {
         // Already initialized - restore from cache or load fresh
         console.log('[App] RPC already initialized, cached state:', cachedAppState ? 'yes' : 'no')
-        setBlobServerPort(platformRPC.getBlobServerPort())
+        const existingBlobServerPort = platformRPC.getBlobServerPort()
+        setBlobServerPort(isValidBlobServerPort(existingBlobServerPort) ? existingBlobServerPort : null)
 
         if (cachedAppState) {
           // State already restored from cache in useState initializers
@@ -241,16 +245,18 @@ export default function RootLayout() {
           loadInitialData().catch(() => {})
           return // Early return since we already set ready/loading
         } else {
-          // No cache, need to load
-          await loadInitialData()
+          // No cache, need to load in the background after unblocking the shell
+          setReady(true)
+          setLoading(false)
+          loadInitialData().catch((err: any) => {
+            console.error('[App] Background initial data load failed:', err?.message || err)
+          })
+          return
         }
       }
     } catch (err) {
       console.error('[App] Failed to initialize Pear backend:', err)
     }
-
-    setReady(true)
-    setLoading(false)
   }, [loadInitialData])
 
   useEffect(() => {

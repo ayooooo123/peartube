@@ -30,8 +30,8 @@ type PlaybackMemory = {
 
 type HiddenPlayerState = PlaybackMemory & {
   mode: 'hidden'
-  video: null
-  url: null
+  video: VideoData | null
+  url: string | null
 }
 
 type ActivePlayerState = PlaybackMemory & {
@@ -54,6 +54,7 @@ export type TransitionSource =
   | 'minimizePlayer'
   | 'maximizePlayer'
   | 'enterBackgroundAudio'
+  | 'setAmbientVideoContext'
 
 export type PlayerEvent =
   | {
@@ -61,6 +62,12 @@ export type PlayerEvent =
       source: 'loadAndPlayVideo'
       video: VideoData
       url: string
+    }
+  | {
+      type: 'SET_AMBIENT_VIDEO_CONTEXT'
+      source: 'setAmbientVideoContext'
+      video: VideoData | null
+      url?: string | null
     }
   | {
       type: 'RESTORE_FROM_LAST_CLOSED'
@@ -353,6 +360,13 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
       switch (event.type) {
         case 'LOAD_VIDEO':
           return toFullscreenState(state, event.video, event.url, true)
+        case 'SET_AMBIENT_VIDEO_CONTEXT':
+          return {
+            ...state,
+            mode: 'hidden',
+            video: event.video,
+            url: event.url || null,
+          }
         case 'RESTORE_FROM_LAST_CLOSED':
           return toFullscreenState(state, event.video, event.url, false)
         case 'FORCE_RELOAD_PLAYBACK':
@@ -398,6 +412,7 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
       switch (event.type) {
         case 'LOAD_VIDEO':
         case 'RESTORE_FROM_LAST_CLOSED':
+        case 'SET_AMBIENT_VIDEO_CONTEXT':
         case 'APP_BACKGROUND':
         case 'APP_FOREGROUND':
         case 'REMOTE_PLAY':
@@ -446,6 +461,12 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
         case 'LOAD_VIDEO':
           // Allow loading a new video while in fullscreen (e.g., tapping related video)
           return toFullscreenState(state, event.video, event.url, true)
+        case 'SET_AMBIENT_VIDEO_CONTEXT':
+          return {
+            ...state,
+            video: event.video,
+            url: event.url || null,
+          }
         case 'RESTORE_FROM_LAST_CLOSED':
           return invalidTransition(state, event)
         case 'CLOSE_VIDEO':
@@ -500,6 +521,12 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
           // Allow loading a new video from mini mode — transitions to fullscreen.
           // This happens when user taps a new video while mini player is active.
           return toFullscreenState(state, event.video, event.url, true)
+        case 'SET_AMBIENT_VIDEO_CONTEXT':
+          return {
+            ...state,
+            video: event.video,
+            url: event.url || null,
+          }
         case 'RESTORE_FROM_LAST_CLOSED':
           return invalidTransition(state, event)
         case 'PIP_ENTERED_ANDROID':
@@ -593,6 +620,7 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
       switch (event.type) {
         case 'LOAD_VIDEO':
         case 'RESTORE_FROM_LAST_CLOSED':
+        case 'SET_AMBIENT_VIDEO_CONTEXT':
         case 'FORCE_RELOAD_PLAYBACK':
         case 'MINIMIZE':
         case 'MAXIMIZE':
@@ -632,6 +660,7 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
       switch (event.type) {
         case 'LOAD_VIDEO':
         case 'RESTORE_FROM_LAST_CLOSED':
+        case 'SET_AMBIENT_VIDEO_CONTEXT':
         case 'FORCE_RELOAD_PLAYBACK':
         case 'MINIMIZE':
         case 'MAXIMIZE':
@@ -690,6 +719,7 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
       switch (event.type) {
         case 'LOAD_VIDEO':
         case 'RESTORE_FROM_LAST_CLOSED':
+        case 'SET_AMBIENT_VIDEO_CONTEXT':
         case 'FORCE_RELOAD_PLAYBACK':
         case 'MINIMIZE':
         case 'MAXIMIZE':

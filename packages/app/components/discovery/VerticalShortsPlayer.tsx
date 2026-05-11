@@ -16,6 +16,7 @@ type VerticalShortsPlayerProps = {
   isLoading?: boolean
   thumbnailUrl?: string | null
   controlsVisible?: boolean
+  progressBottomOffset?: number
   onControlsVisibleChange?: (visible: boolean) => void
   onReplay?: () => void
 }
@@ -39,6 +40,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
   isLoading = false,
   thumbnailUrl,
   controlsVisible = true,
+  progressBottomOffset = 150,
   onControlsVisibleChange,
   onReplay,
 }: VerticalShortsPlayerProps) {
@@ -190,7 +192,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
       ) : null}
 
       {showPlayer ? (
-        <View style={styles.progressDock} pointerEvents="box-none">
+        <View style={[styles.progressDock, { bottom: progressBottomOffset }]} pointerEvents="box-none">
           {controlsVisible ? (
             <View style={styles.controlButtons} pointerEvents="box-none">
               <Pressable
@@ -261,7 +263,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
     paddingHorizontal: 18,
     paddingBottom: 18,
   },

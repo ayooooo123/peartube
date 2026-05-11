@@ -6,6 +6,13 @@ export function mergeUniqueFeedVideos<T extends { channelKey?: string; driveKey?
   limit?: number,
 ): T[]
 
+export function mergeVerticalFeedEntries<T extends { channelKey?: string; driveKey?: string }>(
+  previousEntries?: T[],
+  incomingEntries?: T[],
+): T[]
+
+export function hasRichVerticalFeedSnapshot(entries?: any[], videos?: any[]): boolean
+
 export function getVerticalFeedPreviewVideos<T = any>(
   entries: any[],
   options?: {

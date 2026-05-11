@@ -231,31 +231,40 @@ test('PublicFeedManager does not recurse through the storage peer emitter wrappe
   }
 })
 
-test('PublicFeedManager reports active peer connections across swarm shapes without dialing', () => {
+test('PublicFeedManager reports active peer connections only from swarm.connections', () => {
   const publicKey = b4a.alloc(32, 8)
   const keyHex = b4a.toString(publicKey, 'hex')
-  const cases = [
-    (swarm) => { swarm.peers = new Map([[keyHex, { publicKey, connected: true }]]) },
-    (swarm) => { swarm.peers = new Map([[publicKey, { publicKey, connected: true }]]) },
-    (swarm) => { swarm.peers = new Set([{ publicKey, connected: true }]) },
-    (swarm) => { swarm.peers = new Set([{ publicKey, stream: {} }]) },
-    (swarm) => { swarm.connections.add({ remotePublicKey: publicKey }) },
-    (swarm) => { swarm._allConnections = new Set([{ remotePublicKey: publicKey, opened: true }]) },
-    (swarm) => { swarm.peers.set(keyHex, { publicKey, connectedTime: Date.now() }) },
-  ]
+  const swarm = createSwarm()
+  swarm.peers.set(keyHex, { publicKey, connected: true, connectedTime: Date.now() })
+  swarm._allConnections = new Set([{ remotePublicKey: publicKey, opened: true }])
+  swarm.connections.add({ remotePublicKey: publicKey })
+  const manager = new PublicFeedManager(swarm, createMetaDb())
 
-  for (const setup of cases) {
-    const swarm = createSwarm()
-    setup(swarm)
-    const manager = new PublicFeedManager(swarm, createMetaDb())
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    assert.equal(swarm.joinPeerCalls.length, 0)
+    assert.equal(manager.getStats().directPeerDial.peers[0].connected, true)
+  } finally {
+    manager.stop()
+  }
+})
 
-    try {
-      assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-      assert.equal(swarm.joinPeerCalls.length, 0)
-      assert.equal(manager.getStats().directPeerDial.peers[0].connected, true)
-    } finally {
-      manager.stop()
-    }
+test('PublicFeedManager treats swarm.peers and _allConnections as diagnostics, not sockets', () => {
+  const publicKey = b4a.alloc(32, 18)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const swarm = createSwarm()
+  swarm.peers.set(keyHex, { publicKey, connected: true, connectedTime: Date.now() })
+  swarm._allConnections = new Set([{ remotePublicKey: publicKey, opened: true }])
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.peers[0].connected, false)
+    assert.equal(stats.peers[0].swarm.connectedTime >= 0, true)
+    assert.equal(stats.swarmAllConnections, 1)
+  } finally {
+    manager.stop()
   }
 })
 
@@ -540,6 +549,35 @@ test('periodic gossip does not send on feed channels before they open', () => {
   }
 })
 
+test('broadcastSubmitChannel sends only on open feed connections', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const unopenedConn = createConnection()
+  const openConn = createConnection()
+  const unopenedSent = []
+  const openSent = []
+
+  manager.peerChannels.set(unopenedConn, { messages: [{ send: (msg) => unopenedSent.push(msg) }] })
+  manager.peerChannels.set(openConn, { messages: [{ send: (msg) => openSent.push(msg) }] })
+  manager.feedConnections.add(openConn)
+
+  try {
+    const stats = manager.getStats()
+    assert.equal(stats.feedChannelCandidates, 2)
+    assert.equal(stats.peerCount, 1)
+    assert.equal(stats.feedConnections, 1)
+
+    manager.broadcastSubmitChannel(DRIVE_KEY, null, PUBLIC_BEE_KEY)
+
+    assert.equal(unopenedSent.length, 0)
+    assert.equal(openSent.length, 1)
+    assert.equal(openSent[0].type, 'SUBMIT_CHANNEL')
+    assert.equal(openSent[0].key, DRIVE_KEY)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('feed channel open sends HAVE_FEED immediately', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
@@ -694,6 +732,79 @@ test('keyed peer entries survive persistence and restart even when peerCount is 
     assert.equal(feed[0].peerCount, 0)
   } finally {
     second.stop()
+  }
+})
+
+
+test('restored discovered entries are marked discovery-only and previews require availability probes', async () => {
+  const metaDb = createPersistedMetaDb({
+    'discovered-channels-v2': [{
+      driveKey: DRIVE_KEY,
+      publicBeeKey: PUBLIC_BEE_KEY,
+      channelName: 'Cached Channel',
+      previewVideos: [{
+        id: 'cached-mkv',
+        title: 'Cached MKV',
+        availability: 'playable',
+        playbackSupport: 'unverified-container',
+        blobId: '0:8:0:1024',
+        blobsCoreKey: '44'.repeat(32),
+      }],
+    }],
+  })
+  const manager = new PublicFeedManager(createSwarm(), metaDb)
+
+  try {
+    await manager.start()
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].discoveryOnly, true)
+    assert.equal(feed[0].restoredFromCache, true)
+    assert.equal(feed[0].requiresAvailabilityProbe, true)
+    assert.equal(feed[0].restoredFrom, 'discovered-channels-v2')
+    assert.equal(feed[0].previewVideos[0].availability, 'unknown')
+    assert.equal(feed[0].previewVideos[0].byteAvailability, 'unknown')
+    assert.equal(feed[0].previewVideos[0].playbackSupport, 'unverified-container')
+    assert.equal(feed[0].previewVideos[0].containerSupport, 'unverified-container')
+    assert.equal(feed[0].previewVideos[0].requiresAvailabilityProbe, true)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('restored relay catalog entries are visible but discovery-only until re-probed', async () => {
+  const metaDb = createPersistedMetaDb({
+    'public-feed-relay-catalog-v1': {
+      entries: [{
+        driveKey: 'aa'.repeat(32),
+        publicBeeKey: 'bb'.repeat(32),
+        source: 'relay-cache',
+        relayServing: true,
+        relayRole: 'cache',
+        previewVideos: [{
+          id: 'relay-cached-video',
+          availability: 'playable',
+          blobId: '0:4:0:512',
+          blobsCoreKey: 'cc'.repeat(32),
+        }],
+      }],
+    },
+  })
+  const manager = new PublicFeedManager(createSwarm(), metaDb)
+
+  try {
+    await manager.start()
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].source, 'relay-cache')
+    assert.equal(feed[0].relayServing, true)
+    assert.equal(feed[0].discoveryOnly, true)
+    assert.equal(feed[0].restoredFromCache, true)
+    assert.equal(feed[0].requiresAvailabilityProbe, true)
+    assert.equal(feed[0].previewVideos[0].availability, 'unknown')
+    assert.equal(feed[0].previewVideos[0].byteAvailability, 'unknown')
+  } finally {
+    manager.stop()
   }
 })
 

@@ -450,9 +450,9 @@ B.updateChannel = async (r: any) => { const a = identityManager.getActiveIdentit
 B.updateVideoMetadata = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }; return api.updateVideoMetadata(r.channelKey || a.driveKey, r.videoId, { title: r.title, description: r.description, category: r.category }) }
 B.updateChannelAvatar = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }; const buf = fs.readFileSync(r.filePath); return api.updateChannelAvatar(a.driveKey, buf, r.mimeType || 'image/jpeg') }
 B.listVideos = async (r: any) => {
-  const ck = r?.channelKey || ''; if (!ck) return { videos: [] }
-  let raw: any[] = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch (err: any) { return { success: false, error: err?.message || String(err), stale: true, videos: [] } }
-  return { videos: (raw || []).map((v: any) => {
+  const ck = r?.channelKey || ''; if (!ck) return { success: false, error: 'Missing channelKey', videos: [] }
+  let raw: any[] = []; try { raw = await api.listVideos(ck, r.publicBeeKey) } catch (err: any) { return { success: false, error: err?.message || String(err), stale: true, retryable: true, videos: [] } }
+  return { success: true, videos: (raw || []).map((v: any) => {
     const id = v?.id ? String(v.id) : ''; if (!id) return null
     return {
       id,
@@ -516,9 +516,11 @@ B.unsubscribeChannel = async (r: any) => { await api.unsubscribeChannel(r.channe
 B.getSubscriptions = async () => { const s = await api.getSubscriptions(); return { subscriptions: s.map((i: any) => ({ channelKey: i.driveKey, channelName: i.name })) } }
 B.joinChannel = async (r: any) => { await api.subscribeChannel(r.channelKey); return { success: true } }
 B.getPublicFeed = async () => {
-  const r = api.getPublicFeed()
-  return {
-    entries: (r.entries || [])
+  try {
+    const r = api.getPublicFeed()
+    return {
+      success: true,
+      entries: (r.entries || [])
       .map((e: any) => ({
         channelKey: e.channelKey || e.driveKey || '',
         driveKey: e.driveKey || e.channelKey || '',
@@ -532,7 +534,10 @@ B.getPublicFeed = async () => {
         previewVideos: Array.isArray(e.previewVideos) ? e.previewVideos : [],
       }))
       .filter((e: any) => typeof e.channelKey === 'string' && e.channelKey.length > 0),
-    stats: r.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
+      stats: r.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
+    }
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err), stale: true, retryable: true, entries: [], stats: { totalEntries: 0, hiddenCount: 0, peerCount: 0 } }
   }
 }
 B.refreshFeed = async () => { api.refreshFeed(); return { success: true } }
@@ -580,7 +585,7 @@ B.getVideoThumbnail = async (r: any) => {
     const parts = thumbnailBlobId.split(':').map(Number)
     const url = ctx.blobServer.getLink(blobsCore.key, { blob: { blockOffset: parts[0], blockLength: parts[1], byteOffset: parts[2], byteLength: parts[3] }, type: 'image/jpeg', host: ctx.blobServerHost || '127.0.0.1', port: ctx.blobServer?.port || ctx.blobServerPort })
     return { url, exists: true }
-  } catch { return { url: null, exists: false } }
+  } catch (err: any) { return { success: false, error: err?.message || String(err), stale: true, retryable: true, url: null, exists: false } }
 }
 B.setVideoThumbnail = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(Buffer.from(r.imageData, 'base64')); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }
 B.setVideoThumbnailFromFile = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false }; const ch = await identityManager.getActiveChannel?.(); if (!ch?.blobs) return { success: false }; const blob = await ch.putBlob(fs.readFileSync(r.filePath)); await ch.updateVideo(r.videoId, { thumbnailBlobId: blob.id, thumbnailBlobsCoreKey: ch.blobsKeyHex }); return { success: true, thumbnailBlobId: blob.id } }
@@ -608,7 +613,7 @@ B.getBlobServerPort = async () => ({ port: getBlobPort() })
 B.createDeviceInvite = async (r: any) => { const res = await api.createDeviceInvite(r.channelKey); return { inviteCode: res.inviteCode } }
 B.pairDevice = async (r: any) => { const res = await api.pairDevice(r.inviteCode, r.deviceName || ''); try { const ex = identityManager.getIdentities?.() || []; if (ex.length === 0 && res?.channelKey) await identityManager.addPairedChannelIdentity?.(res.channelKey, 'Paired Channel') } catch {} return { success: Boolean(res.success), channelKey: res.channelKey } }
 B.listDevices = async (r: any) => { const res = await api.listDevices(r.channelKey); return { devices: res.devices || [] } }
-B.globalSearchVideos = async (r: any) => { try { const raw = await api.globalSearchVideos(r.query, { topK: r.topK || 20 }); return { results: raw.map((i: any) => ({ id: String(i.id || ''), score: i.score != null ? String(i.score) : null, metadata: i.metadata ? JSON.stringify(i.metadata) : null })) } } catch { return { results: [] } } }
+B.globalSearchVideos = async (r: any) => { try { const raw = await api.globalSearchVideos(r.query, { topK: r.topK || 20 }); return { success: true, results: raw.map((i: any) => ({ id: String(i.id || ''), score: i.score != null ? String(i.score) : null, metadata: i.metadata ? JSON.stringify(i.metadata) : null })) } } catch (err: any) { return { success: false, error: err?.message || String(err), retryable: true, results: [] } } }
 B.searchVideos = async (r: any) => {
   try {
     const raw = await api.searchVideos(r.channelKey, r.query, { topK: r.topK || 10, federated: Boolean(r.federated) })

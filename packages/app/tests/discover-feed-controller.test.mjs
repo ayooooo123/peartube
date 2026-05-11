@@ -4,8 +4,10 @@ import test from 'node:test'
 import {
   clearHydratedFeedChannels,
   getVerticalFeedPreviewVideos,
+  hasRichVerticalFeedSnapshot,
   mapHydratedVerticalFeedVideos,
   mergeUniqueFeedVideos,
+  mergeVerticalFeedEntries,
   warmNextPlaybackUrls,
   withFeedTimeout,
 } from '../lib/discover-feed-controller.js'
@@ -31,6 +33,50 @@ test('vertical feed controller dedupes preview and hydrated videos by channel/vi
     ['one', 'b', 'keep'],
     ['two', 'c', 'add'],
   ])
+})
+
+test('vertical feed controller preserves rich cached entries during partial feed hydration', () => {
+  const cached = [{
+    channelKey: 'one',
+    driveKey: 'one',
+    publicBeeKey: 'bee-one',
+    channelName: 'Cached Channel',
+    manifestUpdatedAt: 20,
+    previewVideos: [{ id: 'cached-video', blobId: '0:1:0:10', blobsCoreKey: 'abc' }],
+  }]
+  const partial = [{
+    channelKey: 'one',
+    driveKey: 'one',
+    channelName: null,
+    manifestUpdatedAt: 10,
+    previewVideos: [],
+  }]
+
+  const merged = mergeVerticalFeedEntries(cached, partial)
+
+  assert.equal(merged.length, 1)
+  assert.equal(merged[0].channelName, 'Cached Channel')
+  assert.equal(merged[0].publicBeeKey, 'bee-one')
+  assert.equal(merged[0].manifestUpdatedAt, 20)
+  assert.deepEqual(merged[0].previewVideos, cached[0].previewVideos)
+  assert.equal(hasRichVerticalFeedSnapshot(merged, []), true)
+})
+
+test('vertical feed controller accepts newer rich feed fields over restored cache', () => {
+  const merged = mergeVerticalFeedEntries([{
+    channelKey: 'one',
+    channelName: 'Old',
+    manifestUpdatedAt: 20,
+    previewVideos: [{ id: 'old' }],
+  }], [{
+    channelKey: 'one',
+    channelName: 'New',
+    manifestUpdatedAt: 30,
+    previewVideos: [{ id: 'new' }],
+  }])
+
+  assert.equal(merged[0].channelName, 'New')
+  assert.deepEqual(merged[0].previewVideos, [{ id: 'new' }])
 })
 
 test('vertical feed controller filters preview videos through renderability policy', () => {

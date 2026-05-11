@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-require-imports */
 /**
  * PearTube HRPC Schema Definition
  *
@@ -1000,6 +1001,8 @@ ns.register({
   name: 'desktop-bootstrap-response',
   fields: [
     { name: 'blobServerPort', type: 'uint', required: false },
+    { name: 'blobServerReady', type: 'bool', required: false },
+    { name: 'blobServerError', type: 'string', required: false },
     { name: 'protocolVersion', type: 'uint', required: false },
     { name: 'storagePath', type: 'string', required: false },
     { name: 'snapshot', type: '@peartube/desktop-browse-snapshot', required: true }
@@ -1220,7 +1223,9 @@ ns.register({
   fields: [
     { name: 'ready', type: 'bool', required: true },
     { name: 'hasIdentity', type: 'bool', required: false },
-    { name: 'blobServerPort', type: 'uint', required: false }
+    { name: 'blobServerPort', type: 'uint', required: false },
+    { name: 'blobServerReady', type: 'bool', required: false },
+    { name: 'blobServerError', type: 'string', required: false }
   ]
 })
 

@@ -23,6 +23,26 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
 import { colors } from '@/lib/colors'
 
+const CHANNEL_PAGE_RPC_TIMEOUT_MS = 4500
+
+type ChannelPageTimeoutResult = { timedOut: true }
+
+function withChannelPageTimeout<T>(promise: Promise<T>, ms = CHANNEL_PAGE_RPC_TIMEOUT_MS): Promise<T | ChannelPageTimeoutResult> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise.finally(() => {
+      if (timeout) clearTimeout(timeout)
+    }),
+    new Promise<ChannelPageTimeoutResult>((resolve) => {
+      timeout = setTimeout(() => resolve({ timedOut: true }), ms)
+    }),
+  ])
+}
+
+function isTimedOutResult(result: unknown): result is { timedOut: true } {
+  return Boolean(result && typeof result === 'object' && (result as any).timedOut === true)
+}
+
 type ChannelMeta = {
   name?: string
   description?: string
@@ -156,6 +176,7 @@ export default function ChannelScreen() {
   const [identityDriveKey, setIdentityDriveKey] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [screenError, setScreenError] = useState('')
+  const [videosDegradedMessage, setVideosDegradedMessage] = useState('')
 
   const [isEditModalVisible, setIsEditModalVisible] = useState(false)
   const [editName, setEditName] = useState('')
@@ -204,14 +225,33 @@ export default function ChannelScreen() {
     try {
       setScreenError('')
       setIsLoading(true)
-      const [channelMetaResponse, channelVideosResponse] = await Promise.all([
-        rpc.getChannelMeta({ channelKey, publicBeeKey: channelPublicBeeKey || undefined } as any),
-        rpc.listVideos({ channelKey, publicBeeKey: channelPublicBeeKey || undefined } as any),
+      setVideosDegradedMessage('')
+      const [channelMetaSettled, channelVideosSettled] = await Promise.allSettled([
+        withChannelPageTimeout(rpc.getChannelMeta({ channelKey, publicBeeKey: channelPublicBeeKey || undefined } as any)),
+        withChannelPageTimeout(rpc.listVideos({ channelKey, publicBeeKey: channelPublicBeeKey || undefined } as any)),
       ])
-      const loadedVideos = Array.isArray(channelVideosResponse?.videos) ? channelVideosResponse.videos : []
-      setChannelMeta(channelMetaResponse || null)
-      setChannelVideos(loadedVideos)
-      resolveChannelThumbnails(loadedVideos)
+
+      const metaResult = channelMetaSettled.status === 'fulfilled' ? channelMetaSettled.value : null
+      if (!isTimedOutResult(metaResult) && metaResult) {
+        setChannelMeta(metaResult)
+      }
+
+      const videosResult = channelVideosSettled.status === 'fulfilled' ? channelVideosSettled.value : null
+      if (isTimedOutResult(videosResult)) {
+        setVideosDegradedMessage('Video list is taking longer than expected. Showing any cached channel details; retry to refresh videos.')
+      } else if (channelVideosSettled.status === 'rejected') {
+        setVideosDegradedMessage(channelVideosSettled.reason?.message || 'Failed to load videos. Retry to refresh this channel.')
+      } else if ((videosResult as any)?.success === false) {
+        setVideosDegradedMessage((videosResult as any)?.error || 'Failed to load videos. Retry to refresh this channel.')
+      } else {
+        const loadedVideos = Array.isArray((videosResult as any)?.videos) ? (videosResult as any).videos : []
+        setChannelVideos(loadedVideos)
+        resolveChannelThumbnails(loadedVideos)
+      }
+
+      if (channelMetaSettled.status === 'rejected' && channelVideosSettled.status === 'rejected') {
+        setScreenError(channelMetaSettled.reason?.message || channelVideosSettled.reason?.message || 'Failed to load channel page.')
+      }
     } catch (channelFetchError: any) {
       setScreenError(channelFetchError?.message || 'Failed to load channel page.')
     } finally {
@@ -390,7 +430,19 @@ export default function ChannelScreen() {
               </View>
 
               <View style={styles.videoListSection}>
-            {channelVideos.length === 0 ? (
+            {videosDegradedMessage ? (
+              <View className="mb-4 rounded-xl bg-pear-bg-card border border-pear-border px-4 py-3">
+                <Text className="text-body text-pear-text-secondary" selectable>{videosDegradedMessage}</Text>
+                <PressableFeedback
+                  onPress={fetchChannelPage}
+                  className="mt-3 self-start bg-pear-primary rounded-lg px-4 py-2"
+                  accessibilityRole="button"
+                >
+                  <Text className="text-white text-label">Retry</Text>
+                </PressableFeedback>
+              </View>
+            ) : null}
+            {channelVideos.length === 0 && !videosDegradedMessage ? (
               <View className="py-16 items-center justify-center rounded-xl bg-pear-bg-card border border-pear-border">
                 <Feather name="video-off" size={30} color={colors.textMuted} />
                 <Text className="text-body text-pear-text-secondary mt-3">No videos yet</Text>

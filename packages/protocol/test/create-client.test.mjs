@@ -15,6 +15,8 @@ class FakeHRPC {
     return Promise.resolve({
         status: {
           blobServerPort: 9999,
+          blobServerReady: true,
+          blobServerError: null,
           protocolVersion: 2
         }
       })
@@ -53,12 +55,66 @@ test('createProtocolClient remaps feed update events', async (t) => {
 
   const ready = await client.ready()
 
-  t.alike(ready, { blobServerPort: 9999, protocolVersion: 2 })
+  t.alike(ready, { blobServerPort: 9999, blobServerReady: true, blobServerError: null, protocolVersion: 2 })
   t.alike(readyEvents[0], ready)
 
   FakeHRPC.instances[0].handlers.feedUpdate({ action: 'update', channelKey: 'abc' })
 
   t.alike(events[0], { action: 'update', channelKey: 'abc' })
+})
+
+test('createProtocolClient propagates degraded blob server readiness and does not dedupe status changes', async (t) => {
+  FakeHRPC.instances.length = 0
+  const readyEvents = []
+
+  class DegradedHRPC extends FakeHRPC {
+    getStatus() {
+      return Promise.resolve({
+        status: {
+          blobServerPort: null,
+          blobServerReady: false,
+          blobServerError: 'listen failed',
+          protocolVersion: 2
+        }
+      })
+    }
+
+    onEventReady(handler) {
+      this.handlers.ready = handler
+    }
+  }
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: DegradedHRPC
+  })
+
+  client.events.on(PROTOCOL_EVENTS.HOST_READY, (payload) => {
+    readyEvents.push(payload)
+  })
+
+  const ready = await client.ready()
+
+  t.alike(ready, { blobServerPort: null, blobServerReady: false, blobServerError: 'listen failed', protocolVersion: 2 })
+  t.alike(readyEvents, [ready])
+
+  FakeHRPC.instances[0].handlers.ready({
+    blobServerPort: null,
+    blobServerReady: false,
+    blobServerError: 'listen failed',
+    protocolVersion: 2
+  })
+  FakeHRPC.instances[0].handlers.ready({
+    blobServerPort: 4545,
+    blobServerReady: true,
+    blobServerError: null,
+    protocolVersion: 2
+  })
+
+  t.alike(readyEvents, [
+    ready,
+    { blobServerPort: 4545, blobServerReady: true, blobServerError: null, protocolVersion: 2 }
+  ])
 })
 
 test('createProtocolClient forwards log events through the shared event map', async (t) => {

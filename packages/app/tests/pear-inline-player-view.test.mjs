@@ -17,7 +17,9 @@ test('PearInlineVideoView uses react-native-video as the native inline renderer'
 
   assert.match(source, /react-native-video/)
   assert.match(source, /<Video/)
-  assert.match(source, /useTextureView=\{Platform\.OS === 'android'\}/)
+  assert.match(source, /autoEnterPipOnLeave = true/)
+  assert.match(source, /enterPictureInPictureOnLeave=\{autoEnterPipOnLeave\}/)
+  assert.match(source, /useTextureView=\{false\}/)
   assert.match(source, /bufferConfig=\{Platform\.OS === 'android' \? ANDROID_BUFFER_CONFIG : undefined\}/)
   assert.doesNotMatch(source, /expo-pear-player/)
   assert.doesNotMatch(source, /createPearPlayer/)
@@ -37,9 +39,14 @@ test('PearInlineVideoView adapter controls the shared VideoRef directly', () => 
   assert.doesNotMatch(source, /controller\./)
 })
 
-test('legacy MpvMobileVideoView file is only a compatibility shim', () => {
-  const source = readAppFile('components/video-player/MpvMobileVideoView.tsx')
+test('legacy MpvMobileVideoView implementation stays removed or only exists as a shim', () => {
+  const shimPath = path.join(appRoot, 'components/video-player/MpvMobileVideoView.tsx')
+  if (!fs.existsSync(shimPath)) {
+    assert.equal(fs.existsSync(shimPath), false)
+    return
+  }
 
+  const source = readAppFile('components/video-player/MpvMobileVideoView.tsx')
   assert.match(source, /PearInlineVideoView as MpvMobileVideoView/)
   assert.equal(
     source.includes('expo-pear-player'),

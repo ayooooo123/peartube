@@ -1,7 +1,12 @@
 import { PROTOCOL_EVENTS } from '@peartube/protocol/events'
 
-export type HostReadyData = {
+type BlobServerStatus = {
   blobServerPort: number | null
+  blobServerReady?: boolean
+  blobServerError?: string | null
+}
+
+export type HostReadyData = BlobServerStatus & {
   protocolVersion: 2
 }
 
@@ -119,7 +124,8 @@ function createCallbackStore(): PlatformCallbacks {
 function safeDispatch<T>(callbacks: T[], value: Parameters<Extract<T, (...args: any[]) => unknown>>[0]) {
   for (const callback of callbacks) {
     try {
-      ;(callback as (data: typeof value) => void)(value)
+      const typedCallback = callback as (data: typeof value) => void
+      typedCallback(value)
     } catch (error) {
       console.error('[Platform RPC] Event callback failed:', error)
     }
@@ -143,6 +149,8 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
     if (
       lastReady &&
       lastReady.blobServerPort === data.blobServerPort &&
+      lastReady.blobServerReady === data.blobServerReady &&
+      lastReady.blobServerError === data.blobServerError &&
       lastReady.protocolVersion === data.protocolVersion
     ) {
       return

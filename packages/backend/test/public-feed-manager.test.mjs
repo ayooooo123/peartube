@@ -231,31 +231,40 @@ test('PublicFeedManager does not recurse through the storage peer emitter wrappe
   }
 })
 
-test('PublicFeedManager reports active peer connections across swarm shapes without dialing', () => {
+test('PublicFeedManager reports active peer connections only from swarm.connections', () => {
   const publicKey = b4a.alloc(32, 8)
   const keyHex = b4a.toString(publicKey, 'hex')
-  const cases = [
-    (swarm) => { swarm.peers = new Map([[keyHex, { publicKey, connected: true }]]) },
-    (swarm) => { swarm.peers = new Map([[publicKey, { publicKey, connected: true }]]) },
-    (swarm) => { swarm.peers = new Set([{ publicKey, connected: true }]) },
-    (swarm) => { swarm.peers = new Set([{ publicKey, stream: {} }]) },
-    (swarm) => { swarm.connections.add({ remotePublicKey: publicKey }) },
-    (swarm) => { swarm._allConnections = new Set([{ remotePublicKey: publicKey, opened: true }]) },
-    (swarm) => { swarm.peers.set(keyHex, { publicKey, connectedTime: Date.now() }) },
-  ]
+  const swarm = createSwarm()
+  swarm.peers.set(keyHex, { publicKey, connected: true, connectedTime: Date.now() })
+  swarm._allConnections = new Set([{ remotePublicKey: publicKey, opened: true }])
+  swarm.connections.add({ remotePublicKey: publicKey })
+  const manager = new PublicFeedManager(swarm, createMetaDb())
 
-  for (const setup of cases) {
-    const swarm = createSwarm()
-    setup(swarm)
-    const manager = new PublicFeedManager(swarm, createMetaDb())
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    assert.equal(swarm.joinPeerCalls.length, 0)
+    assert.equal(manager.getStats().directPeerDial.peers[0].connected, true)
+  } finally {
+    manager.stop()
+  }
+})
 
-    try {
-      assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-      assert.equal(swarm.joinPeerCalls.length, 0)
-      assert.equal(manager.getStats().directPeerDial.peers[0].connected, true)
-    } finally {
-      manager.stop()
-    }
+test('PublicFeedManager treats swarm.peers and _allConnections as diagnostics, not sockets', () => {
+  const publicKey = b4a.alloc(32, 18)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const swarm = createSwarm()
+  swarm.peers.set(keyHex, { publicKey, connected: true, connectedTime: Date.now() })
+  swarm._allConnections = new Set([{ remotePublicKey: publicKey, opened: true }])
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.peers[0].connected, false)
+    assert.equal(stats.peers[0].swarm.connectedTime >= 0, true)
+    assert.equal(stats.swarmAllConnections, 1)
+  } finally {
+    manager.stop()
   }
 })
 
@@ -536,6 +545,35 @@ test('periodic gossip does not send on feed channels before they open', () => {
     assert.equal(sent.length, 0)
   } finally {
     Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
+test('broadcastSubmitChannel sends only on open feed connections', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const unopenedConn = createConnection()
+  const openConn = createConnection()
+  const unopenedSent = []
+  const openSent = []
+
+  manager.peerChannels.set(unopenedConn, { messages: [{ send: (msg) => unopenedSent.push(msg) }] })
+  manager.peerChannels.set(openConn, { messages: [{ send: (msg) => openSent.push(msg) }] })
+  manager.feedConnections.add(openConn)
+
+  try {
+    const stats = manager.getStats()
+    assert.equal(stats.feedChannelCandidates, 2)
+    assert.equal(stats.peerCount, 1)
+    assert.equal(stats.feedConnections, 1)
+
+    manager.broadcastSubmitChannel(DRIVE_KEY, null, PUBLIC_BEE_KEY)
+
+    assert.equal(unopenedSent.length, 0)
+    assert.equal(openSent.length, 1)
+    assert.equal(openSent[0].type, 'SUBMIT_CHANNEL')
+    assert.equal(openSent[0].key, DRIVE_KEY)
+  } finally {
     manager.stop()
   }
 })

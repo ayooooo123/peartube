@@ -220,6 +220,13 @@ test('vertical discovery updates feed entries when previews change without chann
   assert.match(source, /prevSignature === nextSignature \? prev : mergedEntries/, 'unchanged signatures may preserve state, changed previews must update entries')
 })
 
+test('global overlay cast URL resolution preserves direct blob refs', () => {
+  const source = readAppFile('components/VideoPlayerOverlayImpl.tsx')
+
+  const directRefCastCalls = source.match(/rpc\.getVideoUrl\(\{[\s\S]*?publicBeeKey: currentVideoAny\.publicBeeKey,[\s\S]*?blobId: currentVideoAny\.blobId,[\s\S]*?blobsCoreKey: currentVideoAny\.blobsCoreKey,[\s\S]*?mimeType: currentVideo\.mimeType,[\s\S]*?\}\)/g) || []
+  assert.equal(directRefCastCalls.length, 2, 'manual and auto cast URL resolution should pass direct playback refs')
+})
+
 test('vertical discovery keeps the global watch/mini overlay off the Shorts route', () => {
   const discoverSource = readAppFile('app/(tabs)/discover.tsx')
   const overlaySource = readAppFile('components/VideoPlayerOverlayImpl.tsx')

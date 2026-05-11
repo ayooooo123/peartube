@@ -367,7 +367,7 @@ export default function VerticalDiscoveryScreen() {
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).catch(() => undefined)
         if (isStalePlaybackRequest()) return
-        setAmbientVideoContext(video, cachedUrl)
+        setAmbientVideoContext(video, cachedUrl, { keepHidden: true })
         setShortsVideoUrl(cachedUrl)
         setShortsPlaybackSession((prev) => prev + 1)
         setShortsLoading(false)
@@ -378,7 +378,7 @@ export default function VerticalDiscoveryScreen() {
       if (isStalePlaybackRequest()) return
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
-        setAmbientVideoContext(video, result.url)
+        setAmbientVideoContext(video, result.url, { keepHidden: true })
         setShortsVideoUrl(result.url)
         setShortsPlaybackSession((prev) => prev + 1)
       }
@@ -461,7 +461,7 @@ export default function VerticalDiscoveryScreen() {
   }, [router])
 
   const openComments = useCallback((video: VideoData) => {
-    setAmbientVideoContext(video, activeVideoKey === `${video.channelKey}:${video.id}` ? shortsVideoUrl : null)
+    setAmbientVideoContext(video, activeVideoKey === `${video.channelKey}:${video.id}` ? shortsVideoUrl : null, { keepHidden: true })
     setShortsChromeVisible(true)
     setCommentsSheetVisible(true)
   }, [activeVideoKey, setAmbientVideoContext, shortsVideoUrl])

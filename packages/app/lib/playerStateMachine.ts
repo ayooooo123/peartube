@@ -68,6 +68,7 @@ export type PlayerEvent =
       source: 'setAmbientVideoContext'
       video: VideoData | null
       url?: string | null
+      keepHidden?: boolean
     }
   | {
       type: 'RESTORE_FROM_LAST_CLOSED'
@@ -462,6 +463,14 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
           // Allow loading a new video while in fullscreen (e.g., tapping related video)
           return toFullscreenState(state, event.video, event.url, true)
         case 'SET_AMBIENT_VIDEO_CONTEXT':
+          if (event.keepHidden) {
+            return {
+              ...state,
+              mode: 'hidden',
+              video: event.video,
+              url: event.url || null,
+            }
+          }
           return {
             ...state,
             video: event.video,
@@ -522,6 +531,14 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
           // This happens when user taps a new video while mini player is active.
           return toFullscreenState(state, event.video, event.url, true)
         case 'SET_AMBIENT_VIDEO_CONTEXT':
+          if (event.keepHidden) {
+            return {
+              ...state,
+              mode: 'hidden',
+              video: event.video,
+              url: event.url || null,
+            }
+          }
           return {
             ...state,
             video: event.video,

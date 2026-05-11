@@ -78,7 +78,7 @@ interface VideoPlayerContextType {
 
   // Actions
   loadAndPlayVideo: (video: VideoData, url: string) => void
-  setAmbientVideoContext: (video: VideoData | null, url?: string | null) => void
+  setAmbientVideoContext: (video: VideoData | null, url?: string | null, options?: { keepHidden?: boolean }) => void
   pauseVideo: () => void
   resumeVideo: () => void
   closeVideo: () => void
@@ -847,7 +847,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     startInActivityPlayback(video, url, 'direct-load')
   }, [startInActivityPlayback])
 
-  const setAmbientVideoContext = useCallback((video: VideoData | null, url: string | null = null) => {
+  const setAmbientVideoContext = useCallback((video: VideoData | null, url: string | null = null, options: { keepHidden?: boolean } = {}) => {
     const currentKey = currentVideoRef.current
       ? `${currentVideoRef.current.channelKey || ''}:${currentVideoRef.current.id || currentVideoRef.current.path || ''}`
       : null
@@ -855,7 +855,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
     currentVideoRef.current = video
     videoUrlRef.current = url
-    dispatch({ type: 'SET_AMBIENT_VIDEO_CONTEXT', source: 'setAmbientVideoContext', video, url })
+    dispatch({
+      type: 'SET_AMBIENT_VIDEO_CONTEXT',
+      source: 'setAmbientVideoContext',
+      video,
+      url,
+      keepHidden: options.keepHidden,
+    })
 
     if (video && currentKey !== nextKey) {
       setVideoStats(null)

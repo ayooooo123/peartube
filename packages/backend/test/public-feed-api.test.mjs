@@ -356,6 +356,7 @@ test('listVideos marks videos unavailable when neither local cache nor peer hint
   t.is(requestCalls.length, 1)
   t.is(videos.length, 1)
   t.is(videos[0]?.availability, 'unavailable')
+  t.is(videos[0]?.byteAvailability, 'unavailable')
 })
 
 test('listVideos does not mark remote videos playable from unrelated swarm peers alone', async (t) => {
@@ -479,6 +480,9 @@ test('listVideos keeps the local head-block fast path explicitly playable', asyn
 
   t.is(videos.length, 1)
   t.is(videos[0]?.availability, 'playable')
+  t.is(videos[0]?.byteAvailability, 'playable')
+  t.is(videos[0]?.contiguousBlocks, 8)
+  t.is(videos[0]?.hasHeadBlock, true)
 })
 
 test('listVideos respects authoritative unavailable hints even when peers are connected', async (t) => {
@@ -548,6 +552,7 @@ test('listVideos respects authoritative unavailable hints even when peers are co
 
   t.is(videos.length, 1)
   t.is(videos[0]?.availability, 'unavailable')
+  t.is(videos[0]?.byteAvailability, 'unavailable')
 })
 
 test('listVideos revalidates cached remote availability on each read', async (t) => {
@@ -619,7 +624,11 @@ test('listVideos revalidates cached remote availability on each read', async (t)
   const second = await api.listVideos(driveKey, publicBeeKey)
 
   t.is(first[0]?.availability, 'playable')
+  t.is(first[0]?.byteAvailability, 'playable')
+  t.is(first[0]?.contiguousBlocks, 8)
+  t.is(first[0]?.hasHeadBlock, true)
   t.is(second[0]?.availability, 'unavailable')
+  t.is(second[0]?.byteAvailability, 'unavailable')
   t.is(requestCount, 2)
 })
 

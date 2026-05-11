@@ -120,6 +120,8 @@ export default function VerticalDiscoveryScreen() {
   } = useVideoPlayerContext()
 
   const bottomChromePadding = Math.max(insets.bottom + 86, 104)
+  const metaBottomPadding = bottomChromePadding + 56
+  const progressBottomOffset = bottomChromePadding + 16
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const cachedDiscoverFeed = useMemo(() => readDiscoverFeedCache(), [])
   const [refreshing, setRefreshing] = useState(false)
@@ -459,6 +461,10 @@ export default function VerticalDiscoveryScreen() {
         </View>
       </View>
 
+      {shortsChromeVisible ? (
+        <View pointerEvents="none" style={[styles.topChromeFade, { height: Math.max(insets.top + 112, 136) }]} />
+      ) : null}
+
       {verticalVideos.length === 0 ? (
         <View style={styles.centerState}>
           {feedLoading || !ready ? <ActivityIndicator color={colors.primary} size="large" /> : null}
@@ -501,20 +507,20 @@ export default function VerticalDiscoveryScreen() {
                     isLoading={shortsLoading && activeVideoKey === `${video.channelKey}:${video.id}`}
                     thumbnailUrl={video.thumbnailUrl || null}
                     controlsVisible={shortsChromeVisible}
-                    progressBottomOffset={bottomChromePadding}
+                    progressBottomOffset={progressBottomOffset}
                     onControlsVisibleChange={setShortsChromeVisible}
                     onReplay={() => playVideo(video)}
                   />
                 </View>
                 {shortsChromeVisible ? (
-                  <View style={[styles.bottomMeta, { paddingBottom: bottomChromePadding + 22 }]}>
+                  <View style={[styles.bottomMeta, { paddingBottom: metaBottomPadding }]}>
                     <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
                       <Text style={styles.videoTitle} numberOfLines={2}>{video.title || 'Untitled'}</Text>
                       <Text style={styles.videoMeta} numberOfLines={1}>
                         {video.channel?.name || 'Channel'} · {formatTimeAgo(video.uploadedAt || Date.now())}
                       </Text>
                       {video.description ? (
-                        <Text style={styles.videoDescription} numberOfLines={2}>{video.description}</Text>
+                        <Text style={styles.videoDescription} numberOfLines={1}>{video.description}</Text>
                       ) : null}
                     </Pressable>
                     <View style={styles.sideRail}>
@@ -607,6 +613,14 @@ const styles = StyleSheet.create({
   page: {
     backgroundColor: '#050607',
   },
+  topChromeFade: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 9,
+    backgroundColor: 'rgba(0,0,0,0.36)',
+  },
   backdrop: {
     flex: 1,
     justifyContent: 'center',
@@ -626,19 +640,21 @@ const styles = StyleSheet.create({
   bottomMeta: {
     position: 'absolute',
     left: 18,
-    right: 16,
+    right: 14,
     bottom: 0,
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 14,
+    gap: 10,
   },
   metaTextBlock: {
     flex: 1,
-    paddingRight: 4,
+    minWidth: 0,
+    paddingRight: 2,
   },
   videoTitle: {
     color: '#fff',
-    fontSize: 22,
+    fontSize: 20,
+    lineHeight: 24,
     fontWeight: '800',
     letterSpacing: -0.5,
     textShadowColor: 'rgba(0,0,0,0.45)',
@@ -647,28 +663,29 @@ const styles = StyleSheet.create({
   },
   videoMeta: {
     color: 'rgba(255,255,255,0.78)',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
-    marginTop: 8,
+    marginTop: 6,
   },
   videoDescription: {
-    color: 'rgba(255,255,255,0.72)',
-    fontSize: 14,
-    lineHeight: 19,
-    marginTop: 8,
+    color: 'rgba(255,255,255,0.68)',
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 5,
   },
   sideRail: {
-    width: 72,
+    width: 58,
     alignItems: 'center',
-    gap: 20,
+    gap: 14,
   },
   sideButton: {
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
   },
   sideLabel: {
     color: 'rgba(255,255,255,0.82)',
-    fontSize: 11,
+    fontSize: 10,
+    lineHeight: 12,
     fontWeight: '700',
   },
   centerState: {

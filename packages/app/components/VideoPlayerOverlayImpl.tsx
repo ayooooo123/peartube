@@ -492,9 +492,14 @@ export function VideoPlayerOverlay() {
           const videoRef = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
             ? currentVideo.path
             : currentVideo.id
+          const currentVideoAny = currentVideo as any
           const result = await rpc.getVideoUrl({
             channelKey: currentVideo.channelKey,
             videoId: videoRef,
+            publicBeeKey: currentVideoAny.publicBeeKey,
+            blobId: currentVideoAny.blobId,
+            blobsCoreKey: currentVideoAny.blobsCoreKey,
+            mimeType: currentVideo.mimeType,
           })
           urlToCast = result?.url || null
         } catch (err: any) {
@@ -566,9 +571,14 @@ export function VideoPlayerOverlay() {
           const videoRef = (currentVideo.path && typeof currentVideo.path === 'string' && currentVideo.path.startsWith('/'))
             ? currentVideo.path
             : currentVideo.id
+          const currentVideoAny = currentVideo as any
           const result = await rpc.getVideoUrl({
             channelKey: currentVideo.channelKey,
             videoId: videoRef,
+            publicBeeKey: currentVideoAny.publicBeeKey,
+            blobId: currentVideoAny.blobId,
+            blobsCoreKey: currentVideoAny.blobsCoreKey,
+            mimeType: currentVideo.mimeType,
           })
           urlToCast = result?.url || null
         }

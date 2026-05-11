@@ -93,9 +93,9 @@ function P2PStatsOverlay({ stats, showDetails, onPress }: {
 // P2P Stats Bar Component - Enhanced with more details
 function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   const { rpc: appRpc } = useApp()
-  const [globalPeers, setGlobalPeers] = useState(0)
+  const [globalConnections, setGlobalConnections] = useState(0)
 
-  // Fetch global peer count as fallback when video stats are not available yet.
+  // Fetch global connection count as network diagnostics when video stats are not available yet.
   useEffect(() => {
     let mounted = true
     let intervalId: NodeJS.Timeout | null = null
@@ -103,12 +103,9 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
     const fetchGlobalStatus = async () => {
       try {
         const swarmStatus = await appRpc?.getSwarmStatus?.()
-        const peerCount =
-          swarmStatus?.peerCount ??
-          swarmStatus?.swarmConnections ??
-          swarmStatus?.swarmPeers
-        if (mounted && peerCount !== undefined) {
-          setGlobalPeers(peerCount)
+        const connectionCount = swarmStatus?.swarmConnections ?? swarmStatus?.feedConnections ?? 0
+        if (mounted) {
+          setGlobalConnections(connectionCount)
         }
       } catch {
         // Ignore errors - backend might be unavailable
@@ -126,7 +123,7 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
     }
   }, [stats, appRpc])
 
-  console.log('[P2PStatsBar] Rendering, stats:', stats ? 'present' : 'null', 'globalPeers:', globalPeers)
+  console.log('[P2PStatsBar] Rendering, stats:', stats ? 'present' : 'null', 'globalConnections:', globalConnections)
 
   // Format bytes to human readable
   const formatBytes = (bytes: number): string => {
@@ -137,8 +134,7 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
   }
 
-  // Get peer count - prefer video stats, fallback to global
-  const peerCount = stats?.peerCount ?? globalPeers
+  const videoPeerCount = stats?.peerCount ?? 0
   const downloadSpeedValue = Number(stats?.speedMBps ?? 0)
   const uploadSpeedValue = Number(stats?.uploadSpeedMBps ?? 0)
   const downloadSpeedText = Number.isFinite(downloadSpeedValue) ? downloadSpeedValue.toFixed(2) : '0.00'
@@ -147,8 +143,7 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
   // Status color and label
   const getStatusInfo = () => {
     if (!stats) {
-      if (globalPeers > 0) return { color: '#60a5fa', label: 'Connected' }
-      return { color: '#6b7280', label: 'Connecting...' }
+      return { color: '#6b7280', label: 'Waiting for video peers' }
     }
     if (stats.isComplete) return { color: '#4ade80', label: 'Cached' }
     if (stats.status === 'downloading') return { color: '#fbbf24', label: 'Downloading' }
@@ -170,7 +165,7 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
         </View>
         <View style={styles.statsBarCenter}>
           <Feather name="users" color={colors.textMuted} size={12} />
-          <Text style={styles.statsBarText}>{peerCount} peers</Text>
+          <Text style={styles.statsBarText}>{videoPeerCount} video peer{videoPeerCount !== 1 ? 's' : ''}</Text>
         </View>
         {stats && (
           <View style={styles.statsBarSpeeds}>
@@ -184,6 +179,12 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
       {stats && !stats.isComplete && (
         <View style={styles.progressBarBg}>
           <View style={[styles.progressBarFill, { width: `${stats.progress || 0}%` }]} />
+        </View>
+      )}
+
+      {!stats && globalConnections > 0 && (
+        <View style={styles.statsBarRow2}>
+          <Text style={styles.statsBarDetail}>Network online: {globalConnections} connection{globalConnections !== 1 ? 's' : ''}</Text>
         </View>
       )}
 

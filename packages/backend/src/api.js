@@ -212,6 +212,29 @@ export function createApi({
     }
   }
 
+  function getVideoCorePeerCount(driveKey, videoPath) {
+    try {
+      const channel = ctx.channels?.get?.(driveKey)
+      const normalizedId = normalizeVideoId(videoPath)
+      const candidates = [
+        videoPath,
+        normalizedId,
+        normalizedId ? `/videos/${normalizedId}.mp4` : null,
+        normalizedId ? `videos/${normalizedId}.mp4` : null,
+      ].filter(Boolean)
+
+      for (const candidate of candidates) {
+        const core = channel?.videoCores?.get?.(candidate) || channel?.cores?.get?.(candidate)
+        const peers = core?.peers
+        if (Array.isArray(peers)) return peers.length
+        if (typeof peers?.length === 'number') return peers.length
+        if (typeof peers?.size === 'number') return peers.size
+      }
+    } catch { /* best effort */ }
+
+    return 0
+  }
+
   function previewVideosFromFeedEntry(driveKey, publicBeeKey = null) {
     const entry = getPublicFeedEntry(driveKey)
     const previews = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
@@ -2192,10 +2215,12 @@ export function createApi({
      * @returns {Object}
      */
     getVideoStats(driveKey, videoPath) {
+      const videoPeerCount = getVideoCorePeerCount(driveKey, videoPath);
       if (videoStats) {
         const stats = videoStats.getStats(driveKey, videoPath);
         if (stats) {
           stats.swarmConnections = ctx.swarm?.connections?.size || 0;
+          stats.peerCount = videoPeerCount || stats.peerCount || 0;
           return stats;
         }
       }
@@ -2207,7 +2232,7 @@ export function createApi({
         downloadedBlocks: 0,
         totalBytes: 0,
         downloadedBytes: 0,
-        peerCount: ctx.swarm?.connections?.size || 0,
+        peerCount: videoPeerCount,
         swarmConnections: ctx.swarm?.connections?.size || 0,
         speedMBps: '0',
         elapsed: 0,

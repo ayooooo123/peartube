@@ -38,6 +38,26 @@ type ChannelPageProps = {
   }
 }
 
+const CHANNEL_PAGE_RPC_TIMEOUT_MS = 4500
+
+type ChannelPageTimeoutResult = { timedOut: true }
+
+function withChannelPageTimeout<T>(promise: Promise<T>, ms = CHANNEL_PAGE_RPC_TIMEOUT_MS): Promise<T | ChannelPageTimeoutResult> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise.finally(() => {
+      if (timeout) clearTimeout(timeout)
+    }),
+    new Promise<ChannelPageTimeoutResult>((resolve) => {
+      timeout = setTimeout(() => resolve({ timedOut: true }), ms)
+    }),
+  ])
+}
+
+function isTimedOutResult(result: unknown): result is ChannelPageTimeoutResult {
+  return Boolean(result && typeof result === 'object' && (result as any).timedOut === true)
+}
+
 function parseChannelKeyFromHash(hash: string): ChannelRouteParams {
   const normalized = hash.replace(/^#\/?/, '')
   const [pathPart = '', queryPart = ''] = normalized.split('?')
@@ -111,13 +131,30 @@ export default function ChannelPageWeb(props: ChannelPageProps) {
     setLoading(true)
     setError(null)
     try {
-      const [metaResult, videosResult] = await Promise.all([
-        rpc.getChannelMeta({ channelKey: resolvedChannelKey, publicBeeKey: resolvedPublicBeeKey || undefined }),
-        rpc.listVideos({ channelKey: resolvedChannelKey, publicBeeKey: resolvedPublicBeeKey || undefined }),
+      const [metaSettled, videosSettled] = await Promise.allSettled([
+        withChannelPageTimeout(rpc.getChannelMeta({ channelKey: resolvedChannelKey, publicBeeKey: resolvedPublicBeeKey || undefined })),
+        withChannelPageTimeout(rpc.listVideos({ channelKey: resolvedChannelKey, publicBeeKey: resolvedPublicBeeKey || undefined })),
       ])
 
-      setChannelMeta(metaResult || null)
-      setVideos(Array.isArray(videosResult?.videos) ? videosResult.videos : [])
+      const metaResult = metaSettled.status === 'fulfilled' ? metaSettled.value : null
+      if (!isTimedOutResult(metaResult) && metaResult) {
+        setChannelMeta(metaResult || null)
+      }
+
+      const videosResult = videosSettled.status === 'fulfilled' ? videosSettled.value : null
+      if (isTimedOutResult(videosResult)) {
+        setError('Video list is taking longer than expected. Showing cached channel details; retry to refresh videos.')
+      } else if (videosSettled.status === 'rejected') {
+        setError(videosSettled.reason?.message || 'Failed to load videos')
+      } else if ((videosResult as any)?.success === false) {
+        setError((videosResult as any)?.error || 'Failed to load videos')
+      } else {
+        setVideos(Array.isArray((videosResult as any)?.videos) ? (videosResult as any).videos : [])
+      }
+
+      if (metaSettled.status === 'rejected' && videosSettled.status === 'rejected') {
+        setError(metaSettled.reason?.message || videosSettled.reason?.message || 'Failed to load channel')
+      }
     } catch (err: any) {
       setError(err?.message || 'Failed to load channel')
     } finally {

@@ -807,6 +807,16 @@ export class PublicFeedManager {
       .filter((conn) => this.peerChannels.has(conn))
   }
 
+  _feedConnectionStats() {
+    const openConnections = this._openFeedConnections().length
+    return {
+      openConnections,
+      channelCandidates: this.peerChannels.size,
+      candidateConnections: this.peerChannels.size,
+      rememberedPeerCandidates: this._discoveredPeers.size,
+    }
+  }
+
   _startGossipLoop() {
     if (this._gossipInterval) return
     try {
@@ -1527,9 +1537,19 @@ export class PublicFeedManager {
       signedDescriptor: this._normalizeSignedDescriptor(snapshot?.signedDescriptor),
     };
 
+    const openConns = this._openFeedConnections()
+    console.log(
+      '[PublicFeed] Broadcast SUBMIT_CHANNEL open feed connections=',
+      openConns.length,
+      'channelCandidates=',
+      this.peerChannels.size
+    )
+
     let sent = 0;
-    for (const [conn, channel] of this.peerChannels) {
+    for (const conn of openConns) {
       if (conn === excludeConn) continue;
+      const channel = this.peerChannels.get(conn)
+      if (!channel) continue
       try {
         channel.messages[0].send(msg);
         sent++;
@@ -1612,11 +1632,15 @@ export class PublicFeedManager {
    * @returns {{totalEntries: number, hiddenCount: number, peerCount: number}}
    */
   getStats() {
+    const feed = this._feedConnectionStats()
     return {
       totalEntries: this.entries.size,
       hiddenCount: this.hiddenKeys.size,
-      peerCount: this.peerChannels.size,
-      feedConnections: this.feedConnections.size,
+      peerCount: feed.openConnections,
+      feedConnections: feed.openConnections,
+      feedChannelCandidates: feed.channelCandidates,
+      candidateConnections: feed.candidateConnections,
+      rememberedPeerCandidates: feed.rememberedPeerCandidates,
       directPeerDial: this.getDirectPeerDialStats(),
     };
   }

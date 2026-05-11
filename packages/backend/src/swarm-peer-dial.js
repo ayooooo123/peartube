@@ -44,35 +44,12 @@ export function swarmConnectionLike(entry) {
   )
 }
 
-export function swarmHasConnection(swarm, keyHex, publicKey = null) {
+export function swarmHasConnection(swarm, keyHex, _publicKey = null) {
   if (!swarm || !keyHex) return false
   const connections = swarm.connections
   if (connections && typeof connections[Symbol.iterator] === 'function') {
     for (const conn of connections) {
       if (peerMatchesKey(conn, keyHex)) return true
-    }
-  }
-  const all = swarm._allConnections
-  if (all && typeof all[Symbol.iterator] === 'function') {
-    for (const entry of all) {
-      if (entry && typeof entry === 'object' && swarmConnectionLike(entry) && peerMatchesKey(entry, keyHex)) return true
-    }
-  }
-  const peers = swarm.peers
-  if (peers && typeof peers.get === 'function') {
-    let peerInfo = peers.get(keyHex)
-    if (!peerInfo && publicKey) {
-      try {
-        peerInfo = peers.get(publicKey)
-      } catch {
-        peerInfo = null
-      }
-    }
-    if (swarmConnectionLike(peerInfo)) return true
-  }
-  if (peers && typeof peers[Symbol.iterator] === 'function') {
-    for (const peer of peers) {
-      if (swarmConnectionLike(peer) && peerMatchesKey(peer, keyHex)) return true
     }
   }
   return false

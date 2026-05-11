@@ -765,14 +765,18 @@ export function createApi({
 
           return videos.map((video) => {
             const id = extractVideoId(video)
+            const localHint = id ? localHintsById.get(id) : null
+            const peerHint = id ? peerHintsById.get(id) : null
+            const availability = id
+              ? resolveExplicitVideoAvailability({ localHint, peerHint })
+              : 'unavailable'
+
             return {
               ...video,
-              availability: id
-                ? resolveExplicitVideoAvailability({
-                    localHint: localHintsById.get(id),
-                    peerHint: peerHintsById.get(id),
-                  })
-                : 'unavailable',
+              availability,
+              byteAvailability: availability,
+              contiguousBlocks: Number(localHint?.contiguousBlocks || peerHint?.contiguousBlocks || 0) || 0,
+              hasHeadBlock: Boolean(localHint?.hasHeadBlock || peerHint?.hasHeadBlock),
             }
           })
         }

@@ -36,6 +36,9 @@ test('vertical discovery uses paged full-screen feed and plays inline in the sho
   assert.match(source, /handoffToShorts\(\)/, 'vertical discovery should pause and close the global player before Shorts starts')
   assert.match(source, /preparePlayback\(playbackRequest\)/, 'vertical player should resolve playback through backend preparePlayback')
   assert.match(source, /getCachedVideoUrl\(cacheKey\)/, 'vertical player should use the short playback URL cache')
+  assert.match(source, /setAmbientVideoContext\(video, cachedUrl, \{ keepHidden: true \}\)/, 'cached Shorts playback should update social context without showing the global mini player')
+  assert.match(source, /setAmbientVideoContext\(video, result\.url, \{ keepHidden: true \}\)/, 'prepared Shorts playback should update social context without showing the global mini player')
+  assert.match(source, /setAmbientVideoContext\(video, activeVideoKey === `\$\{video\.channelKey\}:\$\{video\.id\}` \? shortsVideoUrl : null, \{ keepHidden: true \}\)/, 'comments should receive active Shorts context without launching the global player')
   assert.match(source, /setShortsVideoUrl\(/, 'vertical player should keep playback URL in local shorts-player state')
   assert.match(source, /handoffToShorts\(\)[\s\S]*const cachedUrl = cacheKey \? getCachedVideoUrl\(cacheKey\) : null/, 'handoff should happen before cached Shorts playback attaches')
   assert.match(source, /handoffToShorts\(\)[\s\S]*const result = await rpc\.preparePlayback\(playbackRequest\)/, 'handoff should happen before prepared Shorts playback attaches')
@@ -235,6 +238,9 @@ test('vertical discovery keeps the global watch/mini overlay off the Shorts rout
   assert.match(overlaySource, /usePathname\(\)/, 'global overlay should know the active route')
   assert.match(overlaySource, /const hideGlobalOverlayOnDiscover = !isDesktop && isDiscoverPathActive/, 'mobile Discover should suppress the global watch overlay')
   assert.match(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden' && !isInPipMode/, 'Discover should not show stale mini/fullscreen overlays over Shorts')
+  const stateMachineSource = readAppFile('lib/playerStateMachine.ts')
+  assert.match(stateMachineSource, /keepHidden\?: boolean/, 'ambient Shorts context should be able to update video metadata without activating the global player')
+  assert.match(stateMachineSource, /case 'SET_AMBIENT_VIDEO_CONTEXT':[\s\S]*if \(event\.keepHidden\) \{[\s\S]*mode: 'hidden'/, 'ambient context updates should force hidden mode when requested')
 })
 
 test('vertical discovery positions progress and chrome without clumping metadata/actions', () => {

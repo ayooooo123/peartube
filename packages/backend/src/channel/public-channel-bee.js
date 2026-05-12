@@ -108,10 +108,19 @@ export class PublicChannelBee extends ReadyResource {
   // Channel Metadata
   // ============================================
 
+  _sanitizePublicMetadata(meta) {
+    if (!meta || typeof meta !== 'object') return null
+    const out = { ...meta }
+    // PublicBee is intentionally readable by anyone with the key. Never persist
+    // the comments admin writer key here; keep it in private channel metadata only.
+    delete out.commentsAdminKey
+    return out
+  }
+
   async getMetadata() {
     await this.waitForSync(1500)
     const node = await this.bee.get('meta')
-    return node?.value || null
+    return this._sanitizePublicMetadata(node?.value || null)
   }
 
   async setMetadata(meta) {
@@ -119,11 +128,12 @@ export class PublicChannelBee extends ReadyResource {
     // Merge with existing metadata so callers can perform partial updates without
     // accidentally dropping previously published fields (e.g. commentsAutobaseKey).
     const existing = await this.bee.get('meta').catch(() => null)
-    const prev = existing?.value && typeof existing.value === 'object' ? existing.value : {}
+    const prev = this._sanitizePublicMetadata(existing?.value || null) || {}
+    const patch = this._sanitizePublicMetadata(meta) || {}
 
     await this.bee.put('meta', {
       ...prev,
-      ...(meta && typeof meta === 'object' ? meta : {}),
+      ...patch,
       updatedAt: Date.now()
     })
     console.log('[PublicBee] Metadata updated')

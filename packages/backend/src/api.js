@@ -3063,12 +3063,6 @@ export function createApi({
                 } catch (err) {
                   console.log('[API] _getCommentsAutobase: could not store admin key in channel metadata:', err?.message)
                 }
-                try {
-                  await localChannel.publicBee?.setMetadata({ commentsAdminKey: adminKeyHex })
-                  console.log('[API] _getCommentsAutobase: published commentsAdminKey to PublicBee')
-                } catch (err) {
-                  console.log('[API] _getCommentsAutobase: could not publish admin key:', err?.message)
-                }
               }
 
               return commentsBase
@@ -3170,26 +3164,6 @@ export function createApi({
             console.log('[API] _getCommentsAutobase: published commentsAutobaseKey to PublicBee')
           } catch (err) {
             console.log('[API] _getCommentsAutobase: could not publish key to PublicBee:', err?.message)
-          }
-        }
-
-        // Publishing device: publish admin key if missing or stale.
-        if (isPublishingDevice && pubBee?.writable && commentsBase.localWriterKeyHex) {
-          const adminKeyHex = commentsBase.localWriterKeyHex
-          if (!commentsAdminKey || commentsAdminKey !== adminKeyHex) {
-            try {
-              await pubBee.setMetadata({ commentsAdminKey: adminKeyHex })
-              console.log('[API] _getCommentsAutobase: published commentsAdminKey to PublicBee')
-            } catch (err) {
-              console.log('[API] _getCommentsAutobase: could not publish admin key:', err?.message)
-            }
-          }
-          if (localChannel) {
-            try {
-              await localChannel.updateMetadata({ commentsAdminKey: adminKeyHex })
-            } catch (err) {
-              console.log('[API] _getCommentsAutobase: could not store admin key in channel metadata:', err?.message)
-            }
           }
         }
 

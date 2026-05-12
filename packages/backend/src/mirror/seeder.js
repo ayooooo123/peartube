@@ -1,6 +1,7 @@
 import { fetchMirrorDescriptor } from './fetcher.js'
-import { EventType, DescriptorState, WorkerPhase, DescriptorFlags, SourceType, encodeDescriptor, encodeMirrorRequest, toFixed32 } from './schemas.js'
+import { DescriptorState, WorkerPhase, toFixed32, toFixed64 } from './schemas.js'
 import { appendDescriptorAdded } from './autobase.js'
+import { createMirrorRefreshManager, createMirrorRefreshPolicy } from './refresh.js'
 
 const ZERO_32 = new Uint8Array(32)
 
@@ -11,6 +12,9 @@ function keyHex(bytes) {
 function toBigInt(value, fallback = 0n) {
   if (typeof value === 'bigint') return value
   if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.floor(value)))
+  if (typeof value === 'string' && value.trim()) {
+    try { return BigInt(value) } catch {}
+  }
   return fallback
 }
 
@@ -70,6 +74,121 @@ function buildDescriptorAddedPayload(descriptor, options = {}) {
   }
 }
 
+function buildSeedRecord(descriptor, options = {}, extras = {}) {
+  const refreshPolicy = createMirrorRefreshPolicy(options.refreshPolicy || options)
+  const sourceUrl = extras.sourceUrl || options.sourceUrl || extras.finalUrl || descriptor?.sourceUrl || null
+  const now = toBigInt(options.now, BigInt(Date.now()))
+  const availabilityEpoch = Number(descriptor?.availabilityEpoch || refreshPolicy.plan({ descriptor }, { now }).nextAvailabilityEpoch)
+  return {
+    descriptor,
+    core: extras.core || null,
+    topic: extras.topic || toFixed32(descriptor.swarmTopic || ZERO_32),
+    sourceUrl,
+    refreshPolicy,
+    refreshManager: createMirrorRefreshManager(options.refreshPolicy || options),
+    refreshCount: 0,
+    lastRefreshAt: now,
+    lastRefetchAt: extras.lastRefetchAt || now,
+    lastKeyRotationAt: extras.lastKeyRotationAt || 0n,
+    lastAvailabilityEpoch: availabilityEpoch,
+    state: {
+      workerPhase: WorkerPhase.SEEDING,
+      descriptorState: DescriptorState.ACTIVE,
+      topicHex: keyHex(extras.topic || toFixed32(descriptor.swarmTopic || ZERO_32)),
+      joined: Boolean(extras.joined),
+      lastRefreshAt: now,
+      lastAvailabilityEpoch: availabilityEpoch,
+    },
+    close: extras.close || (async () => {}),
+  }
+}
+
+export async function refreshMirroredVideo(autobase, swarm, record, options = {}) {
+  if (!record) throw new Error('refreshMirroredVideo requires a seed record')
+  const now = toBigInt(options.now, BigInt(Date.now()))
+  const policy = record.refreshPolicy || createMirrorRefreshPolicy(options.refreshPolicy || options)
+  const plan = policy.plan(record, { ...options, now })
+  if (!plan.shouldRefresh) {
+    return { refreshed: false, plan, record }
+  }
+
+  const next = { ...record }
+  let updatedDescriptor = record.descriptor
+  let reFetched = false
+  let rotatedSigningKey = false
+  let rotatedAvailabilityEpoch = false
+
+  if (plan.shouldRefetchSource && record.sourceUrl) {
+    const fetched = await fetchMirrorDescriptor(record.sourceUrl, {
+      ...options,
+      signer: options.signer || record.descriptor?.signer,
+      availabilityEpoch: plan.nextAvailabilityEpoch,
+      now,
+    })
+    updatedDescriptor = fetched.descriptor
+    next.latestFetch = fetched
+    next.lastRefetchedAt = now
+    next.lastRefetchAt = now
+    reFetched = true
+  }
+
+  if (plan.shouldRotateSigningKey) {
+    rotatedAvailabilityEpoch = true
+    next.lastKeyRotationAt = now
+    if (typeof options.rotateSigningKey === 'function') {
+      const rotation = await options.rotateSigningKey(record, plan)
+      if (rotation?.signer) {
+        updatedDescriptor = { ...updatedDescriptor, signer: toFixed32(rotation.signer) }
+        rotatedSigningKey = true
+      }
+      if (rotation?.signature) {
+        updatedDescriptor = { ...updatedDescriptor, signature: toFixed64(rotation.signature) }
+      }
+    }
+  }
+
+  rotatedAvailabilityEpoch = plan.shouldRotateSigningKey || reFetched
+
+  updatedDescriptor = {
+    ...updatedDescriptor,
+    availabilityEpoch: plan.nextAvailabilityEpoch,
+  }
+
+  next.descriptor = updatedDescriptor
+  next.lastAvailabilityEpoch = plan.nextAvailabilityEpoch
+  next.lastRefreshAt = now
+  next.refreshCount = (record.refreshCount || 0) + 1
+  next.state = {
+    ...(record.state || {}),
+    workerPhase: WorkerPhase.SEEDING,
+    descriptorState: DescriptorState.ACTIVE,
+    lastRefreshAt: now,
+    lastAvailabilityEpoch: plan.nextAvailabilityEpoch,
+    refreshCount: next.refreshCount,
+  }
+
+  if (autobase && typeof options.signBytes === 'function') {
+    await appendDescriptorAdded(autobase, buildDescriptorAddedPayload(updatedDescriptor, options), {
+      signer: updatedDescriptor.signer || ZERO_32,
+      actorId: options.actorId || updatedDescriptor.publisherIdentity || ZERO_32,
+      prevEntryId: options.prevEntryId || ZERO_32,
+      observedAt: now,
+      signBytes: options.signBytes,
+    })
+  }
+
+  Object.assign(record, next)
+  return {
+    refreshed: true,
+    plan,
+    record,
+    descriptor: updatedDescriptor,
+    reFetched,
+    rotatedSigningKey,
+    rotatedAvailabilityEpoch,
+  }
+}
+
 export async function seedMirroredVideo(autobase, swarm, descriptor, options = {}) {
   const core = await openCoreForDescriptor(options.getCore, descriptor, options)
   const topic = toFixed32(descriptor.swarmTopic || ZERO_32)
@@ -87,21 +206,15 @@ export async function seedMirroredVideo(autobase, swarm, descriptor, options = {
     })
   }
 
-  return {
-    descriptor,
+  return buildSeedRecord(descriptor, options, {
     core,
     topic,
-    state: {
-      workerPhase: WorkerPhase.SEEDING,
-      descriptorState: DescriptorState.ACTIVE,
-      topicHex: keyHex(topic),
-      joined: true,
-    },
+    joined: true,
     close: async () => {
       seedHandle.close()
       try { await core?.close?.() } catch {}
     },
-  }
+  })
 }
 
 export async function seedDiscoveredVideo(autobase, swarm, sourceUrl, options = {}) {
@@ -109,6 +222,7 @@ export async function seedDiscoveredVideo(autobase, swarm, sourceUrl, options = 
   const descriptor = extracted.descriptor
   const seeded = await seedMirroredVideo(autobase, swarm, descriptor, {
     ...options,
+    sourceUrl: extracted.finalUrl || sourceUrl,
     reason: options.reason ?? 1,
     initialState: options.initialState ?? DescriptorState.DISCOVERED,
   })
@@ -121,20 +235,71 @@ export async function seedDiscoveredVideo(autobase, swarm, sourceUrl, options = 
 
 export function createMirrorSeeder(options = {}) {
   const records = new Map()
+  const refreshManager = createMirrorRefreshManager(options.refreshPolicy || options)
+  const timers = new Map()
+  let stopped = false
+
+  const scheduleRefresh = (key, record, nextOptions = {}) => {
+    if (!options.autoRefresh || stopped) return null
+    const plan = record.refreshPolicy.plan(record, nextOptions)
+    const delayMs = Math.max(1000, plan.nextRefreshAt - Date.now())
+    const existing = timers.get(key)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(async () => {
+      timers.delete(key)
+      if (stopped || !records.has(key)) return
+      const current = records.get(key)
+      if (!current) return
+      try {
+        await refreshRecord(current.autobase, current.swarm, current, nextOptions)
+      } catch {}
+      scheduleRefresh(key, current, nextOptions)
+    }, delayMs)
+    timers.set(key, timer)
+    return timer
+  }
 
   const register = async (autobase, swarm, descriptor, nextOptions = {}) => {
     const record = await seedMirroredVideo(autobase, swarm, descriptor, { ...options, ...nextOptions })
-    records.set(keyHex(record.topic), record)
+    const key = keyHex(record.topic)
+    record.autobase = autobase
+    record.swarm = swarm
+    records.set(key, record)
+    scheduleRefresh(key, record, nextOptions)
     return record
   }
 
   const registerFromUrl = async (autobase, swarm, sourceUrl, nextOptions = {}) => {
     const record = await seedDiscoveredVideo(autobase, swarm, sourceUrl, { ...options, ...nextOptions })
-    records.set(keyHex(record.topic), record)
+    const key = keyHex(record.topic)
+    record.autobase = autobase
+    record.swarm = swarm
+    records.set(key, record)
+    scheduleRefresh(key, record, nextOptions)
     return record
   }
 
+  const refreshRecord = async (autobase, swarm, record, nextOptions = {}) => {
+    if (!record) return null
+    const refreshed = await refreshMirroredVideo(autobase, swarm, record, { ...options, ...nextOptions })
+    const key = keyHex(record.topic)
+    records.set(key, record)
+    scheduleRefresh(key, record, nextOptions)
+    return refreshed
+  }
+
+  const refreshAll = async (nextOptions = {}) => {
+    const outcomes = []
+    for (const record of records.values()) {
+      outcomes.push(await refreshRecord(record.autobase, record.swarm, record, nextOptions))
+    }
+    return outcomes
+  }
+
   const stop = async () => {
+    stopped = true
+    for (const timer of timers.values()) clearTimeout(timer)
+    timers.clear()
     for (const record of records.values()) {
       try { await record.close?.() } catch {}
     }
@@ -144,13 +309,17 @@ export function createMirrorSeeder(options = {}) {
   return {
     register,
     registerFromUrl,
+    refreshRecord,
+    refreshAll,
     stop,
     records,
+    refreshManager,
   }
 }
 
 export default {
   seedMirroredVideo,
   seedDiscoveredVideo,
+  refreshMirroredVideo,
   createMirrorSeeder,
 }

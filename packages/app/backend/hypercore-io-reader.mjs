@@ -315,15 +315,13 @@ export class HypercoreIOReader {
       throw new Error('Must call preload() before createIOContext()')
     }
 
-    const self = this
-
     // Use 128KB buffer for IOContext
     const ioContext = new ffmpeg.IOContext(128 * 1024, {
       onread: (buffer) => {
-        return self.syncRead(buffer)
+        return this.syncRead(buffer)
       },
       onseek: (offset, whence) => {
-        return self.seek(offset, whence)
+        return this.seek(offset, whence)
       }
     })
 

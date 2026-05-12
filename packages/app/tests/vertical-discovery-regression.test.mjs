@@ -267,9 +267,21 @@ test('vertical discovery stops inline Shorts playback when the route unmounts or
 
   assert.match(source, /useFocusEffect/, 'Discover should subscribe to route focus lifecycle')
   assert.match(source, /stopShortsPlayback/, 'Discover should centralize Shorts playback teardown')
+  assert.match(source, /shortsPlayerRef\.current\?\.exitPictureInPicture\?\.\(\)/, 'teardown should force-exit any stale native PiP window before detaching Shorts')
   assert.match(source, /shortsPlayerRef\.current\?\.stop\?\.\(\)/, 'teardown should stop the native inline player instead of merely hiding React chrome')
+  assert.match(source, /shortsPlayerRef\.current\?\.destroy\?\.\(\)/, 'teardown should destroy the route-local native surface so it cannot keep PiP alive')
+  assert.match(source, /setAmbientVideoContext\(null, null\)/, 'teardown should clear hidden ambient Shorts metadata from the global player context')
   assert.match(source, /setShortsVideoUrl\(null\)/, 'teardown should detach the playback URL so the inline surface unmounts')
   assert.match(source, /return stopShortsPlayback/, 'Discover should run teardown when tab navigation leaves the Shorts route')
+})
+
+test('native inline player exposes explicit PiP exit and tears down its surface on destroy', () => {
+  const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
+  const portSource = readAppFile('lib/video-player/playerPort.ts')
+
+  assert.match(portSource, /exitPictureInPicture\?: \(\) => void \| Promise<void>/, 'PlayerPort should expose explicit PiP exit for route-local teardown')
+  assert.match(source, /exitPictureInPicture:\s*\(\) => \{[\s\S]*dismissFullscreenPlayer\?\.\(\)[\s\S]*exitPictureInPicture\?\.\(\)/, 'native inline player should bridge explicit PiP exit to react-native-video')
+  assert.match(source, /destroy: async \(\) => \{[\s\S]*dismissFullscreenPlayer\?\.\(\)[\s\S]*pause\?\.\(\)[\s\S]*seek\(0\)/, 'destroy should leave no fullscreen/PiP surface playing behind the route')
 })
 
 test('bottom tab screens pad scrollable content by the measured pill tab bar height', () => {

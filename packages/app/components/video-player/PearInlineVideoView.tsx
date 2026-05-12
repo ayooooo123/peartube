@@ -183,6 +183,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
           videoRef.current?.seek(0)
         },
         destroy: async () => {
+          videoRef.current?.dismissFullscreenPlayer?.()
           videoRef.current?.pause?.()
           videoRef.current?.seek(0)
         },
@@ -198,6 +199,10 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         },
         enterPip: () => {
           void videoRef.current?.enterPictureInPicture?.()
+        },
+        exitPictureInPicture: () => {
+          videoRef.current?.dismissFullscreenPlayer?.()
+          void videoRef.current?.exitPictureInPicture?.()
         },
       },
       {

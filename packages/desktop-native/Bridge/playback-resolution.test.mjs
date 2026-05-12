@@ -3,8 +3,9 @@ import assert from 'node:assert/strict'
 
 import { resolvePlaybackViaClient } from './playback-resolution.mjs'
 
-test('resolvePlaybackViaClient warms playback before requesting the blob URL', async () => {
+test('resolvePlaybackViaClient requests the blob URL before background warmup settles', async () => {
   const order = []
+  let releasePrefetch
 
   const logs = []
   const response = await resolvePlaybackViaClient({
@@ -14,11 +15,13 @@ test('resolvePlaybackViaClient warms playback before requesting the blob URL', a
           order.push('getVideoUrl')
           assert.equal(request.channelKey, 'channel-a')
           assert.equal(request.videoId, '/videos/video-a.mp4')
+          assert.equal(request.blobId, '0:8:0:1024')
+          assert.equal(request.blobsCoreKey, 'aa'.repeat(32))
           return { url: 'http://127.0.0.1:3000/blob.mp4' }
         },
         async prefetchVideo() {
           order.push('prefetchVideo')
-          await new Promise((resolve) => setTimeout(resolve, 20))
+          await new Promise((resolve) => { releasePrefetch = resolve })
           return {
             success: true,
             initialBlocks: 16,
@@ -33,6 +36,8 @@ test('resolvePlaybackViaClient warms playback before requesting the blob URL', a
       publicBeeKey: 'bee-a',
       videoId: 'video-a',
       videoPath: '/videos/video-a.mp4',
+      blobId: '0:8:0:1024',
+      blobsCoreKey: 'aa'.repeat(32),
     },
     log: (line) => logs.push(line),
     prefetchTimeoutMs: 100,
@@ -42,11 +47,15 @@ test('resolvePlaybackViaClient warms playback before requesting the blob URL', a
     videoId: 'video-a',
     url: 'http://127.0.0.1:3000/blob.mp4',
   })
-  assert.deepEqual(order, ['prefetchVideo', 'getVideoUrl'])
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.deepEqual(order, ['getVideoUrl', 'prefetchVideo'])
+
+  releasePrefetch()
+  await new Promise((resolve) => setTimeout(resolve, 0))
   assert.match(logs.at(-1), /Playback prefetch started/)
 })
 
-test('resolvePlaybackViaClient keeps playback URL resolution separate from prefetch failures', async () => {
+test('resolvePlaybackViaClient returns playback URL despite prefetch timeout', async () => {
   const logs = []
   const order = []
 
@@ -59,7 +68,7 @@ test('resolvePlaybackViaClient keeps playback URL resolution separate from prefe
         },
         async prefetchVideo() {
           order.push('prefetchVideo')
-          return { success: false, error: 'Playback prefetch timed out' }
+          await new Promise(() => {})
         },
       },
     },
@@ -71,7 +80,10 @@ test('resolvePlaybackViaClient keeps playback URL resolution separate from prefe
     prefetchTimeoutMs: 5,
   })
 
-  assert.deepEqual(order, ['prefetchVideo', 'getVideoUrl'])
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.deepEqual(order, ['getVideoUrl', 'prefetchVideo'])
   assert.equal(response.url, 'http://127.0.0.1:3000/blob.mp4')
+
+  await new Promise((resolve) => setTimeout(resolve, 10))
   assert.match(logs.at(-1), /still warming/)
 })

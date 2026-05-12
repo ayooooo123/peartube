@@ -760,6 +760,23 @@ export class PublicFeedManager {
     this._recordStartupEvent('public-feed-start-called')
     console.log('[PublicFeed] ===== STARTING PUBLIC FEED =====');
 
+    // Issue the topic join up front so DHT announce/lookup overlaps with the
+    // metaDb cache restoration below. (Matches the hyperdrive README pattern:
+    // attach handlers → join → do other work; never await flush() on the
+    // hot path.)
+    try {
+      this.feedDiscovery = this.swarm.join(NETWORK_TOPIC, { server: true, client: true })
+      this._recordStartupEvent('public-feed-topic-join-called', { topicHex: NETWORK_TOPIC_HEX })
+      this.feedDiscovery?.flushed?.().then(() => {
+        this._recordStartupEvent('public-feed-topic-flushed', { peers: this.swarm.peers?.size || 0, connections: this.swarm.connections?.size || 0 })
+        console.log('[PublicFeed] Shared network feed discovery flushed, connections:', this.swarm.connections?.size || 0)
+      }).catch(() => {})
+      console.log('[PublicFeed] Joined shared network feed topic:', NETWORK_TOPIC_HEX.slice(0, 16))
+    } catch (err) {
+      console.log('[PublicFeed] Shared network feed topic join failed:', err?.message)
+      this.feedDiscovery = null
+    }
+
     // Load persisted published channels from database
     // Try new format first (with publicBeeKey), fall back to legacy format
     if (this.metaDb) {
@@ -857,19 +874,6 @@ export class PublicFeedManager {
     if (this.entries.size > 0) {
       console.log('[PublicFeed] Notifying listeners of', this.entries.size, 'restored entries');
       try { this.onFeedUpdate?.(); } catch {}
-    }
-
-    try {
-      this.feedDiscovery = this.swarm.join(NETWORK_TOPIC, { server: true, client: true })
-      this._recordStartupEvent('public-feed-topic-join-called', { topicHex: NETWORK_TOPIC_HEX })
-      this.feedDiscovery?.flushed?.().then(() => {
-        this._recordStartupEvent('public-feed-topic-flushed', { peers: this.swarm.peers?.size || 0, connections: this.swarm.connections?.size || 0 })
-        console.log('[PublicFeed] Shared network feed discovery flushed, connections:', this.swarm.connections?.size || 0)
-      }).catch(() => {})
-      console.log('[PublicFeed] Joined shared network feed topic:', NETWORK_TOPIC_HEX.slice(0, 16))
-    } catch (err) {
-      console.log('[PublicFeed] Shared network feed topic join failed:', err?.message)
-      this.feedDiscovery = null
     }
 
     // Set up feed protocol on any existing connections.

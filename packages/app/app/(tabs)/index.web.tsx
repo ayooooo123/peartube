@@ -2027,7 +2027,7 @@ const watchStyles: Record<string, React.CSSProperties> = {
 }
 
 export default function HomeScreen() {
-  const { ready, identity, videos, loading, loadVideos, rpc } = useApp()
+  const { ready, identity, videos, loading, loadVideos, rpc, platformEvents } = useApp()
 
 
   // Hash-based routing state (for Pear desktop)
@@ -2158,17 +2158,6 @@ export default function HomeScreen() {
     uploadedAt: v.uploadedAt ? new Date(v.uploadedAt).toISOString() : undefined,
   })), [myVideosWithMeta])
 
-  // Load public feed on mount — skip if cache is fresh (loaded within 60s)
-  useEffect(() => {
-    if (ready) {
-      const cacheAge = Date.now() - feedCache.lastLoadedAt
-      if (feedCache.feedEntries.length > 0 && cacheAge < 60_000) {
-        return
-      }
-      loadPublicFeed()
-    }
-  }, [ready])
-
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {
     if (!rpc) return
@@ -2200,6 +2189,27 @@ export default function HomeScreen() {
       setFeedLoading(false)
     }
   }, [rpc, channelMeta])
+
+  // Load public feed on mount and whenever the desktop backend announces new
+  // feed gossip. Desktop previously only hydrated once, then skipped refreshes
+  // if cached videos existed, so relay/archive videos could stay invisible until
+  // a full remount even though the worker emitted eventFeedUpdate.
+  useEffect(() => {
+    if (!ready) return
+
+    const cacheAge = Date.now() - feedCache.lastLoadedAt
+    if (!(feedCache.feedEntries.length > 0 && cacheAge < 60_000)) {
+      loadPublicFeed()
+    }
+
+    const unsubscribe = (platformEvents as any)?.onFeedUpdate?.(() => {
+      void loadPublicFeed()
+    })
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe()
+    }
+  }, [ready, platformEvents, loadPublicFeed])
 
   const loadChannelMeta = useCallback(async (driveKey: string) => {
     if (!rpc) return
@@ -2348,12 +2358,14 @@ export default function HomeScreen() {
     setFeedVideosLoading(false)
   }, [rpc, feedEntries, channelMeta, identity?.driveKey])
 
-  // Load feed videos when feedEntries change — skip if already have cached videos
+  // Load/feed-refresh video cards whenever the feed manifest changes. Keep
+  // existing cards visible while merge helpers preserve valid previews; do not
+  // skip just because a previous feed snapshot already populated the grid.
   useEffect(() => {
-    if (feedEntries.length > 0 && ready && feedVideos.length === 0) {
+    if (feedEntries.length > 0 && ready) {
       loadFeedVideos()
     }
-  }, [feedEntries, ready])
+  }, [feedEntries, ready, loadFeedVideos])
 
   // Lazily resolve thumbnail URLs for feed videos that have blob references
   // but no thumbnailUrl yet. Uses the fast path (thumbnailBlobId/thumbnailBlobsCoreKey)

@@ -25,6 +25,7 @@ import {
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
+import { createKnownPeerCache, loadKnownPeers, dialKnownPeers } from './known-peers.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -131,6 +132,7 @@ let globalPeerPoolDiscovery = null;
 let globalPeerPoolTopicHex = null;
 let globalSwarmDiagnostics = null;
 let globalNetworkStartupTiming = null;
+let globalKnownPeerCache = null;
 
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
@@ -1242,6 +1244,12 @@ export async function initializeStorage(config) {
 
   const channels = new Map();
 
+  // Known-peer cache: persist remote pubkeys so the next cold start can
+  // `swarm.joinPeer(pk)` them directly without waiting for a topic DHT lookup.
+  const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
+  const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
+  globalKnownPeerCache = knownPeerCache
+
   // Set up replication for all connections
   swarm.on('connection', (conn, info) => {
     try {
@@ -1251,6 +1259,7 @@ export async function initializeStorage(config) {
       globalSwarmDiagnostics?.recordConnection?.(conn, info)
       console.log('[Storage] Peer connected:', remoteKey, 'connections:', swarm.connections?.size || 0, 'connecting:', swarm.connecting || 0);
       void appendDebugLine(`[storage] peer connected ${remoteKey} connections=${swarm.connections?.size || 0} connecting=${swarm.connecting || 0}`)
+      if (info?.publicKey) knownPeerCache.record(info.publicKey)
 
       // Register stream with wakeup protocol for content announcements
       if (wakeup) {
@@ -1299,6 +1308,23 @@ export async function initializeStorage(config) {
     }
   });
 
+  // Warm dial: re-connect to recently-seen peers via swarm.joinPeer(pk). This
+  // runs in the background — joinPeer is non-blocking and idempotent against
+  // the topic-based discovery that's already in flight.
+  if (!swarm._peartubeOffline) {
+    loadKnownPeers(metaDb).then((known) => {
+      if (!known.length) return
+      const dialed = dialKnownPeers(swarm, known, { selfKeyHex })
+      if (dialed > 0) {
+        console.log('[Storage] Warm-dialed', dialed, 'known peer(s) of', known.length, 'cached')
+        globalNetworkStartupTiming?.record('warm-dial-issued', { dialed, cached: known.length })
+        void appendDebugLine(`[storage] warm-dial issued dialed=${dialed} cached=${known.length}`)
+      }
+    }).catch((err) => {
+      console.log('[Storage] Warm-dial skipped:', err?.message)
+    })
+  }
+
   // Initialize blind peering for mobile connectivity
   // Desktop (non-firewalled): runs as blind peer server to keep data available
   // Mobile (firewalled): connects to mirrors to sync when direct P2P fails
@@ -1341,7 +1367,8 @@ export async function initializeStorage(config) {
     blobSessionToken, // Session token for URL authentication
     channels,
     wakeup,
-    peerPoolDiscovery: globalPeerPoolDiscovery
+    peerPoolDiscovery: globalPeerPoolDiscovery,
+    knownPeerCache
   };
 }
 
@@ -2140,6 +2167,9 @@ export async function suspendNetworking() {
     if (globalSwarm) {
       await globalSwarm.suspend();
       console.log('[Network] Swarm suspended');
+    }
+    if (globalKnownPeerCache) {
+      try { await globalKnownPeerCache.flush() } catch { /* best effort */ }
     }
     if (globalBlobServer) {
       console.log('[CastDiag] suspendNetworking: suspending BlobServer (cast not active)');

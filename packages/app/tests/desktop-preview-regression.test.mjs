@@ -16,6 +16,14 @@ test('desktop Home merges preview cards instead of replacing them during hydrati
   assert.doesNotMatch(desktopHomeSource, /const merged = backfilledVideos\.length > 0[\s\S]*: previewVideos/)
 })
 
+test('desktop Home subscribes to feed-update events and rehydrates non-empty cached grids', () => {
+  assert.match(desktopHomeSource, /platformEvents \} = useApp\(\)/)
+  assert.match(desktopHomeSource, /platformEvents as any\)\?\.onFeedUpdate\?\.\(\(\) => \{\s*void loadPublicFeed\(\)/s)
+  assert.match(desktopHomeSource, /if \(typeof unsubscribe === 'function'\) unsubscribe\(\)/)
+  assert.match(desktopHomeSource, /if \(feedEntries\.length > 0 && ready\) \{\s*loadFeedVideos\(\)/s)
+  assert.doesNotMatch(desktopHomeSource, /feedVideos\.length === 0\) \{\s*loadFeedVideos\(\)/)
+})
+
 test('desktop Search preserves direct blob refs from search metadata', () => {
   assert.match(searchSource, /blobId:\s*metadata\.blobId \|\| undefined/)
   assert.match(searchSource, /blobsCoreKey:\s*metadata\.blobsCoreKey \|\| undefined/)

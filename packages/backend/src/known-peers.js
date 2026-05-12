@@ -5,10 +5,6 @@
  * starts can call `swarm.joinPeer(pk)` directly. This short-circuits the
  * topic-based DHT lookup that would otherwise have to complete before any
  * peer connection can occur.
- *
- * Pattern follows Hyperswarm's documented `joinPeer` semantics (direct
- * reconnect with auto-reconnect on failure). Storage is a single Hyperbee
- * row keyed by `known-peers-v1`.
  */
 
 import b4a from 'b4a'
@@ -33,7 +29,6 @@ export function createKnownPeerCache(metaDb, { selfKeyHex = null } = {}) {
   const peers = new Map()
   let dirty = false
   let flushTimer = null
-  let closed = false
 
   function evictOldest() {
     if (peers.size <= MAX_KNOWN_PEERS) return
@@ -45,7 +40,7 @@ export function createKnownPeerCache(metaDb, { selfKeyHex = null } = {}) {
   }
 
   function scheduleFlush() {
-    if (flushTimer || closed) return
+    if (flushTimer) return
     flushTimer = setTimeout(() => {
       flushTimer = null
       void flush()
@@ -53,7 +48,7 @@ export function createKnownPeerCache(metaDb, { selfKeyHex = null } = {}) {
   }
 
   async function flush() {
-    if (!dirty || !metaDb || closed) return
+    if (!dirty || !metaDb) return
     dirty = false
     const list = [...peers.entries()].map(([key, lastSeen]) => ({ key, lastSeen }))
     try {
@@ -65,31 +60,16 @@ export function createKnownPeerCache(metaDb, { selfKeyHex = null } = {}) {
   }
 
   function record(publicKey) {
-    if (closed || !metaDb) return
+    if (!metaDb) return
     const keyHex = toKeyHex(publicKey)
-    if (!keyHex) return
-    if (selfKeyHex && keyHex === selfKeyHex) return
+    if (!keyHex || keyHex === selfKeyHex) return
     peers.set(keyHex, Date.now())
     evictOldest()
     dirty = true
     scheduleFlush()
   }
 
-  async function close() {
-    closed = true
-    if (flushTimer) {
-      clearTimeout(flushTimer)
-      flushTimer = null
-    }
-    await flush()
-  }
-
-  return {
-    record,
-    flush,
-    close,
-    get size() { return peers.size }
-  }
+  return { record, flush }
 }
 
 export async function loadKnownPeers(metaDb) {
@@ -106,12 +86,10 @@ export async function loadKnownPeers(metaDb) {
   }
 }
 
-export function dialKnownPeers(swarm, knownList, { limit = MAX_KNOWN_PEERS, selfKeyHex = null } = {}) {
-  if (!swarm || typeof swarm.joinPeer !== 'function') return 0
-  if (swarm._peartubeOffline) return 0
+export function dialKnownPeers(swarm, knownList) {
+  if (!swarm || typeof swarm.joinPeer !== 'function' || swarm._peartubeOffline) return 0
   let dialed = 0
-  for (const entry of knownList.slice(0, limit)) {
-    if (selfKeyHex && entry.key === selfKeyHex) continue
+  for (const entry of knownList) {
     try {
       const pk = b4a.from(entry.key, 'hex')
       if (pk.length !== 32) continue

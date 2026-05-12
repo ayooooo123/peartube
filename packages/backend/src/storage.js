@@ -1156,6 +1156,112 @@ export async function initializeStorage(config) {
     }
   }
 
+  const channels = new Map();
+
+  // Initialize protomux-wakeup for content announcements
+  let wakeup = null;
+  if (Wakeup) {
+    try {
+      wakeup = new Wakeup();
+      console.log('[Storage] Wakeup protocol initialized');
+    } catch (err) {
+      console.log('[Storage] Wakeup init failed (non-fatal):', err?.message);
+    }
+  }
+
+  // Known-peer cache: persist remote pubkeys so the next cold start can
+  // `swarm.joinPeer(pk)` them directly without waiting for a topic DHT lookup.
+  const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
+  const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
+  globalKnownPeerCache = knownPeerCache
+
+  // Register handlers BEFORE swarm.join so any incoming connection is replicated
+  // immediately (canonical Hyperswarm/Hyperdrive pattern).
+  swarm.on('connection', (conn, info) => {
+    try {
+      if (!conn || conn.destroyed) return
+      const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
+      globalNetworkStartupTiming?.record('socket-connected', { key: remoteKey, connections: swarm.connections?.size || 0, connecting: swarm.connecting || 0 })
+      globalSwarmDiagnostics?.recordConnection?.(conn, info)
+      console.log('[Storage] Peer connected:', remoteKey, 'connections:', swarm.connections?.size || 0, 'connecting:', swarm.connecting || 0);
+      void appendDebugLine(`[storage] peer connected ${remoteKey} connections=${swarm.connections?.size || 0} connecting=${swarm.connecting || 0}`)
+      if (info?.publicKey) knownPeerCache.record(info.publicKey)
+
+      // Register stream with wakeup protocol for content announcements
+      if (wakeup) {
+        try {
+          wakeup.addStream(conn);
+        } catch (err) {
+          console.log('[Storage] Wakeup addStream error (non-fatal):', err?.message);
+        }
+      }
+
+      // Replicate all Hypercore data in the Corestore:
+      // - Autobase cores (channel metadata, videos, comments, etc.)
+      // - Hyperblobs cores (video bytes, thumbnails)
+      try {
+        if (conn.destroyed) return
+        store.replicate(conn);
+      } catch (err) {
+        console.log('[Storage] store.replicate failed (non-fatal):', err?.message);
+      }
+
+      // Also replicate all loaded Autobase channels. Each channel's setupPairing
+      // registers its own handler, but only for connections established AFTER the
+      // channel is loaded. This covers channels that were loaded BEFORE this peer
+      // connected.
+      if (channels.size > 0) {
+        console.log('[Storage] Replicating', channels.size, 'Autobase channel(s) on new connection');
+        for (const [keyHex, channel] of channels) {
+          if (conn.destroyed) break
+          if (channel?.base && channel._replicatedConns && !channel._replicatedConns.has(conn)) {
+            try {
+              channel._replicatedConns.add(conn)
+              if (conn.destroyed) {
+                channel._replicatedConns.delete(conn)
+                continue
+              }
+              channel.base.replicate(conn)
+              console.log('[Storage] Replicated Autobase for channel:', keyHex.slice(0, 16))
+            } catch (err) {
+              console.log('[Storage] Error replicating channel', keyHex.slice(0, 16), ':', err?.message)
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.log('[Storage] connection handler error (non-fatal):', err?.message)
+    }
+  });
+
+  // Log swarm events for debugging mobile connectivity
+  swarm.on('update', () => {
+    globalSwarmDiagnostics?.recordUpdate?.()
+    log.debug('Swarm update event', { connections: swarm.connections?.size || 0, peers: swarm.peers?.size || 0 })
+  });
+
+  // Log peer discovery events (DHT found a peer)
+  swarm.on('peer', (peer, topic) => {
+    globalSwarmDiagnostics?.recordPeer?.(peer, topic)
+    const peerKey = peer?.publicKey ? b4a.toString(peer.publicKey, 'hex').slice(0, 16) : 'unknown'
+    globalNetworkStartupTiming?.record('peer-discovered', { key: peerKey, relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0, connections: swarm.connections?.size || 0, connecting: swarm.connecting || 0 })
+    const relayAddresses = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0
+    console.log('[Storage] PEER DISCOVERED:', peerKey, 'total peers:', swarm.peers?.size || 0, 'relayAddresses:', relayAddresses, 'connecting:', swarm.connecting || 0)
+    void appendDebugLine(`[storage] peer discovered ${peerKey} totalPeers=${swarm.peers?.size || 0} relayAddresses=${relayAddresses} connecting=${swarm.connecting || 0}`)
+  })
+
+  // Warm dial: re-connect to recently-seen peers. swarm.joinPeer is idempotent
+  // against any topic-based discovery that follows.
+  if (!swarm._peartubeOffline) {
+    loadKnownPeers(metaDb).then((known) => {
+      if (!known.length) return
+      const dialed = dialKnownPeers(swarm, known)
+      if (dialed > 0) console.log('[Storage] Warm-dialed', dialed, 'of', known.length, 'known peers')
+    }).catch((err) => {
+      console.log('[Storage] Warm-dial skipped:', err?.message)
+    })
+  }
+
   // Join the PearTube network topic for peer pool building
   // More connected peers = better relay options for symmetric NAT holepunching
   const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'));
@@ -1226,122 +1332,6 @@ export async function initializeStorage(config) {
   setTimeout(logDhtState, 2000)
   setTimeout(logDhtState, 5000)
 
-  // Log swarm events for debugging mobile connectivity
-  swarm.on('update', () => {
-    globalSwarmDiagnostics?.recordUpdate?.()
-    log.debug('Swarm update event', { connections: swarm.connections?.size || 0, peers: swarm.peers?.size || 0 })
-  });
-
-  // Log peer discovery events (DHT found a peer)
-  swarm.on('peer', (peer, topic) => {
-    globalSwarmDiagnostics?.recordPeer?.(peer, topic)
-    const peerKey = peer?.publicKey ? b4a.toString(peer.publicKey, 'hex').slice(0, 16) : 'unknown'
-    globalNetworkStartupTiming?.record('peer-discovered', { key: peerKey, relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0, connections: swarm.connections?.size || 0, connecting: swarm.connecting || 0 })
-    const relayAddresses = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0
-    console.log('[Storage] PEER DISCOVERED:', peerKey, 'total peers:', swarm.peers?.size || 0, 'relayAddresses:', relayAddresses, 'connecting:', swarm.connecting || 0)
-    void appendDebugLine(`[storage] peer discovered ${peerKey} totalPeers=${swarm.peers?.size || 0} relayAddresses=${relayAddresses} connecting=${swarm.connecting || 0}`)
-  })
-
-  const channels = new Map();
-
-  // Known-peer cache: persist remote pubkeys so the next cold start can
-  // `swarm.joinPeer(pk)` them directly without waiting for a topic DHT lookup.
-  const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
-  const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
-  globalKnownPeerCache = knownPeerCache
-
-  // Set up replication for all connections
-  swarm.on('connection', (conn, info) => {
-    try {
-      if (!conn || conn.destroyed) return
-      const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
-      globalNetworkStartupTiming?.record('socket-connected', { key: remoteKey, connections: swarm.connections?.size || 0, connecting: swarm.connecting || 0 })
-      globalSwarmDiagnostics?.recordConnection?.(conn, info)
-      console.log('[Storage] Peer connected:', remoteKey, 'connections:', swarm.connections?.size || 0, 'connecting:', swarm.connecting || 0);
-      void appendDebugLine(`[storage] peer connected ${remoteKey} connections=${swarm.connections?.size || 0} connecting=${swarm.connecting || 0}`)
-      if (info?.publicKey) knownPeerCache.record(info.publicKey)
-
-      // Register stream with wakeup protocol for content announcements
-      if (wakeup) {
-        try {
-          wakeup.addStream(conn);
-        } catch (err) {
-          console.log('[Storage] Wakeup addStream error (non-fatal):', err?.message);
-        }
-      }
-
-      // Replicate all Hypercore data in the Corestore:
-      // - Autobase cores (channel metadata, videos, comments, etc.)
-      // - Hyperblobs cores (video bytes, thumbnails)
-      try {
-        if (conn.destroyed) return
-        store.replicate(conn);
-      } catch (err) {
-        console.log('[Storage] store.replicate failed (non-fatal):', err?.message);
-      }
-
-      // CRITICAL: Also replicate all loaded Autobase channels
-      // Each channel's setupPairing registers its own handler, but that only fires for
-      // connections established AFTER the channel is loaded. This ensures channels loaded
-      // BEFORE this peer connected also get replicated.
-      if (channels.size > 0) {
-        console.log('[Storage] Replicating', channels.size, 'Autobase channel(s) on new connection');
-        for (const [keyHex, channel] of channels) {
-          if (conn.destroyed) break
-          if (channel?.base && channel._replicatedConns && !channel._replicatedConns.has(conn)) {
-            try {
-              channel._replicatedConns.add(conn)
-              if (conn.destroyed) {
-                channel._replicatedConns.delete(conn)
-                continue
-              }
-              channel.base.replicate(conn)
-              console.log('[Storage] Replicated Autobase for channel:', keyHex.slice(0, 16))
-            } catch (err) {
-              console.log('[Storage] Error replicating channel', keyHex.slice(0, 16), ':', err?.message)
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.log('[Storage] connection handler error (non-fatal):', err?.message)
-    }
-  });
-
-  // Warm dial: re-connect to recently-seen peers via swarm.joinPeer(pk). This
-  // runs in the background — joinPeer is non-blocking and idempotent against
-  // the topic-based discovery that's already in flight.
-  if (!swarm._peartubeOffline) {
-    loadKnownPeers(metaDb).then((known) => {
-      if (!known.length) return
-      const dialed = dialKnownPeers(swarm, known, { selfKeyHex })
-      if (dialed > 0) {
-        console.log('[Storage] Warm-dialed', dialed, 'known peer(s) of', known.length, 'cached')
-        globalNetworkStartupTiming?.record('warm-dial-issued', { dialed, cached: known.length })
-        void appendDebugLine(`[storage] warm-dial issued dialed=${dialed} cached=${known.length}`)
-      }
-    }).catch((err) => {
-      console.log('[Storage] Warm-dial skipped:', err?.message)
-    })
-  }
-
-  // Initialize blind peering for mobile connectivity
-  // Desktop (non-firewalled): runs as blind peer server to keep data available
-  // Mobile (firewalled): connects to mirrors to sync when direct P2P fails
-  // DISABLED: Testing if this affects playback
-  let wakeup = null;
-
-  // Initialize protomux-wakeup for content announcements
-  // This enables faster sync by announcing new content to peers immediately
-  if (Wakeup) {
-    try {
-      wakeup = new Wakeup();
-      console.log('[Storage] Wakeup protocol initialized');
-    } catch (err) {
-      console.log('[Storage] Wakeup init failed (non-fatal):', err?.message);
-    }
-  }
-
 
   // Set global reference for suspend/resume lifecycle management
   globalChannels = channels;
@@ -1367,8 +1357,7 @@ export async function initializeStorage(config) {
     blobSessionToken, // Session token for URL authentication
     channels,
     wakeup,
-    peerPoolDiscovery: globalPeerPoolDiscovery,
-    knownPeerCache
+    peerPoolDiscovery: globalPeerPoolDiscovery
   };
 }
 

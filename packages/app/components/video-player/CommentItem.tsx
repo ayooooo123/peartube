@@ -52,7 +52,12 @@ export const CommentItem = memo(function CommentItem({
           </Text>
         )}
         <View style={styles.commentActions}>
-          <Pressable onPress={onReply} style={styles.commentActionButton}>
+          <Pressable
+            onPress={onReply}
+            style={styles.commentActionButton}
+            accessibilityRole="button"
+            accessibilityLabel="Reply to comment"
+          >
             <Feather name="corner-up-left" color={colors.textMuted} size={14} />
           </Pressable>
           {(isOwnComment || comment.pendingState) && (
@@ -60,6 +65,9 @@ export const CommentItem = memo(function CommentItem({
               onPress={onDelete}
               disabled={isDeleting}
               style={styles.commentActionButton}
+              accessibilityRole="button"
+              accessibilityLabel="Delete comment"
+              accessibilityState={{ disabled: isDeleting, busy: isDeleting }}
             >
               {isDeleting ? (
                 <ActivityIndicator size="small" color={colors.textMuted} />

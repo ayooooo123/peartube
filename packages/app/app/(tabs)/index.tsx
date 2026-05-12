@@ -120,6 +120,7 @@ export default function HomeScreen() {
   const { width: screenWidth } = useWindowDimensions()
   const tabBarMetrics = useTabBarMetrics()
   const bottomPadding = Math.max(tabBarMetrics.height + 16, insets.bottom + 16)
+  const feedBottomPadding = Math.max(bottomPadding, tabBarMetrics.height + 40, insets.bottom + 40)
 
   const gridColumns = getDesktopVideoGridColumns(isDesktop, screenWidth)
 
@@ -998,6 +999,9 @@ export default function HomeScreen() {
               onPress={refreshFeed}
               className="p-2 active:opacity-60"
               disabled={feedLoading || backendConnecting || !rpc}
+              accessibilityRole="button"
+              accessibilityLabel="Refresh discover feed"
+              accessibilityState={{ disabled: feedLoading || backendConnecting || !rpc, busy: feedLoading }}
             >
               <Feather
                 name="refresh-cw"
@@ -1095,6 +1099,9 @@ export default function HomeScreen() {
               <Pressable
                 key={cat}
                 onPress={() => setActiveCategory(cat)}
+                accessibilityRole="button"
+                accessibilityLabel={`Filter by ${cat}`}
+                accessibilityState={{ selected: activeCategory === cat }}
                 style={{
                   paddingHorizontal: 16,
                   paddingVertical: 8,
@@ -1266,7 +1273,7 @@ export default function HomeScreen() {
               : item.type
           )}
           renderItem={renderHomeFeedItem}
-          contentContainerStyle={{ paddingBottom: bottomPadding, flexGrow: 1 }}
+          contentContainerStyle={{ paddingBottom: feedBottomPadding, flexGrow: 1 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
           showsVerticalScrollIndicator={false}
           removeClippedSubviews={true}

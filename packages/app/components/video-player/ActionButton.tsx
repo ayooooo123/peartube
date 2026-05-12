@@ -16,6 +16,7 @@ interface ActionButtonProps {
   onPress?: () => void
   active?: boolean
   loading?: boolean
+  accessibilityLabel?: string
 }
 
 export const ActionButton = memo(function ActionButton({
@@ -24,9 +25,16 @@ export const ActionButton = memo(function ActionButton({
   onPress,
   active,
   loading,
+  accessibilityLabel,
 }: ActionButtonProps) {
   return (
-    <Pressable style={styles.actionButton} onPress={onPress}>
+    <Pressable
+      style={styles.actionButton}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || label}
+      accessibilityState={{ disabled: !onPress || loading, selected: Boolean(active), busy: Boolean(loading) }}
+    >
       {loading ? (
         <ActivityIndicator size={20} color={colors.primary} />
       ) : (

@@ -160,7 +160,11 @@ export class PublicChannelBee extends ReadyResource {
         }
       }
     } catch (error) {
-      try { stream.destroy?.(error) } catch {}
+      try {
+        stream.destroy?.(error)
+      } catch (destroyError) {
+        console.warn('[PublicBee] listVideos stream destroy failed:', destroyError?.message || destroyError)
+      }
       console.warn('[PublicBee] listVideos stream failed:', error?.message || error)
       return videos
     }

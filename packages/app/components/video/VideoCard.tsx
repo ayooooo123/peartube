@@ -101,7 +101,13 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
   }))
 
   return (
-    <Pressable onPress={handlePress} style={getPressedStyle} testID={testID}>
+    <Pressable
+      onPress={handlePress}
+      style={getPressedStyle}
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={`Play ${video.title}`}
+    >
       <View style={styles.surface}>
         <View style={styles.thumbnailFrame}>
           <ThumbnailImage
@@ -119,6 +125,8 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
               onPressOut={channelPressOut}
               style={[styles.avatarContainer, channelAnimStyle]}
               hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${channelName}`}
             >
               <View style={styles.avatar}>
                 <Text style={styles.avatarText}>{channelInitial}</Text>
@@ -145,6 +153,8 @@ function VideoCardComponent({ video, onPress, onChannelPress, showChannelInfo = 
                     onPressOut={channelPressOut}
                     style={channelAnimStyle}
                     hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open ${channelName}`}
                   >
                     <Text style={styles.channelNameLink} numberOfLines={1}>
                       {channelName}

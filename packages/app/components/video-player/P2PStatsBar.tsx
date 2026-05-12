@@ -19,15 +19,23 @@ export const P2PStatsBar = memo(function P2PStatsBar({ stats }: P2PStatsBarProps
   const peerCount = stats?.peerCount ?? 0
   const downloadSpeed = Number(stats?.speedMBps ?? 0)
   const uploadSpeed = Number(stats?.uploadSpeedMBps ?? 0)
+  const downloadedBytes = Number(stats?.downloadedBytes ?? 0)
+  const totalBytes = Number(stats?.totalBytes ?? 0)
+  const downloadedBlocks = Number(stats?.downloadedBlocks ?? 0)
+  const totalBlocks = Number(stats?.totalBlocks ?? 0)
+  const hasBytes = totalBytes > 0
+  const hasBlocks = totalBlocks > 0
+  const hasProgressDetails = hasBytes || hasBlocks || Boolean(stats?.isComplete)
 
   const getStatusInfo = () => {
-    if (!stats) {
-      return { color: '#6b7280', label: 'Connecting' }
-    }
+    if (!stats) return { color: '#6b7280', label: 'Starting player' }
     if (stats.isComplete) return { color: '#4ade80', label: 'Cached' }
     if (stats.status === 'downloading') return { color: '#fbbf24', label: 'Downloading' }
-    if (stats.status === 'connecting' || stats.status === 'resolving') return { color: '#60a5fa', label: 'Connecting' }
-    return { color: '#6b7280', label: 'Waiting' }
+    if (stats.status === 'connecting') return { color: '#60a5fa', label: 'Finding video peers' }
+    if (stats.status === 'resolving') return { color: '#a78bfa', label: 'Resolving video' }
+    if (stats.status === 'error') return { color: '#f87171', label: 'Playback error' }
+    if (peerCount === 0 && !hasProgressDetails) return { color: '#6b7280', label: 'Waiting for video peers' }
+    return { color: '#6b7280', label: 'Preparing video' }
   }
 
   const { color, label } = getStatusInfo()
@@ -53,21 +61,25 @@ export const P2PStatsBar = memo(function P2PStatsBar({ stats }: P2PStatsBarProps
       </View>
 
       {/* Progress bar */}
-      {stats && !stats.isComplete && (
+      {stats && !stats.isComplete && hasProgressDetails && (
         <View style={styles.progressBarBg}>
           <View style={[styles.progressBarFill, { width: `${stats.progress || 0}%` }]} />
         </View>
       )}
 
       {/* Details row */}
-      {stats && (
+      {stats && hasProgressDetails && (
         <View style={styles.statsRowSecondary}>
-          <Text style={styles.statDetail}>
-            {formatSizeCompact(stats.downloadedBytes || 0)} / {formatSizeCompact(stats.totalBytes || 0)}
-          </Text>
-          <Text style={styles.statDetail}>
-            {stats.downloadedBlocks || 0} / {stats.totalBlocks || 0} blocks
-          </Text>
+          {hasBytes && (
+            <Text style={styles.statDetail}>
+              {formatSizeCompact(downloadedBytes)} / {formatSizeCompact(totalBytes)}
+            </Text>
+          )}
+          {hasBlocks && (
+            <Text style={styles.statDetail}>
+              {downloadedBlocks} / {totalBlocks} blocks
+            </Text>
+          )}
           <Text style={[styles.statProgress, stats.isComplete && styles.statProgressComplete]}>
             {stats.progress || 0}%
           </Text>

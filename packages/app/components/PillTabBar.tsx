@@ -209,6 +209,9 @@ function TabButton({ tab, isActive, onPress }: TabButtonProps) {
       onPress={onPress}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
+      accessibilityRole="tab"
+      accessibilityLabel={tab.label}
+      accessibilityState={{ selected: isActive }}
     >
       {tab.emphasized ? (
         <View style={[styles.emphasizedIconBg, isActive && styles.emphasizedIconBgActive]}>

@@ -5,6 +5,20 @@ import { useApp } from '@/lib/AppContext'
 import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 import { COMMENTS_PER_PAGE } from '@/components/video-player'
 
+const SOCIAL_RPC_TIMEOUT_MS = 8000
+
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise.finally(() => {
+      if (timeout) clearTimeout(timeout)
+    }),
+    new Promise<T>((resolve) => {
+      timeout = setTimeout(() => resolve(fallback), ms)
+    }),
+  ])
+}
+
 interface SocialContextType {
   comments: any[]
   pendingComments: any[]
@@ -117,8 +131,16 @@ export function SocialProvider({ children }: { children: React.ReactNode }) {
 
     try {
       const [commentsRes, reactionsRes] = await Promise.all([
-        rpc.listComments?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee, page, limit: COMMENTS_PER_PAGE }).catch(() => null),
-        !append ? rpc.getReactions?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee }).catch(() => null) : Promise.resolve(null),
+        withTimeout(
+          rpc.listComments?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee, page, limit: COMMENTS_PER_PAGE }).catch(() => null) ?? Promise.resolve(null),
+          SOCIAL_RPC_TIMEOUT_MS,
+          null
+        ),
+        !append ? withTimeout(
+          rpc.getReactions?.({ channelKey: ch, videoId: canonicalVid, publicBeeKey: pubBee }).catch(() => null) ?? Promise.resolve(null),
+          SOCIAL_RPC_TIMEOUT_MS,
+          null
+        ) : Promise.resolve(null),
       ])
 
       const primaryOk = Boolean(commentsRes?.success && Array.isArray(commentsRes.comments))

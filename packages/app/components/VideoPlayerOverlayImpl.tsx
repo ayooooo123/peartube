@@ -3034,6 +3034,9 @@ export function VideoPlayerOverlay() {
                   onPress={refreshComments}
                   disabled={refreshingComments}
                   style={[styles.refreshButton, refreshingComments && { opacity: 0.5 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Refresh comments"
+                  accessibilityState={{ disabled: refreshingComments, busy: refreshingComments }}
                 >
                   {refreshingComments ? (
                     <ActivityIndicator size="small" color={colors.primary} />
@@ -3063,11 +3066,15 @@ export function VideoPlayerOverlay() {
                   placeholderTextColor={colors.textMuted}
                   style={styles.commentInput}
                   multiline
+                  accessibilityLabel={replyToComment ? 'Write a reply' : 'Add a comment'}
                 />
                 <Pressable
                   onPress={postComment}
                   disabled={postingComment || !commentText.trim()}
                   style={[styles.commentButton, (postingComment || !commentText.trim()) && { opacity: 0.5 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={postingComment ? 'Posting comment' : 'Post comment'}
+                  accessibilityState={{ disabled: postingComment || !commentText.trim(), busy: postingComment }}
                 >
                   <Text style={styles.commentButtonText}>{postingComment ? 'Posting…' : 'Post'}</Text>
                 </Pressable>
@@ -3097,7 +3104,12 @@ export function VideoPlayerOverlay() {
                             </Text>
                           )}
                           <View style={styles.commentActions}>
-                            <Pressable onPress={() => setReplyToComment(c)} style={styles.commentActionButton}>
+                            <Pressable
+                              onPress={() => setReplyToComment(c)}
+                              style={styles.commentActionButton}
+                              accessibilityRole="button"
+                              accessibilityLabel="Reply to comment"
+                            >
                               <Feather name="corner-up-left" color={colors.textMuted} size={14} />
                             </Pressable>
                             {(isOwnComment(c) || c.pendingState) && (
@@ -3105,6 +3117,9 @@ export function VideoPlayerOverlay() {
                                 onPress={() => deleteComment(c.commentId)}
                                 disabled={deletingCommentId === c.commentId}
                                 style={styles.commentActionButton}
+                                accessibilityRole="button"
+                                accessibilityLabel="Delete comment"
+                                accessibilityState={{ disabled: deletingCommentId === c.commentId, busy: deletingCommentId === c.commentId }}
                               >
                                 {deletingCommentId === c.commentId ? (
                                   <ActivityIndicator size="small" color={colors.textMuted} />
@@ -3139,6 +3154,9 @@ export function VideoPlayerOverlay() {
                                     onPress={() => deleteComment(reply.commentId)}
                                     disabled={deletingCommentId === reply.commentId}
                                     style={styles.commentActionButton}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Delete comment"
+                                    accessibilityState={{ disabled: deletingCommentId === reply.commentId, busy: deletingCommentId === reply.commentId }}
                                   >
                                     {deletingCommentId === reply.commentId ? (
                                       <ActivityIndicator size="small" color={colors.textMuted} />
@@ -3161,6 +3179,9 @@ export function VideoPlayerOverlay() {
                       onPress={loadMoreComments}
                       disabled={loadingMoreComments}
                       style={styles.loadMoreButton}
+                      accessibilityRole="button"
+                      accessibilityLabel="Load more comments"
+                      accessibilityState={{ disabled: loadingMoreComments, busy: loadingMoreComments }}
                     >
                       {loadingMoreComments ? (
                         <ActivityIndicator size="small" color={colors.primary} />

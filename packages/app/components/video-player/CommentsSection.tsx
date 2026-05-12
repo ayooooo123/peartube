@@ -80,6 +80,9 @@ export const CommentsSection = memo(function CommentsSection({
           onPress={onRefreshComments}
           disabled={refreshingComments}
           style={[styles.refreshButton, refreshingComments && { opacity: 0.5 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Refresh comments"
+          accessibilityState={{ disabled: refreshingComments, busy: refreshingComments }}
         >
           {refreshingComments ? (
             <ActivityIndicator size="small" color={colors.primary} />

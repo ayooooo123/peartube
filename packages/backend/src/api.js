@@ -235,6 +235,21 @@ export function createApi({
     return 0
   }
 
+  function getFeedEntryVideoCount(driveKey, publicBeeKey = null) {
+    const entry = getPublicFeedEntry(driveKey)
+    if (!entry) return 0
+    const previews = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
+    if (previews.length > 0) return previews.length
+    if (
+      publicBeeKey &&
+      entry.publicBeeKey &&
+      entry.publicBeeKey !== publicBeeKey
+    ) {
+      return 0
+    }
+    return Number.isFinite(entry.videoCount) ? entry.videoCount : 0
+  }
+
   function previewVideosFromFeedEntry(driveKey, publicBeeKey = null) {
     const entry = getPublicFeedEntry(driveKey)
     const previews = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
@@ -517,7 +532,9 @@ export function createApi({
     },
 
     /**
-     * Get channel metadata with video count (for public feed)
+     * Get channel metadata. Keep the default path metadata-only: videoCount is
+     * derived from public-feed snapshots/previews when available instead of
+     * calling listVideos(), which duplicates expensive PublicBee/channel reads.
      * @param {string} driveKey
      * @returns {Promise<ChannelMetadata>}
      */
@@ -529,14 +546,10 @@ export function createApi({
           return cloneObject(cached.value)
         }
         // Fast/public-feed path: if publicBeeKey is provided, don't load Autobase.
-        // Viewers should be able to list metadata/videos via the auto-replicating PublicBee.
+        // Viewers should be able to read metadata via the auto-replicating PublicBee.
         if (publicBeeKey) {
           const publicBee = await loadPublicBee(ctx, publicBeeKey)
           const meta = await withTimeout(publicBee.getMetadata().catch(() => null), 1000, `PublicBee getMetadata ${driveKey?.slice?.(0, 16) || ''}`).catch(() => null)
-          const previewVideos = previewVideosFromFeedEntry(driveKey, publicBeeKey)
-          const videos = previewVideos.length > 0
-            ? previewVideos
-            : await listPublicBeeVideosBounded({ publicBee, driveKey, publicBeeKey, timeoutMs: 1200 })
           const result = {
             driveKey,
             name: meta?.name || 'Channel',
@@ -544,7 +557,7 @@ export function createApi({
             avatar: meta?.avatar || null,
             createdAt: meta?.createdAt || Date.now(),
             publicKey: meta?.createdBy || null,
-            videoCount: videos?.length || 0
+            videoCount: getFeedEntryVideoCount(driveKey, publicBeeKey)
           }
           channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
           return cloneObject(result)
@@ -553,7 +566,6 @@ export function createApi({
         const channel = await loadChannelBounded(driveKey)
         await markAsMultiWriterChannel(driveKey)
         const meta = await channel.getMetadata().catch(() => null)
-        const videos = await withTimeout(channel.listVideos().catch(() => []), 1200, `channel meta listVideos ${driveKey?.slice?.(0, 16) || ''}`).catch(() => [])
         const result = {
           driveKey,
           name: meta?.name || 'Channel',
@@ -561,7 +573,7 @@ export function createApi({
           avatar: meta?.avatar || null,
           createdAt: meta?.createdAt || Date.now(),
           publicKey: meta?.createdBy || null,
-          videoCount: videos?.length || 0
+          videoCount: getFeedEntryVideoCount(driveKey)
         }
         channelMetaCache.set(driveKey, { ts: Date.now(), value: result })
         return cloneObject(result)

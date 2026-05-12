@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, no-undef, @typescript-eslint/no-require-imports */
 import bareProcess from 'bare-process'
 import os from 'bare-os'
 import HRPC from '../../spec/spec/hrpc/index.js'
@@ -362,11 +363,19 @@ function createBridgeState() {
   return {
     hostSession: null,
     client: null,
+    keepAliveTimer: null,
+    shuttingDown: false,
     currentStoragePath: null,
     feedUpdateCount: 0,
     lastFeedUpdateAt: null,
     lastBrowseSnapshot: createEmptyBrowseSnapshot(),
   }
+}
+
+function clearBridgeKeepAlive(state) {
+  if (!state?.keepAliveTimer) return
+  clearInterval(state.keepAliveTimer)
+  state.keepAliveTimer = null
 }
 
 function defaultStoragePath() {
@@ -433,12 +442,6 @@ async function createNativeSidecarBackend(options = {}) {
     const path = pathModule?.default ?? pathModule
     const fs = fsModule?.default ?? fsModule
     const generateAndStoreThumbnail = thumbnailModule?.generateAndStoreThumbnail
-    const transcoder = {
-      startTranscode: async () => ({ success: false, error: 'Transcoding is not wired in the native sidecar yet.' }),
-      stopTranscode: () => ({ success: false, error: 'Transcoding is not wired in the native sidecar yet.' }),
-      getStatus: () => ({ status: 'unavailable', progress: 0, bytesWritten: 0, error: 'Transcoding is not wired in the native sidecar yet.' }),
-    }
-
     attachMobileHandlers(backend, {
       api: backend.api,
       identityManager: backend.identityManager,
@@ -450,7 +453,6 @@ async function createNativeSidecarBackend(options = {}) {
       fs,
       path,
       generateAndStoreThumbnail,
-      transcoder,
       storagePath: options.storagePath,
     })
 
@@ -635,11 +637,18 @@ function createChannelDataFetcher(client) {
 }
 
 async function shutdownBridge(state) {
-  await destroyAllMpvPlayers()
-  await state.hostSession?.terminate?.()
-  state.hostSession = null
-  state.client = null
-  state.currentStoragePath = null
+  if (!state || state.shuttingDown) return
+  state.shuttingDown = true
+  clearBridgeKeepAlive(state)
+  try {
+    await destroyAllMpvPlayers()
+    await state.hostSession?.terminate?.()
+  } finally {
+    state.hostSession = null
+    state.client = null
+    state.currentStoragePath = null
+    state.shuttingDown = false
+  }
 }
 
 async function mutateAndReload(state, mutate, options = {}) {
@@ -1279,73 +1288,82 @@ function registerHandlers(hrpcInstance, state, reportFatal) {
 
 async function main() {
   const state = createBridgeState()
-  const keepAliveTimer = setInterval(() => {}, 1 << 30)
+  state.keepAliveTimer = setInterval(() => {}, 1 << 30)
 
-  // bare-rpc expects a duplex stream with on('data'), on('error'), on('drain'), write(), destroy()
-  const stream = {
-    write(data) { return process.stdout.write(data) },
-    destroy(err) {
-      process.stdin?.destroy?.(err)
-      process.stdout?.destroy?.(err)
-    },
-    on(event, cb) {
-      if (event === 'drain') {
-        process.stdout?.on?.(event, cb)
-      } else {
-        process.stdin?.on?.(event, cb)
-      }
-      return stream
-    },
-    once(event, cb) {
-      if (event === 'drain') {
-        process.stdout?.once?.(event, cb)
-      } else {
-        process.stdin?.once?.(event, cb)
-      }
-      return stream
-    },
-    removeListener(event, cb) {
-      if (event === 'drain') {
-        process.stdout?.removeListener?.(event, cb)
-      } else {
-        process.stdin?.removeListener?.(event, cb)
-      }
-      return stream
-    },
-  }
-
-  hrpc = new HRPC(stream)
-
-  const reportFatal = (label, error) => {
-    const message = `${label}: ${formatError(error)}`
-    emitBridgeEvent('error', { code: 0, message })
-    writeStderr(`[${runtimeLabel}] ${message}`)
-  }
-
-  if (typeof Bare !== 'undefined' && Bare?.on) {
-    Bare.on('unhandledRejection', (reason) => {
-      reportFatal('Unhandled rejection', reason)
-      return true
-    })
-
-    Bare.on('uncaughtException', (error) => {
-      reportFatal('Uncaught exception', error)
-      return true
-    })
-  }
-
-  registerHandlers(hrpc, state, reportFatal)
-
-  process.stdin?.resume?.()
-
-  process.stdin?.on?.('end', () => {
-    clearInterval(keepAliveTimer)
+  const exitAfterShutdown = () => {
     void shutdownBridge(state).finally(() => {
       try {
         Bare.exit(0)
       } catch {}
     })
-  })
+  }
+
+  try {
+    // bare-rpc expects a duplex stream with on('data'), on('error'), on('drain'), write(), destroy()
+    const stream = {
+      write(data) { return process.stdout.write(data) },
+      destroy(err) {
+        void shutdownBridge(state)
+        process.stdin?.destroy?.(err)
+        process.stdout?.destroy?.(err)
+      },
+      on(event, cb) {
+        if (event === 'drain') {
+          process.stdout?.on?.(event, cb)
+        } else {
+          process.stdin?.on?.(event, cb)
+        }
+        return stream
+      },
+      once(event, cb) {
+        if (event === 'drain') {
+          process.stdout?.once?.(event, cb)
+        } else {
+          process.stdin?.once?.(event, cb)
+        }
+        return stream
+      },
+      removeListener(event, cb) {
+        if (event === 'drain') {
+          process.stdout?.removeListener?.(event, cb)
+        } else {
+          process.stdin?.removeListener?.(event, cb)
+        }
+        return stream
+      },
+    }
+
+    hrpc = new HRPC(stream)
+
+    const reportFatal = (label, error) => {
+      const message = `${label}: ${formatError(error)}`
+      emitBridgeEvent('error', { code: 0, message })
+      writeStderr(`[${runtimeLabel}] ${message}`)
+    }
+
+    if (typeof Bare !== 'undefined' && Bare?.on) {
+      Bare.on('unhandledRejection', (reason) => {
+        reportFatal('Unhandled rejection', reason)
+        return true
+      })
+
+      Bare.on('uncaughtException', (error) => {
+        reportFatal('Uncaught exception', error)
+        return true
+      })
+    }
+
+    registerHandlers(hrpc, state, reportFatal)
+
+    process.stdin?.resume?.()
+
+    process.stdin?.on?.('end', exitAfterShutdown)
+    process.stdin?.on?.('close', exitAfterShutdown)
+    process.stdin?.on?.('error', exitAfterShutdown)
+  } catch (error) {
+    clearBridgeKeepAlive(state)
+    throw error
+  }
 }
 
 main().catch((error) => {

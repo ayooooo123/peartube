@@ -410,6 +410,46 @@ test('PublicFeedManager.start joins shared PearTube network topic for feed-peer 
   }
 })
 
+test('PublicFeedManager exposes startup timing boundaries for discovery and feed open', async () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const publicKey = b4a.alloc(32, 21)
+  const conn = createConnection()
+  conn.remotePublicKey = publicKey
+  const originalFrom = Protomux.from
+
+  Protomux.from = () => ({
+    pair() {},
+    createChannel(opts) {
+      return {
+        messages: [{ send() {} }],
+        open() {
+          opts.onopen()
+        }
+      }
+    }
+  })
+
+  try {
+    await manager.start()
+    manager.handleDiscoveredPeer({ publicKey }, NETWORK_TOPIC)
+    manager.handleConnection(conn, { publicKey })
+    manager.handleMessage({ type: 'HAVE_FEED', keys: [] }, conn)
+
+    const events = manager.getStats().startupTiming.events.map((event) => event.name)
+    assert.equal(events.includes('manager-created'), true)
+    assert.equal(events.includes('public-feed-start-called'), true)
+    assert.equal(events.includes('public-feed-topic-join-called'), true)
+    assert.equal(events.includes('feed-peer-discovered'), true)
+    assert.equal(events.includes('feed-socket-connected'), true)
+    assert.equal(events.includes('protomux-feed-open'), true)
+    assert.equal(events.includes('first-have-feed-received'), true)
+  } finally {
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})
+
 test('discovered peer diagnostics become connected when the Hyperswarm socket arrives', () => {
   const publicKey = b4a.alloc(32, 14)
   const swarm = createSwarm()

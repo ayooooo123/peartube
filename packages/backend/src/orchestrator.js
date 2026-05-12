@@ -334,6 +334,14 @@ export async function createBackendContext(config) {
       console.error('[Orchestrator] publicFeed.handleDiscoveredPeer failed:', err?.message)
     }
   })
+  // Start public feed discovery before slower local managers/API wiring so DHT
+  // lookup, socket setup, and Protomux feed opening overlap backend warm-up.
+  ipcLog('[orchestrator] publicFeed.start starting early')
+  await appendDebugLine('[orchestrator] publicFeed.start starting early')
+  const publicFeedStartPromise = publicFeed.start().catch((e) => {
+    console.error('[Orchestrator] Public feed start failed:', e?.message);
+  })
+
   ipcLog('[orchestrator] seedingManager.init starting')
   await appendDebugLine('[orchestrator] seedingManager.init starting')
 
@@ -388,14 +396,9 @@ export async function createBackendContext(config) {
     publicFeed.setFeedSnapshotProvider((entries) => api.getFeedSnapshotEntries(entries, { limitPerChannel: 3 }))
   }
 
-  // Phase 6.5: Start public feed discovery immediately so UIs can get updates without waiting
-  ipcLog('[orchestrator] publicFeed.start starting')
-  await appendDebugLine('[orchestrator] publicFeed.start starting')
-  try {
-    await publicFeed.start();
-  } catch (e) {
-    console.error('[Orchestrator] Public feed start failed:', e?.message);
-  }
+  // The early start may still be restoring cached feed entries. Await it before
+  // exposing backend-ready so initial feed/status snapshots are consistent.
+  await publicFeedStartPromise
   await appendDebugLine('[orchestrator] publicFeed.start done')
   ipcLog('[orchestrator] publicFeed.start done')
 

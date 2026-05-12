@@ -87,6 +87,42 @@ let hyperswarmModuleReady = null
 // Global network stats instance (set after swarm is created)
 let networkStats = null;
 
+function createNetworkStartupTiming() {
+  const startedAt = Date.now()
+  const events = []
+  const seen = new Set()
+  const record = (name, details = {}) => {
+    const at = Date.now()
+    const event = {
+      name,
+      at,
+      sinceStartMs: Math.max(0, at - startedAt),
+      ...details
+    }
+    events.push(event)
+    while (events.length > 80) events.shift()
+    seen.add(name)
+    void appendDebugLine(`[startup-timing] ${name} t=${event.sinceStartMs}ms ${JSON.stringify(details)}`)
+    return event
+  }
+  record('storage-entry')
+  return {
+    startedAt,
+    record,
+    markOnce(name, details = {}) {
+      if (seen.has(name)) return null
+      return record(name, details)
+    },
+    snapshot() {
+      return {
+        startedAt,
+        elapsedMs: Math.max(0, Date.now() - startedAt),
+        events: events.slice(-40)
+      }
+    }
+  }
+}
+
 // Global references for suspend/resume (set in initializeStorage)
 let globalSwarm = null;
 let globalBlobServer = null;
@@ -94,6 +130,7 @@ let globalChannels = null;
 let globalPeerPoolDiscovery = null;
 let globalPeerPoolTopicHex = null;
 let globalSwarmDiagnostics = null;
+let globalNetworkStartupTiming = null;
 
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
@@ -790,6 +827,7 @@ export async function retainPublicBeeContentDiscovery(ctx, publicBeeKeyHex, opti
  * @returns {Promise<import('./types.js').StorageContext>}
  */
 export async function initializeStorage(config) {
+  globalNetworkStartupTiming = createNetworkStartupTiming()
   await appendDebugLine('[storage] initializeStorage entry')
   warmOptionalStorageDeps()
   warmHyperswarmModule()
@@ -1093,6 +1131,7 @@ export async function initializeStorage(config) {
     }
   }
   console.log('[Storage] Swarm created, publicKey:', b4a.toString(swarm.keyPair.publicKey, 'hex').slice(0, 16));
+  globalNetworkStartupTiming?.record('swarm-created', { offline: Boolean(swarm._peartubeOffline) })
   const initialDhtState = describeDhtState(swarm.dht)
   if (initialDhtState) {
     console.log('[Storage] Initial DHT bind state:', JSON.stringify(initialDhtState))
@@ -1122,11 +1161,13 @@ export async function initializeStorage(config) {
   if (!swarm._peartubeOffline) {
     try {
       const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
+      globalNetworkStartupTiming?.record('topic-join-called', { topic: 'peer-pool', topicHex: globalPeerPoolTopicHex })
       globalPeerPoolDiscovery = poolDiscovery;
       console.log('[Storage] Joined peartube-network topic for peer pool building');
       // Don't await flushed() - it can hang on mobile
       poolDiscovery.flushed().then(() => {
         console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
+        globalNetworkStartupTiming?.record('topic-flushed', { topic: 'peer-pool', connections: swarm.connections?.size || 0, bootstrapped: swarm.dht?.bootstrapped })
         void appendDebugLine(
           `[storage] peer-pool discovery flushed connections=${swarm.connections?.size || 0} bootstrapped=${swarm.dht?.bootstrapped}`
         )
@@ -1146,6 +1187,7 @@ export async function initializeStorage(config) {
   console.log('[Storage] Starting swarm.listen() (non-blocking)...');
   await appendDebugLine('[storage] swarm.listen start')
   const listenPromise = swarm.listen()
+  globalNetworkStartupTiming?.record('swarm-listen-called')
 
   // Track listen state for debugging
   swarm._peartubeListenResolved = false
@@ -1153,12 +1195,14 @@ export async function initializeStorage(config) {
     listenPromise
       .then(() => {
         swarm._peartubeListenResolved = true
+        globalNetworkStartupTiming?.record('swarm-listen-resolved', { firewalled: swarm.dht?.firewalled, bootstrapped: swarm.dht?.bootstrapped })
         console.log('[Storage] listen() resolved, dht.firewalled:', swarm.dht?.firewalled, 'dht.bootstrapped:', swarm.dht?.bootstrapped)
         void appendDebugLine(
           `[storage] swarm.listen resolved firewalled=${swarm.dht?.firewalled} bootstrapped=${swarm.dht?.bootstrapped}`
         )
       })
       .catch((e) => {
+        globalNetworkStartupTiming?.record('swarm-listen-failed', { error: e?.message || String(e) })
         console.log('[Storage] listen() failed:', e?.message)
         void appendDebugLine(`[storage] swarm.listen failed ${e?.message || String(e)}`)
       })
@@ -1190,6 +1234,7 @@ export async function initializeStorage(config) {
   swarm.on('peer', (peer, topic) => {
     globalSwarmDiagnostics?.recordPeer?.(peer, topic)
     const peerKey = peer?.publicKey ? b4a.toString(peer.publicKey, 'hex').slice(0, 16) : 'unknown'
+    globalNetworkStartupTiming?.record('peer-discovered', { key: peerKey, relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0, connections: swarm.connections?.size || 0, connecting: swarm.connecting || 0 })
     const relayAddresses = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0
     console.log('[Storage] PEER DISCOVERED:', peerKey, 'total peers:', swarm.peers?.size || 0, 'relayAddresses:', relayAddresses, 'connecting:', swarm.connecting || 0)
     void appendDebugLine(`[storage] peer discovered ${peerKey} totalPeers=${swarm.peers?.size || 0} relayAddresses=${relayAddresses} connecting=${swarm.connecting || 0}`)
@@ -1202,6 +1247,7 @@ export async function initializeStorage(config) {
     try {
       if (!conn || conn.destroyed) return
       const remoteKey = info?.publicKey ? b4a.toString(info.publicKey, 'hex').slice(0, 16) : 'unknown';
+      globalNetworkStartupTiming?.record('socket-connected', { key: remoteKey, connections: swarm.connections?.size || 0, connecting: swarm.connecting || 0 })
       globalSwarmDiagnostics?.recordConnection?.(conn, info)
       console.log('[Storage] Peer connected:', remoteKey, 'connections:', swarm.connections?.size || 0, 'connecting:', swarm.connecting || 0);
       void appendDebugLine(`[storage] peer connected ${remoteKey} connections=${swarm.connections?.size || 0} connecting=${swarm.connecting || 0}`)
@@ -2320,6 +2366,7 @@ export async function resumeNetworking() {
  */
 export function getNetworkStats() {
   const diagnostics = globalSwarmDiagnostics?.snapshot?.() || null
+  const startupTiming = globalNetworkStartupTiming?.snapshot?.() || null
   if (!networkStats) {
     // Fallback: return basic stats from swarm
     if (globalSwarm) {
@@ -2337,7 +2384,8 @@ export function getNetworkStats() {
           ephemeral: globalSwarm.dht?.ephemeral ?? null,
           online: globalSwarm.dht?.online ?? null
         },
-        hyperswarm: diagnostics
+        hyperswarm: diagnostics,
+        startupTiming
       };
     }
     return null;
@@ -2345,10 +2393,10 @@ export function getNetworkStats() {
 
   try {
     const stats = networkStats.toJson();
-    return diagnostics ? { ...stats, hyperswarm: diagnostics } : stats
+    return { ...stats, hyperswarm: diagnostics, startupTiming }
   } catch (err) {
     console.log('[Network] Stats toJson error:', err?.message);
-    return diagnostics ? { hyperswarm: diagnostics } : null;
+    return diagnostics || startupTiming ? { hyperswarm: diagnostics, startupTiming } : null;
   }
 }
 

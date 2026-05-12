@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, no-constant-condition, @typescript-eslint/no-this-alias */
 /**
  * ChannelStreamReader
  *
@@ -13,6 +14,12 @@
 import Worker from 'bare-worker'
 import Channel from 'bare-channel'
 import http from 'bare-http1'
+import {
+  createReaderAbortError,
+  createReaderTimeoutError,
+  isReadWaitExhausted,
+  normalizeReadWaitOptions
+} from './channel-stream-reader-guard.mjs'
 
 // Chunk size for read requests
 const READ_CHUNK_SIZE = 64 * 1024  // 64KB per read
@@ -66,9 +73,14 @@ function formatWorkerSpec(spec) {
  * ChannelStreamReader - sync reads via bare-channel
  */
 export class ChannelStreamReader {
-  constructor(url, fileSize) {
+  constructor(url, fileSize, options = {}) {
     this.url = url
     this.fileSize = fileSize
+    const readWaitOptions = normalizeReadWaitOptions(options)
+    this.readTimeoutMs = readWaitOptions.readTimeoutMs
+    this.maxReadAttempts = readWaitOptions.maxReadAttempts
+    this.readAttemptDelayMs = readWaitOptions.readAttemptDelayMs
+    this.signal = readWaitOptions.signal
 
     // Channels for communication with worker
     this.dataChannel = null
@@ -80,6 +92,14 @@ export class ChannelStreamReader {
     this.worker = null
     this.workerReady = false
     this.workerUrl = null
+    this.destroyed = false
+    this.abortReason = null
+
+    if (this.signal?.addEventListener) {
+      this.signal.addEventListener('abort', () => {
+        this.abort(this.signal.reason || 'aborted')
+      }, { once: true })
+    }
 
     // Read buffer - stores data received from worker
     this.buffer = new Map()  // offset -> { data, end }
@@ -206,6 +226,8 @@ export class ChannelStreamReader {
    * Request data from worker and wait for response
    */
   requestData(offset, length) {
+    this.throwIfAborted()
+
     // Send read request to worker
     this.cmdPort.writeSync({
       type: 'read',
@@ -213,11 +235,28 @@ export class ChannelStreamReader {
       length
     })
 
-    // Block until we receive data response
+    // Block until we receive data response, but keep the wait bounded so a
+    // stalled worker/channel cannot deadlock the transcoder thread forever.
+    const deadline = Date.now() + this.readTimeoutMs
+    let attempts = 0
+
     while (true) {
+      this.throwIfAborted()
+      if (isReadWaitExhausted({ now: Date.now(), deadline, attempts, maxReadAttempts: this.maxReadAttempts })) {
+        this.abort(createReaderTimeoutError(offset, length))
+        throw this.abortReason
+      }
+
       const msg = this.dataPort.readSync()
       if (msg === null) {
+        this.abort(new Error('Channel closed unexpectedly'))
         throw new Error('Channel closed unexpectedly')
+      }
+
+      if (msg === undefined) {
+        attempts++
+        this.waitBetweenReadAttempts()
+        continue
       }
 
       if (msg.type === 'data') {
@@ -234,11 +273,41 @@ export class ChannelStreamReader {
         }
         // Keep waiting for more data
       } else if (msg.type === 'error') {
+        this.abort(new Error(msg.message))
         throw new Error(msg.message)
       } else if (msg.type === 'eof') {
         return
       }
+
+      attempts++
     }
+  }
+
+  throwIfAborted() {
+    if (this.destroyed) {
+      throw this.abortReason || new Error('ChannelStreamReader destroyed')
+    }
+    if (this.signal?.aborted) {
+      this.abort(this.signal.reason || 'aborted')
+      throw this.abortReason
+    }
+  }
+
+  waitBetweenReadAttempts() {
+    if (this.readAttemptDelayMs <= 0) return
+    const end = Date.now() + this.readAttemptDelayMs
+    while (Date.now() < end) {}
+  }
+
+  abort(reason = 'aborted') {
+    if (this.destroyed) return
+    this.destroyed = true
+    this.abortReason = createReaderAbortError(reason)
+
+    try { this.cmdPort?.writeSync?.({ type: 'abort', reason: this.abortReason.message }) } catch {}
+    try { this.dataPort?.close?.() } catch {}
+    try { this.cmdPort?.close?.() } catch {}
+    try { this.worker?.postMessage?.({ type: 'stop' }) } catch {}
   }
 
   /**
@@ -387,6 +456,8 @@ export class ChannelStreamReader {
    */
   destroy() {
     console.log('[ChannelStreamReader] Destroying')
+
+    this.abort('destroyed')
 
     if (this.worker) {
       this.worker.postMessage({ type: 'stop' })

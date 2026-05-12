@@ -182,8 +182,10 @@ class Downloader {
         break
 
       case 'stop':
+      case 'abort':
         this.running = false
         this.queue.clear()
+        this.sendError(cmd.reason || 'aborted')
         break
 
       default:

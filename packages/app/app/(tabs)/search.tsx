@@ -48,7 +48,7 @@ function makeRouteVideoData(video: SearchVideoData, channelKey: string) {
 }
 
 function computeTextRelevance(query: string, title: string): number {
-  const normalize = (s: string) => s.toLowerCase().replace(/[._\-\[\]\(\)]/g, ' ').replace(/\s+/g, ' ').trim()
+  const normalize = (s: string) => s.toLowerCase().replace(/[._\-[\]{}]/g, ' ').replace(/\s+/g, ' ').trim()
   const q = normalize(query)
   const t = normalize(title)
 
@@ -381,7 +381,7 @@ export default function SearchTab() {
           <View style={{ alignItems: 'center', paddingVertical: 48 }}>
             <Feather name="search" size={48} color={colors.textSecondary} />
             <Text style={{ color: colors.textSecondary, marginTop: 16, textAlign: 'center' }}>
-              No results found for "{query}"
+              No results found for {query}
             </Text>
             <Text style={{ color: colors.textMuted, marginTop: 8, textAlign: 'center', fontSize: 13 }}>
               Try a different search term
@@ -392,7 +392,7 @@ export default function SearchTab() {
         {!searching && results.length > 0 && (
           <>
             <Text style={{ color: colors.textSecondary, marginBottom: 16, fontSize: 14 }}>
-              Found {results.length} result{results.length !== 1 ? 's' : ''} for "{query}"
+              Found {results.length} result{results.length !== 1 ? 's' : ''} for {query}
             </Text>
 
             <View style={isDesktop ? {

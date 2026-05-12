@@ -716,10 +716,6 @@ export class MultiWriterChannel extends ReadyResource {
             await this.publicBee.setMetadata({ commentsAutobaseKey: this.commentsAutobase.keyHex })
             console.log('[Channel] _initCommentsAutobase: synced commentsAutobaseKey to PublicBee')
           }
-          if (adminKeyHex && pubMeta?.commentsAdminKey !== adminKeyHex) {
-            await this.publicBee.setMetadata({ commentsAdminKey: adminKeyHex })
-            console.log('[Channel] _initCommentsAutobase: synced commentsAdminKey to PublicBee')
-          }
         } catch (err) {
           console.log('[Channel] _initCommentsAutobase: publish error (non-fatal):', err?.message)
         }

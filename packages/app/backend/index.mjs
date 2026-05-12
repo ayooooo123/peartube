@@ -8,6 +8,7 @@
 
 import { startHost } from '@peartube/host/start-host'
 import { PROTOCOL_VERSION } from '@peartube/host'
+import { createJsonFrameParser, encodeJsonFrame } from '@peartube/platform/ipc-json-framing'
 import { attachLazyCastHandlers } from './lazy-cast-handlers.mjs'
 
 let HRPC = null
@@ -463,20 +464,15 @@ function removeStaleLocks(storageDir) {
     }
   }
 
+  const ipcFrameParser = createJsonFrameParser()
+
   function parseIpcMessage(chunk) {
-    if (!chunk) return null
-    try {
-      const text = b4a.toString(chunk).trim()
-      if (!text || text[0] !== '{') return null
-      const parsed = JSON.parse(text)
-      return parsed && typeof parsed === 'object' ? parsed : null
-    } catch {
-      return null
-    }
+    const messages = ipcFrameParser.push(chunk)
+    return messages.length > 0 ? messages[0] : null
   }
 
   function encodeIpcMessage(value) {
-    return b4a.from(JSON.stringify(value))
+    return b4a.from(encodeJsonFrame(value))
   }
 
   attachUnhandledHandlers(reportBackendError)

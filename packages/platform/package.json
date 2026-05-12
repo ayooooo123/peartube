@@ -17,7 +17,8 @@
       "default": "./src/rpc.web.ts"
     },
     "./rpc.native": "./src/rpc.native.ts",
-    "./rpc.web": "./src/rpc.web.ts"
+    "./rpc.web": "./src/rpc.web.ts",
+    "./ipc-json-framing": "./src/ipc-json-framing.js"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -7,6 +7,7 @@
 
 import { createPlatformRpcBridge } from './rpc.shared';
 import { createNativeRunner } from './runner.native';
+import { createJsonFrameParser, encodeJsonFrame } from './ipc-json-framing.js';
 import {
   createBundleCachePaths,
   normalizeBundleFilePath,
@@ -210,16 +211,15 @@ function sendShutdownSignalViaIpc(instance: InstanceType<typeof Worklet>): Promi
       reject(new Error('shutdown-timeout'));
     }, SHUTDOWN_TIMEOUT_MS);
 
+    const parser = createJsonFrameParser();
+
     function onData(chunk: any) {
-      try {
-        const str = typeof chunk === 'string' ? chunk : chunk?.toString?.('utf-8') ?? String(chunk);
-        const msg = JSON.parse(str);
+      for (const msg of parser.push(chunk)) {
         if (msg?.type === 'shutdown-complete') {
           cleanup();
           resolve();
+          return;
         }
-      } catch {
-        // Not JSON or not our message — ignore
       }
     }
 
@@ -244,7 +244,7 @@ function sendShutdownSignalViaIpc(instance: InstanceType<typeof Worklet>): Promi
     }
 
     try {
-      const shutdownPayload = JSON.stringify({ type: 'shutdown' })
+      const shutdownPayload = encodeJsonFrame({ type: 'shutdown' })
       if (typeof shutdownPayload !== 'string' || shutdownPayload.length === 0) {
         cleanup()
         resolve()

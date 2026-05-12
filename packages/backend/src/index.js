@@ -20,6 +20,7 @@ export { createBackendRuntime } from './runtime.js';
 export * as feed from './feed.js';
 export * as media from './media.js';
 export * as swarm from './swarm.js';
+export * as mirror from './mirror/index.js';
 
 // Video Stats - P2P download progress tracking
 export { VideoStatsTracker } from './video-stats.js';

@@ -15,8 +15,40 @@ import { getDesktopVideoGridColumns } from '@/lib/video-layout'
 
 const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(window as any).Pear || !!(window as any).bridge)
 
+type SearchVideoData = VideoData & {
+  blobId?: string | null
+  blobsCoreKey?: string | null
+  publicBeeKey?: string | null
+}
+
+function getSearchVideoRef(video: SearchVideoData) {
+  return video.path && typeof video.path === 'string' && video.path.startsWith('/')
+    ? video.path
+    : video.id
+}
+
+function makeRouteVideoData(video: SearchVideoData, channelKey: string) {
+  return JSON.stringify({
+    id: video.id,
+    title: video.title,
+    description: video.description,
+    channelKey,
+    publicBeeKey: video.publicBeeKey || undefined,
+    path: video.path,
+    size: video.size,
+    duration: video.duration,
+    uploadedAt: video.uploadedAt || video.createdAt,
+    thumbnail: video.thumbnail,
+    thumbnailUrl: video.thumbnailUrl,
+    blobId: video.blobId || undefined,
+    blobsCoreKey: video.blobsCoreKey || undefined,
+    mimeType: video.mimeType || undefined,
+    channel: video.channel,
+  })
+}
+
 function computeTextRelevance(query: string, title: string): number {
-  const normalize = (s: string) => s.toLowerCase().replace(/[._\-\[\]\(\)]/g, ' ').replace(/\s+/g, ' ').trim()
+  const normalize = (s: string) => s.toLowerCase().replace(/[._\-[\]{}]/g, ' ').replace(/\s+/g, ' ').trim()
   const q = normalize(query)
   const t = normalize(title)
 
@@ -54,7 +86,7 @@ export default function SearchTab() {
   const gridColumns = getDesktopVideoGridColumns(isDesktop, screenWidth)
 
   const [searching, setSearching] = useState(false)
-  const [results, setResults] = useState<VideoData[]>([])
+  const [results, setResults] = useState<SearchVideoData[]>([])
   const [error, setError] = useState<string | null>(null)
   const [searched, setSearched] = useState(false)
   const [thumbnailCache, setThumbnailCache] = useState<Record<string, string>>({})
@@ -91,7 +123,7 @@ export default function SearchTab() {
         }
         const res = await rpc.globalSearchVideos({ query, topK: 50 })
 
-        const videos: VideoData[] = (res.results || []).map((r: any) => {
+        const videos: SearchVideoData[] = (res.results || []).map((r: any) => {
           try {
             const metadata = typeof r.metadata === 'string'
               ? JSON.parse(r.metadata)
@@ -112,12 +144,16 @@ export default function SearchTab() {
               driveKey: channelKey,
               channelKey: channelKey,
               publicBeeKey: metadata.publicBeeKey || r.publicBeeKey,
+              path: metadata.path || r.path || undefined,
+              blobId: metadata.blobId || r.blobId || undefined,
+              blobsCoreKey: metadata.blobsCoreKey || r.blobsCoreKey || undefined,
+              mimeType: metadata.mimeType || r.mimeType || undefined,
               score,
             }
           } catch {
             return null
           }
-        }).filter(Boolean) as VideoData[]
+        }).filter(Boolean) as SearchVideoData[]
 
         videos.sort((a, b) => {
           const relA = computeTextRelevance(query, a.title || '')
@@ -162,7 +198,7 @@ export default function SearchTab() {
     doSearch()
   }, [query, ready, rpc, blobServerPort])
 
-  const handleVideoPress = useCallback(async (video: VideoData) => {
+  const handleVideoPress = useCallback(async (video: SearchVideoData) => {
     const channelKey = video.channelKey || video.driveKey
     if (!channelKey) return
 
@@ -176,7 +212,7 @@ export default function SearchTab() {
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       const base = window.location.href.split('#')[0].replace(/index\.html$/, '')
-      const videoData = encodeURIComponent(JSON.stringify({ ...video, channelKey }))
+      const videoData = encodeURIComponent(makeRouteVideoData(video, channelKey))
       window.location.href = `${base}video/${video.id}.html?videoData=${videoData}`
       return
     }
@@ -184,14 +220,13 @@ export default function SearchTab() {
     if (!rpc) return
 
     try {
-      const videoRef = video.id
-      const videoAny = video as VideoData & { blobId?: string | null; blobsCoreKey?: string | null }
+      const videoRef = getSearchVideoRef(video)
       const result = await rpc.preparePlayback({
         channelKey,
         videoId: videoRef,
         publicBeeKey: video.publicBeeKey || undefined,
-        blobId: videoAny.blobId || undefined,
-        blobsCoreKey: videoAny.blobsCoreKey || undefined,
+        blobId: video.blobId || undefined,
+        blobsCoreKey: video.blobsCoreKey || undefined,
         mimeType: video.mimeType || undefined,
       })
 
@@ -209,6 +244,10 @@ export default function SearchTab() {
           category: video.category,
           channel: video.channel ? { name: video.channel.name } : undefined,
           thumbnailUrl: video.thumbnailUrl,
+          driveKey: video.driveKey,
+          publicBeeKey: video.publicBeeKey,
+          blobId: video.blobId || null,
+          blobsCoreKey: video.blobsCoreKey || null,
         }
         loadAndPlayVideo(coreVideo, result.url)
       }
@@ -342,7 +381,7 @@ export default function SearchTab() {
           <View style={{ alignItems: 'center', paddingVertical: 48 }}>
             <Feather name="search" size={48} color={colors.textSecondary} />
             <Text style={{ color: colors.textSecondary, marginTop: 16, textAlign: 'center' }}>
-              No results found for "{query}"
+              No results found for {query}
             </Text>
             <Text style={{ color: colors.textMuted, marginTop: 8, textAlign: 'center', fontSize: 13 }}>
               Try a different search term
@@ -353,7 +392,7 @@ export default function SearchTab() {
         {!searching && results.length > 0 && (
           <>
             <Text style={{ color: colors.textSecondary, marginBottom: 16, fontSize: 14 }}>
-              Found {results.length} result{results.length !== 1 ? 's' : ''} for "{query}"
+              Found {results.length} result{results.length !== 1 ? 's' : ''} for {query}
             </Text>
 
             <View style={isDesktop ? {

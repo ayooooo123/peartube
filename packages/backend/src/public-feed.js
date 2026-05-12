@@ -111,6 +111,12 @@ export class PublicFeedManager {
     this._gossipInterval = null;
     /** @type {number} */
     this._gossipIntervalMs = 30000;
+    /** @type {Array<{name: string, at: number, sinceStartMs: number, [key: string]: any}>} */
+    this._startupEvents = [];
+    /** @type {number} */
+    this._startupStartedAt = this._now();
+    this._recordStartupEvent('manager-created');
+
     /** @type {(() => void) | null} */
     this.onFeedUpdate = null;
     /** @type {((conn: any) => void) | null} */
@@ -127,6 +133,27 @@ export class PublicFeedManager {
     this._persistMaxEntries = 500
 
     log.info('Initialized')
+  }
+
+  _recordStartupEvent(name, details = {}) {
+    const at = this._now()
+    const event = {
+      name,
+      at,
+      sinceStartMs: Math.max(0, at - this._startupStartedAt),
+      ...details
+    }
+    this._startupEvents.push(event)
+    while (this._startupEvents.length > 80) this._startupEvents.shift()
+    return event
+  }
+
+  getStartupTiming() {
+    return {
+      startedAt: this._startupStartedAt,
+      elapsedMs: Math.max(0, this._now() - this._startupStartedAt),
+      events: this._startupEvents.slice(-40)
+    }
   }
 
   /**
@@ -617,6 +644,9 @@ export class PublicFeedManager {
     if (!this.swarm) return false
     const publicKey = this._peerEntryPublicKey(peer)
     const remembered = this._rememberPeerPublicKey(publicKey, peer, topic)
+    if (remembered) {
+      this._recordStartupEvent('feed-peer-discovered', { key: remembered.keyHex.slice(0, 16), topic: topic ? (this._isNetworkTopic(topic) ? 'peartube-network' : 'other') : 'unknown', relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0 })
+    }
     if (!remembered) {
       this._directPeerDialStats.skipped++
       this._directPeerDialStats.lastReason = 'self-or-missing-key'
@@ -727,6 +757,7 @@ export class PublicFeedManager {
   async start() {
     if (this.started) return;
     this.started = true;
+    this._recordStartupEvent('public-feed-start-called')
     console.log('[PublicFeed] ===== STARTING PUBLIC FEED =====');
 
     // Load persisted published channels from database
@@ -830,7 +861,9 @@ export class PublicFeedManager {
 
     try {
       this.feedDiscovery = this.swarm.join(NETWORK_TOPIC, { server: true, client: true })
+      this._recordStartupEvent('public-feed-topic-join-called', { topicHex: NETWORK_TOPIC_HEX })
       this.feedDiscovery?.flushed?.().then(() => {
+        this._recordStartupEvent('public-feed-topic-flushed', { peers: this.swarm.peers?.size || 0, connections: this.swarm.connections?.size || 0 })
         console.log('[PublicFeed] Shared network feed discovery flushed, connections:', this.swarm.connections?.size || 0)
       }).catch(() => {})
       console.log('[PublicFeed] Joined shared network feed topic:', NETWORK_TOPIC_HEX.slice(0, 16))
@@ -1015,6 +1048,7 @@ export class PublicFeedManager {
     const remoteKey = info?.publicKey || conn.remotePublicKey || conn.publicKey
     this._markPeerConnected(remoteKey)
     console.log('[PublicFeed] handleConnection:', label, 'setting up feed protocol on new connection');
+    this._recordStartupEvent('feed-socket-connected', { connection: label })
     this.wiredConnections.add(conn);
 
     let mux;
@@ -1083,6 +1117,7 @@ export class PublicFeedManager {
       }],
       onopen: () => {
         console.log('[PublicFeed] Feed channel opened:', label, 'Total feed connections:', this.feedConnections.size + 1, 'ageMs=', this._connectionAgeMs(conn));
+        this._recordStartupEvent('protomux-feed-open', { connection: label, ageMs: this._connectionAgeMs(conn), feedConnections: this.feedConnections.size + 1 })
         this.feedConnections.add(conn);
         try {
           this.onFeedConnectionOpen?.(conn);
@@ -1281,6 +1316,9 @@ export class PublicFeedManager {
       }
 
       const peerSetChanged = this._setPeerFeedKeys(conn, announcedKeys)
+      if (!this._startupEvents.some((event) => event.name === 'first-have-feed-received')) {
+        this._recordStartupEvent('first-have-feed-received', { keys: announcedKeys.length, entries: receivedCount })
+      }
       try {
         this.onFeedSync?.({ type: 'HAVE_FEED', added, received: receivedCount });
       } catch {}
@@ -1701,6 +1739,7 @@ export class PublicFeedManager {
       candidateConnections: feed.candidateConnections,
       rememberedPeerCandidates: feed.rememberedPeerCandidates,
       directPeerDial: this.getDirectPeerDialStats(),
+      startupTiming: this.getStartupTiming(),
     };
   }
 }

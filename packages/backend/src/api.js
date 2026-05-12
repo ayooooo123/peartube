@@ -2600,6 +2600,10 @@ export function createApi({
       const topicHex = b4a.toString(crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8')), 'hex')
       const networkDebug = getNetworkStats()
       const feedStats = publicFeed?.getStats?.() || {}
+      const startupTiming = {
+        storage: networkDebug?.startupTiming || null,
+        publicFeed: feedStats.startupTiming || null,
+      }
       const doctor = {
         dht: {
           bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
@@ -2639,6 +2643,7 @@ export function createApi({
         feedEntries: publicFeed?.entries?.size || 0,
         feedTopicHex: topicHex,
         network: networkDebug,
+        startupTiming,
         doctor,
         swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,

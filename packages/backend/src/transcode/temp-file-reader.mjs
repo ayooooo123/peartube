@@ -25,6 +25,8 @@ import path from 'bare-path'
 import os from 'bare-os'
 import http from 'bare-http1'
 
+/* eslint-disable no-empty */
+
 // Initial buffer before starting transcode
 // Keep this small for faster startup - we'll handle catching up gracefully
 const MIN_INITIAL_BUFFER = 20 * 1024 * 1024   // 20MB minimum - quick start
@@ -543,21 +545,20 @@ export class TempFileReader {
     const endPos = this.currentPos + toRead
     const availableToRead = this._getAvailableBytes(this.currentPos, toRead)
 
-    // If we've caught up to the download, return EOF immediately
-    // IMPORTANT: We cannot spin-wait here because it blocks the event loop,
-    // which prevents the HTTP download from receiving more data (deadlock!)
+    // If we've caught up to the download before true EOF, fail loudly instead
+    // of returning EOF. Returning 0 tells FFmpeg the input ended successfully,
+    // which silently truncates the transcode output.
     if (!this.downloadComplete && availableToRead <= 0) {
       this.waitCount++
       this.downloadUnderflow = true
+      this.downloadError = new Error('Download underflow before EOF')
       console.error('[TempFileReader] Transcoder caught up to download! STOPPING.',
         'pos:', Math.round(this.currentPos / 1024 / 1024) + 'MB',
         'downloaded:', Math.round(this.downloadedBytes / 1024 / 1024) + 'MB',
         'fileSize:', Math.round(this.fileSize / 1024 / 1024) + 'MB')
       console.error('[TempFileReader] This usually means the video is still being P2P synced.',
         'Wait for the video to fully download before casting.')
-      // Return EOF (0) instead of error (-1) to avoid FFmpeg crash
-      // Transcoding will end early but app won't crash
-      return 0
+      return -1
     }
     if (availableToRead > 0 && availableToRead < toRead) {
       toRead = availableToRead
@@ -647,23 +648,21 @@ export class TempFileReader {
       throw new Error('Must call startDownload() and wait before createIOContext()')
     }
 
-    const self = this
-
     // Use larger buffer for IOContext (128KB)
     const ioContext = new ffmpeg.IOContext(128 * 1024, {
       onread: (buffer) => {
-        return self.syncRead(buffer)
+        return this.syncRead(buffer)
       },
 
       onseek: (offset, whence) => {
-        return self.syncSeek(offset, whence)
+        return this.syncSeek(offset, whence)
       }
     })
 
     ioContext._reader = this
     ioContext._cleanup = () => {
-      console.log('[TempFileReader] IOContext cleanup - reads:', self.readCount,
-        'seeks:', self.seekCount, 'waits:', self.waitCount)
+      console.log('[TempFileReader] IOContext cleanup - reads:', this.readCount,
+        'seeks:', this.seekCount, 'waits:', this.waitCount)
     }
 
     return ioContext

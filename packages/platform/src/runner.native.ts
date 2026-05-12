@@ -1,5 +1,7 @@
+/* eslint-disable no-empty */
 import { createProtocolClient, PROTOCOL_EVENTS } from '@peartube/protocol'
 
+import { createJsonFrameParser, encodeJsonFrame } from './ipc-json-framing.js'
 import type { PlatformLifecycleEvent, PlatformRunner } from './rpc.shared'
 import { launchNativeWorklet } from './native-worklet-launch.js'
 
@@ -49,15 +51,15 @@ function sendShutdownSignalViaIpc(worklet: WorkletInstance, timeoutMs: number) {
       resolve()
     }, timeoutMs)
 
+    const parser = createJsonFrameParser()
+
     function onData(chunk: any) {
-      try {
-        const message = typeof chunk === 'string' ? chunk : chunk?.toString?.('utf-8') ?? ''
-        if (JSON.parse(message)?.type === 'shutdown-complete') {
+      for (const message of parser.push(chunk)) {
+        if (message?.type === 'shutdown-complete') {
           cleanup()
           resolve()
+          return
         }
-      } catch {
-        // Ignore non-JSON worklet output.
       }
     }
 
@@ -75,7 +77,7 @@ function sendShutdownSignalViaIpc(worklet: WorkletInstance, timeoutMs: number) {
     try {
       ipc.on?.('data', onData)
       ipc.on?.('close', onClose)
-      ipc.write(JSON.stringify({ type: 'shutdown' }))
+      ipc.write(encodeJsonFrame({ type: 'shutdown' }))
     } catch {
       cleanup()
       resolve()

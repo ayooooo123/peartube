@@ -1,8 +1,8 @@
 /**
  * Home Tab - YouTube-style Video Feed with P2P Public Feed Discovery
  */
-import { useCallback, useState, useEffect, useRef } from 'react'
-import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, AppState, AppStateStatus } from 'react-native'
+import { useCallback, useState, useEffect, useRef, useMemo } from 'react'
+import { View, Text, RefreshControl, Pressable, ActivityIndicator, Platform, ScrollView, FlatList, useWindowDimensions, AppState, AppStateStatus, type ListRenderItemInfo } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -16,6 +16,7 @@ import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
+import { chunkHomeFeedRows, getVirtualizedHomeFeedRows } from '@/lib/home-feed-virtualization'
 import {
   getFeedPreviewVideos,
   getFeedVideoHydrationMode,
@@ -74,6 +75,20 @@ interface ChannelMeta {
   description?: string
   videoCount?: number
 }
+
+type HomeFeedListItem =
+  | { type: 'discover-header' }
+  | { type: 'discover-loading' }
+  | { type: 'discover-empty' }
+  | { type: 'discover-row'; videos: VideoData[]; rowIndex: number }
+  | { type: 'my-videos-header' }
+  | { type: 'my-videos-empty' }
+  | { type: 'my-videos-row'; videos: VideoData[]; rowIndex: number }
+
+type ChannelListItem =
+  | { type: 'loading' }
+  | { type: 'empty' }
+  | { type: 'row'; videos: VideoData[]; rowIndex: number }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
@@ -870,6 +885,324 @@ export default function HomeScreen() {
 
   const backendConnecting = !ready
   const backendLoading = Boolean(loading)
+  const videoGridItemStyle = useMemo(() => isDesktop ? {
+    width: `calc(${100 / gridColumns}% - ${(gridColumns - 1) * 24 / gridColumns}px)`,
+  } as any : undefined, [isDesktop, gridColumns])
+
+  const discoverRows = useMemo(() => getVirtualizedHomeFeedRows({
+    videos: feedVideosWithThumbs,
+    activeCategory,
+    columns: gridColumns,
+  }) as VideoData[][], [feedVideosWithThumbs, activeCategory, gridColumns])
+
+  const myVideoRows = useMemo(
+    () => chunkHomeFeedRows(myVideosWithMeta, gridColumns) as VideoData[][],
+    [myVideosWithMeta, gridColumns]
+  )
+
+  const channelRows = useMemo(
+    () => chunkHomeFeedRows(channelVideosWithThumbs, gridColumns) as VideoData[][],
+    [channelVideosWithThumbs, gridColumns]
+  )
+
+  const homeFeedItems = useMemo<HomeFeedListItem[]>(() => {
+    const items: HomeFeedListItem[] = [{ type: 'discover-header' }]
+    if ((feedLoading || loadingFeedVideos) && feedVideos.length === 0) {
+      items.push({ type: 'discover-loading' })
+    } else if (discoverRows.length === 0) {
+      items.push({ type: 'discover-empty' })
+    } else {
+      discoverRows.forEach((row, rowIndex) => items.push({ type: 'discover-row', videos: row, rowIndex }))
+    }
+
+    items.push({ type: 'my-videos-header' })
+    if (myVideoRows.length === 0) {
+      items.push({ type: 'my-videos-empty' })
+    } else {
+      myVideoRows.forEach((row, rowIndex) => items.push({ type: 'my-videos-row', videos: row, rowIndex }))
+    }
+    return items
+  }, [discoverRows, feedLoading, loadingFeedVideos, feedVideos.length, myVideoRows])
+
+  const channelItems = useMemo<ChannelListItem[]>(() => {
+    if (loadingChannel) return [{ type: 'loading' }]
+    if (channelRows.length === 0) return [{ type: 'empty' }]
+    return channelRows.map((row, rowIndex) => ({ type: 'row', videos: row, rowIndex }))
+  }, [loadingChannel, channelRows])
+
+  const renderVideoRow = useCallback((
+    rowVideos: VideoData[],
+    {
+      showChannelInfo,
+      firstRowTestId,
+    }: { showChannelInfo: boolean; firstRowTestId?: boolean }
+  ) => (
+    <View style={isDesktop ? {
+      paddingHorizontal: 0,
+      flexDirection: 'row',
+      gap: 24,
+      marginBottom: 24,
+    } : { marginBottom: 12 }}>
+      {rowVideos.map((video, index) => (
+        <View
+          key={`${video.channelKey || 'local'}-${video.id}`}
+          style={videoGridItemStyle}
+        >
+          <VideoCard
+            video={video}
+            onPress={() => playVideo(video)}
+            showChannelInfo={showChannelInfo}
+            onChannelPress={showChannelInfo && video.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: video.channelKey, publicBeeKey: video.publicBeeKey || undefined } }) : undefined}
+            testID={firstRowTestId && index === 0 ? 'discover-feed-first-video' : undefined}
+          />
+        </View>
+      ))}
+    </View>
+  ), [isDesktop, playVideo, router, videoGridItemStyle])
+
+  const renderChannelItem = useCallback(({ item }: ListRenderItemInfo<ChannelListItem>) => {
+    if (item.type === 'loading') {
+      return (
+        <View className="py-12 items-center">
+          <ActivityIndicator color={colors.primary} size="large" />
+          <Text className="text-label text-pear-text-muted mt-4">Loading videos...</Text>
+        </View>
+      )
+    }
+    if (item.type === 'empty') {
+      return (
+        <View className="py-12 items-center bg-pear-bg-elevated rounded-xl" style={{ marginHorizontal: isDesktop ? 0 : 20 }}>
+          <Text className="text-label text-pear-text mt-2">No videos yet</Text>
+        </View>
+      )
+    }
+    return renderVideoRow(item.videos, { showChannelInfo: false })
+  }, [isDesktop, renderVideoRow])
+
+  const renderHomeFeedItem = useCallback(({ item }: ListRenderItemInfo<HomeFeedListItem>) => {
+    if (item.type === 'discover-header') {
+      return (
+        <View style={{ paddingHorizontal: isDesktop ? 24 : 20, paddingTop: isDesktop ? 24 : 16 }}>
+          <View className="flex-row items-center justify-between mb-3">
+            <View className="flex-row items-center">
+              <Feather name="globe" color={colors.primary} size={18} />
+              <Text className="text-headline text-pear-text ml-2">Discover</Text>
+              {peerCount > 0 && (
+                <View className="flex-row items-center ml-2 bg-pear-bg-card px-2 py-0.5 rounded-full">
+                  <Feather name="users" color={colors.textMuted} size={12} />
+                  <Text className="text-caption text-pear-text-muted ml-1">{peerCount}</Text>
+                </View>
+              )}
+            </View>
+            <Pressable
+              onPress={refreshFeed}
+              className="p-2 active:opacity-60"
+              disabled={feedLoading || backendConnecting || !rpc}
+            >
+              <Feather
+                name="refresh-cw"
+                color={(feedLoading || backendConnecting || !rpc) ? colors.textMuted : colors.primary}
+                size={18}
+              />
+            </Pressable>
+          </View>
+
+          {(backendConnecting || backendLoading || backendError) && (
+            <View
+              style={{
+                borderWidth: 1,
+                borderColor: colors.border,
+                backgroundColor: colors.bgSecondary,
+                borderRadius: 12,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                marginBottom: 12,
+              }}
+            >
+              {backendError ? (
+                <>
+                  <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
+                    Backend error
+                  </Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                    {backendError}
+                  </Text>
+                  {retryBackend ? (
+                    <Pressable
+                      onPress={retryBackend}
+                      style={{
+                        marginTop: 10,
+                        alignSelf: 'flex-start',
+                        paddingHorizontal: 14,
+                        paddingVertical: 8,
+                        borderRadius: 999,
+                        backgroundColor: colors.primary,
+                      }}
+                    >
+                      <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Retry backend</Text>
+                    </Pressable>
+                  ) : null}
+                </>
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                      {backendConnecting
+                        ? (startupStatus || 'Connecting to P2P network...')
+                        : 'Loading...'}
+                    </Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
+                      {backendConnecting
+                        ? 'You can browse the UI while the backend starts.'
+                        : 'Fetching identities and videos in the background.'}
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+              <Text style={{ color: colors.text, fontSize: 12 }}>Peers: {swarmStatus?.peers ?? peerCount}</Text>
+              {swarmStatus?.feedConnections !== undefined && (
+                <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Feed: {swarmStatus.feedConnections}</Text>
+              )}
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+              <Text style={{ color: colors.text, fontSize: 12 }}>Channels: {feedEntries.length}</Text>
+              {swarmStatus?.channels !== undefined && (
+                <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Channels: {swarmStatus.channels}</Text>
+              )}
+            </View>
+            {lastFeedRefresh && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+                <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                  Updated {formatTimeAgo(lastFeedRefresh)}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={{ marginBottom: 12 }}
+            contentContainerStyle={{ gap: 8 }}
+          >
+            {categories.map((cat) => (
+              <Pressable
+                key={cat}
+                onPress={() => setActiveCategory(cat)}
+                style={{
+                  paddingHorizontal: 16,
+                  paddingVertical: 8,
+                  borderRadius: 8,
+                  backgroundColor: activeCategory === cat ? colors.text : colors.bgCard,
+                }}
+              >
+                <Text style={{
+                  fontSize: 14,
+                  fontWeight: '500',
+                  color: activeCategory === cat ? colors.bg : colors.text,
+                }}>
+                  {cat}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )
+    }
+
+    if (item.type === 'discover-loading') {
+      return (
+        <View className="py-8 items-center" style={{ paddingHorizontal: isDesktop ? 24 : 20 }}>
+          <ActivityIndicator color={colors.primary} />
+          <Text className="text-caption text-pear-text-muted mt-2">Discovering videos...</Text>
+        </View>
+      )
+    }
+
+    if (item.type === 'discover-empty') {
+      return (
+        <View style={{ paddingHorizontal: isDesktop ? 24 : 20 }}>
+          <View className="py-8 items-center bg-pear-bg-elevated rounded-xl">
+            <Feather name="globe" color={colors.textMuted} size={32} />
+            <Text className="text-label text-pear-text mt-2">No seeded videos discovered yet</Text>
+            <Text className="text-caption text-pear-text-muted mt-1">Click refresh or wait for peers that are actively announcing channels</Text>
+          </View>
+        </View>
+      )
+    }
+
+    if (item.type === 'discover-row') {
+      return (
+        <View style={{ paddingHorizontal: isDesktop ? 24 : 20 }}>
+          {renderVideoRow(item.videos, { showChannelInfo: true, firstRowTestId: item.rowIndex === 0 })}
+        </View>
+      )
+    }
+
+    if (item.type === 'my-videos-header') {
+      return (
+        <View style={{ paddingTop: 12, paddingHorizontal: isDesktop ? 24 : 20 }}>
+          <View className="flex-row items-center justify-between mb-3">
+            <Text className="text-headline text-pear-text">Your Videos</Text>
+            <Pressable
+              onPress={refreshMyVideos}
+              className="p-2 active:opacity-60"
+              disabled={refreshingMyVideos || !identity?.driveKey}
+            >
+              <Feather name="refresh-cw" color={refreshingMyVideos ? colors.textMuted : colors.primary} size={18} />
+            </Pressable>
+          </View>
+        </View>
+      )
+    }
+
+    if (item.type === 'my-videos-empty') {
+      return (
+        <View style={{ paddingHorizontal: isDesktop ? 24 : 20 }}>
+          <View className="py-12 items-center bg-pear-bg-elevated rounded-xl">
+            <Text className="text-display mb-4">📺</Text>
+            <Text className="text-label text-pear-text mb-2">No videos yet</Text>
+            <Text className="text-caption text-pear-text-muted text-center px-8">
+              Upload your first video from the Studio tab
+            </Text>
+          </View>
+        </View>
+      )
+    }
+
+    return (
+      <View style={{ paddingHorizontal: isDesktop ? 24 : 0 }}>
+        {renderVideoRow(item.videos, { showChannelInfo: true })}
+      </View>
+    )
+  }, [
+    activeCategory,
+    backendConnecting,
+    backendError,
+    backendLoading,
+    categories,
+    feedEntries.length,
+    feedLoading,
+    identity?.driveKey,
+    isDesktop,
+    lastFeedRefresh,
+    loadingFeedVideos,
+    peerCount,
+    refreshFeed,
+    refreshMyVideos,
+    refreshingMyVideos,
+    renderVideoRow,
+    retryBackend,
+    rpc,
+    startupStatus,
+    swarmStatus,
+  ])
 
   return (
     <View className="flex-1 bg-pear-bg">
@@ -909,262 +1242,38 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <ScrollView contentContainerStyle={{ paddingBottom: bottomPadding, paddingHorizontal: isDesktop ? 24 : 0 }}>
-            {loadingChannel ? (
-              <View className="py-12 items-center">
-                <ActivityIndicator color={colors.primary} size="large" />
-                <Text className="text-label text-pear-text-muted mt-4">Loading videos...</Text>
-              </View>
-            ) : channelVideos.length === 0 ? (
-              <View className="py-12 items-center bg-pear-bg-elevated rounded-xl" style={{ marginHorizontal: isDesktop ? 0 : 20 }}>
-                <Text className="text-label text-pear-text mt-2">No videos yet</Text>
-              </View>
-            ) : (
-              <View style={isDesktop ? { paddingTop: 16, flexDirection: 'row', flexWrap: 'wrap', gap: 24 } : { paddingTop: 8 }}>
-                {channelVideosWithThumbs.map((video) => (
-                  <View
-                    key={video.id}
-                    style={isDesktop ? {
-                      width: `calc(${100 / gridColumns}% - ${(gridColumns - 1) * 24 / gridColumns}px)`,
-                    } as any : undefined}
-                  >
-                    <VideoCard
-                      video={video}
-                      onPress={() => playVideo(video)}
-                      showChannelInfo={false}
-                    />
-                  </View>
-                ))}
-              </View>
-            )}
-          </ScrollView>
+          <FlatList
+            data={channelItems}
+            keyExtractor={(item) => item.type === 'row' ? `channel-row-${item.rowIndex}` : item.type}
+            renderItem={renderChannelItem}
+            contentContainerStyle={{ paddingBottom: bottomPadding, paddingHorizontal: isDesktop ? 24 : 0, paddingTop: isDesktop ? 16 : 8, flexGrow: 1 }}
+            showsVerticalScrollIndicator={false}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={5}
+            windowSize={10}
+            initialNumToRender={4}
+          />
         </View>
       )}
 
       {/* Main Feed */}
       {!viewingChannel && (
-        <ScrollView
+        <FlatList
+          data={homeFeedItems}
+          keyExtractor={(item) => (
+            item.type === 'discover-row' || item.type === 'my-videos-row'
+              ? `${item.type}-${item.rowIndex}`
+              : item.type
+          )}
+          renderItem={renderHomeFeedItem}
           contentContainerStyle={{ paddingBottom: bottomPadding, flexGrow: 1 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-        >
-          {/* Discover Section */}
-          <View style={{ paddingHorizontal: isDesktop ? 24 : 20, paddingTop: isDesktop ? 24 : 16 }}>
-            <View className="flex-row items-center justify-between mb-3">
-              <View className="flex-row items-center">
-                <Feather name="globe" color={colors.primary} size={18} />
-                <Text className="text-headline text-pear-text ml-2">Discover</Text>
-                {peerCount > 0 && (
-                  <View className="flex-row items-center ml-2 bg-pear-bg-card px-2 py-0.5 rounded-full">
-                    <Feather name="users" color={colors.textMuted} size={12} />
-                    <Text className="text-caption text-pear-text-muted ml-1">{peerCount}</Text>
-                  </View>
-                )}
-              </View>
-              <Pressable
-                onPress={refreshFeed}
-                className="p-2 active:opacity-60"
-                disabled={feedLoading || backendConnecting || !rpc}
-              >
-                <Feather
-                  name="refresh-cw"
-                  color={(feedLoading || backendConnecting || !rpc) ? colors.textMuted : colors.primary}
-                  size={18}
-                />
-              </Pressable>
-            </View>
-
-            {(backendConnecting || backendLoading || backendError) && (
-              <View
-                style={{
-                  borderWidth: 1,
-                  borderColor: colors.border,
-                  backgroundColor: colors.bgSecondary,
-                  borderRadius: 12,
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                  marginBottom: 12,
-                }}
-              >
-                {backendError ? (
-                  <>
-                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', marginBottom: 6 }}>
-                      Backend error
-                    </Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 12 }}>
-                      {backendError}
-                    </Text>
-                    {retryBackend ? (
-                      <Pressable
-                        onPress={retryBackend}
-                        style={{
-                          marginTop: 10,
-                          alignSelf: 'flex-start',
-                          paddingHorizontal: 14,
-                          paddingVertical: 8,
-                          borderRadius: 999,
-                          backgroundColor: colors.primary,
-                        }}
-                      >
-                        <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Retry backend</Text>
-                      </Pressable>
-                    ) : null}
-                  </>
-                ) : (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
-                        {backendConnecting
-                          ? (startupStatus || 'Connecting to P2P network…')
-                          : 'Loading…'}
-                      </Text>
-                      <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
-                        {backendConnecting
-                          ? 'You can browse the UI while the backend starts.'
-                          : 'Fetching identities and videos in the background.'}
-                      </Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-            )}
-
-            {/* P2P status pills */}
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
-                <Text style={{ color: colors.text, fontSize: 12 }}>Peers: {swarmStatus?.peers ?? peerCount}</Text>
-                {swarmStatus?.feedConnections !== undefined && (
-                  <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Feed: {swarmStatus.feedConnections}</Text>
-                )}
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
-                <Text style={{ color: colors.text, fontSize: 12 }}>Channels: {feedEntries.length}</Text>
-          {swarmStatus?.channels !== undefined && (
-          <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Channels: {swarmStatus.channels}</Text>
-        )}
-              </View>
-              {lastFeedRefresh && (
-                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
-                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>
-                    Updated {formatTimeAgo(lastFeedRefresh)}
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            {/* Category Filter Chips */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={{ marginBottom: 12 }}
-              contentContainerStyle={{ gap: 8 }}
-            >
-              {categories.map((cat) => (
-                <Pressable
-                  key={cat}
-                  onPress={() => setActiveCategory(cat)}
-                  style={{
-                    paddingHorizontal: 16,
-                    paddingVertical: 8,
-                    borderRadius: 8,
-                    backgroundColor: activeCategory === cat ? colors.text : colors.bgCard,
-                  }}
-                >
-                  <Text style={{
-                    fontSize: 14,
-                    fontWeight: '500',
-                    color: activeCategory === cat ? colors.bg : colors.text,
-                  }}>
-                    {cat}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-
-            {(feedLoading || loadingFeedVideos) && feedVideos.length === 0 ? (
-              <View className="py-8 items-center">
-                <ActivityIndicator color={colors.primary} />
-                <Text className="text-caption text-pear-text-muted mt-2">Discovering videos...</Text>
-              </View>
-            ) : feedVideosWithThumbs.length === 0 ? (
-              <View className="py-8 items-center bg-pear-bg-elevated rounded-xl">
-                <Feather name="globe" color={colors.textMuted} size={32} />
-                <Text className="text-label text-pear-text mt-2">No seeded videos discovered yet</Text>
-                <Text className="text-caption text-pear-text-muted mt-1">Click refresh or wait for peers that are actively announcing channels</Text>
-              </View>
-            ) : (
-              <View style={isDesktop ? {
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                gap: 24,
-              } : { gap: 12 }}>
-                {feedVideosWithThumbs
-                  .filter(v => activeCategory === 'All' || (v as any).category === activeCategory)
-                  .map((video, index) => (
-                  <View
-                    key={`${video.channelKey}-${video.id}`}
-                    style={isDesktop ? {
-                      width: `calc(${100 / gridColumns}% - ${(gridColumns - 1) * 24 / gridColumns}px)`,
-                    } as any : { marginBottom: 12 }}
-                  >
-                    <VideoCard
-                      video={video}
-                      onPress={() => playVideo(video)}
-                      showChannelInfo={true}
-                      onChannelPress={video.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: video.channelKey, publicBeeKey: video.publicBeeKey || undefined } }) : undefined}
-                      testID={index === 0 ? 'discover-feed-first-video' : undefined}
-                    />
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-
-          {/* Your Videos - Responsive Grid on Desktop, List on Mobile */}
-          <View style={{ paddingTop: 24, paddingHorizontal: isDesktop ? 24 : 0 }}>
-            <View className="flex-row items-center justify-between mb-3" style={{ paddingHorizontal: isDesktop ? 0 : 20 }}>
-              <Text className="text-headline text-pear-text">Your Videos</Text>
-              <Pressable
-                onPress={refreshMyVideos}
-                className="p-2 active:opacity-60"
-                disabled={refreshingMyVideos || !identity?.driveKey}
-              >
-                <Feather name="refresh-cw" color={refreshingMyVideos ? colors.textMuted : colors.primary} size={18} />
-              </Pressable>
-            </View>
-            {myVideosWithMeta.length === 0 ? (
-              <View className="py-12 items-center bg-pear-bg-elevated rounded-xl" style={{ marginHorizontal: isDesktop ? 0 : 20 }}>
-                <Text className="text-display mb-4">📺</Text>
-                <Text className="text-label text-pear-text mb-2">No videos yet</Text>
-                <Text className="text-caption text-pear-text-muted text-center px-8">
-                  Upload your first video from the Studio tab
-                </Text>
-              </View>
-            ) : (
-              <View style={isDesktop ? {
-                flexDirection: 'row',
-                flexWrap: 'wrap',
-                gap: 24,
-              } : { gap: 12 }}>
-                {myVideosWithMeta.map((video) => (
-                  <View
-                    key={video.id}
-                    style={isDesktop ? {
-                      width: `calc(${100 / gridColumns}% - ${(gridColumns - 1) * 24 / gridColumns}px)`,
-                    } as any : { marginBottom: 12 }}
-                  >
-                    <VideoCard
-                      video={video}
-                      onPress={() => playVideo(video)}
-                      showChannelInfo={true}
-                      onChannelPress={video.channelKey ? () => router.push({ pathname: '/channel/[key]', params: { key: video.channelKey, publicBeeKey: video.publicBeeKey || undefined } }) : undefined}
-                    />
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-        </ScrollView>
+          showsVerticalScrollIndicator={false}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={5}
+          windowSize={10}
+          initialNumToRender={4}
+        />
       )}
     </View>
   )

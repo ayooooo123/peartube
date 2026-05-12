@@ -330,14 +330,17 @@ export default function VerticalDiscoveryScreen() {
   }, [loadFeed, platformEvents, ready, rpc])
 
   const stopShortsPlayback = useCallback(() => {
+    void shortsPlayerRef.current?.exitPictureInPicture?.()
     void shortsPlayerRef.current?.stop?.()
     void shortsPlayerRef.current?.pause?.()
+    void shortsPlayerRef.current?.destroy?.()
     pendingPlayKeyRef.current = null
     playbackRequestSeqRef.current += 1
+    setAmbientVideoContext(null, null)
     setShortsVideoUrl(null)
     setCommentsSheetVisible(false)
     setShortsLoading(false)
-  }, [])
+  }, [setAmbientVideoContext])
 
   useFocusEffect(
     useCallback(() => {

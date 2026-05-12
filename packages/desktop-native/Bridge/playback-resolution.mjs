@@ -60,20 +60,6 @@ export async function resolvePlaybackViaClient({
 
   const { videoId, request } = createVideoRequest(params)
 
-  if (typeof client.video.prefetchVideo === 'function') {
-    const prefetchResult = await withTimeout(
-      () => client.video.prefetchVideo({
-        channelKey: params.channelKey,
-        videoId: request.videoId,
-        publicBeeKey: params.publicBeeKey || undefined,
-      }),
-      { success: false, error: 'Playback prefetch timed out' },
-      prefetchTimeoutMs
-    )
-
-    logPrefetchOutcome(log, params, prefetchResult)
-  }
-
   const response = await client.video.getVideoUrl(request)
 
   if (!response?.url) {
@@ -81,6 +67,22 @@ export async function resolvePlaybackViaClient({
   }
 
   if (typeof client.video.prefetchVideo === 'function') {
+    queueMicrotask(() => {
+      void withTimeout(
+        () => client.video.prefetchVideo({
+          channelKey: params.channelKey,
+          videoId: request.videoId,
+          publicBeeKey: params.publicBeeKey || undefined,
+        }),
+        { success: false, error: 'Playback prefetch timed out' },
+        prefetchTimeoutMs
+      )
+        .then((prefetchResult) => logPrefetchOutcome(log, params, prefetchResult))
+        .catch((error) => {
+          log(`Playback prefetch failed for ${params.videoId}: ${error?.message || String(error)}`)
+        })
+    })
+
     queueMicrotask(() => {
       void withTimeout(
         () => client.video.getVideoStats?.({

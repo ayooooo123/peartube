@@ -25,6 +25,8 @@ import path from 'bare-path'
 import os from 'bare-os'
 import http from 'bare-http1'
 
+/* eslint-disable no-empty */
+
 // Initial buffer before starting transcode
 // Keep this small for faster startup - we'll handle catching up gracefully
 const MIN_INITIAL_BUFFER = 20 * 1024 * 1024   // 20MB minimum - quick start
@@ -646,23 +648,21 @@ export class TempFileReader {
       throw new Error('Must call startDownload() and wait before createIOContext()')
     }
 
-    const self = this
-
     // Use larger buffer for IOContext (128KB)
     const ioContext = new ffmpeg.IOContext(128 * 1024, {
       onread: (buffer) => {
-        return self.syncRead(buffer)
+        return this.syncRead(buffer)
       },
 
       onseek: (offset, whence) => {
-        return self.syncSeek(offset, whence)
+        return this.syncSeek(offset, whence)
       }
     })
 
     ioContext._reader = this
     ioContext._cleanup = () => {
-      console.log('[TempFileReader] IOContext cleanup - reads:', self.readCount,
-        'seeks:', self.seekCount, 'waits:', self.waitCount)
+      console.log('[TempFileReader] IOContext cleanup - reads:', this.readCount,
+        'seeks:', this.seekCount, 'waits:', this.waitCount)
     }
 
     return ioContext

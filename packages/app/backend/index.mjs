@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, no-undef, @typescript-eslint/no-require-imports, @typescript-eslint/no-unused-expressions */
 /**
  * PearTube Mobile Backend Entry
  *

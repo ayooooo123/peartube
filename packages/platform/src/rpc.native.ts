@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, @typescript-eslint/no-empty-object-type */
 /**
  * RPC Client - Native (React Native / Mobile)
  *

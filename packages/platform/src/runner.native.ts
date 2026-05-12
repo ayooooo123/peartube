@@ -1,3 +1,4 @@
+/* eslint-disable no-empty */
 import { createProtocolClient, PROTOCOL_EVENTS } from '@peartube/protocol'
 
 import { createJsonFrameParser, encodeJsonFrame } from './ipc-json-framing.js'

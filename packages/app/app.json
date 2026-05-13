@@ -39,7 +39,8 @@
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.ACCESS_WIFI_STATE",
         "android.permission.CHANGE_WIFI_MULTICAST_STATE",
-        "android.permission.NEARBY_WIFI_DEVICES"
+        "android.permission.NEARBY_WIFI_DEVICES",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -63,7 +64,7 @@
         {
           "android": {
             "minSdkVersion": 29,
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": false
           }
         }
       ],

@@ -2068,7 +2068,7 @@ export function VideoPlayerOverlay() {
     return null
   }
 
-  if (hideGlobalOverlayOnDiscover && playerMode !== 'hidden' && !isInPipMode) {
+  if (hideGlobalOverlayOnDiscover && playerMode !== 'hidden') {
     return null
   }
 

@@ -62,6 +62,25 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
     setPlaybackProgress({ currentTime: 0, duration: 0 })
   }, [videoKey])
 
+  useEffect(() => {
+    return () => {
+      const player = playerRef.current
+      if (!player) return
+
+      try {
+        void player.exitPictureInPicture?.()
+      } catch {}
+
+      try {
+        void player.stop?.()
+      } catch {}
+
+      try {
+        void player.destroy?.()
+      } catch {}
+    }
+  }, [playerRef])
+
   const isLandscape = useMemo(() => {
     if (!videoSize) return false
     return videoSize.width > videoSize.height * 1.12

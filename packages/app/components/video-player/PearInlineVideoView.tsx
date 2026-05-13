@@ -184,6 +184,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         },
         destroy: async () => {
           videoRef.current?.dismissFullscreenPlayer?.()
+          void videoRef.current?.exitPictureInPicture?.()
           videoRef.current?.pause?.()
           videoRef.current?.seek(0)
         },
@@ -221,6 +222,26 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (!playerRef) return
     playerRef.current = adapter
     return () => {
+      if (playerRef.current === adapter) {
+        playerRef.current = null
+      }
+    }
+  }, [adapter, playerRef])
+
+  useEffect(() => {
+    return () => {
+      try {
+        videoRef.current?.dismissFullscreenPlayer?.()
+      } catch {}
+      try {
+        void videoRef.current?.exitPictureInPicture?.()
+      } catch {}
+      try {
+        videoRef.current?.pause?.()
+      } catch {}
+      try {
+        videoRef.current?.seek?.(0)
+      } catch {}
       if (playerRef.current === adapter) {
         playerRef.current = null
       }

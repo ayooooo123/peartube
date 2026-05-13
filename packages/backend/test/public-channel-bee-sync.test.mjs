@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 import Corestore from 'corestore'
 import { PublicChannelBee } from '../src/channel/public-channel-bee.js'
+import { MultiWriterChannel } from '../src/channel/multi-writer-channel.js'
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix))
@@ -15,16 +16,25 @@ async function closeSilently(resource) {
   try { await resource.close() } catch {}
 }
 
-test('syncFromChannel keeps existing public videos when a channel unexpectedly reads empty', async (t) => {
+async function withPublicBee(fn) {
   const dir = makeTempDir('peartube-public-bee-sync-')
   const store = new Corestore(dir)
   let publicBee = null
 
   try {
     await store.ready()
-    publicBee = new PublicChannelBee(store, { name: 'public-sync-guard-test' })
+    publicBee = new PublicChannelBee(store, { name: `public-sync-${Date.now()}-${Math.random()}` })
     await publicBee.ready()
+    await fn(publicBee)
+  } finally {
+    await closeSilently(publicBee)
+    await closeSilently(store)
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
 
+test('syncFromChannel keeps existing public videos when a channel unexpectedly reads empty', async (t) => {
+  await withPublicBee(async (publicBee) => {
     await publicBee.putVideo('video-1', {
       title: 'Existing public video',
       uploadedAt: 1,
@@ -48,9 +58,91 @@ test('syncFromChannel keeps existing public videos when a channel unexpectedly r
     t.is(videos.length, 1)
     t.is(videos[0]?.id, 'video-1')
     t.is(videos[0]?.title, 'Existing public video')
-  } finally {
-    await closeSilently(publicBee)
-    await closeSilently(store)
-    rmSync(dir, { recursive: true, force: true })
+  })
+})
+
+test('syncFromChannel merges partial channel views without deleting missing public videos', async (t) => {
+  await withPublicBee(async (publicBee) => {
+    await publicBee.putVideo('video-1', {
+      title: 'Existing public video',
+      uploadedAt: 1,
+    })
+    await publicBee.putVideo('video-2', {
+      title: 'Second existing public video',
+      uploadedAt: 2,
+    })
+
+    await publicBee.syncFromChannel({
+      keyHex: 'bb'.repeat(32),
+      async getMetadata() {
+        return { name: 'Partial Channel' }
+      },
+      async listVideos() {
+        return [{
+          id: 'video-1',
+          title: 'Updated from partial view',
+          uploadedAt: 3,
+        }]
+      },
+    })
+
+    const videos = await publicBee.listVideos()
+    const byId = new Map(videos.map((video) => [video.id, video]))
+
+    t.is(videos.length, 2)
+    t.is(byId.get('video-1')?.title, 'Updated from partial view')
+    t.is(byId.get('video-2')?.title, 'Second existing public video')
+  })
+})
+
+test('syncVideos remains destructive by default for complete source snapshots', async (t) => {
+  await withPublicBee(async (publicBee) => {
+    await publicBee.putVideo('video-1', { title: 'Keep', uploadedAt: 1 })
+    await publicBee.putVideo('video-2', { title: 'Delete', uploadedAt: 2 })
+
+    await publicBee.syncVideos([{ id: 'video-1', title: 'Kept', uploadedAt: 3 }])
+
+    const videos = await publicBee.listVideos()
+    t.is(videos.length, 1)
+    t.is(videos[0]?.id, 'video-1')
+    t.is(videos[0]?.title, 'Kept')
+  })
+})
+
+test('MultiWriterChannel video mutations do not scan all videos for logical clocks', async (t) => {
+  const channel = Object.create(MultiWriterChannel.prototype)
+  channel._lastVideoLogicalClock = 0
+  channel.base = { local: { key: Buffer.from('cc'.repeat(32), 'hex') } }
+  channel.publicBee = null
+
+  let appendedAdd = null
+  let appendedUpdate = null
+  let safeUpdates = 0
+
+  channel.listVideos = async () => {
+    throw new Error('listVideos should not be called to compute logicalClock')
   }
+  channel.appendOp = async (op) => {
+    if (op.type === 'add-video') appendedAdd = op
+    if (op.type === 'update-video') appendedUpdate = op
+  }
+  channel._safeUpdate = async () => {
+    safeUpdates += 1
+  }
+  channel.getVideo = async (id) => ({
+    id,
+    title: 'Existing',
+    logicalClock: 100,
+  })
+
+  await channel.addVideo({ id: 'video-1', title: 'New video' })
+  await channel.updateVideo('video-1', { title: 'Updated video' })
+
+  t.is(appendedAdd?.type, 'add-video')
+  t.is(appendedAdd?.id, 'video-1')
+  t.ok(Number.isSafeInteger(appendedAdd?.logicalClock), 'addVideo assigns a logical clock')
+  t.is(appendedUpdate?.type, 'update-video')
+  t.is(appendedUpdate?.id, 'video-1')
+  t.ok(appendedUpdate?.logicalClock > appendedAdd?.logicalClock, 'updateVideo clock advances without scanning')
+  t.is(safeUpdates, 2)
 })

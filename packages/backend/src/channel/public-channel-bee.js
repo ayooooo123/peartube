@@ -236,38 +236,46 @@ export class PublicChannelBee extends ReadyResource {
    * Sync all videos from a source (e.g., Autobase channel)
    * @param {Array<Object>} videos - Video metadata array
    */
-  async syncVideos(videos) {
+  async syncVideos(videos, opts = {}) {
     if (!this.writable) throw new Error('Not writable')
 
+    const destructive = opts.destructive !== false
     const batch = this.bee.batch()
 
-    // Get existing video IDs
+    // Get existing video IDs only when this sync is allowed to delete missing
+    // entries. Non-destructive callers may be syncing from stale/partial views.
     const existing = new Set()
-    const existingVideos = await this.listVideos()
-    for (const v of existingVideos) {
-      existing.add(v.id)
+    if (destructive) {
+      const existingVideos = await this.listVideos()
+      for (const v of existingVideos) {
+        existing.add(v.id)
+      }
     }
 
     // Add/update videos from source
     const sourceIds = new Set()
+    const now = Date.now()
     for (const video of videos) {
       if (!video.id) continue
       sourceIds.add(video.id)
       await batch.put(`videos/${video.id}`, {
         ...video,
-        syncedAt: Date.now()
+        syncedAt: now
       })
     }
 
-    // Delete videos that no longer exist in source
-    for (const id of existing) {
-      if (!sourceIds.has(id)) {
-        await batch.del(`videos/${id}`)
+    // Delete videos that no longer exist in source only for explicitly complete
+    // source snapshots. syncFromChannel intentionally disables this path.
+    if (destructive) {
+      for (const id of existing) {
+        if (!sourceIds.has(id)) {
+          await batch.del(`videos/${id}`)
+        }
       }
     }
 
     await batch.flush()
-    console.log('[PublicBee] Synced', videos.length, 'videos')
+    console.log('[PublicBee] Synced', videos.length, 'videos', destructive ? '(destructive)' : '(non-destructive)')
   }
 
   /**
@@ -287,18 +295,11 @@ export class PublicChannelBee extends ReadyResource {
         await this.setMetadata(meta)
       }
 
-      // Sync videos
+      // Sync videos non-destructively. The Autobase view may be stale or
+      // partially materialized (especially after bounded replication waits), so
+      // absence from this read must not delete already-published public videos.
       const videos = await channel.listVideos()
-      if ((videos?.length || 0) === 0) {
-        const existingVideos = await this.listVideos()
-        if (existingVideos.length > 0) {
-          console.warn(
-            '[PublicBee] syncFromChannel: channel returned 0 videos while public bee still has content; skipping destructive sync'
-          )
-          return
-        }
-      }
-      await this.syncVideos(videos)
+      await this.syncVideos(videos || [], { destructive: false })
 
       console.log('[PublicBee] Synced from channel:', channel.keyHex?.slice(0, 16))
     } catch (err) {

@@ -13,7 +13,11 @@ function makeTempDir(prefix) {
 
 async function closeSilently(resource) {
   if (!resource || typeof resource.close !== 'function') return
-  try { await resource.close() } catch {}
+  try {
+    await resource.close()
+  } catch {
+    // Best-effort cleanup for temporary Corestore resources.
+  }
 }
 
 async function withPublicBee(fn) {

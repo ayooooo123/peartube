@@ -96,6 +96,11 @@ export class MultiWriterChannel extends ReadyResource {
     /** @type {Map<string, {count: number, windowStartMs: number}>} */
     this._localRateLimits = new Map()
 
+    // Local monotonic clock for video mutations. This intentionally avoids
+    // scanning the full video index on every add/update; the view apply path is
+    // still deterministic because the chosen clock is persisted in the op.
+    this._lastVideoLogicalClock = 0
+
     // CRITICAL: Queue connections that arrive before base is ready
     // This prevents the race condition where connections arrive during _open()
     // but before we can call base.replicate()
@@ -372,6 +377,13 @@ export class MultiWriterChannel extends ReadyResource {
     // - view entries contain schemaVersion/logicalClock but not type
     const { type, schemaVersion, logicalClock, ...rest } = value
     return rest
+  }
+
+  _nextVideoLogicalClock() {
+    const now = Date.now()
+    const next = Math.max(this._lastVideoLogicalClock + 1, now)
+    this._lastVideoLogicalClock = next
+    return next
   }
 
   async _syncPublicBeeFromViewDiff(beforeSnapshot, afterSnapshot) {
@@ -1439,16 +1451,7 @@ export class MultiWriterChannel extends ReadyResource {
     if (!id) throw new Error('Video id required')
     console.log('[Channel] addVideo:', id, 'blobId:', meta.blobId, 'blobsCoreKey:', meta.blobsCoreKey?.slice(0, 16), 'keyLen:', meta.blobsCoreKey?.length)
 
-    // Get next logical clock. Use a timeout to avoid hanging when the
-    // Autobase view has blocks from remote writers that aren't available locally.
-    const videos = await Promise.race([
-      this.listVideos().catch(() => []),
-      new Promise(resolve => setTimeout(() => resolve(null), 5000))
-    ])
-    const maxClock = videos
-      ? Math.max(...videos.map(v => v.logicalClock || 0), 0)
-      : Date.now()
-    const nextClock = maxClock + 1
+    const nextClock = this._nextVideoLogicalClock()
 
     const videoMeta = {
       type: 'add-video',
@@ -1493,16 +1496,7 @@ export class MultiWriterChannel extends ReadyResource {
     const existing = await this.getVideo(id)
     if (!existing) throw new Error('Video not found: ' + id)
 
-    // Get next logical clock. Use a timeout to avoid hanging when the
-    // Autobase view has blocks from remote writers that aren't available locally.
-    const videos = await Promise.race([
-      this.listVideos().catch(() => []),
-      new Promise(resolve => setTimeout(() => resolve(null), 5000))
-    ])
-    const maxClock = videos
-      ? Math.max(...videos.map(v => v.logicalClock || 0), 0)
-      : Date.now()
-    const nextClock = maxClock + 1
+    const nextClock = this._nextVideoLogicalClock()
 
     const videoMeta = {
       type: 'update-video',

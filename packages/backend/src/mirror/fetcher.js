@@ -88,7 +88,7 @@ function safeBigInt(value, fallback = 0n) {
   if (typeof value === 'bigint') return value
   if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.floor(value)))
   if (typeof value === 'string' && value.trim()) {
-    try { return BigInt(value) } catch {}
+    try { return BigInt(value) } catch { /* ignore invalid bigint */ }
   }
   return fallback
 }

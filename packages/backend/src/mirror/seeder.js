@@ -13,7 +13,7 @@ function toBigInt(value, fallback = 0n) {
   if (typeof value === 'bigint') return value
   if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.floor(value)))
   if (typeof value === 'string' && value.trim()) {
-    try { return BigInt(value) } catch {}
+    try { return BigInt(value) } catch { /* ignore invalid bigint */ }
   }
   return fallback
 }
@@ -45,15 +45,15 @@ function joinSwarmTopic(swarm, topic, onConnection) {
   const onConn = async (stream) => {
     try {
       await onConnection?.(stream)
-    } catch {}
+    } catch { /* ignore connection handler failures */ }
   }
   if (typeof swarm.on === 'function') swarm.on('connection', onConn)
   return {
     topicKey,
     discovery,
     close() {
-      try { discovery?.destroy?.() } catch {}
-      try { swarm.off?.('connection', onConn) } catch {}
+      try { discovery?.destroy?.() } catch { /* best effort cleanup */ }
+      try { swarm.off?.('connection', onConn) } catch { /* best effort cleanup */ }
     },
   }
 }
@@ -212,7 +212,7 @@ export async function seedMirroredVideo(autobase, swarm, descriptor, options = {
     joined: true,
     close: async () => {
       seedHandle.close()
-      try { await core?.close?.() } catch {}
+      try { await core?.close?.() } catch { /* best effort cleanup */ }
     },
   })
 }
@@ -252,7 +252,7 @@ export function createMirrorSeeder(options = {}) {
       if (!current) return
       try {
         await refreshRecord(current.autobase, current.swarm, current, nextOptions)
-      } catch {}
+      } catch { /* retry on next refresh tick */ }
       scheduleRefresh(key, current, nextOptions)
     }, delayMs)
     timers.set(key, timer)
@@ -301,7 +301,7 @@ export function createMirrorSeeder(options = {}) {
     for (const timer of timers.values()) clearTimeout(timer)
     timers.clear()
     for (const record of records.values()) {
-      try { await record.close?.() } catch {}
+      try { await record.close?.() } catch { /* best effort cleanup */ }
     }
     records.clear()
   }

@@ -12,7 +12,7 @@ function safeBigInt(value, fallback = 0n) {
   if (typeof value === 'bigint') return value
   if (typeof value === 'number' && Number.isFinite(value)) return BigInt(Math.max(0, Math.floor(value)))
   if (typeof value === 'string' && value.trim()) {
-    try { return BigInt(value) } catch {}
+    try { return BigInt(value) } catch { /* ignore invalid bigint */ }
   }
   return fallback
 }
@@ -99,7 +99,7 @@ export function createMirrorRefreshManager(options = {}) {
     const timer = setTimeout(async () => {
       timers.delete(timer)
       if (stopped) return
-      try { await fn() } catch {}
+      try { await fn() } catch { /* best effort cleanup */ }
     }, Math.max(0, delayMs))
     timers.add(timer)
     return timer

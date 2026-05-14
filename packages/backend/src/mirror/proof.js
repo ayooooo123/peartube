@@ -250,7 +250,7 @@ export function createProofEmitter(options = {}) {
     const timer = setTimeout(async () => {
       timers.delete(timer)
       if (stopped) return
-      try { await fn() } catch {}
+      try { await fn() } catch { /* best effort cleanup */ }
     }, Math.max(0, delayMs))
     timers.add(timer)
     return timer

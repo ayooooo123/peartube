@@ -1,15 +1,17 @@
 import { memo } from 'react'
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useSocial } from '@/lib/SocialContext'
+import type { VideoData } from '@peartube/core'
+import { useShortsSocial } from '@/lib/shorts-social'
 import { CommentsSection } from '@/components/video-player'
 
 type ShortsCommentsSheetProps = {
+  video: VideoData | null
   visible: boolean
   onClose: () => void
 }
 
-export const ShortsCommentsSheet = memo(function ShortsCommentsSheet({ visible, onClose }: ShortsCommentsSheetProps) {
+export const ShortsCommentsSheet = memo(function ShortsCommentsSheet({ video, visible, onClose }: ShortsCommentsSheetProps) {
   const insets = useSafeAreaInsets()
   const {
     commentText,
@@ -28,7 +30,7 @@ export const ShortsCommentsSheet = memo(function ShortsCommentsSheet({ visible, 
     deleteComment,
     displayComments,
     organizedComments,
-  } = useSocial()
+  } = useShortsSocial(video)
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>

@@ -240,3 +240,16 @@ test('mobile pill tab bar owns its own route matching and stays disabled on desk
     'pill tab bar should no longer depend on TabNavigator state props',
   )
 })
+
+test('mobile pill tab bar renders vector icons on Android instead of text fallbacks', () => {
+  const tabBarSource = readAppFile('components/PillTabBar.tsx')
+  const appJson = JSON.parse(readAppFile('app.json'))
+
+  assert.match(tabBarSource, /<Feather name=\{tab\.icon\} size=\{iconSize\} color=\{iconColor\}/, 'pill tab bar should render Feather glyphs for every tab')
+  assert.doesNotMatch(tabBarSource, /function TextIcon/, 'pill tab bar should not render H\/D\/S text placeholders on Android')
+  assert.doesNotMatch(tabBarSource, /Platform\.OS === 'android' \? \(/, 'Android should use the same vector icon component as iOS')
+  assert.ok(
+    appJson.expo.plugins.includes('./plugins/withVectorIconFonts.js'),
+    'prebuild should copy @expo/vector-icons font assets into native Android builds',
+  )
+})

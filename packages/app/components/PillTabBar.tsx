@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react'
-import { View, Pressable, StyleSheet, Platform, Keyboard, KeyboardEvent, Text } from 'react-native'
+import { View, Pressable, StyleSheet, Platform, Keyboard, KeyboardEvent } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePathname, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -26,7 +26,6 @@ try {
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
-const AnimatedText = Animated.createAnimatedComponent(Text)
 
 interface TabItem {
   name: string
@@ -200,7 +199,7 @@ function TabButton({ tab, isActive, onPress }: TabButtonProps) {
   }))
 
   const iconSize = tab.emphasized ? EMPHASIZED_ICON_SIZE : ICON_SIZE
-  const iconColor = isActive ? colors.primary : colors.textMuted
+  const iconColor = tab.emphasized ? (isActive ? '#fff' : colors.textMuted) : (isActive ? colors.primary : colors.textMuted)
 
   return (
     <AnimatedPressable
@@ -218,43 +217,17 @@ function TabButton({ tab, isActive, onPress }: TabButtonProps) {
     >
       {tab.emphasized ? (
         <View style={[styles.emphasizedIconBg, isActive && styles.emphasizedIconBgActive]}>
-          {Platform.OS === 'android' ? (
-            <TextIcon icon={tab.icon} active={isActive} emphasized />
-          ) : (
-            <Feather name={tab.icon} size={iconSize} color={isActive ? '#fff' : colors.textMuted} />
-          )}
+          <Feather name={tab.icon} size={iconSize} color={iconColor} />
         </View>
-      ) : Platform.OS === 'android' ? (
-        <TextIcon icon={tab.icon} active={isActive} />
       ) : (
-        <Feather name={tab.icon} size={iconSize} color={iconColor} />
+        <View style={[styles.iconShell, isActive && styles.iconShellActive]}>
+          <Feather name={tab.icon} size={iconSize} color={iconColor} />
+        </View>
       )}
     </AnimatedPressable>
   )
 }
 
-function TextIcon({ icon, active, emphasized = false }: { icon: TabItem['icon']; active: boolean; emphasized?: boolean }) {
-  const label = icon === 'home'
-    ? 'H'
-    : icon === 'zap'
-      ? 'D'
-      : icon === 'plus-circle'
-        ? '+'
-        : icon === 'download'
-          ? '↓'
-          : icon === 'settings'
-            ? 'S'
-            : '•'
-
-  return (
-    <View style={[styles.textIconShell, emphasized && styles.textIconShellEmphasized, active && styles.textIconShellActive]}>
-      <View style={[styles.textIconDot, active && styles.textIconDotActive]} />
-      <AnimatedText style={[styles.textIconLabel, emphasized && styles.textIconLabelEmphasized, active && styles.textIconLabelActive]}>
-        {label}
-      </AnimatedText>
-    </View>
-  )
-}
 
 const styles = StyleSheet.create({
   container: {
@@ -320,45 +293,14 @@ const styles = StyleSheet.create({
   emphasizedIconBgActive: {
     backgroundColor: colors.primary,
   },
-  textIconShell: {
+  iconShell: {
     width: 48,
     height: 44,
     borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  textIconShellEmphasized: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'transparent',
-  },
-  textIconShellActive: {
+  iconShellActive: {
     backgroundColor: 'rgba(79, 156, 255, 0.16)',
-  },
-  textIconDot: {
-    position: 'absolute',
-    top: 7,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: 'transparent',
-  },
-  textIconDotActive: {
-    backgroundColor: colors.primary,
-  },
-  textIconLabel: {
-    color: colors.textMuted,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '900',
-  },
-  textIconLabelEmphasized: {
-    color: '#fff',
-    fontSize: 22,
-    lineHeight: 26,
-  },
-  textIconLabelActive: {
-    color: colors.primary,
   },
 })

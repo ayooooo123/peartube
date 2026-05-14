@@ -32,25 +32,22 @@ test('vertical discovery uses paged full-screen feed and plays inline in the sho
   assert.match(source, /<VerticalShortsPlayer[\s\S]*testID="vertical-discovery-inline-player"/, 'active vertical item should render through the dedicated shorts player surface')
   assert.doesNotMatch(source, /<VideoContainer/, 'vertical discovery must not embed the normal watch player container')
   assert.doesNotMatch(source, /loadAndPlayVideo\(/, 'vertical playback must not open the normal mobile playback overlay')
-  assert.match(source, /useVideoPlayerContext\(/, 'vertical discovery should coordinate with the global player for playback handoff')
-  assert.match(source, /handoffToShorts\(\)/, 'vertical discovery should pause and close the global player before Shorts starts')
+  assert.doesNotMatch(source, /useVideoPlayerContext\(/, 'vertical discovery should not bind the Shorts player to the global watch player context')
+  assert.doesNotMatch(source, /handoffToShorts\(\)/, 'Shorts playback should not hand off through the normal player')
   assert.match(source, /preparePlayback\(playbackRequest\)/, 'vertical player should resolve playback through backend preparePlayback')
   assert.match(source, /getCachedVideoUrl\(cacheKey\)/, 'vertical player should use the short playback URL cache')
-  assert.match(source, /setAmbientVideoContext\(video, cachedUrl, \{ keepHidden: true \}\)/, 'cached Shorts playback should update social context without showing the global mini player')
-  assert.match(source, /setAmbientVideoContext\(video, result\.url, \{ keepHidden: true \}\)/, 'prepared Shorts playback should update social context without showing the global mini player')
-  assert.match(source, /setAmbientVideoContext\(video, activeVideoKey === `\$\{video\.channelKey\}:\$\{video\.id\}` \? shortsVideoUrl : null, \{ keepHidden: true \}\)/, 'comments should receive active Shorts context without launching the global player')
+  assert.doesNotMatch(source, /setAmbientVideoContext\(/, 'Shorts playback and comments should not update global watch-player metadata')
   assert.match(source, /setShortsVideoUrl\(/, 'vertical player should keep playback URL in local shorts-player state')
-  assert.match(source, /handoffToShorts\(\)[\s\S]*const cachedUrl = cacheKey \? getCachedVideoUrl\(cacheKey\) : null/, 'handoff should happen before cached Shorts playback attaches')
-  assert.match(source, /handoffToShorts\(\)[\s\S]*const result = await rpc\.preparePlayback\(playbackRequest\)/, 'handoff should happen before prepared Shorts playback attaches')
+  assert.match(source, /const cachedUrl = cacheKey \? getCachedVideoUrl\(cacheKey\) : null/, 'cached Shorts playback should attach directly to the Shorts player')
+  assert.match(source, /const result = await rpc\.preparePlayback\(playbackRequest\)/, 'prepared Shorts playback should attach directly to the Shorts player')
 })
 
-test('vertical discovery handoff pauses and hides the global player while preserving return position', () => {
+test('vertical discovery is isolated from the global watch player context', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
-  assert.match(source, /const \{[\s\S]*currentVideo,[\s\S]*playerMode,[\s\S]*pauseVideo,[\s\S]*closeVideo,[\s\S]*\} = useVideoPlayerContext\(\)/, 'Discover should read global player state and controls')
-  assert.match(source, /if \(!currentVideo \|\| playerMode === 'hidden'\) return/, 'handoff should no-op when no in-app player is active')
-  assert.match(source, /pauseVideo\(\)/, 'handoff should pause the active global player immediately')
-  assert.match(source, /closeVideo\(\)/, 'handoff should hide/detach the global player surface before Shorts plays')
+  assert.doesNotMatch(source, /import \{ useVideoPlayerContext \}/, 'Discover should not import the global player context')
+  assert.doesNotMatch(source, /currentVideo|playerMode|pauseVideo|closeVideo/, 'Discover should not read or mutate global watch-player state')
+  assert.doesNotMatch(source, /keepHidden/, 'Shorts should not use hidden global ambient state as a shadow comments/player model')
 })
 
 test('vertical discovery uses a dedicated shorts player surface instead of the watch player frame', () => {
@@ -241,7 +238,7 @@ test('vertical discovery keeps the global watch/mini overlay off the Shorts rout
   const discoverSource = readAppFile('app/(tabs)/discover.tsx')
   const overlaySource = readAppFile('components/VideoPlayerOverlayImpl.tsx')
 
-  assert.match(discoverSource, /closeVideo\(\)\n\s*setAmbientVideoContext\(null, null\)/, 'handoff should clear ambient player context after closing the global player')
+  assert.doesNotMatch(discoverSource, /setAmbientVideoContext|closeVideo\(\)|pauseVideo\(\)/, 'Shorts route should be completely separate from global watch player mutations')
   assert.match(overlaySource, /usePathname\(\)/, 'global overlay should know the active route')
   assert.match(overlaySource, /useSegments\(\)/, 'global overlay should inspect active route segments when pathname is group-normalized')
   assert.match(overlaySource, /segments\.includes\('discover'\)/, 'mobile Discover suppression should not depend on one exact Expo Router pathname string')
@@ -250,9 +247,7 @@ test('vertical discovery keeps the global watch/mini overlay off the Shorts rout
   assert.match(overlaySource, /if \(hideGlobalOverlayOnDiscover\) \{[\s\S]*return null/, 'Discover should suppress the global overlay entirely, including hidden ambient state tap surfaces')
   assert.doesNotMatch(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden'/, 'Discover suppression must not let hidden ambient global overlay surfaces render behind Shorts chrome')
   assert.doesNotMatch(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden' && !isInPipMode/, 'Discover suppression must include stale PiP mode, not exempt it')
-  const stateMachineSource = readAppFile('lib/playerStateMachine.ts')
-  assert.match(stateMachineSource, /keepHidden\?: boolean/, 'ambient Shorts context should be able to update video metadata without activating the global player')
-  assert.match(stateMachineSource, /case 'SET_AMBIENT_VIDEO_CONTEXT':[\s\S]*if \(event\.keepHidden\) \{[\s\S]*mode: 'hidden'/, 'ambient context updates should force hidden mode when requested')
+  assert.match(discoverSource, /<ShortsCommentsSheet video=\{activeVideo \|\| null\}/, 'Shorts comments should receive route-local active video context')
 })
 
 test('vertical discovery positions progress and chrome without clumping metadata/actions', () => {
@@ -283,9 +278,20 @@ test('vertical discovery stops inline Shorts playback when the route unmounts or
   assert.match(source, /shortsPlayerRef\.current\?\.exitPictureInPicture\?\.\(\)/, 'teardown should force-exit any stale native PiP window before detaching Shorts')
   assert.match(source, /shortsPlayerRef\.current\?\.stop\?\.\(\)/, 'teardown should stop the native inline player instead of merely hiding React chrome')
   assert.match(source, /shortsPlayerRef\.current\?\.destroy\?\.\(\)/, 'teardown should destroy the route-local native surface so it cannot keep PiP alive')
-  assert.match(source, /setAmbientVideoContext\(null, null\)/, 'teardown should clear hidden ambient Shorts metadata from the global player context')
+  assert.doesNotMatch(source, /setAmbientVideoContext\(null, null\)/, 'teardown should not touch hidden ambient global player metadata')
   assert.match(source, /setShortsVideoUrl\(null\)/, 'teardown should detach the playback URL so the inline surface unmounts')
   assert.match(source, /return stopShortsPlayback/, 'Discover should run teardown when tab navigation leaves the Shorts route')
+})
+
+test('Shorts comments use route-local social state instead of the global watch-player social context', () => {
+  const sheetSource = readAppFile('components/discovery/ShortsCommentsSheet.tsx')
+  const hookSource = readAppFile('lib/shorts-social.ts')
+
+  assert.match(sheetSource, /video: VideoData \| null/, 'Shorts comments sheet should accept the active Shorts video directly')
+  assert.match(sheetSource, /useShortsSocial\(video\)/, 'Shorts comments should load social data from route-local Shorts state')
+  assert.doesNotMatch(sheetSource, /useSocial\(/, 'Shorts comments should not consume global watch-player social context')
+  assert.match(hookSource, /export function useShortsSocial\(video: VideoData \| null\)/, 'route-local Shorts social hook should be keyed by explicit video')
+  assert.doesNotMatch(hookSource, /useVideoPlayerContext\(/, 'route-local Shorts social hook must not read global player context')
 })
 
 test('native inline player exposes explicit PiP exit and tears down its surface on destroy', () => {

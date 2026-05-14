@@ -39,7 +39,6 @@ import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-fe
 import { formatTimeAgo } from '@/lib/formatters'
 import { VerticalShortsPlayer } from '@/components/discovery/VerticalShortsPlayer'
 import { ShortsCommentsSheet } from '@/components/discovery/ShortsCommentsSheet'
-import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
 
 interface FeedEntry {
   driveKey: string
@@ -114,14 +113,6 @@ export default function VerticalDiscoveryScreen() {
   const { height: screenHeight, width: screenWidth } = useWindowDimensions()
   const { isDesktop } = usePlatform()
   const { ready, identity, rpc, blobServerPort, backendError, startupStatus, platformEvents } = useApp()
-  const {
-    currentVideo,
-    playerMode,
-    pauseVideo,
-    closeVideo,
-    setAmbientVideoContext,
-  } = useVideoPlayerContext()
-
   const bottomChromePadding = Math.max(insets.bottom + 86, 104)
   const metaBottomPadding = bottomChromePadding + 72
   const progressBottomOffset = metaBottomPadding + 142
@@ -337,11 +328,10 @@ export default function VerticalDiscoveryScreen() {
     void shortsPlayerRef.current?.destroy?.()
     pendingPlayKeyRef.current = null
     playbackRequestSeqRef.current += 1
-    setAmbientVideoContext(null, null)
     setShortsVideoUrl(null)
     setCommentsSheetVisible(false)
     setShortsLoading(false)
-  }, [setAmbientVideoContext])
+  }, [])
 
   useFocusEffect(
     useCallback(() => {
@@ -349,12 +339,7 @@ export default function VerticalDiscoveryScreen() {
     }, [stopShortsPlayback])
   )
 
-  const handoffToShorts = useCallback(() => {
-    if (!currentVideo || playerMode === 'hidden') return
-    pauseVideo()
-    closeVideo()
-    setAmbientVideoContext(null, null)
-  }, [closeVideo, currentVideo, pauseVideo, playerMode, setAmbientVideoContext])
+
 
   const playVideo = useCallback(async (video: VideoData) => {
     if (!rpc) return
@@ -366,12 +351,10 @@ export default function VerticalDiscoveryScreen() {
     const isStalePlaybackRequest = () => pendingPlayKeyRef.current !== playKey || playbackRequestSeqRef.current !== requestSeq
 
     try {
-      handoffToShorts()
       const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).catch(() => undefined)
         if (isStalePlaybackRequest()) return
-        setAmbientVideoContext(video, cachedUrl, { keepHidden: true })
         setShortsVideoUrl(cachedUrl)
         setShortsPlaybackSession((prev) => prev + 1)
         setShortsLoading(false)
@@ -382,7 +365,6 @@ export default function VerticalDiscoveryScreen() {
       if (isStalePlaybackRequest()) return
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
-        setAmbientVideoContext(video, result.url, { keepHidden: true })
         setShortsVideoUrl(result.url)
         setShortsPlaybackSession((prev) => prev + 1)
       }
@@ -396,7 +378,7 @@ export default function VerticalDiscoveryScreen() {
         setShortsLoading(false)
       }
     }
-  }, [handoffToShorts, makePlaybackRequest, rpc, setAmbientVideoContext])
+  }, [makePlaybackRequest, rpc])
 
   useEffect(() => {
     if (!activeVideo || !ready) return
@@ -464,11 +446,10 @@ export default function VerticalDiscoveryScreen() {
     })
   }, [router])
 
-  const openComments = useCallback((video: VideoData) => {
-    setAmbientVideoContext(video, activeVideoKey === `${video.channelKey}:${video.id}` ? shortsVideoUrl : null, { keepHidden: true })
+  const openComments = useCallback((_video: VideoData) => {
     setShortsChromeVisible(true)
     setCommentsSheetVisible(true)
-  }, [activeVideoKey, setAmbientVideoContext, shortsVideoUrl])
+  }, [])
 
   const verticalVideos = useMemo(() => videos.map((video) => {
     const cacheKey = `${video.channelKey}:${video.id}`
@@ -608,7 +589,7 @@ export default function VerticalDiscoveryScreen() {
           )}
         />
       )}
-      <ShortsCommentsSheet visible={commentsSheetVisible} onClose={() => setCommentsSheetVisible(false)} />
+      <ShortsCommentsSheet video={activeVideo || null} visible={commentsSheetVisible} onClose={() => setCommentsSheetVisible(false)} />
     </View>
   )
 }

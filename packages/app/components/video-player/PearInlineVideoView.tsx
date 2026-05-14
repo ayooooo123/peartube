@@ -138,10 +138,13 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         // Android backgrounds or enters PiP. Treat that as a transition, not a
         // fatal stuck-playback signal that should remount the player.
         suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
+        if (!autoEnterPipOnLeave) {
+          void adapter.destroy?.()
+        }
       }
     })
     return () => subscription.remove()
-  }, [])
+  }, [adapter, autoEnterPipOnLeave])
 
   const shouldSuppressStuckPlaybackRecovery = useCallback(() => {
     if (Platform.OS !== 'android') return false
@@ -231,16 +234,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   useEffect(() => {
     return () => {
       try {
-        videoRef.current?.dismissFullscreenPlayer?.()
-      } catch {}
-      try {
-        void videoRef.current?.exitPictureInPicture?.()
-      } catch {}
-      try {
-        videoRef.current?.pause?.()
-      } catch {}
-      try {
-        videoRef.current?.seek?.(0)
+        void adapter.destroy?.()
       } catch {}
       if (playerRef.current === adapter) {
         playerRef.current = null

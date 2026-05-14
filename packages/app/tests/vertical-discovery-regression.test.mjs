@@ -250,6 +250,19 @@ test('vertical discovery keeps the global watch/mini overlay off the Shorts rout
   assert.match(discoverSource, /<ShortsCommentsSheet video=\{activeVideo \|\| null\}/, 'Shorts comments should receive route-local active video context')
 })
 
+test('vertical discovery cleans and clamps raw long filenames before rendering card titles', () => {
+  const source = readAppFile('app/(tabs)/discover.tsx')
+
+  assert.match(source, /function cleanDiscoverFilenameTitle\(title: string\)/, 'Discover should have a filename-title cleanup helper')
+  assert.match(source, /xpost\[_-\]\[a-f0-9\]\{12,\}/, 'xpost relay/hash suffixes should be stripped from card titles')
+  assert.match(source, /replace\(\/\(\[a-z\]\)\(\[A-Z\]\)\/g, '\$1 \$2'\)/, 'camel-cased filenames should be split into readable words')
+  assert.match(source, /releaseToken/, 'torrent/release-group tokens should be removed from display titles')
+  assert.match(source, /const displayTitle = cleaned\.length >= 3 && cleaned\.length < title\.length \? cleaned : title/, 'cleaned filename titles should replace raw titles when useful')
+  assert.match(source, /displayTitle\.slice\(0, 72\)\.trimEnd\(\)\}…/, 'very long raw filename-style titles should still be clipped before layout')
+  assert.match(source, /numberOfLines=\{2\} ellipsizeMode="tail">\{getDiscoverDisplayTitle\(video\)\}/, 'vertical card title should be bounded to two lines and use the display helper')
+  assert.doesNotMatch(source, /numberOfLines=\{3\} ellipsizeMode="tail">\{video\.title \|\| 'Untitled'\}/, 'raw three-line filename titles should not dominate Shorts chrome')
+})
+
 test('vertical discovery positions progress and chrome without clumping metadata/actions', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 

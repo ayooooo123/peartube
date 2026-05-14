@@ -88,33 +88,6 @@ function getVideoRef(video: VideoData) {
 }
 
 
-function cleanDiscoverFilenameTitle(title: string) {
-  const withoutXpost = title.replace(/[-_ ]?xpost[_-][a-f0-9]{12,}$/i, '')
-  const spaced = withoutXpost
-    .replace(/[._-]+/g, ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/([A-Za-z])(\d{4})/g, '$1 $2')
-    .replace(/(\d{4})([A-Za-z])/g, '$1 $2')
-  const tokens = spaced.split(/\s+/).filter(Boolean)
-  const releaseToken = /^(?:repack|proper|extended|unrated|remastered|web[- ]?dl|webrip|bluray|brrip|dvdrip|hdrip|x264|x265|h264|h265|hevc|aac|dts|truehd|atmos|yts|yify|mx|rarbg|eztv|1080p?|720p?|2160p?|4k|8k|10bit|5\.?1|7\.?1)$/i
-  const kept = []
-  for (const token of tokens) {
-    if (releaseToken.test(token)) continue
-    if (/^[a-f0-9]{16,}$/i.test(token)) continue
-    kept.push(token)
-  }
-  return kept.join(' ').replace(/\s+/g, ' ').trim()
-}
-
-function getDiscoverDisplayTitle(video: VideoData) {
-  const title = String(video.title || '').replace(/\s+/g, ' ').trim()
-  if (!title) return 'Untitled'
-  const cleaned = cleanDiscoverFilenameTitle(title)
-  const displayTitle = cleaned.length >= 3 && cleaned.length < title.length ? cleaned : title
-  if (displayTitle.length <= 72) return displayTitle
-  return `${displayTitle.slice(0, 72).trimEnd()}…`
-}
-
 function makeRouteVideoData(video: VideoData) {
   return JSON.stringify({
     id: video.id,
@@ -588,7 +561,7 @@ export default function VerticalDiscoveryScreen() {
                 {shortsChromeVisible ? (
                   <View style={[styles.bottomMeta, { paddingBottom: metaBottomPadding }]}>
                     <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
-                      <Text style={styles.videoTitle} numberOfLines={2} ellipsizeMode="tail">{getDiscoverDisplayTitle(video)}</Text>
+                      <Text style={styles.videoTitle} numberOfLines={1} ellipsizeMode="tail">{video.title || 'Untitled'}</Text>
                       <Text style={styles.videoMeta} numberOfLines={1}>
                         {video.channel?.name || 'Channel'} · {formatTimeAgo(video.uploadedAt || Date.now())}
                       </Text>
@@ -734,17 +707,21 @@ const styles = StyleSheet.create({
     left: 20,
     right: 20,
     bottom: 0,
-    gap: 10,
+    gap: 8,
+    maxHeight: 172,
+    overflow: 'hidden',
   },
   metaTextBlock: {
     minWidth: 0,
+    flexShrink: 1,
   },
   videoTitle: {
     color: '#fff',
-    fontSize: 17,
-    lineHeight: 21,
+    fontSize: 16,
+    lineHeight: 20,
     fontWeight: '800',
-    letterSpacing: -0.5,
+    letterSpacing: -0.4,
+    flexShrink: 1,
     textShadowColor: 'rgba(0,0,0,0.45)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
@@ -753,19 +730,20 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.78)',
     fontSize: 12,
     fontWeight: '600',
-    marginTop: 6,
+    marginTop: 4,
   },
   videoDescription: {
     color: 'rgba(255,255,255,0.68)',
     fontSize: 12,
     lineHeight: 16,
-    marginTop: 5,
+    marginTop: 4,
   },
   bottomActionRail: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 18,
+    gap: 14,
+    flexShrink: 0,
   },
   bottomActionButton: {
     flex: 1,

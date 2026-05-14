@@ -15,6 +15,7 @@ function readAppFile(relativePath) {
 test('Android release manifest disables legacy storage, backup, and blanket cleartext traffic', () => {
   const manifest = readAppFile('android/app/src/main/AndroidManifest.xml')
   const appJson = JSON.parse(readAppFile('app.json'))
+  const androidPipPlugin = readAppFile('plugins/withAndroidPiP.js')
   const buildPropertiesPlugin = appJson.expo.plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === 'expo-build-properties')
 
   assert.match(manifest, /android:allowBackup="false"/)
@@ -25,6 +26,9 @@ test('Android release manifest disables legacy storage, backup, and blanket clea
   assert.match(manifest, /android:name="android\.permission\.POST_NOTIFICATIONS"/)
   assert.equal(buildPropertiesPlugin?.[1]?.android?.usesCleartextTraffic, false)
   assert.ok(appJson.expo.android.permissions.includes('android.permission.POST_NOTIFICATIONS'))
+  assert.match(androidPipPlugin, /android:networkSecurityConfig'\] = '@xml\/network_security_config'/)
+  assert.match(androidPipPlugin, /NETWORK_SECURITY_CONFIG/)
+  assert.match(androidPipPlugin, /android:usesPermissionFlags'\] = 'neverForLocation'/)
 })
 
 test('Android network security config blocks cleartext except local development loopbacks', () => {

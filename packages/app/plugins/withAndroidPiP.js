@@ -2,6 +2,16 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { withAndroidManifest, withDangerousMod, withAppBuildGradle } = require('@expo/config-plugins')
 
+const NETWORK_SECURITY_CONFIG = `<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+  <base-config cleartextTrafficPermitted="false" />
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="false">localhost</domain>
+    <domain includeSubdomains="false">127.0.0.1</domain>
+    <domain includeSubdomains="false">10.0.2.2</domain>
+  </domain-config>
+</network-security-config>`
+
 function createPlayerActivitySource(packageName) {
   const templatePath = path.join(__dirname, 'templates', 'PlayerActivity.kt.template')
   const template = fs.readFileSync(templatePath, 'utf8')
@@ -59,6 +69,22 @@ function normalizePipActivities(application) {
   delete playerActivity.$['android:resizeableActivity']
 
   return { mainActivity, playerActivity }
+}
+
+function hardenApplicationSecurity(application) {
+  application.$['android:allowBackup'] = 'false'
+  application.$['android:requestLegacyExternalStorage'] = 'false'
+  application.$['android:usesCleartextTraffic'] = 'false'
+  application.$['android:networkSecurityConfig'] = '@xml/network_security_config'
+}
+
+function hardenNearbyWifiPermission(manifest) {
+  const permissions = manifest['uses-permission'] || []
+  for (const permission of permissions) {
+    if (permission.$?.['android:name'] === 'android.permission.NEARBY_WIFI_DEVICES') {
+      permission.$['android:usesPermissionFlags'] = 'neverForLocation'
+    }
+  }
 }
 
 function ensurePlayerActivitySource(config) {
@@ -137,6 +163,21 @@ function ensurePlayerActivityTheme(config) {
   return config
 }
 
+function ensureNetworkSecurityConfig(config) {
+  const xmlDir = path.join(
+    config.modRequest.platformProjectRoot,
+    'app',
+    'src',
+    'main',
+    'res',
+    'xml',
+  )
+  const configPath = path.join(xmlDir, 'network_security_config.xml')
+  fs.mkdirSync(xmlDir, { recursive: true })
+  fs.writeFileSync(configPath, NETWORK_SECURITY_CONFIG)
+  return config
+}
+
 function withAndroidPiP(config) {
   config = withAndroidManifest(config, (config) => {
     const application = config.modResults.manifest.application?.[0]
@@ -148,6 +189,8 @@ function withAndroidPiP(config) {
     }
 
     const { mainActivity } = normalizePipActivities(application)
+    hardenApplicationSecurity(application)
+    hardenNearbyWifiPermission(config.modResults.manifest)
     if (!mainActivity) {
       console.warn('[withAndroidPiP] No MainActivity found in manifest')
     }
@@ -164,6 +207,7 @@ function withAndroidPiP(config) {
     'android',
     (config) => {
       ensurePlayerActivityTheme(config)
+      ensureNetworkSecurityConfig(config)
       return ensurePlayerActivitySource(config)
     },
   ])

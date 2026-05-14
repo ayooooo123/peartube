@@ -2068,7 +2068,7 @@ export function VideoPlayerOverlay() {
     }
   }, [currentVideo, playerMode, videoUrl, isPear, isDesktop])
 
-  if (!currentVideo) {
+  if (!currentVideo || playerMode === 'hidden') {
     return null
   }
 

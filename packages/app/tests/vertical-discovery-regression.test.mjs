@@ -246,6 +246,7 @@ test('vertical discovery keeps the global watch/mini overlay off the Shorts rout
   assert.match(overlaySource, /useSegments\(\)/, 'global overlay should inspect active route segments when pathname is group-normalized')
   assert.match(overlaySource, /segments\.includes\('discover'\)/, 'mobile Discover suppression should not depend on one exact Expo Router pathname string')
   assert.match(overlaySource, /const hideGlobalOverlayOnDiscover = !isDesktop && isDiscoverPathActive/, 'mobile Discover should suppress the global watch overlay')
+  assert.match(overlaySource, /if \(!currentVideo \|\| playerMode === 'hidden'\) \{[\s\S]*return null/, 'hidden ambient Shorts metadata must not render global overlay tap surfaces on Home')
   assert.match(overlaySource, /if \(hideGlobalOverlayOnDiscover\) \{[\s\S]*return null/, 'Discover should suppress the global overlay entirely, including hidden ambient state tap surfaces')
   assert.doesNotMatch(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden'/, 'Discover suppression must not let hidden ambient global overlay surfaces render behind Shorts chrome')
   assert.doesNotMatch(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden' && !isInPipMode/, 'Discover suppression must include stale PiP mode, not exempt it')

@@ -37,6 +37,7 @@ import {
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-feed-cache'
 import { formatTimeAgo } from '@/lib/formatters'
+import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { VerticalShortsPlayer } from '@/components/discovery/VerticalShortsPlayer'
 import { ShortsCommentsSheet } from '@/components/discovery/ShortsCommentsSheet'
 
@@ -114,9 +115,10 @@ export default function VerticalDiscoveryScreen() {
   const { height: screenHeight, width: screenWidth } = useWindowDimensions()
   const { isDesktop } = usePlatform()
   const { ready, identity, rpc, blobServerPort, backendError, startupStatus, platformEvents } = useApp()
-  const bottomChromePadding = Math.max(insets.bottom + 72, 90)
-  const metaBottomPadding = bottomChromePadding + 32
-  const progressBottomOffset = metaBottomPadding + 118
+  const tabBarMetrics = useTabBarMetrics()
+  const bottomChromePadding = Math.max(tabBarMetrics.height + 18, insets.bottom + 110, 126)
+  const metaBottomPadding = bottomChromePadding
+  const progressBottomOffset = metaBottomPadding + 104
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const cachedDiscoverFeed = useMemo(() => readDiscoverFeedCache(), [])
   const [refreshing, setRefreshing] = useState(false)

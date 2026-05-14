@@ -264,9 +264,10 @@ test('vertical discovery preserves raw titles while constraining long-title layo
 test('vertical discovery positions progress and chrome without clumping metadata/actions', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
-  assert.match(source, /const bottomChromePadding = Math\.max\(insets\.bottom \+ 72, 90\)/, 'Discover should compute a compact tab-safe bottom chrome inset')
-  assert.match(source, /const metaBottomPadding = bottomChromePadding \+ 32/, 'metadata should sit lower above the bottom nav chrome')
-  assert.match(source, /const progressBottomOffset = metaBottomPadding \+ 118/, 'progress should sit just above video metadata like X/Twitter video chrome')
+  assert.match(source, /useTabBarMetrics\(\)/, 'Discover should read the measured bottom tab bar height')
+  assert.match(source, /const bottomChromePadding = Math\.max\(tabBarMetrics\.height \+ 18, insets\.bottom \+ 110, 126\)/, 'Discover controls should clear the floating bottom tab bar and safe area')
+  assert.match(source, /const metaBottomPadding = bottomChromePadding/, 'metadata should use the measured tab-safe offset directly')
+  assert.match(source, /const progressBottomOffset = metaBottomPadding \+ 104/, 'progress should sit above the video metadata/action block')
   assert.match(source, /progressBottomOffset=\{progressBottomOffset\}/, 'Shorts progress should use the separated progress offset')
   assert.match(source, /paddingBottom: metaBottomPadding/, 'metadata should reserve its own larger bottom offset')
   assert.match(source, /!\/\^\\s\*source\\s\*:\/i\.test\(video\.description\)/, 'Discover should hide raw source URL descriptions from primary card chrome')

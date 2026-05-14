@@ -114,9 +114,9 @@ export default function VerticalDiscoveryScreen() {
   const { height: screenHeight, width: screenWidth } = useWindowDimensions()
   const { isDesktop } = usePlatform()
   const { ready, identity, rpc, blobServerPort, backendError, startupStatus, platformEvents } = useApp()
-  const bottomChromePadding = Math.max(insets.bottom + 86, 104)
-  const metaBottomPadding = bottomChromePadding + 72
-  const progressBottomOffset = metaBottomPadding + 142
+  const bottomChromePadding = Math.max(insets.bottom + 72, 90)
+  const metaBottomPadding = bottomChromePadding + 32
+  const progressBottomOffset = metaBottomPadding + 118
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const cachedDiscoverFeed = useMemo(() => readDiscoverFeedCache(), [])
   const [refreshing, setRefreshing] = useState(false)
@@ -571,15 +571,15 @@ export default function VerticalDiscoveryScreen() {
                     </Pressable>
                     <View style={styles.bottomActionRail}>
                       <Pressable onPress={() => openChannel(video)} style={styles.bottomActionButton}>
-                        <Feather name="user" color="#fff" size={22} />
+                        <Feather name="user" color="#fff" size={18} />
                         <Text style={styles.bottomActionLabel} numberOfLines={1}>Channel</Text>
                       </Pressable>
                       <Pressable onPress={() => openComments(video)} style={styles.bottomActionButton}>
-                        <Feather name="message-circle" color="#fff" size={22} />
+                        <Feather name="message-circle" color="#fff" size={18} />
                         <Text style={styles.bottomActionLabel} numberOfLines={1}>Chat</Text>
                       </Pressable>
                       <Pressable onPress={() => playVideo(video)} style={styles.bottomActionButton}>
-                        <Feather name="rotate-cw" color="#fff" size={22} />
+                        <Feather name="rotate-cw" color="#fff" size={18} />
                         <Text style={styles.bottomActionLabel} numberOfLines={1}>Replay</Text>
                       </Pressable>
                     </View>
@@ -707,8 +707,8 @@ const styles = StyleSheet.create({
     left: 20,
     right: 20,
     bottom: 0,
-    gap: 8,
-    maxHeight: 172,
+    gap: 6,
+    maxHeight: 136,
     overflow: 'hidden',
   },
   metaTextBlock: {
@@ -717,8 +717,8 @@ const styles = StyleSheet.create({
   },
   videoTitle: {
     color: '#fff',
-    fontSize: 16,
-    lineHeight: 20,
+    fontSize: 15,
+    lineHeight: 18,
     fontWeight: '800',
     letterSpacing: -0.4,
     flexShrink: 1,
@@ -742,16 +742,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 14,
+    gap: 10,
     flexShrink: 0,
   },
   bottomActionButton: {
     flex: 1,
-    minHeight: 44,
-    borderRadius: 14,
+    minHeight: 34,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
+    gap: 2,
     backgroundColor: 'rgba(0,0,0,0.18)',
   },
   bottomActionLabel: {

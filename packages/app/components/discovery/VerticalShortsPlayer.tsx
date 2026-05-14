@@ -69,15 +69,21 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
 
       try {
         void player.exitPictureInPicture?.()
-      } catch {}
+      } catch {
+        // Best effort teardown; individual native calls may already be disposed.
+      }
 
       try {
         void player.stop?.()
-      } catch {}
+      } catch {
+        // Best effort teardown; individual native calls may already be disposed.
+      }
 
       try {
         void player.destroy?.()
-      } catch {}
+      } catch {
+        // Best effort teardown; individual native calls may already be disposed.
+      }
     }
   }, [playerRef])
 
@@ -211,22 +217,20 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
         </Pressable>
       ) : null}
 
-      {showPlayer ? (
+      {showPlayer && controlsVisible ? (
+        <View style={styles.centerPlaybackControls} pointerEvents="box-none">
+          <Pressable
+            onPress={isPaused ? playShorts : pauseShorts}
+            style={styles.centerControlButton}
+            accessibilityLabel={isPaused ? 'Play Shorts video' : 'Pause Shorts video'}
+          >
+            <Feather name={isPaused ? 'play' : 'pause'} color="#fff" size={30} />
+          </Pressable>
+        </View>
+      ) : null}
+
+      {(showPlayer || isActive) && controlsVisible ? (
         <View style={[styles.progressDock, { bottom: progressBottomOffset }]} pointerEvents="box-none">
-          {controlsVisible ? (
-            <View style={styles.controlButtons} pointerEvents="box-none">
-              <Pressable
-                onPress={isPaused ? playShorts : pauseShorts}
-                style={styles.controlButton}
-                accessibilityLabel={isPaused ? 'Play Shorts video' : 'Pause Shorts video'}
-              >
-                <Feather name={isPaused ? 'play' : 'pause'} color="#fff" size={24} />
-              </Pressable>
-              <Pressable onPress={restartShorts} style={styles.controlButton} accessibilityLabel="Restart Shorts video">
-                <Feather name="rotate-cw" color="#fff" size={22} />
-              </Pressable>
-            </View>
-          ) : null}
           <Pressable
             onPress={handleProgressBarPress}
             onLayout={handleProgressBarLayout}
@@ -283,34 +287,36 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    paddingHorizontal: 18,
-    paddingBottom: 18,
+    paddingHorizontal: 24,
+    paddingBottom: 0,
   },
-  controlButtons: {
-    flexDirection: 'row',
+  centerPlaybackControls: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: '34%',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 12,
+    pointerEvents: 'box-none',
   },
-  controlButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+  centerControlButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.42)',
+    backgroundColor: 'rgba(0,0,0,0.34)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.14)',
   },
   progressTrack: {
-    height: 18,
+    height: 14,
     justifyContent: 'center',
   },
   progressRail: {
     height: 3,
-    borderRadius: 999,
+    borderRadius: 2,
     overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.26)',
+    backgroundColor: 'rgba(255,255,255,0.34)',
   },
   progressFill: {
     height: '100%',

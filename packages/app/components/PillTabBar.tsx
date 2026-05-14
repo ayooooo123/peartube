@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react'
-import { View, Pressable, StyleSheet, Platform, Keyboard, KeyboardEvent } from 'react-native'
+import { View, Pressable, StyleSheet, Platform, Keyboard, KeyboardEvent, Text } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePathname, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
@@ -18,12 +18,15 @@ import { colors } from '@/lib/colors'
 
 let BlurView: any = null
 try {
+  // expo-blur is optional; require keeps startup tolerant when the native module is absent.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   BlurView = require('expo-blur').BlurView
 } catch {
   // Optional dependency - falls back to solid background
 }
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable)
+const AnimatedText = Animated.createAnimatedComponent(Text)
 
 interface TabItem {
   name: string
@@ -42,10 +45,10 @@ const TABS: TabItem[] = [
   { name: 'settings', path: '/settings', icon: 'settings', label: 'Settings' },
 ]
 
-const PILL_HEIGHT = 56
+const PILL_HEIGHT = Platform.OS === 'android' ? 64 : 56
 const PILL_HORIZONTAL_MARGIN = 16
 const PILL_BOTTOM_OFFSET = 8
-const PILL_BORDER_RADIUS = 28
+const PILL_BORDER_RADIUS = Platform.OS === 'android' ? 32 : 28
 const ICON_SIZE = 22
 const EMPHASIZED_ICON_SIZE = 28
 
@@ -64,7 +67,7 @@ export function PillTabBar() {
   const { isDesktop } = usePlatform()
   const { playerMode, isInPipMode, androidSplitPlayerEnabled } = useVideoPlayerContext()
   const isAndroidWatchPathActive = Platform.OS === 'android' && pathname.startsWith('/video/')
-  
+
   const barVisible = useSharedValue(1)
   const keyboardVisible = useSharedValue(0)
   const bottomPosition = PILL_BOTTOM_OFFSET + Math.max(insets.bottom, 8)
@@ -86,7 +89,7 @@ export function PillTabBar() {
   useEffect(() => {
     const showSub = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-      (e: KeyboardEvent) => {
+      (_e: KeyboardEvent) => {
         keyboardVisible.value = withTiming(1, { duration: 200 })
       }
     )
@@ -146,14 +149,14 @@ export function PillTabBar() {
           style={StyleSheet.absoluteFill}
         />
       ) : null}
-      
+
       <View style={styles.backgroundOverlay} />
       <View style={styles.topHighlight} />
-      
+
       <View style={styles.tabsContainer}>
         {TABS.map((tab) => {
           const isActive = isTabActive(pathname, tab.path)
-          
+
           return (
             <TabButton
               key={tab.name}
@@ -215,12 +218,41 @@ function TabButton({ tab, isActive, onPress }: TabButtonProps) {
     >
       {tab.emphasized ? (
         <View style={[styles.emphasizedIconBg, isActive && styles.emphasizedIconBgActive]}>
-          <Feather name={tab.icon} size={iconSize} color={isActive ? '#fff' : colors.textMuted} />
+          {Platform.OS === 'android' ? (
+            <TextIcon icon={tab.icon} active={isActive} emphasized />
+          ) : (
+            <Feather name={tab.icon} size={iconSize} color={isActive ? '#fff' : colors.textMuted} />
+          )}
         </View>
+      ) : Platform.OS === 'android' ? (
+        <TextIcon icon={tab.icon} active={isActive} />
       ) : (
         <Feather name={tab.icon} size={iconSize} color={iconColor} />
       )}
     </AnimatedPressable>
+  )
+}
+
+function TextIcon({ icon, active, emphasized = false }: { icon: TabItem['icon']; active: boolean; emphasized?: boolean }) {
+  const label = icon === 'home'
+    ? 'H'
+    : icon === 'zap'
+      ? 'D'
+      : icon === 'plus-circle'
+        ? '+'
+        : icon === 'download'
+          ? '↓'
+          : icon === 'settings'
+            ? 'S'
+            : '•'
+
+  return (
+    <View style={[styles.textIconShell, emphasized && styles.textIconShellEmphasized, active && styles.textIconShellActive]}>
+      <View style={[styles.textIconDot, active && styles.textIconDotActive]} />
+      <AnimatedText style={[styles.textIconLabel, emphasized && styles.textIconLabelEmphasized, active && styles.textIconLabelActive]}>
+        {label}
+      </AnimatedText>
+    </View>
   )
 }
 
@@ -232,10 +264,11 @@ const styles = StyleSheet.create({
     height: PILL_HEIGHT,
     borderRadius: PILL_BORDER_RADIUS,
     overflow: 'hidden',
+    zIndex: 100,
     ...Platform.select({
       android: {
-        elevation: 8,
-        backgroundColor: colors.bgElevated,
+        elevation: 16,
+        backgroundColor: 'rgba(16, 18, 22, 0.94)',
       },
       ios: {
         backgroundColor: 'transparent',
@@ -248,9 +281,9 @@ const styles = StyleSheet.create({
   },
   backgroundOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: Platform.OS === 'ios' 
+    backgroundColor: Platform.OS === 'ios'
       ? 'rgba(24, 24, 27, 0.75)'
-      : colors.bgElevated,
+      : 'rgba(16, 18, 22, 0.94)',
   },
   topHighlight: {
     position: 'absolute',
@@ -265,7 +298,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
   },
   tabButton: {
     flex: 1,
@@ -274,17 +307,58 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   tabButtonEmphasized: {
-    flex: 1.2,
+    flex: 1.12,
   },
   emphasizedIconBg: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: colors.bgHover,
     alignItems: 'center',
     justifyContent: 'center',
   },
   emphasizedIconBgActive: {
     backgroundColor: colors.primary,
+  },
+  textIconShell: {
+    width: 48,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  textIconShellEmphasized: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'transparent',
+  },
+  textIconShellActive: {
+    backgroundColor: 'rgba(79, 156, 255, 0.16)',
+  },
+  textIconDot: {
+    position: 'absolute',
+    top: 7,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'transparent',
+  },
+  textIconDotActive: {
+    backgroundColor: colors.primary,
+  },
+  textIconLabel: {
+    color: colors.textMuted,
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '900',
+  },
+  textIconLabelEmphasized: {
+    color: '#fff',
+    fontSize: 22,
+    lineHeight: 26,
+  },
+  textIconLabelActive: {
+    color: colors.primary,
   },
 })

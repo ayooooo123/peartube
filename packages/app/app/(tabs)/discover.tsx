@@ -80,6 +80,7 @@ function getFeedEntrySignature(entry: FeedEntry) {
   ].join('|')
 }
 
+const SHOW_DISCOVER_HEADER_CHROME = false
 
 function getVideoRef(video: VideoData) {
   return video.path && typeof video.path === 'string' && video.path.startsWith('/')
@@ -123,7 +124,7 @@ export default function VerticalDiscoveryScreen() {
 
   const bottomChromePadding = Math.max(insets.bottom + 86, 104)
   const metaBottomPadding = bottomChromePadding + 72
-  const progressBottomOffset = bottomChromePadding + 26
+  const progressBottomOffset = metaBottomPadding + 142
   const pageHeight = Math.max(1, screenHeight - insets.top)
   const cachedDiscoverFeed = useMemo(() => readDiscoverFeedCache(), [])
   const [refreshing, setRefreshing] = useState(false)
@@ -498,31 +499,33 @@ export default function VerticalDiscoveryScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={[styles.topChrome, { paddingTop: Math.max(insets.top, 10) }]}> 
-        <View>
-          <Text style={styles.eyebrow}>PearTube</Text>
-          <Text style={styles.title}>Discover</Text>
+      {SHOW_DISCOVER_HEADER_CHROME && shortsChromeVisible ? (
+        <View style={[styles.topChrome, { paddingTop: Math.max(insets.top + 8, 18) }]}>
+          <View style={styles.titleBlock}>
+            <Text style={styles.eyebrow}>PearTube</Text>
+            <Text style={styles.title}>Discover</Text>
+          </View>
+          <View style={styles.topActions}>
+            {feedEntries.length > 0 ? (
+              <View style={styles.feedPill}>
+                <Feather name="radio" color={colors.primary} size={12} />
+                <Text style={styles.feedPillText}>{feedEntries.length} feeds</Text>
+              </View>
+            ) : null}
+            {degradedCopy ? (
+              <View style={styles.feedPill}>
+                <Text style={styles.feedPillIcon}>!</Text>
+                <Text style={styles.feedPillText}>Cached</Text>
+              </View>
+            ) : null}
+            <Pressable onPress={onRefresh} style={styles.roundButton} disabled={refreshing || feedLoading}>
+              <Text style={styles.roundButtonText}>R</Text>
+            </Pressable>
+          </View>
         </View>
-        <View style={styles.topActions}>
-          {feedEntries.length > 0 ? (
-            <View style={styles.feedPill}>
-              <Feather name="radio" color={colors.primary} size={12} />
-              <Text style={styles.feedPillText}>{feedEntries.length} feeds</Text>
-            </View>
-          ) : null}
-          {degradedCopy ? (
-            <View style={styles.feedPill}>
-              <Feather name="alert-circle" color={colors.primary} size={12} />
-              <Text style={styles.feedPillText}>Cached</Text>
-            </View>
-          ) : null}
-          <Pressable onPress={onRefresh} style={styles.roundButton} disabled={refreshing || feedLoading}>
-            <Feather name="refresh-cw" color={colors.text} size={18} />
-          </Pressable>
-        </View>
-      </View>
+      ) : null}
 
-      {shortsChromeVisible ? (
+      {SHOW_DISCOVER_HEADER_CHROME && shortsChromeVisible ? (
         <View pointerEvents="none" style={[styles.topChromeFade, { height: Math.max(insets.top + 112, 136) }]} />
       ) : null}
 
@@ -576,7 +579,7 @@ export default function VerticalDiscoveryScreen() {
                 {shortsChromeVisible ? (
                   <View style={[styles.bottomMeta, { paddingBottom: metaBottomPadding }]}>
                     <Pressable onPress={() => openDetails(video)} style={styles.metaTextBlock}>
-                      <Text style={styles.videoTitle} numberOfLines={2}>{video.title || 'Untitled'}</Text>
+                      <Text style={styles.videoTitle} numberOfLines={3} ellipsizeMode="tail">{video.title || 'Untitled'}</Text>
                       <Text style={styles.videoMeta} numberOfLines={1}>
                         {video.channel?.name || 'Channel'} · {formatTimeAgo(video.uploadedAt || Date.now())}
                       </Text>
@@ -584,18 +587,18 @@ export default function VerticalDiscoveryScreen() {
                         <Text style={styles.videoDescription} numberOfLines={1}>{video.description}</Text>
                       ) : null}
                     </Pressable>
-                    <View style={styles.sideRail}>
-                      <Pressable onPress={() => openChannel(video)} style={styles.sideButton}>
-                        <Feather name="user" color="#fff" size={24} />
-                        <Text style={styles.sideLabel} numberOfLines={1}>Channel</Text>
+                    <View style={styles.bottomActionRail}>
+                      <Pressable onPress={() => openChannel(video)} style={styles.bottomActionButton}>
+                        <Feather name="user" color="#fff" size={22} />
+                        <Text style={styles.bottomActionLabel} numberOfLines={1}>Channel</Text>
                       </Pressable>
-                      <Pressable onPress={() => openComments(video)} style={styles.sideButton}>
-                        <Feather name="message-circle" color="#fff" size={24} />
-                        <Text style={styles.sideLabel} numberOfLines={1}>Chat</Text>
+                      <Pressable onPress={() => openComments(video)} style={styles.bottomActionButton}>
+                        <Feather name="message-circle" color="#fff" size={22} />
+                        <Text style={styles.bottomActionLabel} numberOfLines={1}>Chat</Text>
                       </Pressable>
-                      <Pressable onPress={() => playVideo(video)} style={styles.sideButton}>
-                        <Feather name="rotate-cw" color="#fff" size={24} />
-                        <Text style={styles.sideLabel} numberOfLines={1}>Replay</Text>
+                      <Pressable onPress={() => playVideo(video)} style={styles.bottomActionButton}>
+                        <Feather name="rotate-cw" color="#fff" size={22} />
+                        <Text style={styles.bottomActionLabel} numberOfLines={1}>Replay</Text>
                       </Pressable>
                     </View>
                   </View>
@@ -621,11 +624,16 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 10,
-    paddingHorizontal: 18,
-    paddingBottom: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  titleBlock: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 12,
   },
   eyebrow: {
     color: colors.primary,
@@ -636,40 +644,54 @@ const styles = StyleSheet.create({
   },
   title: {
     color: '#fff',
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: '800',
     letterSpacing: -0.8,
   },
   topActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'flex-end',
+    gap: 8,
+    flexShrink: 0,
   },
   feedPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
+    gap: 4,
+    paddingHorizontal: 9,
     paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(0,0,0,0.42)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.14)',
+  },
+  feedPillIcon: {
+    color: colors.primary,
+    fontSize: 13,
+    lineHeight: 13,
+    fontWeight: '900',
   },
   feedPillText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
   },
   roundButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(0,0,0,0.42)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.14)',
+  },
+  roundButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '900',
   },
   page: {
     backgroundColor: '#050607',
@@ -680,7 +702,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 9,
-    backgroundColor: 'rgba(0,0,0,0.36)',
+    backgroundColor: 'rgba(0,0,0,0.52)',
   },
   backdrop: {
     flex: 1,
@@ -700,22 +722,18 @@ const styles = StyleSheet.create({
   },
   bottomMeta: {
     position: 'absolute',
-    left: 18,
-    right: 14,
+    left: 20,
+    right: 20,
     bottom: 0,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
     gap: 10,
   },
   metaTextBlock: {
-    flex: 1,
     minWidth: 0,
-    paddingRight: 2,
   },
   videoTitle: {
     color: '#fff',
-    fontSize: 20,
-    lineHeight: 24,
+    fontSize: 17,
+    lineHeight: 21,
     fontWeight: '800',
     letterSpacing: -0.5,
     textShadowColor: 'rgba(0,0,0,0.45)',
@@ -734,18 +752,22 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     marginTop: 5,
   },
-  sideRail: {
-    width: 62,
+  bottomActionRail: {
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
+    justifyContent: 'space-between',
+    gap: 18,
   },
-  sideButton: {
+  bottomActionButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 14,
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 4,
-    minHeight: 48,
+    backgroundColor: 'rgba(0,0,0,0.18)',
   },
-  sideLabel: {
-    width: 62,
+  bottomActionLabel: {
     color: 'rgba(255,255,255,0.82)',
     fontSize: 10,
     lineHeight: 12,

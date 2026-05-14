@@ -146,7 +146,7 @@ test('vertical discovery calls getFeedPreviewVideos through the controller with 
 })
 
 
-test('vertical discovery lets the shorts player hide card chrome without hiding progress', () => {
+test('vertical discovery hides all card chrome, including progress, when tapped', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
   const playerSource = readAppFile('components/discovery/VerticalShortsPlayer.tsx')
 
@@ -154,12 +154,18 @@ test('vertical discovery lets the shorts player hide card chrome without hiding 
   assert.match(source, /controlsVisible=\{shortsChromeVisible\}/, 'Discover should pass shared chrome visibility to the Shorts player')
   assert.match(source, /onControlsVisibleChange=\{setShortsChromeVisible\}/, 'Shorts player taps should update route chrome visibility')
   assert.match(source, /\{shortsChromeVisible \? \([\s\S]*styles\.bottomMeta/, 'channel/details/replay buttons should hide when Shorts controls are hidden')
+  assert.match(source, /\{SHOW_DISCOVER_HEADER_CHROME && shortsChromeVisible \? \([\s\S]*styles\.topChrome/, 'header/feed chrome should stay hidden on Shorts so tapping leaves only video')
   assert.match(playerSource, /toggleControlsVisibility/, 'Shorts player should toggle controls on tap')
   assert.match(playerSource, /onControlsVisibleChange\?\.\(!controlsVisible\)/, 'Shorts player should notify the parent when controls are toggled')
   assert.match(playerSource, /pointerEvents="box-none"/, 'overlay chrome must not swallow card taps outside actual controls')
-  assert.match(playerSource, /showPlayer \? \([\s\S]*styles\.progressDock/, 'every active Shorts card should keep a progress bar mounted')
-  assert.match(playerSource, /\{controlsVisible \? \([\s\S]*styles\.controlButtons/, 'buttons should be the part that hides when controls are tapped away')
-  assert.doesNotMatch(playerSource, /showPlayer && controlsVisible \? \([\s\S]*progressTrack/, 'progress bar should not disappear with the rest of the controls')
+  assert.match(playerSource, /style=\{styles\.centerControlButton\}/, 'play/pause should be centered higher on the video instead of taking space near the progress bar')
+  assert.match(playerSource, /top: '34%'/, 'centered playback button should sit above the progress rail instead of crowding it')
+  assert.match(playerSource, /progressDock:\s*\{[\s\S]*paddingHorizontal: 24/, 'progress bar should have visible side inset like X/Twitter instead of extending edge-to-edge')
+  assert.match(playerSource, /progressRail:\s*\{[\s\S]*borderRadius: 2/, 'progress rail should be lightly rounded like X/Twitter player chrome')
+  assert.match(playerSource, /\(showPlayer \|\| isActive\) && controlsVisible \? \([\s\S]*styles\.progressDock/, 'progress should disappear with the rest of the Shorts chrome when tapped away')
+  assert.doesNotMatch(playerSource, /styles\.controlButtons/, 'progress dock should not carry the play/pause controls anymore')
+  assert.doesNotMatch(playerSource, /\{controlsVisible \? \([\s\S]*styles\.controlButtons/, 'buttons should no longer sit above the progress bar')
+  assert.doesNotMatch(playerSource, /\(showPlayer \|\| isActive\) \? \([\s\S]*styles\.progressDock/, 'progress bar should not remain mounted after controls are hidden')
 })
 
 test('shorts player has functional playback buttons and a seekable progress bar', () => {
@@ -169,6 +175,7 @@ test('shorts player has functional playback buttons and a seekable progress bar'
   assert.match(source, /const \[playbackProgress, setPlaybackProgress\]/, 'Shorts player should track current time and duration')
   assert.match(source, /onProgress=\{handleProgress\}/, 'Shorts player should receive native progress events')
   assert.match(source, /seekPosition=\{seekPosition\}/, 'Shorts player should pass seek requests to the native inline player')
+  assert.match(source, /accessibilityLabel=\{isPaused \? 'Play Shorts video' : 'Pause Shorts video'\}/, 'play/pause button should keep the existing accessible labels')
   assert.match(source, /playerRef\.current\?\.pause\?\.\(\)/, 'pause button should call the player port')
   assert.match(source, /playerRef\.current\?\.play\?\.\(\)/, 'play button should call the player port')
   assert.match(source, /playerRef\.current\?\.seek\?\.\(0\)/, 'restart button should seek to the beginning')
@@ -239,7 +246,8 @@ test('vertical discovery keeps the global watch/mini overlay off the Shorts rout
   assert.match(overlaySource, /useSegments\(\)/, 'global overlay should inspect active route segments when pathname is group-normalized')
   assert.match(overlaySource, /segments\.includes\('discover'\)/, 'mobile Discover suppression should not depend on one exact Expo Router pathname string')
   assert.match(overlaySource, /const hideGlobalOverlayOnDiscover = !isDesktop && isDiscoverPathActive/, 'mobile Discover should suppress the global watch overlay')
-  assert.match(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden'\)/, 'Discover should not show stale mini/fullscreen/PiP overlays over Shorts')
+  assert.match(overlaySource, /if \(hideGlobalOverlayOnDiscover\) \{[\s\S]*return null/, 'Discover should suppress the global overlay entirely, including hidden ambient state tap surfaces')
+  assert.doesNotMatch(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden'/, 'Discover suppression must not let hidden ambient global overlay surfaces render behind Shorts chrome')
   assert.doesNotMatch(overlaySource, /hideGlobalOverlayOnDiscover && playerMode !== 'hidden' && !isInPipMode/, 'Discover suppression must include stale PiP mode, not exempt it')
   const stateMachineSource = readAppFile('lib/playerStateMachine.ts')
   assert.match(stateMachineSource, /keepHidden\?: boolean/, 'ambient Shorts context should be able to update video metadata without activating the global player')
@@ -251,17 +259,18 @@ test('vertical discovery positions progress and chrome without clumping metadata
 
   assert.match(source, /const bottomChromePadding = Math\.max\(insets\.bottom \+ 86, 104\)/, 'Discover should compute a tab-safe bottom chrome inset')
   assert.match(source, /const metaBottomPadding = bottomChromePadding \+ 72/, 'metadata should sit well above progress and nav chrome')
-  assert.match(source, /const progressBottomOffset = bottomChromePadding \+ 26/, 'progress should sit between metadata and bottom chrome')
+  assert.match(source, /const progressBottomOffset = metaBottomPadding \+ 142/, 'progress should sit just above video metadata like X/Twitter video chrome')
   assert.match(source, /progressBottomOffset=\{progressBottomOffset\}/, 'Shorts progress should use the separated progress offset')
   assert.match(source, /paddingBottom: metaBottomPadding/, 'metadata should reserve its own larger bottom offset')
   assert.match(source, /!\/\^\\s\*source\\s\*:\/i\.test\(video\.description\)/, 'Discover should hide raw source URL descriptions from primary card chrome')
   assert.match(source, /numberOfLines=\{1\}>\{video\.description\}/, 'description/source copy should not grow into controls while playing')
   assert.match(source, /\{feedEntries\.length\} feeds/, 'feed count pill should label what the number means')
   assert.match(source, /styles\.topChromeFade/, 'header should have a subtle backing fade over active video')
-  assert.match(source, /sideRail:\s*\{[\s\S]*width: 62[\s\S]*gap: 16/, 'side action rail should keep single-line labels without crowding metadata')
-  assert.match(source, /<Text style=\{styles\.sideLabel\} numberOfLines=\{1\}>Chat<\/Text>/, 'comments action should use a short single-line label')
-  assert.match(source, /sideLabel:\s*\{[\s\S]*width: 62[\s\S]*textAlign: 'center'/, 'side labels should be width-constrained and centered instead of wrapping')
+  assert.match(source, /bottomActionRail:\s*\{[\s\S]*flexDirection: 'row'[\s\S]*gap: 18/, 'action buttons should move from the side rail into a lighter bottom row')
+  assert.match(source, /<Text style=\{styles\.bottomActionLabel\} numberOfLines=\{1\}>Chat<\/Text>/, 'comments action should use a short single-line label')
+  assert.match(source, /bottomActionLabel:\s*\{[\s\S]*textAlign: 'center'/, 'bottom action labels should stay centered instead of wrapping')
   assert.match(source, /metaTextBlock:\s*\{[\s\S]*minWidth: 0/, 'metadata text should shrink instead of pushing into action controls')
+  assert.match(source, /bottomActionButton:\s*\{[\s\S]*minHeight: 44[\s\S]*backgroundColor: 'rgba\(0,0,0,0\.18\)'/, 'bottom action buttons should stay lightweight instead of heavy pill blocks')
   assert.doesNotMatch(source, /progressBottomOffset=\{Math\.max\(insets\.bottom \+ 140, 158\)\}/, 'old low progress offset caused title/source overlap')
 })
 

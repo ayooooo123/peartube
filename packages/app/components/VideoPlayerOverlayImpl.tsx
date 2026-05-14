@@ -2072,7 +2072,7 @@ export function VideoPlayerOverlay() {
     return null
   }
 
-  if (hideGlobalOverlayOnDiscover && playerMode !== 'hidden') {
+  if (hideGlobalOverlayOnDiscover) {
     return null
   }
 

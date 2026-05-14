@@ -2,6 +2,9 @@ const ROLE_MOBILE = 'mobile'
 const ROLE_RELAY = 'relay'
 const ROLE_HYBRID = 'hybrid'
 
+const PLAYER_SHORTS = 'shorts'
+const PLAYER_MAIN = 'main'
+
 const TRANSITION_RANK = {
   discovered: 0,
   verified: 1,
@@ -9,6 +12,8 @@ const TRANSITION_RANK = {
   quarantined: 3,
   tombstoned: 4,
 }
+
+const textEncoder = new TextEncoder()
 
 const DEFAULT_POLICY = {
   minDescriptorFreshnessMs: 10 * 60 * 1000,
@@ -30,6 +35,27 @@ const DEFAULT_POLICY = {
     maxBytesPerDay: 5 * 1024 * 1024 * 1024,
     proofIntervalMs: 10 * 60 * 1000,
     refreshIntervalMs: 20 * 60 * 1000,
+  },
+}
+
+const DEFAULT_PLAYER_POLICY = {
+  main: {
+    priority: 100,
+    activeBudget: 100,
+    backgroundBudget: 15,
+    maxConcurrentDecodes: 2,
+    maxConcurrentPrefetches: 4,
+    suspendAfterMs: 0,
+    pipAllowed: true,
+  },
+  shorts: {
+    priority: 20,
+    activeBudget: 35,
+    backgroundBudget: 8,
+    maxConcurrentDecodes: 1,
+    maxConcurrentPrefetches: 1,
+    suspendAfterMs: 30 * 1000,
+    pipAllowed: false,
   },
 }
 
@@ -138,6 +164,7 @@ function mergeDescriptor(current, incoming) {
   if (!current) return cloneDescriptor(incoming)
   const merged = cloneDescriptor(current)
   const next = cloneDescriptor(incoming)
+  if (!next) return merged
   for (const key of Object.keys(next)) {
     if (next[key] === null || next[key] === undefined || next[key] === '') continue
     if (merged[key] === null || merged[key] === undefined || merged[key] === '') {
@@ -487,6 +514,333 @@ export function applyConcurrentUpdate(state, input = {}, options = {}) {
   return { applied: true, record, state }
 }
 
+function normalizePlayerSurface(surface) {
+  return surface === PLAYER_MAIN ? PLAYER_MAIN : PLAYER_SHORTS
+}
+
+function createPlayerSurfaceState(surface, options = {}) {
+  const normalizedSurface = normalizePlayerSurface(surface)
+  const policy = { ...DEFAULT_PLAYER_POLICY[normalizedSurface], ...(options.policy || {}) }
+  return {
+    surface: normalizedSurface,
+    sessionId: options.sessionId || hashText({ surface: normalizedSurface, seed: options.seed || 'player' }),
+    playerId: options.playerId || hashText({ surface: normalizedSurface, playerId: options.playerId || options.seed || 'player' }),
+    policy,
+    active: Boolean(options.active ?? (normalizedSurface === PLAYER_MAIN)),
+    suspended: Boolean(options.suspended ?? false),
+    pipVisible: Boolean(options.pipVisible ?? false),
+    localClock: 0n,
+    lastActiveAt: nowMs(options.lastActiveAt || Date.now()),
+    lastSuspendedAt: safeBigInt(options.lastSuspendedAt || 0n, 0n),
+    lastEventAt: safeBigInt(options.lastEventAt || 0n, 0n),
+    currentMediaId: toHex(options.currentMediaId || ''),
+    currentQueueId: toHex(options.currentQueueId || ''),
+    playbackState: {
+      mediaId: toHex(options.currentMediaId || ''),
+      positionMs: safeBigInt(options.positionMs || 0n, 0n),
+      bufferedUntilMs: safeBigInt(options.bufferedUntilMs || 0n, 0n),
+      paused: Boolean(options.paused ?? !options.active),
+      muted: Boolean(options.muted ?? false),
+      visible: Boolean(options.visible ?? (normalizedSurface === PLAYER_MAIN)),
+      pipEnabled: normalizedSurface === PLAYER_MAIN ? Boolean(options.pipEnabled ?? true) : false,
+    },
+    resourcePool: {
+      cpuBudget: safeNumber(options.cpuBudget, policy.activeBudget),
+      bandwidthBudget: safeNumber(options.bandwidthBudget, policy.backgroundBudget),
+      decodeBudget: safeNumber(options.decodeBudget, policy.maxConcurrentDecodes),
+      prefetchBudget: safeNumber(options.prefetchBudget, policy.maxConcurrentPrefetches),
+      suspended: Boolean(options.suspended ?? false),
+    },
+    localState: new Map(),
+    localEvents: new Map(),
+    queue: [],
+  }
+}
+
+function createPlayerResourceGate(options = {}) {
+  const mainPolicy = { ...DEFAULT_PLAYER_POLICY.main, ...(options.main || {}) }
+  const shortsPolicy = { ...DEFAULT_PLAYER_POLICY.shorts, ...(options.shorts || {}) }
+
+  function budgetFor(surface, resourceContext = {}) {
+    const normalizedSurface = normalizePlayerSurface(surface)
+    const policy = normalizedSurface === PLAYER_MAIN ? mainPolicy : shortsPolicy
+    const priority = normalizedSurface === PLAYER_MAIN ? policy.priority : policy.priority
+    const pressure = safeNumber(resourceContext.pressure, 0)
+    const backgroundPenalty = normalizedSurface === PLAYER_SHORTS ? Math.min(policy.backgroundBudget, Math.max(0, pressure)) : 0
+    const activeBudget = Math.max(0, policy.activeBudget - backgroundPenalty)
+    const suspended = Boolean(resourceContext.inactive || (normalizedSurface === PLAYER_SHORTS && resourceContext.mainActive && pressure > 0))
+    return {
+      surface: normalizedSurface,
+      priority,
+      activeBudget,
+      backgroundBudget: policy.backgroundBudget,
+      maxConcurrentDecodes: policy.maxConcurrentDecodes,
+      maxConcurrentPrefetches: policy.maxConcurrentPrefetches,
+      pipAllowed: policy.pipAllowed,
+      suspended,
+      suspendAfterMs: policy.suspendAfterMs,
+      shouldPreempt: normalizedSurface === PLAYER_MAIN,
+    }
+  }
+
+  function shouldSuspend(surface, resourceContext = {}) {
+    const budget = budgetFor(surface, resourceContext)
+    if (budget.surface === PLAYER_MAIN) return Boolean(resourceContext.forceSuspendMain)
+    if (resourceContext.mainActive && !resourceContext.allowShortsWhileMainActive) return true
+    if (budget.suspended) return true
+    if (resourceContext.inactiveForMs && budget.suspendAfterMs > 0 && resourceContext.inactiveForMs >= budget.suspendAfterMs) return true
+    return false
+  }
+
+  function chooseActiveSurface(resourceContext = {}) {
+    if (resourceContext.mainRequested || resourceContext.mainActive) return PLAYER_MAIN
+    if (resourceContext.shortsRequested) return PLAYER_SHORTS
+    return PLAYER_SHORTS
+  }
+
+  return { mainPolicy, shortsPolicy, budgetFor, shouldSuspend, chooseActiveSurface }
+}
+
+function createUnifiedAutobaseSink(options = {}) {
+  const events = []
+  const bySurface = new Map()
+  const seen = new Set()
+  const appendFn = typeof options.append === 'function'
+    ? options.append
+    : typeof options.autobase?.append === 'function'
+      ? options.autobase.append.bind(options.autobase)
+      : typeof options.autobase?.write === 'function'
+        ? options.autobase.write.bind(options.autobase)
+        : typeof options.autobase?.log?.append === 'function'
+          ? options.autobase.log.append.bind(options.autobase.log)
+          : null
+
+  function surfaceBucket(surface) {
+    const key = normalizePlayerSurface(surface)
+    if (!bySurface.has(key)) bySurface.set(key, { sequence: 0n, events: [], lastEventAt: 0n })
+    return bySurface.get(key)
+  }
+
+  async function append(record = {}) {
+    const surface = normalizePlayerSurface(record.surface)
+    const bucket = surfaceBucket(surface)
+    const observedAt = safeBigInt(record.observedAt || Date.now(), nowMs())
+    const sequence = bucket.sequence + 1n
+    bucket.sequence = sequence
+    const eventId = toHex(record.eventId || hashText({ surface, sequence: String(sequence), ...record }))
+    const dedupeKey = `${surface}:${eventId}`
+    if (seen.has(dedupeKey)) {
+      return { appended: false, duplicate: true, eventId, sequence, surface }
+    }
+    const envelope = {
+      version: 1,
+      domain: 'playback',
+      surface,
+      playerId: toHex(record.playerId || record.sessionId || ''),
+      sessionId: toHex(record.sessionId || ''),
+      eventId,
+      sequence,
+      observedAt,
+      kind: record.kind || 'state',
+      payload: record.payload || {},
+    }
+    seen.add(dedupeKey)
+    bucket.events.push(envelope)
+    bucket.lastEventAt = observedAt > bucket.lastEventAt ? observedAt : bucket.lastEventAt
+    events.push(envelope)
+
+    if (appendFn) {
+      await appendFn(textEncoder.encode(JSON.stringify(envelope)))
+    }
+
+    return { appended: true, duplicate: false, envelope }
+  }
+
+  function snapshot() {
+    return {
+      events: events.slice(),
+      bySurface: Array.from(bySurface.entries()).map(([surface, bucket]) => ({
+        surface,
+        sequence: bucket.sequence,
+        lastEventAt: bucket.lastEventAt,
+        events: bucket.events.slice(),
+      })),
+    }
+  }
+
+  return { append, snapshot, bySurface, events }
+}
+
+export function createPlayerSplitState(options = {}) {
+  return {
+    main: createPlayerSurfaceState(PLAYER_MAIN, options.main || {}),
+    shorts: createPlayerSurfaceState(PLAYER_SHORTS, options.shorts || {}),
+    activeSurface: normalizePlayerSurface(options.activeSurface || PLAYER_MAIN),
+    lastSwitchoverAt: safeBigInt(options.lastSwitchoverAt || 0n, 0n),
+  }
+}
+
+function routePlayerEvent(surfaceState, event = {}, sink, resourceGate, globalContext = {}) {
+  const surface = surfaceState.surface
+  const nextEventAt = safeBigInt(event.observedAt || globalContext.observedAt || Date.now(), nowMs())
+  const budget = resourceGate.budgetFor(surface, {
+    mainActive: globalContext.mainActive,
+    inactive: globalContext.inactive,
+    pressure: globalContext.pressure,
+    allowShortsWhileMainActive: globalContext.allowShortsWhileMainActive,
+    inactiveForMs: globalContext.inactiveForMs,
+  })
+  const suspended = resourceGate.shouldSuspend(surface, {
+    ...globalContext,
+    forceSuspendMain: globalContext.forceSuspendMain,
+  })
+
+  surfaceState.lastEventAt = nextEventAt
+  surfaceState.localClock += 1n
+  surfaceState.active = !suspended && (surface === PLAYER_MAIN || globalContext.allowShortsWhileMainActive !== false)
+  surfaceState.suspended = suspended
+  surfaceState.resourcePool = {
+    ...surfaceState.resourcePool,
+    cpuBudget: budget.activeBudget,
+    bandwidthBudget: surface === PLAYER_MAIN ? Math.max(budget.activeBudget, surfaceState.resourcePool.bandwidthBudget) : budget.backgroundBudget,
+    decodeBudget: budget.maxConcurrentDecodes,
+    prefetchBudget: budget.maxConcurrentPrefetches,
+    suspended,
+  }
+  surfaceState.playbackState = {
+    ...surfaceState.playbackState,
+    mediaId: toHex(event.mediaId || surfaceState.playbackState.mediaId),
+    positionMs: safeBigInt(event.positionMs || surfaceState.playbackState.positionMs, 0n),
+    bufferedUntilMs: safeBigInt(event.bufferedUntilMs || surfaceState.playbackState.bufferedUntilMs, 0n),
+    paused: Boolean(event.paused ?? surfaceState.playbackState.paused),
+    muted: Boolean(event.muted ?? surfaceState.playbackState.muted),
+    visible: Boolean(event.visible ?? (surface === PLAYER_MAIN && !suspended)),
+    pipEnabled: surface === PLAYER_MAIN ? Boolean(event.pipEnabled ?? surfaceState.playbackState.pipEnabled) : false,
+  }
+  surfaceState.localState.set(event.kind || 'state', {
+    ...event,
+    surface,
+    budget,
+    suspended,
+    observedAt: nextEventAt,
+  })
+  surfaceState.localEvents.set(toHex(event.eventId || hashText(event)), event)
+  surfaceState.queue.push({
+    kind: event.kind || 'state',
+    surface,
+    payload: event,
+    observedAt: nextEventAt,
+  })
+
+  const sinkRecord = {
+    surface,
+    sessionId: surfaceState.sessionId,
+    playerId: surfaceState.playerId,
+    kind: event.kind || 'state',
+    eventId: event.eventId || '',
+    observedAt: nextEventAt,
+    payload: {
+      ...event,
+      localStateKey: event.kind || 'state',
+      playbackState: surfaceState.playbackState,
+    },
+  }
+
+  const commit = sink ? sink.append(sinkRecord) : Promise.resolve({ appended: false })
+  return { surfaceState, budget, suspended, commit }
+}
+
+export function createDualPlayerPlaybackCore(options = {}) {
+  const state = options.state || createPlayerSplitState(options)
+  const resourceGate = createPlayerResourceGate(options.resourceGate || options)
+  const sink = createUnifiedAutobaseSink(options.autobaseSink || { autobase: options.autobase, append: options.append })
+
+  function syncActiveSurface(nextSurface, context = {}) {
+    const normalized = normalizePlayerSurface(nextSurface)
+    state.activeSurface = normalized
+    state.lastSwitchoverAt = nowMs(context.observedAt || Date.now())
+    state.main.active = normalized === PLAYER_MAIN
+    state.shorts.active = normalized === PLAYER_SHORTS && context.allowShortsWhileMainActive !== false
+    state.main.suspended = resourceGate.shouldSuspend(PLAYER_MAIN, { ...context, mainActive: normalized === PLAYER_MAIN })
+    state.shorts.suspended = resourceGate.shouldSuspend(PLAYER_SHORTS, { ...context, mainActive: normalized === PLAYER_MAIN })
+    state.main.resourcePool = resourceGate.budgetFor(PLAYER_MAIN, { ...context, mainActive: normalized === PLAYER_MAIN })
+    state.shorts.resourcePool = resourceGate.budgetFor(PLAYER_SHORTS, { ...context, mainActive: normalized === PLAYER_MAIN })
+    return state.activeSurface
+  }
+
+  function emit(surface, event = {}, context = {}) {
+    const normalized = normalizePlayerSurface(surface)
+    const surfaceState = normalized === PLAYER_MAIN ? state.main : state.shorts
+    if (normalized === PLAYER_MAIN) {
+      state.shorts.suspended = resourceGate.shouldSuspend(PLAYER_SHORTS, {
+        ...context,
+        mainActive: true,
+        allowShortsWhileMainActive: context.allowShortsWhileMainActive,
+        inactiveForMs: context.inactiveForMs,
+      })
+      if (state.shorts.suspended) state.shorts.active = false
+    }
+    return routePlayerEvent(surfaceState, event, sink, resourceGate, {
+      ...context,
+      mainActive: normalized === PLAYER_MAIN || state.main.active,
+    })
+  }
+
+  function dispatch(event = {}, context = {}) {
+    const surface = normalizePlayerSurface(event.surface || context.surface || state.activeSurface)
+    return emit(surface, event, context)
+  }
+
+  function prioritizeMain(context = {}) {
+    return syncActiveSurface(PLAYER_MAIN, context)
+  }
+
+  function prioritizeShorts(context = {}) {
+    if (context.allowShortsWhileMainActive === false && state.main.active) {
+      return state.activeSurface
+    }
+    return syncActiveSurface(PLAYER_SHORTS, context)
+  }
+
+  function suspendInactivePlayers(context = {}) {
+    const mainSuspended = resourceGate.shouldSuspend(PLAYER_MAIN, { ...context, mainActive: state.activeSurface === PLAYER_MAIN })
+    const shortsSuspended = resourceGate.shouldSuspend(PLAYER_SHORTS, {
+      ...context,
+      mainActive: state.activeSurface === PLAYER_MAIN,
+      allowShortsWhileMainActive: context.allowShortsWhileMainActive,
+      inactiveForMs: context.inactiveForMs,
+    })
+    state.main.suspended = mainSuspended
+    state.shorts.suspended = shortsSuspended
+    if (shortsSuspended) state.shorts.active = false
+    if (mainSuspended) state.main.active = false
+    return { mainSuspended, shortsSuspended }
+  }
+
+  function snapshot() {
+    return {
+      activeSurface: state.activeSurface,
+      lastSwitchoverAt: state.lastSwitchoverAt,
+      main: state.main,
+      shorts: state.shorts,
+      sink: sink.snapshot(),
+    }
+  }
+
+  return {
+    state,
+    resourceGate,
+    sink,
+    dispatch,
+    emit,
+    prioritizeMain,
+    prioritizeShorts,
+    suspendInactivePlayers,
+    syncActiveSurface,
+    snapshot,
+  }
+}
+
 export function createUniversalCore(options = {}) {
   const role = normalizeRole(options.role)
   const sybil = createSybilPolicy(options.sybil)
@@ -494,6 +848,7 @@ export function createUniversalCore(options = {}) {
   const availability = createAvailabilityPlanner(options.availability)
   const resources = createResourcePolicy({ role, ...options.resources })
   const state = options.state || createConcurrentState(options)
+  const playerCore = createDualPlayerPlaybackCore(options.players || {})
 
   function scorePeer(peer = {}, now = Date.now()) {
     const identityScore = sybil.scoreIdentity(peer.identity || peer, now)
@@ -600,6 +955,26 @@ export function createUniversalCore(options = {}) {
     }
   }
 
+  function playerSnapshot() {
+    return playerCore.snapshot()
+  }
+
+  function routePlayerEvent(event = {}, context = {}) {
+    return playerCore.dispatch(event, context)
+  }
+
+  function prioritizeMainPlayer(context = {}) {
+    return playerCore.prioritizeMain(context)
+  }
+
+  function prioritizeShortsPlayer(context = {}) {
+    return playerCore.prioritizeShorts(context)
+  }
+
+  function suspendInactivePlayers(context = {}) {
+    return playerCore.suspendInactivePlayers(context)
+  }
+
   function usefulWorkSnapshot() {
     return usefulWork.snapshot()
   }
@@ -613,6 +988,7 @@ export function createUniversalCore(options = {}) {
       tombstones: Array.from(state.tombstones.values()),
       causalWatermark: state.causalWatermark,
       lastAppliedAt: state.lastAppliedAt,
+      players: playerSnapshot(),
     }
   }
 
@@ -623,6 +999,7 @@ export function createUniversalCore(options = {}) {
     usefulWork,
     availability,
     resources,
+    playerCore,
     scorePeer,
     registerPeer,
     recordUsefulWork,
@@ -631,6 +1008,11 @@ export function createUniversalCore(options = {}) {
     shouldSyncPeer,
     chooseFanoutPeers,
     planRefresh,
+    routePlayerEvent,
+    prioritizeMainPlayer,
+    prioritizeShortsPlayer,
+    suspendInactivePlayers,
+    playerSnapshot,
     usefulWorkSnapshot,
     stateSnapshot,
   }
@@ -640,11 +1022,17 @@ export default {
   ROLE_MOBILE,
   ROLE_RELAY,
   ROLE_HYBRID,
+  PLAYER_MAIN,
+  PLAYER_SHORTS,
   createSybilPolicy,
   createUsefulWorkLedger,
   createAvailabilityPlanner,
   createResourcePolicy,
   createConcurrentState,
   applyConcurrentUpdate,
+  createPlayerSplitState,
+  createPlayerResourceGate,
+  createUnifiedAutobaseSink,
+  createDualPlayerPlaybackCore,
   createUniversalCore,
 }

@@ -21,6 +21,8 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - uses: ./.github/actions/validate-submodules
+
       - uses: ./.github/actions/setup-node-workspace
         with:
           node-version: 22.x

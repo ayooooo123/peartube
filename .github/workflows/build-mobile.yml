@@ -109,6 +109,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
+      - uses: ./.github/actions/validate-submodules
+
       - uses: ./.github/actions/setup-node-workspace
         with:
           node-version: 22.x

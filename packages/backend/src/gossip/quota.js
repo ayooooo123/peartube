@@ -56,8 +56,9 @@ export function createQuotaTracker(identity = {}, now = Date.now()) {
     },
     consume(amount = 1) {
       refill()
-      if (remaining < amount) return false
-      remaining -= amount
+      const spend = Math.max(0, Math.floor(safeNumber(amount, 1)))
+      if (remaining < spend) return false
+      remaining -= spend
       return true
     },
     reset(value = quota.burst) {
@@ -68,13 +69,25 @@ export function createQuotaTracker(identity = {}, now = Date.now()) {
   }
 }
 
-export function rateLimitFanout(peers, quota) {
+export function rateLimitFanout(peers, quota, options = {}) {
   const limit = Math.max(1, safeNumber(quota?.fanout, 1))
-  return Array.isArray(peers) ? peers.slice(0, limit) : []
+  const candidates = Array.isArray(peers) ? peers : []
+  const selected = []
+  const consume = options.consume === true && typeof quota?.consume === 'function'
+  for (const peer of candidates) {
+    if (selected.length >= limit) break
+    if (consume && !quota.consume(1)) break
+    selected.push(peer)
+  }
+  return selected
+}
+
+export function spendFanout(items, quota) {
+  return rateLimitFanout(items, quota, { consume: true })
 }
 
 export function shouldRequestMore(quota, pendingRequests = 0) {
-  return pendingRequests < Math.max(1, safeNumber(quota?.requests, 1))
+  return pendingRequests < Math.max(1, safeNumber(quota?.requests, 1)) && canSpendQuota(quota, 1)
 }
 
 export default {
@@ -83,5 +96,6 @@ export default {
   createQuotaTracker,
   canSpendQuota,
   rateLimitFanout,
+  spendFanout,
   shouldRequestMore,
 }

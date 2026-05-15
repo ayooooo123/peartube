@@ -1,5 +1,5 @@
 import { createDescriptorBloom, bloomFilterKnownDescriptors, decodeDescriptorBloom } from './bloom.js'
-import { createIdentityQuota, createQuotaTracker, rateLimitFanout, shouldRequestMore } from './quota.js'
+import { createIdentityQuota, createQuotaTracker, rateLimitFanout, shouldRequestMore, spendFanout } from './quota.js'
 
 const textEncoder = new TextEncoder()
 const ZERO_32 = new Uint8Array(32)
@@ -28,11 +28,17 @@ function normalizeDescriptorId(value) {
   if (!value) return null
   if (value instanceof Uint8Array) return bytesToHex(value)
   if (typeof value === 'string') return value.trim().toLowerCase().replace(/^0x/, '')
-  if (typeof value === 'object' && value.descriptorId) return normalizeDescriptorId(value.descriptorId)
+  if (typeof value === 'object') {
+    return normalizeDescriptorId(value.descriptorId || value.id || value.driveKey || value.descriptor?.descriptorId || value.proof?.descriptorId)
+  }
   return null
 }
 
 function safeNumber(value, fallback = 0) {
+  if (typeof value === 'bigint') {
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) return fallback
+    return Number(value)
+  }
   const n = Number(value)
   return Number.isFinite(n) ? n : fallback
 }
@@ -48,13 +54,13 @@ function isDescriptorFresh(descriptor, now = Date.now(), maxAgeMs = 10 * 60 * 10
   return true
 }
 
-async function defaultVerifySignature({ descriptor, entry, verifier }) {
-  if (typeof verifier !== 'function') return true
+async function defaultVerifySignature({ descriptor, entry, verifier, allowUnsignedForTests = false }) {
+  if (typeof verifier !== 'function') return Boolean(allowUnsignedForTests)
   return Boolean(await verifier({ descriptor, entry }))
 }
 
 function getDescriptorId(entry) {
-  return normalizeDescriptorId(entry?.descriptorId || entry?.id || entry?.driveKey || entry?.descriptor?.descriptorId)
+  return normalizeDescriptorId(entry)
 }
 
 function buildValidationResult({ ok, reason = null, entry = null, descriptor = null }) {
@@ -71,7 +77,12 @@ export async function validateIncomingDescriptor(entry, options = {}) {
   if (descriptor.flags != null && (Number(descriptor.flags) & (1 << 5))) {
     return buildValidationResult({ ok: false, reason: 'tombstoned', entry, descriptor })
   }
-  const signatureOk = await defaultVerifySignature({ descriptor, entry, verifier: options.verifySignature })
+  const signatureOk = await defaultVerifySignature({
+    descriptor,
+    entry,
+    verifier: options.verifySignature,
+    allowUnsignedForTests: options.allowUnsignedForTests,
+  })
   if (!signatureOk) {
     return buildValidationResult({ ok: false, reason: 'bad-signature', entry, descriptor })
   }
@@ -92,7 +103,12 @@ export async function validateIncomingProof(entry, options = {}) {
   if (expiresAt && now > expiresAt) {
     return buildValidationResult({ ok: false, reason: 'proof-expired', entry, descriptor: null })
   }
-  const signatureOk = await defaultVerifySignature({ descriptor: proof, entry, verifier: options.verifySignature })
+  const signatureOk = await defaultVerifySignature({
+    descriptor: proof,
+    entry,
+    verifier: options.verifySignature,
+    allowUnsignedForTests: options.allowUnsignedForTests,
+  })
   if (!signatureOk) {
     return buildValidationResult({ ok: false, reason: 'bad-signature', entry, descriptor: null })
   }
@@ -109,6 +125,14 @@ export function shouldPropagateDescriptor(descriptor, options = {}) {
   return true
 }
 
+export function shouldPropagateProof(proof, options = {}) {
+  if (!proof || !normalizeDescriptorId(proof.descriptorId)) return false
+  const now = options.now || Date.now()
+  const expiresAt = safeNumber(proof.expiresAt, 0)
+  if (expiresAt && now > expiresAt) return false
+  return true
+}
+
 export function buildGossipState(options = {}) {
   const now = options.now || Date.now()
   const known = Array.isArray(options.knownDescriptors) ? options.knownDescriptors : []
@@ -118,7 +142,7 @@ export function buildGossipState(options = {}) {
     now,
     bloom,
     quota,
-    knownDescriptors: known.map((descriptor) => normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)).filter(Boolean),
+    knownDescriptors: known.map((descriptor) => normalizeDescriptorId(descriptor)).filter(Boolean),
     identityWeight: createIdentityQuota(options.identity || {}, now).weight,
   }
 }
@@ -127,6 +151,7 @@ export function createGossipSync(options = {}) {
   const state = buildGossipState(options)
   const validators = {
     verifySignature: options.verifySignature,
+    allowUnsignedForTests: options.allowUnsignedForTests,
     reachabilityGate: options.reachabilityGate,
     maxAgeMs: options.maxAgeMs,
     now: options.now,
@@ -141,31 +166,38 @@ export function createGossipSync(options = {}) {
     const remoteFilter = await peer?.sendBloom?.(await buildOutboundFilter(descriptors))
     const remote = remoteFilter?.has ? remoteFilter : (remoteFilter ? decodeDescriptorBloom(remoteFilter) : null)
     const localCandidates = Array.isArray(descriptors) ? descriptors : []
-    const missing = localCandidates.filter((descriptor) => {
-      const id = normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)
+    const remoteMissing = localCandidates.filter((descriptor) => {
+      const id = normalizeDescriptorId(descriptor)
       if (!id) return false
       return !remote?.bits || !remote?.has?.(id)
     })
-    const allowed = rateLimitFanout(missing, state.quota)
-    if (allowed.length > 0 && shouldRequestMore(state.quota, peer?.pendingRequests || 0)) {
-      await peer?.requestDescriptors?.(allowed.map((descriptor) => normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)).filter(Boolean))
+    const allowed = spendFanout(remoteMissing, state.quota)
+    if (allowed.length > 0) {
+      if (typeof peer?.sendDescriptors === 'function') {
+        await peer.sendDescriptors(allowed)
+      } else if (typeof peer?.offerDescriptors === 'function') {
+        await peer.offerDescriptors(allowed.map((descriptor) => normalizeDescriptorId(descriptor)).filter(Boolean))
+      }
     }
-    return { remoteFilter, missing: allowed }
+    return { remoteFilter, missing: allowed, remoteMissing: allowed }
   }
 
   async function ingest(entries = []) {
     const accepted = []
     for (const entry of Array.isArray(entries) ? entries : []) {
-      const descriptorResult = entry?.proof
+      const isProof = Boolean(entry?.proof)
+      const descriptorResult = isProof
         ? await validateIncomingProof(entry, validators)
         : await validateIncomingDescriptor(entry, validators)
       if (!descriptorResult.ok) continue
-      const descriptor = entry?.descriptor || entry
-      if (descriptor && !shouldPropagateDescriptor(descriptor, { ...validators, reachabilityGate: options.reachabilityGate })) {
+      const payload = isProof ? entry.proof : (entry?.descriptor || entry)
+      if (isProof) {
+        if (!shouldPropagateProof(payload, validators)) continue
+      } else if (payload && !shouldPropagateDescriptor(payload, { ...validators, reachabilityGate: options.reachabilityGate })) {
         continue
       }
       accepted.push(entry)
-      const id = getDescriptorId(descriptor)
+      const id = getDescriptorId(payload)
       if (id) state.bloom.add(id)
       if (id && !state.knownDescriptors.includes(id)) state.knownDescriptors.push(id)
     }
@@ -175,14 +207,17 @@ export function createGossipSync(options = {}) {
   async function fanout(peers = [], descriptors = []) {
     const quotaPeers = rateLimitFanout(Array.isArray(peers) ? peers : [], state.quota)
     const payload = await buildOutboundFilter(descriptors)
+    let sent = 0
     for (const peer of quotaPeers) {
+      if (!state.quota.consume(1)) break
+      sent += 1
       if (typeof peer?.sendBloom === 'function') await peer.sendBloom(payload)
       if (typeof peer?.requestDescriptors === 'function' && shouldRequestMore(state.quota, peer?.pendingRequests || 0)) {
-        const ids = (Array.isArray(descriptors) ? descriptors : []).map((descriptor) => normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)).filter(Boolean)
+        const ids = (Array.isArray(descriptors) ? descriptors : []).map((descriptor) => normalizeDescriptorId(descriptor)).filter(Boolean)
         if (ids.length > 0) await peer.requestDescriptors(ids)
       }
     }
-    return quotaPeers.length
+    return sent
   }
 
   return {
@@ -204,4 +239,5 @@ export default {
   validateIncomingDescriptor,
   validateIncomingProof,
   shouldPropagateDescriptor,
+  shouldPropagateProof,
 }

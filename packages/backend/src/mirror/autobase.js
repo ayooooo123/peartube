@@ -3,16 +3,16 @@ import {
   EventType,
   DescriptorState,
   WorkerPhase,
-  DescriptorAddedPayload,
-  ProofAddedPayload,
-  QuarantinedPayload,
-  TombstonedPayload,
   encodeLogEntry,
   decodeLogEntry,
   decodeDescriptorAddedPayload,
   decodeProofAddedPayload,
   decodeQuarantinedPayload,
   decodeTombstonedPayload,
+  encodeDescriptorAddedPayload,
+  encodeProofAddedPayload,
+  encodeQuarantinedPayload,
+  encodeTombstonedPayload,
   toFixed32,
   toFixed64,
 } from './schemas.js'
@@ -106,6 +106,7 @@ function createDescriptorRecord(descriptor, observedAt, eventId, stateAfter = De
     lastProofId: cloneBytes(ZERO_32),
     lastEventId: cloneBytes(eventId),
     lastDescriptorHash: descriptorFingerprint(descriptor),
+    reasonCode: 0,
     duplicateProofCount: 0,
     conflictCount: 0,
     outOfOrderCount: 0,
@@ -129,7 +130,7 @@ function syncTerminalMaps(state, id, current) {
       descriptorId: cloneBytes(current.descriptor.descriptorId),
       tombstonedAt: current.tombstonedAt,
       lastProofId: cloneBytes(current.lastProofId),
-      reasonCode: 0,
+      reasonCode: current.reasonCode || 0,
     })
     state.quarantined.delete(id)
     return
@@ -139,7 +140,7 @@ function syncTerminalMaps(state, id, current) {
       descriptorId: cloneBytes(current.descriptor.descriptorId),
       quarantineUntil: current.quarantineUntil,
       failureCount: current.failureCount,
-      reasonCode: 0,
+      reasonCode: current.reasonCode || 0,
     })
     state.tombstoned.delete(id)
     return
@@ -228,7 +229,12 @@ function applyProofTransition(state, payload, entry, eventId) {
   }
 
   if (current.state !== DescriptorState.TOMBSTONED) {
-    current.state = payload.stateAfterProof === DescriptorState.QUARANTINED ? DescriptorState.QUARANTINED : DescriptorState.ACTIVE
+    const requestedState = payload.stateAfterProof === DescriptorState.QUARANTINED ? DescriptorState.QUARANTINED : DescriptorState.ACTIVE
+    if (current.state === DescriptorState.QUARANTINED && requestedState === DescriptorState.ACTIVE && observedAt < ensureBigInt(current.quarantineUntil, 0n)) {
+      current.state = DescriptorState.QUARANTINED
+    } else {
+      current.state = requestedState
+    }
     current.lastTransitionAt = observedAt
     current.lastEventId = cloneBytes(eventId)
     if (payload.stateAfterProof === DescriptorState.ACTIVE && payload.failureCountReset) {
@@ -250,6 +256,7 @@ function applyQuarantineTransition(state, payload, entry, eventId) {
     const placeholder = createDescriptorRecord({ descriptorId: cloneBytes(payload.descriptorId) }, observedAt, eventId, DescriptorState.QUARANTINED)
     placeholder.quarantineUntil = ensureBigInt(payload.quarantineUntil, observedAt)
     placeholder.failureCount = Number(payload.failureCount || 0)
+    placeholder.reasonCode = Number(payload.reasonCode || 0)
     placeholder.tombstonedAt = 0n
     state.activeIndex.set(descriptorId, placeholder)
     syncTerminalMaps(state, descriptorId, placeholder)
@@ -268,6 +275,7 @@ function applyQuarantineTransition(state, payload, entry, eventId) {
   current.state = DescriptorState.QUARANTINED
   current.quarantineUntil = maxBigInt(current.quarantineUntil, payload.quarantineUntil)
   current.failureCount = Math.max(current.failureCount, Number(payload.failureCount || 0))
+  current.reasonCode = Number(payload.reasonCode || 0)
   current.lastTransitionAt = observedAt
   current.lastEventId = cloneBytes(eventId)
   syncTerminalMaps(state, descriptorId, current)
@@ -284,6 +292,7 @@ function applyTombstoneTransition(state, payload, entry, eventId) {
     const placeholder = createDescriptorRecord({ descriptorId: cloneBytes(payload.descriptorId) }, observedAt, eventId, DescriptorState.TOMBSTONED)
     placeholder.tombstonedAt = observedAt
     placeholder.lastProofId = cloneBytes(payload.lastProofId)
+    placeholder.reasonCode = Number(payload.reasonCode || 0)
     state.activeIndex.set(descriptorId, placeholder)
     syncTerminalMaps(state, descriptorId, placeholder)
     state.identityWeight = Math.max(0, state.identityWeight - 25)
@@ -301,6 +310,7 @@ function applyTombstoneTransition(state, payload, entry, eventId) {
   current.state = DescriptorState.TOMBSTONED
   current.tombstonedAt = maxBigInt(current.tombstonedAt, payload.tombstonedAt)
   current.lastProofId = cloneBytes(payload.lastProofId)
+  current.reasonCode = Number(payload.reasonCode || 0)
   current.lastTransitionAt = observedAt
   current.lastEventId = cloneBytes(eventId)
   syncTerminalMaps(state, descriptorId, current)
@@ -397,10 +407,10 @@ export function shouldForwardDescriptor(state, descriptorId) {
 }
 
 function buildEnvelopePayload(entryType, payload) {
-  if (entryType === EventType.DESCRIPTOR_ADDED) return DescriptorAddedPayload.encode(payload)
-  if (entryType === EventType.PROOF_ADDED) return ProofAddedPayload.encode(payload)
-  if (entryType === EventType.QUARANTINED) return QuarantinedPayload.encode(payload)
-  if (entryType === EventType.TOMBSTONED) return TombstonedPayload.encode(payload)
+  if (entryType === EventType.DESCRIPTOR_ADDED) return encodeDescriptorAddedPayload(payload)
+  if (entryType === EventType.PROOF_ADDED) return encodeProofAddedPayload(payload)
+  if (entryType === EventType.QUARANTINED) return encodeQuarantinedPayload(payload)
+  if (entryType === EventType.TOMBSTONED) return encodeTombstonedPayload(payload)
   throw new Error(`Unknown Peartube event type: ${entryType}`)
 }
 

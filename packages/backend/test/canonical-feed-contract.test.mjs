@@ -5,7 +5,6 @@ import {
   CANONICAL_FEED_CONTRACT_VERSION,
   CANONICAL_FEED_ENTRY_FIELDS,
   CANONICAL_FEED_VIDEO_FIELDS,
-  createCanonicalFeedEntry,
   createCanonicalFeedEnvelope,
   createCanonicalFeedVideo,
 } from '../src/canonical-feed-contract.js'
@@ -177,6 +176,34 @@ test('normalizeCanonicalFeedVideo preserves mixed raw inputs and channel fallbac
   t.is(video.availability, 'unknown')
   t.is(video.byteAvailability, 'playable')
   t.is(video.publicBeeKey, '44'.repeat(32))
+})
+
+test('normalizeCanonicalFeedVideoFromLocalUpload keeps local upload channel metadata intact', (t) => {
+  const video = normalizeCanonicalFeedVideoFromLocalUpload({
+    id: 100,
+    title: 'Local upload',
+    uploadedAt: 9,
+    availability: 'playable',
+    byteAvailability: 'playable',
+    blobId: 'local-blob',
+    blobsCoreKey: '88'.repeat(32),
+    mimeType: 'video/mp4',
+    channelKey: 'local-channel',
+    driveKey: 'local-channel',
+  }, {
+    channelKey: 'local-channel',
+    driveKey: 'local-channel',
+    name: 'Local channel',
+    avatar: '/local-avatar.png',
+    icon: '/local-icon.png',
+  })
+
+  t.is(video.id, '100')
+  t.is(video.channelKey, 'local-channel')
+  t.is(video.channel?.name, 'Local channel')
+  t.is(video.channel?.avatar, '/local-avatar.png')
+  t.is(video.channel?.icon, '/local-icon.png')
+  t.is(video.blobId, 'local-blob')
 })
 
 test('normalizeCanonicalFeedVideoFromPublicFeed falls back to feed channel metadata before channelMeta snapshots', (t) => {

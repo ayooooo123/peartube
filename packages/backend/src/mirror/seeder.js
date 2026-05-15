@@ -78,9 +78,13 @@ function buildSeedRecord(descriptor, options = {}, extras = {}) {
   const refreshPolicy = createMirrorRefreshPolicy(options.refreshPolicy || options)
   const sourceUrl = extras.sourceUrl || options.sourceUrl || extras.finalUrl || descriptor?.sourceUrl || null
   const now = toBigInt(options.now, BigInt(Date.now()))
-  const availabilityEpoch = Number(descriptor?.availabilityEpoch || refreshPolicy.plan({ descriptor }, { now }).nextAvailabilityEpoch)
+  const availabilityEpoch = Number(refreshPolicy.plan({ descriptor }, { now }).nextAvailabilityEpoch)
+  const refreshedDescriptor = {
+    ...descriptor,
+    availabilityEpoch,
+  }
   return {
-    descriptor,
+    descriptor: refreshedDescriptor,
     core: extras.core || null,
     topic: extras.topic || toFixed32(descriptor.swarmTopic || ZERO_32),
     sourceUrl,
@@ -89,7 +93,7 @@ function buildSeedRecord(descriptor, options = {}, extras = {}) {
     refreshCount: 0,
     lastRefreshAt: now,
     lastRefetchAt: extras.lastRefetchAt || now,
-    lastKeyRotationAt: extras.lastKeyRotationAt || 0n,
+    lastKeyRotationAt: extras.lastKeyRotationAt || now,
     lastAvailabilityEpoch: availabilityEpoch,
     state: {
       workerPhase: WorkerPhase.SEEDING,
@@ -196,7 +200,7 @@ export async function seedMirroredVideo(autobase, swarm, descriptor, options = {
     if (core) await replicateCore(core, stream)
   })
 
-  if (autobase) {
+  if (autobase && typeof options.signBytes === 'function') {
     await appendDescriptorAdded(autobase, buildDescriptorAddedPayload(descriptor, options), {
       signer: descriptor.signer || ZERO_32,
       actorId: options.actorId || descriptor.publisherIdentity || ZERO_32,
@@ -242,6 +246,7 @@ export function createMirrorSeeder(options = {}) {
   const scheduleRefresh = (key, record, nextOptions = {}) => {
     if (!options.autoRefresh || stopped) return null
     const plan = record.refreshPolicy.plan(record, nextOptions)
+    if (!plan.shouldRefresh && !options.scheduleIdleRefresh) return null
     const delayMs = Math.max(1000, plan.nextRefreshAt - Date.now())
     const existing = timers.get(key)
     if (existing) clearTimeout(existing)
@@ -252,8 +257,9 @@ export function createMirrorSeeder(options = {}) {
       if (!current) return
       try {
         await refreshRecord(current.autobase, current.swarm, current, nextOptions)
-      } catch { /* retry on next refresh tick */ }
-      scheduleRefresh(key, current, nextOptions)
+      } catch {
+        scheduleRefresh(key, current, nextOptions)
+      }
     }, delayMs)
     timers.set(key, timer)
     return timer

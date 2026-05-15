@@ -1,3 +1,5 @@
+import crypto from 'node:crypto'
+
 const textEncoder = new TextEncoder()
 const ZERO_32 = new Uint8Array(32)
 const ZERO_64 = new Uint8Array(64)
@@ -61,23 +63,7 @@ async function sha256Bytes(input) {
     return new Uint8Array(digest)
   }
 
-  let h1 = 0x811c9dc5
-  let h2 = 0x01000193
-  for (let i = 0; i < data.length; i++) {
-    const byte = data[i]
-    h1 ^= byte
-    h1 = Math.imul(h1, h2)
-    h2 ^= (byte + i) & 0xff
-    h2 = Math.imul(h2, 0x45d9f3b)
-  }
-
-  const out = new Uint8Array(32)
-  const view = new DataView(out.buffer)
-  for (let i = 0; i < 8; i++) {
-    const seed = Math.imul(h1 ^ (h2 + i * 0x9e3779b1), 0x45d9f3b) >>> 0
-    view.setUint32(i * 4, seed >>> 0, false)
-  }
-  return out
+  return new Uint8Array(crypto.createHash('sha256').update(Buffer.from(data)).digest())
 }
 
 async function digest32(value) {

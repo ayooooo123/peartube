@@ -619,37 +619,10 @@ function createRelayStorageService({ backend, eventSink, playback, nativeRuntime
     }
   }
 
-  function createContext(phase, detail = {}) {
-    return {
-      kind: "gossip",
-      phase,
-      platform,
-      storagePath,
-      backend,
-      api,
-      publicFeed,
-      playback,
-      eventSink,
-      resourcePool: "main",
-      modules: serviceModules,
-      ...detail
-    }
-  }
-
   async function emit(type, detail = {}) {
     if (!eventSink) return
     await eventSink.append(type, snapshot(detail))
   }
-
-  async function runLifecycle(phase, detail = {}) {
-    const context = createContext(phase, detail)
-    await Promise.all([
-      invokeServiceLifecycle(serviceModules.bloom, phase, context),
-      invokeServiceLifecycle(serviceModules.quota, phase, context),
-      invokeServiceLifecycle(serviceModules.sync, phase, context)
-    ])
-  }
-
   async function start() {
     started = true
     suspended = false
@@ -701,10 +674,6 @@ function createRelayStorageService({ backend, eventSink, playback, nativeRuntime
   }
 
   return {
-    init: async () => {
-      await runLifecycle('init')
-      return snapshot()
-    },
     start,
     refresh,
     suspend,

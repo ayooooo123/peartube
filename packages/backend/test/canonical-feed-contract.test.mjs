@@ -9,6 +9,12 @@ import {
   createCanonicalFeedEnvelope,
   createCanonicalFeedVideo,
 } from '../src/canonical-feed-contract.js'
+import {
+  normalizeCanonicalFeedVideo,
+  normalizeCanonicalFeedVideoFromLocalUpload,
+  normalizeCanonicalFeedVideoFromPreviewHydration,
+  normalizeCanonicalFeedVideoFromPublicFeed,
+} from '../src/canonical-feed.js'
 
 test('canonical feed contract exposes the canonical surface fields', (t) => {
   t.is(CANONICAL_FEED_CONTRACT_VERSION, 1)
@@ -103,6 +109,145 @@ test('createCanonicalFeedVideo preserves titles, icons, and blob references', (t
   t.is(video.blobId, 'video-blob')
   t.is(video.blobsCoreKey, '22'.repeat(32))
   t.is(video.publicBeeKey, '44'.repeat(32))
+})
+
+test('normalizeCanonicalFeedVideo preserves mixed raw inputs and channel fallback precedence', (t) => {
+  const video = normalizeCanonicalFeedVideo({
+    id: 7,
+    title: null,
+    name: 'Mixed input title',
+    description: 'Raw description',
+    uploadedAt: '123',
+    duration: '456',
+    thumbnailUrl: 'http://localhost/thumbs/raw.jpg',
+    blobId: 'video-blob',
+    blobsCoreKey: '22'.repeat(32),
+    mimeType: 'video/mp4',
+    availability: 'unknown',
+    byteAvailability: 'playable',
+    playbackSupport: 'blocked',
+    channel: {
+      channelKey: 'raw-channel',
+      driveKey: 'raw-drive',
+      name: 'Raw channel',
+      description: 'Raw channel description',
+      avatar: '/raw-avatar.png',
+      icon: '/raw-icon.png',
+      thumbnail: '/raw-thumbnail.png',
+      videoCount: '11',
+      lastSeen: '789',
+      manifestUpdatedAt: '987',
+    },
+    channelName: 'Ignored scalar channel name',
+    channelAvatar: '/ignored-avatar.png',
+    channelIcon: '/ignored-icon.png',
+    publicBeeKey: '44'.repeat(32),
+  }, {
+    source: 'preview-hydration',
+    channel: {
+      channelKey: 'option-channel',
+      driveKey: 'option-drive',
+      name: 'Option channel',
+      avatar: '/option-avatar.png',
+      icon: '/option-icon.png',
+    },
+    channelMeta: {
+      channelKey: 'meta-channel',
+      driveKey: 'meta-drive',
+      name: 'Meta channel',
+      avatar: '/meta-avatar.png',
+      icon: '/meta-icon.png',
+    },
+    channelKey: 'option-channel',
+    driveKey: 'option-drive',
+    publicBeeKey: '55'.repeat(32),
+  })
+
+  t.is(video.id, '7')
+  t.is(video.title, 'Mixed input title')
+  t.is(video.channelKey, 'raw-channel')
+  t.is(video.driveKey, 'raw-drive')
+  t.is(video.channel?.name, 'Raw channel')
+  t.is(video.channel?.avatar, '/raw-avatar.png')
+  t.is(video.channel?.icon, '/raw-icon.png')
+  t.is(video.channel?.thumbnail, '/raw-thumbnail.png')
+  t.is(video.channel?.videoCount, 11)
+  t.is(video.channel?.lastSeen, 789)
+  t.is(video.channel?.manifestUpdatedAt, 987)
+  t.is(video.availability, 'unknown')
+  t.is(video.byteAvailability, 'playable')
+  t.is(video.publicBeeKey, '44'.repeat(32))
+})
+
+test('normalizeCanonicalFeedVideoFromPublicFeed falls back to feed channel metadata before channelMeta snapshots', (t) => {
+  const video = normalizeCanonicalFeedVideoFromPublicFeed({
+    id: 'preview-1',
+    title: 'Preview',
+    uploadedAt: 1,
+    blobId: 'preview-blob',
+    blobsCoreKey: '11'.repeat(32),
+    mimeType: 'video/mp4',
+    availability: 'playable',
+    byteAvailability: 'playable',
+    channelName: 'Ignored video channel',
+    channelAvatar: '/ignored-video-avatar.png',
+    channelIcon: '/ignored-video-icon.png',
+  }, {
+    channelKey: 'feed-channel',
+    driveKey: 'feed-drive',
+    publicBeeKey: '66'.repeat(32),
+    channel: {
+      channelKey: 'feed-channel',
+      driveKey: 'feed-drive',
+      name: 'Feed channel',
+      avatar: '/feed-avatar.png',
+      icon: '/feed-icon.png',
+      videoCount: 2,
+    },
+    channelMeta: {
+      name: 'Meta channel',
+      avatar: '/meta-avatar.png',
+      icon: '/meta-icon.png',
+      videoCount: 11,
+    },
+  })
+
+  t.is(video.channelKey, 'feed-channel')
+  t.is(video.driveKey, 'feed-drive')
+  t.is(video.channel?.name, 'Feed channel')
+  t.is(video.channel?.avatar, '/feed-avatar.png')
+  t.is(video.channel?.icon, '/feed-icon.png')
+  t.is(video.channel?.videoCount, 2)
+  t.is(video.publicBeeKey, '66'.repeat(32))
+  t.is(video.blobId, 'preview-blob')
+})
+
+test('normalizeCanonicalFeedVideoFromPreviewHydration preserves distinct availability and byte availability after restart', (t) => {
+  const video = normalizeCanonicalFeedVideoFromPreviewHydration({
+    id: 'restored-1',
+    title: 'Restored preview',
+    uploadedAt: 42,
+    availability: 'unknown',
+    byteAvailability: 'playable',
+    blobId: 'restored-blob',
+    blobsCoreKey: '77'.repeat(32),
+    mimeType: 'video/mp4',
+  }, {
+    channelKey: 'restored-channel',
+    driveKey: 'restored-channel',
+    channel: {
+      channelKey: 'restored-channel',
+      driveKey: 'restored-channel',
+      name: 'Restored channel',
+      avatar: '/restored-avatar.png',
+      icon: '/restored-icon.png',
+    },
+  })
+
+  t.is(video.availability, 'unknown')
+  t.is(video.byteAvailability, 'playable')
+  t.is(video.channel?.avatar, '/restored-avatar.png')
+  t.is(video.channel?.icon, '/restored-icon.png')
 })
 
 test('createCanonicalFeedEnvelope normalizes nested entries and videos', (t) => {

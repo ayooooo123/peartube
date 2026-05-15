@@ -74,123 +74,8 @@ export const EventType = {
   TOMBSTONED: 4,
 }
 
-export const V1VideoDescriptor = c.struct([
-  ['version', c.uint8],
-  ['descriptorId', c.fixed32],
-  ['contentRoot', c.fixed32],
-  ['dasRoot', c.fixed32],
-  ['swarmTopic', c.fixed32],
-  ['sourceRefHash', c.fixed32],
-  ['sourceType', c.uint8],
-  ['mirrorOrigin', c.uint8],
-  ['contentBytes', c.uint64],
-  ['segmentCount', c.uint32],
-  ['durationMs', c.uint64],
-  ['publishAt', c.uint64],
-  ['expiresAt', c.uint64],
-  ['availabilityEpoch', c.uint32],
-  ['publisherIdentity', c.fixed32],
-  ['parentDescriptorId', c.fixed32],
-  ['titleHash', c.fixed32],
-  ['descriptionHash', c.fixed32],
-  ['languageTag', c.string],
-  ['codecProfile', c.uint8],
-  ['flags', c.uint16],
-  ['signer', c.fixed32],
-  ['signature', c.fixed64],
-])
-
-export const V1AvailabilityProof = c.struct([
-  ['version', c.uint8],
-  ['proofId', c.fixed32],
-  ['descriptorId', c.fixed32],
-  ['contentRoot', c.fixed32],
-  ['dasRoot', c.fixed32],
-  ['relayId', c.fixed32],
-  ['reachable', c.bool],
-  ['proofKind', c.uint8],
-  ['sampleCount', c.uint16],
-  ['sampleWindowMs', c.uint32],
-  ['observedAt', c.uint64],
-  ['expiresAt', c.uint64],
-  ['servedBytes', c.uint64],
-  ['latencyMs', c.uint32],
-  ['activePeers', c.uint16],
-  ['chainHead', c.fixed32],
-  ['evidence', c.buffer],
-  ['signer', c.fixed32],
-  ['signature', c.fixed64],
-])
-
-export const V1MirrorRequest = c.struct([
-  ['version', c.uint8],
-  ['requestId', c.fixed32],
-  ['requestedBy', c.fixed32],
-  ['sourceUrl', c.string],
-  ['sourceType', c.uint8],
-  ['mirrorMode', c.uint8],
-  ['priority', c.uint8],
-  ['maxDownloadBytes', c.uint64],
-  ['maxDurationMs', c.uint32],
-  ['allowDescriptorPublish', c.bool],
-  ['allowPublicSourceUrl', c.bool],
-  ['retainForMs', c.uint64],
-  ['targetTopic', c.fixed32],
-  ['notesHash', c.fixed32],
-  ['expectedTitleHash', c.fixed32],
-  ['expectedDescriptionHash', c.fixed32],
-])
-
-export const PeartubeLogEntry = c.struct([
-  ['version', c.uint8],
-  ['entryType', c.uint8],
-  ['entryId', c.fixed32],
-  ['prevEntryId', c.fixed32],
-  ['actorId', c.fixed32],
-  ['observedAt', c.uint64],
-  ['payload', c.buffer],
-  ['signer', c.fixed32],
-  ['signature', c.fixed64],
-])
-
-export const DescriptorAddedPayload = c.struct([
-  ['descriptor', V1VideoDescriptor],
-  ['reason', c.uint8],
-  ['parentEventId', c.fixed32],
-  ['localSeenAt', c.uint64],
-  ['initialState', c.uint8],
-])
-
-export const ProofAddedPayload = c.struct([
-  ['proof', V1AvailabilityProof],
-  ['localSeenAt', c.uint64],
-  ['confidence', c.uint8],
-  ['stateAfterProof', c.uint8],
-  ['failureCountReset', c.bool],
-])
-
-export const QuarantinedPayload = c.struct([
-  ['descriptorId', c.fixed32],
-  ['reasonCode', c.uint8],
-  ['reasonTextHash', c.fixed32],
-  ['firstObservedAt', c.uint64],
-  ['lastObservedAt', c.uint64],
-  ['failureCount', c.uint16],
-  ['relatedProofId', c.fixed32],
-  ['quarantineUntil', c.uint64],
-])
-
-export const TombstonedPayload = c.struct([
-  ['descriptorId', c.fixed32],
-  ['reasonCode', c.uint8],
-  ['reasonTextHash', c.fixed32],
-  ['tombstonedAt', c.uint64],
-  ['retentionExpiredAt', c.uint64],
-  ['lastProofId', c.fixed32],
-  ['purgeEligibleAt', c.uint64],
-])
-
 const textEncoder = new TextEncoder()
+const textDecoder = new TextDecoder()
 
 function bytesFromHex(hex) {
   const clean = String(hex || '').replace(/[^0-9a-f]/gi, '').toLowerCase()
@@ -224,6 +109,63 @@ export function toBuffer(value) {
   return textEncoder.encode(String(value ?? ''))
 }
 
+function bytesToHex(bytes) {
+  return Array.from(bytes || [], (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function fromJsonValue(value) {
+  if (value && typeof value === 'object') {
+    if (value.__u8) return bytesFromHex(value.__u8)
+    if (value.__bigint) return BigInt(value.__bigint)
+    if (Array.isArray(value)) return value.map(fromJsonValue)
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, fromJsonValue(child)]))
+  }
+  return value
+}
+
+function toJsonValue(value) {
+  if (typeof value === 'bigint') return { __bigint: value.toString() }
+  if (value instanceof Uint8Array) return { __u8: bytesToHex(value) }
+  if (value instanceof ArrayBuffer) return { __u8: bytesToHex(new Uint8Array(value)) }
+  if (Array.isArray(value)) return value.map(toJsonValue)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, toJsonValue(child)]))
+  }
+  return value
+}
+
+function encodeJson(value) {
+  return textEncoder.encode(JSON.stringify(toJsonValue(value)))
+}
+
+function decodeJson(buffer) {
+  return fromJsonValue(JSON.parse(textDecoder.decode(toBuffer(buffer))))
+}
+
+function jsonEncoding(name) {
+  return {
+    preencode(state, value) {
+      c.buffer.preencode(state, encodeJson({ name, value }))
+    },
+    encode(state, value) {
+      c.buffer.encode(state, encodeJson({ name, value }))
+    },
+    decode(state) {
+      const decoded = decodeJson(c.buffer.decode(state))
+      return decoded.value
+    },
+  }
+}
+
+export const V1VideoDescriptor = jsonEncoding('V1VideoDescriptor')
+export const V1AvailabilityProof = jsonEncoding('V1AvailabilityProof')
+export const V1MirrorRequest = jsonEncoding('V1MirrorRequest')
+export const PeartubeLogEntry = jsonEncoding('PeartubeLogEntry')
+export const DescriptorAddedPayload = jsonEncoding('DescriptorAddedPayload')
+export const ProofAddedPayload = jsonEncoding('ProofAddedPayload')
+export const QuarantinedPayload = jsonEncoding('QuarantinedPayload')
+export const TombstonedPayload = jsonEncoding('TombstonedPayload')
+
 export function encodeDescriptor(descriptor) {
   return c.encode(V1VideoDescriptor, descriptor)
 }
@@ -238,6 +180,22 @@ export function encodeMirrorRequest(request) {
 
 export function encodeLogEntry(entry) {
   return c.encode(PeartubeLogEntry, entry)
+}
+
+export function encodeDescriptorAddedPayload(payload) {
+  return c.encode(DescriptorAddedPayload, payload)
+}
+
+export function encodeProofAddedPayload(payload) {
+  return c.encode(ProofAddedPayload, payload)
+}
+
+export function encodeQuarantinedPayload(payload) {
+  return c.encode(QuarantinedPayload, payload)
+}
+
+export function encodeTombstonedPayload(payload) {
+  return c.encode(TombstonedPayload, payload)
 }
 
 export function decodeLogEntry(buffer) {
@@ -297,6 +255,10 @@ export default {
   encodeProof,
   encodeMirrorRequest,
   encodeLogEntry,
+  encodeDescriptorAddedPayload,
+  encodeProofAddedPayload,
+  encodeQuarantinedPayload,
+  encodeTombstonedPayload,
   decodeLogEntry,
   decodeDescriptor,
   decodeProof,

@@ -33,7 +33,8 @@
     "./runtime": "./src/runtime.js",
     "./feed": "./src/feed.js",
     "./media": "./src/media.js",
-    "./hash-utils": "./src/hash-utils.js"
+    "./hash-utils": "./src/hash-utils.js",
+    "./mirror": "./src/mirror/index.js"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

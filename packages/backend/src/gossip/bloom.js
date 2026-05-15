@@ -35,12 +35,28 @@ function bytesToHex(bytes) {
   return Array.from(bytes || [], (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-export function createDescriptorBloom(options = {}) {
+function normalizeBloomGeometry(options = {}) {
+  const explicitSize = Number(options.size)
+  const explicitHashCount = Number(options.hashCount)
+  if (Number.isFinite(explicitSize) && explicitSize >= 8 && Number.isFinite(explicitHashCount) && explicitHashCount >= 1) {
+    return {
+      size: Math.max(8, Math.floor(explicitSize)),
+      hashCount: Math.max(1, Math.floor(explicitHashCount)),
+    }
+  }
+
   const expectedItems = Math.max(1, Number(options.expectedItems || 256) || 256)
   const falsePositiveRate = Math.min(0.25, Math.max(0.0001, Number(options.falsePositiveRate || 0.02) || 0.02))
   const size = Math.max(8, Math.ceil((-expectedItems * Math.log(falsePositiveRate)) / (Math.LN2 ** 2)))
   const hashCount = Math.max(2, Math.round((size / expectedItems) * Math.LN2))
-  const bits = new Uint8Array(Math.ceil(size / 8))
+  return { size, hashCount }
+}
+
+export function createDescriptorBloom(options = {}) {
+  const { size, hashCount } = normalizeBloomGeometry(options)
+  const bits = options.bits instanceof Uint8Array
+    ? new Uint8Array(options.bits.slice(0, Math.ceil(size / 8)))
+    : new Uint8Array(Math.ceil(size / 8))
   const entries = new Set()
 
   function setBit(index) {
@@ -127,21 +143,23 @@ export function decodeDescriptorBloom(payload) {
     throw new TypeError('decodeDescriptorBloom requires a bloom payload object')
   }
   const size = Math.max(8, Number(payload.size || 0) || 8)
-  const hashCount = Math.max(2, Number(payload.hashCount || 0) || 2)
+  const hashCount = Math.max(1, Number(payload.hashCount || 0) || 1)
   const bitsHex = typeof payload.bits === 'string' ? payload.bits : ''
   const bits = toBytes(bitsHex)
-  const bloom = createDescriptorBloom({ expectedItems: Math.max(1, Number(payload.itemCount || 0) || 1), falsePositiveRate: 0.02 })
-  if (bits.length > 0) bloom.bits.set(bits.slice(0, bloom.bits.length))
+  const bloom = createDescriptorBloom({ size, hashCount, bits })
   return {
     version: Number(payload.version || 1) || 1,
-    size,
-    hashCount,
+    size: bloom.size,
+    hashCount: bloom.hashCount,
     bits: bloom.bits,
     itemCount: Number(payload.itemCount || 0) || 0,
     has: bloom.has,
     add: bloom.add,
     missing: bloom.missing,
-    serialize: bloom.serialize,
+    serialize: () => ({
+      ...bloom.serialize(),
+      itemCount: Number(payload.itemCount || 0) || 0,
+    }),
   }
 }
 

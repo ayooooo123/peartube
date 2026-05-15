@@ -65,7 +65,7 @@ async function readBlock(core, index) {
   if (typeof core.get === 'function') return core.get(index)
   if (typeof core.read === 'function') return core.read(index)
   if (typeof core.checkout === 'function') {
-    const view = core.checkout(index)
+    const view = core.checkout(getCoreLength(core))
     return view?.get ? view.get(index) : null
   }
   return null
@@ -106,7 +106,8 @@ export async function sampleCoreAvailability(core, descriptor, options = {}) {
       Buffer.from(dasRoot),
       Buffer.from(String(i)),
     ]))
-    const offset = seed[0] / 255
+    const view = new DataView(seed.buffer, seed.byteOffset, seed.byteLength)
+    const offset = view.getUint32(0, false) / 0xffffffff
     seeds.push(Math.min(maxIndex, Math.floor(offset * (maxIndex + 1))))
   }
 
@@ -196,10 +197,11 @@ export async function buildAvailabilityProof(descriptor, core, options = {}) {
     Buffer.from(String(proof.observedAt)),
     Buffer.from(proof.signature),
   ]))
+  const signedPayload = encodeProof({ ...proof, signature: ZERO_64 })
 
   return {
     proof,
-    unsigned,
+    unsigned: signedPayload,
     sampled,
     signature: proof.signature,
   }

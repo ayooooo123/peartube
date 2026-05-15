@@ -1,4 +1,5 @@
 import { PROTOCOL_VERSION } from '@peartube/host'
+import { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js'
 
 function noop() {}
 
@@ -177,6 +178,7 @@ export function createBackendRuntime(opts = {}) {
 
   let backend = null
   let rpc = null
+  let core = null
   let disposed = false
   let disposeRequested = false
   let initPromise = null
@@ -186,7 +188,12 @@ export function createBackendRuntime(opts = {}) {
     if (disposed) return
     disposed = true
 
-    if (!backend) return
+    if (!backend && !core) return
+
+    if (core && typeof core.shutdown === 'function') {
+      await core.shutdown()
+      return
+    }
 
     const { shutdownBackend } = await import('./storage.js')
     await shutdownBackend(backend?.ctx)
@@ -198,28 +205,29 @@ export function createBackendRuntime(opts = {}) {
 
     initPromise = (async () => {
       try {
-        await appendDebugLine('[runtime] importing orchestrator/spec/handlers')
+        await appendDebugLine('[runtime] importing spec/handlers')
         const [
-          { createBackendContext },
           specModule,
           { registerSharedHandlers },
         ] = await Promise.all([
-          import('./orchestrator.js'),
           import('@peartube/spec'),
           import('./hrpc-handlers.js'),
         ])
 
         const HRPC = specModule?.default ?? specModule
-        await appendDebugLine('[runtime] creating backend context')
-        backend = await createBackendContext({
+        await appendDebugLine('[runtime] creating universal core')
+        core = createUniversalCore({
           storagePath,
+          platform,
+          runtime: { stream },
+          hrpc: null,
           onStatsUpdate: onVideoStats,
           ...lifecycleOptions
         })
+        backend = await core.init()
 
         if (disposeRequested) {
-          const { shutdownBackend } = await import('./storage.js')
-          await shutdownBackend(backend?.ctx)
+          await core.shutdown()
           return { backend, rpc, dispose }
         }
         backend.sharedHandlers = {
@@ -228,10 +236,11 @@ export function createBackendRuntime(opts = {}) {
         }
 
         rpc = new HRPC(stream)
+        if (core.services) core.services.hrpc = rpc
+        if (backend) backend.universalCore = core
 
         if (disposeRequested) {
-          const { shutdownBackend } = await import('./storage.js')
-          await shutdownBackend(backend?.ctx)
+          await core.shutdown()
           return { backend, rpc, dispose }
         }
 
@@ -251,6 +260,12 @@ export function createBackendRuntime(opts = {}) {
         }
 
         registerSharedHandlers(rpc, backend)
+        const universalHandlers = createUniversalHrpcSurface(core)
+        for (const [name, handler] of Object.entries(universalHandlers)) {
+          if (typeof rpc.respond === 'function') rpc.respond(name, handler)
+          else rpc[name] = handler
+        }
+        await core.start()
 
         const blobStatus = getBlobServerStatus(backend)
         const readyPayload = { ...blobStatus, protocolVersion: PROTOCOL_VERSION }

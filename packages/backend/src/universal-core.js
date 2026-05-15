@@ -78,6 +78,23 @@ function createId(prefix) {
   return `${prefix}${now().toString(36)}-${random}`
 }
 
+function createSerialExecutor() {
+  let tail = Promise.resolve()
+  return async function runSerial(task) {
+    const run = tail.then(task, task)
+    tail = run.catch(() => {})
+    return await run
+  }
+}
+
+async function flushBarrier(target, context) {
+  return await invokeIfPresent(target, ['flush', 'drain', 'sync', 'barrier'], context)
+}
+
+async function rollbackTarget(target, context) {
+  return await invokeIfPresent(target, ['rollback', 'reset', 'abort'], context)
+}
+
 function normalizePlatform(platform) {
   if (platform === UNIVERSAL_CORE_PLATFORMS.MOBILE) return UNIVERSAL_CORE_PLATFORMS.MOBILE
   if (platform === UNIVERSAL_CORE_PLATFORMS.DESKTOP) return UNIVERSAL_CORE_PLATFORMS.DESKTOP
@@ -139,41 +156,62 @@ async function instantiateNativeRuntime(options, emit) {
     libudx: await resolveNativeModule(loaded, 'libudx', ['udx', 'networkCore'])
   }
 
+  async function nativeTransition(phase, names, methodNames, context) {
+    const completed = []
+    try {
+      for (const name of names) {
+        const handle = runtime.handles[name]
+        if (!handle) continue
+        await invokeIfPresent(handle, methodNames, { ...context, nativeName: name, phase })
+        await flushBarrier(handle, { ...context, nativeName: name, phase })
+        completed.push(name)
+      }
+      return runtime.handles
+    } catch (error) {
+      for (const name of completed.reverse()) {
+        await rollbackTarget(runtime.handles[name], { ...context, nativeName: name, phase, error: toErrorMessage(error) }).catch(() => {})
+      }
+      throw error
+    }
+  }
+
   const runtime = {
     nativeModules,
     handles: {},
     async init(context) {
-      for (const name of ['libhc', 'libkv', 'libudx']) {
-        const module = nativeModules[name]
-        if (!module) continue
-        const handle = await createNativeHandle(name, module, context, emit)
-        if (handle) runtime.handles[name] = handle
+      const created = []
+      try {
+        for (const name of ['libhc', 'libkv', 'libudx']) {
+          const module = nativeModules[name]
+          if (!module) continue
+          const handle = await createNativeHandle(name, module, context, emit)
+          if (handle) {
+            runtime.handles[name] = handle
+            created.push(name)
+          }
+        }
+        for (const name of created) await flushBarrier(runtime.handles[name], { ...context, nativeName: name, phase: 'init' })
+        return runtime.handles
+      } catch (error) {
+        for (const name of created.reverse()) {
+          await rollbackTarget(runtime.handles[name], { ...context, nativeName: name, phase: 'init', error: toErrorMessage(error) }).catch(() => {})
+          await invokeIfPresent(runtime.handles[name], ['shutdown', 'close', 'stop', 'destroy'], context).catch(() => {})
+          delete runtime.handles[name]
+        }
+        throw error
       }
-      return runtime.handles
     },
     async start(context) {
-      for (const name of ['libhc', 'libkv', 'libudx']) {
-        await invokeIfPresent(runtime.handles[name], ['start', 'resume', 'open', 'boot'], context)
-      }
-      return runtime.handles
+      return await nativeTransition('start', ['libhc', 'libkv', 'libudx'], ['start', 'resume', 'open', 'boot'], context)
     },
     async suspend(context) {
-      for (const name of ['libudx', 'libkv', 'libhc']) {
-        await invokeIfPresent(runtime.handles[name], ['suspend', 'pause', 'stop'], context)
-      }
-      return runtime.handles
+      return await nativeTransition('suspend', ['libudx', 'libkv', 'libhc'], ['suspend', 'pause', 'stop'], context)
     },
     async resume(context) {
-      for (const name of ['libhc', 'libkv', 'libudx']) {
-        await invokeIfPresent(runtime.handles[name], ['resume', 'start', 'open', 'boot'], context)
-      }
-      return runtime.handles
+      return await nativeTransition('resume', ['libhc', 'libkv', 'libudx'], ['resume', 'start', 'open', 'boot'], context)
     },
     async shutdown(context) {
-      for (const name of ['libudx', 'libkv', 'libhc']) {
-        await invokeIfPresent(runtime.handles[name], ['shutdown', 'close', 'stop', 'destroy'], context)
-      }
-      return runtime.handles
+      return await nativeTransition('shutdown', ['libudx', 'libkv', 'libhc'], ['shutdown', 'close', 'stop', 'destroy'], context)
     }
   }
 
@@ -216,8 +254,9 @@ function createAutobaseEventSink({ metaDb, platform, storagePath, onEvent = noop
   let hydrated = false
   let currentSnapshot = null
   const recent = []
+  const serialize = createSerialExecutor()
 
-  async function hydrate() {
+  async function hydrateUnlocked() {
     if (hydrated) return currentSnapshot
     hydrated = true
 
@@ -239,10 +278,15 @@ function createAutobaseEventSink({ metaDb, platform, storagePath, onEvent = noop
     return currentSnapshot
   }
 
+  async function hydrate() {
+    return await serialize(hydrateUnlocked)
+  }
+
   async function append(type, payload = {}, extra = {}) {
-    await hydrate()
-    seq += 1
-    const record = {
+    return await serialize(async () => {
+      await hydrateUnlocked()
+      seq += 1
+      const record = {
       seq,
       type,
       platform,
@@ -252,36 +296,37 @@ function createAutobaseEventSink({ metaDb, platform, storagePath, onEvent = noop
       ...extra
     }
 
-    recent.push(record)
-    while (recent.length > 100) recent.shift()
+      recent.push(record)
+      while (recent.length > 100) recent.shift()
 
-    currentSnapshot = {
-      ...(currentSnapshot || {}),
-      platform,
-      storagePath,
-      lastSeq: seq,
-      updatedAt: record.at,
-      lastEventType: type,
-      lastEvent: record,
-      recent: recent.slice(-32)
-    }
-
-    if (metaDb && typeof metaDb.put === 'function') {
-      const key = `${EVENT_PREFIX}${String(seq).padStart(12, '0')}`
-      try {
-        await metaDb.put(key, record)
-      } catch {
-        // best-effort persistence; the in-memory snapshot still advances.
+      currentSnapshot = {
+        ...(currentSnapshot || {}),
+        platform,
+        storagePath,
+        lastSeq: seq,
+        updatedAt: record.at,
+        lastEventType: type,
+        lastEvent: record,
+        recent: recent.slice(-32)
       }
-      try {
-        await metaDb.put(SNAPSHOT_KEY, currentSnapshot)
-      } catch {
-        // best-effort persistence; the in-memory snapshot still advances.
-      }
-    }
 
-    onEvent(record)
-    return record
+      if (metaDb && typeof metaDb.put === 'function') {
+        const key = `${EVENT_PREFIX}${String(seq).padStart(12, '0')}`
+        try {
+          await metaDb.put(key, record)
+        } catch {
+          // best-effort persistence; the in-memory snapshot still advances.
+        }
+        try {
+          await metaDb.put(SNAPSHOT_KEY, currentSnapshot)
+        } catch {
+          // best-effort persistence; the in-memory snapshot still advances.
+        }
+      }
+
+      onEvent(record)
+      return record
+    })
   }
 
   async function restore() {
@@ -315,6 +360,7 @@ function createPartitionedPlaybackContexts({
     suspended: false,
     nextId: 1,
     active: new Map(),
+    hostSurfaces: new Map(),
     partitions: {
       main: {
         kind: 'main',
@@ -406,6 +452,15 @@ function createPartitionedPlaybackContexts({
       }
     }
 
+    const hostSurfaceId = request.hostSurfaceId || request.surfaceId || kind
+    const existingSurfaceOwner = state.hostSurfaces.get(hostSurfaceId)
+    if (existingSurfaceOwner && existingSurfaceOwner.kind !== kind) {
+      return { allowed: false, reason: `host surface ${hostSurfaceId} owned by ${existingSurfaceOwner.kind}` }
+    }
+    if (kind === 'shorts' && (request.pip || request.pictureInPicture || request.autoEnterPipOnLeave)) {
+      return { allowed: false, reason: 'shorts partition cannot acquire PiP-capable host surface' }
+    }
+
     return {
       allowed: true,
       reason: null,
@@ -460,9 +515,13 @@ function createPartitionedPlaybackContexts({
       createdAt: now(),
       request: safeJsonClone(request),
       allocation: gate.allocation,
+      hostSurfaceId: request.hostSurfaceId || request.surfaceId || kind,
+      hostSurfaceMode: kind === 'shorts' ? 'route-local' : 'global-watch',
+      allowPiP: kind === 'main' && Boolean(request.allowPiP ?? request.pip ?? request.pictureInPicture),
       state: 'active'
     }
 
+    state.hostSurfaces.set(context.hostSurfaceId, { kind, contextId, allowPiP: context.allowPiP })
     state.active.set(contextId, context)
     applyAllocation(kind, gate.allocation)
     emit('playback:acquired', { kind, contextId, request })
@@ -477,6 +536,8 @@ function createPartitionedPlaybackContexts({
     if (!context) return false
 
     state.active.delete(contextId)
+    const owner = state.hostSurfaces.get(context.hostSurfaceId)
+    if (owner?.contextId === contextId) state.hostSurfaces.delete(context.hostSurfaceId)
     releaseAllocation(context.kind, context.allocation)
     emit('playback:released', { kind: context.kind, contextId })
     await persistSnapshot()
@@ -514,13 +575,17 @@ function createPartitionedPlaybackContexts({
       suspended: state.suspended,
       total: { ...state.total },
       partitions,
+      hostSurfaces: Array.from(state.hostSurfaces.entries()).map(([id, owner]) => ({ id, ...owner })),
       active: Array.from(state.active.values()).map((item) => ({
         id: item.id,
         kind: item.kind,
         createdAt: item.createdAt,
         state: item.state,
         request: safeJsonClone(item.request),
-        allocation: { ...item.allocation }
+        allocation: { ...item.allocation },
+        hostSurfaceId: item.hostSurfaceId,
+        hostSurfaceMode: item.hostSurfaceMode,
+        allowPiP: item.allowPiP
       }))
     }
   }
@@ -926,6 +991,7 @@ function createRelayMirrorSeedService({ backend, eventSink, playback, platform, 
   let refreshTimer = null
   let lastRefreshAt = null
   let refreshCount = 0
+  let refreshInFlight = null
   const refreshIntervalMs = 30000
 
   function snapshot(extra = {}) {
@@ -1013,6 +1079,19 @@ function createRelayMirrorSeedService({ backend, eventSink, playback, platform, 
   }
 
   async function refresh(reason = 'manual') {
+    if (refreshInFlight) {
+      await emit('mirror.refresh', { reason, skipped: true, why: 'refresh already in flight' })
+      return snapshot({ reason, skipped: true, why: 'refresh already in flight' })
+    }
+    refreshInFlight = refreshUnlocked(reason)
+    try {
+      return await refreshInFlight
+    } finally {
+      refreshInFlight = null
+    }
+  }
+
+  async function refreshUnlocked(reason = 'manual') {
     const context = createContext('refresh', { reason })
     const moduleInvocation = await invokeServiceLifecycle(serviceModules.refresh, 'refresh', context, ['sync'])
     if (moduleInvocation.called && moduleInvocation.result != null) {
@@ -1210,6 +1289,7 @@ export function createUniversalCore(options = {}) {
   }
   let initPromise = null
   let shutdownRequested = false
+  const runLifecycleSerial = createSerialExecutor()
 
   function emit(event, detail = {}) {
     const record = {
@@ -1322,7 +1402,7 @@ export function createUniversalCore(options = {}) {
     }
   }
 
-  async function init() {
+  async function initUnlocked() {
     if (backend) return backend
     if (initPromise) return initPromise
 
@@ -1331,6 +1411,7 @@ export function createUniversalCore(options = {}) {
       emit('init:start', { platform: normalizedPlatform })
 
       await initializeNative()
+      await nativeRuntime?.init?.({ platform: normalizedPlatform, storagePath })
       await initializeBackend()
       await initializeServices()
       await Promise.all([
@@ -1338,14 +1419,14 @@ export function createUniversalCore(options = {}) {
         invokeIfPresent(services.mirrorSeed, ['init'], { backend, services, platform: normalizedPlatform, storagePath })
       ])
       await eventSink.restore()
+      setState(UNIVERSAL_CORE_STATES.INITIALIZED)
       await writeStateEvent('core.initialized', {
+        state,
         platform: normalizedPlatform,
         storagePath,
         hasMetaDb: Boolean(backend?.ctx?.metaDb),
         hasSwarm: Boolean(backend?.ctx?.swarm)
       })
-
-      setState(UNIVERSAL_CORE_STATES.INITIALIZED)
       emit('init:complete', {
         native: {
           libhc: Boolean(nativeRuntime?.nativeModules?.libhc),
@@ -1360,8 +1441,8 @@ export function createUniversalCore(options = {}) {
     return initPromise
   }
 
-  async function start() {
-    await init()
+  async function startUnlocked() {
+    await initUnlocked()
     setState(UNIVERSAL_CORE_STATES.STARTING)
     emit('start', { platform: normalizedPlatform })
 
@@ -1372,17 +1453,16 @@ export function createUniversalCore(options = {}) {
     await invokeIfPresent(services.swarm, ['start', 'resume', 'open'], { backend, services })
     await playback?.resume?.()
 
+    setState(UNIVERSAL_CORE_STATES.STARTED)
     await writeStateEvent('core.started', {
       state,
       playback: playback?.getSnapshot?.() || null
     })
-
-    setState(UNIVERSAL_CORE_STATES.STARTED)
     emit('start:complete', { state })
     return { backend, services, state, lifecycle }
   }
 
-  async function suspend() {
+  async function suspendUnlocked() {
     if (state !== UNIVERSAL_CORE_STATES.STARTED && state !== UNIVERSAL_CORE_STATES.RESUMED) {
       return { backend, services, state, lifecycle }
     }
@@ -1395,14 +1475,13 @@ export function createUniversalCore(options = {}) {
     await invokeIfPresent(services.swarm, ['suspend', 'pause', 'stop'], { backend, services })
     await invokeIfPresent(services.gossip, ['suspend', 'pause', 'stop'], { backend, services })
     await invokeIfPresent(services.mirrorSeed, ['suspend', 'pause', 'stop'], { backend, services })
-    await writeStateEvent('core.suspended', { playback: playback?.getSnapshot?.() || null })
-
     setState(UNIVERSAL_CORE_STATES.SUSPENDED)
+    await writeStateEvent('core.suspended', { state, playback: playback?.getSnapshot?.() || null })
     emit('suspend:complete', {})
     return { backend, services, state, lifecycle }
   }
 
-  async function resume() {
+  async function resumeUnlocked() {
     if (state !== UNIVERSAL_CORE_STATES.SUSPENDED) {
       return { backend, services, state, lifecycle }
     }
@@ -1417,14 +1496,13 @@ export function createUniversalCore(options = {}) {
     await invokeIfPresent(services.mirrorSeed, ['resume', 'start', 'open'], { backend, services })
     await playback?.resume?.()
 
-    await writeStateEvent('core.resumed', { playback: playback?.getSnapshot?.() || null })
-
     setState(UNIVERSAL_CORE_STATES.RESUMED)
+    await writeStateEvent('core.resumed', { state, playback: playback?.getSnapshot?.() || null })
     emit('resume:complete', {})
     return { backend, services, state, lifecycle }
   }
 
-  async function shutdown() {
+  async function shutdownUnlocked() {
     if (shutdownRequested) return { backend, services, state, lifecycle }
     shutdownRequested = true
 
@@ -1440,11 +1518,31 @@ export function createUniversalCore(options = {}) {
     await invokeIfPresent(services.storage, ['shutdown', 'close', 'stop', 'destroy'], { backend, services })
     await invokeIfPresent(backend, ['shutdown', 'close', 'stop', 'destroy'], { backend, services })
 
-    await writeStateEvent('core.shutdown', { state: UNIVERSAL_CORE_STATES.SHUTDOWN })
-
     setState(UNIVERSAL_CORE_STATES.SHUTDOWN)
+    await writeStateEvent('core.shutdown', { state })
     emit('shutdown:complete', {})
     return { backend, services, state, lifecycle }
+  }
+
+
+  async function init() {
+    return await runLifecycleSerial(initUnlocked)
+  }
+
+  async function start() {
+    return await runLifecycleSerial(startUnlocked)
+  }
+
+  async function suspend() {
+    return await runLifecycleSerial(suspendUnlocked)
+  }
+
+  async function resume() {
+    return await runLifecycleSerial(resumeUnlocked)
+  }
+
+  async function shutdown() {
+    return await runLifecycleSerial(shutdownUnlocked)
   }
 
   function getStatus() {

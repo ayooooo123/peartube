@@ -11,6 +11,12 @@ function firstString(...values) {
   return ''
 }
 
+function coerceString(value) {
+  if (value === null || value === undefined) return ''
+  const stringValue = String(value)
+  return stringValue.length > 0 ? stringValue : ''
+}
+
 function firstStringOrNull(...values) {
   const value = firstString(...values)
   return value.length > 0 ? value : null
@@ -28,9 +34,9 @@ function toNumberOrNull(value) {
 }
 
 function normalizeAvailability(value) {
-  if (typeof value !== 'string') return 'unknown'
+  if (typeof value !== 'string') return null
   const normalized = value.trim().toLowerCase()
-  return CANONICAL_AVAILABILITY.has(normalized) ? normalized : 'unknown'
+  return CANONICAL_AVAILABILITY.has(normalized) ? normalized : null
 }
 
 function reconcileAvailability(rawAvailability, rawByteAvailability, rawPlaybackSupport) {
@@ -41,10 +47,10 @@ function reconcileAvailability(rawAvailability, rawByteAvailability, rawPlayback
       ? 'unavailable'
       : null
 
-  const availabilityCandidates = [rawAvailability, rawByteAvailability, fromPlaybackHint].map(normalizeAvailability)
-  if (availabilityCandidates.includes('playable')) return 'playable'
-  if (availabilityCandidates.includes('unavailable')) return 'unavailable'
-  return 'unknown'
+  const availability = normalizeAvailability(rawAvailability) ?? fromPlaybackHint ?? normalizeAvailability(rawByteAvailability) ?? 'unknown'
+  const byteAvailability = normalizeAvailability(rawByteAvailability) ?? fromPlaybackHint ?? normalizeAvailability(rawAvailability) ?? 'unknown'
+
+  return { availability, byteAvailability }
 }
 
 /**
@@ -152,23 +158,23 @@ export function normalizeCanonicalFeedVideo(rawVideo = {}, options = {}) {
   ) || channelKey
   const directRefs = normalizeDirectPlaybackRefs(rawVideo)
   const thumbnailRefs = normalizeThumbnailRefs(rawVideo)
-  const resolvedAvailability = reconcileAvailability(
+  const { availability, byteAvailability } = reconcileAvailability(
     rawVideo.availability,
     rawVideo.byteAvailability,
     rawVideo.playbackSupport,
   )
 
   return {
-    id: firstString(rawVideo.id, rawVideo.videoId, rawVideo.path, rawVideo.slug),
+    id: firstString(rawVideo.id, rawVideo.videoId, rawVideo.path, rawVideo.slug) || coerceString(rawVideo.id ?? rawVideo.videoId ?? rawVideo.path ?? rawVideo.slug),
     path: firstStringOrNull(rawVideo.path, rawVideo.videoPath, rawVideo.legacyPath),
-    title: firstString(rawVideo.title, rawVideo.name, rawVideo.videoTitle, rawVideo.displayName, rawVideo.filename) || 'Untitled',
+    title: firstString(rawVideo.title, rawVideo.name, rawVideo.videoTitle, rawVideo.displayName, rawVideo.filename) || coerceString(rawVideo.title ?? rawVideo.name ?? rawVideo.videoTitle ?? rawVideo.displayName ?? rawVideo.filename) || 'Untitled',
     description: rawVideo.description ?? rawVideo.videoDescription ?? null,
     uploadedAt: toNumber(rawVideo.uploadedAt ?? rawVideo.createdAt ?? rawVideo.addedAt ?? rawVideo.lastSeen ?? 0),
     duration: toNumberOrNull(rawVideo.duration ?? rawVideo.length ?? rawVideo.seconds),
     ...thumbnailRefs,
     ...directRefs,
-    availability: resolvedAvailability,
-    byteAvailability: resolvedAvailability,
+    availability,
+    byteAvailability,
     channelKey,
     driveKey,
     publicBeeKey: firstStringOrNull(rawVideo.publicBeeKey, options.publicBeeKey),

@@ -47,13 +47,19 @@ function reconcileAvailability(rawAvailability, rawByteAvailability, rawPlayback
   return 'unknown'
 }
 
-function normalizeChannelObject(rawChannel = {}, fallback = {}) {
+/**
+ * Normalize a raw channel snapshot into the canonical channel object.
+ *
+ * @param {Object} rawChannel
+ * @param {Object} [fallback]
+ * @returns {import('./canonical-feed-contract.js').CanonicalFeedVideo['channel']}
+ */
+export function normalizeCanonicalFeedChannel(rawChannel = {}, fallback = {}) {
   const channelKey = firstStringOrNull(
     rawChannel.channelKey,
     rawChannel.driveKey,
     fallback.channelKey,
     fallback.driveKey,
-    fallback.channel,
     rawChannel.key,
   )
   const driveKey = firstStringOrNull(
@@ -113,9 +119,8 @@ function normalizeThumbnailRefs(raw = {}) {
  * @returns {import('./canonical-feed-contract.js').CanonicalFeedVideo}
  */
 export function normalizeCanonicalFeedVideo(rawVideo = {}, options = {}) {
-  const source = options.source || rawVideo.source || 'public-feed'
   const rawChannel = rawVideo.channel || options.channel || rawVideo.channelMeta || options.channelMeta || {}
-  const channel = normalizeChannelObject(rawChannel, {
+  const channel = normalizeCanonicalFeedChannel(rawChannel, {
     channelKey: options.channelKey || rawVideo.channelKey || rawVideo.driveKey,
     driveKey: options.driveKey || rawVideo.driveKey || rawVideo.channelKey,
     name: rawVideo.channelName,
@@ -168,7 +173,6 @@ export function normalizeCanonicalFeedVideo(rawVideo = {}, options = {}) {
     driveKey,
     publicBeeKey: firstStringOrNull(rawVideo.publicBeeKey, options.publicBeeKey),
     channel,
-    source,
   }
 }
 

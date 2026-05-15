@@ -44,7 +44,7 @@ function getIdentityCount(backend) {
   return backend?.identityManager?.getIdentities?.().length || 0
 }
 
-function buildSharedSystemHandlers(backend) {
+export function buildSharedSystemHandlers(backend) {
   return {
     async DesktopBootstrap(req) {
       const emptySnapshot = {

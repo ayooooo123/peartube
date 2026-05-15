@@ -112,7 +112,11 @@ export async function createBackend(opts = {}) {
 
     const readyPayload = { ...getBlobServerStatus(backend), protocolVersion: PROTOCOL_VERSION }
     readyCallback(readyPayload)
-    try { rpc.eventReady?.(readyPayload) } catch {}
+    try {
+      rpc.eventReady?.(readyPayload)
+    } catch {
+      // Older HRPC shims may not expose ready events.
+    }
 
     return {
       core,
@@ -129,7 +133,9 @@ export async function createBackend(opts = {}) {
         message: error?.message || String(error),
         retryable: false
       })
-    } catch {}
+    } catch {
+      // Preserve the original startup error if event emission fails.
+    }
     await destroy()
     throw error
   }

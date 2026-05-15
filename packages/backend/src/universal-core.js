@@ -619,9 +619,35 @@ function createRelayStorageService({ backend, eventSink, playback, nativeRuntime
     }
   }
 
+  function createContext(phase, detail = {}) {
+    return {
+      kind: "gossip",
+      phase,
+      platform,
+      storagePath,
+      backend,
+      api,
+      publicFeed,
+      playback,
+      eventSink,
+      resourcePool: "main",
+      modules: serviceModules,
+      ...detail
+    }
+  }
+
   async function emit(type, detail = {}) {
     if (!eventSink) return
     await eventSink.append(type, snapshot(detail))
+  }
+
+  async function runLifecycle(phase, detail = {}) {
+    const context = createContext(phase, detail)
+    await Promise.all([
+      invokeServiceLifecycle(serviceModules.bloom, phase, context),
+      invokeServiceLifecycle(serviceModules.quota, phase, context),
+      invokeServiceLifecycle(serviceModules.sync, phase, context)
+    ])
   }
 
   async function start() {
@@ -675,6 +701,10 @@ function createRelayStorageService({ backend, eventSink, playback, nativeRuntime
   }
 
   return {
+    init: async () => {
+      await runLifecycle('init')
+      return snapshot()
+    },
     start,
     refresh,
     suspend,
@@ -686,9 +716,71 @@ function createRelayStorageService({ backend, eventSink, playback, nativeRuntime
   }
 }
 
-function createRelayGossipService({ backend, eventSink, playback, platform, storagePath }) {
+function normalizeServiceModules(modules = {}) {
+  return {
+    bloom: modules?.bloom ?? modules?.gossipBloom ?? null,
+    quota: modules?.quota ?? modules?.gossipQuota ?? null,
+    sync: modules?.sync ?? modules?.gossipSync ?? null,
+    autobase: modules?.autobase ?? modules?.mirrorAutobase ?? null,
+    fetcher: modules?.fetcher ?? modules?.mirrorFetcher ?? null,
+    refresh: modules?.refresh ?? modules?.mirrorRefresh ?? null
+  }
+}
+
+function summarizeServiceModule(module) {
+  if (!module) return null
+  const summary = {
+    available: true,
+    type: typeof module,
+    name: module?.name ?? module?.constructor?.name ?? null,
+    hasStatus: typeof module?.getStatus === "function" || typeof module?.status === "function" || typeof module?.snapshot === "function"
+  }
+  try {
+    if (typeof module?.state !== "undefined") summary.state = module.state
+    if (typeof module?.status !== "undefined" && typeof module?.status !== "function") summary.status = safeJsonClone(module.status)
+    if (typeof module?.snapshot === "function") summary.snapshot = safeJsonClone(module.snapshot())
+  } catch {
+    // best effort summary only
+  }
+  return summary
+}
+
+async function resolveServiceTarget(entry, context) {
+  if (!entry) return null
+  if (entry && typeof entry.then === "function") return await entry
+  if (typeof entry === "function") {
+    try {
+      return await entry(context)
+    } catch {
+      try {
+        return await entry()
+      } catch {
+        return entry
+      }
+    }
+  }
+  return entry?.default ?? entry
+}
+
+async function invokeServiceLifecycle(entry, phase, context, aliases = []) {
+  const target = await resolveServiceTarget(entry, context)
+  if (!target) return { called: false, result: null }
+
+  const candidateNames = [phase].concat(aliases || [])
+  for (const name of candidateNames) {
+    const fn = resolveStep(target, [name])
+    if (fn) {
+      const result = await fn(context)
+      return { called: true, result }
+    }
+  }
+
+  return { called: false, result: null }
+}
+function createRelayGossipService({ backend, eventSink, playback, platform, storagePath, modules = null }) {
   const publicFeed = backend?.publicFeed || null
   const api = backend?.api || null
+  const serviceModules = normalizeServiceModules(modules)
   let started = false
   let syncCount = 0
 
@@ -710,7 +802,29 @@ function createRelayGossipService({ backend, eventSink, playback, platform, stor
         maxConcurrent: playback?.getSnapshot?.()?.partitions?.main?.maxConcurrent ?? null,
         activeCount: playback?.getSnapshot?.()?.partitions?.main?.activeCount ?? null
       },
+      modules: {
+        bloom: summarizeServiceModule(serviceModules.bloom),
+        quota: summarizeServiceModule(serviceModules.quota),
+        sync: summarizeServiceModule(serviceModules.sync)
+      },
       ...extra
+    }
+  }
+
+  function createContext(phase, detail = {}) {
+    return {
+      kind: 'gossip',
+      phase,
+      platform,
+      storagePath,
+      backend,
+      api,
+      publicFeed,
+      playback,
+      eventSink,
+      resourcePool: 'main',
+      modules: serviceModules,
+      ...detail
     }
   }
 
@@ -719,9 +833,19 @@ function createRelayGossipService({ backend, eventSink, playback, platform, stor
     await eventSink.append(type, snapshot(detail))
   }
 
+  async function runLifecycle(phase, detail = {}) {
+    const context = createContext(phase, detail)
+    await Promise.all([
+      invokeServiceLifecycle(serviceModules.bloom, phase, context),
+      invokeServiceLifecycle(serviceModules.quota, phase, context),
+      invokeServiceLifecycle(serviceModules.sync, phase, context)
+    ])
+  }
+
   async function start() {
     started = true
     await emit('gossip.start', { phase: 'begin' })
+    await runLifecycle('start')
     await publicFeed?.start?.()
     await sync('start')
     await emit('gossip.start', { phase: 'complete' })
@@ -732,6 +856,14 @@ function createRelayGossipService({ backend, eventSink, playback, platform, stor
     if (!publicFeed) {
       await emit('gossip.sync', { reason, skipped: true, why: 'missing publicFeed' })
       return snapshot({ reason, skipped: true })
+    }
+
+    const context = createContext('sync', { reason })
+    const moduleInvocation = await invokeServiceLifecycle(serviceModules.sync, 'sync', context, ['refresh'])
+    if (moduleInvocation.called && moduleInvocation.result != null) {
+      const detail = { reason, moduleUsed: true, moduleResult: safeJsonClone(moduleInvocation.result) }
+      await emit('gossip.sync', detail)
+      return snapshot(detail)
     }
 
     return await withPlaybackLease(playback, 'main', {
@@ -756,6 +888,7 @@ function createRelayGossipService({ backend, eventSink, playback, platform, stor
       const detail = {
         reason,
         requested,
+        moduleUsed: moduleInvocation.called,
         feed: summarizeFeedEntries(feedEntries),
         snapshotEntries: Array.isArray(snapshotEntries) ? snapshotEntries.length : 0,
         stats: publicFeed.getStats?.() || null
@@ -774,6 +907,7 @@ function createRelayGossipService({ backend, eventSink, playback, platform, stor
   async function suspend() {
     started = false
     await emit('gossip.suspend', { phase: 'begin' })
+    await runLifecycle('suspend')
     await publicFeed?.stop?.()
     await emit('gossip.suspend', { phase: 'complete' })
     return snapshot()
@@ -782,6 +916,7 @@ function createRelayGossipService({ backend, eventSink, playback, platform, stor
   async function resume() {
     started = true
     await emit('gossip.resume', { phase: 'begin' })
+    await runLifecycle('resume')
     await publicFeed?.start?.()
     await sync('resume')
     await emit('gossip.resume', { phase: 'complete' })
@@ -791,12 +926,17 @@ function createRelayGossipService({ backend, eventSink, playback, platform, stor
   async function shutdown() {
     started = false
     await emit('gossip.shutdown', { phase: 'begin' })
+    await runLifecycle('shutdown')
     await publicFeed?.stop?.()
     await emit('gossip.shutdown', { phase: 'complete' })
     return snapshot()
   }
 
   return {
+    init: async () => {
+      await runLifecycle('init')
+      return snapshot()
+    },
     start,
     sync,
     refresh,
@@ -809,9 +949,10 @@ function createRelayGossipService({ backend, eventSink, playback, platform, stor
   }
 }
 
-function createRelayMirrorSeedService({ backend, eventSink, playback, platform, storagePath }) {
+function createRelayMirrorSeedService({ backend, eventSink, playback, platform, storagePath, modules = null }) {
   const publicFeed = backend?.publicFeed || null
   const seedingManager = backend?.seedingManager || null
+  const serviceModules = normalizeServiceModules(modules)
   let started = false
   let refreshTimer = null
   let lastRefreshAt = null
@@ -828,13 +969,44 @@ function createRelayMirrorSeedService({ backend, eventSink, playback, platform, 
       refreshIntervalMs,
       seeds: typeof seedingManager?.getActiveSeeds === 'function' ? seedingManager.getActiveSeeds().length : 0,
       pinnedChannels: typeof seedingManager?.getPinnedChannels === 'function' ? seedingManager.getPinnedChannels().length : 0,
+      modules: {
+        autobase: summarizeServiceModule(serviceModules.autobase),
+        fetcher: summarizeServiceModule(serviceModules.fetcher),
+        refresh: summarizeServiceModule(serviceModules.refresh)
+      },
       ...extra
+    }
+  }
+
+  function createContext(phase, detail = {}) {
+    return {
+      kind: 'mirror',
+      phase,
+      platform,
+      storagePath,
+      backend,
+      publicFeed,
+      seedingManager,
+      playback,
+      eventSink,
+      resourcePool: 'shorts',
+      modules: serviceModules,
+      ...detail
     }
   }
 
   async function emit(type, detail = {}) {
     if (!eventSink) return
     await eventSink.append(type, snapshot(detail))
+  }
+
+  async function runLifecycle(phase, detail = {}) {
+    const context = createContext(phase, detail)
+    await Promise.all([
+      invokeServiceLifecycle(serviceModules.autobase, phase, context),
+      invokeServiceLifecycle(serviceModules.fetcher, phase, context),
+      invokeServiceLifecycle(serviceModules.refresh, phase, context)
+    ])
   }
 
   function clearRefreshTimer() {
@@ -872,6 +1044,14 @@ function createRelayMirrorSeedService({ backend, eventSink, playback, platform, 
   }
 
   async function refresh(reason = 'manual') {
+    const context = createContext('refresh', { reason })
+    const moduleInvocation = await invokeServiceLifecycle(serviceModules.refresh, 'refresh', context, ['sync'])
+    if (moduleInvocation.called && moduleInvocation.result != null) {
+      const detail = { reason, moduleUsed: true, moduleResult: safeJsonClone(moduleInvocation.result) }
+      await emit('mirror.refresh', detail)
+      return snapshot(detail)
+    }
+
     if (!seedingManager) {
       await emit('mirror.refresh', { reason, skipped: true, why: 'missing seedingManager' })
       return snapshot({ reason, skipped: true })
@@ -930,8 +1110,17 @@ function createRelayMirrorSeedService({ backend, eventSink, playback, platform, 
         try { await seedingManager.enforceQuota() } catch { /* best effort */ }
       }
 
+      await runLifecycle('refresh', {
+        feedEntries: feedEntries.length,
+        seedJobs: seedJobs.length,
+        added,
+        removed,
+        pinned
+      })
+
       const detail = {
         reason,
+        moduleUsed: moduleInvocation.called,
         feedEntries: feedEntries.length,
         seedJobs: seedJobs.length,
         added,
@@ -948,6 +1137,7 @@ function createRelayMirrorSeedService({ backend, eventSink, playback, platform, 
   async function start() {
     started = true
     await emit('mirror.start', { phase: 'begin' })
+    await runLifecycle('start')
     clearRefreshTimer()
     await refresh('start')
     refreshTimer = setInterval(() => {
@@ -961,6 +1151,7 @@ function createRelayMirrorSeedService({ backend, eventSink, playback, platform, 
   async function suspend() {
     started = false
     await emit('mirror.suspend', { phase: 'begin' })
+    await runLifecycle('suspend')
     clearRefreshTimer()
     await emit('mirror.suspend', { phase: 'complete' })
     return snapshot()
@@ -969,6 +1160,7 @@ function createRelayMirrorSeedService({ backend, eventSink, playback, platform, 
   async function resume() {
     started = true
     await emit('mirror.resume', { phase: 'begin' })
+    await runLifecycle('resume')
     clearRefreshTimer()
     await refresh('resume')
     refreshTimer = setInterval(() => {
@@ -982,6 +1174,7 @@ function createRelayMirrorSeedService({ backend, eventSink, playback, platform, 
   async function shutdown() {
     started = false
     await emit('mirror.shutdown', { phase: 'begin' })
+    await runLifecycle('shutdown')
     clearRefreshTimer()
     await emit('mirror.shutdown', { phase: 'complete' })
     return snapshot()
@@ -1023,6 +1216,8 @@ export function createUniversalCore(options = {}) {
     createMirrorSeedWorker = null,
     createStorageService = null,
     createSwarmService = null,
+    gossipModules = null,
+    mirrorModules = null,
     loadNativeModules = null,
     nativeModules = null
   } = options
@@ -1126,11 +1321,11 @@ export function createUniversalCore(options = {}) {
 
     const gossipFactory = typeof createGossipService === 'function'
       ? createGossipService
-      : (args) => createRelayGossipService({ ...args, eventSink, playback, platform: normalizedPlatform, storagePath })
+      : (args) => createRelayGossipService({ ...args, eventSink, playback, platform: normalizedPlatform, storagePath, modules: gossipModules })
 
     const mirrorSeedFactory = typeof createMirrorSeedWorker === 'function'
       ? createMirrorSeedWorker
-      : (args) => createRelayMirrorSeedService({ ...args, eventSink, playback, platform: normalizedPlatform, storagePath })
+      : (args) => createRelayMirrorSeedService({ ...args, eventSink, playback, platform: normalizedPlatform, storagePath, modules: mirrorModules })
 
     services.storage = await storageFactory({ backend, platform: normalizedPlatform, hrpc, runtime, storagePath, ctx, nativeRuntime, eventSink, playback })
     services.swarm = typeof createSwarmService === 'function'
@@ -1169,6 +1364,10 @@ export function createUniversalCore(options = {}) {
       await initializeNative()
       await initializeBackend()
       await initializeServices()
+      await Promise.all([
+        invokeIfPresent(services.gossip, ['init'], { backend, services, platform: normalizedPlatform, storagePath }),
+        invokeIfPresent(services.mirrorSeed, ['init'], { backend, services, platform: normalizedPlatform, storagePath })
+      ])
       await eventSink.restore()
       await writeStateEvent('core.initialized', {
         platform: normalizedPlatform,

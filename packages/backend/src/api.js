@@ -1590,20 +1590,12 @@ export function createApi({
         const channelKey = entry?.channelKey || entry?.driveKey || ''
         if (!channelKey) continue
 
-        const channel = entry?.channel || (entry?.channelName ? { name: entry.channelName } : null)
-        const channelMeta = channel || {}
-        if (!channelMetaByKey[channelKey]) {
+        const channel = entry?.channel && typeof entry.channel === 'object' ? entry.channel : null
+        if (channel && Object.keys(channel).length > 0 && !channelMetaByKey[channelKey]) {
           channelMetaByKey[channelKey] = {
+            ...channel,
             channelKey,
             driveKey: entry?.driveKey || channelKey,
-            name: channelMeta.name || entry?.channelName || null,
-            description: channelMeta.description || null,
-            avatar: channelMeta.avatar || null,
-            icon: channelMeta.icon || null,
-            thumbnail: channelMeta.thumbnail || null,
-            videoCount: Number.isFinite(entry?.videoCount) ? entry.videoCount : null,
-            lastSeen: Number(entry?.lastSeen || 0) || 0,
-            manifestUpdatedAt: Number(entry?.manifestUpdatedAt || 0) || 0,
           }
         }
 
@@ -1614,7 +1606,7 @@ export function createApi({
             channelKey,
             driveKey: entry?.driveKey || channelKey,
             publicBeeKey: entry?.publicBeeKey || null,
-            channel: channelMetaByKey[channelKey],
+            channel: channelMetaByKey[channelKey] || channel || undefined,
           })
         }
       }

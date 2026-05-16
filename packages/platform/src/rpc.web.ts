@@ -419,6 +419,10 @@ export const rpc = {
   },
 
   // Public Feed
+  async getCanonicalFeed() {
+    return ensureRPC().getCanonicalFeed({});
+  },
+
   async getPublicFeed() {
     return ensureRPC().getPublicFeed({});
   },

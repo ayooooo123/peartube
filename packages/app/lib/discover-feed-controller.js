@@ -121,7 +121,7 @@ export function mapHydratedVerticalFeedVideos(entry, videoList, { identityDriveK
       ...video,
       channelKey,
       publicBeeKey: entry.publicBeeKey || undefined,
-      channel: { name: entry.channelName || 'Channel' },
+      channel: entry.channel || { name: entry.channelName || 'Channel' },
     }))
 }
 

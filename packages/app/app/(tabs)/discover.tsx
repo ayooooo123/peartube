@@ -193,10 +193,10 @@ export default function VerticalDiscoveryScreen() {
     }
   }, [blobServerPort, rpc])
 
-  const seedFromFeedEntries = useCallback((entries: FeedEntry[]) => {
+  const seedFromFeedEntries = useCallback((entries: FeedEntry[], channelMeta: Record<string, any> = {}) => {
     const renderable = getVerticalFeedPreviewVideos(entries as any, {
       identityDriveKey: identity?.driveKey || undefined,
-      channelMeta: {},
+      channelMeta,
       limit: 40,
     }) as VideoData[]
 
@@ -268,7 +268,7 @@ export default function VerticalDiscoveryScreen() {
     setFeedLoading(true)
     try {
       const timeoutToken = Symbol('vertical-feed-timeout')
-      const result = await withFeedTimeout(rpc.getPublicFeed({}), 4000, timeoutToken as any)
+      const result = await withFeedTimeout(rpc.getCanonicalFeed({}), 4000, timeoutToken as any)
       if (result === timeoutToken) {
         setFeedTimedOut(true)
         setFeedError('Feed refresh timed out; showing cached snapshot.')
@@ -282,6 +282,7 @@ export default function VerticalDiscoveryScreen() {
         return
       }
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
+      const channelMetaByKey = (result as any)?.channelMetaByKey || {}
       setFeedTimedOut(false)
       setFeedError(null)
       setLastSuccessfulFeedAt(Date.now())
@@ -294,7 +295,7 @@ export default function VerticalDiscoveryScreen() {
         const nextSignature = mergedEntries.map(getFeedEntrySignature).join('\n')
         return prevSignature === nextSignature ? prev : mergedEntries
       })
-      seedFromFeedEntries(mergedEntries)
+      seedFromFeedEntries(mergedEntries, channelMetaByKey)
       for (const entry of mergedEntries.slice(0, 24)) {
         void hydrateChannelVideos(entry)
       }

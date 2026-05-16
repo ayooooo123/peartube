@@ -263,7 +263,7 @@ export default function HomeScreen() {
     try {
       setFeedLoading(true)
       // Add timeout to prevent infinite spinner if RPC hangs
-      const feedPromise = rpc.getPublicFeed({})
+      const feedPromise = rpc.getCanonicalFeed({})
       const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000))
       const result = await Promise.race([feedPromise, timeoutPromise])
 
@@ -272,13 +272,16 @@ export default function HomeScreen() {
           const key = entry?.channelKey || entry?.driveKey
           return key && all.findIndex((candidate) => (candidate?.channelKey || candidate?.driveKey) === key) === index
         }) as FeedEntry[]
-        console.log('[Home] getPublicFeed entries:', mergedEntries.map((e: any) => ({
+        console.log('[Home] getCanonicalFeed entries:', mergedEntries.map((e: any) => ({
           channelKey: e.channelKey || e.driveKey,
           source: e.source,
           peerCount: e.peerCount,
           hasBee: !!e.publicBeeKey,
         })))
         setFeedEntries(mergedEntries)
+        if (result?.channelMetaByKey) {
+          setChannelMeta((prev) => ({ ...result.channelMetaByKey, ...prev }))
+        }
         const CONCURRENT_META_LOADS = 3
         const metaRequests = getMissingChannelMetaRequests(mergedEntries, channelMetaRef.current, 6)
         for (const request of metaRequests.slice(0, CONCURRENT_META_LOADS)) {
@@ -288,7 +291,7 @@ export default function HomeScreen() {
       if (result?.stats) {
         setPeerCount(result.stats.peerCount || 0)
       }
-      logTiming('publicFeed', startedAt, {
+      logTiming('canonicalFeed', startedAt, {
         entries: result?.entries?.length || 0,
         timedOut: !result,
       })

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports, no-empty, no-extra-semi */
 /**
  * Root Layout - Wraps app with providers
  *
@@ -6,7 +7,7 @@
 import '../global.css'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Stack } from 'expo-router'
-import { StatusBar, View, Platform, AppState, AppStateStatus, PermissionsAndroid } from 'react-native'
+import { StatusBar, View, Platform, AppState, AppStateStatus, PermissionsAndroid, NativeModules } from 'react-native'
 import { GluestackUIProvider } from '@/components/ui/gluestack-ui-provider'
 import { PlatformProvider } from '@/lib/PlatformProvider'
 import { VideoPlayerProvider, videoStatsEventEmitter, videoLoadEventEmitter, VideoData, playbackActiveEmitter } from '@/lib/VideoPlayerContext'
@@ -75,6 +76,14 @@ let platformRPC: any = null
 const BACKEND_SOURCE_CACHE_KEY = '__PEARTUBE_BACKEND_SOURCE__'
 const DOWNLOADER_SOURCE_CACHE_KEY = '__PEARTUBE_DOWNLOADER_WORKER_SOURCE__'
 const CAST_ACTIVE_GLOBAL_KEY = '__PEARTUBE_CAST_ACTIVE__'
+const PeartubeNetworkDiscovery = (NativeModules as any).PeartubeNetworkDiscovery
+
+type AndroidDiscoveryPermissionStatus = {
+  postNotifications?: string
+  nearbyWifi?: string
+  multicastLockHeld?: boolean
+  lastError?: string | null
+}
 
 function coerceBundleSource(mod: any): string | null {
   if (typeof mod === 'string') return mod
@@ -176,6 +185,7 @@ export default function RootLayout() {
   const [blobServerPort, setBlobServerPort] = useState<number | null>(() => cachedAppState?.blobServerPort ?? null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const [startupStatus, setStartupStatus] = useState<string | null>(null)
+  const [androidDiscoveryPermissionStatus, setAndroidDiscoveryPermissionStatus] = useState<AndroidDiscoveryPermissionStatus | null>(null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
 const castKeepaliveIntervalRef = useRef<NodeJS.Timeout | null>(null)
 const castSuspendGraceTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -779,20 +789,62 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
     stopCastKeepalive,
   ])
 
-  useEffect(() => {
-    if (isNative) {
-      if (Platform.OS === 'android' && Platform.Version >= 33) {
-        PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS).catch(() => {})
-        if (PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES) {
-          PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES).catch(() => {})
+  const requestAndroidDiscoveryPermissions = useCallback(async (): Promise<AndroidDiscoveryPermissionStatus> => {
+    const status: AndroidDiscoveryPermissionStatus = {}
+
+    if (Platform.OS !== 'android') return status
+
+    if (Platform.Version >= 33) {
+      try {
+        status.postNotifications = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS)
+      } catch (err: any) {
+        status.postNotifications = 'error'
+        status.lastError = err?.message || String(err)
+      }
+
+      if (PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES) {
+        try {
+          status.nearbyWifi = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES)
+        } catch (err: any) {
+          status.nearbyWifi = 'error'
+          status.lastError = err?.message || String(err)
         }
       }
-      initNativeBackend()
+    }
+
+    try {
+      const discoveryStatus = await PeartubeNetworkDiscovery?.acquireMulticastLock?.()
+      status.multicastLockHeld = discoveryStatus?.multicastLockHeld === true
+      status.lastError = discoveryStatus?.lastError ?? status.lastError ?? null
+    } catch (err: any) {
+      status.multicastLockHeld = false
+      status.lastError = err?.message || String(err)
+      console.warn('[App] Android network discovery setup failed:', status.lastError)
+    }
+
+    console.log('[App] Android discovery permission status:', JSON.stringify(status))
+    setAndroidDiscoveryPermissionStatus(status)
+    return status
+  }, [])
+
+  useEffect(() => {
+    if (isNative) {
+      let cancelled = false
+      ;(async () => {
+        await requestAndroidDiscoveryPermissions()
+        if (!cancelled) initNativeBackend()
+      })()
 
       const subscription = AppState.addEventListener('change', handleAppStateChange)
       return () => {
+        cancelled = true
         subscription.remove()
         castPlaybackStateUnsubRef.current?.()
+        if (Platform.OS === 'android') {
+          PeartubeNetworkDiscovery?.releaseMulticastLock?.().catch((err: any) => {
+            console.log('[App] Android discovery multicast release failed:', err?.message)
+          })
+        }
         clearCastSuspendGraceTimer()
         if (startupTimerRef.current) {
           clearTimeout(startupTimerRef.current)
@@ -821,6 +873,7 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
     handleAppStateChange,
     initNativeBackend,
     initPearBackend,
+    requestAndroidDiscoveryPermissions,
     stopCastKeepalive,
   ])
 
@@ -1034,6 +1087,7 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
     platformEvents: platformRPC?.events,
     backendError,
     startupStatus,
+    androidDiscoveryPermissionStatus,
     retryBackend,
     uploadVideo: uploadVideoHandler,
     pickVideoFile: pickVideoFileHandler,

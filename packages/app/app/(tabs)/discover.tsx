@@ -36,6 +36,7 @@ import {
 } from '@/lib/discover-feed-controller'
 import { getCachedVideoUrl, makeVideoUrlCacheKey, setCachedVideoUrl } from '@/lib/video-url-cache'
 import { readDiscoverFeedCache, writeDiscoverFeedCache } from '@/lib/discover-feed-cache'
+import { classifyFeedDiscoveryState } from '@/lib/android-discovery-diagnostics'
 import { formatTimeAgo } from '@/lib/formatters'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { VerticalShortsPlayer } from '@/components/discovery/VerticalShortsPlayer'
@@ -60,6 +61,13 @@ interface FeedEntry {
     thumbnailBlobsCoreKey?: string | null
     thumbnailMimeType?: string | null
   }>
+}
+
+type SwarmStatus = {
+  peers: number
+  feedConnections?: number
+  channels?: number
+  doctor?: { recommendedBoundary?: string | null }
 }
 function getFeedEntrySignature(entry: FeedEntry) {
   const previewSignature = (entry.previewVideos || []).map((video) => [
@@ -114,7 +122,7 @@ export default function VerticalDiscoveryScreen() {
   const insets = useSafeAreaInsets()
   const { height: screenHeight, width: screenWidth } = useWindowDimensions()
   const { isDesktop } = usePlatform()
-  const { ready, identity, rpc, blobServerPort, backendError, startupStatus, platformEvents } = useApp()
+  const { ready, identity, rpc, blobServerPort, backendError, startupStatus, platformEvents, androidDiscoveryPermissionStatus } = useApp()
   const tabBarMetrics = useTabBarMetrics()
   const bottomChromePadding = Math.max(tabBarMetrics.height + 18, insets.bottom + 110, 126)
   const metaBottomPadding = bottomChromePadding
@@ -123,6 +131,8 @@ export default function VerticalDiscoveryScreen() {
   const cachedDiscoverFeed = useMemo(() => readDiscoverFeedCache(), [])
   const [refreshing, setRefreshing] = useState(false)
   const [feedLoading, setFeedLoading] = useState(false)
+  const [peerCount, setPeerCount] = useState(0)
+  const [swarmStatus, setSwarmStatus] = useState<SwarmStatus | null>(null)
   const [feedEntries, setFeedEntries] = useState<FeedEntry[]>(() => (cachedDiscoverFeed?.feedEntries || []) as FeedEntry[])
   const [videos, setVideos] = useState<VideoData[]>(() => (cachedDiscoverFeed?.videos || []) as VideoData[])
   const [cacheRestoredOnly, setCacheRestoredOnly] = useState(() => Boolean(cachedDiscoverFeed?.videos?.length || cachedDiscoverFeed?.feedEntries?.length))
@@ -282,11 +292,15 @@ export default function VerticalDiscoveryScreen() {
         return
       }
       const entries = Array.isArray((result as any)?.entries) ? (result as any).entries : []
+      const stats = (result as any)?.stats
       const channelMetaByKey = (result as any)?.channelMetaByKey || {}
       setFeedTimedOut(false)
       setFeedError(null)
       setLastSuccessfulFeedAt(Date.now())
       setUsingCachedSnapshot(false)
+      if (stats) {
+        setPeerCount(stats.peerCount || 0)
+      }
       if (entries.length > 0 && hasRichVerticalFeedSnapshot(entries, [])) setCacheRestoredOnly(false)
       let mergedEntries = entries
       setFeedEntries((prev) => {
@@ -296,6 +310,20 @@ export default function VerticalDiscoveryScreen() {
         return prevSignature === nextSignature ? prev : mergedEntries
       })
       seedFromFeedEntries(mergedEntries, channelMetaByKey)
+      try {
+        const statusPromise = rpc.getSwarmStatus()
+        const status = await Promise.race([statusPromise, new Promise((resolve) => setTimeout(() => resolve(null), 3000))])
+        if (status) {
+          setSwarmStatus({
+            peers: (status as any).peerCount || (status as any).swarmConnections || 0,
+            feedConnections: (status as any).feedConnections,
+            channels: (status as any).channelsLoaded,
+            doctor: (status as any).doctor || undefined,
+          })
+        }
+      } catch (err) {
+        console.log('[VerticalDiscovery] Failed to load swarm status:', (err as any)?.message || err)
+      }
       for (const entry of mergedEntries.slice(0, 24)) {
         void hydrateChannelVideos(entry)
       }
@@ -462,6 +490,39 @@ export default function VerticalDiscoveryScreen() {
       thumbnailUrl: thumbnailCache[cacheKey] || video.thumbnailUrl || (video as any).thumbnail || null,
     }
   }), [thumbnailCache, videos])
+  const feedDiscoveryState = useMemo(() => classifyFeedDiscoveryState({
+    ready,
+    entries: feedEntries,
+    videos: verticalVideos,
+    peerCount,
+    swarmStatus,
+    permissionStatus: androidDiscoveryPermissionStatus,
+    hasCachedSnapshot: Boolean(cachedDiscoverFeed?.videos?.length || cachedDiscoverFeed?.feedEntries?.length) || usingCachedSnapshot,
+  }), [androidDiscoveryPermissionStatus, cachedDiscoverFeed?.feedEntries?.length, cachedDiscoverFeed?.videos?.length, feedEntries, peerCount, ready, swarmStatus, usingCachedSnapshot, verticalVideos])
+  const discoveryState = feedDiscoveryState?.state || 'discovery-waiting'
+  const discoveryReason = feedDiscoveryState?.reason
+  const discoveryTitle = discoveryState === 'backend-starting'
+    ? (startupStatus || 'Connecting to P2P network…')
+    : discoveryState === 'permission-degraded'
+      ? 'Local peer discovery needs Nearby Wi-Fi'
+      : discoveryState === 'network-degraded'
+        ? 'Peer discovery is degraded'
+        : discoveryState === 'cached-fallback'
+          ? 'Using cached Discover data'
+          : discoveryState === 'hydrating'
+            ? 'Hydrating Discover feed'
+            : 'Looking for peers'
+  const discoveryDetail = discoveryState === 'backend-starting'
+    ? 'Waiting for the backend to report discovery status.'
+    : discoveryState === 'permission-degraded'
+      ? 'Grant Nearby Wi-Fi permission, then pull to refresh.'
+      : discoveryState === 'network-degraded'
+        ? `Network boundary: ${discoveryReason || 'unknown'}. Pull to retry the feed path.`
+        : discoveryState === 'cached-fallback'
+          ? 'No live peers are connected yet; cached videos will stay visible when available.'
+          : discoveryState === 'hydrating'
+            ? `peerCount: ${peerCount}. Waiting for channel hydration.`
+            : `peerCount: ${peerCount}. Keep the app open or pull to refresh.`
   const hydrationErrorCount = Object.keys(hydrationErrors).length
   const degradedCopy = feedTimedOut
     ? 'Feed refresh timed out — showing cached previews.'
@@ -518,10 +579,10 @@ export default function VerticalDiscoveryScreen() {
         <View style={styles.centerState}>
           {feedLoading || !ready ? <ActivityIndicator color={colors.primary} size="large" /> : null}
           <Text style={styles.centerTitle}>
-            {backendError ? 'Backend error' : ready ? (feedTimedOut || feedError || usingCachedSnapshot ? 'Showing cached Discover' : 'No videos discovered yet') : (startupStatus || 'Connecting to P2P network…')}
+            {backendError ? 'Backend error' : discoveryTitle}
           </Text>
           <Text style={styles.centerBody}>
-            {backendError || degradedCopy || 'Pull down to refresh, or wait for peers to announce channels.'}
+            {backendError || discoveryDetail || degradedCopy || 'Pull down to refresh, or wait for peers to announce channels.'}
           </Text>
         </View>
       ) : (

@@ -11,6 +11,7 @@ export interface AppContextType {
   platformEvents?: any
   backendError?: string | null
   startupStatus?: string | null
+  androidDiscoveryPermissionStatus?: any
   retryBackend?: () => void
   uploadVideo: (
     filePath: string,

@@ -18,6 +18,7 @@ import { Recommender } from './recommendations/recommender.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { NETWORK_TOPIC_STRING } from './types.js'
+import { createCanonicalFeedEnvelope } from './canonical-feed-contract.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -1574,6 +1575,52 @@ export function createApi({
           unkeyedEntries,
         },
       };
+    },
+
+    /**
+     * Get the canonical feed envelope for app surfaces.
+     * @returns {{version: number, savedAt: number, identityDriveKey: string | null, entries: Array, videos: Array, channelMetaByKey: Object, stats: Object}}
+     */
+    getCanonicalFeed() {
+      const feed = this.getPublicFeed()
+      const channelMetaByKey = {}
+      const videos = []
+
+      for (const entry of feed.entries || []) {
+        const channelKey = entry?.channelKey || entry?.driveKey || ''
+        if (!channelKey) continue
+
+        const channel = entry?.channel && typeof entry.channel === 'object' ? entry.channel : null
+        if (channel && Object.keys(channel).length > 0 && !channelMetaByKey[channelKey]) {
+          channelMetaByKey[channelKey] = {
+            ...channel,
+            channelKey,
+            driveKey: entry?.driveKey || channelKey,
+          }
+        }
+
+        for (const preview of Array.isArray(entry?.previewVideos) ? entry.previewVideos : []) {
+          if (!preview) continue
+          videos.push({
+            ...preview,
+            channelKey,
+            driveKey: entry?.driveKey || channelKey,
+            publicBeeKey: entry?.publicBeeKey || null,
+            channel: channelMetaByKey[channelKey] || channel || undefined,
+          })
+        }
+      }
+
+      return {
+        ...createCanonicalFeedEnvelope({
+          savedAt: Date.now(),
+          identityDriveKey: ctx?.identityManager?.getActiveIdentity?.()?.driveKey || null,
+          entries: feed.entries || [],
+          videos,
+          channelMetaByKey,
+        }),
+        stats: feed.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
+      }
     },
 
     /**

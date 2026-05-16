@@ -129,24 +129,10 @@ export function attachMobileHandlers(B, deps) {
   B.joinChannel = async (r) => { await api.subscribeChannel(r.channelKey); return { success: true } }
 
   // --- Public Feed handlers ---
-  B.getPublicFeed = async () => {
-    const r = await api.getPublicFeed()
-    return {
-      entries: r.entries.map(e => ({
-        channelKey: e.driveKey || e.channelKey,
-        driveKey: e.driveKey || e.channelKey,
-        source: e.source || 'peer',
-        publicBeeKey: e.publicBeeKey || null,
-        channelName: e.channelName || e.name || null,
-        videoCount: e.videoCount || 0,
-        peerCount: e.peerCount || 0,
-        lastSeen: e.lastSeen || 0,
-        manifestUpdatedAt: e.manifestUpdatedAt || 0,
-        previewVideos: Array.isArray(e.previewVideos) ? e.previewVideos : [],
-      })),
-      stats: r.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
-    }
+  B.getCanonicalFeed = async () => {
+    return api.getCanonicalFeed()
   }
+  B.getPublicFeed = async () => B.getCanonicalFeed()
   B.refreshFeed = async () => { await api.refreshFeed(); return { success: true } }
   B.submitToFeed = async () => {
     const a = identityManager.getActiveIdentity();

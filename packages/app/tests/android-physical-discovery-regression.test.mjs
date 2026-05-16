@@ -42,6 +42,7 @@ test('root layout requests Android discovery permissions, records results, and a
   assert.match(source, /setAndroidDiscoveryPermissionStatus/)
   assert.match(source, /acquireMulticastLock\?\.\(\)/)
   assert.match(source, /initNativeBackend\(\)/)
+  assert.match(source, /doctor: (status as any).doctor || undefined/)
   const helperIndex = source.indexOf('const requestAndroidDiscoveryPermissions = useCallback')
   const effectCallIndex = source.indexOf('await requestAndroidDiscoveryPermissions()')
   assert.ok(
@@ -110,4 +111,10 @@ test('feed discovery state distinguishes permission, transport, cached fallback,
     recoverable: true,
     reason: 'zero-peers-no-entries',
   })
+
+  const discoverSource = readAppFile('app/(tabs)/discover.tsx')
+  assert.match(discoverSource, /classifyFeedDiscoveryState/)
+  assert.match(discoverSource, /Looking for peers/)
+  assert.match(discoverSource, /peerCount: \${peerCount}. Keep the app open or pull to refresh./)
+  assert.match(discoverSource, /Network boundary: \${discoveryReason \|\| 'unknown'}. Pull to retry the feed path./)
 })

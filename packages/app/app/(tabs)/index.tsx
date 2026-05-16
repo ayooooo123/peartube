@@ -135,7 +135,7 @@ export default function HomeScreen() {
   const [feedLoading, setFeedLoading] = useState(false)
   const [peerCount, setPeerCount] = useState(0)
   const [lastFeedRefresh, setLastFeedRefresh] = useState<number | null>(null)
-  const [swarmStatus, setSwarmStatus] = useState<{ peers: number; feedConnections?: number; channels?: number } | null>(null)
+  const [swarmStatus, setSwarmStatus] = useState<{ peers: number; feedConnections?: number; channels?: number; doctor?: { recommendedBoundary?: string | null } } | null>(null)
   const channelMetaRef = useRef(channelMeta)
   channelMetaRef.current = channelMeta
   const inflightChannelMetaLoads = useRef<Set<string>>(new Set())
@@ -305,6 +305,7 @@ export default function HomeScreen() {
             peers: (status as any).peerCount || (status as any).swarmConnections || 0,
             feedConnections: (status as any).feedConnections,
             channels: (status as any).channelsLoaded,
+            doctor: (status as any).doctor || undefined,
           })
         }
       } catch (err) {

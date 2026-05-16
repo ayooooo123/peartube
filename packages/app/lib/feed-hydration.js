@@ -88,12 +88,13 @@ export function getFeedPreviewVideos(feedEntries, channelMeta, identityDriveKey,
       })) continue
 
       seen.add(videoKey)
+      const resolvedChannel = channelMeta?.[channelKey] || entry?.channel || { name: channelName }
       videos.push({
         ...preview,
         channelKey,
         driveKey: channelKey,
         publicBeeKey,
-        channel: { name: channelName },
+        channel: resolvedChannel,
       })
     }
   }

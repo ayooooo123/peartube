@@ -18,6 +18,7 @@ import { Recommender } from './recommendations/recommender.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { NETWORK_TOPIC_STRING } from './types.js'
+import { createCanonicalFeedEnvelope } from './canonical-feed-contract.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -1574,6 +1575,60 @@ export function createApi({
           unkeyedEntries,
         },
       };
+    },
+
+    /**
+     * Get the canonical feed envelope for app surfaces.
+     * @returns {{version: number, savedAt: number, identityDriveKey: string | null, entries: Array, videos: Array, channelMetaByKey: Object, stats: Object}}
+     */
+    getCanonicalFeed() {
+      const feed = this.getPublicFeed()
+      const channelMetaByKey = {}
+      const videos = []
+
+      for (const entry of feed.entries || []) {
+        const channelKey = entry?.channelKey || entry?.driveKey || ''
+        if (!channelKey) continue
+
+        const channel = entry?.channel || (entry?.channelName ? { name: entry.channelName } : null)
+        const channelMeta = channel || {}
+        if (!channelMetaByKey[channelKey]) {
+          channelMetaByKey[channelKey] = {
+            channelKey,
+            driveKey: entry?.driveKey || channelKey,
+            name: channelMeta.name || entry?.channelName || null,
+            description: channelMeta.description || null,
+            avatar: channelMeta.avatar || null,
+            icon: channelMeta.icon || null,
+            thumbnail: channelMeta.thumbnail || null,
+            videoCount: Number.isFinite(entry?.videoCount) ? entry.videoCount : null,
+            lastSeen: Number(entry?.lastSeen || 0) || 0,
+            manifestUpdatedAt: Number(entry?.manifestUpdatedAt || 0) || 0,
+          }
+        }
+
+        for (const preview of Array.isArray(entry?.previewVideos) ? entry.previewVideos : []) {
+          if (!preview) continue
+          videos.push({
+            ...preview,
+            channelKey,
+            driveKey: entry?.driveKey || channelKey,
+            publicBeeKey: entry?.publicBeeKey || null,
+            channel: channelMetaByKey[channelKey],
+          })
+        }
+      }
+
+      return {
+        ...createCanonicalFeedEnvelope({
+          savedAt: Date.now(),
+          identityDriveKey: ctx?.identityManager?.getActiveIdentity?.()?.driveKey || null,
+          entries: feed.entries || [],
+          videos,
+          channelMetaByKey,
+        }),
+        stats: feed.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
+      }
     },
 
     /**

@@ -39,6 +39,7 @@ import {
   readFeedSnapshotFromDisk,
   writeFeedSnapshotToDisk,
 } from '@/lib/feed-snapshot-storage'
+import { classifyFeedDiscoveryState } from '@/lib/android-discovery-diagnostics'
 // Public feed types
 interface FeedEntry {
   driveKey: string
@@ -114,7 +115,7 @@ const isPear = Platform.OS === 'web' && typeof window !== 'undefined' && (!!(win
 export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
-  const { ready, identity, videos, loading, loadVideos, rpc, backendError, startupStatus, retryBackend, platformEvents, blobServerPort } = useApp()
+  const { ready, identity, videos, loading, loadVideos, rpc, backendError, startupStatus, retryBackend, platformEvents, blobServerPort, androidDiscoveryPermissionStatus } = useApp()
   const { loadAndPlayVideo } = useVideoPlayerContext()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
@@ -889,6 +890,22 @@ export default function HomeScreen() {
 
   const backendConnecting = !ready
   const backendLoading = Boolean(loading)
+  const feedDiscoveryState = useMemo(() => classifyFeedDiscoveryState({
+    ready,
+    entries: feedEntries,
+    videos: feedVideosWithThumbs,
+    peerCount,
+    permissionStatus: androidDiscoveryPermissionStatus,
+    hasCachedSnapshot: snapshotRestoredOnly || snapshotChannelKeys.size > 0,
+  }), [
+    androidDiscoveryPermissionStatus,
+    feedEntries,
+    feedVideosWithThumbs,
+    peerCount,
+    ready,
+    snapshotChannelKeys,
+    snapshotRestoredOnly,
+  ])
   const videoGridItemStyle = useMemo(() => isDesktop ? {
     width: `calc(${100 / gridColumns}% - ${(gridColumns - 1) * 24 / gridColumns}px)`,
   } as any : undefined, [isDesktop, gridColumns])
@@ -1136,12 +1153,38 @@ export default function HomeScreen() {
     }
 
     if (item.type === 'discover-empty') {
+      const state = feedDiscoveryState?.state || 'discovery-waiting'
+      const reason = feedDiscoveryState?.reason
+      const title = state === 'permission-degraded'
+        ? 'Local peer discovery needs Nearby Wi-Fi'
+        : state === 'network-degraded'
+          ? 'Peer discovery is degraded'
+          : state === 'cached-fallback'
+            ? 'Using cached discovery data'
+            : 'Looking for PearTube peers'
+      const detail = state === 'permission-degraded'
+        ? 'Grant Nearby devices/Wi-Fi permission, then refresh discovery.'
+        : state === 'network-degraded'
+          ? `Network boundary: ${reason || 'unknown'}. Refresh will retry the feed path.`
+          : state === 'cached-fallback'
+            ? 'No live peers are connected yet; cached videos will stay visible when available.'
+            : 'No live peers have announced channels yet. Keep the app open or tap refresh.'
+
       return (
         <View style={{ paddingHorizontal: isDesktop ? 24 : 20 }}>
           <View className="py-8 items-center bg-pear-bg-elevated rounded-xl">
-            <Feather name="globe" color={colors.textMuted} size={32} />
-            <Text className="text-label text-pear-text mt-2">No seeded videos discovered yet</Text>
-            <Text className="text-caption text-pear-text-muted mt-1">Click refresh or wait for peers that are actively announcing channels</Text>
+            <Feather name="radio" color={colors.textMuted} size={32} />
+            <Text className="text-label text-pear-text mt-2 text-center">{title}</Text>
+            <Text className="text-caption text-pear-text-muted mt-1 text-center px-6">{detail}</Text>
+            <Pressable
+              onPress={refreshFeed}
+              disabled={feedLoading || backendConnecting || !rpc}
+              className="mt-4 px-4 py-2 rounded-lg bg-pear-primary active:opacity-70"
+              accessibilityRole="button"
+              accessibilityLabel="Retry peer discovery"
+            >
+              <Text className="text-label text-white">Retry discovery</Text>
+            </Pressable>
           </View>
         </View>
       )
@@ -1197,6 +1240,7 @@ export default function HomeScreen() {
     backendError,
     backendLoading,
     categories,
+    feedDiscoveryState,
     feedEntries.length,
     feedLoading,
     identity?.driveKey,

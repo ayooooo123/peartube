@@ -193,10 +193,10 @@ export default function VerticalDiscoveryScreen() {
     }
   }, [blobServerPort, rpc])
 
-  const seedFromFeedEntries = useCallback((entries: FeedEntry[], channelMeta: Record<string, any> = {}) => {
+  const seedFromFeedEntries = useCallback((entries: FeedEntry[], channelMetaByKey: Record<string, any> = {}) => {
     const renderable = getVerticalFeedPreviewVideos(entries as any, {
       identityDriveKey: identity?.driveKey || undefined,
-      channelMeta,
+      channelMeta: channelMetaByKey,
       limit: 40,
     }) as VideoData[]
 

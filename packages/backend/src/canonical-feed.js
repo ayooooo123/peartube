@@ -127,8 +127,8 @@ function normalizeThumbnailRefs(raw = {}) {
 export function normalizeCanonicalFeedVideo(rawVideo = {}, options = {}) {
   const rawChannel = rawVideo.channel || options.channel || rawVideo.channelMeta || options.channelMeta || {}
   const channel = normalizeCanonicalFeedChannel(rawChannel, {
-    channelKey: options.channelKey || rawVideo.channelKey || rawVideo.driveKey,
-    driveKey: options.driveKey || rawVideo.driveKey || rawVideo.channelKey,
+    channelKey: rawVideo.channelKey || rawVideo.driveKey || options.channelKey,
+    driveKey: rawVideo.driveKey || rawVideo.channelKey || options.driveKey,
     name: rawVideo.channelName,
     description: rawVideo.channelDescription,
     avatar: rawVideo.channelAvatar,
@@ -142,6 +142,8 @@ export function normalizeCanonicalFeedVideo(rawVideo = {}, options = {}) {
   const channelKey = firstStringOrNull(
     rawVideo.channelKey,
     rawVideo.driveKey,
+    rawChannel.channelKey,
+    rawChannel.driveKey,
     options.channelKey,
     options.driveKey,
     channel.channelKey,
@@ -150,6 +152,8 @@ export function normalizeCanonicalFeedVideo(rawVideo = {}, options = {}) {
   const driveKey = firstStringOrNull(
     rawVideo.driveKey,
     rawVideo.channelKey,
+    rawChannel.driveKey,
+    rawChannel.channelKey,
     options.driveKey,
     options.channelKey,
     channel.driveKey,

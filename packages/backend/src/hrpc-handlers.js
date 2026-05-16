@@ -68,6 +68,7 @@ export const SHARED_HANDLER_NAMES = [
   'GetBlobServerPort',
   'GetChannel',
   'GetChannelMeta',
+  'GetCanonicalFeed',
   'GetIdentities',
   'GetIdentity',
   'GetPinnedChannels',

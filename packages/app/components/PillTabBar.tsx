@@ -3,6 +3,7 @@ import { View, Pressable, StyleSheet, Platform, Keyboard, KeyboardEvent } from '
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { usePathname, useRouter } from 'expo-router'
 import { Feather } from '@expo/vector-icons'
+import { LinearGradient } from 'expo-linear-gradient'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -44,7 +45,7 @@ const TABS: TabItem[] = [
   { name: 'settings', path: '/settings', icon: 'settings', label: 'Settings' },
 ]
 
-const PILL_HEIGHT = Platform.OS === 'android' ? 64 : 56
+const PILL_HEIGHT = Platform.OS === 'android' ? 66 : 58
 const PILL_HORIZONTAL_MARGIN = 16
 const PILL_BOTTOM_OFFSET = 8
 const PILL_BORDER_RADIUS = Platform.OS === 'android' ? 32 : 28
@@ -149,6 +150,12 @@ export function PillTabBar() {
         />
       ) : null}
 
+      <LinearGradient
+        pointerEvents="none"
+        colors={['rgba(255,255,255,0.13)', 'rgba(16,18,22,0.94)', 'rgba(8,10,14,0.96)']}
+        locations={[0, 0.18, 1]}
+        style={StyleSheet.absoluteFill}
+      />
       <View style={styles.backgroundOverlay} />
       <View style={styles.topHighlight} />
 
@@ -240,23 +247,23 @@ const styles = StyleSheet.create({
     zIndex: 100,
     ...Platform.select({
       android: {
-        elevation: 16,
-        backgroundColor: 'rgba(16, 18, 22, 0.94)',
+        elevation: 22,
+        backgroundColor: 'rgba(10, 12, 16, 0.96)',
       },
       ios: {
         backgroundColor: 'transparent',
       },
     }),
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.34,
+    shadowRadius: 18,
   },
   backgroundOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: Platform.OS === 'ios'
       ? 'rgba(24, 24, 27, 0.75)'
-      : 'rgba(16, 18, 22, 0.94)',
+      : 'rgba(8, 10, 14, 0.50)',
   },
   topHighlight: {
     position: 'absolute',
@@ -264,7 +271,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(255, 255, 255, 0.14)',
   },
   tabsContainer: {
     flex: 1,
@@ -286,12 +293,17 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: colors.bgHover,
+    backgroundColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   emphasizedIconBgActive: {
     backgroundColor: colors.primary,
+    shadowColor: colors.primary,
+    shadowOpacity: 0.32,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
   },
   iconShell: {
     width: 48,
@@ -301,6 +313,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   iconShellActive: {
-    backgroundColor: 'rgba(79, 156, 255, 0.16)',
+    backgroundColor: 'rgba(255,255,255,0.09)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
 })

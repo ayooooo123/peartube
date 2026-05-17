@@ -23,6 +23,7 @@ type PearInlineVideoViewProps = {
   pipWindowSize?: { width: number; height: number } | null
   pipEnabled?: boolean
   autoEnterPipOnLeave?: boolean
+  showNotificationControls?: boolean
   videoTitle?: string
   channelName?: string
   thumbnailUrl?: string | null
@@ -93,6 +94,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   onVideoStateChange,
   onPictureInPictureChanged,
   autoEnterPipOnLeave = true,
+  showNotificationControls = autoEnterPipOnLeave,
   videoTitle,
   channelName,
   thumbnailUrl,
@@ -214,11 +216,11 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         capabilities: {
           pictureInPicture: Platform.OS === 'android',
           playbackRate: true,
-          backgroundAudio: true,
+          backgroundAudio: showNotificationControls,
         },
       },
     ),
-    [],
+    [showNotificationControls],
   )
 
   useEffect(() => {
@@ -442,10 +444,11 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         // PiP
         onPictureInPictureStatusChanged={handlePictureInPictureStatusChanged}
         // Background & PiP support
-        playInBackground={true}
-        playWhenInactive={true}
-        // showNotificationControls: react-native-video handles notification controls natively
-        showNotificationControls={true}
+        playInBackground={showNotificationControls}
+        playWhenInactive={showNotificationControls}
+        // Route-local surfaces such as Shorts disable notification controls; otherwise
+        // every swiped/remounted inline player registers a Media3 transport session.
+        showNotificationControls={showNotificationControls}
         // Auto-enter PiP when enabled by the caller. Shorts/Discover owns its
         // route-local player and should not spawn a system PiP window on leave.
         enterPictureInPictureOnLeave={autoEnterPipOnLeave}

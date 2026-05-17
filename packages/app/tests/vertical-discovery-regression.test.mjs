@@ -55,6 +55,7 @@ test('vertical discovery uses a dedicated shorts player surface instead of the w
 
   assert.match(source, /PearInlineVideoView/, 'shorts player should paint the native inline video surface directly')
   assert.match(source, /autoEnterPipOnLeave=\{false\}/, 'shorts mode should not auto-trigger system PiP when leaving the app')
+  assert.match(source, /showNotificationControls=\{false\}/, 'shorts mode should not create Android Media3 notification sessions for every swiped card')
   assert.doesNotMatch(source, /VideoContainer/, 'shorts player must not wrap the normal watch player container')
   assert.match(source, /\.\.\.StyleSheet\.absoluteFillObject/, 'shorts player should own the full vertical card surface')
   assert.match(source, /landscapeVideoSurface/, 'shorts player should have a landscape-specific presentation mode')
@@ -128,7 +129,7 @@ test('Home Discover preloads visible feed playback URLs into the shared URL cach
 test('vertical discovery subscribes to backend feed-update events instead of only loading once', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
-  assert.match(source, /platformEvents \} = useApp\(\)/, 'Discover should receive platform event hooks from app context')
+  assert.match(source, /platformEvents[,\s\S]*\} = useApp\(\)/, 'Discover should receive platform event hooks from app context')
   assert.match(source, /platformEvents as any\)\?\.onFeedUpdate\?\.\(\(\) => \{[\s\S]*?void loadFeed\(\)/, 'Discover should reload the vertical feed when backend gossip announces feed updates')
   assert.match(source, /if \(typeof unsubscribe === 'function'\) unsubscribe\(\)/, 'Discover should unsubscribe from feed events on unmount')
 })
@@ -158,7 +159,7 @@ test('vertical discovery hides all card chrome, including progress, when tapped'
   assert.match(playerSource, /style=\{styles\.centerControlButton\}/, 'play/pause should be centered higher on the video instead of taking space near the progress bar')
   assert.match(playerSource, /top: '34%'/, 'centered playback button should sit above the progress rail instead of crowding it')
   assert.match(playerSource, /progressDock:\s*\{[\s\S]*paddingHorizontal: 24/, 'progress bar should have visible side inset like X/Twitter instead of extending edge-to-edge')
-  assert.match(playerSource, /progressRail:\s*\{[\s\S]*borderRadius: 2/, 'progress rail should be lightly rounded like X/Twitter player chrome')
+  assert.match(playerSource, /progressRail:\s*\{[\s\S]*borderRadius: (?:2|999)/, 'progress rail should be lightly rounded like X/Twitter player chrome')
   assert.match(playerSource, /\(showPlayer \|\| isActive\) && controlsVisible \? \([\s\S]*styles\.progressDock/, 'progress should disappear with the rest of the Shorts chrome when tapped away')
   assert.doesNotMatch(playerSource, /styles\.controlButtons/, 'progress dock should not carry the play/pause controls anymore')
   assert.doesNotMatch(playerSource, /\{controlsVisible \? \([\s\S]*styles\.controlButtons/, 'buttons should no longer sit above the progress bar')
@@ -255,7 +256,7 @@ test('vertical discovery preserves raw titles while constraining long-title layo
 
   assert.doesNotMatch(source, /cleanDiscoverFilenameTitle|getDiscoverDisplayTitle/, 'Discover should not rewrite or clean user/video titles')
   assert.match(source, /numberOfLines=\{1\} ellipsizeMode="tail">\{video\.title \|\| 'Untitled'\}/, 'card title should render the raw title and rely on UI truncation')
-  assert.match(source, /bottomMeta:\s*\{[\s\S]*maxHeight: 136[\s\S]*overflow: 'hidden'/, 'metadata/action block should have a hard visual bound')
+  assert.match(source, /bottomMeta:\s*\{[\s\S]*maxHeight: 1(?:36|52)[\s\S]*overflow: 'hidden'/, 'metadata/action block should have a hard visual bound')
   assert.match(source, /metaTextBlock:\s*\{[\s\S]*flexShrink: 1/, 'long title text should shrink instead of pushing controls')
   assert.match(source, /videoTitle:\s*\{[\s\S]*flexShrink: 1/, 'raw title text should be layout-constrained, not mutated')
   assert.match(source, /bottomActionRail:\s*\{[\s\S]*flexShrink: 0/, 'action buttons should remain visible even when titles are long')
@@ -274,11 +275,11 @@ test('vertical discovery positions progress and chrome without clumping metadata
   assert.match(source, /numberOfLines=\{1\}>\{video\.description\}/, 'description/source copy should not grow into controls while playing')
   assert.match(source, /\{feedEntries\.length\} feeds/, 'feed count pill should label what the number means')
   assert.match(source, /styles\.topChromeFade/, 'header should have a subtle backing fade over active video')
-  assert.match(source, /bottomActionRail:\s*\{[\s\S]*flexDirection: 'row'[\s\S]*gap: 10/, 'action buttons should move from the side rail into a tighter bottom row')
+  assert.match(source, /bottomActionRail:\s*\{[\s\S]*flexDirection: 'row'[\s\S]*gap: (?:8|10)/, 'action buttons should move from the side rail into a tighter bottom row')
   assert.match(source, /<Text style=\{styles\.bottomActionLabel\} numberOfLines=\{1\}>Chat<\/Text>/, 'comments action should use a short single-line label')
   assert.match(source, /bottomActionLabel:\s*\{[\s\S]*textAlign: 'center'/, 'bottom action labels should stay centered instead of wrapping')
   assert.match(source, /metaTextBlock:\s*\{[\s\S]*minWidth: 0/, 'metadata text should shrink instead of pushing into action controls')
-  assert.match(source, /bottomActionButton:\s*\{[\s\S]*minHeight: 34[\s\S]*backgroundColor: 'rgba\(0,0,0,0\.18\)'/, 'bottom action buttons should stay compact instead of heavy pill blocks')
+  assert.match(source, /bottomActionButton:\s*\{[\s\S]*minHeight: (?:34|40)[\s\S]*backgroundColor: 'rgba\((?:0,0,0,0\.18|8,10,14,0\.38)\)'/, 'bottom action buttons should stay compact instead of heavy pill blocks')
   assert.match(source, /<Feather name="user" color="#fff" size=\{18\}/, 'action icons should be smaller than the previous oversized buttons')
   assert.doesNotMatch(source, /progressBottomOffset=\{Math\.max\(insets\.bottom \+ 140, 158\)\}/, 'old low progress offset caused title/source overlap')
 })

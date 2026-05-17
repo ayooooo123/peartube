@@ -1,6 +1,7 @@
 import { memo, RefObject, useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, ImageBackground, LayoutChangeEvent, Pressable, StyleSheet, View } from 'react-native'
 import { Feather } from '@expo/vector-icons'
+import { LinearGradient } from 'expo-linear-gradient'
 import type { VideoData } from '@peartube/core'
 import { colors } from '@/lib/colors'
 import { PearInlineVideoView } from '@/components/video-player/PearInlineVideoView'
@@ -184,6 +185,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
           currentVideoKey={videoKey}
           isPlaying={isActive && !isPaused}
           autoEnterPipOnLeave={false}
+          showNotificationControls={false}
           playbackRate={1}
           seekPosition={seekPosition}
           videoTitle={video.title}
@@ -201,13 +203,22 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
         />
       ) : null}
 
+      <LinearGradient
+        pointerEvents="none"
+        colors={['rgba(0,0,0,0.32)', 'rgba(0,0,0,0)', 'rgba(0,0,0,0.64)']}
+        locations={[0, 0.46, 1]}
+        style={StyleSheet.absoluteFill}
+      />
+
       {showPlayer && isLandscape ? (
         <View pointerEvents="none" style={styles.landscapeMatte} />
       ) : null}
 
       {isLoading ? (
         <View style={styles.centerOverlay}>
-          <ActivityIndicator color="#fff" size="large" />
+          <View style={styles.loadingOrb}>
+            <ActivityIndicator color="#fff" size="small" />
+          </View>
         </View>
       ) : null}
 
@@ -238,7 +249,8 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
             accessibilityRole="adjustable"
             accessibilityLabel="Shorts progress bar"
           >
-            <View style={[styles.progressRail]}>
+            <View style={styles.progressRail}>
+              <View style={[styles.progressFillGlow, { width: `${effectiveProgress * 100}%` }]} />
               <View style={[styles.progressFill, { width: `${effectiveProgress * 100}%` }]} />
             </View>
           </Pressable>
@@ -281,7 +293,17 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.2)',
+    backgroundColor: 'rgba(0,0,0,0.12)',
+  },
+  loadingOrb: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(8,10,14,0.42)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
   },
   progressDock: {
     position: 'absolute',
@@ -309,33 +331,41 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.14)',
   },
   progressTrack: {
-    height: 14,
+    height: 18,
     justifyContent: 'center',
   },
   progressRail: {
-    height: 3,
-    borderRadius: 2,
+    height: 4,
+    borderRadius: 999,
     overflow: 'hidden',
-    backgroundColor: 'rgba(255,255,255,0.34)',
+    backgroundColor: 'rgba(255,255,255,0.26)',
+  },
+  progressFillGlow: {
+    position: 'absolute',
+    left: 0,
+    top: -3,
+    bottom: -3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(79,156,255,0.22)',
   },
   progressFill: {
     height: '100%',
     borderRadius: 999,
-    backgroundColor: colors.primary,
+    backgroundColor: '#f7fbff',
   },
   playButtonShell: {
     position: 'absolute',
     left: '50%',
     top: '50%',
-    width: 86,
-    height: 86,
-    marginLeft: -43,
-    marginTop: -43,
-    borderRadius: 43,
+    width: 82,
+    height: 82,
+    marginLeft: -41,
+    marginTop: -41,
+    borderRadius: 41,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.13)',
+    backgroundColor: 'rgba(8,10,14,0.34)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.16)',
   },
 })

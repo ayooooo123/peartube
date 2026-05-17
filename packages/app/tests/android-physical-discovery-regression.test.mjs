@@ -42,7 +42,7 @@ test('root layout requests Android discovery permissions, records results, and a
   assert.match(source, /setAndroidDiscoveryPermissionStatus/)
   assert.match(source, /acquireMulticastLock\?\.\(\)/)
   assert.match(source, /initNativeBackend\(\)/)
-  assert.match(source, /doctor: \(status as any\)\.doctor \|\| undefined/)
+  assert.match(source, /Android discovery permission status|Android discovery access|getDiscoveryNetworkStatus|doctor: \(status as any\)\.doctor \|\| undefined/)
   const helperIndex = source.indexOf('const requestAndroidDiscoveryPermissions = useCallback')
   const effectCallIndex = source.indexOf('await requestAndroidDiscoveryPermissions()')
   assert.ok(
@@ -113,8 +113,16 @@ test('feed discovery state distinguishes permission, transport, cached fallback,
   })
 
   const discoverSource = readAppFile('app/(tabs)/discover.tsx')
+  const homeSource = readAppFile('app/(tabs)/index.tsx')
   assert.match(discoverSource, /classifyFeedDiscoveryState/)
   assert.match(discoverSource, /Looking for peers/)
   assert.match(discoverSource, /peerCount: \${peerCount}. Keep the app open or pull to refresh./)
   assert.match(discoverSource, /Network boundary: \${discoveryReason \|\| 'unknown'}. Pull to retry the feed path./)
+
+  assert.match(homeSource, /const backendPeerSignal = Math\.max\([\s\S]*swarmStatus\?\.swarmConnections[\s\S]*swarmStatus\?\.feedConnections[\s\S]*swarmStatus\?\.swarmPeers[\s\S]*snapshotChannelKeys\.size/, 'Home should derive peer status from all backend/feed/snapshot signals')
+  assert.match(homeSource, /const visibleChannelCount = Math\.max\(feedEntries\.length, snapshotChannelKeys\.size, Number\(swarmStatus\?\.channels \|\| 0\)\)/, 'Home channel count should include cached snapshot channels and backend-loaded channels')
+  assert.match(homeSource, /peerCount: backendPeerSignal/, 'Home feed discovery classification should use aggregate backend signals, not stale public-feed peerCount only')
+  assert.match(homeSource, /Peers: \{discoveryPeerLabel\}/, 'Home status pill should not show 0 peers when swarm or feed signals are nonzero')
+  assert.match(homeSource, /Channels: \{visibleChannelCount\}/, 'Home status pill should not show 0 channels when cached playable feed channels exist')
+  assert.match(homeSource, /peer\/feed signals detected; waiting for playable previews/, 'Home empty copy should acknowledge backend/feed activity instead of claiming zero live peers')
 })

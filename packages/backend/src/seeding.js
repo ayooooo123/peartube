@@ -5,10 +5,19 @@
  * Handles content seeding with storage quotas and prioritization.
  */
 
+import { normalizeBlobsCoreKey, normalizeBlobRefInput, stringifyBlobId } from './blob-ref.js';
+
 /**
  * @typedef {import('./types.js').SeedingConfig} SeedingConfig
  * @typedef {import('./types.js').SeedInfo} SeedInfo
  */
+
+function normalizeSeedBlobRef(seed) {
+  const blobsCoreKey = normalizeBlobsCoreKey(seed?.blobsCoreKey)
+  const blob = normalizeBlobRefInput(seed?.blobId || seed?.blob)
+  if (!blobsCoreKey || !blob) return null
+  return { blobsCoreKey, blob, blobId: stringifyBlobId(blob) }
+}
 
 export class SeedingManager {
   /**
@@ -118,10 +127,14 @@ export class SeedingManager {
    * @param {string} videoPath
    * @returns {Promise<boolean>}
    */
-  async removeSeed(driveKey, videoPath) {
+  async removeSeed(driveKey, videoPath, options = {}) {
     const key = `${driveKey}:${videoPath}`;
     if (this.activeSeeds.has(key)) {
+      const seed = this.activeSeeds.get(key);
       this.activeSeeds.delete(key);
+      if (options.clearBlob !== false) {
+        await this.clearSeedBlob(seed);
+      }
       await this.persistSeeds();
       console.log('[SeedingManager] Removed seed:', key.slice(0, 32));
       return true;
@@ -232,11 +245,38 @@ export class SeedingManager {
       if (seed.reason === 'pinned') continue; // Never remove pinned
 
       this.activeSeeds.delete(seed.key);
+      await this.clearSeedBlob(seed);
       currentBytes -= seed.bytes || 0;
       console.log('[SeedingManager] Removed seed to meet quota:', seed.key.slice(0, 32));
     }
 
     await this.persistSeeds();
+  }
+
+  /**
+   * Clear the Hypercore block range for a cached seed.
+   * @param {SeedInfo & { blobId?: string | object | null, blobsCoreKey?: string | null }} seed
+   * @returns {Promise<boolean>}
+   */
+  async clearSeedBlob(seed) {
+    const ref = normalizeSeedBlobRef(seed);
+    if (!ref) return false;
+
+    try {
+      const core = this.store.get(Buffer.from(ref.blobsCoreKey, 'hex'));
+      await core.ready?.();
+      const start = ref.blob.blockOffset;
+      const end = ref.blob.blockOffset + ref.blob.blockLength;
+      if (typeof core.clear === 'function') {
+        await core.clear(start, end);
+        console.log('[SeedingManager] Cleared cached blob range:', ref.blobsCoreKey.slice(0, 16), start, end);
+        return true;
+      }
+    } catch (err) {
+      console.log('[SeedingManager] Failed to clear cached blob range:', err?.message);
+    }
+
+    return false;
   }
 
   /**
@@ -335,7 +375,9 @@ export class SeedingManager {
     }
 
     for (const key of toRemove) {
+      const seed = this.activeSeeds.get(key);
       this.activeSeeds.delete(key);
+      await this.clearSeedBlob(seed);
     }
 
     await this.persistSeeds();

@@ -163,6 +163,7 @@ export function attachMobileHandlers(B, deps) {
       peerPoolJoined: Boolean(s.peerPoolJoined),
       publicFeedDiscoveryJoined: Boolean(s.publicFeedDiscoveryJoined),
       feedTopicHex: s.feedTopicHex || null,
+      recommendedBoundary: s.recommendedBoundary || s.doctor?.recommendedBoundary || null,
     }
   }
 

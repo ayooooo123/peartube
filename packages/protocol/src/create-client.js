@@ -35,6 +35,7 @@ const NAMESPACE_METHODS = Object.freeze({
     verifyAttestation: 'verifyAttestation'
   },
   feed: {
+    getCanonicalFeed: 'getCanonicalFeed',
     getPublicFeed: 'getPublicFeed',
     refreshFeed: 'refreshFeed',
     submitToFeed: 'submitToFeed',
@@ -171,6 +172,28 @@ function normalizeHostErrorPayload(payload) {
   )
 }
 
+function normalizeNetworkStatusPayload(payload = {}) {
+  const swarmConnections = payload?.swarmConnections ?? payload?.peerCount ?? 0
+  const peerCount = payload?.peerCount ?? swarmConnections
+
+  return {
+    connected: Boolean(payload?.connected ?? (swarmConnections > 0 || peerCount > 0)),
+    peerCount,
+    swarmConnections,
+    swarmPeers: payload?.swarmPeers ?? 0,
+    feedConnections: payload?.feedConnections ?? 0,
+    feedEntries: payload?.feedEntries ?? 0,
+    channelsLoaded: payload?.channelsLoaded ?? 0,
+    swarmOffline: Boolean(payload?.swarmOffline),
+    swarmOfflineReason: payload?.swarmOfflineReason ?? null,
+    swarmListenResolved: Boolean(payload?.swarmListenResolved),
+    peerPoolJoined: Boolean(payload?.peerPoolJoined),
+    publicFeedDiscoveryJoined: Boolean(payload?.publicFeedDiscoveryJoined),
+    feedTopicHex: payload?.feedTopicHex ?? null,
+    recommendedBoundary: payload?.recommendedBoundary ?? null
+  }
+}
+
 function createTransportClosedError(reason) {
   const suffix = reason ? `: ${reason}` : ''
   return createHostError(
@@ -197,6 +220,14 @@ function createMethodCaller(rpc, ready, methodName) {
     } catch (error) {
       throw normalizeProtocolError(error)
     }
+  }
+}
+
+function createNetworkStatusCaller(rpc, ready) {
+  return async (request = {}) => {
+    const response = await createMethodCaller(rpc, ready, 'getSwarmStatus')(request)
+    const status = normalizeNetworkStatusPayload(response)
+    return status
   }
 }
 
@@ -361,6 +392,12 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     return readyPromise
   }
 
+  const getNetworkStatus = async (request = {}) => {
+    const status = await createNetworkStatusCaller(rpc, ready)(request)
+    events.emit(PROTOCOL_EVENTS.NETWORK_STATUS, status)
+    return status
+  }
+
   return {
     stream,
     rpc,
@@ -371,7 +408,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     },
     system: {
       getStatus: createMethodCaller(rpc, ready, 'getStatus'),
-      getSwarmStatus: createMethodCaller(rpc, ready, 'getSwarmStatus'),
+      getSwarmStatus: getNetworkStatus,
       getBlobServerPort: createMethodCaller(rpc, ready, 'getBlobServerPort')
     },
     identity: createNamespace(rpc, ready, NAMESPACE_METHODS.identity),

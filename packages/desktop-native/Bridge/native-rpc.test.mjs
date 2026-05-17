@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   BRIDGE_COMMANDS,
   BRIDGE_EVENTS,
+  NATIVE_BRIDGE_PROTOCOL_VERSION,
   bootstrapResponseCodec,
   createRPCFrameParser,
   decodeFrame,
@@ -22,6 +23,7 @@ import {
   mpvCreateResponseCodec,
   encodeResponseFrame,
   hostReadyEventCodec,
+  networkStatusEventCodec,
   searchRequestCodec,
   searchResponseCodec,
   setVideoThumbnailFromFileRequestCodec,
@@ -93,6 +95,29 @@ test('bootstrap payload roundtrips through compact encoding', () => {
   assert.deepEqual(decoded.snapshot.state, snapshot.state)
 })
 
+test('bootstrap response defaults to the current native bridge protocol version', () => {
+  const encoded = encodePayload(bootstrapResponseCodec, {
+    storagePath: '/tmp/native',
+    snapshot: {
+      generatedAt: 1234,
+      sections: { home: [], subscriptions: [], library: [], studio: [], diagnostics: [] },
+      stats: { homeCount: 0, subscriptionCount: 0, libraryCount: 0, channelCount: 0 },
+      state: {
+        subscriptionChannelKeys: [],
+        identityChannelKeys: [],
+        activeIdentityName: null,
+        activeIdentityChannelKey: null,
+        activeChannelPublished: false,
+      },
+    },
+  })
+
+  const decoded = decodePayload(bootstrapResponseCodec, encoded)
+
+  assert.equal(NATIVE_BRIDGE_PROTOCOL_VERSION, 2)
+  assert.equal(decoded.protocolVersion, NATIVE_BRIDGE_PROTOCOL_VERSION)
+})
+
 test('rpc frame parser assembles chunked request frames', () => {
   const parser = createRPCFrameParser()
   const request = encodeRequestFrame({
@@ -155,6 +180,40 @@ test('feed update events roundtrip through compact encoding', () => {
     {
       channelKey: 'feed',
       action: 'update',
+    }
+  )
+})
+
+test('network status events roundtrip through compact encoding', () => {
+  const eventFrame = encodeEventFrame({
+    command: BRIDGE_EVENTS.networkStatus,
+    data: encodePayload(networkStatusEventCodec, {
+      bootstrapped: true,
+      firewalled: false,
+      peerCount: 2,
+      connectionCount: 1,
+      feedPeerCount: 1,
+      feedEntries: 3,
+      offline: false,
+      offlineReason: null,
+    }),
+  })
+
+  const eventMessage = decodeFrame(eventFrame)
+
+  assert.equal(eventMessage.kind, 'event')
+  assert.equal(eventMessage.command, BRIDGE_EVENTS.networkStatus)
+  assert.deepEqual(
+    decodePayload(networkStatusEventCodec, eventMessage.data),
+    {
+      bootstrapped: true,
+      firewalled: false,
+      peerCount: 2,
+      connectionCount: 1,
+      feedPeerCount: 1,
+      feedEntries: 3,
+      offline: false,
+      offlineReason: null,
     }
   )
 })

@@ -3,6 +3,23 @@ export type ProtocolReadyData = {
   protocolVersion: 2
 }
 
+export type ProtocolNetworkStatus = {
+  connected: boolean
+  peerCount: number
+  swarmConnections: number
+  swarmPeers: number
+  feedConnections: number
+  feedEntries: number
+  channelsLoaded: number
+  swarmOffline: boolean
+  swarmOfflineReason: string | null
+  swarmListenResolved: boolean
+  peerPoolJoined: boolean
+  publicFeedDiscoveryJoined: boolean
+  feedTopicHex: string | null
+  recommendedBoundary: string | null
+}
+
 export const PROTOCOL_VERSION: 2
 
 export const HOST_ERROR_CODES: {
@@ -25,6 +42,7 @@ export const PROTOCOL_EVENTS: {
   readonly UPLOAD_PROGRESS: 'upload.progress'
   readonly DOWNLOAD_PROGRESS: 'download.progress'
   readonly FEED_UPDATED: 'feed.updated'
+  readonly NETWORK_STATUS: 'network.status'
   readonly VIDEO_STATS: 'video.stats'
   readonly CAST_DEVICE_FOUND: 'cast.deviceFound'
   readonly CAST_DEVICE_LOST: 'cast.deviceLost'

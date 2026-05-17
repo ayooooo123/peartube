@@ -33,6 +33,24 @@ class FakeHRPC {
   onEventError(handler) {
     this.handlers.error = handler
   }
+
+  getSwarmStatus() {
+    return Promise.resolve({
+      connected: true,
+      peerCount: 3,
+      swarmConnections: 3,
+      swarmPeers: 4,
+      feedConnections: 2,
+      feedEntries: 8,
+      channelsLoaded: 5,
+      swarmOffline: false,
+      swarmListenResolved: true,
+      peerPoolJoined: true,
+      publicFeedDiscoveryJoined: true,
+      feedTopicHex: 'feed-topic',
+      recommendedBoundary: 'content-playback-or-ui'
+    })
+  }
 }
 
 test('createProtocolClient remaps feed update events', async (t) => {
@@ -134,6 +152,40 @@ test('createProtocolClient forwards log events through the shared event map', as
   FakeHRPC.instances[0].handlers.log({ level: 'info', message: 'backend ready' })
 
   t.alike(logEvents, [{ level: 'info', message: 'backend ready' }])
+})
+
+test('createProtocolClient emits normalized network status from the system namespace', async (t) => {
+  FakeHRPC.instances.length = 0
+  const networkEvents = []
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: FakeHRPC
+  })
+
+  client.events.on(PROTOCOL_EVENTS.NETWORK_STATUS, (payload) => {
+    networkEvents.push(payload)
+  })
+
+  const status = await client.system.getSwarmStatus()
+
+  t.alike(status, {
+    connected: true,
+    peerCount: 3,
+    swarmConnections: 3,
+    swarmPeers: 4,
+    feedConnections: 2,
+    feedEntries: 8,
+    channelsLoaded: 5,
+    swarmOffline: false,
+    swarmOfflineReason: null,
+    swarmListenResolved: true,
+    peerPoolJoined: true,
+    publicFeedDiscoveryJoined: true,
+    feedTopicHex: 'feed-topic',
+    recommendedBoundary: 'content-playback-or-ui'
+  })
+  t.alike(networkEvents, [status])
 })
 
 test('createProtocolClient fails fast on protocol version mismatch', async (t) => {

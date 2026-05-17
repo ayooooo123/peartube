@@ -607,6 +607,7 @@ B.getSwarmStatus = async () => {
     peerPoolJoined: Boolean(s.peerPoolJoined),
     publicFeedDiscoveryJoined: Boolean(s.publicFeedDiscoveryJoined),
     feedTopicHex: s.feedTopicHex || null,
+    recommendedBoundary: s.recommendedBoundary || s.doctor?.recommendedBoundary || null,
   }
 }
 B.getBlobServerPort = async () => ({ port: getBlobPort() })

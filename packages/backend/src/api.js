@@ -2704,6 +2704,7 @@ export function createApi({
         network: networkDebug,
         startupTiming,
         doctor,
+        recommendedBoundary: doctor.recommendedBoundary,
         swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
         swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),

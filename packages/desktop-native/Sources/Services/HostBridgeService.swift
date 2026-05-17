@@ -9,6 +9,7 @@ import Observation
 @MainActor
 @Observable
 final class HostBridgeService {
+  private static let supportedProtocolVersion = 2
   private static let supportedVideoUploadFileExtensions: Set<String> = [
     "mp4", "mov", "m4v", "mkv", "webm"
   ]
@@ -66,6 +67,7 @@ final class HostBridgeService {
   private(set) var mpvAvailable = false
   private(set) var ffmpegDecodeAvailable = false
   private(set) var ffmpegDecodeAvailabilityError: String?
+  private(set) var networkStatus: NativeNetworkStatus?
 
   @ObservationIgnored private var hostSession: (any NativeHostSession)?
   @ObservationIgnored private var hrpc: HRPC?
@@ -97,6 +99,55 @@ final class HostBridgeService {
     let url: URL
     let playerId: String?
     let frameServerPort: Int?
+  }
+
+  struct NativeNetworkStatus: Equatable {
+    let connected: Bool
+    let peerCount: Int
+    let swarmConnections: Int
+    let swarmPeers: Int
+    let feedConnections: Int
+    let feedEntries: Int
+    let channelsLoaded: Int
+    let swarmOffline: Bool
+    let swarmOfflineReason: String?
+    let swarmListenResolved: Bool
+    let peerPoolJoined: Bool
+    let publicFeedDiscoveryJoined: Bool
+    let feedTopicHex: String?
+    let recommendedBoundary: String?
+
+    init(schema: GetSwarmStatusResponse) {
+      let resolvedSwarmConnections = Self.intValue(schema.swarmConnections)
+      connected = schema.connected
+      peerCount = Self.intValue(schema.peerCount, defaultValue: resolvedSwarmConnections)
+      swarmConnections = resolvedSwarmConnections
+      swarmPeers = Self.intValue(schema.swarmPeers)
+      feedConnections = Self.intValue(schema.feedConnections)
+      feedEntries = Self.intValue(schema.feedEntries)
+      channelsLoaded = Self.intValue(schema.channelsLoaded)
+      swarmOffline = schema.swarmOffline
+      swarmOfflineReason = schema.swarmOfflineReason
+      swarmListenResolved = schema.swarmListenResolved
+      peerPoolJoined = schema.peerPoolJoined
+      publicFeedDiscoveryJoined = schema.publicFeedDiscoveryJoined
+      feedTopicHex = schema.feedTopicHex
+      recommendedBoundary = schema.recommendedBoundary
+    }
+
+    var diagnosticSummary: String {
+      if swarmOffline {
+        return "Network status: offline (\(swarmOfflineReason ?? "unknown reason"))."
+      }
+      if !swarmListenResolved {
+        return "Network status: DHT bootstrap still pending."
+      }
+      return "Network status: peers=\(peerCount), swarmConnections=\(swarmConnections), feedConnections=\(feedConnections), feedEntries=\(feedEntries)."
+    }
+
+    private static func intValue(_ value: UInt?, defaultValue: Int = 0) -> Int {
+      value.map(Int.init) ?? defaultValue
+    }
   }
 
   var isReady: Bool {
@@ -205,10 +256,12 @@ final class HostBridgeService {
         )
       }
 
+      try Self.validateProtocolVersion(response.protocolVersion)
       appendLog("Bootstrap snapshot received from shared host.")
       let blobPort = response.blobServerPort.flatMap { $0 > 0 ? Int($0) : nil }
       phase = .ready(blobServerPort: blobPort)
       lastHeartbeat = Date()
+      _ = await refreshNetworkStatus()
       let responseSnapshot = NativeBrowseSnapshot(schema: response.snapshot)
       let displaySnapshot = Self.preferredBrowseSnapshot(
         liveSnapshot: responseSnapshot,
@@ -344,6 +397,7 @@ final class HostBridgeService {
       let response = try await gatedRPC { hrpc in
         try await hrpc.desktopRefreshBrowse(DesktopRefreshBrowseRequest())
       }
+      _ = await refreshNetworkStatus()
       let liveSnapshot = NativeBrowseSnapshot(schema: response.snapshot)
       let snapshot = Self.preferredBrowseSnapshot(
         liveSnapshot: liveSnapshot,
@@ -364,6 +418,25 @@ final class HostBridgeService {
     }
 
     appState.setLoading(false)
+  }
+
+  @discardableResult
+  func refreshNetworkStatus() async -> NativeNetworkStatus? {
+    guard hrpc != nil else { return networkStatus }
+
+    do {
+      let response = try await gatedRPC { hrpc in
+        try await hrpc.getSwarmStatus(GetSwarmStatusRequest())
+      }
+      let status = NativeNetworkStatus(schema: response)
+      networkStatus = status
+      lastHeartbeat = Date()
+      appendLog(status.diagnosticSummary)
+      return status
+    } catch {
+      appendLog("Network status refresh failed: \(error.localizedDescription)")
+      return networkStatus
+    }
   }
 
   func searchVideos(query: String, into appState: AppState, topK: Int = 12) async {
@@ -1780,6 +1853,7 @@ final class HostBridgeService {
     forceAVPlayerFallback = false
     activeMpvPlayerID = nil
     activeMpvFrameServerPort = nil
+    networkStatus = nil
   }
 
   private func makeHRPC(
@@ -2007,6 +2081,7 @@ final class HostBridgeService {
     hrpc = nil
     hrpcDelegate = nil
     stopPlaybackStatsPolling()
+    networkStatus = nil
 
     if case .booting = phase {
       phase = .failed(disconnectError.localizedDescription)
@@ -2062,6 +2137,16 @@ final class HostBridgeService {
   private func gatedRPC<T>(_ body: (HRPC) async throws -> T) async throws -> T {
     let hrpc = try await ensureHRPC()
     return try await body(hrpc)
+  }
+
+  private static func validateProtocolVersion(_ version: UInt?) throws {
+    let actual = version.map(Int.init)
+    guard actual == supportedProtocolVersion else {
+      throw HostBridgeError.protocolVersionMismatch(
+        expected: supportedProtocolVersion,
+        actual: actual
+      )
+    }
   }
 
   /// Performs any HRPC call, then refreshes the browse snapshot afterward.
@@ -3038,6 +3123,7 @@ private enum HostBridgeError: LocalizedError {
   case bridgeInputUnavailable
   case bridgeResponse(String)
   case bridgeDisconnected
+  case protocolVersionMismatch(expected: Int, actual: Int?)
 
   var errorDescription: String? {
     switch self {
@@ -3051,6 +3137,9 @@ private enum HostBridgeError: LocalizedError {
       return message
     case .bridgeDisconnected:
       return "Native host bridge disconnected."
+    case .protocolVersionMismatch(let expected, let actual):
+      let actualDescription = actual.map(String.init) ?? "missing"
+      return "Native host protocol version mismatch. Expected \(expected), received \(actualDescription)."
     }
   }
 }

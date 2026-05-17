@@ -90,11 +90,24 @@ export function buildSharedSystemHandlers(backend) {
     },
     async GetSwarmStatus() {
       const swarmStatus = backend?.api?.getSwarmStatus?.() || {}
-      const peerCount = swarmStatus.peerCount ?? swarmStatus.swarmConnections ?? 0
+      const swarmConnections = swarmStatus.swarmConnections ?? 0
+      const peerCount = swarmStatus.peerCount ?? swarmConnections
 
       return {
-        connected: peerCount > 0,
-        peerCount
+        connected: (swarmConnections || peerCount) > 0,
+        peerCount,
+        swarmConnections,
+        swarmPeers: swarmStatus.swarmPeers ?? 0,
+        feedConnections: swarmStatus.feedConnections ?? 0,
+        feedEntries: swarmStatus.feedEntries ?? 0,
+        channelsLoaded: swarmStatus.channelsLoaded ?? 0,
+        swarmOffline: Boolean(swarmStatus.swarmOffline),
+        swarmOfflineReason: swarmStatus.swarmOfflineReason ?? null,
+        swarmListenResolved: Boolean(swarmStatus.swarmListenResolved),
+        peerPoolJoined: Boolean(swarmStatus.peerPoolJoined),
+        publicFeedDiscoveryJoined: Boolean(swarmStatus.publicFeedDiscoveryJoined),
+        feedTopicHex: swarmStatus.feedTopicHex ?? null,
+        recommendedBoundary: swarmStatus.recommendedBoundary ?? swarmStatus.doctor?.recommendedBoundary ?? null
       }
     }
   }

@@ -482,6 +482,10 @@ export const rpc = {
   },
 
   async getSwarmStatus() {
+    const client = mainBridge.getClient() as any;
+    if (typeof client?.system?.getSwarmStatus === 'function') {
+      return client.system.getSwarmStatus({});
+    }
     return ensureRPC().getSwarmStatus({});
   },
 

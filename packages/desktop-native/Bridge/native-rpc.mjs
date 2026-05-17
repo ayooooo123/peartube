@@ -1,5 +1,7 @@
 import c from 'compact-encoding'
 
+export const NATIVE_BRIDGE_PROTOCOL_VERSION = 2
+
 export const BRIDGE_COMMANDS = Object.freeze({
   bootstrap: 1,
   refreshBrowse: 2,
@@ -47,6 +49,7 @@ export const BRIDGE_EVENTS = Object.freeze({
   workletReady: 4,
   feedUpdated: 5,
   uploadProgress: 6,
+  networkStatus: 7,
 })
 
 class IgnoredRPCFrameError extends Error {}
@@ -192,7 +195,7 @@ export const browseSnapshotCodec = objectCodec([
 
 export const bootstrapResponseCodec = objectCodec([
   field('blobServerPort', optionalUIntCodec, null),
-  field('protocolVersion', c.uint, 1),
+  field('protocolVersion', c.uint, NATIVE_BRIDGE_PROTOCOL_VERSION),
   field('storagePath', c.string),
   field('snapshot', browseSnapshotCodec),
 ])
@@ -450,6 +453,17 @@ export const uploadProgressEventCodec = objectCodec([
   field('totalBytes', optionalUIntCodec, null),
   field('speed', optionalUIntCodec, null),
   field('eta', optionalUIntCodec, null),
+])
+
+export const networkStatusEventCodec = objectCodec([
+  field('bootstrapped', c.bool, false),
+  field('firewalled', c.bool, false),
+  field('peerCount', c.uint, 0),
+  field('connectionCount', c.uint, 0),
+  field('feedPeerCount', c.uint, 0),
+  field('feedEntries', c.uint, 0),
+  field('offline', c.bool, false),
+  field('offlineReason', optionalStringCodec, null),
 ])
 
 export const mpvAvailableResponseCodec = objectCodec([

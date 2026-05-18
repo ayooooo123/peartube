@@ -38,7 +38,8 @@ export async function startRelay({ config, logger = null } = {}) {
         runtime.ctx,
         resolved.publicBeeKey,
         resolved.channelKey,
-        serviceLogger.download
+        serviceLogger.download,
+        resolved
       )
     }
   })

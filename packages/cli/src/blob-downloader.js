@@ -111,7 +111,9 @@ async function downloadBlobRef(ctx, ref) {
   if (ctx.swarm && !ctx.swarm.destroyed && blobsCore.discoveryKey) {
     try {
       ctx.swarm.join(blobsCore.discoveryKey, { server: true, client: true })
-    } catch {}
+    } catch (err) {
+      void err
+    }
   }
 
   const download = blobsCore.download({

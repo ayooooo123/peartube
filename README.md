@@ -13,6 +13,10 @@ A decentralized P2P video streaming platform built on Hypercore Protocol. Runs o
 
 ## Architecture
 
+PearTube uses a **universal backend** for every client. The UI shells differ by
+platform, but they all talk through `@peartube/protocol` to `@peartube/host`,
+which boots the shared `@peartube/backend` P2P stack.
+
 ```
 packages/
 ├── app/                # Unified app (iOS, Android, Electrobun Desktop)
@@ -217,6 +221,8 @@ npm run lint:fix         # Fix linting issues
 | Native macOS (experimental) | SwiftUI | bare-native sidecar | HRPC over stdin/stdout |
 
 All platforms share:
+- The same universal backend host boundary (`@peartube/host`)
+- The same protocol client/event map (`@peartube/protocol`)
 - The same backend business logic (`@peartube/backend`)
 - The same HRPC schema (`@peartube/spec`)
 - The same Hypercore Protocol stack

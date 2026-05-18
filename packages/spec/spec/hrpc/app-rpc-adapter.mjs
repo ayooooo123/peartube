@@ -1235,6 +1235,17 @@ export const APP_RPC_METADATA = Object.freeze({
       "send": true,
       "requestStream": false,
       "responseStream": false
+    },
+    {
+      "id": 23,
+      "command": "get-canonical-feed",
+      "method": "getCanonicalFeed",
+      "handler": "GetCanonicalFeed",
+      "request": "@peartube/get-canonical-feed-request",
+      "response": "@peartube/get-canonical-feed-response",
+      "send": false,
+      "requestStream": false,
+      "responseStream": false
     }
   ],
   "namespaces": {
@@ -1397,6 +1408,17 @@ export const APP_RPC_METADATA = Object.freeze({
       }
     ],
     "feed": [
+      {
+        "id": 23,
+        "command": "get-canonical-feed",
+        "method": "getCanonicalFeed",
+        "handler": "GetCanonicalFeed",
+        "request": "@peartube/get-canonical-feed-request",
+        "response": "@peartube/get-canonical-feed-response",
+        "send": false,
+        "requestStream": false,
+        "responseStream": false
+      },
       {
         "id": 22,
         "command": "get-public-feed",
@@ -2340,6 +2362,7 @@ export const APP_RPC_METADATA = Object.freeze({
     "download-video",
     "ffmpeg-decode-available",
     "get-blob-server-port",
+    "get-canonical-feed",
     "get-channel",
     "get-channel-meta",
     "get-identities",

@@ -492,6 +492,12 @@ ns.register({
     { name: 'thumbnailBlobsCoreKey', type: 'string', required: false },
     { name: 'thumbnailMimeType', type: 'string', required: false },
     { name: 'availability', type: 'string', required: false },
+    { name: 'description', type: 'string', required: false },
+    { name: 'thumbnailUrl', type: 'string', required: false },
+    { name: 'byteAvailability', type: 'string', required: false },
+    { name: 'channelKey', type: 'string', required: false },
+    { name: 'driveKey', type: 'string', required: false },
+    { name: 'publicBeeKey', type: 'string', required: false },
   ]
 })
 
@@ -506,7 +512,11 @@ ns.register({
     { name: 'lastSeen', type: 'uint', required: false },
     { name: 'source', type: 'string', required: false },
     { name: 'manifestUpdatedAt', type: 'uint', required: false },
-    { name: 'previewVideos', type: '@peartube/feed-entry-preview-video', array: true }
+    { name: 'previewVideos', type: '@peartube/feed-entry-preview-video', array: true },
+    { name: 'driveKey', type: 'string', required: false },
+    { name: 'relayRole', type: 'string', required: false },
+    { name: 'relayServing', type: 'bool', required: false },
+    { name: 'previewVideosHash', type: 'string', required: false }
   ]
 })
 
@@ -521,6 +531,24 @@ ns.register({
   name: 'get-public-feed-response',
   fields: [
     { name: 'entries', type: '@peartube/feed-entry', array: true }
+  ]
+})
+
+ns.register({
+  name: 'get-canonical-feed-request',
+  fields: [
+    { name: 'limit', type: 'uint', required: false }
+  ]
+})
+
+ns.register({
+  name: 'get-canonical-feed-response',
+  fields: [
+    { name: 'version', type: 'uint', required: false },
+    { name: 'savedAt', type: 'uint', required: false },
+    { name: 'identityDriveKey', type: 'string', required: false },
+    { name: 'entries', type: '@peartube/feed-entry', array: true },
+    { name: 'videos', type: '@peartube/feed-entry-preview-video', array: true }
   ]
 })
 
@@ -612,7 +640,19 @@ ns.register({
   name: 'get-swarm-status-response',
   fields: [
     { name: 'connected', type: 'bool', required: true },
-    { name: 'peerCount', type: 'uint', required: false }
+    { name: 'peerCount', type: 'uint', required: false },
+    { name: 'swarmConnections', type: 'uint', required: false },
+    { name: 'swarmPeers', type: 'uint', required: false },
+    { name: 'feedConnections', type: 'uint', required: false },
+    { name: 'feedEntries', type: 'uint', required: false },
+    { name: 'channelsLoaded', type: 'uint', required: false },
+    { name: 'swarmOffline', type: 'bool', required: false },
+    { name: 'swarmOfflineReason', type: 'string', required: false },
+    { name: 'swarmListenResolved', type: 'bool', required: false },
+    { name: 'peerPoolJoined', type: 'bool', required: false },
+    { name: 'publicFeedDiscoveryJoined', type: 'bool', required: false },
+    { name: 'feedTopicHex', type: 'string', required: false },
+    { name: 'recommendedBoundary', type: 'string', required: false }
   ]
 })
 
@@ -2360,6 +2400,12 @@ rpcNs.register({
   name: 'get-public-feed',
   request: { name: '@peartube/get-public-feed-request', stream: false },
   response: { name: '@peartube/get-public-feed-response', stream: false }
+})
+
+rpcNs.register({
+  name: 'get-canonical-feed',
+  request: { name: '@peartube/get-canonical-feed-request', stream: false },
+  response: { name: '@peartube/get-canonical-feed-response', stream: false }
 })
 
 rpcNs.register({

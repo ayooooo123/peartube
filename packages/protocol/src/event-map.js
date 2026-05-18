@@ -5,6 +5,7 @@ export const PROTOCOL_EVENTS = Object.freeze({
   UPLOAD_PROGRESS: 'upload.progress',
   DOWNLOAD_PROGRESS: 'download.progress',
   FEED_UPDATED: 'feed.updated',
+  NETWORK_STATUS: 'network.status',
   VIDEO_STATS: 'video.stats',
   CAST_DEVICE_FOUND: 'cast.deviceFound',
   CAST_DEVICE_LOST: 'cast.deviceLost',

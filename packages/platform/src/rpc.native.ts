@@ -44,6 +44,7 @@ declare const HRPC: new (stream: any) => {
   subscribeChannel(req: { channelKey: string }): Promise<any>;
   joinChannel(req: { channelKey: string }): Promise<any>;
   getSubscriptions(req: {}): Promise<any>;
+  getCanonicalFeed(req: {}): Promise<any>;
   getPublicFeed(req: {}): Promise<any>;
   refreshFeed(req: {}): Promise<any>;
   submitToFeed(req: {}): Promise<any>;
@@ -996,6 +997,10 @@ export const rpc = {
   },
 
   // Public Feed
+  async getCanonicalFeed() {
+    return ensureRPC().getCanonicalFeed({});
+  },
+
   async getPublicFeed() {
     return ensureRPC().getPublicFeed({});
   },
@@ -1110,6 +1115,10 @@ export const rpc = {
   },
 
   async getSwarmStatus() {
+    const client = mainBridge.getClient() as any;
+    if (typeof client?.system?.getSwarmStatus === 'function') {
+      return client.system.getSwarmStatus({});
+    }
     return ensureRPC().getSwarmStatus({});
   },
 

@@ -67,6 +67,9 @@ struct SectionEmptyStateView: View {
       if !appState.activeChannelPublished {
         return "Your channel exists locally. Publish it to the public feed or upload your first video."
       }
+      if let description = networkEmptyDescription {
+        return description
+      }
       return "The native shell is ready. Refresh the feed or upload your first video."
     case .subscriptions:
       return "Subscribed channels will appear here after you follow creators from Home or Search."
@@ -79,8 +82,37 @@ struct SectionEmptyStateView: View {
         ? "Use the native Studio flow to upload and publish your channel."
         : "Create a channel to unlock native upload and publishing controls."
     case .diagnostics:
-      return "Inspect host logs and connection health while the embedded Bare host runs."
+      return "Inspect host logs and connection health while the universal backend host runs."
     }
+  }
+
+  private var networkEmptyDescription: String? {
+    guard section == .home, let status = hostBridge.networkStatus else {
+      return nil
+    }
+
+    if status.swarmOffline {
+      let reason = status.swarmOfflineReason ?? "the backend reported networking is unavailable"
+      return "P2P networking is offline: \(reason)."
+    }
+
+    if !status.swarmListenResolved {
+      return "Connecting to the DHT. Public feed entries will appear after the backend joins the discovery network."
+    }
+
+    if status.peerCount == 0 && status.swarmConnections == 0 {
+      return "Connected to the DHT, but no PearTube peers are reachable yet."
+    }
+
+    if status.feedConnections == 0 {
+      return "Connected to the DHT, but no PearTube feed channels have opened yet."
+    }
+
+    if status.feedEntries == 0 {
+      return "Connected to the DHT and feed peers, but no public feed entries have arrived yet."
+    }
+
+    return nil
   }
 
   @ViewBuilder

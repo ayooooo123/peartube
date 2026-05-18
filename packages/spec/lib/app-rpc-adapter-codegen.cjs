@@ -23,6 +23,7 @@ const APP_RPC_NAMESPACES = Object.freeze({
     'verify-attestation'
   ],
   feed: [
+    'get-canonical-feed',
     'get-public-feed',
     'refresh-feed',
     'submit-to-feed',

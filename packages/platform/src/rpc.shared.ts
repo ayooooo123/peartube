@@ -16,6 +16,23 @@ export type HostErrorData = {
   retryable: boolean
 }
 
+export type NetworkStatusData = {
+  connected?: boolean
+  peerCount?: number
+  swarmConnections?: number
+  swarmPeers?: number
+  feedConnections?: number
+  feedEntries?: number
+  channelsLoaded?: number
+  swarmOffline?: boolean
+  swarmOfflineReason?: string | null
+  swarmListenResolved?: boolean
+  peerPoolJoined?: boolean
+  publicFeedDiscoveryJoined?: boolean
+  feedTopicHex?: string | null
+  recommendedBoundary?: string | null
+}
+
 export type PlatformLifecycleEvent =
   | { type: 'host.ready'; data: HostReadyData }
   | ({ type: 'host.error' } & HostErrorData)
@@ -63,6 +80,9 @@ export type ProtocolClientLike = {
     on(event: string, listener: (payload: any) => void): () => void
   }
   ready(): Promise<HostReadyData>
+  system?: {
+    getSwarmStatus?(request?: any): Promise<NetworkStatusData>
+  }
 }
 
 type ReadyCallback = (data: HostReadyData) => void
@@ -71,6 +91,7 @@ type VideoStatsCallback = (data: any) => void
 type UploadProgressCallback = (data: any) => void
 type DownloadProgressCallback = (data: any) => void
 type FeedUpdateCallback = (data: any) => void
+type NetworkStatusCallback = (data: NetworkStatusData) => void
 type CastDeviceFoundCallback = (data: any) => void
 type CastDeviceLostCallback = (data: any) => void
 type CastPlaybackStateCallback = (data: any) => void
@@ -85,6 +106,7 @@ type PlatformCallbacks = {
   uploadProgress: UploadProgressCallback[]
   downloadProgress: DownloadProgressCallback[]
   feedUpdate: FeedUpdateCallback[]
+  networkStatus: NetworkStatusCallback[]
   castDeviceFound: CastDeviceFoundCallback[]
   castDeviceLost: CastDeviceLostCallback[]
   castPlaybackState: CastPlaybackStateCallback[]
@@ -114,6 +136,7 @@ function createCallbackStore(): PlatformCallbacks {
     uploadProgress: [],
     downloadProgress: [],
     feedUpdate: [],
+    networkStatus: [],
     castDeviceFound: [],
     castDeviceLost: [],
     castPlaybackState: [],
@@ -179,6 +202,7 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       nextClient.events.on(PROTOCOL_EVENTS.LOG, (data: any) => safeDispatch(callbacks.log, data)),
       nextClient.events.on(PROTOCOL_EVENTS.DOWNLOAD_PROGRESS, (data: any) => safeDispatch(callbacks.downloadProgress, data)),
       nextClient.events.on(PROTOCOL_EVENTS.FEED_UPDATED, (data: any) => safeDispatch(callbacks.feedUpdate, data)),
+      nextClient.events.on(PROTOCOL_EVENTS.NETWORK_STATUS, (data: any) => safeDispatch(callbacks.networkStatus, data)),
       nextClient.events.on(PROTOCOL_EVENTS.VIDEO_STATS, (data: any) => safeDispatch(callbacks.videoStats, data)),
       nextClient.events.on(PROTOCOL_EVENTS.CAST_DEVICE_FOUND, (data: any) => safeDispatch(callbacks.castDeviceFound, data)),
       nextClient.events.on(PROTOCOL_EVENTS.CAST_DEVICE_LOST, (data: any) => safeDispatch(callbacks.castDeviceLost, data)),
@@ -244,6 +268,10 @@ export function createPlatformRpcBridge(options: PlatformRpcBridgeOptions) {
       onFeedUpdate(callback: FeedUpdateCallback) {
         callbacks.feedUpdate.push(callback)
         return () => removeCallback(callbacks.feedUpdate, callback)
+      },
+      onNetworkStatus(callback: NetworkStatusCallback) {
+        callbacks.networkStatus.push(callback)
+        return () => removeCallback(callbacks.networkStatus, callback)
       },
       onCastDeviceFound(callback: CastDeviceFoundCallback) {
         callbacks.castDeviceFound.push(callback)

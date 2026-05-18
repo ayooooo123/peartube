@@ -2592,7 +2592,7 @@ export function createApi({
      * Get storage stats for peer content
      * @returns {{ usedBytes: number, maxBytes: number, usedGB: string, maxGB: number, seedCount: number, pinnedCount: number }}
      */
-    getStorageStats() {
+    async getStorageStats() {
       if (seedingManager) {
         return seedingManager.getStorageStats();
       }
@@ -2602,7 +2602,11 @@ export function createApi({
         usedGB: '0.00',
         maxGB: 5,
         seedCount: 0,
-        pinnedCount: 0
+        pinnedCount: 0,
+        totalStorageBytes: 0,
+        totalStorageGB: '0.00',
+        untrackedStorageBytes: 0,
+        untrackedStorageGB: '0.00'
       };
     },
 
@@ -2627,8 +2631,9 @@ export function createApi({
     async clearCache() {
       console.log('[API] CLEAR_CACHE');
       if (seedingManager) {
-        const clearedBytes = await seedingManager.clearCache();
-        return { success: true, clearedBytes };
+        const result = await seedingManager.clearCache();
+        const clearedBytes = typeof result === 'number' ? result : result?.clearedBytes || 0;
+        return { success: true, clearedBytes, ...(typeof result === 'object' && result ? result : {}) };
       }
       return { success: false, clearedBytes: 0 };
     },

@@ -16,6 +16,10 @@ interface StorageStats {
   maxGB: number
   seedCount: number
   pinnedCount: number
+  totalStorageBytes?: number
+  totalStorageGB?: string
+  untrackedStorageBytes?: number
+  untrackedStorageGB?: string
 }
 
 interface TranscodeSettings {
@@ -57,6 +61,23 @@ export default function SettingsScreen() {
   const canManageTranscodeSettings = isPear && typeof (rpc as any)?.getTranscodeSettings === 'function'
   const [transcodeSettings, setTranscodeSettings] = useState<TranscodeSettings | null>(null)
   const [transcodeSettingsLoading, setTranscodeSettingsLoading] = useState(false)
+
+  const getTotalStorageBytes = (stats: StorageStats | null): number => {
+    if (!stats) return 0
+    return Math.max(stats.usedBytes || 0, stats.totalStorageBytes || 0)
+  }
+
+  const getTotalStorageGB = (stats: StorageStats | null): string => {
+    if (!stats) return '0.00'
+    if (stats.totalStorageGB) return stats.totalStorageGB
+    return (getTotalStorageBytes(stats) / (1024 * 1024 * 1024)).toFixed(2)
+  }
+
+  const getUntrackedStorageGB = (stats: StorageStats | null): string => {
+    if (!stats) return '0.00'
+    if (stats.untrackedStorageGB) return stats.untrackedStorageGB
+    return (Math.max(0, getTotalStorageBytes(stats) - (stats.usedBytes || 0)) / (1024 * 1024 * 1024)).toFixed(2)
+  }
 
   // Check if channel is published
   const checkPublishStatus = useCallback(async () => {
@@ -464,9 +485,9 @@ export default function SettingsScreen() {
             <Feather name="hard-drive" color={colors.primary} size={20} />
           </View>
           <View className="flex-1 ml-4">
-            <Text className="text-label text-pear-text">Peer Content Cache</Text>
+            <Text className="text-label text-pear-text">PearTube Storage</Text>
             <Text className="text-caption text-pear-text-muted mt-0.5">
-              {storageStats ? `${storageStats.usedGB} GB / ${storageStats.maxGB} GB used` : 'Loading...'}
+              {storageStats ? `${getTotalStorageGB(storageStats)} GB total • ${storageStats.usedGB} / ${storageStats.maxGB} GB cached` : 'Loading...'}
             </Text>
           </View>
         </View>
@@ -481,6 +502,9 @@ export default function SettingsScreen() {
             </View>
             <Text className="text-caption text-pear-text-muted mt-2">
               {storageStats.seedCount} cached videos • {storageStats.pinnedCount} pinned channels
+            </Text>
+            <Text className="text-caption text-pear-text-muted mt-1">
+              {getUntrackedStorageGB(storageStats)} GB app/P2P data outside tracked peer cache
             </Text>
           </View>
         )}
@@ -537,7 +561,7 @@ export default function SettingsScreen() {
       </View>
 
       <Text className="text-caption text-pear-text-muted">
-        Cached content from other channels. Higher limits help the network by seeding more content to other peers. Your own videos are stored separately and do not count toward this limit.
+        Cached peer content is controlled by the cache limit. Total app storage also includes local channel data, indexes, metadata, bundle cache, and other P2P/Corestore data that Android counts for the app.
       </Text>
     </View>
   )

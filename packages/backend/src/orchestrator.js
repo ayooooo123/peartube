@@ -30,6 +30,8 @@ import {
   loadBarePathModule,
   resolveBareFsModuleSync,
   resolveBarePathModuleSync,
+  resolveBareOrNodeFsModuleSync,
+  resolveBareOrNodePathModuleSync,
 } from './runtime-modules.js'
 import {
   isCorestoreLockError,
@@ -54,6 +56,40 @@ async function appendDebugLine(line) {
     fs.appendFileSync(filePath, `${new Date().toISOString()} ${line}\n`)
   } catch (err) {
     void err
+  }
+}
+
+function createStorageUsageMeasurer(storagePath) {
+  return async function getDiskUsageBytes() {
+    const fs = resolveBareOrNodeFsModuleSync()
+    const path = resolveBareOrNodePathModuleSync()
+    if (!fs || !path || !storagePath) return null
+    const stat = fs.promises?.stat
+    const readdir = fs.promises?.readdir
+    if (typeof stat !== 'function' || typeof readdir !== 'function') return null
+
+    async function walk(targetPath) {
+      let info
+      try {
+        info = await stat.call(fs.promises, targetPath)
+      } catch {
+        return 0
+      }
+      if (!info?.isDirectory?.()) return Number(info?.size || 0) || 0
+      let total = 0
+      let entries = []
+      try {
+        entries = await readdir.call(fs.promises, targetPath)
+      } catch {
+        return 0
+      }
+      for (const entry of entries) {
+        total += await walk(path.join(targetPath, entry))
+      }
+      return total
+    }
+
+    return walk(storagePath)
   }
 }
 
@@ -296,7 +332,9 @@ export async function createBackendContext(config) {
   ctx.publicFeed = publicFeed
   const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();
-  const seedingManager = new SeedingManager(ctx.store, ctx.metaDb);
+  const seedingManager = new SeedingManager(ctx.store, ctx.metaDb, {
+    getDiskUsageBytes: createStorageUsageMeasurer(storagePath)
+  });
   const identityManager = createIdentityManager({ ctx });
   const uploadManager = createUploadManager({ ctx });
 

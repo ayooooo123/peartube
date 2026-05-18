@@ -19,14 +19,22 @@ function normalizeSeedBlobRef(seed) {
   return { blobsCoreKey, blob, blobId: stringifyBlobId(blob) }
 }
 
+function formatBytesAsGB(bytes) {
+  return (Math.max(0, Number(bytes) || 0) / (1024 * 1024 * 1024)).toFixed(2);
+}
+
 export class SeedingManager {
   /**
    * @param {import('corestore')} store - Corestore instance
    * @param {import('hyperbee')} metaDb - Metadata database
+   * @param {{ getDiskUsageBytes?: () => number | Promise<number> }} [options]
    */
-  constructor(store, metaDb) {
+  constructor(store, metaDb, options = {}) {
     this.store = store;
     this.metaDb = metaDb;
+    this.getDiskUsageBytes = typeof options.getDiskUsageBytes === 'function'
+      ? options.getDiskUsageBytes
+      : (typeof store?.getDiskUsageBytes === 'function' ? () => store.getDiskUsageBytes() : null);
     /** @type {Map<string, SeedInfo>} key: `${driveKey}:${videoPath}` -> seed info */
     this.activeSeeds = new Map();
     /** @type {Set<string>} driveKeys that are pinned (always seed) */
@@ -342,26 +350,53 @@ export class SeedingManager {
     await this.enforceQuota();
   }
 
-  /**
-   * Get storage stats for UI display
-   * @returns {{ usedBytes: number, maxBytes: number, usedGB: string, maxGB: number, seedCount: number, pinnedCount: number }}
-   */
-  getStorageStats() {
-    const usedBytes = this.calculateStorage();
+  async getTotalStorageBytes() {
+    if (!this.getDiskUsageBytes) return null;
+    try {
+      const value = await this.getDiskUsageBytes();
+      return Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
+    } catch (err) {
+      console.log('[SeedingManager] Failed to measure total storage:', err?.message);
+      return null;
+    }
+  }
+
+  buildStorageStats(totalStorageBytes = null) {
+    const usedBytes = Math.round(this.calculateStorage());
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
+    const measuredTotal = Number.isFinite(totalStorageBytes) && totalStorageBytes >= 0
+      ? Math.round(totalStorageBytes)
+      : usedBytes;
+    const untrackedStorageBytes = Math.max(0, measuredTotal - usedBytes);
     return {
       usedBytes,
       maxBytes,
-      usedGB: (usedBytes / (1024 * 1024 * 1024)).toFixed(2),
+      usedGB: formatBytesAsGB(usedBytes),
       maxGB: this.config.maxStorageGB,
       seedCount: this.activeSeeds.size,
-      pinnedCount: this.pinnedChannels.size
+      pinnedCount: this.pinnedChannels.size,
+      totalStorageBytes: measuredTotal,
+      totalStorageGB: formatBytesAsGB(measuredTotal),
+      untrackedStorageBytes,
+      untrackedStorageGB: formatBytesAsGB(untrackedStorageBytes)
     };
+  }
+
+  getStorageStatsSync() {
+    return this.buildStorageStats(null);
+  }
+
+  /**
+   * Get storage stats for UI display
+   * @returns {Promise<{ usedBytes: number, maxBytes: number, usedGB: string, maxGB: number, seedCount: number, pinnedCount: number, totalStorageBytes: number, totalStorageGB: string, untrackedStorageBytes: number, untrackedStorageGB: string }>}
+   */
+  async getStorageStats() {
+    return this.buildStorageStats(await this.getTotalStorageBytes());
   }
 
   /**
    * Clear all non-pinned cached content
-   * @returns {Promise<number>} bytes cleared
+   * @returns {Promise<{ clearedBytes: number, totalStorageBytes: number, totalStorageGB: string, untrackedStorageBytes: number, untrackedStorageGB: string }>} bytes cleared and post-clear total storage snapshot
    */
   async clearCache() {
     let clearedBytes = 0;
@@ -382,6 +417,17 @@ export class SeedingManager {
 
     await this.persistSeeds();
     console.log('[SeedingManager] Cleared cache:', clearedBytes, 'bytes from', toRemove.length, 'seeds');
-    return clearedBytes;
+    const stats = this.buildStorageStats(await this.getTotalStorageBytes());
+    return {
+      clearedBytes: Math.round(clearedBytes),
+      totalStorageBytes: stats.totalStorageBytes,
+      totalStorageGB: stats.totalStorageGB,
+      untrackedStorageBytes: stats.untrackedStorageBytes,
+      untrackedStorageGB: stats.untrackedStorageGB
+    };
+  }
+
+  clearCacheSync() {
+    return this.buildStorageStats(null);
   }
 }

@@ -858,7 +858,11 @@ ns.register({
     { name: 'usedGB', type: 'string', required: true },
     { name: 'maxGB', type: 'uint', required: true },
     { name: 'seedCount', type: 'uint', required: true },
-    { name: 'pinnedCount', type: 'uint', required: true }
+    { name: 'pinnedCount', type: 'uint', required: true },
+    { name: 'totalStorageBytes', type: 'uint', required: false },
+    { name: 'totalStorageGB', type: 'string', required: false },
+    { name: 'untrackedStorageBytes', type: 'uint', required: false },
+    { name: 'untrackedStorageGB', type: 'string', required: false }
   ]
 })
 

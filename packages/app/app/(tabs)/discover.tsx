@@ -65,7 +65,10 @@ interface FeedEntry {
 
 type SwarmStatus = {
   peers: number
+  peerCount?: number
+  swarmConnections?: number
   feedConnections?: number
+  swarmPeers?: number
   channels?: number
   doctor?: { recommendedBoundary?: string | null }
 }
@@ -156,6 +159,31 @@ export default function VerticalDiscoveryScreen() {
   const hydratedChannelsRef = useRef<Set<string>>(new Set())
   const feedLoadInFlightRef = useRef(false)
   const inflightPlaybackWarmups = useRef<Set<string>>(new Set())
+
+  const loadSwarmStatus = useCallback(async () => {
+    if (!rpc) return
+    try {
+      const statusPromise = rpc.getSwarmStatus()
+      const status = await Promise.race([statusPromise, new Promise((resolve) => setTimeout(() => resolve(null), 3000))])
+      if (!status) return
+      setSwarmStatus({
+        peers: Math.max(
+          Number((status as any).peerCount || 0),
+          Number((status as any).swarmConnections || 0),
+          Number((status as any).feedConnections || 0),
+          Number((status as any).swarmPeers || 0),
+        ),
+        peerCount: (status as any).peerCount,
+        swarmConnections: (status as any).swarmConnections,
+        feedConnections: (status as any).feedConnections,
+        swarmPeers: (status as any).swarmPeers,
+        channels: (status as any).channelsLoaded,
+        doctor: (status as any).doctor || undefined,
+      })
+    } catch (err) {
+      console.log('[VerticalDiscovery] Failed to load swarm status:', (err as any)?.message || err)
+    }
+  }, [rpc])
 
   const activeVideo = videos[activeIndex]
   const activeVideoKey = activeVideo ? `${activeVideo.channelKey}:${activeVideo.id}` : null
@@ -310,20 +338,7 @@ export default function VerticalDiscoveryScreen() {
         return prevSignature === nextSignature ? prev : mergedEntries
       })
       seedFromFeedEntries(mergedEntries, channelMetaByKey)
-      try {
-        const statusPromise = rpc.getSwarmStatus()
-        const status = await Promise.race([statusPromise, new Promise((resolve) => setTimeout(() => resolve(null), 3000))])
-        if (status) {
-          setSwarmStatus({
-            peers: (status as any).peerCount || (status as any).swarmConnections || 0,
-            feedConnections: (status as any).feedConnections,
-            channels: (status as any).channelsLoaded,
-            doctor: (status as any).doctor || undefined,
-          })
-        }
-      } catch (err) {
-        console.log('[VerticalDiscovery] Failed to load swarm status:', (err as any)?.message || err)
-      }
+      await loadSwarmStatus()
       for (const entry of mergedEntries.slice(0, 24)) {
         void hydrateChannelVideos(entry)
       }
@@ -336,12 +351,21 @@ export default function VerticalDiscoveryScreen() {
       feedLoadInFlightRef.current = false
       setFeedLoading(false)
     }
-  }, [feedEntries, hydrateChannelVideos, rpc, seedFromFeedEntries, videos])
+  }, [feedEntries, hydrateChannelVideos, loadSwarmStatus, rpc, seedFromFeedEntries, videos])
 
   useEffect(() => {
     if (!ready || !rpc) return
     loadFeed()
   }, [loadFeed, ready, rpc])
+
+  useEffect(() => {
+    if (!ready || !rpc) return
+    void loadSwarmStatus()
+    const interval = setInterval(() => {
+      void loadSwarmStatus()
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [loadSwarmStatus, ready, rpc])
 
   useEffect(() => {
     if (!ready || !rpc) return
@@ -490,15 +514,26 @@ export default function VerticalDiscoveryScreen() {
       thumbnailUrl: thumbnailCache[cacheKey] || video.thumbnailUrl || (video as any).thumbnail || null,
     }
   }), [thumbnailCache, videos])
+  const backendPeerSignal = Math.max(
+    Number(peerCount || 0),
+    Number(swarmStatus?.peers || 0),
+    Number(swarmStatus?.peerCount || 0),
+    Number(swarmStatus?.swarmConnections || 0),
+    Number(swarmStatus?.feedConnections || 0),
+    Number(swarmStatus?.swarmPeers || 0),
+    feedEntries.length,
+    videos.length,
+  )
+  const discoveryPeerLabel = backendPeerSignal > 0 ? backendPeerSignal : peerCount
   const feedDiscoveryState = useMemo(() => classifyFeedDiscoveryState({
     ready,
     entries: feedEntries,
     videos: verticalVideos,
-    peerCount,
+    peerCount: backendPeerSignal,
     swarmStatus,
     permissionStatus: androidDiscoveryPermissionStatus,
     hasCachedSnapshot: Boolean(cachedDiscoverFeed?.videos?.length || cachedDiscoverFeed?.feedEntries?.length) || usingCachedSnapshot,
-  }), [androidDiscoveryPermissionStatus, cachedDiscoverFeed?.feedEntries?.length, cachedDiscoverFeed?.videos?.length, feedEntries, peerCount, ready, swarmStatus, usingCachedSnapshot, verticalVideos])
+  }), [androidDiscoveryPermissionStatus, cachedDiscoverFeed?.feedEntries?.length, cachedDiscoverFeed?.videos?.length, feedEntries, backendPeerSignal, ready, swarmStatus, usingCachedSnapshot, verticalVideos])
   const discoveryState = feedDiscoveryState?.state || 'discovery-waiting'
   const discoveryReason = feedDiscoveryState?.reason
   const discoveryTitle = discoveryState === 'backend-starting'
@@ -521,8 +556,8 @@ export default function VerticalDiscoveryScreen() {
         : discoveryState === 'cached-fallback'
           ? 'No live peers are connected yet; cached videos will stay visible when available.'
           : discoveryState === 'hydrating'
-            ? `peerCount: ${peerCount}. Waiting for channel hydration.`
-            : `peerCount: ${peerCount}. Keep the app open or pull to refresh.`
+            ? `peerCount: ${discoveryPeerLabel}. Waiting for channel hydration.`
+            : `peerCount: ${discoveryPeerLabel}. Keep the app open or pull to refresh.`
   const hydrationErrorCount = Object.keys(hydrationErrors).length
   const degradedCopy = feedTimedOut
     ? 'Feed refresh timed out — showing cached previews.'

@@ -20,7 +20,10 @@ test('settings renders storage controls before account onboarding', () => {
 
   assert.match(noIdentityBlock, /renderStorageSection\(\)/)
   assert.match(storageSection, /Storage/)
-  assert.match(storageSection, /Peer Content Cache/)
+  assert.match(storageSection, /PearTube Storage/)
+  assert.match(storageSection, /GB total/)
+  assert.match(storageSection, /GB cached/)
+  assert.match(storageSection, /app\/P2P data outside tracked peer cache/)
   assert.match(storageSection, /handleStorageLimitChange/)
   assert.match(storageSection, /handleClearCache/)
 })

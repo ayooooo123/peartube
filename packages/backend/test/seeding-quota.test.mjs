@@ -85,11 +85,11 @@ test('setMaxStorageGB enforces quota and clears removed cached blob ranges', asy
     blobsCoreKey: coreB
   })
   await manager.persistSeeds()
-  t.is(manager.getStorageStats().usedBytes, 8 * GB)
+  t.is(manager.getStorageStatsSync().usedBytes, 8 * GB)
 
   await manager.setMaxStorageGB(5)
 
-  t.is(manager.getStorageStats().usedBytes, 4 * GB)
+  t.is(manager.getStorageStatsSync().usedBytes, 4 * GB)
   t.is(manager.getActiveSeeds().length, 1)
   t.is(manager.getActiveSeeds()[0].videoPath, 'videos/new.mp4')
   t.alike(store.cores.get(coreA).clearCalls, [{ start: 10, end: 14 }])
@@ -116,10 +116,10 @@ test('clearCache clears non-pinned blob ranges and keeps pinned cached bytes', a
     blobsCoreKey: coreC
   })
 
-  const clearedBytes = await manager.clearCache()
+  const clearResult = await manager.clearCache()
 
-  t.is(clearedBytes, 2 * GB)
-  t.is(manager.getStorageStats().usedBytes, 3 * GB)
+  t.is(clearResult.clearedBytes, 2 * GB)
+  t.is(manager.getStorageStatsSync().usedBytes, 3 * GB)
   t.is(manager.getActiveSeeds().length, 1)
   t.is(manager.getActiveSeeds()[0].reason, 'pinned')
   t.alike(store.cores.get(coreA).clearCalls, [{ start: 3, end: 8 }])
@@ -138,7 +138,7 @@ test('quota enforcement ignores invalid blob refs but still updates seed account
 
   await manager.setMaxStorageGB(5)
 
-  t.is(manager.getStorageStats().usedBytes, 0)
+  t.is(manager.getStorageStatsSync().usedBytes, 0)
   t.is(manager.getActiveSeeds().length, 0)
   t.is(store.calls.length, 0)
 })

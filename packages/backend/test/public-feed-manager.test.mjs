@@ -373,6 +373,40 @@ test('PublicFeedManager preserves relay-address hints and queues existing peer i
   }
 })
 
+test('PublicFeedManager promotes pending discovered peer candidates to explicit', () => {
+  const publicKey = b4a.alloc(32, 23)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const swarm = createSwarm()
+  let priorityUpdates = 0
+  const peerInfo = {
+    publicKey,
+    queued: true,
+    waiting: false,
+    explicit: false,
+    relayAddresses: [{ host: 'relay.test', port: 49737 }],
+    topics: [NETWORK_TOPIC],
+    _updatePriority() {
+      priorityUpdates++
+      return false
+    },
+  }
+  swarm.peers.set(keyHex, peerInfo)
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses: peerInfo.relayAddresses }, NETWORK_TOPIC), true)
+    assert.equal(swarm.joinPeerCalls.length, 0)
+    assert.equal(peerInfo.explicit, true)
+    assert.equal(priorityUpdates, 1)
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.lastReason, 'dial-already-pending-promoted')
+    assert.equal(stats.peers[0].pending, true)
+    assert.ok(stats.lastDialedAt)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('PublicFeedManager recovery is observational after initial bounded peer queueing', () => {
   const publicKey = b4a.alloc(32, 22)
   const keyHex = b4a.toString(publicKey, 'hex')

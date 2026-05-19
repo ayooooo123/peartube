@@ -691,13 +691,22 @@ export class PublicFeedManager {
       this._directPeerDialStats.lastReason = 'already-connected-peer'
       return false
     }
+    const now = this._now()
     if (peerInfo?.queued || peerInfo?.waiting) {
       this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'dial-already-pending'
+      try {
+        peerInfo.explicit = true
+        if (typeof peerInfo._updatePriority === 'function') {
+          try { peerInfo._updatePriority() } catch { /* best effort */ }
+        }
+      } catch { /* diagnostics only */ }
+      this._directPeerDialStats.lastReason = 'dial-already-pending-promoted'
+      this._directPeerLastDialedAt.set(keyHex, now)
+      this._directPeerDialStats.lastDialedAt = now
+      console.log('[PublicFeed] Promoted pending shared-topic peer dial:', keyHex.slice(0, 16), 'queued=', Boolean(peerInfo?.queued), 'waiting=', Boolean(peerInfo?.waiting))
       return false
     }
 
-    const now = this._now()
     try {
       if (peerInfo && typeof this.swarm._enqueue === 'function') {
         peerInfo.explicit = true

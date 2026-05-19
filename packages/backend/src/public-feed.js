@@ -577,6 +577,12 @@ export class PublicFeedManager {
   _markPeerConnected(publicKey) {
     const remembered = this._rememberPeerPublicKey(publicKey)
     if (!remembered) return
+    const peerInfo = this.swarm?.peers?.get?.(remembered.keyHex) || null
+    if (peerInfo && typeof peerInfo === 'object') {
+      peerInfo.queued = false
+      peerInfo.waiting = false
+      peerInfo.connectedTime = Date.now()
+    }
     this._directPeerLastDialError.delete(remembered.keyHex)
     this._directPeerLastDialErrorStack.delete(remembered.keyHex)
     this._directPeerDialStats.connected++
@@ -652,11 +658,13 @@ export class PublicFeedManager {
       this._directPeerDialStats.lastReason = 'self-or-missing-key'
       return false
     }
-    this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
+    const peerInfo = this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
     if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) {
       this._directPeerDialStats.skipped++
       this._directPeerDialStats.lastReason = 'already-connected-peer'
+      return true
     }
+    this._queueDiscoveredPeer(remembered.keyHex, remembered.publicKey, peerInfo)
     return true
   }
 
@@ -668,6 +676,64 @@ export class PublicFeedManager {
       this._directPeerLastDialError.set(keyHex, err?.message || String(err))
       if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
       return null
+    }
+  }
+
+  _queueDiscoveredPeer(keyHex, publicKey, peerInfo = null) {
+    this._directPeerDialStats.attempted++
+    if (!keyHex || !publicKey || !this.swarm) {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'missing-peer-key'
+      return false
+    }
+    if (this._hasActivePeerConnection(keyHex, publicKey)) {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'already-connected-peer'
+      return false
+    }
+    if (peerInfo?.queued || peerInfo?.waiting) {
+      this._directPeerDialStats.skipped++
+      this._directPeerDialStats.lastReason = 'dial-already-pending'
+      return false
+    }
+
+    const now = this._now()
+    try {
+      if (peerInfo && typeof this.swarm._enqueue === 'function') {
+        peerInfo.explicit = true
+        if (typeof peerInfo._updatePriority === 'function') {
+          try { peerInfo._updatePriority() } catch { /* best effort */ }
+        }
+        const queued = this.swarm._enqueue(peerInfo)
+        if (!queued) {
+          this._directPeerDialStats.skipped++
+          this._directPeerDialStats.lastReason = 'enqueue-returned-false'
+          return false
+        }
+        this._directPeerDialStats.queued++
+        this._directPeerDialStats.lastReason = 'queued-existing-peer'
+      } else if (typeof this.swarm.joinPeer === 'function') {
+        this.swarm.joinPeer(publicKey)
+        this._directPeerDialStats.queued++
+        this._directPeerDialStats.lastReason = 'queued-joinPeer'
+      } else {
+        this._directPeerDialStats.skipped++
+        this._directPeerDialStats.lastReason = 'joinPeer-unavailable'
+        return false
+      }
+
+      this._directPeerLastDialedAt.set(keyHex, now)
+      this._directPeerLastDialError.delete(keyHex)
+      this._directPeerLastDialErrorStack.delete(keyHex)
+      this._directPeerDialStats.lastDialedAt = now
+      console.log('[PublicFeed] Queued shared-topic peer dial:', keyHex.slice(0, 16), 'reason=', this._directPeerDialStats.lastReason)
+      return true
+    } catch (err) {
+      this._directPeerDialStats.failed++
+      this._directPeerDialStats.lastReason = 'queue-error'
+      this._directPeerLastDialError.set(keyHex, err?.message || String(err))
+      if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
+      return false
     }
   }
 

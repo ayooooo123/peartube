@@ -256,10 +256,12 @@ export function createApi({
     const previews = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
     if (previews.length === 0) return []
     const resolvedPublicBeeKey = publicBeeKey || entry?.publicBeeKey || null
+    const feedEntryHasLivePeer = Number(entry?.peerCount || 0) > 0
     return previews
       .filter((video) => video?.id || video?.path)
       .map((video) => {
         const id = normalizeVideoId(video.id || video.path)
+        const videoAvailability = video.availability || video.byteAvailability || (feedEntryHasLivePeer ? 'playable' : null)
         return {
           ...video,
           id,
@@ -268,6 +270,8 @@ export function createApi({
           publicBeeKey: resolvedPublicBeeKey,
           relayBacked: Boolean(entry?.relayServing || entry?.relayRole === 'cache' || entry?.source === 'relay-cache'),
           mimeType: video.mimeType || 'video/mp4',
+          availability: videoAvailability,
+          byteAvailability: video.byteAvailability || videoAvailability,
         }
       })
   }
@@ -780,9 +784,12 @@ export function createApi({
             const id = extractVideoId(video)
             const localHint = id ? localHintsById.get(id) : null
             const peerHint = id ? peerHintsById.get(id) : null
-            const availability = id
-              ? resolveExplicitVideoAvailability({ localHint, peerHint })
-              : 'unavailable'
+            const explicitAvailability = video?.byteAvailability || video?.availability || null
+            const availability = explicitAvailability === 'playable'
+              ? 'playable'
+              : id
+                ? resolveExplicitVideoAvailability({ localHint, peerHint })
+                : 'unavailable'
 
             return {
               ...video,

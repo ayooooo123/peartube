@@ -110,4 +110,24 @@ test('feed discovery state distinguishes permission, transport, cached fallback,
     recoverable: true,
     reason: 'zero-peers-no-entries',
   })
+
+  assert.deepEqual(classifyFeedDiscoveryState({
+    ready: true,
+    entries: [{ driveKey: 'live-feed' }],
+    videos: [],
+    swarmStatus: { feedEntries: 88, feedConnections: 0, peers: 0 },
+  }), {
+    state: 'hydrating',
+    recoverable: true,
+  })
+})
+
+test('Home Discover separates feed counts from peers and does not call hydrating entries peerless', () => {
+  const source = readAppFile('app/(tabs)/index.tsx')
+
+  assert.match(source, /Feed: \{displayFeedEntries\}/, 'Home should show feed entries as Feed, not overload Channels or Peers')
+  assert.match(source, /Channels: \{displayChannels\}/, 'Home should still show visible/discovered channel count separately')
+  assert.doesNotMatch(source, /5 feed\/channel signals detected; waiting for playable previews/, 'Home should not show stale feed-channel signal copy from older builds')
+  assert.match(source, /state === 'hydrating'[\s\S]*\? 'Loading playable previews'/, 'hydrating feed entries should not be labeled as looking for peers')
+  assert.match(source, /feed entries detected; resolving playable video previews\./, 'hydrating detail should mention feed entries being resolved')
 })

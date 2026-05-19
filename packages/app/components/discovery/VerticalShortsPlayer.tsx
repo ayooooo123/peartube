@@ -156,7 +156,8 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
   }, [playbackProgress.duration, playerRef, progressBarWidth])
 
   const showPlayer = Boolean(videoUrl && isActive && !hasPlaybackError)
-  const showPoster = !showPlayer && Boolean(thumbnailUrl)
+  const showPoster = Boolean(thumbnailUrl)
+  const posterOpacity = showPlayer ? 0.28 : 0.58
   const effectiveProgress = playbackProgress.duration > 0
     ? clampProgress(playbackProgress.currentTime / playbackProgress.duration)
     : 0
@@ -173,7 +174,7 @@ export const VerticalShortsPlayer = memo(function VerticalShortsPlayer({
         <ImageBackground
           source={{ uri: thumbnailUrl || undefined }}
           style={StyleSheet.absoluteFill}
-          imageStyle={styles.posterImage}
+          imageStyle={[styles.posterImage, { opacity: posterOpacity }]}
         />
       ) : null}
 
@@ -267,7 +268,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   posterImage: {
-    opacity: 0.44,
     resizeMode: 'cover',
   },
   videoSurface: {

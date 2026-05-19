@@ -112,10 +112,17 @@ export function getFeedVideoHydrationMode({ feedEntries, swarmStatus }) {
   // that peer-discovered channels have reachable peers. If we ignore entry peerCount,
   // hydration stays stuck in local-only mode and never joins/fetches remote videos.
   const entryPeerSignal = feedEntries.some((entry) => (entry?.peerCount ?? 0) > 0)
+  const directPreviewSignal = feedEntries.some((entry) => (
+    Array.isArray(entry?.previewVideos) && entry.previewVideos.some(hasDirectBlobRef)
+  ))
 
   if (
     entryPeerSignal ||
+    directPreviewSignal ||
     (swarmStatus?.feedConnections ?? 0) > 0 ||
+    (swarmStatus?.swarmConnections ?? 0) > 0 ||
+    (swarmStatus?.feedEntries ?? 0) > 0 ||
+    (swarmStatus?.channels ?? 0) > 0 ||
     (swarmStatus?.peers ?? 0) > 0
   ) {
     return 'network'

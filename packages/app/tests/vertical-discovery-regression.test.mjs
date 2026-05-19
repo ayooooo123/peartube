@@ -126,6 +126,16 @@ test('Home Discover preloads visible feed playback URLs into the shared URL cach
   assert.match(source, /if \(result\?\.url\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'Home warmups should populate the shared playback URL cache')
 })
 
+test('Home Discover falls back to public feed RPC and labels feed entries separately from live peers', () => {
+  const source = readAppFile('app/(tabs)/index.tsx')
+
+  assert.match(source, /typeof rpc\.getCanonicalFeed === 'function'[\s\S]*rpc\.getPublicFeed\(\{\}\)/, 'Home should fall back when mobile backend only exposes getPublicFeed')
+  assert.match(source, /const displayFeedEntries = Math\.max\([\s\S]*swarmStatus\?\.feedEntries \?\? 0,[\s\S]*feedEntries\.length/, 'Home should display backend feed-entry count separately')
+  assert.match(source, />Feed: \{displayFeedEntries\}</, 'Home should label feed entries as Feed, not Peers')
+  assert.match(source, />Peers: \{displayPeers\}</, 'Home should keep live peer/connection count under Peers')
+  assert.doesNotMatch(source, />Peers: \{feedEntries\.length\}</, 'feed entries must never be shown as peer count')
+})
+
 test('vertical discovery subscribes to backend feed-update events instead of only loading once', () => {
   const source = readAppFile('app/(tabs)/discover.tsx')
 
@@ -164,6 +174,9 @@ test('vertical discovery hides all card chrome, including progress, when tapped'
   assert.doesNotMatch(playerSource, /styles\.controlButtons/, 'progress dock should not carry the play/pause controls anymore')
   assert.doesNotMatch(playerSource, /\{controlsVisible \? \([\s\S]*styles\.controlButtons/, 'buttons should no longer sit above the progress bar')
   assert.doesNotMatch(playerSource, /\(showPlayer \|\| isActive\) \? \([\s\S]*styles\.progressDock/, 'progress bar should not remain mounted after controls are hidden')
+  assert.match(playerSource, /const showPoster = Boolean\(thumbnailUrl\)/, 'Shorts should keep poster imagery behind playback so black video frames are not visually empty')
+  assert.match(playerSource, /const posterOpacity = showPlayer \? 0\.28 : 0\.58/, 'Shorts should dim but preserve posters while the inline player is active')
+  assert.match(playerSource, /imageStyle=\{\[styles\.posterImage, \{ opacity: posterOpacity \}\]\}/, 'poster opacity should be dynamic instead of hidden once playback starts')
 })
 
 test('shorts player has functional playback buttons and a seekable progress bar', () => {

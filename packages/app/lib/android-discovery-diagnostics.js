@@ -25,7 +25,14 @@ export function classifyFeedDiscoveryState({
     return { state: 'content-ready', recoverable: false }
   }
   if (Array.isArray(entries) && entries.length > 0) {
-    if (Number(peerCount || 0) > 0 || Number(swarmStatus?.peers || 0) > 0 || Number(swarmStatus?.feedConnections || 0) > 0) {
+    if (
+      Number(peerCount || 0) > 0 ||
+      Number(swarmStatus?.peers || 0) > 0 ||
+      Number(swarmStatus?.swarmConnections || 0) > 0 ||
+      Number(swarmStatus?.feedConnections || 0) > 0 ||
+      Number(swarmStatus?.feedEntries || 0) > 0 ||
+      Number(swarmStatus?.channels || 0) > 0
+    ) {
       return { state: 'hydrating', recoverable: true }
     }
     return hasCachedSnapshot

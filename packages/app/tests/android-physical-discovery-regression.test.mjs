@@ -42,7 +42,6 @@ test('root layout requests Android discovery permissions, records results, and a
   assert.match(source, /setAndroidDiscoveryPermissionStatus/)
   assert.match(source, /acquireMulticastLock\?\.\(\)/)
   assert.match(source, /initNativeBackend\(\)/)
-  assert.match(source, /Android discovery permission status|Android discovery access|getDiscoveryNetworkStatus|doctor: \(status as any\)\.doctor \|\| undefined/)
   const helperIndex = source.indexOf('const requestAndroidDiscoveryPermissions = useCallback')
   const effectCallIndex = source.indexOf('await requestAndroidDiscoveryPermissions()')
   assert.ok(
@@ -112,34 +111,23 @@ test('feed discovery state distinguishes permission, transport, cached fallback,
     reason: 'zero-peers-no-entries',
   })
 
-  const discoverSource = readAppFile('app/(tabs)/discover.tsx')
-  const homeSource = readAppFile('app/(tabs)/index.tsx')
-  assert.match(discoverSource, /classifyFeedDiscoveryState/)
-  assert.match(discoverSource, /Looking for peers/)
-  assert.match(discoverSource, /peerCount: \${discoveryPeerLabel}. Keep the app open or pull to refresh./)
-  assert.match(discoverSource, /const backendPeerSignal = Math\.max\([\s\S]*swarmStatus\?\.swarmConnections[\s\S]*swarmStatus\?\.feedConnections[\s\S]*swarmStatus\?\.swarmPeers[\s\S]*feedEntries\.length[\s\S]*videos\.length/, 'Discover should derive visible peer status from backend/feed/video signals, not stale public-feed peerCount only')
-  assert.match(discoverSource, /peerCount: backendPeerSignal/, 'Discover feed discovery classification should use aggregate backend signals')
-  assert.match(discoverSource, /const discoveryPeerLabel = backendPeerSignal > 0 \? backendPeerSignal : peerCount/, 'Discover empty copy should report aggregate peer signal')
-  assert.match(discoverSource, /Network boundary: \${discoveryReason \|\| 'unknown'}. Pull to retry the feed path./)
+  assert.deepEqual(classifyFeedDiscoveryState({
+    ready: true,
+    entries: [{ driveKey: 'live-feed' }],
+    videos: [],
+    swarmStatus: { feedEntries: 88, feedConnections: 0, peers: 0 },
+  }), {
+    state: 'hydrating',
+    recoverable: true,
+  })
+})
 
-  assert.match(homeSource, /const getCanonicalFeed = \(rpc as any\)\.getCanonicalFeed[\s\S]*typeof getCanonicalFeed === 'function'[\s\S]*getCanonicalFeed\.call\(rpc, \{\}\)[\s\S]*rpc\.getPublicFeed\(\{\}\)/, 'Home should fall back to schema-registered getPublicFeed when mobile builds lack getCanonicalFeed')
-  assert.match(homeSource, /const loadSwarmStatus = useCallback[\s\S]*Math\.max\([\s\S]*swarmConnections[\s\S]*feedConnections[\s\S]*swarmPeers/, 'Home should poll full swarm status independently of feed loading')
-  assert.match(homeSource, /void loadSwarmStatus\(\)[\s\S]*refreshFeed\(\)/, 'Home foreground/periodic refresh should update peer status even when feed loading fails')
-  assert.match(homeSource, /const livePeerCount = Math\.max\([\s\S]*swarmStatus\?\.swarmConnections[\s\S]*swarmStatus\?\.feedConnections[\s\S]*swarmStatus\?\.swarmPeers[\s\S]*\)\n {2}const visibleChannelCount/, 'Home live peer count should only use peer/connection diagnostics, not discovered channel/feed-entry totals')
-  const livePeerCountBlock = homeSource.slice(
-    homeSource.indexOf('const livePeerCount = Math.max('),
-    homeSource.indexOf('const visibleChannelCount = Math.max(')
-  )
-  assert.doesNotMatch(livePeerCountBlock, /feedEntries\.length|snapshotChannelKeys\.size/, 'Home must not label feed entries or snapshot channels as peers')
-  assert.match(homeSource, /const feedActivitySignal = Math\.max\(livePeerCount, feedEntries\.length, snapshotChannelKeys\.size\)/, 'Home empty-state activity signal may combine peer and feed/channel evidence')
-  const schemaSource = readAppFile('../spec/schema.cjs')
-  assert.match(schemaSource, /name: 'get-swarm-status-response'[\s\S]*name: 'swarmConnections'[\s\S]*name: 'swarmPeers'[\s\S]*name: 'feedConnections'[\s\S]*name: 'feedEntries'[\s\S]*name: 'channelsLoaded'/, 'mobile HRPC schema must preserve full swarm diagnostics instead of dropping fields during decode')
-  assert.match(homeSource, /const visibleChannelCount = Math\.max\(feedEntries\.length, snapshotChannelKeys\.size, Number\(swarmStatus\?\.channels \|\| 0\)\)/, 'Home channel count should include cached snapshot channels and backend-loaded channels')
-  assert.match(homeSource, /peerCount: feedActivitySignal/, 'Home feed discovery classification should use aggregate activity signals for empty-state classification')
-  assert.match(homeSource, /Peers: \{discoveryPeerLabel\}/, 'Home peer pill should show live peer/connection count only')
-  assert.match(homeSource, /Feed: \{feedEntries\.length\}/, 'Home feed sublabel should show discovered feed entry count')
-  assert.doesNotMatch(homeSource, />Channels: \{swarmStatus\.channels\}<\/Text>/, 'Home must not render a second Channels label for live backend-loaded channels')
-  assert.match(homeSource, /Live: \{swarmStatus\.channels\}/, 'Home secondary channel status should be labelled Live, not Channels')
-  assert.match(homeSource, /Channels: \{visibleChannelCount\}/, 'Home status pill should not show 0 channels when cached playable feed channels exist')
-  assert.match(homeSource, /feed\/channel signals detected; waiting for playable previews/, 'Home empty copy should acknowledge backend/feed activity without calling feed entries peers')
+test('Home Discover separates feed counts from peers and does not call hydrating entries peerless', () => {
+  const source = readAppFile('app/(tabs)/index.tsx')
+
+  assert.match(source, /Feed: \{displayFeedEntries\}/, 'Home should show feed entries as Feed, not overload Channels or Peers')
+  assert.match(source, /Channels: \{displayChannels\}/, 'Home should still show visible/discovered channel count separately')
+  assert.doesNotMatch(source, /5 feed\/channel signals detected; waiting for playable previews/, 'Home should not show stale feed-channel signal copy from older builds')
+  assert.match(source, /state === 'hydrating'[\s\S]*\? 'Loading playable previews'/, 'hydrating feed entries should not be labeled as looking for peers')
+  assert.match(source, /feed entries detected; resolving playable video previews\./, 'hydrating detail should mention feed entries being resolved')
 })

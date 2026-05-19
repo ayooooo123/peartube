@@ -83,6 +83,21 @@ test('getFeedVideoHydrationMode uses local-only hydration for cached entries bef
     feedEntries: [{ driveKey: 'a', peerCount: 2 }],
     swarmStatus: null,
   }), 'network')
+
+  assert.equal(getFeedVideoHydrationMode({
+    feedEntries: [{
+      driveKey: 'relay-archive',
+      publicBeeKey: 'bee-relay',
+      peerCount: 0,
+      previewVideos: [{ id: 'direct', blobId: '0:8:0:1024', blobsCoreKey: 'aa'.repeat(32) }],
+    }],
+    swarmStatus: { peers: 0, feedConnections: 0 },
+  }), 'network')
+
+  assert.equal(getFeedVideoHydrationMode({
+    feedEntries: [{ driveKey: 'status-backed', peerCount: 0 }],
+    swarmStatus: { peers: 0, feedConnections: 0, feedEntries: 88 },
+  }), 'network')
 })
 
 test('getFeedPreviewVideos only uses local or live-peer manifest previews', () => {
@@ -248,6 +263,23 @@ test('feed preview videos keep unverified mirrored media visible when byte avail
   assert.equal(videos[0].id, 'mkv-preview')
   assert.equal(videos[0].availability, 'playable')
   assert.equal(videos[0].playbackSupport, 'unverified-container')
+})
+
+test('backend preview fallback preserves live-peer preview availability for Home rendering', async () => {
+  const source = await import('node:fs').then((fs) => fs.readFileSync(new URL('../../backend/src/api.js', import.meta.url), 'utf8'))
+  const previewHelper = source.slice(
+    source.indexOf('function previewVideosFromFeedEntry'),
+    source.indexOf('function getPreviewVideoFromFeed'),
+  )
+  const availabilityBlock = source.slice(
+    source.indexOf('const attachVideoAvailability'),
+    source.indexOf('const cached = listVideosCache.get'),
+  )
+
+  assert.match(previewHelper, /const feedEntryHasLivePeer = Number\(entry\?\.peerCount \|\| 0\) > 0/, 'backend preview fallback should treat live-peer feed previews as renderable')
+  assert.match(previewHelper, /const videoAvailability = video\.availability \|\| video\.byteAvailability \|\| \(feedEntryHasLivePeer \? 'playable' : null\)/, 'preview videos should carry playable availability when the feed entry has live peers')
+  assert.match(availabilityBlock, /const explicitAvailability = video\?\.byteAvailability \|\| video\?\.availability \|\| null/, 'availability revalidation should preserve explicit playable preview availability')
+  assert.match(availabilityBlock, /explicitAvailability === 'playable'[\s\S]*\? 'playable'/, 'explicit playable preview refs must not be downgraded to unavailable during fallback')
 })
 
 test('mergeHydratedFeedVideos replaces stale channel cards when a refreshed channel no longer has watchable videos', () => {

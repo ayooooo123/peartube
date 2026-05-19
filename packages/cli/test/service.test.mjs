@@ -769,3 +769,62 @@ test('createRelayService watches configured local mirror directory', async (t) =
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('createRelayService refreshes already accepted channels when feed preview refs appear', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-preview-refresh-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+  const previewVideos = [{
+    id: 'preview-1',
+    blobId: '0:2:0:20',
+    blobsCoreKey: 'aa'.repeat(32),
+    thumbnailBlobId: '2:1:20:5',
+    thumbnailBlobsCoreKey: 'bb'.repeat(32)
+  }]
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push({ channelKey: candidate.channelKey, previews: candidate.previewVideos?.length || 0 })
+        return {
+          bytesDownloaded: candidate.previewVideos?.length ? 20 : 0,
+          videosFound: 0,
+          videosDownloaded: candidate.previewVideos?.length ? 1 : 0,
+          previewVideos: candidate.previewVideos || [],
+          videoCount: candidate.previewVideos?.length || 0
+        }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-preview-refresh', publicBeeKey: 'bee-preview-refresh', source: 'discovered' })
+    await runtime.emit({ channelKey: 'chan-preview-refresh', publicBeeKey: 'bee-preview-refresh', source: 'discovered', previewVideos })
+
+    const channel = service.catalog.getChannel('chan-preview-refresh')
+
+    t.alike(mirrored, [
+      { channelKey: 'chan-preview-refresh', previews: 0 },
+      { channelKey: 'chan-preview-refresh', previews: 1 }
+    ])
+    t.is(channel.videosDownloaded, 1)
+    t.is(channel.bytes, 20)
+    t.alike(channel.previewVideos, previewVideos)
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

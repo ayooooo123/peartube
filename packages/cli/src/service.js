@@ -48,6 +48,34 @@ export async function createRelayService({
     })
   }
 
+  function getPreviewBlobSignature(previewVideos) {
+    if (!Array.isArray(previewVideos) || previewVideos.length === 0) return ''
+    return previewVideos
+      .filter((video) => video?.blobsCoreKey && video?.blobId)
+      .map((video) => [
+        String(video.blobsCoreKey).toLowerCase(),
+        String(video.blobId),
+        video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey).toLowerCase() : '',
+        video?.thumbnailBlobId ? String(video.thumbnailBlobId) : ''
+      ].join(':'))
+      .sort()
+      .join('|')
+  }
+
+  function shouldRefreshAcceptedChannel(existing, candidate) {
+    if (!existing?.channelKey) return false
+    const incomingSignature = getPreviewBlobSignature(candidate?.previewVideos)
+    if (!incomingSignature) return false
+
+    const existingSignature = getPreviewBlobSignature(existing.previewVideos)
+    if (incomingSignature !== existingSignature) return true
+
+    if ((Number(existing.videosDownloaded) || 0) <= 0) return true
+    if ((Number(existing.bytes) || 0) <= 0) return true
+
+    return false
+  }
+
   async function runLocalMirrorOnce(localMirrorConfig = config.archive?.localMirror || {}) {
     if (!localMirrorConfig?.enabled) return null
     if (localMirrorRunning) return { skipped: true, reason: 'already-running' }
@@ -109,12 +137,20 @@ export async function createRelayService({
       ? await runtime.resolveCandidate(candidate)
       : candidate
 
-    const decision = evaluateCandidate({
-      candidate: resolved,
-      config,
-      acceptedChannels: new Set(relayCatalog.getChannels().map((channel) => channel.channelKey)),
-      ownerCounts: relayCatalog.getOwnerCounts()
-    })
+    const existingChannel = relayCatalog.getChannel(resolved.channelKey)
+    const refreshAcceptedChannel = shouldRefreshAcceptedChannel(existingChannel, resolved)
+    const decision = refreshAcceptedChannel
+      ? {
+        accepted: true,
+        reason: 'accepted-preview-refresh',
+        retentionClass: existingChannel.retentionClass || resolved.retentionClass || 'discovery'
+      }
+      : evaluateCandidate({
+        candidate: resolved,
+        config,
+        acceptedChannels: new Set(relayCatalog.getChannels().map((channel) => channel.channelKey)),
+        ownerCounts: relayCatalog.getOwnerCounts()
+      })
 
     if (!decision.accepted) {
       logger.admission.info('Candidate rejected', {
@@ -167,6 +203,15 @@ export async function createRelayService({
         videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || 0) || 0,
         manifestUpdatedAt: Date.now()
       })
+
+      if (refreshAcceptedChannel) {
+        logger.mirror.info('Accepted channel refreshed from preview refs', {
+          channelKey: resolved.channelKey,
+          ownerKey: resolved.ownerKey || null,
+          videosDownloaded: mirrorStats?.videosDownloaded || 0,
+          bytesDownloaded: mirrorStats?.bytesDownloaded || 0
+        })
+      }
 
       if (resolved.publicBeeKey) {
         await runtime.cacheManager?.addChannel?.(resolved.channelKey, resolved.publicBeeKey, 'discovered').catch(() => {})

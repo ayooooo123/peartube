@@ -91,16 +91,6 @@ type ChannelListItem =
   | { type: 'empty' }
   | { type: 'row'; videos: VideoData[]; rowIndex: number }
 
-type HomeSwarmStatus = {
-  peers: number
-  peerCount?: number
-  swarmConnections?: number
-  feedConnections?: number
-  swarmPeers?: number
-  channels?: number
-  doctor?: { recommendedBoundary?: string | null }
-}
-
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
     promise,
@@ -145,7 +135,14 @@ export default function HomeScreen() {
   const [feedLoading, setFeedLoading] = useState(false)
   const [peerCount, setPeerCount] = useState(0)
   const [lastFeedRefresh, setLastFeedRefresh] = useState<number | null>(null)
-  const [swarmStatus, setSwarmStatus] = useState<HomeSwarmStatus | null>(null)
+  const [swarmStatus, setSwarmStatus] = useState<{
+    peers: number
+    swarmPeers?: number
+    swarmConnections?: number
+    feedConnections?: number
+    feedEntries?: number
+    channels?: number
+  } | null>(null)
   const channelMetaRef = useRef(channelMeta)
   channelMetaRef.current = channelMeta
   const inflightChannelMetaLoads = useRef<Set<string>>(new Set())
@@ -267,45 +264,16 @@ export default function HomeScreen() {
     }
   }, [rpc])
 
-  const loadSwarmStatus = useCallback(async () => {
-    if (!rpc) return
-    try {
-      const statusPromise = rpc.getSwarmStatus()
-      const status = await Promise.race([statusPromise, new Promise((r) => setTimeout(() => r(null), 3000))])
-      if (!status) return
-      setSwarmStatus({
-        peers: Math.max(
-          Number((status as any).peerCount || 0),
-          Number((status as any).swarmConnections || 0),
-          Number((status as any).feedConnections || 0),
-          Number((status as any).swarmPeers || 0),
-        ),
-        peerCount: (status as any).peerCount,
-        swarmConnections: (status as any).swarmConnections,
-        feedConnections: (status as any).feedConnections,
-        swarmPeers: (status as any).swarmPeers,
-        channels: (status as any).channelsLoaded,
-        doctor: (status as any).doctor || undefined,
-      })
-    } catch (err) {
-      console.log('[Home] Failed to load swarm status:', (err as any)?.message || err)
-    }
-  }, [rpc])
-
   // Load public feed from backend
   const loadPublicFeed = useCallback(async () => {
     if (!rpc) return
     const startedAt = nowMs()
     try {
       setFeedLoading(true)
-      // Add timeout to prevent infinite spinner if RPC hangs. Physical-device
-      // release builds may not expose the newer canonical-feed HRPC method yet,
-      // but getPublicFeed is registered in the generated mobile schema and
-      // returns the same feed entries through the mobile handler.
-      const getCanonicalFeed = (rpc as any).getCanonicalFeed
-      const feedPromise = typeof getCanonicalFeed === 'function'
-        ? getCanonicalFeed.call(rpc, {})
-        : rpc.getPublicFeed({})
+      // Add timeout to prevent infinite spinner if RPC hangs
+      const feedPromise = (typeof rpc.getCanonicalFeed === 'function'
+        ? rpc.getCanonicalFeed({})
+        : rpc.getPublicFeed({}))
       const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000))
       const result = await Promise.race([feedPromise, timeoutPromise])
 
@@ -331,20 +299,45 @@ export default function HomeScreen() {
         }
       }
       if (result?.stats) {
-        setPeerCount(result.stats.peerCount || 0)
+        const feedStats = result.stats as any
+        setPeerCount(feedStats.peerCount || feedStats.feedConnections || 0)
+        setSwarmStatus((prev) => ({
+          peers: feedStats.swarmConnections ?? prev?.peers ?? (feedStats.peerCount || 0),
+          swarmPeers: feedStats.swarmPeers ?? prev?.swarmPeers,
+          swarmConnections: feedStats.swarmConnections ?? prev?.swarmConnections,
+          feedConnections: feedStats.feedConnections ?? prev?.feedConnections,
+          feedEntries: feedStats.feedEntries ?? feedStats.totalEntries ?? result?.entries?.length ?? prev?.feedEntries,
+          channels: feedStats.channelsLoaded ?? prev?.channels,
+        }))
       }
       logTiming('canonicalFeed', startedAt, {
         entries: result?.entries?.length || 0,
         timedOut: !result,
       })
       setLastFeedRefresh(Date.now())
-      await loadSwarmStatus()
+      try {
+        const statusPromise = rpc.getSwarmStatus()
+        const status = await Promise.race([statusPromise, new Promise((r) => setTimeout(() => r(null), 3000))])
+        if (status) {
+          const statusAny = status as any
+          setSwarmStatus({
+            peers: statusAny.swarmConnections ?? statusAny.peerCount ?? 0,
+            swarmPeers: statusAny.swarmPeers ?? statusAny.peerCount,
+            swarmConnections: statusAny.swarmConnections,
+            feedConnections: statusAny.feedConnections,
+            feedEntries: statusAny.feedEntries,
+            channels: statusAny.channelsLoaded,
+          })
+        }
+      } catch (err) {
+        console.log('[Home] Failed to load swarm status:', (err as any)?.message || err)
+      }
     } catch (err) {
       console.error('[Home] Failed to load public feed:', err)
     } finally {
       setFeedLoading(false)
     }
-  }, [rpc, loadChannelMeta, loadSwarmStatus])
+  }, [rpc, loadChannelMeta])
 
   const refreshFeed = useCallback(async () => {
     if (!rpc) return
@@ -425,12 +418,10 @@ export default function HomeScreen() {
   useEffect(() => {
     if (ready) {
       loadPublicFeed()
-      void loadSwarmStatus()
     }
     // Periodic refresh to keep discovery updated
     const interval = setInterval(() => {
       if (ready) {
-        void loadSwarmStatus()
         refreshFeed()
       }
     }, 30000)
@@ -444,13 +435,12 @@ export default function HomeScreen() {
       clearInterval(interval)
       if (typeof unsub === 'function') unsub()
     }
-  }, [ready, platformEvents, loadPublicFeed, loadSwarmStatus, refreshFeed])
+  }, [ready, platformEvents, loadPublicFeed, refreshFeed])
 
   // Refresh discovery when app returns to foreground (mobile)
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active' && appState.current !== 'active' && ready) {
-        void loadSwarmStatus()
         refreshFeed()
         if (feedVideos.length > 0) {
           fetchThumbnailsForVideos(feedVideos)
@@ -459,7 +449,7 @@ export default function HomeScreen() {
       appState.current = state
     })
     return () => sub.remove()
-  }, [ready, refreshFeed, feedVideos, fetchThumbnailsForVideos, loadSwarmStatus])
+  }, [ready, refreshFeed, feedVideos, fetchThumbnailsForVideos])
 
   const hideChannel = useCallback(async (driveKey: string) => {
     if (!rpc) return
@@ -922,23 +912,11 @@ export default function HomeScreen() {
 
   const backendConnecting = !ready
   const backendLoading = Boolean(loading)
-  const livePeerCount = Math.max(
-    Number(peerCount || 0),
-    Number(swarmStatus?.peers || 0),
-    Number(swarmStatus?.peerCount || 0),
-    Number(swarmStatus?.swarmConnections || 0),
-    Number(swarmStatus?.feedConnections || 0),
-    Number(swarmStatus?.swarmPeers || 0),
-  )
-  const visibleChannelCount = Math.max(feedEntries.length, snapshotChannelKeys.size, Number(swarmStatus?.channels || 0))
-  const feedActivitySignal = Math.max(livePeerCount, feedEntries.length, snapshotChannelKeys.size)
-  const discoveryPeerLabel = livePeerCount
-
   const feedDiscoveryState = useMemo(() => classifyFeedDiscoveryState({
     ready,
     entries: feedEntries,
     videos: feedVideosWithThumbs,
-    peerCount: feedActivitySignal,
+    peerCount,
     swarmStatus,
     permissionStatus: androidDiscoveryPermissionStatus,
     hasCachedSnapshot: snapshotRestoredOnly || snapshotChannelKeys.size > 0,
@@ -946,12 +924,21 @@ export default function HomeScreen() {
     androidDiscoveryPermissionStatus,
     feedEntries,
     feedVideosWithThumbs,
-    feedActivitySignal,
+    peerCount,
     ready,
     snapshotChannelKeys,
     snapshotRestoredOnly,
     swarmStatus,
   ])
+  const displayPeers = swarmStatus?.swarmConnections ?? swarmStatus?.peers ?? peerCount
+  const displayFeedEntries = Math.max(
+    swarmStatus?.feedEntries ?? 0,
+    feedEntries.length,
+  )
+  const displayChannels = Math.max(
+    feedEntries.length,
+    swarmStatus?.channels ?? 0,
+  )
   const videoGridItemStyle = useMemo(() => isDesktop ? {
     width: `calc(${100 / gridColumns}% - ${(gridColumns - 1) * 24 / gridColumns}px)`,
   } as any : undefined, [isDesktop, gridColumns])
@@ -1054,10 +1041,10 @@ export default function HomeScreen() {
             <View className="flex-row items-center">
               <Feather name="globe" color={colors.primary} size={18} />
               <Text className="text-headline text-pear-text ml-2">Discover</Text>
-              {discoveryPeerLabel > 0 && (
+              {peerCount > 0 && (
                 <View className="flex-row items-center ml-2 bg-pear-bg-card px-2 py-0.5 rounded-full">
                   <Feather name="users" color={colors.textMuted} size={12} />
-                  <Text className="text-caption text-pear-text-muted ml-1">{discoveryPeerLabel}</Text>
+                  <Text className="text-caption text-pear-text-muted ml-1">{peerCount}</Text>
                 </View>
               )}
             </View>
@@ -1135,17 +1122,17 @@ export default function HomeScreen() {
 
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
-              <Text style={{ color: colors.text, fontSize: 12 }}>Peers: {discoveryPeerLabel}</Text>
-              {feedEntries.length > 0 && (
-                <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Feed: {feedEntries.length}</Text>
+              <Text style={{ color: colors.text, fontSize: 12 }}>Peers: {displayPeers}</Text>
+              {swarmStatus?.feedConnections !== undefined && (
+                <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Live: {swarmStatus.feedConnections}</Text>
               )}
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
-              <Text style={{ color: colors.text, fontSize: 12 }}>Channels: {visibleChannelCount}</Text>
-              {snapshotChannelKeys.size > feedEntries.length && (
-                <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Cached: {snapshotChannelKeys.size}</Text>
-              )}
-              {swarmStatus?.channels !== undefined && swarmStatus.channels !== visibleChannelCount && (
+              <Text style={{ color: colors.text, fontSize: 12 }}>Feed: {displayFeedEntries}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, marginRight: 8, marginBottom: 6 }}>
+              <Text style={{ color: colors.text, fontSize: 12 }}>Channels: {displayChannels}</Text>
+              {swarmStatus?.channels !== undefined && swarmStatus.channels !== displayChannels && (
                 <Text style={{ color: colors.textMuted, fontSize: 12, marginLeft: 6 }}>Live: {swarmStatus.channels}</Text>
               )}
             </View>
@@ -1210,17 +1197,17 @@ export default function HomeScreen() {
           ? 'Peer discovery is degraded'
           : state === 'cached-fallback'
             ? 'Using cached discovery data'
-            : 'Looking for PearTube peers'
+            : state === 'hydrating'
+              ? 'Loading playable previews'
+              : 'Looking for PearTube peers'
       const detail = state === 'permission-degraded'
         ? 'Grant Nearby devices/Wi-Fi permission, then refresh discovery.'
         : state === 'network-degraded'
           ? `Network boundary: ${reason || 'unknown'}. Refresh will retry the feed path.`
           : state === 'cached-fallback'
-            ? (feedActivitySignal > 0
-              ? `${feedActivitySignal} feed/channel signals detected; waiting for playable previews.`
-              : 'No live feed entries have arrived yet; cached videos will stay visible when available.')
-            : feedActivitySignal > 0
-              ? `${feedActivitySignal} feed/channel signals detected; waiting for playable previews.`
+            ? 'No live peers are connected yet; cached videos will stay visible when available.'
+            : state === 'hydrating'
+              ? `${displayFeedEntries || feedEntries.length} feed entries detected; resolving playable video previews.`
               : 'No live peers have announced channels yet. Keep the app open or tap refresh.'
 
       return (

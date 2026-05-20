@@ -1,6 +1,6 @@
 {
   "name": "@peartube/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shared UI components, hooks, and utilities for PearTube",
   "private": true,
   "main": "./src/index.ts",

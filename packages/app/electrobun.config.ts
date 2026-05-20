@@ -2,7 +2,7 @@ export default {
   app: {
     name: 'PearTube',
     identifier: 'com.peartube.desktop',
-    version: '0.1.0',
+    version: '0.1.1',
   },
   build: {
     bunVersion: '1.3.11',

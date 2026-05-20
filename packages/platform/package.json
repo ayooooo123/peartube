@@ -1,6 +1,6 @@
 {
   "name": "@peartube/platform",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Platform abstraction layer for PearTube",
   "private": true,
   "type": "module",

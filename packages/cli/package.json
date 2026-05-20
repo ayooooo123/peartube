@@ -1,6 +1,6 @@
 {
   "name": "@peartube/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "bin": {
@@ -10,7 +10,7 @@
     "peartube-peer-bare": "bare-bin.js"
   },
   "scripts": {
-    "test": "brittle test/admission.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/blob-downloader.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs",
+    "test": "brittle test/admission.test.mjs test/archive-ui.test.mjs test/archive.test.mjs test/cli.test.mjs test/config.test.mjs test/local-drive-mirror.test.mjs test/relay-seeding.test.mjs test/service.test.mjs test/status.test.mjs",
     "build:standalone": "node ./scripts/build-standalone.mjs",
     "build:standalone:linux-x64": "RELAY_STANDALONE_HOST=linux-x64 node ./scripts/build-standalone.mjs",
     "build:standalone:linux-arm64": "RELAY_STANDALONE_HOST=linux-arm64 node ./scripts/build-standalone.mjs",

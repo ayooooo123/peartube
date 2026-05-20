@@ -18,7 +18,6 @@ import { Recommender } from './recommendations/recommender.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { NETWORK_TOPIC_STRING } from './types.js'
-import { createCanonicalFeedEnvelope } from './canonical-feed-contract.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -256,12 +255,10 @@ export function createApi({
     const previews = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
     if (previews.length === 0) return []
     const resolvedPublicBeeKey = publicBeeKey || entry?.publicBeeKey || null
-    const feedEntryHasLivePeer = Number(entry?.peerCount || 0) > 0
     return previews
       .filter((video) => video?.id || video?.path)
       .map((video) => {
         const id = normalizeVideoId(video.id || video.path)
-        const videoAvailability = video.availability || video.byteAvailability || (feedEntryHasLivePeer ? 'playable' : null)
         return {
           ...video,
           id,
@@ -270,8 +267,6 @@ export function createApi({
           publicBeeKey: resolvedPublicBeeKey,
           relayBacked: Boolean(entry?.relayServing || entry?.relayRole === 'cache' || entry?.source === 'relay-cache'),
           mimeType: video.mimeType || 'video/mp4',
-          availability: videoAvailability,
-          byteAvailability: video.byteAvailability || videoAvailability,
         }
       })
   }
@@ -784,12 +779,9 @@ export function createApi({
             const id = extractVideoId(video)
             const localHint = id ? localHintsById.get(id) : null
             const peerHint = id ? peerHintsById.get(id) : null
-            const explicitAvailability = video?.byteAvailability || video?.availability || null
-            const availability = explicitAvailability === 'playable'
-              ? 'playable'
-              : id
-                ? resolveExplicitVideoAvailability({ localHint, peerHint })
-                : 'unavailable'
+            const availability = id
+              ? resolveExplicitVideoAvailability({ localHint, peerHint })
+              : 'unavailable'
 
             return {
               ...video,
@@ -1255,7 +1247,7 @@ export function createApi({
           try {
             await Promise.race([
               blobsCore.update({ wait: true }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 1500))
+              new Promise((_, reject) => setTimeout(() => reject(new Error('thumbnail core update timeout')), 10000))
             ]);
           } catch { /* best effort */ }
 
@@ -1582,52 +1574,6 @@ export function createApi({
           unkeyedEntries,
         },
       };
-    },
-
-    /**
-     * Get the canonical feed envelope for app surfaces.
-     * @returns {{version: number, savedAt: number, identityDriveKey: string | null, entries: Array, videos: Array, channelMetaByKey: Object, stats: Object}}
-     */
-    getCanonicalFeed() {
-      const feed = this.getPublicFeed()
-      const channelMetaByKey = {}
-      const videos = []
-
-      for (const entry of feed.entries || []) {
-        const channelKey = entry?.channelKey || entry?.driveKey || ''
-        if (!channelKey) continue
-
-        const channel = entry?.channel && typeof entry.channel === 'object' ? entry.channel : null
-        if (channel && Object.keys(channel).length > 0 && !channelMetaByKey[channelKey]) {
-          channelMetaByKey[channelKey] = {
-            ...channel,
-            channelKey,
-            driveKey: entry?.driveKey || channelKey,
-          }
-        }
-
-        for (const preview of Array.isArray(entry?.previewVideos) ? entry.previewVideos : []) {
-          if (!preview) continue
-          videos.push({
-            ...preview,
-            channelKey,
-            driveKey: entry?.driveKey || channelKey,
-            publicBeeKey: entry?.publicBeeKey || null,
-            channel: channelMetaByKey[channelKey] || channel || undefined,
-          })
-        }
-      }
-
-      return {
-        ...createCanonicalFeedEnvelope({
-          savedAt: Date.now(),
-          identityDriveKey: ctx?.identityManager?.getActiveIdentity?.()?.driveKey || null,
-          entries: feed.entries || [],
-          videos,
-          channelMetaByKey,
-        }),
-        stats: feed.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
-      }
     },
 
     /**
@@ -2599,7 +2545,7 @@ export function createApi({
      * Get storage stats for peer content
      * @returns {{ usedBytes: number, maxBytes: number, usedGB: string, maxGB: number, seedCount: number, pinnedCount: number }}
      */
-    async getStorageStats() {
+    getStorageStats() {
       if (seedingManager) {
         return seedingManager.getStorageStats();
       }
@@ -2609,11 +2555,7 @@ export function createApi({
         usedGB: '0.00',
         maxGB: 5,
         seedCount: 0,
-        pinnedCount: 0,
-        totalStorageBytes: 0,
-        totalStorageGB: '0.00',
-        untrackedStorageBytes: 0,
-        untrackedStorageGB: '0.00'
+        pinnedCount: 0
       };
     },
 
@@ -2638,9 +2580,8 @@ export function createApi({
     async clearCache() {
       console.log('[API] CLEAR_CACHE');
       if (seedingManager) {
-        const result = await seedingManager.clearCache();
-        const clearedBytes = typeof result === 'number' ? result : result?.clearedBytes || 0;
-        return { success: true, clearedBytes, ...(typeof result === 'object' && result ? result : {}) };
+        const clearedBytes = await seedingManager.clearCache();
+        return { success: true, clearedBytes };
       }
       return { success: false, clearedBytes: 0 };
     },
@@ -2659,7 +2600,7 @@ export function createApi({
         peers: ctx.swarm?.connections?.size || 0,
         blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
         blobServerHost: ctx.blobServerHost || '127.0.0.1',
-        version: '0.1.0'
+        version: '0.1.1'
       };
     },
 
@@ -2716,7 +2657,6 @@ export function createApi({
         network: networkDebug,
         startupTiming,
         doctor,
-        recommendedBoundary: doctor.recommendedBoundary,
         swarmOffline: Boolean(ctx.swarm?._peartubeOffline),
         swarmOfflineReason: ctx.swarm?._peartubeOfflineReason || null,
         swarmListenResolved: Boolean(ctx.swarm?._peartubeListenResolved),

@@ -65,15 +65,21 @@ export function swarmRememberPeer(swarm, peer, topic = null) {
   if (!peerInfo && swarm.peers && typeof swarm.peers.get === 'function') {
     try { peerInfo = swarm.peers.get(publicKey) || null } catch { peerInfo = null }
   }
-  if (!peerInfo) {
-    peerInfo = {
-      publicKey,
-      relayAddresses: Array.isArray(peer.relayAddresses) ? peer.relayAddresses : [],
-      topics: [],
-    }
-    try { swarm.peers?.set?.(keyHex, peerInfo) } catch { /* diagnostics only */ }
-  }
   const relayAddresses = Array.isArray(peer.relayAddresses) ? peer.relayAddresses : []
+  if (!peerInfo && typeof swarm._upsertPeer === 'function') {
+    try { peerInfo = swarm._upsertPeer(publicKey, relayAddresses) || null } catch { peerInfo = null }
+  }
+  if (!peerInfo) {
+    return {
+      publicKey,
+      relayAddresses,
+      topics: topic ? [topic] : [],
+      queued: false,
+      waiting: false,
+      explicit: false,
+      synthetic: true,
+    }
+  }
   if (relayAddresses.length > 0 && (!Array.isArray(peerInfo.relayAddresses) || peerInfo.relayAddresses.length === 0)) {
     peerInfo.relayAddresses = relayAddresses
   }
@@ -88,13 +94,10 @@ export function swarmRememberPeer(swarm, peer, topic = null) {
 }
 
 export function swarmQueuePeer(swarm, peerInfo) {
-  if (!swarm || !peerInfo) return false
-  peerInfo.explicit = true
-  if (typeof peerInfo._updatePriority === 'function') {
-    try { peerInfo._updatePriority() } catch { /* best effort */ }
-  }
-  if (typeof swarm.joinPeer === 'function' && peerInfo.publicKey) {
+  if (!swarm || !peerInfo || !peerInfo.publicKey) return false
+  if (typeof swarm.joinPeer === 'function') {
     swarm.joinPeer(peerInfo.publicKey)
+    peerInfo.explicit = true
     peerInfo.queued = true
     return true
   }

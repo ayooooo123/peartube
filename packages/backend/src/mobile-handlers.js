@@ -11,6 +11,15 @@
  * @param {Object} B - Backend object to attach handlers to
  * @param {Object} deps - Dependencies from the backend context
  */
+function safeJson(value) {
+  if (value == null) return null
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
 export function attachMobileHandlers(B, deps) {
   const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder } = deps
   const refreshPublishedChannelFeed = async (driveKey) => {
@@ -182,6 +191,10 @@ export function attachMobileHandlers(B, deps) {
       peerPoolJoined: Boolean(s.peerPoolJoined),
       publicFeedDiscoveryJoined: Boolean(s.publicFeedDiscoveryJoined),
       feedTopicHex: s.feedTopicHex ?? null,
+      networkJson: safeJson(s.network),
+      startupTimingJson: safeJson(s.startupTiming),
+      doctorJson: safeJson(s.doctor),
+      directPeerDialJson: safeJson(s.doctor?.feed?.directPeerDial),
       recommendedBoundary: s.recommendedBoundary ?? s.doctor?.recommendedBoundary ?? null,
       network: s.network ?? null,
       startupTiming: s.startupTiming ?? null,

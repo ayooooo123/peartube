@@ -44,6 +44,15 @@ function getIdentityCount(backend) {
   return backend?.identityManager?.getIdentities?.().length || 0
 }
 
+function safeJson(value) {
+  if (value == null) return null
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
 export function buildSharedSystemHandlers(backend) {
   return {
     async DesktopBootstrap(req) {
@@ -107,6 +116,10 @@ export function buildSharedSystemHandlers(backend) {
         peerPoolJoined: Boolean(swarmStatus.peerPoolJoined),
         publicFeedDiscoveryJoined: Boolean(swarmStatus.publicFeedDiscoveryJoined),
         feedTopicHex: swarmStatus.feedTopicHex ?? null,
+        networkJson: safeJson(swarmStatus.network),
+        startupTimingJson: safeJson(swarmStatus.startupTiming),
+        doctorJson: safeJson(swarmStatus.doctor),
+        directPeerDialJson: safeJson(swarmStatus.doctor?.feed?.directPeerDial),
         recommendedBoundary: swarmStatus.recommendedBoundary ?? swarmStatus.doctor?.recommendedBoundary ?? null,
         network: swarmStatus.network ?? null,
         startupTiming: swarmStatus.startupTiming ?? null,

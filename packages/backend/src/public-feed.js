@@ -916,6 +916,8 @@ export class PublicFeed {
       const publicKey = this._discoveredPeers.get(keyHex)
       const swarm = this._swarmDialState(keyHex, publicKey)
       const hint = this._discoveredPeerHints.get(keyHex)
+      const record = this._peerDirectory.get(keyHex)
+      const connected = this._hasActivePeerConnection(keyHex, publicKey)
       peers.push({
         key: keyHex.slice(0, 16),
         attempts: swarm?.attempts || 0,
@@ -925,11 +927,11 @@ export class PublicFeed {
         lastQueuedAt: null,
         lastError: this._directPeerLastDialError.get(keyHex) || null,
         lastErrorStack: this._directPeerLastDialErrorStack.get(keyHex) || null,
-        pending: Boolean(swarm?.queued || swarm?.waiting),
-        connected: this._hasActivePeerConnection(keyHex, publicKey),
-        score: Number(this._peerDirectory.get(keyHex)?.score || 0),
-        joined: Boolean(this._peerDirectory.get(keyHex)?.joined),
-        demoted: Boolean(this._peerDirectory.get(keyHex)?.demoted),
+        pending: Boolean(!connected && (swarm?.queued || swarm?.waiting || record?.joined)),
+        connected,
+        score: Number(record?.score || 0),
+        joined: Boolean(record?.joined),
+        demoted: Boolean(record?.demoted),
         swarm,
       })
     }

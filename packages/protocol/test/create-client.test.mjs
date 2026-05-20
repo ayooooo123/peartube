@@ -48,7 +48,11 @@ class FakeHRPC {
       peerPoolJoined: true,
       publicFeedDiscoveryJoined: true,
       feedTopicHex: 'feed-topic',
-      recommendedBoundary: 'content-playback-or-ui'
+      recommendedBoundary: 'content-playback-or-ui',
+      networkJson: JSON.stringify({ hyperswarm: { recentConnections: [{ type: 'client-attempt' }] } }),
+      startupTimingJson: JSON.stringify({ events: [{ event: 'peer-discovered' }] }),
+      doctorJson: JSON.stringify({ recommendedBoundary: 'transport-socket', socket: { swarmConnections: 0 } }),
+      directPeerDialJson: JSON.stringify({ discoveredPeers: 6, pending: 3 })
     })
   }
 }
@@ -183,7 +187,11 @@ test('createProtocolClient emits normalized network status from the system names
     peerPoolJoined: true,
     publicFeedDiscoveryJoined: true,
     feedTopicHex: 'feed-topic',
-    recommendedBoundary: 'content-playback-or-ui'
+    recommendedBoundary: 'content-playback-or-ui',
+    network: { hyperswarm: { recentConnections: [{ type: 'client-attempt' }] } },
+    startupTiming: { events: [{ event: 'peer-discovered' }] },
+    doctor: { recommendedBoundary: 'transport-socket', socket: { swarmConnections: 0 } },
+    directPeerDial: { discoveredPeers: 6, pending: 3 }
   })
   t.alike(networkEvents, [status])
 })

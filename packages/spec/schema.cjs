@@ -652,6 +652,10 @@ ns.register({
     { name: 'peerPoolJoined', type: 'bool', required: false },
     { name: 'publicFeedDiscoveryJoined', type: 'bool', required: false },
     { name: 'feedTopicHex', type: 'string', required: false },
+    { name: 'networkJson', type: 'string', required: false },
+    { name: 'startupTimingJson', type: 'string', required: false },
+    { name: 'doctorJson', type: 'string', required: false },
+    { name: 'directPeerDialJson', type: 'string', required: false },
     { name: 'recommendedBoundary', type: 'string', required: false }
   ]
 })

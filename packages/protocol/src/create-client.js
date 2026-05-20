@@ -172,9 +172,23 @@ function normalizeHostErrorPayload(payload) {
   )
 }
 
+function parseOptionalJson(value) {
+  if (value == null || value === '') return null
+  if (typeof value !== 'string') return value
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
 function normalizeNetworkStatusPayload(payload = {}) {
   const swarmConnections = payload?.swarmConnections ?? payload?.peerCount ?? 0
   const peerCount = payload?.peerCount ?? swarmConnections
+  const network = payload?.network ?? parseOptionalJson(payload?.networkJson)
+  const startupTiming = payload?.startupTiming ?? parseOptionalJson(payload?.startupTimingJson)
+  const doctor = payload?.doctor ?? parseOptionalJson(payload?.doctorJson)
+  const directPeerDial = payload?.directPeerDial ?? parseOptionalJson(payload?.directPeerDialJson) ?? doctor?.feed?.directPeerDial ?? null
 
   return {
     connected: Boolean(payload?.connected ?? (swarmConnections > 0 || peerCount > 0)),
@@ -190,7 +204,11 @@ function normalizeNetworkStatusPayload(payload = {}) {
     peerPoolJoined: Boolean(payload?.peerPoolJoined),
     publicFeedDiscoveryJoined: Boolean(payload?.publicFeedDiscoveryJoined),
     feedTopicHex: payload?.feedTopicHex ?? null,
-    recommendedBoundary: payload?.recommendedBoundary ?? null
+    recommendedBoundary: payload?.recommendedBoundary ?? doctor?.recommendedBoundary ?? null,
+    network,
+    startupTiming,
+    doctor,
+    directPeerDial
   }
 }
 

@@ -75,6 +75,7 @@ test('swarmRememberPeer installs a public-key peer candidate without private Hyp
 
   const remembered = swarmRememberPeer(swarm, { publicKey }, b4a.alloc(32, 6))
   assert.equal(remembered.publicKey, publicKey)
-  assert.equal(swarm.peers.get(b4a.toString(publicKey, 'hex')), remembered)
+  assert.equal(swarm.peers.has(b4a.toString(publicKey, 'hex')), false)
   assert.equal(remembered.topics.length, 1)
+  assert.equal(remembered.synthetic, true)
 })

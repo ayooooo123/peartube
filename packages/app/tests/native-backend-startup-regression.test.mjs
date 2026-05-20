@@ -108,6 +108,7 @@ test('desktop worker forwards feed update events and full swarm diagnostics', ()
   const source = readAppFile('workers/desktop/index.ts')
 
   assert.match(source, /onFeedUpdate:\s*\(\) => \{[\s\S]*?eventFeedUpdate\?\.\(\{ channelKey: 'feed', action: 'update' \}\)/)
+  assert.match(source, /B\.getCanonicalFeed = B\.getPublicFeed/)
 
   const swarmStatusBlock = source.match(/B\.getSwarmStatus = async \(\) => \{([\s\S]*?)\n\}/)?.[1] ?? ''
   assert.ok(swarmStatusBlock, 'desktop getSwarmStatus handler should exist')

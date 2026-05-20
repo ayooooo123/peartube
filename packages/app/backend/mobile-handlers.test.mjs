@@ -204,12 +204,10 @@ test('preparePlayback forwards direct blob playback fields to the backend api', 
   ]])
 })
 
-test('getPublicFeed preserves serving manifest fields from the backend api', async () => {
+test('feed handlers use getPublicFeed for both public and canonical RPC names', async () => {
   const backend = {}
-  const canonicalFeed = {
-    version: 1,
-    savedAt: 123,
-    identityDriveKey: null,
+  const calls = []
+  const publicFeed = {
     entries: [{
       driveKey: 'channel-key',
       channelKey: 'channel-key',
@@ -227,29 +225,46 @@ test('getPublicFeed preserves serving manifest fields from the backend api', asy
         availability: 'playable',
       }],
     }],
-    videos: [{
-      id: 'preview-1',
-      title: 'Preview',
-      uploadedAt: 999,
-      availability: 'playable',
-      channelKey: 'channel-key',
-      publicBeeKey: 'public-bee-key',
-    }],
-    channelMetaByKey: {},
     stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2 },
   }
   const deps = createDeps({
     api: {
+      getPublicFeed() {
+        calls.push('getPublicFeed')
+        return publicFeed
+      },
       getCanonicalFeed() {
-        return canonicalFeed
+        throw new Error('canonical feed should reuse getPublicFeed')
       },
     },
   })
 
   attachMobileHandlers(backend, deps)
 
-  const result = await backend.getPublicFeed({})
-  assert.deepEqual(result, canonicalFeed)
+  const expected = {
+    entries: [{
+      channelKey: 'channel-key',
+      driveKey: 'channel-key',
+      source: 'peer',
+      publicBeeKey: 'public-bee-key',
+      channelName: 'Manifest Channel',
+      videoCount: 4,
+      peerCount: 2,
+      lastSeen: 123,
+      manifestUpdatedAt: 456,
+      previewVideos: [{
+        id: 'preview-1',
+        title: 'Preview',
+        uploadedAt: 999,
+        availability: 'playable',
+      }],
+    }],
+    stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2 },
+  }
+
+  assert.deepEqual(await backend.getPublicFeed({}), expected)
+  assert.deepEqual(await backend.getCanonicalFeed({}), expected)
+  assert.deepEqual(calls, ['getPublicFeed', 'getPublicFeed'])
 })
 
 test('submitToFeed returns backend failures instead of masking missing publicBeeKey', async () => {

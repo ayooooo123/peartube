@@ -553,6 +553,7 @@ B.getPublicFeed = async () => {
     return { success: false, error: err?.message || String(err), stale: true, retryable: true, entries: [], stats: { totalEntries: 0, hiddenCount: 0, peerCount: 0 } }
   }
 }
+B.getCanonicalFeed = B.getPublicFeed
 B.refreshFeed = async () => { api.refreshFeed(); return { success: true } }
 B.submitToFeed = async () => {
   const a = identityManager.getActiveIdentity();

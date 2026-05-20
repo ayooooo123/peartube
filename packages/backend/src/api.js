@@ -1531,10 +1531,6 @@ export function createApi({
      * Get public feed entries
      * @returns {{entries: Array, stats: Object}}
      */
-    getCanonicalFeed() {
-      return this.getPublicFeed()
-    },
-
     getPublicFeed() {
       if (!publicFeed) {
         return { entries: [], stats: { totalEntries: 0, hiddenCount: 0, peerCount: 0 } };

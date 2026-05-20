@@ -20,6 +20,58 @@ function createDeps(overrides = {}) {
   }
 }
 
+test('feed handlers use getPublicFeed for public and canonical RPC names', async () => {
+  const backend = {}
+  const calls = []
+  const deps = createDeps({
+    api: {
+      getPublicFeed() {
+        calls.push('getPublicFeed')
+        return {
+          entries: [{
+            driveKey: 'channel-key',
+            channelKey: 'channel-key',
+            source: 'peer',
+            publicBeeKey: 'public-bee-key',
+            channelName: 'Manifest Channel',
+            videoCount: 4,
+            peerCount: 2,
+            lastSeen: 123,
+            manifestUpdatedAt: 456,
+            previewVideos: [{ id: 'preview-1', title: 'Preview' }],
+          }],
+          stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2 },
+        }
+      },
+      getCanonicalFeed() {
+        throw new Error('canonical feed should reuse getPublicFeed')
+      },
+    },
+  })
+
+  attachMobileHandlers(backend, deps)
+
+  const expected = {
+    entries: [{
+      channelKey: 'channel-key',
+      driveKey: 'channel-key',
+      source: 'peer',
+      publicBeeKey: 'public-bee-key',
+      channelName: 'Manifest Channel',
+      videoCount: 4,
+      peerCount: 2,
+      lastSeen: 123,
+      manifestUpdatedAt: 456,
+      previewVideos: [{ id: 'preview-1', title: 'Preview' }],
+    }],
+    stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2 },
+  }
+
+  assert.deepEqual(await backend.getPublicFeed({}), expected)
+  assert.deepEqual(await backend.getCanonicalFeed({}), expected)
+  assert.deepEqual(calls, ['getPublicFeed', 'getPublicFeed'])
+})
+
 test('uploadVideo re-gossips an already-published mobile channel after thumbnail metadata is stored', async () => {
   const backend = {}
   const calls = []

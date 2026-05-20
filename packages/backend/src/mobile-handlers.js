@@ -153,6 +153,7 @@ export function attachMobileHandlers(B, deps) {
       stats: r.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
     }
   }
+  B.getCanonicalFeed = B.getPublicFeed
   B.refreshFeed = async () => { await api.refreshFeed(); return { success: true } }
   B.submitToFeed = async () => {
     const a = identityManager.getActiveIdentity();

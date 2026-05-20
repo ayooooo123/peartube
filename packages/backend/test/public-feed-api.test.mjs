@@ -53,6 +53,10 @@ test('getPublicFeed returns peer entries even when publicBeeKey is absent', (t) 
     channelName: null,
     videoCount: 0,
     peerCount: 0,
+    discoveryOnly: false,
+    restoredFromCache: false,
+    restoredFrom: null,
+    requiresAvailabilityProbe: false,
     lastSeen: 1,
     manifestUpdatedAt: 0,
     previewVideos: [],
@@ -846,4 +850,32 @@ test('getPublicFeed exposes relay catalog fields', (t) => {
   t.is(result.entries[0].relayServing, true)
   t.is(result.entries[0].catalogVersion, 1)
   t.is(result.entries[0].previewVideosHash, 'hash-value')
+})
+
+
+test('createApi exposes getCanonicalFeed as the HRPC canonical feed handler alias', (t) => {
+  const api = createApi({
+    ctx: {},
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey: 'aa'.repeat(32),
+          channelKey: 'aa'.repeat(32),
+          source: 'peer',
+          publicBeeKey: 'bb'.repeat(32),
+          channelName: 'Canonical Alias',
+          videoCount: 1,
+          peerCount: 1,
+          lastSeen: 321,
+          previewVideos: [{ id: 'v1', title: 'Preview' }],
+        }]
+      },
+      getStats() {
+        return { totalEntries: 1, hiddenCount: 0, peerCount: 1 }
+      },
+    },
+  })
+
+  t.is(typeof api.getCanonicalFeed, 'function')
+  t.alike(api.getCanonicalFeed(), api.getPublicFeed())
 })

@@ -1,1 +1,8 @@
-$(cat ./.scratch/peartube-clone/packages/backend/src/blob-ref.js)
+export {
+  buildBlobRefCacheKey,
+  normalizeBlobRefInput,
+  normalizeBlobsCoreKey,
+  parseBlobId,
+  parseBlobRef,
+  stringifyBlobId,
+} from './mirror/blob-utils.js'

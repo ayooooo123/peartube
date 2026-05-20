@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -57,4 +58,25 @@ test('major Holepunch dependency migrations are applied consistently', () => {
     '^1.28.4',
     'root runtime should stay on the latest compatible bare-runtime line',
   )
+  assert.equal(
+    appPkg.overrides?.bogon,
+    '1.2.0',
+    'app installs should keep bogon on the isReserved-compatible line',
+  )
+  assert.equal(
+    backendPkg.overrides?.bogon,
+    '1.2.0',
+    'backend installs should keep bogon on the isReserved-compatible line',
+  )
+})
+
+test('HyperDHT resolves a bogon build with isReserved', () => {
+  const requireFromHyperdht = createRequire(
+    path.join(repoRoot, 'packages/backend/node_modules/hyperdht/lib/connect.js')
+  )
+  const bogon = requireFromHyperdht('bogon')
+  const bogonPkg = requireFromHyperdht('bogon/package.json')
+
+  assert.equal(bogonPkg.version, '1.2.0')
+  assert.equal(typeof bogon.isReserved, 'function')
 })

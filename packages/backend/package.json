@@ -88,5 +88,8 @@
   "devDependencies": {
     "brittle": "^3.19.1",
     "typescript": "^5.9.0"
+  },
+  "overrides": {
+    "bogon": "1.2.0"
   }
 }

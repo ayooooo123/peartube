@@ -152,6 +152,7 @@
   },
   "overrides": {
     "@peartube/spec": "file:../spec",
+    "bogon": "1.2.0",
     "minipass": "^7.1.2",
     "tar": {
       "minipass": "^7.1.2"

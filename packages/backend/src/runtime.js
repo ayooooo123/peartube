@@ -107,7 +107,11 @@ export function buildSharedSystemHandlers(backend) {
         peerPoolJoined: Boolean(swarmStatus.peerPoolJoined),
         publicFeedDiscoveryJoined: Boolean(swarmStatus.publicFeedDiscoveryJoined),
         feedTopicHex: swarmStatus.feedTopicHex ?? null,
-        recommendedBoundary: swarmStatus.recommendedBoundary ?? swarmStatus.doctor?.recommendedBoundary ?? null
+        recommendedBoundary: swarmStatus.recommendedBoundary ?? swarmStatus.doctor?.recommendedBoundary ?? null,
+        network: swarmStatus.network ?? null,
+        startupTiming: swarmStatus.startupTiming ?? null,
+        doctor: swarmStatus.doctor ?? null,
+        directPeerDial: swarmStatus.doctor?.feed?.directPeerDial ?? null,
       }
     }
   }

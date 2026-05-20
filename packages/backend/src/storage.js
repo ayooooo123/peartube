@@ -27,6 +27,8 @@ import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
 import { createKnownPeerCache, loadKnownPeers, dialKnownPeers } from './known-peers.js'
 
+const DEFAULT_BLOBS_CORE_UPDATE_TIMEOUT_MS = 15000
+
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
 }
@@ -407,8 +409,9 @@ function createSwarmDiagnostics(swarm) {
 
       const allConnections = []
       try {
-        if (swarm?._allConnections && typeof swarm._allConnections.entries === 'function') {
-          for (const [key, conn] of swarm._allConnections.entries()) {
+        if (swarm?._allConnections && typeof swarm._allConnections[Symbol.iterator] === 'function') {
+          for (const conn of swarm._allConnections) {
+            const key = conn?.remotePublicKey || conn?.publicKey || conn?.id || null
             allConnections.push({ key: shortKeyHex(key), ...describeTrackedConnection(conn) })
             if (allConnections.length >= 20) break
           }
@@ -482,9 +485,9 @@ function installSwarmConnectDiagnostics(swarm, diagnostics) {
     const result = connect.call(this, peerInfo, queued)
     try {
       const after = this._allConnections?.size || 0
-      if (after > before && this._allConnections && typeof this._allConnections.values === 'function') {
+      if (after > before && this._allConnections && typeof this._allConnections[Symbol.iterator] === 'function') {
         let latest = null
-        for (const conn of this._allConnections.values()) latest = conn
+        for (const conn of this._allConnections) latest = conn
         diagnostics?.recordClientConnect?.(latest, peerInfo)
       }
     } catch { /* diagnostics only */ }
@@ -1924,11 +1927,14 @@ export async function getVideoUrlFromBlob(ctx, blobsCoreKeyHex, blobId, options 
     }
   }
 
-  // Wait briefly for peers if needed (reduced from 15s to 5s for faster startup)
+  // Wait briefly for peers if needed. Physical Android devices can take longer
+  // than desktop relays to complete DHT/blob-core peer lookups, so keep this
+  // bounded but not so tight that valid sparse peers are missed.
+  const blobsCoreUpdateTimeoutMs = options.blobsCoreUpdateTimeoutMs ?? DEFAULT_BLOBS_CORE_UPDATE_TIMEOUT_MS
   try {
     await Promise.race([
       blobsCore.update({ wait: true }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('blobs core update timeout')), 5000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('blobs core update timeout')), blobsCoreUpdateTimeoutMs))
     ])
   } catch { /* best effort */ }
 

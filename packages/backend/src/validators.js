@@ -1,6 +1,8 @@
 const TWO_MINUTES_MS = 2 * 60 * 1000
 const TEN_MINUTES_MS = 10 * 60 * 1000
-const MAX_EPOCH_DRIFT = 1
+const DEFAULT_CLOCK_DRIFT_MS = 15 * 60 * 1000
+const DEFAULT_EXPIRE_GRACE_MS = 5 * 60 * 1000
+const MAX_EPOCH_DRIFT = 6
 
 function safeNumber(value, fallback = NaN) {
   const n = Number(value)
@@ -59,24 +61,28 @@ export async function validateIncomingDescriptor(entry, options = {}) {
 
   const now = safeNumber(options.now, Date.now()) || Date.now()
   const timestamp = descriptor.publishedAt ?? descriptor.createdAt ?? descriptor.updatedAt ?? descriptor.timestamp ?? descriptor.observedAt
-  if (!withinClockDrift(timestamp, now, options.clockDriftMs ?? TWO_MINUTES_MS)) {
+  if (!withinClockDrift(timestamp, now, options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS)) {
     return buildValidationResult({ ok: false, reason: 'descriptor-clock-drift', entry, descriptor })
   }
 
   const epoch = descriptor.epoch ?? descriptor.availabilityEpoch ?? descriptor.sequenceEpoch
-  if (!withinEpochDrift(epoch, now, options.epochDrift ?? MAX_EPOCH_DRIFT)) {
+  if (!withinEpochDrift(epoch, now, options.epochDrift ?? options.maxEpochSkew ?? MAX_EPOCH_DRIFT)) {
     return buildValidationResult({ ok: false, reason: 'descriptor-epoch-drift', entry, descriptor })
   }
 
-  if (descriptor.expiresAt != null && safeNumber(descriptor.expiresAt, NaN) < now - (options.clockDriftMs ?? TWO_MINUTES_MS)) {
+  if (descriptor.expiresAt != null && safeNumber(descriptor.expiresAt, NaN) < now - (options.expireGraceMs ?? options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_EXPIRE_GRACE_MS)) {
     return buildValidationResult({ ok: false, reason: 'descriptor-expired', entry, descriptor })
   }
 
-  if (descriptor.notBefore != null && safeNumber(descriptor.notBefore, NaN) > now + (options.clockDriftMs ?? TWO_MINUTES_MS)) {
+  if (descriptor.notBefore != null && safeNumber(descriptor.notBefore, NaN) > now + (options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS)) {
     return buildValidationResult({ ok: false, reason: 'descriptor-not-yet-valid', entry, descriptor })
   }
 
   const verifier = options.verifySignature
+  if (typeof verifier !== 'function') {
+    if (options.allowUnsignedForTests) return buildValidationResult({ ok: true, entry, descriptor })
+    return buildValidationResult({ ok: false, reason: 'bad-signature', entry, descriptor })
+  }
   if (typeof verifier === 'function') {
     const signatureOk = await verifier({ descriptor, entry })
     if (!signatureOk) {
@@ -95,24 +101,28 @@ export async function validateIncomingProof(entry, options = {}) {
 
   const now = safeNumber(options.now, Date.now()) || Date.now()
   const timestamp = proof.publishedAt ?? proof.createdAt ?? proof.updatedAt ?? proof.timestamp ?? proof.observedAt
-  if (!withinClockDrift(timestamp, now, options.clockDriftMs ?? TWO_MINUTES_MS)) {
+  if (!withinClockDrift(timestamp, now, options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS)) {
     return buildValidationResult({ ok: false, reason: 'proof-clock-drift', entry, descriptor: null })
   }
 
   const epoch = proof.epoch ?? proof.availabilityEpoch ?? proof.sequenceEpoch
-  if (!withinEpochDrift(epoch, now, options.epochDrift ?? MAX_EPOCH_DRIFT)) {
+  if (!withinEpochDrift(epoch, now, options.epochDrift ?? options.maxEpochSkew ?? MAX_EPOCH_DRIFT)) {
     return buildValidationResult({ ok: false, reason: 'proof-epoch-drift', entry, descriptor: null })
   }
 
-  if (proof.expiresAt != null && safeNumber(proof.expiresAt, NaN) < now - (options.clockDriftMs ?? TWO_MINUTES_MS)) {
+  if (proof.expiresAt != null && safeNumber(proof.expiresAt, NaN) < now - (options.proofExpireGraceMs ?? options.expireGraceMs ?? options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_EXPIRE_GRACE_MS)) {
     return buildValidationResult({ ok: false, reason: 'proof-expired', entry, descriptor: null })
   }
 
-  if (proof.notBefore != null && safeNumber(proof.notBefore, NaN) > now + (options.clockDriftMs ?? TWO_MINUTES_MS)) {
+  if (proof.notBefore != null && safeNumber(proof.notBefore, NaN) > now + (options.clockDriftMs ?? options.maxClockSkewMs ?? DEFAULT_CLOCK_DRIFT_MS)) {
     return buildValidationResult({ ok: false, reason: 'proof-not-yet-valid', entry, descriptor: null })
   }
 
   const verifier = options.verifySignature
+  if (typeof verifier !== 'function') {
+    if (options.allowUnsignedForTests) return buildValidationResult({ ok: true, entry, descriptor: null })
+    return buildValidationResult({ ok: false, reason: 'bad-signature', entry, descriptor: null })
+  }
   if (typeof verifier === 'function') {
     const signatureOk = await verifier({ descriptor: proof, entry })
     if (!signatureOk) {
@@ -123,4 +133,4 @@ export async function validateIncomingProof(entry, options = {}) {
   return buildValidationResult({ ok: true, entry, descriptor: null })
 }
 
-export { TWO_MINUTES_MS, TEN_MINUTES_MS, MAX_EPOCH_DRIFT }
+export { TWO_MINUTES_MS, TEN_MINUTES_MS, DEFAULT_CLOCK_DRIFT_MS, DEFAULT_EXPIRE_GRACE_MS, MAX_EPOCH_DRIFT }

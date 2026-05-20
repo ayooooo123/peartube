@@ -38,8 +38,8 @@ function bytesToHex(bytes) {
 export function createDescriptorBloom(options = {}) {
   const expectedItems = Math.max(1, Number(options.expectedItems || 256) || 256)
   const falsePositiveRate = Math.min(0.25, Math.max(0.0001, Number(options.falsePositiveRate || 0.02) || 0.02))
-  const size = Math.max(8, Math.ceil((-expectedItems * Math.log(falsePositiveRate)) / (Math.LN2 ** 2)))
-  const hashCount = Math.max(2, Math.round((size / expectedItems) * Math.LN2))
+  const size = Math.max(8, Math.ceil(Number(options.size || 0) || ((-expectedItems * Math.log(falsePositiveRate)) / (Math.LN2 ** 2))))
+  const hashCount = Math.max(2, Math.round(Number(options.hashCount || 0) || ((size / expectedItems) * Math.LN2)))
   const bits = new Uint8Array(Math.ceil(size / 8))
   const entries = new Set()
 
@@ -130,7 +130,7 @@ export function decodeDescriptorBloom(payload) {
   const hashCount = Math.max(2, Number(payload.hashCount || 0) || 2)
   const bitsHex = typeof payload.bits === 'string' ? payload.bits : ''
   const bits = toBytes(bitsHex)
-  const bloom = createDescriptorBloom({ expectedItems: Math.max(1, Number(payload.itemCount || 0) || 1), falsePositiveRate: 0.02 })
+  const bloom = createDescriptorBloom({ size, hashCount, expectedItems: Math.max(1, Number(payload.itemCount || 0) || 1), falsePositiveRate: 0.02 })
   if (bits.length > 0) bloom.bits.set(bits.slice(0, bloom.bits.length))
   return {
     version: Number(payload.version || 1) || 1,

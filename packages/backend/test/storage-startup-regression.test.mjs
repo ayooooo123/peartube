@@ -135,7 +135,17 @@ test('storage captures pre-open DHT connect close diagnostics', () => {
   assert.match(storageSource, /installSwarmConnectDiagnostics\(swarm, globalSwarmDiagnostics\)/)
   assert.match(storageSource, /recordClientConnect\(conn, peerInfo\)/)
   assert.match(storageSource, /type: 'client-attempt'/)
+  assert.match(storageSource, /typeof this\._allConnections\[Symbol\.iterator\] === 'function'/)
+  assert.match(storageSource, /for \(const conn of this\._allConnections\) latest = conn/)
   assert.match(storageSource, /rawStream: rawStream \? \{/)
   assert.match(storageSource, /remoteHost: rawStream\.remoteHost/)
   assert.match(storageSource, /event, \.\.\.detail/)
+})
+
+
+test('blob URL generation uses a physical-device friendly blobs core update timeout', () => {
+  const storageSource = fs.readFileSync(path.join(__dirname, '../src/storage.js'), 'utf8')
+  assert.match(storageSource, /DEFAULT_BLOBS_CORE_UPDATE_TIMEOUT_MS\s*=\s*15000/)
+  assert.match(storageSource, /options\.blobsCoreUpdateTimeoutMs\s*\?\?\s*DEFAULT_BLOBS_CORE_UPDATE_TIMEOUT_MS/)
+  assert.doesNotMatch(storageSource, /blobs core update timeout'\)\), 5000\)/)
 })

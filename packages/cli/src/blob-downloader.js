@@ -1,42 +1,13 @@
 import b4a from 'b4a'
 import { loadPublicBee } from '@peartube/backend/storage'
+import { normalizeBlobRefInput } from '@peartube/backend/blob-ref'
 
 const VIDEO_DOWNLOAD_TIMEOUT_MS = 60_000
 
 function parseBlobId(blobId) {
-  if (blobId && typeof blobId === 'object') {
-    const value = blobId
-    const blockOffset = Number(value.blockOffset)
-    const blockLength = Number(value.blockLength)
-    const byteOffset = Number(value.byteOffset)
-    const byteLength = Number(value.byteLength)
-
-    if (
-      Number.isFinite(blockOffset) &&
-      Number.isFinite(blockLength) &&
-      Number.isFinite(byteOffset) &&
-      Number.isFinite(byteLength)
-    ) {
-      return { blockOffset, blockLength, byteOffset, byteLength }
-    }
-    throw new Error('Invalid blobId object')
-  }
-
-  if (typeof blobId === 'string') {
-    const parts = blobId.split(':').map(Number)
-    if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
-      throw new Error('Invalid blobId string format')
-    }
-
-    return {
-      blockOffset: parts[0],
-      blockLength: parts[1],
-      byteOffset: parts[2],
-      byteLength: parts[3]
-    }
-  }
-
-  throw new Error('Unsupported blobId type')
+  const normalized = normalizeBlobRefInput(blobId)
+  if (!normalized) throw new Error('Invalid blobId format')
+  return normalized
 }
 
 function timeoutPromise(timeoutMs) {

@@ -1,25 +1,9 @@
 import { createDescriptorBloom, bloomFilterKnownDescriptors, decodeDescriptorBloom } from './bloom.js'
 import { createIdentityQuota, createQuotaTracker, rateLimitFanout, shouldRequestMore } from './quota.js'
 import { validateIncomingDescriptor, validateIncomingProof } from '../validators.js'
+export { validateIncomingDescriptor, validateIncomingProof } from '../validators.js'
 
 const textEncoder = new TextEncoder()
-const ZERO_32 = new Uint8Array(32)
-
-function toBytes(value) {
-  if (value instanceof Uint8Array) return new Uint8Array(value)
-  if (typeof value === 'string') {
-    const clean = value.trim().replace(/^0x/, '').replace(/[^0-9a-f]/gi, '').toLowerCase()
-    if (clean.length === 0) return textEncoder.encode(value)
-    const out = new Uint8Array(Math.ceil(clean.length / 2))
-    for (let i = 0; i < out.length; i++) {
-      const start = i * 2
-      out[i] = parseInt(clean.slice(start, start + 2).padEnd(2, '0'), 16) || 0
-    }
-    return out
-  }
-  if (value instanceof ArrayBuffer) return new Uint8Array(value)
-  return textEncoder.encode(String(value ?? ''))
-}
 
 function bytesToHex(bytes) {
   return Array.from(bytes || [], (byte) => byte.toString(16).padStart(2, '0')).join('')
@@ -29,21 +13,33 @@ function normalizeDescriptorId(value) {
   if (!value) return null
   if (value instanceof Uint8Array) return bytesToHex(value)
   if (typeof value === 'string') return value.trim().toLowerCase().replace(/^0x/, '')
-  if (typeof value === 'object' && value.descriptorId) return normalizeDescriptorId(value.descriptorId)
+  if (typeof value === 'object') {
+    return normalizeDescriptorId(value.descriptorId || value.id || value.driveKey || value.channelId || value.key || value.descriptor?.descriptorId || value.proof?.descriptorId)
+  }
   return null
+}
+
+function safeNumber(value, fallback = 0) {
+  if (typeof value === 'bigint') {
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) return fallback
+    return Number(value)
+  }
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
 }
 
 function isFreshEnough(descriptor, now = Date.now(), maxAgeMs = 10 * 60 * 1000, options = {}) {
   if (!descriptor || typeof descriptor !== 'object') return false
-  const expiresAt = Number(descriptor.expiresAt || 0)
-  const publishAt = Number(descriptor.publishAt || 0)
-  const availabilityEpoch = Number(descriptor.availabilityEpoch || 0)
-  const freshnessSkewMs = Math.max(0, Number(options.freshnessSkewMs ?? options.maxClockSkewMs ?? 2 * 60 * 1000) || 0)
-  const availabilityEpochSlack = Math.max(1, Number(options.availabilityEpochSlack ?? 1) || 1)
-  if (expiresAt && now - freshnessSkewMs > expiresAt) return false
-  if (publishAt && now + maxAgeMs + freshnessSkewMs < publishAt) return false
+  const expiresAt = safeNumber(descriptor.expiresAt, 0)
+  const publishAt = safeNumber(descriptor.publishAt ?? descriptor.publishedAt ?? descriptor.createdAt ?? descriptor.updatedAt ?? descriptor.timestamp, 0)
+  const availabilityEpoch = safeNumber(descriptor.availabilityEpoch ?? descriptor.epoch ?? descriptor.sequenceEpoch, 0)
+  const freshnessSkewMs = Math.max(0, safeNumber(options.freshnessSkewMs ?? options.maxClockSkewMs ?? options.clockDriftMs, 15 * 60 * 1000))
+  const expireGraceMs = Math.max(0, safeNumber(options.expireGraceMs, 5 * 60 * 1000))
+  const availabilityEpochSlack = Math.max(1, safeNumber(options.availabilityEpochSlack ?? options.maxEpochSkew ?? options.epochDrift, 6))
+  if (expiresAt && now > expiresAt + Math.max(expireGraceMs, freshnessSkewMs)) return false
+  if (publishAt && now + Math.max(maxAgeMs, freshnessSkewMs) < publishAt) return false
   if (availabilityEpoch) {
-    const currentEpoch = Math.floor((now + freshnessSkewMs) / 600000)
+    const currentEpoch = Math.floor(now / 600000)
     if (Math.abs(currentEpoch - availabilityEpoch) > availabilityEpochSlack) return false
   }
   return true
@@ -68,7 +64,7 @@ export function buildGossipState(options = {}) {
     now,
     bloom,
     quota,
-    knownDescriptors: known.map((descriptor) => normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)).filter(Boolean),
+    knownDescriptors: known.map((descriptor) => normalizeDescriptorId(descriptor)).filter(Boolean),
     identityWeight: createIdentityQuota(options.identity || {}, now).weight,
   }
 }
@@ -77,9 +73,15 @@ export function createGossipSync(options = {}) {
   const state = buildGossipState(options)
   const validators = {
     verifySignature: options.verifySignature,
+    allowUnsignedForTests: options.allowUnsignedForTests,
     reachabilityGate: options.reachabilityGate,
     maxAgeMs: options.maxAgeMs,
     now: options.now,
+    maxClockSkewMs: options.maxClockSkewMs,
+    clockDriftMs: options.clockDriftMs,
+    epochDrift: options.epochDrift,
+    maxEpochSkew: options.maxEpochSkew,
+    expireGraceMs: options.expireGraceMs,
   }
 
   async function buildOutboundFilter(descriptors = []) {
@@ -91,35 +93,40 @@ export function createGossipSync(options = {}) {
     const remoteFilter = await peer?.sendBloom?.(await buildOutboundFilter(descriptors))
     const remote = remoteFilter?.has ? remoteFilter : (remoteFilter ? decodeDescriptorBloom(remoteFilter) : null)
     const localCandidates = Array.isArray(descriptors) ? descriptors : []
-    const missing = localCandidates.filter((descriptor) => {
-      const id = normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)
+    const remoteMissing = localCandidates.filter((descriptor) => {
+      const id = normalizeDescriptorId(descriptor)
       if (!id) return false
       return !remote?.bits || !remote?.has?.(id)
     })
-    const allowed = rateLimitFanout(missing, state.quota)
-    if (allowed.length > 0 && shouldRequestMore(state.quota, peer?.pendingRequests || 0)) {
-      await peer?.requestDescriptors?.(allowed.map((descriptor) => normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)).filter(Boolean))
+    const allowed = []
+    for (const descriptor of remoteMissing) {
+      if (!state.quota.consume(1)) break
+      allowed.push(descriptor)
     }
-    const missingIds = missing.map((descriptor) => normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)).filter(Boolean)
-    missingIds.remoteFilter = remoteFilter
-    missingIds.allowed = allowed
-    missingIds.missing = missing
-    return missingIds
+    if (allowed.length > 0) {
+      if (typeof peer?.sendDescriptors === 'function') {
+        await peer.sendDescriptors(allowed)
+      } else if (typeof peer?.offerDescriptors === 'function') {
+        await peer.offerDescriptors(allowed.map((descriptor) => normalizeDescriptorId(descriptor)).filter(Boolean))
+      }
+    }
+    return { remoteFilter, missing: allowed, remoteMissing: allowed }
   }
 
   async function ingest(entries = []) {
     const accepted = []
     for (const entry of Array.isArray(entries) ? entries : []) {
-      const descriptorResult = entry?.proof
+      const isProof = Boolean(entry?.proof)
+      const descriptorResult = isProof
         ? await validateIncomingProof(entry, validators)
         : await validateIncomingDescriptor(entry, validators)
       if (!descriptorResult.ok) continue
-      const descriptor = entry?.descriptor || entry
-      if (descriptor && !shouldPropagateDescriptor(descriptor, { ...validators, reachabilityGate: options.reachabilityGate })) {
+      const payload = isProof ? entry.proof : (entry?.descriptor || entry)
+      if (!isProof && payload && !shouldPropagateDescriptor(payload, { ...validators, reachabilityGate: options.reachabilityGate })) {
         continue
       }
       accepted.push(entry)
-      const id = normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)
+      const id = normalizeDescriptorId(payload)
       if (id) state.bloom.add(id)
       if (id && !state.knownDescriptors.includes(id)) state.knownDescriptors.push(id)
     }
@@ -129,14 +136,17 @@ export function createGossipSync(options = {}) {
   async function fanout(peers = [], descriptors = []) {
     const quotaPeers = rateLimitFanout(Array.isArray(peers) ? peers : [], state.quota)
     const payload = await buildOutboundFilter(descriptors)
+    let sent = 0
     for (const peer of quotaPeers) {
+      if (!state.quota.consume(1)) break
+      sent += 1
       if (typeof peer?.sendBloom === 'function') await peer.sendBloom(payload)
       if (typeof peer?.requestDescriptors === 'function' && shouldRequestMore(state.quota, peer?.pendingRequests || 0)) {
-        const ids = (Array.isArray(descriptors) ? descriptors : []).map((descriptor) => normalizeDescriptorId(descriptor?.descriptorId || descriptor?.id || descriptor?.driveKey)).filter(Boolean)
+        const ids = (Array.isArray(descriptors) ? descriptors : []).map((descriptor) => normalizeDescriptorId(descriptor)).filter(Boolean)
         if (ids.length > 0) await peer.requestDescriptors(ids)
       }
     }
-    return quotaPeers.length
+    return sent
   }
 
   return {

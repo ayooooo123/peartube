@@ -70,3 +70,20 @@ test('stringifyBlobId and cache key use normalized identity', (t) => {
   t.is(stringifyBlobId(blob), '1:2:3:4')
   t.is(buildBlobRefCacheKey({ driveKey: 'drive', id: 'vid', blobsCoreKey: 'A'.repeat(64), blobId: blob }), 'drive:vid:' + 'a'.repeat(64) + ':1:2:3:4')
 })
+
+
+test('normalizeBlobRefInput accepts nested blob ref wrappers from mirror seeders and fetchers', (t) => {
+  const expected = { blockOffset: 2, blockLength: 3, byteOffset: 4, byteLength: 5 }
+  t.alike(normalizeBlobRefInput({ blobId: '2:3:4:5' }), expected)
+  t.alike(normalizeBlobRefInput({ blob: expected }), expected)
+  t.alike(normalizeBlobRefInput({ id: '2:3:4:5' }), expected)
+  t.alike(parseBlobRef({
+    blobsCoreKey: 'A'.repeat(64),
+    blobRef: { blobId: '2:3:4:5', byteLength: '5' },
+  }), {
+    blobsCoreKey: 'a'.repeat(64),
+    blobId: '2:3:4:5',
+    blob: expected,
+    byteLength: 5,
+  })
+})

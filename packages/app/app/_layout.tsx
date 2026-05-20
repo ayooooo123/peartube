@@ -78,6 +78,14 @@ const DOWNLOADER_SOURCE_CACHE_KEY = '__PEARTUBE_DOWNLOADER_WORKER_SOURCE__'
 const CAST_ACTIVE_GLOBAL_KEY = '__PEARTUBE_CAST_ACTIVE__'
 const PeartubeNetworkDiscovery = (NativeModules as any).PeartubeNetworkDiscovery
 
+function requirePeartubeNetworkDiscovery(): any {
+  const mod = (NativeModules as any).PeartubeNetworkDiscovery
+  if (!mod) {
+    throw new Error('PeartubeNetworkDiscovery native module is unavailable')
+  }
+  return mod
+}
+
 type AndroidDiscoveryPermissionStatus = {
   postNotifications?: string
   nearbyWifi?: string
@@ -813,7 +821,8 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
     }
 
     try {
-      const discoveryStatus = await PeartubeNetworkDiscovery?.acquireMulticastLock?.()
+      const discoveryModule = requirePeartubeNetworkDiscovery()
+      const discoveryStatus = await discoveryModule.acquireMulticastLock()
       status.multicastLockHeld = discoveryStatus?.multicastLockHeld === true
       status.lastError = discoveryStatus?.lastError ?? status.lastError ?? null
     } catch (err: any) {
@@ -841,9 +850,14 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
         subscription.remove()
         castPlaybackStateUnsubRef.current?.()
         if (Platform.OS === 'android') {
-          PeartubeNetworkDiscovery?.releaseMulticastLock?.().catch((err: any) => {
+          try {
+            const discoveryModule = requirePeartubeNetworkDiscovery()
+            discoveryModule.releaseMulticastLock().catch((err: any) => {
+              console.log('[App] Android discovery multicast release failed:', err?.message)
+            })
+          } catch (err: any) {
             console.log('[App] Android discovery multicast release failed:', err?.message)
-          })
+          }
         }
         clearCastSuspendGraceTimer()
         if (startupTimerRef.current) {

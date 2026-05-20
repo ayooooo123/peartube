@@ -21,7 +21,7 @@ import b4a from 'b4a'
 import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
-import { swarmHasConnection } from './swarm-peer-dial.js'
+import { swarmHasConnection, swarmRememberPeer, swarmQueuePeer } from './swarm-peer-dial.js'
 import {
   SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
   CHANNEL_ROOT_DESCRIPTOR_SCHEMA
@@ -586,6 +586,12 @@ export class PublicFeed {
   _markPeerConnected(publicKey) {
     const remembered = this._rememberPeerPublicKey(publicKey)
     if (!remembered) return
+    const peerInfo = this.swarm?.peers?.get?.(remembered.keyHex) || null
+    if (peerInfo && typeof peerInfo === 'object') {
+      peerInfo.queued = false
+      peerInfo.waiting = false
+      peerInfo.connectedTime = Date.now()
+    }
     this._directPeerLastDialError.delete(remembered.keyHex)
     this._directPeerLastDialErrorStack.delete(remembered.keyHex)
     this._directPeerDialStats.connected++
@@ -811,12 +817,44 @@ export class PublicFeed {
       return false
     }
 
-    this._queuePublicJoinPeer(record, peer, topic)
-    this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
+    const peerInfo = swarmRememberPeer(this.swarm, peer, topic)
     if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) {
       this._directPeerDialStats.skipped++
       this._directPeerDialStats.lastReason = 'already-connected-peer'
+      return true
     }
+
+    const now = this._now()
+    this._directPeerDialStats.attempted++
+    if (peerInfo?.queued || peerInfo?.waiting) {
+      this._directPeerDialStats.skipped++
+      try {
+        peerInfo.explicit = true
+        if (typeof peerInfo._updatePriority === 'function') peerInfo._updatePriority()
+      } catch { /* diagnostics only */ }
+      this._directPeerLastDialedAt.set(remembered.keyHex, now)
+      this._directPeerDialStats.lastDialedAt = now
+      this._directPeerDialStats.lastReason = 'dial-already-pending-promoted'
+      return true
+    }
+
+    if (peerInfo && swarmQueuePeer(this.swarm, peerInfo)) {
+      record.joined = true
+      record.demoted = false
+      record.joinAttempts++
+      record.lastJoinedAt = now
+      record.lastJoinError = null
+      this._directPeerLastDialedAt.set(remembered.keyHex, now)
+      this._directPeerLastDialError.delete(remembered.keyHex)
+      this._directPeerLastDialErrorStack.delete(remembered.keyHex)
+      this._directPeerDialStats.queued++
+      this._directPeerDialStats.lastReason = 'queued-existing-peer'
+      this._directPeerDialStats.lastDialedAt = now
+    } else {
+      this._queuePublicJoinPeer(record, peer, topic)
+      this._directPeerLastDialedAt.set(remembered.keyHex, this._directPeerDialStats.lastDialedAt || now)
+    }
+    this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
     return true
   }
 
@@ -830,6 +868,7 @@ export class PublicFeed {
       return null
     }
   }
+
 
   runBoundedPeerRecovery(reason = 'heartbeat') {
     const event = {

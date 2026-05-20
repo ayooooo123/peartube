@@ -43,6 +43,11 @@ export function normalizeBlobRefInput(value) {
     return parsed?.blob || null
   }
   if (!value || typeof value !== 'object') return null
+  const nested = value.blobId ?? value.blob ?? value.blobRef ?? value.ref ?? value.id ?? value.range
+  if (nested && nested !== value) {
+    const normalized = normalizeBlobRefInput(nested)
+    if (normalized) return normalized
+  }
   const source = value.blob && typeof value.blob === 'object' ? value.blob : value
   const blockOffset = normalizeNumber(source.blockOffset)
   const blockLength = normalizeNumber(source.blockLength)
@@ -111,10 +116,8 @@ export function parseBlobRef(value = {}) {
   const blobsCoreKey = normalizeBlobsCoreKey(value.blobsCoreKey || value.blobsKey || value.coreKey)
   const blobSource = value.blobId && typeof value.blobId === 'object'
     ? value.blobId
-    : value.blobId || value.blob || value.blobRef || value.range
-  const blob = typeof blobSource === 'string'
-    ? parseBlobId(blobSource)
-    : normalizeBlobRefInput(blobSource)
+    : value.blobId || value.blob || value.blobRef || value.range || value.id
+  const blob = normalizeBlobRefInput(blobSource)
 
   if (!blobsCoreKey || !blob) return null
 

@@ -65,22 +65,14 @@ export function swarmRememberPeer(swarm, peer, topic = null) {
   if (!peerInfo && swarm.peers && typeof swarm.peers.get === 'function') {
     try { peerInfo = swarm.peers.get(publicKey) || null } catch { peerInfo = null }
   }
-  if (!peerInfo && typeof swarm._upsertPeer === 'function') {
-    try {
-      peerInfo = swarm._upsertPeer(publicKey, Array.isArray(peer.relayAddresses) ? peer.relayAddresses : undefined)
-    } catch {
-      peerInfo = null
-    }
-  }
-  if (!peerInfo && swarm.peers && typeof swarm.peers.set === 'function') {
+  if (!peerInfo) {
     peerInfo = {
       publicKey,
       relayAddresses: Array.isArray(peer.relayAddresses) ? peer.relayAddresses : [],
       topics: [],
     }
-    swarm.peers.set(keyHex, peerInfo)
+    try { swarm.peers?.set?.(keyHex, peerInfo) } catch { /* diagnostics only */ }
   }
-  if (!peerInfo) return null
   const relayAddresses = Array.isArray(peer.relayAddresses) ? peer.relayAddresses : []
   if (relayAddresses.length > 0 && (!Array.isArray(peerInfo.relayAddresses) || peerInfo.relayAddresses.length === 0)) {
     peerInfo.relayAddresses = relayAddresses
@@ -101,9 +93,9 @@ export function swarmQueuePeer(swarm, peerInfo) {
   if (typeof peerInfo._updatePriority === 'function') {
     try { peerInfo._updatePriority() } catch { /* best effort */ }
   }
-  if (typeof swarm._enqueue === 'function') return Boolean(swarm._enqueue(peerInfo))
   if (typeof swarm.joinPeer === 'function' && peerInfo.publicKey) {
     swarm.joinPeer(peerInfo.publicKey)
+    peerInfo.queued = true
     return true
   }
   return false

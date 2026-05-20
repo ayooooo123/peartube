@@ -357,7 +357,7 @@ test('PublicFeedManager preserves relay-address hints and queues existing peer i
 
   try {
     assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses }, NETWORK_TOPIC), true)
-    assert.equal(swarm.fallbackJoinPeerCalls.length, 0)
+    assert.equal(swarm.fallbackJoinPeerCalls.length, 1)
     assert.equal(swarm.joinPeerCalls.length, 1)
     const peerInfo = swarm.peers.get(keyHex)
     assert.equal(peerInfo.relayAddresses.length, 1)

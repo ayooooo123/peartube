@@ -175,6 +175,17 @@ export function attachMobileHandlers(B, deps) {
       feedConnections: s.feedConnections || 0,
       feedEntries: s.feedEntries || 0,
       channelsLoaded: s.channelsLoaded || 0,
+      swarmOffline: Boolean(s.swarmOffline),
+      swarmOfflineReason: s.swarmOfflineReason ?? null,
+      swarmListenResolved: Boolean(s.swarmListenResolved),
+      peerPoolJoined: Boolean(s.peerPoolJoined),
+      publicFeedDiscoveryJoined: Boolean(s.publicFeedDiscoveryJoined),
+      feedTopicHex: s.feedTopicHex ?? null,
+      recommendedBoundary: s.recommendedBoundary ?? s.doctor?.recommendedBoundary ?? null,
+      network: s.network ?? null,
+      startupTiming: s.startupTiming ?? null,
+      doctor: s.doctor ?? null,
+      directPeerDial: s.doctor?.feed?.directPeerDial ?? null,
     }
   }
 

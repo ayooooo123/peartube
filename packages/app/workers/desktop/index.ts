@@ -444,6 +444,19 @@ console.log('[Worker] Backend initialized, attaching desktop handler methods...'
 // We attach all handler implementations now, before any RPC call arrives.
 
 const B = backend as any
+const refreshPublishedChannelFeed = async (driveKey: string | null | undefined) => {
+  if (!driveKey || typeof api?.isChannelPublished !== 'function' || typeof api?.submitToFeed !== 'function') return
+  try {
+    const status = await api.isChannelPublished(driveKey)
+    if (!status?.published) return
+    const result = await api.submitToFeed(driveKey)
+    if (result?.success === false) {
+      console.log('[Worker] uploadVideo feed gossip refresh skipped:', result.error || 'submitToFeed failed')
+    }
+  } catch (err: any) {
+    console.log('[Worker] uploadVideo feed gossip refresh failed (non-fatal):', err?.message)
+  }
+}
 B.getChannel = async (r: any) => ({ channel: await api.getChannel(r.publicKey || '') })
 B.getChannelMeta = async (r: any) => { const m = await api.getChannelMeta(r.channelKey, r.publicBeeKey || null); return { name: m.name, description: m.description, videoCount: m.videoCount || 0 } }
 B.updateChannel = async (r: any) => { const a = identityManager.getActiveIdentity(); if (!a?.driveKey) return { success: false, error: 'No active channel' }; return api.updateChannel(a.driveKey, { name: r.name, description: r.description, avatar: r.avatar }) }
@@ -694,6 +707,7 @@ B.uploadVideo = async (r: any) => {
   if (result.success && result.videoId && !r.skipThumbnailGeneration) {
     try { const t = await generateAndStoreThumbnail(r.filePath, result.videoId, channel, { frameIndex: 300 }); if (t?.thumbnailBlobId) await channel.updateVideo(result.videoId, { thumbnailBlobId: t.thumbnailBlobId, thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey, thumbnailMimeType: t.thumbnailMimeType }) } catch {}
   }
+  await refreshPublishedChannelFeed(active.driveKey)
   return { video: { id: result.videoId || '', title: r.title || '', description: r.description || '', channelKey: active.driveKey } }
 }
 B.pickVideoFile = async () => { const r = await pickVideoFile(); return { filePath: r.filePath || null, name: r.name || null, size: r.size || 0, cancelled: r.cancelled || false } }

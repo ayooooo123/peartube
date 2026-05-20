@@ -15,6 +15,19 @@
  */
 export function attachMobileHandlers(B, deps) {
   const { api, identityManager, uploadManager, ctx, initializeIdentityFromMnemonic, rpc, fs, path, generateAndStoreThumbnail, transcoder } = deps
+  const refreshPublishedChannelFeed = async (driveKey) => {
+    if (!driveKey || typeof api?.isChannelPublished !== 'function' || typeof api?.submitToFeed !== 'function') return
+    try {
+      const status = await api.isChannelPublished(driveKey)
+      if (!status?.published) return
+      const result = await api.submitToFeed(driveKey)
+      if (result?.success === false) {
+        console.log('[Backend] uploadVideo feed gossip refresh skipped:', result.error || 'submitToFeed failed')
+      }
+    } catch (err) {
+      console.log('[Backend] uploadVideo feed gossip refresh failed (non-fatal):', err?.message)
+    }
+  }
 
   // --- Identity handlers ---
   B.createIdentity = async (r) => {
@@ -246,6 +259,7 @@ export function attachMobileHandlers(B, deps) {
     if (result?.videoId && !r.skipThumbnailGeneration) {
       try { const t = await generateAndStoreThumbnail(filePath, result.videoId, channel, { frameIndex: 300 }); if (t?.thumbnailBlobId) await channel.updateVideo(result.videoId, { thumbnailBlobId: t.thumbnailBlobId, thumbnailBlobsCoreKey: t.thumbnailBlobsCoreKey, thumbnailMimeType: t.thumbnailMimeType }) } catch {}
     }
+    await refreshPublishedChannelFeed(active.driveKey)
     return { video: { id: result?.videoId || '', title: r.title, description: r.description || '', channelKey: active.driveKey } }
   }
 

@@ -127,6 +127,21 @@ test('desktop worker forwards feed update events and full swarm diagnostics', ()
   }
 })
 
+test('desktop worker re-gossips already-published channels after upload metadata settles', () => {
+  const source = readAppFile('workers/desktop/index.ts')
+  const uploadStart = source.indexOf('B.uploadVideo = async (r: any) => {')
+  const uploadEnd = source.indexOf('B.pickVideoFile = async', uploadStart)
+  const uploadBlock = uploadStart >= 0 && uploadEnd > uploadStart ? source.slice(uploadStart, uploadEnd) : ''
+
+  assert.ok(uploadBlock, 'desktop uploadVideo handler should exist')
+  assert.match(source, /const refreshPublishedChannelFeed = async/)
+  assert.match(uploadBlock, /await refreshPublishedChannelFeed\(active\.driveKey\)/)
+  assert.ok(
+    uploadBlock.indexOf('channel.updateVideo') < uploadBlock.indexOf('await refreshPublishedChannelFeed(active.driveKey)'),
+    'desktop feed gossip refresh should happen after thumbnail metadata update',
+  )
+})
+
 test('backend orchestrator defers warm-up behind startup gates and does not force a boot-time feed sync request', () => {
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 

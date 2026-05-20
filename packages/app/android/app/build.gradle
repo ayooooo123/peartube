@@ -67,6 +67,34 @@ react {
  * Set this to true in release builds to optimize the app using [R8](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization).
  */
 def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: false).toBoolean()
+def debugKeystoreFile = file('debug.keystore')
+
+tasks.register("ensureDebugKeystore") {
+    outputs.file(debugKeystoreFile)
+    onlyIf { !debugKeystoreFile.exists() }
+
+    doLast {
+        def keytoolExecutable = new File(System.getProperty("java.home"), "bin/keytool")
+        providers.exec {
+            commandLine keytoolExecutable.absolutePath,
+                "-genkeypair",
+                "-v",
+                "-storetype", "PKCS12",
+                "-keystore", debugKeystoreFile.absolutePath,
+                "-storepass", "android",
+                "-alias", "androiddebugkey",
+                "-keypass", "android",
+                "-keyalg", "RSA",
+                "-keysize", "2048",
+                "-validity", "10000",
+                "-dname", "CN=Android Debug,O=Android,C=US"
+        }.result.get().assertNormalExitValue()
+    }
+}
+
+tasks.matching { it.name.startsWith("validateSigning") }.configureEach {
+    dependsOn("ensureDebugKeystore")
+}
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)

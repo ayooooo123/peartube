@@ -1,0 +1,1 @@
+$(cat ./.scratch/peartube-clone/packages/app/android/app/src/main/java/com/peartube/app/PeartubeNetworkDiscovery.kt)

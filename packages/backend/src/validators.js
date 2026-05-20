@@ -1,0 +1,1 @@
+$(cat ./.scratch/peartube-clone/packages/backend/src/validators.js)

@@ -1,3 +1,1 @@
-export * from './bloom.js'
-export * from './quota.js'
-export * from './sync.js'
+$(cat ./.scratch/peartube-clone/packages/backend/src/gossip/index.js)

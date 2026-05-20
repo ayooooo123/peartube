@@ -100,7 +100,7 @@ function getIpcPort(): Promise<number> {
 // ── window.bridge ───────────────────────────────────────────────────────
 const bridge = {
   pkg() {
-    return { name: 'peartube', productName: 'PearTube', version: '0.1.1' }
+    return { name: 'peartube', productName: 'PearTube', version: '0.1.115' }
   },
 
   applyUpdate: async () => {},

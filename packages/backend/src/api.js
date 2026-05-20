@@ -2600,7 +2600,7 @@ export function createApi({
         peers: ctx.swarm?.connections?.size || 0,
         blobServerPort: ctx.blobServer?.port || ctx.blobServerPort || 0,
         blobServerHost: ctx.blobServerHost || '127.0.0.1',
-        version: '0.1.1'
+        version: '0.1.115'
       };
     },
 

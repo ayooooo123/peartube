@@ -59,7 +59,7 @@ targets:
         CFBundleName: $(PRODUCT_NAME)
         CFBundleDisplayName: PearTube Native
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
-        CFBundleShortVersionString: "0.1.1"
+        CFBundleShortVersionString: "0.1.115"
         CFBundleVersion: "1"
         LSApplicationCategoryType: public.app-category.entertainment
         NSPrincipalClass: NSApplication
@@ -148,7 +148,7 @@ targets:
         CFBundleName: $(PRODUCT_NAME)
         CFBundleDisplayName: PearTube MediaExtension Lab
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
-        CFBundleShortVersionString: "0.1.1"
+        CFBundleShortVersionString: "0.1.115"
         CFBundleVersion: "1"
         LSApplicationCategoryType: public.app-category.entertainment
         NSPrincipalClass: NSApplication
@@ -258,7 +258,7 @@ targets:
       properties:
         CFBundleName: PearTubeDesktopTests
         CFBundleIdentifier: com.peartube.desktop.native.tests
-        CFBundleShortVersionString: "0.1.1"
+        CFBundleShortVersionString: "0.1.115"
         CFBundleVersion: "1"
     settings:
       base:

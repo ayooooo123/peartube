@@ -1,6 +1,6 @@
 {
   "name": "@peartube/spec",
-  "version": "0.1.1",
+  "version": "0.1.115",
   "description": "HRPC schema and generated code for PearTube",
   "exports": {
     ".": "./spec/hrpc/index.js",
@@ -16,9 +16,9 @@
   },
   "dependencies": {
     "hrpc": "^4.3.0",
-    "hrpc-swift": "^0.1.1",
+    "hrpc-swift": "^0.1.115",
     "hyperschema": "^1.20.1",
-    "hyperschema-swift": "^0.1.1"
+    "hyperschema-swift": "^0.1.115"
   },
   "devDependencies": {
     "brittle": "^3.19.1"

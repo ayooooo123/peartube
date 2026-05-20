@@ -1,7 +1,7 @@
 {
   "name": "@peartube/desktop-native",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.115",
   "description": "Native macOS shell scaffold for PearTube",
   "scripts": {
     "ensure:barekit-echo": "node ./scripts/ensure-barekit-echo-bundle.mjs",

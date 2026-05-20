@@ -29,7 +29,9 @@ test('Android native discovery module owns MulticastLock lifecycle and status di
   assert.match(moduleSource, /fun releaseMulticastLock\(/)
   assert.match(moduleSource, /fun getDiscoveryNetworkStatus\(/)
   assert.match(packageSource, /PeartubeNetworkDiscoveryModule\(reactContext\)/)
-  assert.match(applicationSource, /add\(PeartubeNetworkDiscoveryPackage\(\)\)/)
+  assert.match(applicationSource, /private val networkDiscovery by lazy \{ PeartubeNetworkDiscovery\(this\) \}/)
+  assert.match(applicationSource, /networkDiscovery\.start\(\)/)
+  assert.match(applicationSource, /networkDiscovery\.logException\("startup", t\)/)
 })
 
 test('root layout requests Android discovery permissions, records results, and acquires MulticastLock before backend startup', () => {

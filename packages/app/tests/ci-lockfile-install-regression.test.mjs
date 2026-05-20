@@ -16,6 +16,7 @@ test('test workflow avoids root npm cache and npm ci because the repo has no roo
   const workflow = readFile('.github/workflows/ci-fast.yml')
   const setupAction = readFile('.github/actions/setup-node-workspace/action.yml')
   const rootPackage = JSON.parse(readFile('package.json'))
+  const specPackage = JSON.parse(readFile('packages/spec/package.json'))
 
   assert.match(
     workflow,
@@ -56,5 +57,15 @@ test('test workflow avoids root npm cache and npm ci because the repo has no roo
     rootPackage.scripts['install:all'],
     /packages\/platform/,
     'install:all should install packages/platform so typecheck has its local deps in CI',
+  )
+  assert.notEqual(
+    specPackage.dependencies['hrpc-swift'],
+    `^${rootPackage.version}`,
+    'release bumps must not rewrite the external hrpc-swift generator dependency to the PearTube app version',
+  )
+  assert.notEqual(
+    specPackage.dependencies['hyperschema-swift'],
+    `^${rootPackage.version}`,
+    'release bumps must not rewrite the external hyperschema-swift generator dependency to the PearTube app version',
   )
 })

@@ -828,3 +828,55 @@ test('createRelayService refreshes already accepted channels when feed preview r
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+
+test('createRelayService keeps previous playable previews when refresh downloads no videos', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-preview-preserve-')
+  const runtime = createFakeRuntime()
+  const previewVideos = [{
+    id: 'preview-1',
+    blobId: '0:2:0:20',
+    blobsCoreKey: 'aa'.repeat(32)
+  }]
+
+  try {
+    let service
+    service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        const firstRefresh = !service?.catalog?.getChannel?.(candidate.channelKey)?.previewVideos
+        return {
+          bytesDownloaded: firstRefresh ? 20 : 0,
+          videosFound: candidate.previewVideos?.length || 0,
+          videosDownloaded: firstRefresh ? 1 : 0,
+          previewVideos: firstRefresh ? candidate.previewVideos : [],
+          videoCount: candidate.previewVideos?.length || 0
+        }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-preview-preserve', publicBeeKey: 'bee-preview-preserve', source: 'discovered', previewVideos })
+    await runtime.emit({ channelKey: 'chan-preview-preserve', publicBeeKey: 'bee-preview-preserve', source: 'discovered', previewVideos })
+
+    const channel = service.catalog.getChannel('chan-preview-preserve')
+    t.alike(channel.previewVideos, previewVideos)
+    t.is(channel.videosDownloaded, 1)
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

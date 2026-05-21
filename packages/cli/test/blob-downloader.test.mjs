@@ -94,3 +94,66 @@ test('downloadChannelBlobs downloads feed preview refs when PublicBee has no vid
   t.is(joins.length, 2)
   t.ok(joins.every((join) => join.opts?.server === true && join.opts?.client === true))
 })
+
+
+test('downloadChannelBlobs only republishes successfully cached video previews', async (t) => {
+  const playableCore = createCore({ length: 4, byteLength: 400 })
+  const missingCore = {
+    discoveryKey: 'missing-discovery',
+    async ready() {},
+    download() {
+      return {
+        async done() { throw new Error('remote blocks unavailable') }
+      }
+    }
+  }
+  const ctx = {
+    swarm: { join() {} },
+    store: {
+      get(key) {
+        const keyHex = Buffer.isBuffer(key) ? key.toString('hex') : String(key)
+        if (keyHex.startsWith('aa')) return playableCore
+        if (keyHex.startsWith('cc')) return missingCore
+        throw new Error(`unexpected key ${keyHex}`)
+      }
+    }
+  }
+
+  const stats = await downloadChannelBlobs(
+    ctx,
+    'ee'.repeat(32),
+    'chan-partial',
+    { info() {}, debug() {}, error() {} },
+    {
+      previewVideos: [
+        {
+          id: 'playable',
+          title: 'Playable',
+          blobId: '1:2:100:200',
+          blobsCoreKey: 'aa'.repeat(32)
+        },
+        {
+          id: 'hollow',
+          title: 'Hollow',
+          blobId: '1:2:100:200',
+          blobsCoreKey: 'cc'.repeat(32)
+        }
+      ]
+    },
+    {
+      async loadPublicBee() {
+        return {
+          async listVideos() {
+            return []
+          }
+        }
+      }
+    }
+  )
+
+  t.is(stats.blobsFound, 2)
+  t.is(stats.blobsDownloaded, 1)
+  t.is(stats.videosDownloaded, 1)
+  t.is(stats.previewVideos.length, 1)
+  t.is(stats.previewVideos[0].id, 'playable')
+})

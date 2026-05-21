@@ -52,6 +52,11 @@ function addVideoDownloadRefs(refs, videos) {
   return added
 }
 
+function addSuccessfulPreviewVideo(previews, ref) {
+  if (ref?.kind !== 'video') return false
+  return addPreviewVideo(previews, ref.sourceVideo)
+}
+
 function addPreviewVideo(previews, video) {
   if (!video?.id || !video?.blobId || !video?.blobsCoreKey) return false
   const id = getVideoKey(video)
@@ -140,21 +145,10 @@ export async function downloadChannelBlobs(ctx, publicBeeKey, driveKey, logger =
     addVideoDownloadRefs(refs, options.catalogEntry?.previewVideos)
     addVideoDownloadRefs(refs, options.feedEntry?.previewVideos)
 
-    if (Array.isArray(options.previewVideos)) {
-      for (const video of options.previewVideos) {
-        if (stats.previewVideos.length >= 3) break
-        addPreviewVideo(stats.previewVideos, video)
-      }
-    }
-
     if (Array.isArray(videos)) {
       stats.videosFound = videos.length
-      stats.videoCount = videos.length
+      stats.videoCount = Math.max(stats.videoCount, videos.length)
       addVideoDownloadRefs(refs, videos)
-      for (const video of videos) {
-        if (stats.previewVideos.length >= 3) break
-        addPreviewVideo(stats.previewVideos, video)
-      }
     }
 
     if (refs.size === 0) {
@@ -168,7 +162,10 @@ export async function downloadChannelBlobs(ctx, publicBeeKey, driveKey, logger =
       try {
         stats.bytesDownloaded += await downloadBlobRef(ctx, ref)
         stats.blobsDownloaded += 1
-        if (ref.kind === 'video') stats.videosDownloaded += 1
+        if (ref.kind === 'video') {
+          stats.videosDownloaded += 1
+          addSuccessfulPreviewVideo(stats.previewVideos, ref)
+        }
         if (ref.kind === 'thumbnail') stats.thumbnailsDownloaded += 1
       } catch (err) {
         logError(

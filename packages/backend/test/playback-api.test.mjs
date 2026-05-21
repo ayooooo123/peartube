@@ -62,7 +62,7 @@ test('preparePlayback returns a playable URL before warmup settles or fails', as
 
   t.alike(calls, [
     ['getVideoUrl', ['channel-key', 'videos/demo.mp4', 'public-bee-key', 'blob-id', 'blobs-core-key', 'video/mp4']],
-    ['prefetchVideo', ['channel-key', 'videos/demo.mp4', 'public-bee-key']],
+    ['prefetchVideo', ['channel-key', 'videos/demo.mp4', 'public-bee-key', 'blob-id', 'blobs-core-key', 'video/mp4']],
     ['getVideoStats', ['channel-key', 'videos/demo.mp4']],
   ])
 })

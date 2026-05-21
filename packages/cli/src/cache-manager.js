@@ -6,7 +6,15 @@
  * @property {number} addedAt - Unix timestamp (ms)
  * @property {number} bytes - Tracked byte usage for this channel
  * @property {boolean} pinned - Whether this channel is pinned (never evicted)
+ * @property {Array<Object>} previewVideos - Compact playable preview refs used to rejoin blob-core swarms after restart
  */
+
+function normalizePreviewVideos(previewVideos) {
+  if (!Array.isArray(previewVideos)) return [];
+  return previewVideos
+    .filter((video) => video && typeof video === 'object')
+    .map((video) => ({ ...video }))
+}
 
 export class CacheManager {
   /**
@@ -36,7 +44,8 @@ export class CacheManager {
         source: record.source === 'pinned' ? 'pinned' : 'discovered',
         addedAt: Number.isFinite(record.addedAt) ? record.addedAt : Date.now(),
         bytes: Number.isFinite(record.bytes) ? record.bytes : 0,
-        pinned: Boolean(record.pinned)
+        pinned: Boolean(record.pinned),
+        previewVideos: normalizePreviewVideos(record.previewVideos)
       };
       this.channels.set(normalized.driveKey, normalized);
     }
@@ -47,8 +56,31 @@ export class CacheManager {
    * @param {string} publicBeeKey
    * @param {'discovered'|'pinned'} source
    */
-  async addChannel(driveKey, publicBeeKey, source) {
-    if (this.channels.has(driveKey)) return false;
+  async addChannel(driveKey, publicBeeKey, source, options = {}) {
+    const previewVideos = normalizePreviewVideos(options.previewVideos)
+    const existing = this.channels.get(driveKey)
+    if (existing) {
+      let changed = false
+      if (typeof publicBeeKey === 'string' && publicBeeKey && existing.publicBeeKey !== publicBeeKey) {
+        existing.publicBeeKey = publicBeeKey
+        changed = true
+      }
+      if (source === 'pinned' && !existing.pinned) {
+        existing.pinned = true
+        existing.source = 'pinned'
+        changed = true
+      }
+      if (previewVideos.length > 0) {
+        const nextSignature = JSON.stringify(previewVideos)
+        const currentSignature = JSON.stringify(existing.previewVideos || [])
+        if (nextSignature !== currentSignature) {
+          existing.previewVideos = previewVideos
+          changed = true
+        }
+      }
+      if (changed) await this._persist()
+      return changed;
+    }
 
     /** @type {CacheChannelRecord} */
     const record = {
@@ -57,7 +89,8 @@ export class CacheManager {
       source,
       addedAt: Date.now(),
       bytes: 0,
-      pinned: source === 'pinned'
+      pinned: source === 'pinned',
+      previewVideos
     };
 
     this.channels.set(driveKey, record);
@@ -94,7 +127,8 @@ export class CacheManager {
         source: 'pinned',
         addedAt: Date.now(),
         bytes: 0,
-        pinned: true
+        pinned: true,
+        previewVideos: []
       });
     }
 

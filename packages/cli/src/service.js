@@ -214,7 +214,11 @@ export async function createRelayService({
       }
 
       if (resolved.publicBeeKey) {
-        await runtime.cacheManager?.addChannel?.(resolved.channelKey, resolved.publicBeeKey, 'discovered').catch(() => {})
+        await runtime.cacheManager?.addChannel?.(resolved.channelKey, resolved.publicBeeKey, 'discovered', {
+          previewVideos: Array.isArray(mirrorStats?.previewVideos)
+            ? mirrorStats.previewVideos
+            : (Array.isArray(resolved.previewVideos) ? resolved.previewVideos : [])
+        }).catch(() => {})
         const seedStats = await runtime.seeder?.seedChannel?.({
           driveKey: resolved.channelKey,
           publicBeeKey: resolved.publicBeeKey,

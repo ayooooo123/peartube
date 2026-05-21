@@ -1,6 +1,7 @@
 import test from 'brittle'
 import { createRelaySeeder } from '../src/seeding.js'
 import { buildRelayStatus, formatRelayStatus } from '../src/status.js'
+import { CacheManager } from '../src/cache-manager.js'
 
 function createCore(keyHex, discoveryKey = `discovery:${keyHex}`) {
   return {
@@ -29,6 +30,49 @@ function createSwarm() {
     }
   }
 }
+
+function createMetaDb(initial = new Map()) {
+  const writes = []
+  return {
+    writes,
+    async get(key) {
+      return initial.has(key) ? { value: initial.get(key) } : null
+    },
+    async put(key, value) {
+      writes.push({ key, value })
+      initial.set(key, value)
+    }
+  }
+}
+
+test('cache manager preserves refreshed preview refs for relay restart seeding', async (t) => {
+  const metaDb = createMetaDb(new Map([
+    ['cache-channels', [{
+      driveKey: 'aa'.padEnd(64, '0'),
+      publicBeeKey: 'bb'.padEnd(64, '0'),
+      source: 'discovered',
+      addedAt: 1,
+      bytes: 0,
+      pinned: false
+    }]]
+  ]))
+  const manager = new CacheManager({}, metaDb, 1024)
+  await manager.init()
+
+  const changed = await manager.addChannel('aa'.padEnd(64, '0'), 'bb'.padEnd(64, '0'), 'discovered', {
+    previewVideos: [{
+      id: 'video-1',
+      blobId: '0:1:0:10',
+      blobsCoreKey: 'cc'.padEnd(64, '0')
+    }]
+  })
+
+  t.is(changed, true)
+  t.is(manager.getChannels()[0].previewVideos.length, 1)
+  t.is(manager.getChannels()[0].previewVideos[0].blobsCoreKey, 'cc'.padEnd(64, '0'))
+  t.is(metaDb.writes.length, 1)
+  t.is(metaDb.writes[0].value[0].previewVideos[0].id, 'video-1')
+})
 
 test('relay seeder retains PublicBee and blob-core discovery handles for mirrored channels', async (t) => {
   const publicBeeCore = createCore('11')

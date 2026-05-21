@@ -207,6 +207,7 @@ const castPlaybackStateUnsubRef = useRef<(() => void) | null>(null)
 const backendReadyRef = useRef(false)
 const startupTimerRef = useRef<NodeJS.Timeout | null>(null)
 const startupProbeIntervalRef = useRef<NodeJS.Timeout | null>(null)
+const lastMirroredPlaybackActiveRef = useRef<boolean | null>(null)
 const CAST_ACTIVITY_GRACE_MS = 60 * 60 * 1000
 const BACKEND_STARTUP_TIMEOUT_MS = 30000
 
@@ -226,6 +227,22 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
       })
     }
   }, [])
+
+  useEffect(() => {
+    const syncPlaybackActive = () => {
+      if (!platformRPC?.rpc?.setPlaybackActive) return
+      const nextActive = Boolean(playbackActiveEmitter.isActive)
+      if (lastMirroredPlaybackActiveRef.current === nextActive) return
+      lastMirroredPlaybackActiveRef.current = nextActive
+      platformRPC.rpc?.setPlaybackActive?.({ active: nextActive }).catch((err: any) => {
+        console.log('[App] setPlaybackActive error:', err?.message)
+      })
+    }
+
+    syncPlaybackActive()
+    const interval = setInterval(syncPlaybackActive, 1000)
+    return () => clearInterval(interval)
+  }, [ready])
 
   const loadInitialData = useCallback(async () => {
     if (!platformRPC) return

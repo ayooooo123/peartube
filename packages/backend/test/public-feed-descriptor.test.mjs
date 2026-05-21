@@ -37,6 +37,7 @@ test('public feed preserves signed channel root descriptor on local submit, pers
   const messages = []
   const conn = {}
   feed.peerChannels.set(conn, { messages: [{ send: (msg) => messages.push(msg) }] })
+  feed.feedConnections.add(conn)
   feed.broadcastSubmitChannel(key(1), null, key(1), { signedDescriptor })
   assert.deepEqual(messages[0].signedDescriptor, signedDescriptor)
 })

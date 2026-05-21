@@ -124,7 +124,8 @@ const APP_RPC_NAMESPACES = Object.freeze({
 const RUNTIME_ONLY_METHODS = Object.freeze([
   // Exposed by the native/desktop platform bridge, not the schema HRPC surface.
   'suspendNetwork',
-  'resumeNetwork'
+  'resumeNetwork',
+  'setPlaybackActive'
 ])
 
 const PLATFORM_ONLY_COMMANDS = Object.freeze([

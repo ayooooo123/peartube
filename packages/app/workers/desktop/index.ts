@@ -509,6 +509,7 @@ B.preparePlayback = async (r: any) => api.preparePlayback(
   r.blobsCoreKey,
   r.mimeType
 )
+B.setPlaybackActive = async (r: any = {}) => api.setPlaybackActive(r)
 
 // Desktop: placeholder for webPreparePlayback.
 // MKV playback is handled client-side via mediabunny MSE player.

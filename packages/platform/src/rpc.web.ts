@@ -323,6 +323,12 @@ export const rpc = {
     return ensureRPC().preparePlayback(req);
   },
 
+  async setPlaybackActive(req: { active: boolean }) {
+    const rpcInstance = ensureRPC() as any;
+    if (typeof rpcInstance.setPlaybackActive !== 'function') return { success: true };
+    return rpcInstance.setPlaybackActive(req);
+  },
+
   async webPreparePlayback(req: { channelKey: string; videoId: string }): Promise<{ url: string; transcoded?: boolean; audioCodec?: string; transcodeError?: string }> {
     const rpcInstance = ensureRPC();
     if (typeof rpcInstance.webPreparePlayback === 'function') {

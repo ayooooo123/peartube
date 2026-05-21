@@ -1338,6 +1338,8 @@ export function createUniversalCore(options = {}) {
       blobServerBindHost: options.blobServerBindHost,
       corestoreWaitForLock: options.corestoreWaitForLock,
       disableStandalonePrimaryKeyFile: options.disableStandalonePrimaryKeyFile,
+      network: options.network || {},
+      swarmOptions: options.swarmOptions || {},
       ipcLog: typeof options.ipcLog === 'function' ? options.ipcLog : noop
     })
 

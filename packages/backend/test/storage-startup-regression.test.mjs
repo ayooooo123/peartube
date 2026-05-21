@@ -122,28 +122,55 @@ test('storage exposes public bee content discovery retention for cached serving 
   assert.match(storageSource, /retainSwarmDiscovery\(ctx, core\.discoveryKey/)
 })
 
-test('storage exposes Hyperswarm peer discovery as a diagnostic peer event', () => {
-  assert.match(
+test('storage does not monkey-patch Hyperswarm peer discovery into app-level dialing events', () => {
+  assert.doesNotMatch(
     storageSource,
     /function installSwarmPeerDiscoveryEmitter\(swarm\)/,
-    'storage should install a peer discovery event adapter'
+    'storage should not install a private _handlePeer wrapper'
   )
-  assert.match(
-    storageSource,
-    /installSwarmPeerDiscoveryEmitter\(swarm\)/,
-    'real swarm startup should install the peer discovery event adapter'
-  )
-  assert.match(
+  assert.doesNotMatch(
     storageSource,
     /swarm\.emit\('peer', peer, topic\)/,
-    'adapter should emit peer events with the discovered peer and topic'
+    'discovered peers should stay under Hyperswarm queue ownership'
+  )
+})
+
+test('storage plumbs explicit Hyperswarm network options into swarm construction', () => {
+  assert.match(
+    storageSource,
+    /function createHyperswarmOptions\(/,
+    'storage should build a whitelisted Hyperswarm option object'
+  )
+  assert.match(
+    storageSource,
+    /network\s*=\s*\{\}/,
+    'initializeStorage should accept network options'
+  )
+  assert.match(
+    storageSource,
+    /new LoadedHyperswarm\(createHyperswarmOptions\(\{ keyPair, network, swarmOptions \}\)\)/,
+    'Hyperswarm should receive configured bootstrap and relay options'
+  )
+})
+
+test('network suspend is guarded by backend playback activity, not only cast state', () => {
+  assert.match(storageSource, /export function setPlaybackActive\(/)
+  assert.match(storageSource, /export function isPlaybackActive\(/)
+  assert.match(
+    storageSource,
+    /if \(isPlaybackActive\(\)\) \{[\s\S]*?Skipping suspend/,
+    'suspendNetworking should skip destructive swarm suspend while backend playback is active'
+  )
+  assert.match(
+    storageSource,
+    /await globalSwarm\.suspend\(\)/,
+    'suspendNetworking still uses Hyperswarm suspend when no playback or cast guard is active'
   )
 })
 
 test('storage captures Hyperswarm connection lifecycle diagnostics', () => {
   assert.match(storageSource, /function createSwarmDiagnostics\(swarm\)/)
   assert.match(storageSource, /globalSwarmDiagnostics = createSwarmDiagnostics\(swarm\)/)
-  assert.match(storageSource, /globalSwarmDiagnostics\?\.recordPeer\?\.\(peer, topic\)/)
   assert.match(storageSource, /globalSwarmDiagnostics\?\.recordConnection\?\.\(conn, info\)/)
   assert.match(storageSource, /hyperswarm: diagnostics/)
 })

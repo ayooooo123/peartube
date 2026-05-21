@@ -42,7 +42,9 @@ function validateStartOptions(options) {
     stream,
     createBackendImpl,
     onFeedUpdate,
-    onVideoStats
+    onVideoStats,
+    network,
+    swarmOptions
   } = options
 
   if (platform !== 'desktop' && platform !== 'mobile') {
@@ -147,6 +149,8 @@ export async function startHost(options = {}) {
       stream,
       entrypoint,
       args,
+      network,
+      swarmOptions,
       onFeedUpdate,
       onVideoStats,
       onReady(payload = {}) {

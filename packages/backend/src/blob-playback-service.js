@@ -103,11 +103,10 @@ export class BlobPlaybackService {
       : this.resolveDirectBlobUrl({ blobsCoreKey, blobId, mimeType })
 
     try {
-      const warmupPromise = Promise.resolve(warmup?.(driveKey, videoPath, publicBeeKey))
-      warmupStarted = Boolean(warmup)
-      warmupPromise.catch((err) => {
-        console.log('[BlobPlaybackService] preparePlayback warmup failed:', err?.message || err)
-      })
+      if (warmup) {
+        warmupStarted = true
+        await Promise.resolve(warmup(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType))
+      }
     } catch (err) {
       console.log('[BlobPlaybackService] preparePlayback warmup failed:', err?.message || err)
     }

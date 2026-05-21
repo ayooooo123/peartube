@@ -21,7 +21,7 @@ import b4a from 'b4a'
 import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
-import { swarmHasConnection, swarmRememberPeer, swarmQueuePeer } from './swarm-peer-dial.js'
+import { swarmHasConnection } from './swarm-peer-dial.js'
 import {
   SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
   CHANNEL_ROOT_DESCRIPTOR_SCHEMA
@@ -107,6 +107,8 @@ export class PublicFeed {
     this._now = () => Date.now();
     /** @type {any | null} */
     this.feedDiscovery = null;
+    /** @type {boolean} */
+    this._ownsFeedDiscovery = false;
     /** @type {any | null} */
     this._gossipInterval = null;
     /** @type {number} */
@@ -746,38 +748,6 @@ export class PublicFeed {
     return this._peerDirectory.get(keyHex) || null
   }
 
-  _queuePublicJoinPeer(record, peer = null, topic = null) {
-    if (!record || !record.publicKey || typeof this.swarm?.joinPeer !== 'function') return false
-    if (record.joined && record.lastJoinedAt && this._now() - record.lastJoinedAt < this._peerJoinCooldownMs) {
-      return true
-    }
-    if (record.demoted && !record.joined) return false
-
-    const lowest = this._lowestScoringPeer(record.keyHex)
-    if (!record.joined && this._peerDirectory.size >= this.maxPeers && lowest && lowest.keyHex !== record.keyHex && lowest.score > record.score) {
-      record.demoted = true
-      return false
-    }
-
-    try {
-      this.swarm.joinPeer(record.publicKey)
-      record.joined = true
-      record.demoted = false
-      record.joinAttempts++
-      record.lastJoinedAt = this._now()
-      record.lastJoinError = null
-      this._directPeerDialStats.queued++
-      this._directPeerDialStats.lastReason = 'joinPeer'
-      this._directPeerDialStats.lastDialedAt = record.lastJoinedAt
-      return true
-    } catch (err) {
-      record.lastJoinError = err?.message || String(err)
-      this._directPeerDialStats.failed++
-      this._directPeerDialStats.lastReason = 'joinPeer-error'
-      return false
-    }
-  }
-
   _recordPeerConnectionOutcome(conn, reason = 'closed') {
     const remoteKey = this._connectionPeerKeys.get(conn) || conn?.remotePublicKey || conn?.publicKey || null
     const keyHex = this._peerKeyHex(remoteKey)
@@ -817,43 +787,14 @@ export class PublicFeed {
       return false
     }
 
-    const peerInfo = swarmRememberPeer(this.swarm, peer, topic)
     if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) {
       this._directPeerDialStats.skipped++
       this._directPeerDialStats.lastReason = 'already-connected-peer'
       return true
     }
 
-    const now = this._now()
-    this._directPeerDialStats.attempted++
-    if (peerInfo?.queued || peerInfo?.waiting) {
-      this._directPeerDialStats.skipped++
-      try {
-        peerInfo.explicit = true
-        if (typeof peerInfo._updatePriority === 'function') peerInfo._updatePriority()
-      } catch { /* diagnostics only */ }
-      this._directPeerLastDialedAt.set(remembered.keyHex, now)
-      this._directPeerDialStats.lastDialedAt = now
-      this._directPeerDialStats.lastReason = 'dial-already-pending-promoted'
-      return true
-    }
-
-    if (peerInfo && swarmQueuePeer(this.swarm, peerInfo)) {
-      record.joined = true
-      record.demoted = false
-      record.joinAttempts++
-      record.lastJoinedAt = now
-      record.lastJoinError = null
-      this._directPeerLastDialedAt.set(remembered.keyHex, now)
-      this._directPeerLastDialError.delete(remembered.keyHex)
-      this._directPeerLastDialErrorStack.delete(remembered.keyHex)
-      this._directPeerDialStats.queued++
-      this._directPeerDialStats.lastReason = 'queued-existing-peer'
-      this._directPeerDialStats.lastDialedAt = now
-    } else {
-      this._queuePublicJoinPeer(record, peer, topic)
-      this._directPeerLastDialedAt.set(remembered.keyHex, this._directPeerDialStats.lastDialedAt || now)
-    }
+    this._directPeerDialStats.skipped++
+    this._directPeerDialStats.lastReason = 'hyperswarm-owned-discovery'
     this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
     return true
   }
@@ -871,62 +812,15 @@ export class PublicFeed {
 
 
   runBoundedPeerRecovery(reason = 'heartbeat') {
-    const now = this._now()
-    const connections = this.swarm?.connections?.size || 0
-    const discoveredPeers = this._discoveredPeers.size
     const event = {
-      at: now,
+      at: this._now(),
       action: 'observed-peers-without-sockets',
       reason: 'hyperswarm-owned-dialing',
       requestedReason: reason,
-      discoveredPeers,
-      connections,
+      discoveredPeers: this._discoveredPeers.size,
+      connections: this.swarm?.connections?.size || 0,
       queued: 0,
     }
-
-    if (this.swarm && discoveredPeers > 0 && connections === 0 && now - this._lastRecoveryAt >= this._recoveryCooldownMs) {
-      this._lastRecoveryAt = now
-      event.action = 'requeued-discovered-peers'
-      event.reason = 'foreground-resume-no-sockets'
-
-      for (const record of this._peerDirectory.values()) {
-        if (!record?.publicKey || record.demoted) continue
-        try {
-          const peerInfo = this.swarm.peers?.get?.(record.keyHex) || null
-          if (peerInfo) {
-            try {
-              peerInfo.explicit = true
-              if (typeof peerInfo._updatePriority === 'function') peerInfo._updatePriority()
-            } catch { /* best effort */ }
-            if (swarmQueuePeer(this.swarm, peerInfo)) {
-              event.queued++
-              record.joined = true
-              record.lastJoinedAt = now
-              this._directPeerDialStats.queued++
-              this._directPeerDialStats.lastReason = 'resume-requeued-existing-peer'
-              this._directPeerDialStats.lastDialedAt = now
-              continue
-            }
-          }
-
-          this.swarm.joinPeer(record.publicKey)
-          event.queued++
-          record.joined = true
-          record.demoted = false
-          record.joinAttempts++
-          record.lastJoinedAt = now
-          record.lastJoinError = null
-          this._directPeerDialStats.queued++
-          this._directPeerDialStats.lastReason = 'resume-joinPeer'
-          this._directPeerDialStats.lastDialedAt = now
-        } catch (err) {
-          record.lastJoinError = err?.message || String(err)
-          this._directPeerDialStats.failed++
-          this._directPeerDialStats.lastReason = 'resume-joinPeer-error'
-        }
-      }
-    }
-
     this._recoveryEvents.push(event)
     while (this._recoveryEvents.length > 10) this._recoveryEvents.shift()
     return event
@@ -1011,21 +905,22 @@ export class PublicFeed {
     this._recordStartupEvent('public-feed-start-called')
     console.log('[PublicFeed] ===== STARTING PUBLIC FEED =====');
 
-    // Issue the topic join up front so DHT announce/lookup overlaps with the
-    // metaDb cache restoration below. (Matches the hyperdrive README pattern:
-    // attach handlers → join → do other work; never await flush() on the
-    // hot path.)
+    // Storage owns the shared PearTube network topic. PublicFeed only opens its
+    // Protomux protocol on sockets Hyperswarm delivers for that topic.
     try {
-      this.feedDiscovery = this.swarm.join(NETWORK_TOPIC, { server: true, client: true })
-      this._recordStartupEvent('public-feed-topic-join-called', { topicHex: NETWORK_TOPIC_HEX })
-      this.feedDiscovery?.flushed?.().then(() => {
-        this._recordStartupEvent('public-feed-topic-flushed', { peers: this.swarm.peers?.size || 0, connections: this.swarm.connections?.size || 0 })
-        console.log('[PublicFeed] Shared network feed discovery flushed, connections:', this.swarm.connections?.size || 0)
-      }).catch(() => {})
-      console.log('[PublicFeed] Joined shared network feed topic:', NETWORK_TOPIC_HEX.slice(0, 16))
+      this.feedDiscovery = typeof this.swarm?.status === 'function'
+        ? this.swarm.status(NETWORK_TOPIC)
+        : null
+      this._ownsFeedDiscovery = false
+      this._recordStartupEvent('public-feed-topic-owned-by-storage', {
+        topicHex: NETWORK_TOPIC_HEX,
+        visible: Boolean(this.feedDiscovery)
+      })
+      console.log('[PublicFeed] Using storage-owned shared network topic:', NETWORK_TOPIC_HEX.slice(0, 16))
     } catch (err) {
-      console.log('[PublicFeed] Shared network feed topic join failed:', err?.message)
+      console.log('[PublicFeed] Shared network topic status lookup failed:', err?.message)
       this.feedDiscovery = null
+      this._ownsFeedDiscovery = false
     }
 
     // Load persisted published channels from database
@@ -1211,9 +1106,13 @@ export class PublicFeed {
       this._directPeerLastDialedAt.clear()
       this._directPeerLastDialError.clear()
       this._directPeerLastDialErrorStack.clear()
+      if (this._ownsFeedDiscovery) {
+        try { this.feedDiscovery?.destroy?.() } catch {}
+      }
+      this.feedDiscovery = null
+      this._ownsFeedDiscovery = false
       if (this._persistTimer) clearTimeout(this._persistTimer)
       if (this._gossipInterval) clearInterval(this._gossipInterval)
-      this.feedDiscovery?.destroy?.()
     } catch {}
     this._persistTimer = null
     this._gossipInterval = null

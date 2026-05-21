@@ -159,6 +159,8 @@ export async function createBackendContext(config) {
     onStatsUpdate,
     corestoreWaitForLock = false,
     disableStandalonePrimaryKeyFile = false,
+    network = {},
+    swarmOptions = {},
     ipcLog: _ipcLog
   } = config;
 
@@ -254,7 +256,9 @@ export async function createBackendContext(config) {
       blobServerHost,
       blobServerBindHost,
       primaryKey,
-      corestoreWaitForLock
+      corestoreWaitForLock,
+      network,
+      swarmOptions
     });
     await appendDebugLine('[orchestrator] initializeStorage done')
   } catch (err) {
@@ -363,15 +367,6 @@ export async function createBackendContext(config) {
       console.error('[Orchestrator] publicFeed.handleConnection failed:', err?.message);
     }
   });
-  ctx.swarm.on('peer', (peer, topic) => {
-    try {
-      if (publicFeed.handleDiscoveredPeer(peer, topic)) {
-        startupGate.noteSwarmPeer()
-      }
-    } catch (err) {
-      console.error('[Orchestrator] publicFeed.handleDiscoveredPeer failed:', err?.message)
-    }
-  })
   // Start public feed discovery before slower local managers/API wiring so DHT
   // lookup, socket setup, and Protomux feed opening overlap backend warm-up.
   ipcLog('[orchestrator] publicFeed.start starting early')

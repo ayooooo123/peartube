@@ -2614,7 +2614,8 @@ export const APP_RPC_METADATA = Object.freeze({
   ],
   "runtimeOnlyMethods": [
     "suspendNetwork",
-    "resumeNetwork"
+    "resumeNetwork",
+    "setPlaybackActive"
   ]
 })
 

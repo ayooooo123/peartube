@@ -10,6 +10,8 @@ export function startHost(options: {
   onLifecycle?: (event: HostLifecycleEvent) => void
   onFeedUpdate?: () => void
   onVideoStats?: (...args: any[]) => void
+  network?: Record<string, any>
+  swarmOptions?: Record<string, any>
 }): Promise<{
   stream: any
   entrypoint: string

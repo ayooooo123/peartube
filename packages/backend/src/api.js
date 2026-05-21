@@ -10,7 +10,7 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery, setPlaybackActive as setStoragePlaybackActive, isPlaybackActive as isStoragePlaybackActive } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
@@ -941,7 +941,8 @@ export function createApi({
 
     /**
      * Prepare normal watch playback without forcing the UI to orchestrate warmup and URL resolution separately.
-     * Warmup is best-effort and must not block returning a playable blob-server URL.
+     * Warmup is bounded and runs before returning so the player does not race
+     * P2P discovery/initial block fetch on first range read.
      * @param {string} driveKey
      * @param {string} videoPath
      * @param {string} [publicBeeKey]
@@ -952,6 +953,7 @@ export function createApi({
      */
     async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
+      setStoragePlaybackActive(true, { source: 'preparePlayback' })
 
       return blobPlayback.preparePlayback({
         driveKey,
@@ -3518,6 +3520,12 @@ export function createApi({
         console.error('[API] suspendNetwork error:', err.message)
         return { success: false, error: err.message }
       }
+    },
+
+    async setPlaybackActive(req = {}) {
+      const active = typeof req === 'boolean' ? req : Boolean(req?.active)
+      const state = setStoragePlaybackActive(active, { source: 'app' })
+      return { success: true, active: isStoragePlaybackActive(), state }
     },
 
     /**

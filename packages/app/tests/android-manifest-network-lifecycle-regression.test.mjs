@@ -56,3 +56,11 @@ test('root layout suspends native networking on background and resumes it on for
   assert.match(handlerBody, /nextState === 'active'/)
   assert.match(handlerBody, /platformRPC\.rpc\?\.resumeNetwork\?\.\(\)/)
 })
+
+test('root layout mirrors local playback activity into the backend suspend guard', () => {
+  const source = readAppFile('app/_layout.tsx')
+
+  assert.match(source, /setPlaybackActive/)
+  assert.match(source, /playbackActiveEmitter\.isActive/)
+  assert.match(source, /platformRPC\.rpc\?\.setPlaybackActive\?\.\(\{ active: nextActive \}\)/)
+})

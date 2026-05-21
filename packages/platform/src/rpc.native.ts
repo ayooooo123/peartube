@@ -104,6 +104,7 @@ declare const HRPC: new (stream: any) => {
   castIsConnected(req: {}): Promise<any>;
   suspendNetwork(req: {}): Promise<any>;
   resumeNetwork(req: {}): Promise<any>;
+  setPlaybackActive(req: { active: boolean }): Promise<any>;
   onEventReady(handler: (data: any) => void): void;
   onEventError(handler: (data: any) => void): void;
   onEventVideoStats(handler: (data: any) => void): void;
@@ -1267,6 +1268,15 @@ export const rpc = {
       return { success: true }
     }
     return await (fn as (req: {}) => Promise<{ success: boolean }>).call(rpc, {})
+  },
+
+  async setPlaybackActive(req: { active: boolean }): Promise<{ success: boolean }> {
+    const rpc = ensureRPC() as unknown as Record<string, unknown>
+    const fn = rpc.setPlaybackActive
+    if (typeof fn !== 'function') {
+      return { success: true }
+    }
+    return await (fn as (request: { active: boolean }) => Promise<{ success: boolean }>).call(rpc, req)
   },
 
   // Channel and metadata updates

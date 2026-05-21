@@ -18,6 +18,14 @@ import Hyperbee from 'hyperbee'
 import b4a from 'b4a'
 import ReadyResource from 'ready-resource'
 
+const DEFAULT_LIST_VIDEOS_SYNC_TIMEOUT_MS = 1500
+const DEFAULT_LIST_VIDEOS_STREAM_TIMEOUT_MS = 1200
+
+function normalizeTimeoutMs(value, fallback) {
+  const timeout = Number(value)
+  return Number.isFinite(timeout) && timeout >= 0 ? timeout : fallback
+}
+
 export class PublicChannelBee extends ReadyResource {
   /**
    * @param {import('corestore')} store
@@ -143,15 +151,36 @@ export class PublicChannelBee extends ReadyResource {
   // Video Operations
   // ============================================
 
-  async listVideos() {
+  async listVideos(options = {}) {
+    const syncTimeoutMs = normalizeTimeoutMs(options?.syncTimeoutMs, DEFAULT_LIST_VIDEOS_SYNC_TIMEOUT_MS)
+    const streamTimeoutMs = normalizeTimeoutMs(options?.timeoutMs, DEFAULT_LIST_VIDEOS_STREAM_TIMEOUT_MS)
+
     // Give replication a chance before scanning.
-    await this.waitForSync(1500)
+    await this.waitForSync(syncTimeoutMs)
 
     const videos = []
     const stream = this.bee.createReadStream({
       gte: 'videos/',
       lt: 'videos0' // '0' comes after '/' in ASCII
     })
+    let timeout = null
+    let timedOut = false
+
+    const destroyStream = (err) => {
+      try {
+        stream.destroy?.(err)
+      } catch (destroyError) {
+        console.warn('[PublicBee] listVideos stream destroy failed:', destroyError?.message || destroyError)
+      }
+    }
+
+    if (streamTimeoutMs > 0) {
+      timeout = setTimeout(() => {
+        timedOut = true
+        destroyStream(new Error(`PublicBee listVideos timed out after ${streamTimeoutMs}ms`))
+      }, streamTimeoutMs)
+      timeout.unref?.()
+    }
 
     try {
       for await (const node of stream) {
@@ -160,13 +189,14 @@ export class PublicChannelBee extends ReadyResource {
         }
       }
     } catch (error) {
-      try {
-        stream.destroy?.(error)
-      } catch (destroyError) {
-        console.warn('[PublicBee] listVideos stream destroy failed:', destroyError?.message || destroyError)
+      if (!timedOut) {
+        destroyStream(error)
+        console.warn('[PublicBee] listVideos stream failed:', error?.message || error)
+      } else {
+        console.log('[PublicBee] listVideos stream timed out; returning partial results:', error?.message || error)
       }
-      console.warn('[PublicBee] listVideos stream failed:', error?.message || error)
-      return videos
+    } finally {
+      if (timeout) clearTimeout(timeout)
     }
 
     // Sort by upload time, newest first

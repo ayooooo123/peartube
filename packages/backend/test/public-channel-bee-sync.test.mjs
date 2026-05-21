@@ -37,6 +37,63 @@ async function withPublicBee(fn) {
   }
 }
 
+function makeDelayedTimeoutStream(delayMs) {
+  let rejectNext = null
+  let timer = null
+
+  const stream = {
+    destroyed: false,
+    destroyError: null,
+    [Symbol.asyncIterator]() {
+      return this
+    },
+    next() {
+      return new Promise((resolve, reject) => {
+        rejectNext = reject
+        timer = setTimeout(() => {
+          rejectNext = null
+          reject(new Error('REQUEST_TIMEOUT: Request timed out'))
+        }, delayMs)
+      })
+    },
+    destroy(err) {
+      this.destroyed = true
+      this.destroyError = err || null
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      if (rejectNext) {
+        const reject = rejectNext
+        rejectNext = null
+        reject(err || new Error('stream destroyed'))
+      }
+    },
+  }
+
+  return stream
+}
+
+test('listVideos returns promptly when a PublicBee video scan stalls', async (t) => {
+  const stream = makeDelayedTimeoutStream(250)
+  const publicBee = Object.create(PublicChannelBee.prototype)
+  publicBee.waitForSync = async () => {}
+  publicBee.bee = {
+    createReadStream() {
+      return stream
+    },
+  }
+
+  const started = Date.now()
+  const videos = await publicBee.listVideos({ timeoutMs: 20 })
+  const elapsed = Date.now() - started
+
+  t.alike(videos, [])
+  t.ok(stream.destroyed, 'stalled stream is destroyed')
+  t.is(stream.destroyError?.message, 'PublicBee listVideos timed out after 20ms')
+  t.ok(elapsed < 150, `listVideos returned after ${elapsed}ms`)
+})
+
 test('syncFromChannel keeps existing public videos when a channel unexpectedly reads empty', async (t) => {
   await withPublicBee(async (publicBee) => {
     await publicBee.putVideo('video-1', {

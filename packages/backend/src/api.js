@@ -87,7 +87,11 @@ export function createApi({
 
   const listPublicBeeVideosBounded = async ({ publicBee, driveKey, publicBeeKey, timeoutMs = 1500 }) => {
     try {
-      return await withTimeout(publicBee.listVideos(), timeoutMs, `PublicBee listVideos ${driveKey?.slice?.(0, 16) || ''} ${publicBeeKey?.slice?.(0, 16) || ''}`)
+      return await withTimeout(
+        publicBee.listVideos({ timeoutMs }),
+        timeoutMs + 100,
+        `PublicBee listVideos ${driveKey?.slice?.(0, 16) || ''} ${publicBeeKey?.slice?.(0, 16) || ''}`
+      )
     } catch (err) {
       console.warn('[API] PublicBee listVideos bounded timeout/failure:', driveKey?.slice?.(0, 16), publicBeeKey?.slice?.(0, 16), err?.message)
       return []
@@ -814,7 +818,12 @@ export function createApi({
           await markAsMultiWriterChannel(driveKey)
           try {
             const publicBee = await loadPublicBee(ctx, publicBeeKey)
-            const videos = await publicBee.listVideos()
+            const videos = await listPublicBeeVideosBounded({
+              publicBee,
+              driveKey,
+              publicBeeKey,
+              timeoutMs: 1200,
+            })
             console.log('[API] LIST_VIDEOS: PublicBee returned', videos?.length, 'videos')
             if ((videos?.length || 0) === 0) {
               const previewVideos = previewVideosFromFeedEntry(driveKey, publicBeeKey)

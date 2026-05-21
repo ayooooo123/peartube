@@ -40,6 +40,29 @@ function moveDirectoryContents(srcDir, destDir, fsModule, pathModule) {
   }
 }
 
+export function relocateLegacyCorestoreDir(storagePath, fsModule, pathModule) {
+  if (!storagePath || !fsModule || !pathModule) return null
+
+  const legacyCorestoreDir = pathModule.join(storagePath, 'corestore')
+  const dbCorestoreDir = pathModule.join(storagePath, 'db', 'corestore')
+
+  let legacyStats = null
+  let dbStats = null
+  try {
+    legacyStats = fsModule.statSync(legacyCorestoreDir)
+  } catch {}
+  try {
+    dbStats = fsModule.statSync(dbCorestoreDir)
+  } catch {}
+
+  if (!legacyStats?.isDirectory?.() || !dbStats?.isDirectory?.()) return null
+
+  const archiveDir = createArchiveDirPath(storagePath, pathModule, fsModule, 'corestore-legacy')
+  moveDirectoryContents(legacyCorestoreDir, archiveDir, fsModule, pathModule)
+  fsModule.rmdirSync(legacyCorestoreDir)
+  return archiveDir
+}
+
 export function relocateLegacyBlindPeerDir(storagePath, fsModule, pathModule) {
   if (!storagePath || !fsModule || !pathModule) return null
 

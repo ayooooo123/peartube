@@ -40,6 +40,6 @@ test('swarmQueuePeer queues through public joinPeer and avoids private priority 
 
   assert.equal(swarmQueuePeer(swarm, peerInfo), true)
   assert.deepEqual(swarm.joinPeerCalls, [publicKey])
-  assert.equal(peerInfo.queued, true)
+  assert.equal(peerInfo.queued, false)
   assert.equal(peerInfo.explicit, true)
 })

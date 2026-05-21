@@ -24,7 +24,9 @@ export async function initPeer ({ storagePath, maxBytes, pinnedChannels = [] }) 
   publicFeed.setOnFeedUpdate(() => {
     for (const entry of publicFeed.entries.values()) {
       if (entry.driveKey && entry.publicBeeKey) {
-        cacheManager.addChannel(entry.driveKey, entry.publicBeeKey, 'discovered').catch(() => {})
+        cacheManager.addChannel(entry.driveKey, entry.publicBeeKey, 'discovered', {
+          previewVideos: Array.isArray(entry.previewVideos) ? entry.previewVideos : []
+        }).catch(() => {})
       }
     }
   })

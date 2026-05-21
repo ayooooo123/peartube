@@ -13,6 +13,14 @@ function emptyStats() {
     blobCores: 0,
     discoveryHandles: 0,
     blindPeer: null,
+    blobAvailability: {
+      playable: 0,
+      available: 0,
+      unavailable: 0,
+      missing: 0,
+      unknown: 0,
+      videos: []
+    },
     lastSeededAt: null,
     lastError: null
   }
@@ -43,6 +51,24 @@ function getVideoKey(video) {
   return String(video?.id || video?.path || video?.videoId || video?.blobId || '')
 }
 
+function mergeBlobAvailability(target, source) {
+  if (!source) return target
+  target.playable += Number(source.playable || 0)
+  target.available += Number(source.available || 0)
+  target.unavailable += Number(source.unavailable || 0)
+  target.missing += Number(source.missing || 0)
+  target.unknown += Number(source.unknown || 0)
+  if (Array.isArray(source.videos)) target.videos.push(...source.videos)
+  return target
+}
+
+function parseBlockBlobId(blobId) {
+  if (typeof blobId !== 'string') return null
+  const parts = blobId.split(':').map((part) => Number(part))
+  if (parts.length < 2 || !Number.isFinite(parts[0]) || !Number.isFinite(parts[1])) return null
+  return { blockOffset: parts[0], blockLength: parts[1] }
+}
+
 function pushPreview(previews, video) {
   if (!video?.id || !video?.blobId || !video?.blobsCoreKey) return false
   const id = getVideoKey(video)
@@ -62,6 +88,12 @@ function pushPreview(previews, video) {
     thumbnailMimeType: video?.thumbnailMimeType || null
   })
   return true
+}
+
+function getVideoRefKey(video) {
+  const id = getVideoKey(video)
+  if (!id || !video?.blobsCoreKey || !video?.blobId) return null
+  return `${id}:${String(video.blobsCoreKey).toLowerCase()}:${String(video.blobId)}`
 }
 
 export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer = null }) {
@@ -113,6 +145,66 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
     }
   }
 
+  async function inspectVideoBlobAvailability(video, core) {
+    const id = getVideoKey(video)
+    const blob = parseBlockBlobId(video?.blobId)
+    const result = {
+      id,
+      blobsCoreKey: video?.blobsCoreKey || null,
+      blobId: video?.blobId || null,
+      availability: 'unknown',
+      contiguousBlocks: 0,
+      hasHeadBlock: false
+    }
+    if (!id || !core || !blob) return result
+
+    const start = blob.blockOffset
+    const end = blob.blockOffset + blob.blockLength
+    try {
+      const fullyCached = await core.has?.(start, end)
+      if (fullyCached) {
+        result.availability = 'playable'
+        result.contiguousBlocks = blob.blockLength
+        result.hasHeadBlock = true
+      } else {
+        result.availability = 'unavailable'
+        result.contiguousBlocks = 0
+        const headEnd = Math.min(end, start + Math.max(1, Math.min(32, blob.blockLength || 32)))
+        const hasHead = await core.has?.(start, headEnd).catch?.(() => false)
+        result.hasHeadBlock = Boolean(hasHead)
+      }
+      return result
+    } catch (err) {
+      result.error = err?.message || String(err)
+      return result
+    }
+  }
+
+  async function collectBlobAvailability(videos, blobCores) {
+    const availability = emptyStats().blobAvailability
+    const seen = new Set()
+    for (const video of videos) {
+      const id = getVideoKey(video)
+      if (!id || !video?.blobsCoreKey || !video?.blobId) continue
+      const key = `${id}:${video.blobsCoreKey}:${video.blobId}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const core = blobCores.get(String(video.blobsCoreKey).toLowerCase()) || null
+      const detail = await inspectVideoBlobAvailability(video, core)
+      if (detail.availability === 'playable') {
+        availability.playable += 1
+        availability.available += 1
+      } else if (detail.availability === 'unavailable') {
+        availability.unavailable += 1
+        availability.missing += 1
+      } else {
+        availability.unknown += 1
+      }
+      availability.videos.push(detail)
+    }
+    return availability
+  }
+
   async function seedChannel(channel) {
     const driveKey = channel?.driveKey || channel?.channelKey
     const publicBeeKey = channel?.publicBeeKey || null
@@ -131,7 +223,9 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
       const videos = await bee?.listVideos?.().catch(() => [])
       const meta = await bee?.getMetadata?.().catch(() => null)
       const blobCoreKeys = new Map()
+      const blobCores = new Map()
       const previewVideos = []
+      const availabilityVideos = []
 
       // Seed every core reference we know, not only what PublicBee.listVideos() returns.
       // Playback often starts from public-feed/catalog previews; if those refs are
@@ -143,14 +237,19 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
       addPreviewCoreKeys(blobCoreKeys, channel?.feedEntry?.previewVideos)
 
       if (Array.isArray(channel?.previewVideos)) {
+        availabilityVideos.push(...channel.previewVideos)
         for (const video of channel.previewVideos) {
           if (previewVideos.length >= 3) break
           pushPreview(previewVideos, video)
         }
       }
+      if (Array.isArray(channel?.videos)) availabilityVideos.push(...channel.videos)
+      if (Array.isArray(channel?.catalogEntry?.previewVideos)) availabilityVideos.push(...channel.catalogEntry.previewVideos)
+      if (Array.isArray(channel?.feedEntry?.previewVideos)) availabilityVideos.push(...channel.feedEntry.previewVideos)
 
       if (Array.isArray(videos)) {
         stats.videos = Math.max(videos.length, previewVideos.length)
+        availabilityVideos.push(...videos)
         for (const video of videos) {
           addCoreKey(blobCoreKeys, video?.blobsCoreKey, 'blob')
           addCoreKey(blobCoreKeys, video?.thumbnailBlobsCoreKey, 'thumbnail')
@@ -161,11 +260,22 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
       for (const [keyHex, kind] of blobCoreKeys) {
         const core = await resolveBlobCore(keyHex)
         if (core?.discoveryKey) {
+          blobCores.set(keyHex, core)
           retainDiscovery(core.discoveryKey, `${kind}:${keyHex.slice(0, 16)}`)
           try { blindPeer?.addCore?.(core, { announce: true, referrer: b4a.from(publicBeeKey, 'hex') }) } catch {}
           stats.blobCores += 1
         }
       }
+
+      stats.blobAvailability = await collectBlobAvailability(availabilityVideos, blobCores)
+      stats.videos = Math.max(stats.videos, stats.blobAvailability.videos.length)
+      const playableRefs = new Set(
+        stats.blobAvailability.videos
+          .filter((video) => video?.availability === 'playable')
+          .map(getVideoRefKey)
+          .filter(Boolean)
+      )
+      const playablePreviewVideos = previewVideos.filter((video) => playableRefs.has(getVideoRefKey(video)))
 
       stats.channels = 1
       stats.discoveryHandles = handles.size
@@ -176,6 +286,7 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
         videos: stats.videos,
         publicBeeCores: stats.publicBeeCores,
         blobCores: stats.blobCores,
+        blobAvailability: stats.blobAvailability,
         lastSeededAt: stats.lastSeededAt,
         lastError: null
       })
@@ -196,7 +307,7 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
         channelName: meta?.name || channel?.channelName || null,
         videoCount: stats.videos,
         manifestUpdatedAt: Number(meta?.updatedAt || meta?.createdAt || 0) || Date.now(),
-        previewVideos
+        previewVideos: playablePreviewVideos
       }
       return stats
     } catch (err) {
@@ -237,6 +348,7 @@ export function createRelaySeeder({ ctx, loadPublicBee, logger = {}, blindPeer =
       stats.videos += Number(channel.videos || 0)
       stats.publicBeeCores += Number(channel.publicBeeCores || 0)
       stats.blobCores += Number(channel.blobCores || 0)
+      mergeBlobAvailability(stats.blobAvailability, channel.blobAvailability)
       if (channel.lastSeededAt && (!stats.lastSeededAt || channel.lastSeededAt > stats.lastSeededAt)) {
         stats.lastSeededAt = channel.lastSeededAt
       }

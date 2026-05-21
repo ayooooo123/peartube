@@ -54,6 +54,7 @@ export function buildRelayStatus({ config, catalog, runtimeStats = {} }) {
         publicBeeCores: runtimeStats.seeding?.publicBeeCores || 0,
         blobCores: runtimeStats.seeding?.blobCores || 0,
         discoveryHandles: runtimeStats.seeding?.discoveryHandles || 0,
+        blobAvailability: runtimeStats.seeding?.blobAvailability || null,
         lastSeededAt: runtimeStats.seeding?.lastSeededAt || null,
         lastError: runtimeStats.seeding?.lastError || null
       }
@@ -100,7 +101,8 @@ export function formatRelayStatus(status) {
     `directPeerDial: discovered=${status.runtime.directPeerDial?.discoveredPeers || 0} pending=${status.runtime.directPeerDial?.pending || 0} queued=${status.runtime.directPeerDial?.queued || 0} skipped=${status.runtime.directPeerDial?.skipped || 0} failed=${status.runtime.directPeerDial?.failed || 0} connected=${status.runtime.directPeerDial?.connected || 0} lastReason=${status.runtime.directPeerDial?.lastReason || 'none'} lastError=${firstDialError || 'none'}`,
     `doctor: boundary=${status.runtime.doctor?.recommendedBoundary || 'unknown'} discovered=${status.runtime.doctor?.discovery?.discoveredPeers ?? status.runtime.directPeerDial?.discoveredPeers ?? 0} sockets=${status.runtime.doctor?.socket?.swarmConnections ?? status.runtime.connections ?? 0} feedConnections=${status.runtime.doctor?.feed?.feedConnections ?? status.runtime.feedConnections ?? 0}`,
     `blindPeer: enabled=${Boolean(status.runtime.blindPeer?.enabled)} key=${status.runtime.blindPeer?.publicKey || 'none'} mirroredCores=${status.runtime.blindPeer?.mirroredCores || 0} mirroredAutobases=${status.runtime.blindPeer?.mirroredAutobases || 0}`,
-    `seeding: channels=${status.runtime.seeding.channels} videos=${status.runtime.seeding.videos} publicBeeCores=${status.runtime.seeding.publicBeeCores} blobCores=${status.runtime.seeding.blobCores} discoveryHandles=${status.runtime.seeding.discoveryHandles}`
+    `seeding: channels=${status.runtime.seeding.channels} videos=${status.runtime.seeding.videos} publicBeeCores=${status.runtime.seeding.publicBeeCores} blobCores=${status.runtime.seeding.blobCores} discoveryHandles=${status.runtime.seeding.discoveryHandles}`,
+    `blobAvailability: playable=${status.runtime.seeding.blobAvailability?.playable || 0} unavailable=${status.runtime.seeding.blobAvailability?.unavailable || 0} unknown=${status.runtime.seeding.blobAvailability?.unknown || 0}`
   ]
 
   if (status.evictionCandidates.length > 0) {

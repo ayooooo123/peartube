@@ -830,9 +830,25 @@ test('createRelayService refreshes already accepted channels when feed preview r
 })
 
 
-test('createRelayService keeps previous playable previews when refresh downloads no videos', async (t) => {
-  const dir = makeTempDir('peartube-relay-service-preview-preserve-')
+test('createRelayService removes playable previews when refresh downloads no videos', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-preview-remove-hollow-')
   const runtime = createFakeRuntime()
+  const published = []
+  const cachedAdds = []
+  const seeded = []
+  runtime.publishRelayCatalogEntry = async (entry) => { published.push(entry); return entry }
+  runtime.cacheManager = {
+    async addChannel(channelKey, publicBeeKey, source, options) {
+      cachedAdds.push({ channelKey, publicBeeKey, source, previewVideos: options?.previewVideos || [] })
+    }
+  }
+  runtime.seeder = {
+    async seedChannel(channel) {
+      seeded.push(channel)
+      return null
+    },
+    getStats() { return {} }
+  }
   const previewVideos = [{
     id: 'preview-1',
     blobId: '0:2:0:20',
@@ -856,7 +872,7 @@ test('createRelayService keeps previous playable previews when refresh downloads
       logger: createFakeLogger(),
       runtimeFactory: async () => runtime,
       mirrorChannel: async (candidate) => {
-        const firstRefresh = !service?.catalog?.getChannel?.(candidate.channelKey)?.previewVideos
+        const firstRefresh = !service?.catalog?.getChannel?.(candidate.channelKey)?.mirroredAt
         return {
           bytesDownloaded: firstRefresh ? 20 : 0,
           videosFound: candidate.previewVideos?.length || 0,
@@ -869,12 +885,69 @@ test('createRelayService keeps previous playable previews when refresh downloads
     })
 
     await service.start()
-    await runtime.emit({ channelKey: 'chan-preview-preserve', publicBeeKey: 'bee-preview-preserve', source: 'discovered', previewVideos })
-    await runtime.emit({ channelKey: 'chan-preview-preserve', publicBeeKey: 'bee-preview-preserve', source: 'discovered', previewVideos })
+    await runtime.emit({ channelKey: 'chan-preview-remove', publicBeeKey: 'bee-preview-remove', source: 'discovered', previewVideos })
+    await runtime.emit({ channelKey: 'chan-preview-remove', publicBeeKey: 'bee-preview-remove', source: 'discovered', previewVideos })
 
-    const channel = service.catalog.getChannel('chan-preview-preserve')
-    t.alike(channel.previewVideos, previewVideos)
-    t.is(channel.videosDownloaded, 1)
+    const channel = service.catalog.getChannel('chan-preview-remove')
+    t.alike(channel.previewVideos, [])
+    t.is(channel.videosDownloaded, 0)
+    t.is(channel.bytes, 0)
+    t.alike(cachedAdds.at(-1).previewVideos, [])
+    t.alike(seeded.at(-1).previewVideos, [])
+    t.alike(published.at(-1).previewVideos, [])
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+test('createRelayService clears playable previews when accepted refresh mirror throws', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-preview-error-clear-')
+  const runtime = createFakeRuntime()
+  const previewVideos = [{
+    id: 'preview-error',
+    blobId: '0:2:0:20',
+    blobsCoreKey: 'aa'.repeat(32)
+  }]
+
+  try {
+    let calls = 0
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        calls += 1
+        if (calls > 1) throw new Error('mirror unavailable')
+        return {
+          bytesDownloaded: 20,
+          videosFound: candidate.previewVideos?.length || 0,
+          videosDownloaded: 1,
+          previewVideos: candidate.previewVideos,
+          videoCount: candidate.previewVideos?.length || 0
+        }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-preview-error', publicBeeKey: 'bee-preview-error', source: 'discovered', previewVideos })
+    await runtime.emit({ channelKey: 'chan-preview-error', publicBeeKey: 'bee-preview-error', source: 'discovered', previewVideos })
+
+    const channel = service.catalog.getChannel('chan-preview-error')
+    t.alike(channel.previewVideos, [])
+    t.is(channel.videosDownloaded, 0)
+    t.is(channel.bytes, 0)
+    t.is(channel.lastError, 'mirror unavailable')
     await service.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

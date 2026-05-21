@@ -31,6 +31,7 @@ export const P2PStatsBar = memo(function P2PStatsBar({ stats }: P2PStatsBarProps
     if (!stats) return { color: '#6b7280', label: 'Starting player' }
     if (stats.isComplete) return { color: '#4ade80', label: 'Cached' }
     if (stats.status === 'downloading') return { color: '#fbbf24', label: 'Downloading' }
+    if (downloadSpeed > 0) return { color: '#fbbf24', label: 'Downloading' }
     if (stats.status === 'connecting') return { color: '#60a5fa', label: 'Finding video peers' }
     if (stats.status === 'resolving') return { color: '#a78bfa', label: 'Resolving video' }
     if (stats.status === 'error') return { color: '#f87171', label: 'Playback error' }

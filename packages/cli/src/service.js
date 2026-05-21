@@ -64,16 +64,13 @@ export async function createRelayService({
 
   function shouldRefreshAcceptedChannel(existing, candidate) {
     if (!existing?.channelKey) return false
-    const incomingSignature = getPreviewBlobSignature(candidate?.previewVideos)
-    if (!incomingSignature) return false
+    if (!Array.isArray(candidate?.previewVideos)) return false
 
+    const incomingSignature = getPreviewBlobSignature(candidate.previewVideos)
     const existingSignature = getPreviewBlobSignature(existing.previewVideos)
     if (incomingSignature !== existingSignature) return true
 
-    if ((Number(existing.videosDownloaded) || 0) <= 0) return true
-    if ((Number(existing.bytes) || 0) <= 0) return true
-
-    return false
+    return true
   }
 
   async function runLocalMirrorOnce(localMirrorConfig = config.archive?.localMirror || {}) {
@@ -199,11 +196,9 @@ export async function createRelayService({
         videosDownloaded: mirrorStats?.videosDownloaded || 0,
         mirroredAt: Date.now(),
         lastError: null,
-        previewVideos: Array.isArray(mirrorStats?.previewVideos) && mirrorStats.previewVideos.length > 0
+        previewVideos: Array.isArray(mirrorStats?.previewVideos)
           ? mirrorStats.previewVideos
-          : (Array.isArray(existingChannel?.previewVideos) && existingChannel.previewVideos.length > 0
-              ? existingChannel.previewVideos
-              : undefined),
+          : undefined,
         videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || 0) || 0,
         manifestUpdatedAt: Date.now()
       })
@@ -218,12 +213,9 @@ export async function createRelayService({
       }
 
       if (resolved.publicBeeKey) {
-        const seedPreviewVideos = Array.isArray(mirrorStats?.previewVideos) && mirrorStats.previewVideos.length > 0
+        const seedPreviewVideos = Array.isArray(mirrorStats?.previewVideos)
           ? mirrorStats.previewVideos
-          : (Array.isArray(resolved.previewVideos) ? resolved.previewVideos : [])
-        const persistedPreviewVideos = seedPreviewVideos.length > 0
-          ? seedPreviewVideos
-          : (Array.isArray(existingChannel?.previewVideos) ? existingChannel.previewVideos : [])
+          : []
         await runtime.cacheManager?.addChannel?.(resolved.channelKey, resolved.publicBeeKey, 'discovered', {
           previewVideos: seedPreviewVideos
         }).catch(() => {})
@@ -240,8 +232,8 @@ export async function createRelayService({
           source: 'relay-cache',
           relayRole: 'cache',
           relayServing: true,
-          previewVideos: persistedPreviewVideos,
-          videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || persistedPreviewVideos.length || 0) || 0,
+          previewVideos: seedPreviewVideos,
+          videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || seedPreviewVideos.length || 0) || 0,
           manifestUpdatedAt: Date.now()
         }
         await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
@@ -258,6 +250,10 @@ export async function createRelayService({
     } catch (err) {
       await relayCatalog.upsertChannel({
         ...baseRecord,
+        videosDownloaded: 0,
+        bytes: 0,
+        previewVideos: [],
+        videoCount: 0,
         lastError: err?.message || String(err)
       })
 

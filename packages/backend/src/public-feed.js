@@ -871,15 +871,62 @@ export class PublicFeed {
 
 
   runBoundedPeerRecovery(reason = 'heartbeat') {
+    const now = this._now()
+    const connections = this.swarm?.connections?.size || 0
+    const discoveredPeers = this._discoveredPeers.size
     const event = {
-      at: this._now(),
+      at: now,
       action: 'observed-peers-without-sockets',
       reason: 'hyperswarm-owned-dialing',
       requestedReason: reason,
-      discoveredPeers: this._discoveredPeers.size,
-      connections: this.swarm?.connections?.size || 0,
+      discoveredPeers,
+      connections,
       queued: 0,
     }
+
+    if (this.swarm && discoveredPeers > 0 && connections === 0 && now - this._lastRecoveryAt >= this._recoveryCooldownMs) {
+      this._lastRecoveryAt = now
+      event.action = 'requeued-discovered-peers'
+      event.reason = 'foreground-resume-no-sockets'
+
+      for (const record of this._peerDirectory.values()) {
+        if (!record?.publicKey || record.demoted) continue
+        try {
+          const peerInfo = this.swarm.peers?.get?.(record.keyHex) || null
+          if (peerInfo) {
+            try {
+              peerInfo.explicit = true
+              if (typeof peerInfo._updatePriority === 'function') peerInfo._updatePriority()
+            } catch { /* best effort */ }
+            if (swarmQueuePeer(this.swarm, peerInfo)) {
+              event.queued++
+              record.joined = true
+              record.lastJoinedAt = now
+              this._directPeerDialStats.queued++
+              this._directPeerDialStats.lastReason = 'resume-requeued-existing-peer'
+              this._directPeerDialStats.lastDialedAt = now
+              continue
+            }
+          }
+
+          this.swarm.joinPeer(record.publicKey)
+          event.queued++
+          record.joined = true
+          record.demoted = false
+          record.joinAttempts++
+          record.lastJoinedAt = now
+          record.lastJoinError = null
+          this._directPeerDialStats.queued++
+          this._directPeerDialStats.lastReason = 'resume-joinPeer'
+          this._directPeerDialStats.lastDialedAt = now
+        } catch (err) {
+          record.lastJoinError = err?.message || String(err)
+          this._directPeerDialStats.failed++
+          this._directPeerDialStats.lastReason = 'resume-joinPeer-error'
+        }
+      }
+    }
+
     this._recoveryEvents.push(event)
     while (this._recoveryEvents.length > 10) this._recoveryEvents.shift()
     return event

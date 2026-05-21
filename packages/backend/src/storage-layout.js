@@ -15,7 +15,9 @@ function moveFileWithFallback(srcPath, destPath, fsModule) {
   try {
     fsModule.renameSync(srcPath, destPath)
     return
-  } catch {}
+  } catch {
+    // Fall back to copy/unlink for cross-device or platform-specific renames.
+  }
 
   const contents = fsModule.readFileSync(srcPath)
   fsModule.writeFileSync(destPath, contents)
@@ -40,6 +42,33 @@ function moveDirectoryContents(srcDir, destDir, fsModule, pathModule) {
   }
 }
 
+export function relocateLegacyCorestoreDir(storagePath, fsModule, pathModule) {
+  if (!storagePath || !fsModule || !pathModule) return null
+
+  const legacyCorestoreDir = pathModule.join(storagePath, 'corestore')
+  const dbCorestoreDir = pathModule.join(storagePath, 'db', 'corestore')
+
+  let legacyStats = null
+  let dbStats = null
+  try {
+    legacyStats = fsModule.statSync(legacyCorestoreDir)
+  } catch {
+    // Missing legacy directory is a no-op.
+  }
+  try {
+    dbStats = fsModule.statSync(dbCorestoreDir)
+  } catch {
+    // Missing canonical directory is a no-op.
+  }
+
+  if (!legacyStats?.isDirectory?.() || !dbStats?.isDirectory?.()) return null
+
+  const archiveDir = createArchiveDirPath(storagePath, pathModule, fsModule, 'corestore-legacy')
+  moveDirectoryContents(legacyCorestoreDir, archiveDir, fsModule, pathModule)
+  fsModule.rmdirSync(legacyCorestoreDir)
+  return archiveDir
+}
+
 export function relocateLegacyBlindPeerDir(storagePath, fsModule, pathModule) {
   if (!storagePath || !fsModule || !pathModule) return null
 
@@ -50,7 +79,9 @@ export function relocateLegacyBlindPeerDir(storagePath, fsModule, pathModule) {
   let legacyStats = null
   try {
     legacyStats = fsModule.statSync(legacyBlindPeerDir)
-  } catch {}
+  } catch {
+    // Missing legacy directory is a no-op.
+  }
 
   if (!legacyStats?.isDirectory?.()) return null
   fsModule.mkdirSync(pathModule.dirname(corestoreBlindPeerDir), { recursive: true })
@@ -76,7 +107,9 @@ export function relocateLegacyLogsDir(storagePath, fsModule, pathModule) {
   let legacyStats = null
   try {
     legacyStats = fsModule.statSync(legacyLogsDir)
-  } catch {}
+  } catch {
+    // Missing legacy directory is a no-op.
+  }
 
   if (!legacyStats?.isDirectory?.()) return null
   if (!fsModule.existsSync(dbLogsDir)) return null

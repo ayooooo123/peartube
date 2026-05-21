@@ -50,7 +50,7 @@ test('swarmQueuePeer promotes peer info and queues via public joinPeer without p
   assert.equal(swarmQueuePeer(swarm, peerInfo), true)
   assert.equal(swarm.enqueueCalls.length, 0)
   assert.equal(peerInfo.explicit, true)
-  assert.equal(peerInfo.queued, true)
+  assert.equal(peerInfo.queued, false)
   assert.equal(swarm.joinPeerCalls.length, 1)
   assert.equal(swarm.joinPeerCalls[0], publicKey)
 })

@@ -119,10 +119,21 @@ test('feed discovery state distinguishes permission, transport, cached fallback,
     ready: true,
     entries: [{ driveKey: 'live-feed' }],
     videos: [],
-    swarmStatus: { feedEntries: 88, feedConnections: 0, peers: 0 },
+    swarmStatus: { feedEntries: 88, feedConnections: 0, swarmPeers: 8 },
   }), {
     state: 'hydrating',
     recoverable: true,
+  })
+
+  assert.deepEqual(classifyFeedDiscoveryState({
+    ready: true,
+    entries: [],
+    videos: [],
+    swarmStatus: { swarmPeers: 8, swarmConnections: 0, feedConnections: 0, doctor: { recommendedBoundary: 'transport-socket' } },
+  }), {
+    state: 'network-degraded',
+    recoverable: true,
+    reason: 'transport-socket',
   })
 })
 

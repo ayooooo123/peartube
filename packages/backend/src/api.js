@@ -3535,7 +3535,6 @@ export function createApi({
     async resumeNetwork() {
       try {
         await resumeNetworking()
-        publicFeed?.runBoundedPeerRecovery?.('foreground-resume')
         return { success: true }
       } catch (err) {
         console.error('[API] resumeNetwork error:', err.message)

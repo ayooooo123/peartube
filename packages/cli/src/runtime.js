@@ -86,7 +86,10 @@ export async function createRelayRuntime({ config, logger }) {
     // Docker/bind-mounted relay volumes can trip device-file inode/mtime validation
     // across clean container restarts even with the same persisted primary key.
     // The relay is a single-writer service, so disable device-file enforcement here.
-    corestoreAllowBackup: true
+    corestoreAllowBackup: true,
+    // A relay without Hyperswarm is not a degraded local app; it cannot
+    // discover peers, gossip inventory, or serve retained content to the network.
+    requireNetwork: true
   })
 
   if (!primaryKey && ctx?.store?.primaryKey) {

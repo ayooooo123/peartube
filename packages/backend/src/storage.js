@@ -848,7 +848,8 @@ export async function initializeStorage(config) {
     blobServerBindHost: blobServerBindHostOverride,
     primaryKey = null,
     corestoreWaitForLock = false,
-    corestoreAllowBackup = false
+    corestoreAllowBackup = false,
+    requireNetwork = false
   } = config;
 
   console.log('[Storage] Initializing storage at:', storagePath);
@@ -1117,10 +1118,28 @@ export async function initializeStorage(config) {
 
   console.log('[Storage] Creating Hyperswarm...');
   await appendDebugLine('[storage] creating hyperswarm')
-  const LoadedHyperswarm = Hyperswarm || (hyperswarmModuleReady ? await Promise.race([
-    hyperswarmModuleReady,
-    new Promise((resolve) => setTimeout(() => resolve(null), 100))
-  ]) : null)
+  let LoadedHyperswarm = Hyperswarm
+  if (!LoadedHyperswarm && requireNetwork) {
+    LoadedHyperswarm = hyperswarmModuleReady ? await hyperswarmModuleReady : null
+    if (typeof LoadedHyperswarm !== 'function') {
+      try {
+        LoadedHyperswarm = await loadHyperswarmModule()
+        if (LoadedHyperswarm) Hyperswarm = LoadedHyperswarm
+      } catch (err) {
+        const reason = err?.message || String(err)
+        console.warn('[Storage] Hyperswarm unavailable but network is required:', reason)
+        throw new Error(`Hyperswarm unavailable for required network startup: ${reason}`)
+      }
+    }
+    if (typeof LoadedHyperswarm !== 'function') {
+      throw new Error(`Hyperswarm unavailable for required network startup`)
+    }
+  } else if (!LoadedHyperswarm) {
+    LoadedHyperswarm = hyperswarmModuleReady ? await Promise.race([
+      hyperswarmModuleReady,
+      new Promise((resolve) => setTimeout(() => resolve(null), 100))
+    ]) : null
+  }
   let swarm
   if (typeof LoadedHyperswarm !== 'function') {
     console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
@@ -1130,6 +1149,9 @@ export async function initializeStorage(config) {
     try {
       swarm = new LoadedHyperswarm({ keyPair });
     } catch (err) {
+      if (requireNetwork) {
+        throw new Error(`Hyperswarm failed to start for required network startup: ${err?.message || String(err)}`)
+      }
       console.warn('[Storage] Hyperswarm creation failed; continuing with offline P2P networking:', err?.message)
       await appendDebugLine(`[storage] hyperswarm create failed; using offline swarm ${err?.message || String(err)}`)
       swarm = createOfflineSwarm(keyPair, err?.message || 'create-failed')

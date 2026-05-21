@@ -29,6 +29,24 @@ test('storage startup does not await optional network dependencies before local 
   assert.match(storageSource, /Promise\.race\(\[[\s\S]*?hyperswarmModuleReady[\s\S]*?setTimeout\(\(\) => resolve\(null\), 100\)/)
 })
 
+test('storage can require Hyperswarm instead of falling back after the optional startup race', () => {
+  assert.match(
+    storageSource,
+    /requireNetwork\s*=\s*false/,
+    'initializeStorage should expose an opt-in required-network mode'
+  )
+  assert.match(
+    storageSource,
+    /requireNetwork[\s\S]*?await hyperswarmModuleReady/,
+    'required-network startup should await Hyperswarm instead of using the optional 100ms race'
+  )
+  assert.match(
+    storageSource,
+    /requireNetwork[\s\S]*?throw new Error\(`Hyperswarm unavailable/,
+    'required-network startup should fail loudly if Hyperswarm cannot load'
+  )
+})
+
 test('blob server watchdog lazily loads HTTP only when cast probing is needed', () => {
   const watchdogBody =
     storageSource.match(/export function startBlobServerWatchdog\(\) \{([\s\S]*?)\n\}/)?.[1] ?? ''

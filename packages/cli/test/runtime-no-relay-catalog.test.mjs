@@ -15,3 +15,7 @@ test('relay runtime publishes cached relay inventory as relay catalog feed entri
   t.ok(runtimeSource.includes('relayRole'), 'relay catalog entries should preserve relay role')
   t.ok(runtimeSource.includes('relayServing'), 'relay catalog entries should advertise relay serving state')
 })
+
+test('relay runtime requires real P2P networking at storage startup', (t) => {
+  t.ok(runtimeSource.includes('requireNetwork: true'), 'relay runtime should not start on the offline no-op swarm')
+})

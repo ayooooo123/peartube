@@ -21,7 +21,6 @@ import b4a from 'b4a'
 import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
-import { swarmHasConnection, swarmRememberPeer, swarmQueuePeer } from './swarm-peer-dial.js'
 import {
   SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
   CHANNEL_ROOT_DESCRIPTOR_SCHEMA
@@ -77,32 +76,10 @@ export class PublicFeed {
     this._nextAvailabilityRequestId = 1;
     /** @type {Map<string, { resolve: Function, timeout: any }>} */
     this.pendingAvailabilityRequests = new Map();
-    /** @type {Map<string, any>} Remembered Hyperswarm peer candidates for diagnostics/recovery. */
+    /** @type {Map<string, { publicKey: any, relayAddressesSeen: number, topics: Set<string>, firstSeenAt: number, lastSeenAt: number }>} Discovered peers retained only for diagnostics. */
     this._discoveredPeers = new Map();
-    /** @type {Map<string, any>} Remembered discovered peer objects with relay-address hints. */
-    this._discoveredPeerHints = new Map();
-    /** @type {Array<{at: number, action: string, reason?: string, discoveredPeers: number, connections: number, queued: number}>} */
-    this._recoveryEvents = [];
     /** @type {number} */
-    this._lastRecoveryAt = 0;
-    /** @type {number} */
-    this._recoveryCooldownMs = 30000;
-    /** @type {Map<string, number>} */
-    this._directPeerLastDialedAt = new Map();
-    /** @type {Map<string, string>} */
-    this._directPeerLastDialError = new Map();
-    /** @type {Map<string, string>} */
-    this._directPeerLastDialErrorStack = new Map();
-    /** @type {{attempted: number, queued: number, skipped: number, failed: number, connected: number, lastReason: string | null, lastDialedAt: number | null}} */
-    this._directPeerDialStats = {
-      attempted: 0,
-      queued: 0,
-      skipped: 0,
-      failed: 0,
-      connected: 0,
-      lastReason: null,
-      lastDialedAt: null,
-    };
+    this._connectionOpenCount = 0;
     /** @type {() => number} */
     this._now = () => Date.now();
     /** @type {any | null} */
@@ -131,15 +108,6 @@ export class PublicFeed {
     this._persistDebounceMs = 1500
     /** @type {number} */
     this._persistMaxEntries = 500
-
-    /** @type {number} */
-    this.maxPeers = Math.max(1, Number(options.maxPeers || this.swarm?.maxPeers || 48) || 48)
-    /** @type {Map<string, {publicKey: any, score: number, firstSeenAt: number, lastSeenAt: number, joined: boolean, demoted: boolean, joinAttempts: number, lastJoinedAt: number | null, lastConnectionAt: number | null, relayHints: number, topics?: Set<string>, lastJoinError?: string | null}>} */
-    this._peerDirectory = new Map()
-    /** @type {Map<any, any>} */
-    this._connectionPeerKeys = new Map()
-    /** @type {number} */
-    this._peerJoinCooldownMs = 30000
 
     log.info('Initialized')
   }
@@ -547,56 +515,48 @@ export class PublicFeed {
     return null
   }
 
-  _peerEntryIsConnected(entry) {
-    if (!entry || typeof entry !== 'object') return false
-    const nestedPeer = entry.value || entry.peer || entry[1]
-    return (
-      entry.connected === true ||
-      entry.opened === true ||
-      (Number.isFinite(entry.connectedTime) && entry.connectedTime >= 0) ||
-      nestedPeer?.connected === true ||
-      nestedPeer?.opened === true ||
-      (Number.isFinite(nestedPeer?.connectedTime) && nestedPeer.connectedTime >= 0) ||
-      Boolean(entry.stream || nestedPeer?.stream)
-    )
+  _peerKeyHex(publicKey) {
+    if (!publicKey) return null
+    if (typeof publicKey === 'string' && /^[a-f0-9]{64}$/i.test(publicKey)) return publicKey.toLowerCase()
+    if (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array) return b4a.toString(publicKey, 'hex')
+    return null
   }
 
-  _activeSwarmConnectionEntries() {
-    const allConnections = this.swarm?._allConnections
-    if (!allConnections || typeof allConnections[Symbol.iterator] !== 'function') return []
-    return Array.from(allConnections).filter((entry) => (
-      entry &&
-      typeof entry === 'object' &&
-      !b4a.isBuffer(entry) &&
-      !(entry instanceof Uint8Array)
-    ))
-  }
-
-  _peerEntryMatchesKey(entry, keyHex, { requireConnected = false } = {}) {
-    const publicKey = this._peerEntryPublicKey(entry)
-    if (!publicKey) return false
-    if (b4a.toString(publicKey, 'hex') !== keyHex) return false
-    return !requireConnected || this._peerEntryIsConnected(entry)
-  }
-
-  _hasActivePeerConnection(keyHex, publicKey = null) {
-    return swarmHasConnection(this.swarm, keyHex, publicKey)
-  }
-
-  _markPeerConnected(publicKey) {
-    const remembered = this._rememberPeerPublicKey(publicKey)
-    if (!remembered) return
-    const peerInfo = this.swarm?.peers?.get?.(remembered.keyHex) || null
-    if (peerInfo && typeof peerInfo === 'object') {
-      peerInfo.queued = false
-      peerInfo.waiting = false
-      peerInfo.connectedTime = Date.now()
+  _hasActivePeerConnection(keyHex) {
+    if (!this.swarm?.connections || typeof this.swarm.connections[Symbol.iterator] !== 'function') return false
+    for (const conn of this.swarm.connections) {
+      const remoteKey = conn?.remotePublicKey || conn?.publicKey
+      if (remoteKey && this._peerKeyHex(remoteKey) === keyHex) return true
     }
-    this._directPeerLastDialError.delete(remembered.keyHex)
-    this._directPeerLastDialErrorStack.delete(remembered.keyHex)
-    this._directPeerDialStats.connected++
-    this._directPeerDialStats.lastReason = 'connected'
+    return false
   }
+
+  _rememberDiscoveredPeer(peer, topic = null) {
+    const publicKey = this._peerEntryPublicKey(peer)
+    const keyHex = this._peerKeyHex(publicKey)
+    if (!keyHex || keyHex === this._peerKeyHex(this.swarm?.keyPair?.publicKey)) return null
+
+    const now = this._now()
+    const relayAddresses = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses : []
+    const existing = this._discoveredPeers.get(keyHex)
+    const record = existing || {
+      publicKey,
+      relayAddressesSeen: 0,
+      topics: new Set(),
+      firstSeenAt: now,
+      lastSeenAt: now,
+    }
+    record.publicKey = publicKey || record.publicKey
+    record.relayAddressesSeen = Math.max(Number(record.relayAddressesSeen || 0), relayAddresses.length)
+    record.lastSeenAt = now
+    if (topic) {
+      const topicHex = this._topicToHex(topic)
+      if (topicHex) record.topics.add(topicHex)
+    }
+    this._discoveredPeers.set(keyHex, record)
+    return { keyHex, publicKey: record.publicKey, record }
+  }
+
 
   _connectionLabel(conn, info = null) {
     if (!conn) return 'conn:unknown'
@@ -623,384 +583,46 @@ export class PublicFeed {
     this.wiredConnections.delete(conn)
     this.peerChannels.delete(conn)
     this.feedConnections.delete(conn)
-    this._connectionPeerKeys.delete(conn)
     this._connectionIds.delete(conn)
     this._connectionStartedAt.delete(conn)
   }
 
-  _rememberPeerPublicKey(publicKey, peer = null, topic = null) {
-    if (!publicKey) return null
-    const keyHex = b4a.toString(publicKey, 'hex')
-    if (!keyHex || keyHex === b4a.toString(this.swarm?.keyPair?.publicKey || [], 'hex')) return null
-    this._discoveredPeers.set(keyHex, publicKey)
-    if (peer && typeof peer === 'object') {
-      const relayAddresses = Array.isArray(peer.relayAddresses) ? peer.relayAddresses : []
-      const existing = this._discoveredPeerHints.get(keyHex) || {}
-      this._discoveredPeerHints.set(keyHex, {
-        peer,
-        topic,
-        relayAddresses,
-        relayAddressesSeen: Math.max(Number(existing.relayAddressesSeen || 0), relayAddresses.length),
-        firstSeenAt: existing.firstSeenAt || this._now(),
-        lastSeenAt: this._now(),
-      })
-    }
-    return { keyHex, publicKey }
-  }
-
-  _peerKeyHex(publicKey) {
-    if (!publicKey) return null
-    if (typeof publicKey === 'string' && /^[a-f0-9]{64}$/i.test(publicKey)) return publicKey.toLowerCase()
-    if (b4a.isBuffer(publicKey) || publicKey instanceof Uint8Array) return b4a.toString(publicKey, 'hex')
-    return null
-  }
-
-  _lowestScoringPeer(excludeKeyHex = null) {
-    let lowest = null
-    for (const record of this._peerDirectory.values()) {
-      if (!record || record.keyHex === excludeKeyHex) continue
-      if (!lowest) {
-        lowest = record
-        continue
-      }
-      if (record.score < lowest.score) {
-        lowest = record
-        continue
-      }
-      if (record.score === lowest.score && record.lastSeenAt < lowest.lastSeenAt) {
-        lowest = record
-      }
-    }
-    return lowest
-  }
-
-  _enforcePeerDirectoryLimit() {
-    while (this._peerDirectory.size > this.maxPeers) {
-      const victim = this._lowestScoringPeer()
-      if (!victim) break
-      victim.demoted = true
-      victim.demotedAt = this._now()
-      this._peerDirectory.delete(victim.keyHex)
-      log.info('Demoted low-scoring peer', { key: victim.keyHex.slice(0, 16), score: victim.score, maxPeers: this.maxPeers })
-    }
-  }
-
-  _scorePeerRecord(record, peer = null, { connectionAgeMs = 0, connected = false, reason = 'seen' } = {}) {
-    if (!record) return null
-    let delta = 0
-    const relayCount = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : Number(record.relayHints || 0)
-    if (relayCount > 0) delta += Math.min(1.5, relayCount * 0.15)
-    if (peer?.client === true) delta -= 0.1
-    if (peer?.queued === true) delta += 0.05
-    if (reason === 'connected') delta += 0.2
-    if (connected && connectionAgeMs > 0) {
-      delta += Math.min(5, connectionAgeMs / 60000)
-    }
-    if (reason === 'transient-client' || (peer?.client === true && connectionAgeMs < 30000)) {
-      delta -= 0.05
-    }
-    record.score = Number(record.score || 0) + delta
-    record.lastScoredAt = this._now()
-    record.lastSeenAt = record.lastSeenAt || record.lastScoredAt
-    return record
-  }
-
-  _registerPeerCandidate(publicKey, peer = null, topic = null, scoreOptions = {}) {
-    const keyHex = this._peerKeyHex(publicKey)
-    if (!keyHex) return null
-    if (keyHex === b4a.toString(this.swarm?.keyPair?.publicKey || [], 'hex')) return null
-
-    let record = this._peerDirectory.get(keyHex)
-    if (!record) {
-      record = {
-        keyHex,
-        publicKey,
-        score: 0,
-        firstSeenAt: this._now(),
-        lastSeenAt: this._now(),
-        joined: false,
-        demoted: false,
-        joinAttempts: 0,
-        lastJoinedAt: null,
-        lastConnectionAt: null,
-        relayHints: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0,
-        topics: new Set(),
-        lastJoinError: null,
-      }
-    } else {
-      record.publicKey = publicKey || record.publicKey
-      record.lastSeenAt = this._now()
-      if (Array.isArray(peer?.relayAddresses)) {
-        record.relayHints = Math.max(Number(record.relayHints || 0), peer.relayAddresses.length)
-      }
-    }
-
-    if (topic) {
-      const topicHex = this._topicToHex(topic)
-      if (topicHex) record.topics.add(topicHex)
-    }
-
-    this._scorePeerRecord(record, peer, scoreOptions)
-    this._peerDirectory.set(keyHex, record)
-    this._enforcePeerDirectoryLimit()
-    return this._peerDirectory.get(keyHex) || null
-  }
-
-  _queuePublicJoinPeer(record, peer = null, topic = null) {
-    if (!record || !record.publicKey || typeof this.swarm?.joinPeer !== 'function') return false
-    if (record.joined && record.lastJoinedAt && this._now() - record.lastJoinedAt < this._peerJoinCooldownMs) {
-      return true
-    }
-    if (record.demoted && !record.joined) return false
-
-    const lowest = this._lowestScoringPeer(record.keyHex)
-    if (!record.joined && this._peerDirectory.size >= this.maxPeers && lowest && lowest.keyHex !== record.keyHex && lowest.score > record.score) {
-      record.demoted = true
-      return false
-    }
-
-    try {
-      this.swarm.joinPeer(record.publicKey)
-      record.joined = true
-      record.demoted = false
-      record.joinAttempts++
-      record.lastJoinedAt = this._now()
-      record.lastJoinError = null
-      this._directPeerDialStats.queued++
-      this._directPeerDialStats.lastReason = 'joinPeer'
-      this._directPeerDialStats.lastDialedAt = record.lastJoinedAt
-      return true
-    } catch (err) {
-      record.lastJoinError = err?.message || String(err)
-      this._directPeerDialStats.failed++
-      this._directPeerDialStats.lastReason = 'joinPeer-error'
-      return false
-    }
-  }
-
-  _recordPeerConnectionOutcome(conn, reason = 'closed') {
-    const remoteKey = this._connectionPeerKeys.get(conn) || conn?.remotePublicKey || conn?.publicKey || null
-    const keyHex = this._peerKeyHex(remoteKey)
-    const record = keyHex ? this._peerDirectory.get(keyHex) : null
-    if (!record) return
-    const ageMs = this._connectionAgeMs(conn)
-    const swarmState = this._swarmDialState(keyHex, remoteKey)
-    record.lastConnectionAt = this._now()
-    this._scorePeerRecord(record, { relayAddresses: Array.from({ length: Number(record.relayHints || 0) }, () => null), client: swarmState?.client }, { connectionAgeMs: ageMs, connected: true, reason: swarmState?.client ? 'transient-client' : reason })
-  }
-
-  /**
-   * Remember a shared-topic peer candidate. Hyperswarm owns dialing and retry
-   * lifecycle after discovery; PublicFeedManager only uses opened sockets.
-   * @param {any} peer
-   * @param {Buffer | Uint8Array | string | null} [topic]
-   * @returns {boolean}
-   */
   handleDiscoveredPeer(peer, topic = null) {
     if (topic && !this._isNetworkTopic(topic)) return false
-    if (!this.swarm) return false
-    const publicKey = this._peerEntryPublicKey(peer)
-    const remembered = this._rememberPeerPublicKey(publicKey, peer, topic)
-    if (remembered) {
-      this._recordStartupEvent('feed-peer-discovered', { key: remembered.keyHex.slice(0, 16), topic: topic ? (this._isNetworkTopic(topic) ? 'peartube-network' : 'other') : 'unknown', relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0 })
-    }
-    if (!remembered) {
-      this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'self-or-missing-key'
-      return false
-    }
-
-    const record = this._registerPeerCandidate(remembered.publicKey, peer, topic, { reason: 'discovered' })
-    if (!record) {
-      this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'peer-demoted'
-      return false
-    }
-
-    const peerInfo = swarmRememberPeer(this.swarm, peer, topic)
-    if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) {
-      this._directPeerDialStats.skipped++
-      this._directPeerDialStats.lastReason = 'already-connected-peer'
-      return true
-    }
-
-    const now = this._now()
-    this._directPeerDialStats.attempted++
-    if (peerInfo?.queued || peerInfo?.waiting) {
-      this._directPeerDialStats.skipped++
-      try {
-        peerInfo.explicit = true
-        if (typeof peerInfo._updatePriority === 'function') peerInfo._updatePriority()
-      } catch { /* diagnostics only */ }
-      this._directPeerLastDialedAt.set(remembered.keyHex, now)
-      this._directPeerDialStats.lastDialedAt = now
-      this._directPeerDialStats.lastReason = 'dial-already-pending-promoted'
-      return true
-    }
-
-    if (peerInfo && swarmQueuePeer(this.swarm, peerInfo)) {
-      record.joined = true
-      record.demoted = false
-      record.joinAttempts++
-      record.lastJoinedAt = now
-      record.lastJoinError = null
-      this._directPeerLastDialedAt.set(remembered.keyHex, now)
-      this._directPeerLastDialError.delete(remembered.keyHex)
-      this._directPeerLastDialErrorStack.delete(remembered.keyHex)
-      this._directPeerDialStats.queued++
-      this._directPeerDialStats.lastReason = 'queued-existing-peer'
-      this._directPeerDialStats.lastDialedAt = now
-    } else {
-      this._queuePublicJoinPeer(record, peer, topic)
-      this._directPeerLastDialedAt.set(remembered.keyHex, this._directPeerDialStats.lastDialedAt || now)
-    }
-    this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
+    const remembered = this._rememberDiscoveredPeer(peer, topic)
+    if (!remembered) return false
+    this._recordStartupEvent('feed-peer-discovered', {
+      key: remembered.keyHex.slice(0, 16),
+      topic: topic ? (this._isNetworkTopic(topic) ? 'peartube-network' : 'other') : 'unknown',
+      relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0,
+    })
     return true
   }
 
-  _rememberDiscoveredPeerInSwarm(peer, topic, keyHex) {
-    if (!this.swarm || !peer || typeof peer !== 'object') return null
-    try {
-      return this._discoveredPeerHints.get(keyHex) || null
-    } catch (err) {
-      this._directPeerLastDialError.set(keyHex, err?.message || String(err))
-      if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
-      return null
-    }
-  }
-
-
-  runBoundedPeerRecovery(reason = 'heartbeat') {
-    const now = this._now()
-    const connections = this.swarm?.connections?.size || 0
-    const discoveredPeers = this._discoveredPeers.size
-    const event = {
-      at: now,
-      action: 'observed-peers-without-sockets',
-      reason: 'hyperswarm-owned-dialing',
-      requestedReason: reason,
-      discoveredPeers,
-      connections,
-      queued: 0,
-    }
-
-    if (this.swarm && discoveredPeers > 0 && connections === 0 && now - this._lastRecoveryAt >= this._recoveryCooldownMs) {
-      this._lastRecoveryAt = now
-      event.action = 'requeued-discovered-peers'
-      event.reason = 'foreground-resume-no-sockets'
-
-      for (const record of this._peerDirectory.values()) {
-        if (!record?.publicKey || record.demoted) continue
-        try {
-          const peerInfo = this.swarm.peers?.get?.(record.keyHex) || null
-          if (peerInfo) {
-            try {
-              peerInfo.explicit = true
-              if (typeof peerInfo._updatePriority === 'function') peerInfo._updatePriority()
-            } catch { /* best effort */ }
-            if (swarmQueuePeer(this.swarm, peerInfo)) {
-              event.queued++
-              record.joined = true
-              record.lastJoinedAt = now
-              this._directPeerDialStats.queued++
-              this._directPeerDialStats.lastReason = 'resume-requeued-existing-peer'
-              this._directPeerDialStats.lastDialedAt = now
-              continue
-            }
-          }
-
-          this.swarm.joinPeer(record.publicKey)
-          event.queued++
-          record.joined = true
-          record.demoted = false
-          record.joinAttempts++
-          record.lastJoinedAt = now
-          record.lastJoinError = null
-          this._directPeerDialStats.queued++
-          this._directPeerDialStats.lastReason = 'resume-joinPeer'
-          this._directPeerDialStats.lastDialedAt = now
-        } catch (err) {
-          record.lastJoinError = err?.message || String(err)
-          this._directPeerDialStats.failed++
-          this._directPeerDialStats.lastReason = 'resume-joinPeer-error'
-        }
-      }
-    }
-
-    this._recoveryEvents.push(event)
-    while (this._recoveryEvents.length > 10) this._recoveryEvents.shift()
-    return event
-  }
-
-  _swarmDialState(keyHex, publicKey = null) {
-    const peers = this.swarm?.peers
-    let peerInfo = peers && typeof peers.get === 'function' ? peers.get(keyHex) : null
-    if (!peerInfo && peers && typeof peers.get === 'function' && publicKey) {
-      try { peerInfo = peers.get(publicKey) } catch { peerInfo = null }
-    }
-    if (!peerInfo || typeof peerInfo !== 'object') return null
-
-    const relayAddresses = Array.isArray(peerInfo.relayAddresses) ? peerInfo.relayAddresses : []
-    const topics = Array.isArray(peerInfo.topics) ? peerInfo.topics : []
-    return {
-      attempts: Number(peerInfo.attempts || 0),
-      queued: Boolean(peerInfo.queued),
-      waiting: Boolean(peerInfo.waiting),
-      explicit: Boolean(peerInfo.explicit),
-      banned: Boolean(peerInfo.banned),
-      proven: Boolean(peerInfo.proven),
-      client: Boolean(peerInfo.client),
-      connectedTime: Number(peerInfo.connectedTime ?? -1),
-      disconnectedTime: Number(peerInfo.disconnectedTime || 0),
-      relayAddresses: relayAddresses.length,
-      topics: topics.length,
-    }
-  }
 
   getDirectPeerDialStats() {
     const peers = []
-    for (const [keyHex] of this._discoveredPeers) {
-      const publicKey = this._discoveredPeers.get(keyHex)
-      const swarm = this._swarmDialState(keyHex, publicKey)
-      const hint = this._discoveredPeerHints.get(keyHex)
-      const record = this._peerDirectory.get(keyHex)
-      const connected = this._hasActivePeerConnection(keyHex, publicKey)
+    for (const [keyHex, record] of this._discoveredPeers) {
       peers.push({
         key: keyHex.slice(0, 16),
-        attempts: swarm?.attempts || 0,
-        discoveredRelayAddresses: Number(hint?.relayAddressesSeen || 0),
-        lastSeenAt: hint?.lastSeenAt || null,
-        lastDialedAt: this._directPeerLastDialedAt.get(keyHex) || null,
-        lastQueuedAt: null,
-        lastError: this._directPeerLastDialError.get(keyHex) || null,
-        lastErrorStack: this._directPeerLastDialErrorStack.get(keyHex) || null,
-        pending: Boolean(!connected && (swarm?.queued || swarm?.waiting || record?.joined)),
-        connected,
-        score: Number(record?.score || 0),
-        joined: Boolean(record?.joined),
-        demoted: Boolean(record?.demoted),
-        swarm,
+        discoveredRelayAddresses: Number(record.relayAddressesSeen || 0),
+        topics: record.topics?.size || 0,
+        firstSeenAt: record.firstSeenAt || null,
+        lastSeenAt: record.lastSeenAt || null,
+        connected: this._hasActivePeerConnection(keyHex),
       })
     }
 
     return {
-      ...this._directPeerDialStats,
       discoveredPeers: this._discoveredPeers.size,
-      pending: peers.filter((peer) => peer.pending).length,
-      maxDirectPeers: null,
-      maxDirectPeerRetries: null,
+      connected: this._connectionOpenCount,
       swarmPeers: this.swarm?.peers?.size || 0,
       swarmConnections: this.swarm?.connections?.size || 0,
-      swarmAllConnections: this.swarm?._allConnections?.size || 0,
       swarmConnecting: Number(this.swarm?.connecting || 0),
-      swarmExplicitPeers: this.swarm?.explicitPeers?.size || 0,
-      swarmQueueSize: this.swarm?._queue?.length || 0,
-      recoveryEvents: this._recoveryEvents.slice(-5),
-      recoveryCooldownMs: this._recoveryCooldownMs,
-      lastRecoveryAt: this._lastRecoveryAt || null,
       peers,
     }
   }
+
 
   /**
    * Start the public feed manager - restore cache and wire current connections
@@ -1204,13 +826,6 @@ export class PublicFeed {
       }
       this.pendingAvailabilityRequests.clear()
       this._discoveredPeers.clear()
-      this._discoveredPeerHints.clear()
-      this._peerDirectory.clear()
-      this._connectionPeerKeys.clear()
-      this._recoveryEvents.length = 0
-      this._directPeerLastDialedAt.clear()
-      this._directPeerLastDialError.clear()
-      this._directPeerLastDialErrorStack.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)
       if (this._gossipInterval) clearInterval(this._gossipInterval)
       this.feedDiscovery?.destroy?.()
@@ -1302,9 +917,7 @@ export class PublicFeed {
     }
 
     const label = this._connectionLabel(conn, info)
-    const remoteKey = info?.publicKey || conn.remotePublicKey || conn.publicKey
-    this._connectionPeerKeys.set(conn, remoteKey)
-    this._markPeerConnected(remoteKey)
+    this._connectionOpenCount++
     console.log('[PublicFeed] handleConnection:', label, 'setting up feed protocol on new connection');
     this._recordStartupEvent('feed-socket-connected', { connection: label })
     this.wiredConnections.add(conn);
@@ -1333,13 +946,11 @@ export class PublicFeed {
     // Clean up on connection close
     conn.on('close', () => {
       console.log('[PublicFeed] Connection closed:', label, 'ageMs=', this._connectionAgeMs(conn));
-      this._recordPeerConnectionOutcome(conn, 'closed');
       this._forgetConnection(conn);
     });
 
     conn.on('error', (err) => {
       console.error('[PublicFeed] Connection error:', label, err.message, 'ageMs=', this._connectionAgeMs(conn));
-      this._recordPeerConnectionOutcome(conn, 'error');
       this._forgetConnection(conn);
     });
   }

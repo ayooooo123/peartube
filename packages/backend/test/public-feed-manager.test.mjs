@@ -407,7 +407,7 @@ test('PublicFeedManager promotes pending discovered peer candidates to explicit'
   }
 })
 
-test('PublicFeedManager recovery is observational after initial bounded peer queueing', () => {
+test('PublicFeedManager recovery requeues discovered peers after foreground resume with no sockets', () => {
   const publicKey = b4a.alloc(32, 22)
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
@@ -417,14 +417,14 @@ test('PublicFeedManager recovery is observational after initial bounded peer que
     const statsBeforeRecovery = manager.getStats().directPeerDial
     assert.equal(statsBeforeRecovery.peers[0].pending, true)
     swarm.joinPeerCalls.length = 0
-    const recovery = manager.runBoundedPeerRecovery('test-recovery')
-    assert.equal(recovery.queued, 0)
-    assert.equal(recovery.reason, 'hyperswarm-owned-dialing')
-    assert.equal(swarm.joinPeerCalls.length, 0)
+    const recovery = manager.runBoundedPeerRecovery('foreground-resume')
+    assert.equal(recovery.queued, 1)
+    assert.equal(recovery.reason, 'foreground-resume-no-sockets')
+    assert.equal(swarm.joinPeerCalls.length, 1) // requeued existing pending peer through Hyperswarm-owned queue
     const stats = manager.getStats().directPeerDial
     assert.equal(stats.recoveryEvents.length, 1)
-    assert.equal(stats.recoveryEvents[0].requestedReason, 'test-recovery')
-    assert.equal(stats.lastReason, 'queued-existing-peer')
+    assert.equal(stats.recoveryEvents[0].requestedReason, 'foreground-resume')
+    assert.equal(stats.lastReason, 'resume-requeued-existing-peer')
   } finally {
     manager.stop()
   }

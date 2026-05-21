@@ -1198,6 +1198,7 @@ export async function initializeStorage(config) {
   // `swarm.joinPeer(pk)` them directly without waiting for a topic DHT lookup.
   const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
   const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
+  swarm._peartubeMetaDb = metaDb
   globalKnownPeerCache = knownPeerCache
 
   // Register handlers BEFORE swarm.join so any incoming connection is replicated
@@ -2393,6 +2394,15 @@ export async function resumeNetworking() {
         }
       }
       console.log('[Network] Wakeup sessions marked active');
+    }
+
+    if (globalKnownPeerCache && globalSwarm) {
+      loadKnownPeers(globalSwarm._peartubeMetaDb).then((known) => {
+        const dialed = dialKnownPeers(globalSwarm, known)
+        if (dialed > 0) console.log('[Network] Resume warm-dialed', dialed, 'known peers')
+      }).catch((err) => {
+        console.log('[Network] Resume warm-dial skipped:', err?.message)
+      })
     }
 
     console.log('[Network] Resumed successfully');

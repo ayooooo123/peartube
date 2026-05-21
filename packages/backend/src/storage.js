@@ -1276,8 +1276,6 @@ export async function initializeStorage(config) {
   const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
   const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
   swarm._peartubeMetaDb = metaDb
-  ctx.network = network
-  ctx.swarmOptions = swarmOptions
   globalKnownPeerCache = knownPeerCache
 
   // Register handlers BEFORE swarm.join so any incoming connection is replicated
@@ -1452,6 +1450,8 @@ export async function initializeStorage(config) {
     blobSessionToken, // Session token for URL authentication
     channels,
     wakeup,
+    network,
+    swarmOptions,
     peerPoolDiscovery: globalPeerPoolDiscovery
   };
 }

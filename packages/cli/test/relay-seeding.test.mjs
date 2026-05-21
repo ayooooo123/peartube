@@ -74,9 +74,35 @@ test('cache manager preserves refreshed preview refs for relay restart seeding',
   t.is(metaDb.writes[0].value[0].previewVideos[0].id, 'video-1')
 })
 
+test('cache manager clears refreshed preview refs when relay download has no playable videos', async (t) => {
+  const metaDb = createMetaDb()
+  const manager = new CacheManager({}, metaDb, 1024)
+
+  await manager.addChannel('aa'.padEnd(64, '0'), 'bb'.padEnd(64, '0'), 'discovered', {
+    previewVideos: [{
+      id: 'video-1',
+      blobId: '0:1:0:10',
+      blobsCoreKey: 'cc'.padEnd(64, '0')
+    }]
+  })
+
+  const changed = await manager.addChannel('aa'.padEnd(64, '0'), 'bb'.padEnd(64, '0'), 'discovered', {
+    previewVideos: []
+  })
+
+  t.is(changed, true)
+  t.alike(manager.getChannels()[0].previewVideos, [])
+  t.alike(metaDb.writes.at(-1).value[0].previewVideos, [])
+})
+
 test('relay seeder retains PublicBee and blob-core discovery handles for mirrored channels', async (t) => {
   const publicBeeCore = createCore('11')
-  const videoCore = createCore('22')
+  const videoCore = {
+    ...createCore('22'),
+    async has(start, end) {
+      return start === 0 && end === 1
+    }
+  }
   const thumbnailCore = createCore('33')
   const swarm = createSwarm()
   const store = {
@@ -140,7 +166,12 @@ test('relay seeder retains PublicBee and blob-core discovery handles for mirrore
 
 test('relay seeder refreshes all cached channels and deduplicates retained joins', async (t) => {
   const publicBeeCore = createCore('44')
-  const blobCore = createCore('55')
+  const blobCore = {
+    ...createCore('55'),
+    async has(start, end) {
+      return start === 0 && end === 1
+    }
+  }
   const swarm = createSwarm()
   const ctx = {
     swarm,
@@ -175,10 +206,117 @@ test('relay seeder refreshes all cached channels and deduplicates retained joins
   t.is(swarm.joins.length, 2)
 })
 
+test('relay seeder exposes per-video local blob availability diagnostics', async (t) => {
+  const publicBeeCore = createCore('21')
+  const availableVideoCore = {
+    ...createCore('31'),
+    async has(start, end) {
+      return start === 10 && end === 14
+    }
+  }
+  const missingVideoCore = {
+    ...createCore('32'),
+    async has() {
+      return false
+    }
+  }
+  const swarm = createSwarm()
+  const ctx = {
+    swarm,
+    store: {
+      get(key) {
+        const keyHex = Buffer.isBuffer(key) ? key.toString('hex') : String(key)
+        if (keyHex.startsWith('31')) return availableVideoCore
+        if (keyHex.startsWith('32')) return missingVideoCore
+        throw new Error(`unexpected core key ${keyHex}`)
+      }
+    }
+  }
+  const seeder = createRelaySeeder({
+    ctx,
+    loadPublicBee: async () => ({
+      core: publicBeeCore,
+      async listVideos() {
+        return []
+      }
+    }),
+    logger: { info() {}, warn() {}, debug() {} }
+  })
+
+  const seedStats = await seeder.seedChannel({
+    driveKey: 'aa'.padEnd(64, '0'),
+    publicBeeKey: 'bb'.padEnd(64, '0'),
+    previewVideos: [
+      { id: 'available', blobId: '10:4:0:100', blobsCoreKey: '31'.padEnd(64, '0') },
+      { id: 'missing', blobId: '20:4:0:100', blobsCoreKey: '32'.padEnd(64, '0') }
+    ]
+  })
+
+  const stats = seeder.getStats()
+  t.is(stats.videos, 2)
+  t.is(stats.blobAvailability.available, 1)
+  t.is(stats.blobAvailability.missing, 1)
+  t.alike(stats.blobAvailability.videos.map((video) => ({ id: video.id, availability: video.availability, contiguousBlocks: video.contiguousBlocks, hasHeadBlock: video.hasHeadBlock })), [
+    { id: 'available', availability: 'playable', contiguousBlocks: 4, hasHeadBlock: true },
+    { id: 'missing', availability: 'unavailable', contiguousBlocks: 0, hasHeadBlock: false }
+  ])
+  t.alike(seedStats.catalogEntry.previewVideos.map((video) => video.id), ['available'])
+})
+
+test('relay seeder does not advertise partially cached preview ranges as playable', async (t) => {
+  const publicBeeCore = createCore('23')
+  const partialVideoCore = {
+    ...createCore('34'),
+    async has(start, end) {
+      return start === 10 && end <= 32
+    }
+  }
+  const swarm = createSwarm()
+  const ctx = {
+    swarm,
+    store: {
+      get(key) {
+        const keyHex = Buffer.isBuffer(key) ? key.toString('hex') : String(key)
+        if (keyHex.startsWith('34')) return partialVideoCore
+        throw new Error(`unexpected core key ${keyHex}`)
+      }
+    }
+  }
+  const seeder = createRelaySeeder({
+    ctx,
+    loadPublicBee: async () => ({
+      core: publicBeeCore,
+      async listVideos() {
+        return []
+      }
+    }),
+    logger: { info() {}, warn() {}, debug() {} }
+  })
+
+  const seedStats = await seeder.seedChannel({
+    driveKey: 'aa'.padEnd(64, '0'),
+    publicBeeKey: 'bb'.padEnd(64, '0'),
+    previewVideos: [
+      { id: 'partial', blobId: '10:40:0:100', blobsCoreKey: '34'.padEnd(64, '0') }
+    ]
+  })
+
+  const detail = seeder.getStats().blobAvailability.videos[0]
+  t.is(detail.availability, 'unavailable')
+  t.is(detail.hasHeadBlock, false)
+  t.is(detail.contiguousBlocks, 0)
+  t.alike(seedStats.catalogEntry.previewVideos, [])
+})
+
 
 test('relay seeder also seeds preview/catalog blob refs when PublicBee is sparse', async (t) => {
   const publicBeeCore = createCore('99')
-  const previewVideoCore = createCore('aa')
+  const previewVideoCore = {
+    ...createCore('aa'),
+    async has(start, end) {
+      return start === 0 && end === 1
+    }
+  }
   const previewThumbnailCore = createCore('ab')
   const catalogVideoCore = createCore('ac')
   const swarm = createSwarm()
@@ -306,7 +444,14 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
       swarmOfflineReason: null,
       swarmListenResolved: true,
       blindPeer: { enabled: true, publicKey: 'abcd', mirroredCores: 4, mirroredAutobases: 0, error: null },
-      seeding: { channels: 2, videos: 5, publicBeeCores: 2, blobCores: 8, discoveryHandles: 10 },
+      seeding: {
+        channels: 2,
+        videos: 5,
+        publicBeeCores: 2,
+        blobCores: 8,
+        discoveryHandles: 10,
+        blobAvailability: { playable: 4, unavailable: 1, unknown: 0, videos: [] }
+      },
       directPeerDial: {
         discoveredPeers: 2,
         pending: 1,
@@ -327,6 +472,7 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
     publicBeeCores: 2,
     blobCores: 8,
     discoveryHandles: 10,
+    blobAvailability: { playable: 4, unavailable: 1, unknown: 0, videos: [] },
     lastSeededAt: null,
     lastError: null
   })
@@ -338,4 +484,5 @@ test('relay status surfaces DHT and seeding stats for phone connectivity diagnos
   t.ok(formatted.includes('lastError=Maximum call stack size exceeded'))
   t.ok(formatted.includes('blindPeer: enabled=true key=abcd mirroredCores=4 mirroredAutobases=0'))
   t.ok(formatted.includes('seeding: channels=2 videos=5 publicBeeCores=2 blobCores=8 discoveryHandles=10'))
+  t.ok(formatted.includes('blobAvailability: playable=4 unavailable=1 unknown=0'))
 })

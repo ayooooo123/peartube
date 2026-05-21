@@ -283,8 +283,8 @@ export class PublicFeed {
     if (entry.channelName) serialized.channelName = entry.channelName
     if (Number(entry.videoCount || 0) > 0) serialized.videoCount = Number(entry.videoCount || 0)
     if (Number(entry.manifestUpdatedAt || 0) > 0) serialized.manifestUpdatedAt = Number(entry.manifestUpdatedAt || 0)
-    const previewVideos = this._sanitizePreviewVideos(entry.previewVideos)
-    if (previewVideos.length > 0) serialized.previewVideos = previewVideos
+    if (Array.isArray(entry.previewVideos)) serialized.previewVideos = this._sanitizePreviewVideos(entry.previewVideos)
+    const previewVideos = Array.isArray(serialized.previewVideos) ? serialized.previewVideos : []
     const previewVideosHash = entry.previewVideosHash || hashPreviewVideos(previewVideos)
     if (previewVideosHash) serialized.previewVideosHash = previewVideosHash
     const signedDescriptor = this._normalizeSignedDescriptor(entry.signedDescriptor)
@@ -400,7 +400,9 @@ export class PublicFeed {
           channelName: snapshot.channelName || byKey.get(driveKey)?.channelName || null,
           videoCount: Number(snapshot.videoCount || byKey.get(driveKey)?.videoCount || 0) || 0,
           manifestUpdatedAt: Number(snapshot.manifestUpdatedAt || byKey.get(driveKey)?.manifestUpdatedAt || 0) || 0,
-          previewVideos: this._sanitizePreviewVideos(snapshot.previewVideos || byKey.get(driveKey)?.previewVideos),
+          previewVideos: Array.isArray(snapshot.previewVideos)
+            ? this._sanitizePreviewVideos(snapshot.previewVideos)
+            : this._sanitizePreviewVideos(byKey.get(driveKey)?.previewVideos),
         }
         byKey.set(driveKey, merged)
         this._applyEntrySnapshot(driveKey, merged)

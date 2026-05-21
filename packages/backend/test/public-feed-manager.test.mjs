@@ -1206,3 +1206,83 @@ test('relay catalog entries stay visible and do not become published channels', 
   assert.equal(entries[0].relayServing, true)
   assert.equal(entries[0].peerCount, 0)
 })
+test('relay catalog empty preview snapshots clear stale previews', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+
+  try {
+    await manager.submitRelayCatalogEntry({
+      driveKey: DRIVE_KEY,
+      publicBeeKey: PUBLIC_BEE_KEY,
+      manifestUpdatedAt: 100,
+      previewVideos: [{
+        id: 'stale-preview',
+        title: 'Stale Preview',
+        blobId: '0:4:0:512',
+        blobsCoreKey: 'cc'.repeat(32),
+        availability: 'playable',
+      }],
+    })
+    assert.equal(manager.getFeed()[0].previewVideos.length, 1)
+
+    await manager.submitRelayCatalogEntry({
+      driveKey: DRIVE_KEY,
+      publicBeeKey: PUBLIC_BEE_KEY,
+      manifestUpdatedAt: 101,
+      previewVideos: [],
+    })
+
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.deepEqual(feed[0].previewVideos, [])
+    assert.equal(feed[0].manifestUpdatedAt, 101)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('feed snapshot provider propagates explicit empty previews', async () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+  const sent = []
+
+  manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY, {
+    manifestUpdatedAt: 100,
+    previewVideos: [{
+      id: 'old-preview',
+      blobId: '0:4:0:512',
+      blobsCoreKey: 'dd'.repeat(32),
+      availability: 'playable',
+    }],
+  })
+  manager.setFeedSnapshotProvider(async () => [{
+    driveKey: DRIVE_KEY,
+    publicBeeKey: PUBLIC_BEE_KEY,
+    manifestUpdatedAt: 101,
+    previewVideos: [],
+  }])
+
+  const originalFrom = Protomux.from
+  Protomux.from = () => ({
+    pair() {},
+    createChannel(opts) {
+      return {
+        messages: [{ send(msg) { sent.push(msg) } }],
+        open() { opts.onopen() }
+      }
+    }
+  })
+
+  try {
+    manager.handleConnection(conn, {})
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const refreshed = sent.find((msg) => msg.type === 'HAVE_FEED' && msg.entries?.[0]?.manifestUpdatedAt === 101)
+    assert.ok(refreshed)
+    assert.deepEqual(refreshed.entries[0].previewVideos, [])
+    assert.deepEqual(manager.getFeed()[0].previewVideos, [])
+  } finally {
+    Protomux.from = originalFrom
+    manager.stop()
+  }
+})

@@ -112,7 +112,9 @@ export async function startHost(options = {}) {
     stream,
     createBackendImpl,
     onFeedUpdate,
-    onVideoStats
+    onVideoStats,
+    network,
+    swarmOptions
   } = options
 
   const lifecycle = createLifecycleController()

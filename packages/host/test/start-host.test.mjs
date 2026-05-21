@@ -121,3 +121,29 @@ test('startHost forwards feed and video callbacks to createBackend', async (t) =
 
   t.alike(calls, ['feed', ['stats', 'channel-key', 'video-id', { peerCount: 3 }]])
 })
+
+test('startHost forwards explicit network options to createBackend', async (t) => {
+  const network = { announce: true, bootstrap: ['127.0.0.1:49737'] }
+  const swarmOptions = { relayThrough: ['relay.example:49737'] }
+  let received = null
+
+  const session = await startHost({
+    platform: 'mobile',
+    storagePath: '/tmp/peartube-host',
+    entrypoint: 'mobile-entry',
+    args: [],
+    stream: createFakeStream(),
+    network,
+    swarmOptions,
+    createBackendImpl: async ({ onReady, network: backendNetwork, swarmOptions: backendSwarmOptions }) => {
+      received = { network: backendNetwork, swarmOptions: backendSwarmOptions }
+      onReady({ blobServerPort: 7777, protocolVersion: 2 })
+      return { destroy: async () => {} }
+    }
+  })
+
+  await session.waitUntilReady()
+
+  t.is(received.network, network)
+  t.is(received.swarmOptions, swarmOptions)
+})

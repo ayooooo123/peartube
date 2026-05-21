@@ -199,7 +199,11 @@ export async function createRelayService({
         videosDownloaded: mirrorStats?.videosDownloaded || 0,
         mirroredAt: Date.now(),
         lastError: null,
-        previewVideos: Array.isArray(mirrorStats?.previewVideos) ? mirrorStats.previewVideos : undefined,
+        previewVideos: Array.isArray(mirrorStats?.previewVideos) && mirrorStats.previewVideos.length > 0
+          ? mirrorStats.previewVideos
+          : (Array.isArray(existingChannel?.previewVideos) && existingChannel.previewVideos.length > 0
+              ? existingChannel.previewVideos
+              : undefined),
         videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || 0) || 0,
         manifestUpdatedAt: Date.now()
       })
@@ -214,15 +218,19 @@ export async function createRelayService({
       }
 
       if (resolved.publicBeeKey) {
+        const seedPreviewVideos = Array.isArray(mirrorStats?.previewVideos) && mirrorStats.previewVideos.length > 0
+          ? mirrorStats.previewVideos
+          : (Array.isArray(resolved.previewVideos) ? resolved.previewVideos : [])
+        const persistedPreviewVideos = seedPreviewVideos.length > 0
+          ? seedPreviewVideos
+          : (Array.isArray(existingChannel?.previewVideos) ? existingChannel.previewVideos : [])
         await runtime.cacheManager?.addChannel?.(resolved.channelKey, resolved.publicBeeKey, 'discovered', {
-          previewVideos: Array.isArray(mirrorStats?.previewVideos)
-            ? mirrorStats.previewVideos
-            : (Array.isArray(resolved.previewVideos) ? resolved.previewVideos : [])
+          previewVideos: seedPreviewVideos
         }).catch(() => {})
         const seedStats = await runtime.seeder?.seedChannel?.({
           driveKey: resolved.channelKey,
           publicBeeKey: resolved.publicBeeKey,
-          previewVideos: Array.isArray(mirrorStats?.previewVideos) ? mirrorStats.previewVideos : []
+          previewVideos: seedPreviewVideos
         }).catch(() => null)
         const catalogEntry = seedStats?.catalogEntry || {
           schema: 'peartube.relayCatalog',
@@ -232,8 +240,8 @@ export async function createRelayService({
           source: 'relay-cache',
           relayRole: 'cache',
           relayServing: true,
-          previewVideos: Array.isArray(mirrorStats?.previewVideos) ? mirrorStats.previewVideos : [],
-          videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || 0) || 0,
+          previewVideos: persistedPreviewVideos,
+          videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || persistedPreviewVideos.length || 0) || 0,
           manifestUpdatedAt: Date.now()
         }
         await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})

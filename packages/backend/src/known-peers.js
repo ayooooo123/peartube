@@ -89,13 +89,46 @@ export async function loadKnownPeers(metaDb) {
 export function dialKnownPeers(swarm, knownList) {
   if (!swarm || typeof swarm.joinPeer !== 'function' || swarm._peartubeOffline) return 0
   let dialed = 0
+  const seen = new Set()
   for (const entry of knownList) {
     try {
-      const pk = b4a.from(entry.key, 'hex')
+      const key = typeof entry?.key === 'string' ? entry.key.toLowerCase() : null
+      if (!key || !/^[0-9a-f]{64}$/.test(key) || seen.has(key)) continue
+      seen.add(key)
+      const pk = b4a.from(key, 'hex')
       if (pk.length !== 32) continue
       swarm.joinPeer(pk)
       dialed++
     } catch { /* best effort */ }
   }
   return dialed
+}
+
+function normalizeExplicitPeerKey(value) {
+  const keyHex = toKeyHex(value?.key || value?.publicKey || value)
+  return keyHex ? { key: keyHex, lastSeen: Date.now(), source: value?.source || 'explicit' } : null
+}
+
+export function getExplicitPeerList(ctx) {
+  const configured = [
+    ctx?.network?.relayPeers,
+    ctx?.network?.knownPeers,
+    ctx?.swarmOptions?.relayPeers,
+    ctx?.swarmOptions?.knownPeers,
+  ]
+  const out = []
+  for (const value of configured) {
+    const list = Array.isArray(value) ? value : (value ? String(value).split(/[\s,]+/) : [])
+    for (const item of list) {
+      const normalized = normalizeExplicitPeerKey(item)
+      if (normalized) out.push(normalized)
+    }
+  }
+  return out
+}
+
+export async function getDialableKnownPeers(ctx) {
+  const explicit = getExplicitPeerList(ctx)
+  const persisted = await loadKnownPeers(ctx?._peartubeMetaDb || ctx?.metaDb)
+  return [...explicit, ...persisted]
 }

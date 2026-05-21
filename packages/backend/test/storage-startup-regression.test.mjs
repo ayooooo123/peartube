@@ -175,6 +175,13 @@ test('storage captures Hyperswarm connection lifecycle diagnostics', () => {
   assert.match(storageSource, /hyperswarm: diagnostics/)
 })
 
+test('retained content discovery direct-dials configured or cached peers for blob topics', () => {
+  assert.match(storageSource, /getDialableKnownPeers\(ctx\)/)
+  assert.match(storageSource, /dialKnownPeers\(ctx\.swarm, known\)/)
+  assert.match(storageSource, /network,/)
+  assert.match(storageSource, /swarmOptions,/)
+})
+
 test('storage captures pre-open DHT connect close diagnostics', () => {
   assert.match(storageSource, /function installSwarmConnectDiagnostics\(swarm, diagnostics\)/)
   assert.match(storageSource, /installSwarmConnectDiagnostics\(swarm, globalSwarmDiagnostics\)/)

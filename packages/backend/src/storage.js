@@ -25,7 +25,7 @@ import {
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
-import { createKnownPeerCache, loadKnownPeers, dialKnownPeers } from './known-peers.js'
+import { createKnownPeerCache, loadKnownPeers, dialKnownPeers, getDialableKnownPeers } from './known-peers.js'
 
 const DEFAULT_BLOBS_CORE_UPDATE_TIMEOUT_MS = 15000
 
@@ -769,6 +769,20 @@ export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
   const handle = ctx.swarm.join(discoveryKey, { server: true, client: true })
   handles.set(discoveryKeyHex, handle)
 
+  if (!ctx.swarm._peartubeOffline) {
+    getDialableKnownPeers(ctx)
+      .then((known) => {
+        const dialed = dialKnownPeers(ctx.swarm, known)
+        if (dialed > 0) {
+          const label = options.label || discoveryKeyHex.slice(0, 16)
+          console.log(`[Storage] Direct-dialed ${dialed} known peer(s) for ${label}`)
+        }
+      })
+      .catch((err) => {
+        console.log('[Storage] Direct peer dial skipped:', err?.message)
+      })
+  }
+
   try {
     const flushed = handle?.flushed?.()
     if (flushed && typeof flushed.then === 'function') {
@@ -1436,6 +1450,8 @@ export async function initializeStorage(config) {
     blobSessionToken, // Session token for URL authentication
     channels,
     wakeup,
+    network,
+    swarmOptions,
     peerPoolDiscovery: globalPeerPoolDiscovery
   };
 }

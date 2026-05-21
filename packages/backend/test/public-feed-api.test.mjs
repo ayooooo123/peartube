@@ -852,22 +852,22 @@ test('getPublicFeed exposes relay catalog fields', (t) => {
   t.is(result.entries[0].previewVideosHash, 'hash-value')
 })
 
-test('resumeNetwork triggers bounded discovered-peer recovery after foreground resume', (t) => {
-  let recoveredReason = null
+test('resumeNetwork delegates to storage networking without app-level peer recovery', (t) => {
+  let recoveryCalls = 0
   const api = createApi({
     ctx: {
       swarm: { connections: new Set(), peers: new Set() },
       channels: new Map(),
     },
     publicFeed: {
-      runBoundedPeerRecovery(reason) {
-        recoveredReason = reason
+      runBoundedPeerRecovery() {
+        recoveryCalls += 1
       },
     },
   })
 
   return api.resumeNetwork().then((result) => {
     t.is(result.success, true)
-    t.is(recoveredReason, 'foreground-resume')
+    t.is(recoveryCalls, 0)
   })
 })

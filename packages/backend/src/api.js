@@ -212,7 +212,23 @@ export function createApi({
     }
   }
 
-  function getVideoCorePeerCount(driveKey, videoPath) {
+  function describeCorePeer(peer) {
+    try {
+      const key = peer?.remotePublicKey || peer?.publicKey || peer?.key || peer?.id || peer?.stream?.remotePublicKey || null
+      const keyHex = key
+        ? (typeof key === 'string' ? key : b4a.toString(key, 'hex'))
+        : null
+      return {
+        key: keyHex && /^[a-f0-9]{64}$/i.test(keyHex) ? keyHex : null,
+        remoteAddress: peer?.remoteAddress || peer?.stream?.remoteAddress || null,
+        type: peer?.constructor?.name || null
+      }
+    } catch {
+      return { key: null, remoteAddress: null, type: null }
+    }
+  }
+
+  function getVideoCorePeerDetails(driveKey, videoPath) {
     try {
       const channel = ctx.channels?.get?.(driveKey)
       const normalizedId = normalizeVideoId(videoPath)
@@ -225,14 +241,35 @@ export function createApi({
 
       for (const candidate of candidates) {
         const core = channel?.videoCores?.get?.(candidate) || channel?.cores?.get?.(candidate)
-        const peers = core?.peers
-        if (Array.isArray(peers)) return peers.length
-        if (typeof peers?.length === 'number') return peers.length
-        if (typeof peers?.size === 'number') return peers.size
+        if (!core) continue
+        const peers = core.peers
+        const peerList = Array.isArray(peers)
+          ? peers
+          : peers && typeof peers.values === 'function'
+            ? Array.from(peers.values())
+            : []
+        const peerCount = Array.isArray(peers)
+          ? peers.length
+          : typeof peers?.length === 'number'
+            ? peers.length
+            : typeof peers?.size === 'number'
+              ? peers.size
+              : peerList.length
+        const blobPeers = peerList.map(describeCorePeer)
+        return {
+          peerCount,
+          blobPeerIds: blobPeers.map((peer) => peer.key).filter(Boolean),
+          blobPeers,
+          blobCoreKey: core.key ? b4a.toString(core.key, 'hex') : null
+        }
       }
     } catch { /* best effort */ }
 
-    return 0
+    return { peerCount: 0, blobPeerIds: [], blobPeers: [], blobCoreKey: null }
+  }
+
+  function getVideoCorePeerCount(driveKey, videoPath) {
+    return getVideoCorePeerDetails(driveKey, videoPath).peerCount
   }
 
   function getFeedEntryVideoCount(driveKey, publicBeeKey = null) {
@@ -2240,12 +2277,16 @@ export function createApi({
      * @returns {Object}
      */
     getVideoStats(driveKey, videoPath) {
-      const videoPeerCount = getVideoCorePeerCount(driveKey, videoPath);
+      const videoPeerDetails = getVideoCorePeerDetails(driveKey, videoPath);
+      const videoPeerCount = videoPeerDetails.peerCount;
       if (videoStats) {
         const stats = videoStats.getStats(driveKey, videoPath);
         if (stats) {
           stats.swarmConnections = ctx.swarm?.connections?.size || 0;
           stats.peerCount = videoPeerCount || stats.peerCount || 0;
+          stats.blobPeerIds = videoPeerDetails.blobPeerIds;
+          stats.blobPeers = videoPeerDetails.blobPeers;
+          stats.blobCoreKey = videoPeerDetails.blobCoreKey;
           return stats;
         }
       }
@@ -2258,6 +2299,9 @@ export function createApi({
         totalBytes: 0,
         downloadedBytes: 0,
         peerCount: videoPeerCount,
+        blobPeerIds: videoPeerDetails.blobPeerIds,
+        blobPeers: videoPeerDetails.blobPeers,
+        blobCoreKey: videoPeerDetails.blobCoreKey,
         swarmConnections: ctx.swarm?.connections?.size || 0,
         speedMBps: '0',
         elapsed: 0,

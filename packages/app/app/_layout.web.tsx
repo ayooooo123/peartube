@@ -46,6 +46,7 @@ const isBridgeDesktop = typeof window !== 'undefined' && !!(window as any).bridg
 const shouldUseStatsPollingFallback = !isBridgeDesktop
 const isValidBlobServerPort = (port: unknown): port is number =>
   typeof port === 'number' && Number.isFinite(port) && port > 0
+const BACKEND_STARTUP_TIMEOUT_MS = 30000
 
 // Types from shared package
 import type { Identity, Video } from '@peartube/core'
@@ -72,6 +73,9 @@ export default function RootLayout() {
   const [blobServerPort, setBlobServerPort] = useState<number | null>(() => cachedAppState?.blobServerPort ?? null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
+  const backendReadyRef = useRef(cachedAppState !== null)
+  const startupTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const pearEventsSubscribedRef = useRef(false)
 
   // Backend init effect is declared after initPearBackend
 
@@ -152,6 +156,10 @@ export default function RootLayout() {
     return () => {
       for (const t of statsPollersRef.current.values()) clearInterval(t)
       statsPollersRef.current.clear()
+      if (startupTimerRef.current) {
+        clearTimeout(startupTimerRef.current)
+        startupTimerRef.current = null
+      }
     }
   }, [])
 
@@ -194,6 +202,25 @@ export default function RootLayout() {
     }
   }, [])
 
+  const markPearBackendReady = useCallback(async (source: string, port: unknown) => {
+    if (backendReadyRef.current) return
+    backendReadyRef.current = true
+    if (startupTimerRef.current) {
+      clearTimeout(startupTimerRef.current)
+      startupTimerRef.current = null
+    }
+
+    const readyPort = isValidBlobServerPort(port) ? port : null
+    console.log('[App] Pear desktop backend ready via', source, 'blobServerPort:', readyPort)
+    setBlobServerPort(readyPort)
+    setReady(true)
+    setLoading(false)
+    setBackendError(null)
+    loadInitialData().catch((err: any) => {
+      console.error('[App] Background initial data load failed:', err?.message || err)
+    })
+  }, [loadInitialData])
+
   const initPearBackend = useCallback(async () => {
     console.log('[App] Initializing Pear desktop backend via platform RPC...')
 
@@ -205,34 +232,72 @@ export default function RootLayout() {
       const alreadyInitialized = platformRPC.isInitialized()
 
       if (!alreadyInitialized) {
-        // Subscribe to events only on first init
-        platformRPC.events.onReady(async (data: any) => {
-          console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
-          setBlobServerPort(isValidBlobServerPort(data?.blobServerPort) ? data.blobServerPort : null)
-          setReady(true)
-          setLoading(false)
-          loadInitialData().catch((err: any) => {
-            console.error('[App] Background initial data load failed:', err?.message || err)
+        backendReadyRef.current = false
+        setBackendError(null)
+        if (startupTimerRef.current) {
+          clearTimeout(startupTimerRef.current)
+          startupTimerRef.current = null
+        }
+
+        if (!pearEventsSubscribedRef.current) {
+          // Subscribe to events only on first init
+          platformRPC.events.onReady(async (data: any) => {
+            console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
+            await markPearBackendReady('eventReady', data?.blobServerPort)
           })
-        })
 
-        platformRPC.events.onVideoStats((data: any) => {
-          const stats = data?.stats ?? data
-          const channelKey = data?.channelKey ?? stats?.channelKey
-          const videoId = data?.videoId ?? stats?.videoId
+          platformRPC.events.onError((data: any) => {
+            const message = String(data?.message || 'Backend error')
+            console.error('[App] Backend error:', message)
+            setBackendError(message)
+            if (!backendReadyRef.current) {
+              setReady(true)
+              setLoading(false)
+            }
+          })
 
-          if (channelKey && videoId && stats) {
-            videoStatsEventEmitter.emit(channelKey, videoId, stats)
+          platformRPC.events.onVideoStats((data: any) => {
+            const stats = data?.stats ?? data
+            const channelKey = data?.channelKey ?? stats?.channelKey
+            const videoId = data?.videoId ?? stats?.videoId
+
+            if (channelKey && videoId && stats) {
+              videoStatsEventEmitter.emit(channelKey, videoId, stats)
+            }
+          })
+
+          pearEventsSubscribedRef.current = true
+        }
+
+        startupTimerRef.current = setTimeout(() => {
+          if (!backendReadyRef.current) {
+            console.warn('[App] Pear desktop backend startup timeout after', BACKEND_STARTUP_TIMEOUT_MS, 'ms — entering degraded mode')
+            setBackendError('Backend is taking longer than expected. You can browse the UI — it will connect when ready.')
+            setReady(true)
+            setLoading(false)
           }
-        })
+          startupTimerRef.current = null
+        }, BACKEND_STARTUP_TIMEOUT_MS)
 
         // Initialize
         await platformRPC.initPlatformRPC()
+
+        if (!backendReadyRef.current) {
+          console.log('[App] initPlatformRPC resolved before ready callback, marking Pear desktop backend ready directly')
+          const modulePort = platformRPC.getBlobServerPort?.()
+          const readyPort = isValidBlobServerPort(modulePort) ? modulePort : null
+          await markPearBackendReady('initPlatformRPC', readyPort)
+        }
       } else {
         // Already initialized - restore from cache or load fresh
         console.log('[App] RPC already initialized, cached state:', cachedAppState ? 'yes' : 'no')
         const existingBlobServerPort = platformRPC.getBlobServerPort()
         setBlobServerPort(isValidBlobServerPort(existingBlobServerPort) ? existingBlobServerPort : null)
+        backendReadyRef.current = true
+        if (startupTimerRef.current) {
+          clearTimeout(startupTimerRef.current)
+          startupTimerRef.current = null
+        }
 
         if (cachedAppState) {
           // State already restored from cache in useState initializers
@@ -256,8 +321,15 @@ export default function RootLayout() {
       }
     } catch (err) {
       console.error('[App] Failed to initialize Pear backend:', err)
+      if (startupTimerRef.current) {
+        clearTimeout(startupTimerRef.current)
+        startupTimerRef.current = null
+      }
+      setBackendError(err instanceof Error ? err.message : 'Failed to initialize backend')
+      setReady(true)
+      setLoading(false)
     }
-  }, [loadInitialData])
+  }, [markPearBackendReady, loadInitialData])
 
   useEffect(() => {
     if (isPear) {

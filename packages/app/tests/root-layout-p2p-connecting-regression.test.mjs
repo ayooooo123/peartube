@@ -63,3 +63,24 @@ test('initial data loading does not re-enable the startup loading spinner after 
   const loadBlock = source.slice(markerIndex, source.indexOf('  const markBackendReady = useCallback', markerIndex))
   assert.doesNotMatch(loadBlock, /setLoading\(true\)/, 'initial data should run in the background without restoring the startup spinner')
 })
+
+test('desktop web startup timeout exits the P2P connecting screen when initPlatformRPC hangs', () => {
+  const source = readAppFile('app/_layout.web.tsx')
+  const timeoutIndex = source.indexOf("console.warn('[App] Pear desktop backend startup timeout after'")
+  assert.notEqual(timeoutIndex, -1, 'desktop web backend startup timeout handler should exist')
+
+  const timeoutBlock = source.slice(timeoutIndex, source.indexOf('}, BACKEND_STARTUP_TIMEOUT_MS)', timeoutIndex))
+  assert.match(timeoutBlock, /setReady\(true\)/, 'timeout should allow the desktop shell to render')
+  assert.match(timeoutBlock, /setLoading\(false\)/, 'timeout must clear loading so Home stops showing Starting P2P network')
+})
+
+test('desktop web init resolution marks ready if the ready event was missed', () => {
+  const source = readAppFile('app/_layout.web.tsx')
+
+  const initIndex = source.indexOf('await platformRPC.initPlatformRPC()')
+  const fallbackIndex = source.indexOf("await markPearBackendReady('initPlatformRPC', readyPort)")
+
+  assert.notEqual(initIndex, -1, 'desktop web initPlatformRPC call should exist')
+  assert.notEqual(fallbackIndex, -1, 'desktop web init should mark ready if init resolves before eventReady')
+  assert.ok(initIndex < fallbackIndex, 'fallback ready mark should happen after initPlatformRPC resolves')
+})

@@ -2438,7 +2438,9 @@ export function createApi({
           stats.swarmConnections = ctx.swarm?.connections?.size || 0;
           stats.peerCount = videoPeerCount || stats.peerCount || 0;
           stats.blobPeerIds = videoPeerDetails.blobPeerIds;
+          stats.blobPeerIdsJson = JSON.stringify(videoPeerDetails.blobPeerIds || []);
           stats.blobPeers = videoPeerDetails.blobPeers;
+          stats.blobPeersJson = JSON.stringify(videoPeerDetails.blobPeers || []);
           stats.blobCoreKey = videoPeerDetails.blobCoreKey;
           return stats;
         }
@@ -2453,7 +2455,9 @@ export function createApi({
         downloadedBytes: 0,
         peerCount: videoPeerCount,
         blobPeerIds: videoPeerDetails.blobPeerIds,
+        blobPeerIdsJson: JSON.stringify(videoPeerDetails.blobPeerIds || []),
         blobPeers: videoPeerDetails.blobPeers,
+        blobPeersJson: JSON.stringify(videoPeerDetails.blobPeers || []),
         blobCoreKey: videoPeerDetails.blobCoreKey,
         swarmConnections: ctx.swarm?.connections?.size || 0,
         speedMBps: '0',

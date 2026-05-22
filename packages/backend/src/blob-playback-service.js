@@ -3,6 +3,19 @@ import b4a from 'b4a'
 import { normalizeBlobRefInput, parseBlobRef } from './blob-ref.js'
 import { retainSwarmDiscovery } from './storage.js'
 
+function getCorePeerCount(core) {
+  const peers = core?.peers
+  if (Array.isArray(peers)) return peers.length
+  if (typeof peers?.length === 'number') return peers.length
+  if (typeof peers?.size === 'number') return peers.size
+  if (peers && typeof peers.values === 'function') return Array.from(peers.values()).length
+  return 0
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 export class BlobPlaybackService {
   constructor({ ctx }) {
     this.ctx = ctx
@@ -35,23 +48,58 @@ export class BlobPlaybackService {
     return { url }
   }
 
-  warmDirectBlobRef(blobsCoreKey, keyBuffer = b4a.from(blobsCoreKey, 'hex')) {
+  getBlobCore(blobsCoreKey, keyBuffer = b4a.from(blobsCoreKey, 'hex')) {
     const ctx = this.ctx
-    if (!ctx.store) return
+    if (!ctx.store) return null
+    try {
+      return ctx.store.get(keyBuffer)
+    } catch {
+      return null
+    }
+  }
+
+  warmDirectBlobRef(blobsCoreKey, keyBuffer = b4a.from(blobsCoreKey, 'hex')) {
+    const blobsCore = this.getBlobCore(blobsCoreKey, keyBuffer)
+    this.retainBlobCorePeers(blobsCoreKey, blobsCore).catch(() => {})
+  }
+
+  async retainBlobCorePeers(blobsCoreKey, blobsCore = this.getBlobCore(blobsCoreKey)) {
+    const ctx = this.ctx
+    if (!blobsCore) return { peerCount: 0, retained: false }
 
     try {
-      const blobsCore = ctx.store.get(keyBuffer)
-      blobsCore.ready().then(() => {
-        if (ctx.swarm && blobsCore.discoveryKey) {
-          try {
-            retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
-              label: `blobs:${String(blobsCoreKey).slice(0, 16)}`,
-            })
-          } catch { /* best effort */ }
-        }
-        blobsCore.update().catch(() => {})
-      }).catch(() => {})
-    } catch { /* best effort */ }
+      await blobsCore.ready()
+      if (ctx.swarm && blobsCore.discoveryKey) {
+        retainSwarmDiscovery(ctx, blobsCore.discoveryKey, {
+          label: `blobs:${String(blobsCoreKey).slice(0, 16)}`,
+        })
+      }
+      blobsCore.update().catch(() => {})
+      return { peerCount: getCorePeerCount(blobsCore), retained: Boolean(blobsCore.discoveryKey) }
+    } catch {
+      return { peerCount: getCorePeerCount(blobsCore), retained: false }
+    }
+  }
+
+  async waitForBlobCorePeers(blobsCoreKey, { minPeers = 1, timeoutMs = 1500, pollMs = 100 } = {}) {
+    const blobsCore = this.getBlobCore(blobsCoreKey)
+    if (!blobsCore) return { peerCount: 0, retained: false, timedOut: false }
+
+    const startedAt = Date.now()
+    let status = await this.retainBlobCorePeers(blobsCoreKey, blobsCore)
+    while (status.peerCount < minPeers && Date.now() - startedAt < timeoutMs) {
+      await wait(pollMs)
+      status = {
+        ...status,
+        peerCount: getCorePeerCount(blobsCore),
+      }
+    }
+
+    return {
+      ...status,
+      timedOut: status.peerCount < minPeers,
+      elapsedMs: Date.now() - startedAt,
+    }
   }
 
   async resolveFromMetadata(meta, { channel } = {}) {
@@ -111,10 +159,16 @@ export class BlobPlaybackService {
       console.log('[BlobPlaybackService] preparePlayback warmup failed:', err?.message || err)
     }
 
+    const peerWarmup = blobsCoreKey
+      ? await this.waitForBlobCorePeers(blobsCoreKey, { minPeers: 1, timeoutMs: 1500, pollMs: 100 })
+      : undefined
+
     return {
       url: result.url,
       stats: typeof getStats === 'function' ? getStats(driveKey, videoPath) : undefined,
       warmupStarted,
+      peerWarmupStarted: Boolean(blobsCoreKey),
+      peerWarmup,
     }
   }
 }

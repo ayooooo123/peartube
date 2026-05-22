@@ -118,6 +118,11 @@ export interface VideoStats {
   totalBytes: number;
   downloadedBytes: number;
   peerCount: number;
+  blobCoreKey?: string | null;
+  blobPeerIds?: string[];
+  blobPeerIdsJson?: string;
+  blobPeers?: Array<{ key?: string | null; remoteAddress?: string | null; type?: string | null }>;
+  blobPeersJson?: string;
   speedMBps: string;
   uploadSpeedMBps?: string;
   elapsed: number;

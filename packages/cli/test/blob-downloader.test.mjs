@@ -177,3 +177,76 @@ test('downloadChannelBlobs only republishes successfully cached video previews',
     error: 'remote blocks unavailable'
   })
 })
+
+test('downloadChannelBlobs treats discovered blob timeouts as unavailable warnings', async (t) => {
+  const timedOutCore = {
+    discoveryKey: 'timeout-discovery',
+    async ready() {},
+    download() {
+      return {
+        async done() {
+          const err = new Error('Blob download timeout (60000ms)')
+          err.code = 'BLOB_DOWNLOAD_TIMEOUT'
+          throw err
+        }
+      }
+    }
+  }
+  const ctx = {
+    swarm: { join() {} },
+    store: {
+      get() {
+        return timedOutCore
+      }
+    }
+  }
+  const errors = []
+  const warnings = []
+
+  const stats = await downloadChannelBlobs(
+    ctx,
+    'ee'.repeat(32),
+    'chan-timeout',
+    {
+      info() {},
+      debug() {},
+      warn(...args) { warnings.push(args) },
+      error(...args) { errors.push(args) }
+    },
+    {
+      source: 'discovered',
+      previewVideos: [{
+        id: 'timeout-video',
+        title: 'Timeout',
+        blobId: '1:2:100:200',
+        blobsCoreKey: 'aa'.repeat(32)
+      }]
+    },
+    {
+      async loadPublicBee() {
+        return {
+          async listVideos() {
+            return []
+          }
+        }
+      }
+    }
+  )
+
+  t.is(stats.blobsFound, 1)
+  t.is(stats.blobsDownloaded, 0)
+  t.is(stats.blobsFailed, 1)
+  t.is(stats.videosDownloaded, 0)
+  t.is(stats.lastError, 'Blob download timeout (60000ms)')
+  t.is(errors.length, 0)
+  t.is(warnings.length, 1)
+  if (warnings[0]) {
+    t.is(warnings[0][0], '[blob-downloader] Blob download unavailable')
+    t.alike(warnings[0][1], {
+      driveKey: 'chan-timeout',
+      videoId: 'timeout-video',
+      kind: 'video',
+      error: 'Blob download timeout (60000ms)'
+    })
+  }
+})

@@ -829,6 +829,69 @@ test('createRelayService refreshes already accepted channels when feed preview r
   }
 })
 
+test('createRelayService backs off unavailable preview refresh attempts', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-preview-backoff-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+  const previewVideos = [{
+    id: 'preview-timeout',
+    blobId: '0:2:0:20',
+    blobsCoreKey: 'aa'.repeat(32)
+  }]
+  let now = 10_000
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push({ channelKey: candidate.channelKey, previews: candidate.previewVideos?.length || 0 })
+        return {
+          bytesDownloaded: 0,
+          videosFound: candidate.previewVideos?.length || 0,
+          videosDownloaded: 0,
+          blobsFailed: candidate.previewVideos?.length || 0,
+          previewVideos: [],
+          videoCount: candidate.previewVideos?.length || 0,
+          lastError: 'Blob download timeout (60000ms)'
+        }
+      },
+      writeStatusFile: async () => {},
+      nowFn: () => now
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-preview-backoff', publicBeeKey: 'bee-preview-backoff', source: 'discovered', previewVideos })
+    await runtime.emit({ channelKey: 'chan-preview-backoff', publicBeeKey: 'bee-preview-backoff', source: 'discovered', previewVideos })
+
+    let channel = service.catalog.getChannel('chan-preview-backoff')
+    t.alike(mirrored, [{ channelKey: 'chan-preview-backoff', previews: 1 }])
+    t.is(channel.lastError, 'Blob download timeout (60000ms)')
+    t.ok(channel.lastMirrorPreviewSignature)
+
+    now += 5 * 60_000 + 1
+    await runtime.emit({ channelKey: 'chan-preview-backoff', publicBeeKey: 'bee-preview-backoff', source: 'discovered', previewVideos })
+
+    channel = service.catalog.getChannel('chan-preview-backoff')
+    t.is(mirrored.length, 2)
+    t.is(channel.lastError, 'Blob download timeout (60000ms)')
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 
 test('createRelayService removes playable previews when refresh downloads no videos', async (t) => {
   const dir = makeTempDir('peartube-relay-service-preview-remove-hollow-')

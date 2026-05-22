@@ -6,6 +6,8 @@ import { createArchiveConsole } from './archive-console.js'
 import { createArchiveJobStore, createArchiveManager, createArchivePublisher, createYtDlpDownloader } from './archive-manager.js'
 import { createLocalDriveMirrorState, mirrorLocalDriveToRelayChannel } from './local-drive-mirror.js'
 
+const MIRROR_RETRY_COOLDOWN_MS = 5 * 60_000
+
 export async function createRelayService({
   config,
   runtimeFactory,
@@ -17,7 +19,8 @@ export async function createRelayService({
   clearIntervalFn = clearInterval,
   fsModule = null,
   pathModule = null,
-  spawnFn = null
+  spawnFn = null,
+  nowFn = Date.now
 }) {
   if (!config) throw new Error('config is required')
   if (typeof runtimeFactory !== 'function') throw new Error('runtimeFactory is required')
@@ -62,15 +65,39 @@ export async function createRelayService({
       .join('|')
   }
 
-  function shouldRefreshAcceptedChannel(existing, candidate) {
-    if (!existing?.channelKey) return false
-    if (!Array.isArray(candidate?.previewVideos)) return false
+  function getAcceptedRefreshDecision(existing, candidate, now) {
+    const unavailable = {
+      refresh: false,
+      skip: false,
+      incomingSignature: ''
+    }
+    if (!existing?.channelKey) return unavailable
+    if (!Array.isArray(candidate?.previewVideos)) return unavailable
 
     const incomingSignature = getPreviewBlobSignature(candidate.previewVideos)
     const existingSignature = getPreviewBlobSignature(existing.previewVideos)
-    if (incomingSignature !== existingSignature) return true
+    if (!incomingSignature) return unavailable
 
-    return true
+    const lastAttemptSignature = existing.lastMirrorPreviewSignature || ''
+    const lastAttemptAt = Number(existing.lastMirrorAttemptAt || 0) || 0
+    const retryAfterMs = MIRROR_RETRY_COOLDOWN_MS - (now - lastAttemptAt)
+    if (!existingSignature && lastAttemptSignature === incomingSignature && retryAfterMs > 0) {
+      return {
+        refresh: false,
+        skip: true,
+        reason: 'preview-refresh-cooldown',
+        incomingSignature,
+        retryAfterMs
+      }
+    }
+
+    return {
+      refresh: true,
+      skip: false,
+      reason: 'accepted-preview-refresh',
+      incomingSignature,
+      retryAfterMs: 0
+    }
   }
 
   async function runLocalMirrorOnce(localMirrorConfig = config.archive?.localMirror || {}) {
@@ -130,16 +157,39 @@ export async function createRelayService({
       return { accepted: false, reason: 'closed' }
     }
 
+    const now = Number(nowFn()) || Date.now()
     const resolved = runtime.resolveCandidate
       ? await runtime.resolveCandidate(candidate)
       : candidate
 
     const existingChannel = relayCatalog.getChannel(resolved.channelKey)
-    const refreshAcceptedChannel = shouldRefreshAcceptedChannel(existingChannel, resolved)
+    const refreshDecision = getAcceptedRefreshDecision(existingChannel, resolved, now)
+    const refreshAcceptedChannel = refreshDecision.refresh
+
+    if (refreshDecision.skip) {
+      const retentionClass = existingChannel.retentionClass || resolved.retentionClass || 'discovery'
+      await relayCatalog.upsertChannel({
+        channelKey: resolved.channelKey,
+        ownerKey: resolved.ownerKey || existingChannel.ownerKey || null,
+        publicBeeKey: resolved.publicBeeKey || existingChannel.publicBeeKey || null,
+        source: resolved.source || existingChannel.source || 'discovered',
+        retentionClass,
+        lastDecisionReason: refreshDecision.reason,
+        lastSeenAt: now
+      })
+      logger.mirror.debug('Accepted channel refresh skipped during mirror retry cooldown', {
+        channelKey: resolved.channelKey,
+        ownerKey: resolved.ownerKey || existingChannel.ownerKey || null,
+        retryAfterMs: Math.ceil(refreshDecision.retryAfterMs)
+      })
+      await persistStatus()
+      return { accepted: true, retentionClass, reason: refreshDecision.reason }
+    }
+
     const decision = refreshAcceptedChannel
       ? {
         accepted: true,
-        reason: 'accepted-preview-refresh',
+        reason: refreshDecision.reason,
         retentionClass: existingChannel.retentionClass || resolved.retentionClass || 'discovery'
       }
       : evaluateCandidate({
@@ -167,8 +217,15 @@ export async function createRelayService({
       source: resolved.source || 'discovered',
       retentionClass: decision.retentionClass,
       lastDecisionReason: decision.reason,
-      lastSeenAt: Date.now()
+      lastSeenAt: now
     }
+    const incomingPreviewSignature = refreshDecision.incomingSignature || getPreviewBlobSignature(resolved.previewVideos)
+    const mirrorAttemptRecord = incomingPreviewSignature
+      ? {
+        lastMirrorAttemptAt: now,
+        lastMirrorPreviewSignature: incomingPreviewSignature
+      }
+      : {}
 
     await relayCatalog.upsertChannel(baseRecord)
 
@@ -191,16 +248,17 @@ export async function createRelayService({
 
       await relayCatalog.upsertChannel({
         ...baseRecord,
+        ...mirrorAttemptRecord,
         bytes: mirrorStats?.bytesDownloaded || 0,
         videosFound: mirrorStats?.videosFound || 0,
         videosDownloaded: mirrorStats?.videosDownloaded || 0,
-        mirroredAt: Date.now(),
-        lastError: null,
+        mirroredAt: now,
+        lastError: mirrorStats?.lastError || null,
         previewVideos: Array.isArray(mirrorStats?.previewVideos)
           ? mirrorStats.previewVideos
           : undefined,
         videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || 0) || 0,
-        manifestUpdatedAt: Date.now()
+        manifestUpdatedAt: now
       })
 
       if (refreshAcceptedChannel) {
@@ -234,7 +292,7 @@ export async function createRelayService({
           relayServing: true,
           previewVideos: seedPreviewVideos,
           videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || seedPreviewVideos.length || 0) || 0,
-          manifestUpdatedAt: Date.now()
+          manifestUpdatedAt: now
         }
         await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
       }
@@ -250,6 +308,7 @@ export async function createRelayService({
     } catch (err) {
       await relayCatalog.upsertChannel({
         ...baseRecord,
+        ...mirrorAttemptRecord,
         videosDownloaded: 0,
         bytes: 0,
         previewVideos: [],

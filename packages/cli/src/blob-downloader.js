@@ -3,6 +3,7 @@ import { loadPublicBee } from '@peartube/backend/storage'
 import { normalizeBlobRefInput } from '@peartube/backend/blob-ref'
 
 const VIDEO_DOWNLOAD_TIMEOUT_MS = 60_000
+const BLOB_DOWNLOAD_TIMEOUT = 'BLOB_DOWNLOAD_TIMEOUT'
 
 function parseBlobId(blobId) {
   const normalized = normalizeBlobRefInput(blobId)
@@ -12,9 +13,21 @@ function parseBlobId(blobId) {
 
 function timeoutPromise(timeoutMs) {
   return new Promise((_, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Blob download timeout (${timeoutMs}ms)`)), timeoutMs)
+    const timer = setTimeout(() => {
+      const err = new Error(`Blob download timeout (${timeoutMs}ms)`)
+      err.code = BLOB_DOWNLOAD_TIMEOUT
+      reject(err)
+    }, timeoutMs)
     timer?.unref?.()
   })
+}
+
+function isBlobDownloadTimeout(err) {
+  return err?.code === BLOB_DOWNLOAD_TIMEOUT || /^Blob download timeout \(\d+ms\)$/.test(err?.message || '')
+}
+
+function isDiscoveryMirror(options) {
+  return options?.source === 'discovered' || options?.source === 'relay-cache'
 }
 
 function getVideoKey(video) {
@@ -84,9 +97,10 @@ async function downloadBlobRef(ctx, ref) {
   const blobsCore = ctx.store.get(blobsCoreKey)
   await blobsCore.ready()
 
+  let discoveryHandle = null
   if (ctx.swarm && !ctx.swarm.destroyed && blobsCore.discoveryKey) {
     try {
-      ctx.swarm.join(blobsCore.discoveryKey, { server: true, client: true })
+      discoveryHandle = ctx.swarm.join(blobsCore.discoveryKey, { server: true, client: true })
     } catch (err) {
       void err
     }
@@ -97,10 +111,18 @@ async function downloadBlobRef(ctx, ref) {
     end: blockOffset + blockLength
   })
 
-  await Promise.race([
-    download.done(),
-    timeoutPromise(VIDEO_DOWNLOAD_TIMEOUT_MS)
-  ])
+  try {
+    await Promise.race([
+      download.done(),
+      timeoutPromise(VIDEO_DOWNLOAD_TIMEOUT_MS)
+    ])
+  } catch (err) {
+    try { download.destroy?.() } catch {}
+    throw err
+  } finally {
+    try { await discoveryHandle?.destroy?.() } catch {}
+    try { await discoveryHandle?.close?.() } catch {}
+  }
 
   if (Number.isFinite(ref.blobId?.byteLength)) return Number(ref.blobId.byteLength)
 
@@ -119,10 +141,12 @@ export async function downloadChannelBlobs(ctx, publicBeeKey, driveKey, logger =
     videosDownloaded: 0,
     blobsFound: 0,
     blobsDownloaded: 0,
+    blobsFailed: 0,
     thumbnailsDownloaded: 0,
     bytesDownloaded: 0,
     previewVideos: [],
-    videoCount: 0
+    videoCount: 0,
+    lastError: null
   }
 
   try {
@@ -168,11 +192,17 @@ export async function downloadChannelBlobs(ctx, publicBeeKey, driveKey, logger =
         }
         if (ref.kind === 'thumbnail') stats.thumbnailsDownloaded += 1
       } catch (err) {
-        logError('[blob-downloader] Blob download failed', {
+        stats.blobsFailed += 1
+        stats.lastError = err?.message || String(err)
+        const logUnavailable = isDiscoveryMirror(options) && isBlobDownloadTimeout(err)
+        const logFailure = logUnavailable && typeof logger.warn === 'function'
+          ? logger.warn.bind(logger)
+          : logError
+        logFailure(logUnavailable ? '[blob-downloader] Blob download unavailable' : '[blob-downloader] Blob download failed', {
           driveKey,
           videoId: ref.videoId || '<unknown-video>',
           kind: ref.kind,
-          error: err?.message || String(err)
+          error: stats.lastError
         })
       }
     }

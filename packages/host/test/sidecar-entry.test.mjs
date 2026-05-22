@@ -16,11 +16,30 @@ test('sidecar entry exports sidecar helpers', async (t) => {
 })
 
 test('parseSidecarArgv preserves entrypoint and trailing args', async (t) => {
-  t.alike(parseSidecarArgv(['/tmp/peartube-host', 'custom-entry', '--inspect']), {
-    storagePath: '/tmp/peartube-host',
-    entrypoint: 'custom-entry',
-    args: ['--inspect']
-  })
+  const parsed = parseSidecarArgv(['/tmp/peartube-host', 'custom-entry', '--inspect'])
+  t.is(parsed.storagePath, '/tmp/peartube-host')
+  t.is(parsed.entrypoint, 'custom-entry')
+  t.alike(parsed.args, ['--inspect'])
+  t.absent(parsed.network)
+  t.absent(parsed.swarmOptions)
+})
+
+test('parseSidecarArgv decodes network launch options from trailing JSON arg', async (t) => {
+  const launchOptions = {
+    network: { relayPeers: ['a'.repeat(64)] },
+    swarmOptions: { knownPeers: ['b'.repeat(64)] }
+  }
+
+  const parsed = parseSidecarArgv([
+    '/tmp/peartube-host',
+    'mobile-entry',
+    JSON.stringify(launchOptions)
+  ])
+  t.is(parsed.storagePath, '/tmp/peartube-host')
+  t.is(parsed.entrypoint, 'mobile-entry')
+  t.alike(parsed.args, [])
+  t.alike(parsed.network, launchOptions.network)
+  t.alike(parsed.swarmOptions, launchOptions.swarmOptions)
 })
 
 test('createProcessTransport exposes a chainable stream-like API', async (t) => {

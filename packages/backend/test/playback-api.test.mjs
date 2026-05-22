@@ -140,6 +140,30 @@ test('getVideoStats keeps video peer count separate from global swarm connection
   t.is(stats.swarmConnections, 4)
 })
 
+test('getVideoStats exposes blob core peer identities for transfer proof', (t) => {
+  const peerA = { remotePublicKey: Buffer.from('a'.repeat(64), 'hex'), remoteAddress: 'relay-a' }
+  const peerB = { publicKey: Buffer.from('b'.repeat(64), 'hex'), remoteAddress: 'relay-b' }
+  const videoCore = {
+    key: Buffer.from('c'.repeat(64), 'hex'),
+    peers: [peerA, peerB],
+  }
+  const api = createApi({
+    ctx: {
+      swarm: { connections: new Set([1, 2, 3, 4]) },
+      channels: new Map([
+        ['channel-key', { videoCores: new Map([['videos/demo.mp4', videoCore]]) }],
+      ]),
+    },
+  })
+
+  const stats = api.getVideoStats('channel-key', 'videos/demo.mp4')
+
+  t.is(stats.peerCount, 2)
+  t.alike(stats.blobPeerIds, ['a'.repeat(64), 'b'.repeat(64)])
+  t.is(stats.blobCoreKey, 'c'.repeat(64))
+  t.is(stats.swarmConnections, 4)
+})
+
 test('getVideoStats does not fall back to global swarm connections as video peers', (t) => {
   const api = createApi({
     ctx: {

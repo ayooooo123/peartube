@@ -76,7 +76,7 @@ export function createProcessTransport() {
   return transport
 }
 
-export async function runHostSidecar({ platform = 'desktop', storagePath, entrypoint = 'sidecar-entry', args = [] } = {}) {
+export async function runHostSidecar({ platform = 'desktop', storagePath, entrypoint = 'sidecar-entry', args = [], network, swarmOptions } = {}) {
   const stream = createProcessTransport()
 
   return startHost({
@@ -84,13 +84,38 @@ export async function runHostSidecar({ platform = 'desktop', storagePath, entryp
     storagePath,
     entrypoint,
     args,
-    stream
+    stream,
+    network,
+    swarmOptions
   })
 }
 
+function parseLaunchOptions(value) {
+  if (typeof value !== 'string' || value.length === 0) return null
+  try {
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object') return null
+    if (parsed.__peartubeLaunchOptions !== true && !parsed.network && !parsed.swarmOptions) return null
+    return {
+      network: parsed.network,
+      swarmOptions: parsed.swarmOptions
+    }
+  } catch {
+    return null
+  }
+}
+
 export function parseSidecarArgv(argv = []) {
-  const [storagePath = '', entrypoint = 'sidecar-entry', ...args] = argv
-  return { storagePath, entrypoint, args }
+  const [storagePath = '', entrypoint = 'sidecar-entry', ...rawArgs] = argv
+  const launchOptions = parseLaunchOptions(rawArgs[0])
+  const args = launchOptions ? rawArgs.slice(1) : rawArgs
+  return {
+    storagePath,
+    entrypoint,
+    args,
+    network: launchOptions?.network,
+    swarmOptions: launchOptions?.swarmOptions
+  }
 }
 
 function isDirectRun() {

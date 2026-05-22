@@ -18,6 +18,7 @@ import { Recommender } from './recommendations/recommender.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { NETWORK_TOPIC_STRING } from './types.js'
+import { collectCorestoreGarbage } from './corestore-gc.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -475,6 +476,7 @@ export function createApi({
     const intents = await loadAllDownloadIntents(ctx)
     let clearedBytes = 0
     let clearedCount = 0
+    let clearedRanges = 0
 
     for (const intent of intents) {
       const prefetchKey = getPrefetchKey(intent?.driveKey, intent?.videoPath)
@@ -484,6 +486,14 @@ export function createApi({
       const result = await clearDownloadIntent(intent)
       clearedBytes += result.clearedBytes || 0
       clearedCount += 1
+      if (result.cleared) clearedRanges += 1
+    }
+
+    if (clearedRanges > 0) {
+      await collectCorestoreGarbage(ctx?.store, {
+        label: 'partial download cache clear',
+        log: console.log
+      })
     }
 
     if (clearedCount > 0) {

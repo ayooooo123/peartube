@@ -38,6 +38,16 @@ function createStore() {
   return {
     cores,
     closed: false,
+    storage: {
+      flushCalls: 0,
+      compactCalls: 0,
+      async flush() {
+        this.flushCalls += 1
+      },
+      async compact() {
+        this.compactCalls += 1
+      }
+    },
     get(input) {
       const key = b4a.isBuffer(input)
         ? b4a.toString(input, 'hex')
@@ -110,6 +120,8 @@ test('clearCache clears persisted partial download intents as cache bytes', asyn
   t.is(result.success, true)
   t.is(result.clearedBytes, 2 * GB)
   t.alike(store.cores.get(coreA).clearCalls, [{ start: 5, end: 9 }])
+  t.is(store.storage.flushCalls, 1)
+  t.is(store.storage.compactCalls, 1)
   t.absent(metaDb.state.has('download-intent:drive-a:videos/partial.mp4'))
 })
 

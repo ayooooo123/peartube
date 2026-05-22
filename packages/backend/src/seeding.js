@@ -6,6 +6,7 @@
  */
 
 import { normalizeBlobsCoreKey, normalizeBlobRefInput, stringifyBlobId } from './blob-ref.js';
+import { collectCorestoreGarbage } from './corestore-gc.js';
 
 /**
  * @typedef {import('./types.js').SeedingConfig} SeedingConfig
@@ -177,10 +178,17 @@ export class SeedingManager {
     if (this.activeSeeds.has(key)) {
       const seed = this.activeSeeds.get(key);
       this.activeSeeds.delete(key);
+      let clearedBlob = false;
       if (options.clearBlob !== false) {
-        await this.clearSeedBlob(seed);
+        clearedBlob = await this.clearSeedBlob(seed);
       }
       await this.persistSeeds();
+      if (clearedBlob) {
+        await collectCorestoreGarbage(this.store, {
+          label: 'seed removal',
+          log: console.log
+        });
+      }
       console.log('[SeedingManager] Removed seed:', key.slice(0, 32));
       return true;
     }
@@ -286,18 +294,26 @@ export class SeedingManager {
       });
 
     // Remove oldest/lowest priority seeds until under quota
+    let clearedBlob = false;
     for (const seed of seeds) {
       if (currentBytes <= maxBytes) break;
       if (seed.reason === 'pinned') continue; // Never remove pinned
       if (protectedKeys.has(seed.key)) continue;
 
       this.activeSeeds.delete(seed.key);
-      await this.clearSeedBlob(seed);
+      clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob;
       currentBytes -= seed.bytes || 0;
       console.log('[SeedingManager] Removed seed to meet quota:', seed.key.slice(0, 32));
     }
 
     await this.persistSeeds();
+
+    if (clearedBlob) {
+      await collectCorestoreGarbage(this.store, {
+        label: 'quota enforcement',
+        log: console.log
+      });
+    }
   }
 
   /**
@@ -440,6 +456,7 @@ export class SeedingManager {
   async clearCache() {
     let clearedBytes = 0;
     const toRemove = [];
+    let clearedBlob = false;
 
     for (const [key, seed] of this.activeSeeds.entries()) {
       if (seed.reason !== 'pinned') {
@@ -451,10 +468,18 @@ export class SeedingManager {
     for (const key of toRemove) {
       const seed = this.activeSeeds.get(key);
       this.activeSeeds.delete(key);
-      await this.clearSeedBlob(seed);
+      clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob;
     }
 
     await this.persistSeeds();
+
+    if (clearedBlob) {
+      await collectCorestoreGarbage(this.store, {
+        label: 'cache clear',
+        log: console.log
+      });
+    }
+
     console.log('[SeedingManager] Cleared cache:', clearedBytes, 'bytes from', toRemove.length, 'seeds');
     const stats = this.buildStorageStats(await this.getTotalStorageBytes());
     return {

@@ -16,11 +16,23 @@ function createMetaDb(seed = {}) {
   }
 }
 
-function createStore({ diskUsageBytes = 0 } = {}) {
+function createStore({ diskUsageBytes = 0, compactedDiskUsageBytes = null } = {}) {
+  const state = { diskUsageBytes }
   return {
     _peartubeStoragePath: '/tmp/peartube-test-storage',
+    storage: {
+      flushCalls: 0,
+      compactCalls: 0,
+      async flush() {
+        this.flushCalls += 1
+      },
+      async compact() {
+        this.compactCalls += 1
+        if (compactedDiskUsageBytes !== null) state.diskUsageBytes = compactedDiskUsageBytes
+      }
+    },
     async getDiskUsageBytes() {
-      return diskUsageBytes
+      return state.diskUsageBytes
     },
     get() {
       return {
@@ -74,4 +86,31 @@ test('clearCache reports app P2P disk usage after clearing tracked non-pinned ca
   t.is(cleared.clearedBytes, 2 * GB)
   t.is(cleared.totalStorageBytes, 6 * GB)
   t.is(cleared.untrackedStorageBytes, 3 * GB)
+})
+
+test('clearCache compacts Corestore before measuring app P2P disk usage', async (t) => {
+  const store = createStore({
+    diskUsageBytes: 6 * GB,
+    compactedDiskUsageBytes: 4 * GB
+  })
+  const manager = new SeedingManager(store, createMetaDb())
+
+  await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
+    byteLength: 2 * GB,
+    blobId: '3:5:0:1234',
+    blobsCoreKey: coreA
+  })
+  await manager.addSeed('drive-pinned', 'videos/pinned.mp4', 'pinned', {
+    byteLength: 3 * GB,
+    blobId: '8:2:0:2048',
+    blobsCoreKey: coreB
+  })
+
+  const cleared = await manager.clearCache()
+
+  t.is(store.storage.flushCalls, 1)
+  t.is(store.storage.compactCalls, 1)
+  t.is(cleared.clearedBytes, 2 * GB)
+  t.is(cleared.totalStorageBytes, 4 * GB)
+  t.is(cleared.untrackedStorageBytes, 1 * GB)
 })

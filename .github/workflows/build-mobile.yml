@@ -120,6 +120,7 @@ jobs:
 
       - name: Prepare iOS frameworks
         working-directory: packages/app
+        shell: bash
         run: npm run ios:prepare
 
       - name: Install CocoaPods dependencies

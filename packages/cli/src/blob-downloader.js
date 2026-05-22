@@ -127,12 +127,12 @@ export async function downloadChannelBlobs(ctx, publicBeeKey, driveKey, logger =
 
   try {
     if (!ctx || ctx.store?.closed) {
-      logError('[blob-downloader] Skipping channel download: invalid context or closed store', driveKey)
+      logError('[blob-downloader] Skipping channel download: invalid context or closed store', { driveKey })
       return stats
     }
 
     if (!publicBeeKey || typeof publicBeeKey !== 'string') {
-      logDebug('[blob-downloader] Skipping channel with missing publicBeeKey', driveKey)
+      logDebug('[blob-downloader] Skipping channel with missing publicBeeKey', { driveKey })
       return stats
     }
 
@@ -152,7 +152,7 @@ export async function downloadChannelBlobs(ctx, publicBeeKey, driveKey, logger =
     }
 
     if (refs.size === 0) {
-      logDebug('[blob-downloader] No blob refs found for channel', driveKey)
+      logDebug('[blob-downloader] No blob refs found for channel', { driveKey })
       return stats
     }
 
@@ -168,29 +168,32 @@ export async function downloadChannelBlobs(ctx, publicBeeKey, driveKey, logger =
         }
         if (ref.kind === 'thumbnail') stats.thumbnailsDownloaded += 1
       } catch (err) {
-        logError(
-          '[blob-downloader] Blob download failed',
+        logError('[blob-downloader] Blob download failed', {
           driveKey,
-          ref.videoId || '<unknown-video>',
-          ref.kind,
-          err?.message || err
-        )
+          videoId: ref.videoId || '<unknown-video>',
+          kind: ref.kind,
+          error: err?.message || String(err)
+        })
       }
     }
 
     stats.videoCount = Math.max(stats.videoCount, stats.previewVideos.length, stats.videosDownloaded)
 
-    logInfo(
-      '[blob-downloader] Channel blob download complete',
+    logInfo('[blob-downloader] Channel blob download complete', {
       driveKey,
-      `videos: ${stats.videosDownloaded}/${stats.videosFound || stats.videoCount}`,
-      `blobs: ${stats.blobsDownloaded}/${stats.blobsFound}`,
-      `bytes: ${stats.bytesDownloaded}`
-    )
+      videosDownloaded: stats.videosDownloaded,
+      videosTotal: stats.videosFound || stats.videoCount,
+      blobsDownloaded: stats.blobsDownloaded,
+      blobsFound: stats.blobsFound,
+      bytesDownloaded: stats.bytesDownloaded
+    })
 
     return stats
   } catch (err) {
-    logError('[blob-downloader] Channel blob download failed', driveKey, err?.message || err)
+    logError('[blob-downloader] Channel blob download failed', {
+      driveKey,
+      error: err?.message || String(err)
+    })
     return stats
   }
 }
@@ -229,7 +232,10 @@ export async function downloadAllCachedChannels(ctx, cacheManager, logger = {}) 
         await cacheManager.updateChannelSize(channel.driveKey, stats.bytesDownloaded)
       }
     } catch (err) {
-      logError('[blob-downloader] Cached channel download failed', channel.driveKey, err?.message || err)
+      logError('[blob-downloader] Cached channel download failed', {
+        driveKey: channel.driveKey,
+        error: err?.message || String(err)
+      })
     }
   }
 

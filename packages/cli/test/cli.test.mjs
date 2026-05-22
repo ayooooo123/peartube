@@ -1,8 +1,10 @@
 import test from 'brittle'
 import { readFileSync } from 'node:fs'
+import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { normalizeCliArgv, parseArgv } from '../src/argv.js'
+import { createCliLogger } from '../src/cli-logger.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -94,6 +96,30 @@ test('config and logger use the runtime process shim', async (t) => {
 
   t.ok(configContent.includes("import process from '#process'"), 'config.js uses the runtime process shim')
   t.ok(loggerContent.includes("import process from '#process'"), 'cli-logger.js uses the runtime process shim')
+})
+
+test('CLI logger keeps positional metadata out of numbered JSON fields', async (t) => {
+  const writes = []
+  const originalWrite = process.stdout.write
+
+  process.stdout.write = function write(chunk, ...args) {
+    writes.push(String(chunk))
+    const callback = args.find((arg) => typeof arg === 'function')
+    callback?.()
+    return true
+  }
+
+  try {
+    const logger = createCliLogger('debug')
+    logger.download.error('download failed', 'aa'.repeat(32), 'video-1')
+  } finally {
+    process.stdout.write = originalWrite
+  }
+
+  t.is(writes.length, 1)
+  const entry = JSON.parse(writes[0])
+  t.absent(Object.hasOwn(entry, '0'))
+  t.alike(entry.args, ['aa'.repeat(32), 'video-1'])
 })
 
 test('Dockerfile packages the standalone relay executable in a minimal runtime image', async (t) => {

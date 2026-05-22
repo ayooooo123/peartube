@@ -39,6 +39,7 @@ test('downloadChannelBlobs downloads feed preview refs when PublicBee has no vid
   const videoCore = createCore({ length: 4, byteLength: 400 })
   const thumbnailCore = createCore({ length: 2, byteLength: 20 })
   const joins = []
+  const infos = []
   const ctx = {
     swarm: {
       join(discoveryKey, opts) {
@@ -59,7 +60,7 @@ test('downloadChannelBlobs downloads feed preview refs when PublicBee has no vid
     ctx,
     'cc'.repeat(32),
     'chan-preview',
-    { info() {}, debug() {}, error() {} },
+    { info(...args) { infos.push(args) }, debug() {}, error() {} },
     {
       previewVideos: [{
         id: 'preview-1',
@@ -93,6 +94,16 @@ test('downloadChannelBlobs downloads feed preview refs when PublicBee has no vid
   t.alike(thumbnailCore.downloads, [{ start: 0, end: 1 }])
   t.is(joins.length, 2)
   t.ok(joins.every((join) => join.opts?.server === true && join.opts?.client === true))
+  t.is(infos.length, 1)
+  t.is(infos[0][0], '[blob-downloader] Channel blob download complete')
+  t.alike(infos[0][1], {
+    driveKey: 'chan-preview',
+    videosDownloaded: 1,
+    videosTotal: 1,
+    blobsDownloaded: 2,
+    blobsFound: 2,
+    bytesDownloaded: 210
+  })
 })
 
 
@@ -118,12 +129,13 @@ test('downloadChannelBlobs only republishes successfully cached video previews',
       }
     }
   }
+  const errors = []
 
   const stats = await downloadChannelBlobs(
     ctx,
     'ee'.repeat(32),
     'chan-partial',
-    { info() {}, debug() {}, error() {} },
+    { info() {}, debug() {}, error(...args) { errors.push(args) } },
     {
       previewVideos: [
         {
@@ -156,4 +168,12 @@ test('downloadChannelBlobs only republishes successfully cached video previews',
   t.is(stats.videosDownloaded, 1)
   t.is(stats.previewVideos.length, 1)
   t.is(stats.previewVideos[0].id, 'playable')
+  t.is(errors.length, 1)
+  t.is(errors[0][0], '[blob-downloader] Blob download failed')
+  t.alike(errors[0][1], {
+    driveKey: 'chan-partial',
+    videoId: 'hollow',
+    kind: 'video',
+    error: 'remote blocks unavailable'
+  })
 })

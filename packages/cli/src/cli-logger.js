@@ -8,6 +8,29 @@ const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 }
 
 let currentLevel = LEVELS.info
 
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object') return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function normalizeArg(value) {
+  if (value instanceof Error) return value.message
+  return value
+}
+
+function normalizeData(args) {
+  if (args.length === 0) return {}
+
+  const [data, ...rest] = args
+  if (isPlainObject(data)) {
+    if (rest.length === 0) return data
+    return { ...data, args: rest.map(normalizeArg) }
+  }
+
+  return { args: args.map(normalizeArg) }
+}
+
 /**
  * @param {boolean|string} debugOrLevel
  */
@@ -25,8 +48,9 @@ export function setDebugLevel(debugOrLevel) {
  * @returns {{ debug: Function, info: Function, warn: Function, error: Function }}
  */
 function createLogger(component) {
-  function log(level, msg, data = {}) {
+  function log(level, msg, ...args) {
     if (LEVELS[level] < currentLevel) return
+    const data = normalizeData(args)
     const entry = {
       level,
       time: Date.now(),
@@ -38,10 +62,10 @@ function createLogger(component) {
   }
 
   return {
-    debug: (msg, data) => log('debug', msg, data),
-    info: (msg, data) => log('info', msg, data),
-    warn: (msg, data) => log('warn', msg, data),
-    error: (msg, data) => log('error', msg, data)
+    debug: (msg, ...args) => log('debug', msg, ...args),
+    info: (msg, ...args) => log('info', msg, ...args),
+    warn: (msg, ...args) => log('warn', msg, ...args),
+    error: (msg, ...args) => log('error', msg, ...args)
   }
 }
 

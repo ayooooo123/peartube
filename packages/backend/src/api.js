@@ -338,12 +338,131 @@ export function createApi({
    */
   async function loadAllDownloadIntents(ctx) {
     const intents = []
+    if (typeof ctx?.metaDb?.createReadStream !== 'function') return intents
     for await (const entry of ctx.metaDb.createReadStream({ gte: 'download-intent:', lt: 'download-intent:~' })) {
       if (entry.value) {
         intents.push(entry.value)
       }
     }
     return intents
+  }
+
+  function getDownloadIntentMetaKey(intent) {
+    return `download-intent:${intent.driveKey}:${intent.videoPath}`
+  }
+
+  function getPrefetchKey(driveKey, videoPath) {
+    return `${driveKey}:${videoPath}`
+  }
+
+  function cancelActiveRangeRequests(prefetchKey) {
+    const existingRanges = activeRangeRequests.get(prefetchKey)
+    if (!existingRanges) return false
+
+    console.log('[API] Cancelling active range requests for:', prefetchKey)
+    existingRanges.ranges.forEach(r => { try { r?.destroy?.() } catch { /* best effort */ } })
+    if (existingRanges.core) {
+      try { existingRanges.core.off('download', existingRanges.onDownload) } catch { /* best effort */ }
+      try { existingRanges.core.off('upload', existingRanges.onUpload) } catch { /* best effort */ }
+    }
+    activeRangeRequests.delete(prefetchKey)
+    return true
+  }
+
+  function activeSeedKeys() {
+    const seeds = typeof seedingManager?.getActiveSeeds === 'function' ? seedingManager.getActiveSeeds() : []
+    return new Set(seeds.map((seed) => getPrefetchKey(seed.driveKey, seed.videoPath)))
+  }
+
+  function cancelRangeRequestsForRemovedSeeds(protectedKeys = new Set()) {
+    if (typeof seedingManager?.getActiveSeeds !== 'function') return
+    const retained = activeSeedKeys()
+    for (const key of activeRangeRequests.keys()) {
+      if (protectedKeys.has(key)) continue
+      if (!retained.has(key)) cancelActiveRangeRequests(key)
+    }
+  }
+
+  async function removeSeedForDownloadIntent(intent) {
+    if (typeof seedingManager?.getActiveSeeds !== 'function' || typeof seedingManager?.removeSeed !== 'function') return
+    const seed = seedingManager.getActiveSeeds()
+      .find((candidate) => candidate?.driveKey === intent.driveKey && candidate?.videoPath === intent.videoPath)
+    if (!seed || seed.reason === 'pinned') return
+    await seedingManager.removeSeed(intent.driveKey, intent.videoPath, { clearBlob: false })
+  }
+
+  async function clearDownloadIntent(intent) {
+    if (!intent?.driveKey || !intent?.videoPath) return { clearedBytes: 0, cleared: false }
+
+    const prefetchKey = getPrefetchKey(intent.driveKey, intent.videoPath)
+    cancelActiveRangeRequests(prefetchKey)
+
+    let cleared = false
+    let clearedBytes = 0
+    const blobsCoreKey = normalizeBlobsCoreKey(intent.blobsCoreKey)
+    const blob = normalizeBlobRefInput(intent.blobId)
+
+    if (blobsCoreKey && blob && ctx?.store) {
+      try {
+        const core = ctx.store.get({ key: b4a.from(blobsCoreKey, 'hex') })
+        await core?.ready?.()
+        if (typeof core?.clear === 'function') {
+          await core.clear(blob.blockOffset, blob.blockOffset + blob.blockLength)
+          cleared = true
+          clearedBytes = Number(intent.totalBytes || blob.byteLength || 0) || 0
+          console.log('[API] Cleared partial cached blob range:', blobsCoreKey.slice(0, 16), blob.blockOffset, blob.blockOffset + blob.blockLength)
+        }
+      } catch (err) {
+        console.log('[API] Failed to clear partial cached blob range:', err?.message)
+      }
+    }
+
+    try {
+      if (typeof ctx?.metaDb?.del === 'function') await ctx.metaDb.del(getDownloadIntentMetaKey(intent))
+    } catch (err) {
+      console.log('[API] Failed to delete download intent:', err?.message)
+    }
+
+    try {
+      await removeSeedForDownloadIntent(intent)
+    } catch (err) {
+      console.log('[API] Failed to remove partial download seed:', err?.message)
+    }
+
+    return { clearedBytes: Math.round(clearedBytes), cleared }
+  }
+
+  async function clearDownloadIntents({ protectedKeys = [], onlyUntrackedSeeds = false } = {}) {
+    const protectedSet = protectedKeys instanceof Set ? protectedKeys : new Set(protectedKeys)
+    const retainedSeeds = onlyUntrackedSeeds ? activeSeedKeys() : null
+    const intents = await loadAllDownloadIntents(ctx)
+    let clearedBytes = 0
+    let clearedCount = 0
+
+    for (const intent of intents) {
+      const prefetchKey = getPrefetchKey(intent?.driveKey, intent?.videoPath)
+      if (protectedSet.has(prefetchKey)) continue
+      if (retainedSeeds?.has(prefetchKey)) continue
+
+      const result = await clearDownloadIntent(intent)
+      clearedBytes += result.clearedBytes || 0
+      clearedCount += 1
+    }
+
+    if (clearedCount > 0) {
+      console.log('[API] Cleared partial download intents:', clearedCount, 'bytes:', clearedBytes)
+    }
+
+    return { clearedBytes: Math.round(clearedBytes), clearedCount }
+  }
+
+  function normalizeClearedBytes(result) {
+    if (typeof result === 'number' && Number.isFinite(result)) return Math.max(0, Math.round(result))
+    if (result && typeof result === 'object') {
+      const value = Number(result.clearedBytes)
+      return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0
+    }
+    return 0
   }
 
   return {
@@ -1696,20 +1815,14 @@ export function createApi({
      * @returns {Promise<Object>}
      */
     async prefetchVideo(driveKey, videoPath, publicBeeKey = null) {
-      const prefetchKey = `${driveKey}:${videoPath}`
+      const prefetchKey = getPrefetchKey(driveKey, videoPath)
       const existing = prefetchInFlight.get(prefetchKey)
       if (existing) return existing
 
       // Cancel any orphaned range requests from a previous prefetch session
-      const existingRanges = activeRangeRequests.get(prefetchKey)
-      if (existingRanges) {
+      if (activeRangeRequests.has(prefetchKey)) {
         console.log('[API] Cancelling orphaned range requests for:', videoPath)
-        existingRanges.ranges.forEach(r => { try { r?.destroy?.() } catch { /* best effort */ } })
-        if (existingRanges.core) {
-          try { existingRanges.core.off('download', existingRanges.onDownload) } catch { /* best effort */ }
-          try { existingRanges.core.off('upload', existingRanges.onUpload) } catch { /* best effort */ }
-        }
-        activeRangeRequests.delete(prefetchKey)
+        cancelActiveRangeRequests(prefetchKey)
       }
 
       const prefetchPromise = (async () => {
@@ -1845,6 +1958,27 @@ export function createApi({
               mimeType: v?.mimeType || existingIntent?.mimeType || '',
               startedAt: Date.now()
             }).catch(err => console.log('[API] Failed to save download intent:', err?.message))
+          }
+
+          if (seedingManager) {
+            await seedingManager.addSeed(driveKey, videoPath, 'watched', {
+              blockLength: totalBlocks,
+              byteLength: totalBytes,
+              publicBeeKey: publicBeeKey || v?.publicBeeKey || existingIntent?.publicBeeKey || null,
+              blobId: blobMeta.blobId,
+              blobsCoreKey: blobMeta.blobsCoreKey,
+              thumbnailBlobId: v?.thumbnailBlobId || existingIntent?.thumbnailBlobId || null,
+              thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || existingIntent?.thumbnailBlobsCoreKey || null,
+              mimeType: v?.mimeType || existingIntent?.mimeType || null,
+              thumbnailMimeType: v?.thumbnailMimeType || existingIntent?.thumbnailMimeType || null
+            }, { protectSelf: true }).catch(err => console.log('[API] Failed to register in-flight seed:', err?.message))
+
+            await clearDownloadIntents({
+              protectedKeys: [prefetchKey],
+              onlyUntrackedSeeds: true
+            }).catch(err => console.log('[API] Failed to clear untracked partial downloads:', err?.message))
+
+            cancelRangeRequestsForRemovedSeeds(new Set([prefetchKey]))
           }
 
           // Count initial blocks already available
@@ -2578,7 +2712,9 @@ export function createApi({
     async setStorageLimit(maxGB) {
       console.log('[API] SET_STORAGE_LIMIT:', maxGB, 'GB');
       if (seedingManager) {
+        await clearDownloadIntents().catch(err => console.log('[API] Failed to clear partial downloads for storage limit:', err?.message))
         await seedingManager.setMaxStorageGB(maxGB);
+        cancelRangeRequestsForRemovedSeeds()
         return { success: true };
       }
       return { success: false };
@@ -2591,8 +2727,13 @@ export function createApi({
     async clearCache() {
       console.log('[API] CLEAR_CACHE');
       if (seedingManager) {
-        const clearedBytes = await seedingManager.clearCache();
-        return { success: true, clearedBytes };
+        const partial = await clearDownloadIntents().catch(err => {
+          console.log('[API] Failed to clear partial downloads:', err?.message)
+          return { clearedBytes: 0 }
+        });
+        const cleared = await seedingManager.clearCache();
+        cancelRangeRequestsForRemovedSeeds()
+        return { success: true, clearedBytes: normalizeClearedBytes(cleared) + normalizeClearedBytes(partial) };
       }
       return { success: false, clearedBytes: 0 };
     },

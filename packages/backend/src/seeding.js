@@ -23,6 +23,21 @@ function formatBytesAsGB(bytes) {
   return (Math.max(0, Number(bytes) || 0) / (1024 * 1024 * 1024)).toFixed(2);
 }
 
+function normalizeProtectedSeedKeys(keys) {
+  if (!keys) return new Set()
+  if (keys instanceof Set) return keys
+  if (Array.isArray(keys)) return new Set(keys.filter(Boolean))
+  if (typeof keys === 'string') return new Set([keys])
+  return new Set()
+}
+
+function mergeSeedReason(existingReason, nextReason) {
+  const priority = { watched: 1, subscribed: 2, pinned: 3 }
+  return (priority[nextReason] || 0) > (priority[existingReason] || 0)
+    ? nextReason
+    : existingReason
+}
+
 export class SeedingManager {
   /**
    * @param {import('corestore')} store - Corestore instance
@@ -85,9 +100,10 @@ export class SeedingManager {
    * @param {string} videoPath
    * @param {'watched'|'pinned'|'subscribed'} reason
    * @param {{blockLength?: number, byteLength?: number, publicBeeKey?: string | null, blobId?: string | null, blobsCoreKey?: string | null, thumbnailBlobId?: string | null, thumbnailBlobsCoreKey?: string | null, mimeType?: string | null, thumbnailMimeType?: string | null}} [blobInfo]
+   * @param {{protectSelf?: boolean, protectedKeys?: string[] | Set<string>}} [options]
    * @returns {Promise<boolean>}
    */
-  async addSeed(driveKey, videoPath, reason, blobInfo) {
+  async addSeed(driveKey, videoPath, reason, blobInfo, options = {}) {
     if (!this.config.autoSeedWatched && reason === 'watched') {
       console.log('[SeedingManager] Auto-seed watched disabled, skipping');
       return false;
@@ -98,6 +114,25 @@ export class SeedingManager {
     // Check if already seeding
     if (this.activeSeeds.has(key)) {
       console.log('[SeedingManager] Already seeding:', key.slice(0, 32));
+      const existing = this.activeSeeds.get(key)
+      const updatedSeedInfo = {
+        ...existing,
+        reason: mergeSeedReason(existing.reason, reason),
+        blocks: blobInfo?.blockLength || existing.blocks || 0,
+        bytes: blobInfo?.byteLength || existing.bytes || 0,
+        publicBeeKey: blobInfo?.publicBeeKey || existing.publicBeeKey || null,
+        blobId: blobInfo?.blobId || existing.blobId || null,
+        blobsCoreKey: blobInfo?.blobsCoreKey || existing.blobsCoreKey || null,
+        thumbnailBlobId: blobInfo?.thumbnailBlobId || existing.thumbnailBlobId || null,
+        thumbnailBlobsCoreKey: blobInfo?.thumbnailBlobsCoreKey || existing.thumbnailBlobsCoreKey || null,
+        mimeType: blobInfo?.mimeType || existing.mimeType || null,
+        thumbnailMimeType: blobInfo?.thumbnailMimeType || existing.thumbnailMimeType || null
+      }
+      this.activeSeeds.set(key, updatedSeedInfo)
+      await this.persistSeeds()
+      const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
+      if (options.protectSelf) protectedKeys.add(key)
+      await this.enforceQuota({ protectedKeys });
       return false;
     }
 
@@ -124,7 +159,9 @@ export class SeedingManager {
     console.log('[SeedingManager] Added seed:', videoPath, 'reason:', reason, 'bytes:', seedInfo.bytes);
 
     // Enforce quota
-    await this.enforceQuota();
+    const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
+    if (options.protectSelf) protectedKeys.add(key)
+    await this.enforceQuota({ protectedKeys });
 
     return true;
   }
@@ -224,7 +261,8 @@ export class SeedingManager {
   /**
    * Enforce storage quota by removing old/low-priority seeds
    */
-  async enforceQuota() {
+  async enforceQuota(options = {}) {
+    const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
     let currentBytes = this.calculateStorage();
 
@@ -251,6 +289,7 @@ export class SeedingManager {
     for (const seed of seeds) {
       if (currentBytes <= maxBytes) break;
       if (seed.reason === 'pinned') continue; // Never remove pinned
+      if (protectedKeys.has(seed.key)) continue;
 
       this.activeSeeds.delete(seed.key);
       await this.clearSeedBlob(seed);

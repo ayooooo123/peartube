@@ -105,7 +105,7 @@ export class BlobPlaybackService {
     try {
       if (warmup) {
         warmupStarted = true
-        await Promise.resolve(warmup(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType))
+        await Promise.resolve(warmup(driveKey, videoPath, publicBeeKey))
       }
     } catch (err) {
       console.log('[BlobPlaybackService] preparePlayback warmup failed:', err?.message || err)

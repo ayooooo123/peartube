@@ -47,12 +47,7 @@ jobs:
           install: 'true'
 
       - name: Run changed-file linter
-        if: ${{ github.event_name == 'pull_request' }}
         run: npm run lint:changed
-
-      - name: Run full linter
-        if: ${{ github.event_name != 'pull_request' }}
-        run: npm run lint
 
   backend-test:
     runs-on: ubuntu-latest

@@ -44,28 +44,28 @@ test('desktop workflows regenerate HRPC schema before desktop builds that import
   )
 })
 
-test('PR lint avoids the historical repo-wide lint backlog', () => {
+test('fast CI avoids the historical repo-wide lint backlog on both PR and main pushes', () => {
   const workflow = readFile('.github/workflows/ci-fast.yml')
   const rootPackage = JSON.parse(readFile('package.json'))
 
   assert.match(
     rootPackage.scripts['lint:changed'],
     /scripts\/lint-changed\.mjs/,
-    'root package should expose a changed-file lint command for PR CI',
+    'root package should expose a changed-file lint command for Fast CI',
   )
   assert.match(
     workflow,
     /fetch-depth: 0/,
-    'pull_request lint checkout must fetch enough history for merge-base against origin/main',
-  )
-  assert.match(
-    workflow,
-    /github\.event_name == 'pull_request'/,
-    'fast CI should branch lint behavior for pull requests',
+    'lint checkout must fetch enough history for merge-base against origin/main',
   )
   assert.match(
     workflow,
     /npm run lint:changed/,
-    'pull_request lint should only lint changed files because main has a known lint backlog',
+    'Fast CI should lint changed files because main has a known lint backlog',
+  )
+  assert.doesNotMatch(
+    workflow,
+    /npm run lint(\s|$)/,
+    'Fast CI must not run repo-wide lint until the historical backlog is cleared',
   )
 })

@@ -12,34 +12,34 @@ function readAppFile(relativePath) {
   return fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
 }
 
-test('PearInlineVideoView uses react-native-video as the native inline renderer', () => {
+test('PearInlineVideoView uses Expo Video as the native inline renderer', () => {
   const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
 
-  assert.match(source, /react-native-video/)
-  assert.match(source, /<Video/)
-  assert.match(source, /autoEnterPipOnLeave = true/)
-  assert.match(source, /showNotificationControls = autoEnterPipOnLeave/)
-  assert.match(source, /enterPictureInPictureOnLeave=\{autoEnterPipOnLeave\}/)
-  assert.match(source, /showNotificationControls=\{showNotificationControls\}/)
-  assert.match(source, /playInBackground=\{showNotificationControls\}/)
-  assert.match(source, /playWhenInactive=\{showNotificationControls\}/)
-  assert.match(source, /useTextureView=\{false\}/)
-  assert.match(source, /bufferConfig=\{Platform\.OS === 'android' \? ANDROID_BUFFER_CONFIG : undefined\}/)
+  assert.match(source, /from 'expo-video'/)
+  assert.match(source, /<VideoView/)
+  assert.match(source, /useVideoPlayer\(/)
+  assert.match(source, /allowsPictureInPicture=\{autoEnterPipOnLeave\}/)
+  assert.match(source, /startsPictureInPictureAutomatically=\{autoEnterPipOnLeave\}/)
+  assert.match(source, /surfaceType="surfaceView"/)
+  assert.match(source, /player\.showNowPlayingNotification = showNotificationControls/)
+  assert.match(source, /player\.staysActiveInBackground = showNotificationControls/)
+  assert.doesNotMatch(source, /from 'react-native-video'/)
+  assert.doesNotMatch(source, /<Video\b/)
   assert.doesNotMatch(source, /expo-pear-player/)
   assert.doesNotMatch(source, /createPearPlayer/)
   assert.doesNotMatch(source, /<PearPlayerView/)
 })
 
-test('PearInlineVideoView adapter controls the shared VideoRef directly', () => {
+test('PearInlineVideoView adapter controls the shared Expo Video player directly', () => {
   const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
 
-  assert.match(source, /play:\s*async \(\)\s*=> \{\s*videoRef\.current\?\.resume\?\.\(\)\s*}/)
-  assert.match(source, /pause:\s*async \(\)\s*=> \{\s*videoRef\.current\?\.pause\?\.\(\)\s*}/)
+  assert.match(source, /play:\s*async \(\)\s*=> \{\s*player\.play\(\)\s*}/)
+  assert.match(source, /pause:\s*async \(\)\s*=> \{\s*player\.pause\(\)\s*}/)
   assert.match(
     source,
-    /stop:\s*async \(\)\s*=> \{[\s\S]*videoRef\.current\?\.pause\?\.\(\)[\s\S]*videoRef\.current\?\.seek\(0\)/,
+    /stop:\s*async \(\)\s*=> \{[\s\S]*player\.pause\(\)[\s\S]*player\.currentTime = 0/,
   )
-  assert.match(source, /seek:\s*async \(timeSeconds: number\) => \{[\s\S]*videoRef\.current\?\.seek\(/)
+  assert.match(source, /seek:\s*async \(timeSeconds: number\) => \{[\s\S]*player\.currentTime = Math\.max\(0, timeSeconds\)/)
   assert.doesNotMatch(source, /controller\./)
 })
 
@@ -54,6 +54,16 @@ test('PearInlineVideoView declares the adapter before AppState effects use it', 
     adapterDeclarationIndex < appStateEffectIndex,
     'adapter must be initialized before AppState effect closes over it; otherwise playback mount can crash from TDZ access',
   )
+})
+
+test('PearInlineVideoView uses Expo Video on native SDK 56 to avoid react-native-video Android mount crash', () => {
+  const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
+
+  assert.match(source, /from 'expo-video'/)
+  assert.match(source, /<VideoView/)
+  assert.match(source, /useVideoPlayer\(/)
+  assert.match(source, /surfaceType="surfaceView"/)
+  assert.doesNotMatch(source, /from 'react-native-video'/)
 })
 
 test('legacy MpvMobileVideoView implementation stays removed or only exists as a shim', () => {

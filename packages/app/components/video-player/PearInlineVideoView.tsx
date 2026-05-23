@@ -1,12 +1,7 @@
-import { memo, ReactNode, RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEventListener } from 'expo'
+import { VideoPlayer, VideoView, useVideoPlayer } from 'expo-video'
+import { memo, ReactNode, RefObject, useCallback, useEffect, useMemo, useRef } from 'react'
 import { AppState, AppStateStatus, Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native'
-import Video, {
-  type OnLoadData,
-  type OnProgressData,
-  type OnBufferData,
-  type VideoRef,
-  type BufferConfig,
-} from 'react-native-video'
 import { createPlayerPort, type PlayerPort } from '@/lib/video-player'
 
 type PearInlineVideoViewProps = {
@@ -43,34 +38,28 @@ export function getPearInlinePlayerId(playbackSession: number, currentVideoKey?:
   return `pear-inline-${playbackSession}-${currentVideoKey || 'video'}`
 }
 
-/** Android buffer configuration following mediastorm reference */
-const ANDROID_BUFFER_CONFIG: BufferConfig = {
-  minBufferMs: 10000,
-  maxBufferMs: 20000,
-  bufferForPlaybackMs: 2500,
-  bufferForPlaybackAfterRebufferMs: 5000,
-  backBufferDurationMs: 10000,
+const ANDROID_BUFFER_OPTIONS = {
+  minBufferForPlayback: 2.5,
+  preferredForwardBufferDuration: 20,
+  waitsToMinimizeStalling: true,
 }
 
-function getEventVideoSize(data: any) {
-  const width = Number(data?.videoSize?.width ?? data?.width ?? data?.naturalSize?.width ?? data?.mVideoWidth)
-  const height = Number(data?.videoSize?.height ?? data?.height ?? data?.naturalSize?.height ?? data?.mVideoHeight)
+function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
+  const rawDurationSeconds = Number(data?.duration ?? player?.duration ?? 0)
+  if (Number.isFinite(rawDurationSeconds) && rawDurationSeconds > 0) {
+    return Math.round(rawDurationSeconds * 1000)
+  }
+  return 0
+}
+
+function getExpoEventVideoSize(data: any, player?: VideoPlayer | null) {
+  const track = data?.videoTrack ?? player?.videoTrack
+  const width = Number(data?.videoSize?.width ?? data?.width ?? data?.naturalSize?.width ?? track?.size?.width ?? track?.width)
+  const height = Number(data?.videoSize?.height ?? data?.height ?? data?.naturalSize?.height ?? track?.size?.height ?? track?.height)
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return undefined
   }
   return { width, height }
-}
-
-function getEventDurationMs(data: any) {
-  const rawDurationMs = Number(data?.durationMs)
-  if (Number.isFinite(rawDurationMs) && rawDurationMs > 0) {
-    return rawDurationMs
-  }
-  const rawDurationSeconds = Number(data?.duration)
-  if (Number.isFinite(rawDurationSeconds) && rawDurationSeconds > 0) {
-    return rawDurationSeconds * 1000
-  }
-  return 0
 }
 
 export const PearInlineVideoView = memo(function PearInlineVideoView({
@@ -100,36 +89,51 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   thumbnailUrl,
   children,
 }: PearInlineVideoViewProps) {
-  const videoRef = useRef<VideoRef>(null)
   const durationMsRef = useRef(0)
   const lastAppliedSeekRef = useRef<number | null>(null)
-
-  // On web, react-native-video fires a 500ms autoplay-denial check that
-  // reports isPlaying=false before the blob server delivers data. Suppress
-  // this false positive until the first real playback event arrives.
-  const mountTimeRef = useRef(Date.now())
-  const hasReceivedPlayEventRef = useRef(false)
-
-  // Stuck playback detection (from mediastorm reference)
-  const [sourceKey, setSourceKey] = useState(0)
   const playbackStartedAtRef = useRef<number | null>(null)
   const hasAdvancedRef = useRef(false)
   const hasRenderedFrameRef = useRef(false)
-  const reloadAttemptRef = useRef(0)
+  const hasReceivedPlayEventRef = useRef(false)
   const appStateRef = useRef<AppStateStatus>(AppState.currentState)
   const suppressStuckPlaybackRecoveryUntilRef = useRef(0)
-  const MAX_RELOAD_ATTEMPTS = 2
-  const STUCK_THRESHOLD_MS = 4000
-  const NO_RENDER_THRESHOLD_MS = 3000
+  const pipExitPlayingRef = useRef(false)
+  const wasInPipRef = useRef(isInPipMode)
+  const playerRefForCallbacks = useRef<VideoPlayer | null>(null)
+  const previousStatusRef = useRef<string | null>(null)
 
-  // Reset stuck detection on source change
+  const player = useVideoPlayer({ uri: videoUrl, metadata: {
+    title: videoTitle || undefined,
+    artist: channelName || undefined,
+    artwork: thumbnailUrl || undefined,
+  } }, (nextPlayer) => {
+    playerRefForCallbacks.current = nextPlayer
+    nextPlayer.timeUpdateEventInterval = 0.5
+    nextPlayer.loop = false
+    nextPlayer.playbackRate = playbackRate
+    nextPlayer.showNowPlayingNotification = showNotificationControls
+    nextPlayer.staysActiveInBackground = showNotificationControls
+    if (Platform.OS === 'android') {
+      try {
+        nextPlayer.bufferOptions = ANDROID_BUFFER_OPTIONS as any
+      } catch {
+        // Some Expo Video versions expose bufferOptions as read-only before source load.
+      }
+    }
+    if (isPlaying) nextPlayer.play()
+  })
+
+  playerRefForCallbacks.current = player
+
   useEffect(() => {
-    playbackStartedAtRef.current = null
     hasAdvancedRef.current = false
     hasRenderedFrameRef.current = false
-    reloadAttemptRef.current = 0
-    setSourceKey(0)
-  }, [videoUrl])
+    hasReceivedPlayEventRef.current = false
+    playbackStartedAtRef.current = null
+    lastAppliedSeekRef.current = null
+    previousStatusRef.current = null
+    playerRefForCallbacks.current = player
+  }, [player, videoUrl, playbackSession, currentVideoKey])
 
   const shouldSuppressStuckPlaybackRecovery = useCallback(() => {
     if (Platform.OS !== 'android') return false
@@ -138,7 +142,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     return Date.now() <= suppressStuckPlaybackRecoveryUntilRef.current
   }, [isInPipMode])
 
-  const applyPendingSeek = useCallback(async (nextSeekPosition: number | undefined, durationMsOverride?: number) => {
+  const applyPendingSeek = useCallback((nextSeekPosition: number | undefined, durationMsOverride?: number) => {
     if (nextSeekPosition === undefined) {
       lastAppliedSeekRef.current = null
       return
@@ -149,49 +153,45 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (durationMs <= 0) return
 
     const clampedSeek = Math.max(0, Math.min(1, nextSeekPosition))
-    const targetMs = Math.round(clampedSeek * durationMs)
-    if (lastAppliedSeekRef.current === targetMs) return
+    const targetSeconds = Math.round(clampedSeek * durationMs) / 1000
+    if (lastAppliedSeekRef.current === Math.round(targetSeconds * 1000)) return
 
-    lastAppliedSeekRef.current = targetMs
-    // react-native-video seek takes seconds
-    videoRef.current?.seek(targetMs / 1000)
-  }, [])
+    lastAppliedSeekRef.current = Math.round(targetSeconds * 1000)
+    player.currentTime = Math.max(0, targetSeconds)
+  }, [player])
 
   const adapter = useMemo(
     () => createPlayerPort(
       {
         play: async () => {
-          videoRef.current?.resume?.()
+          player.play()
         },
         pause: async () => {
-          videoRef.current?.pause?.()
+          player.pause()
         },
         stop: async () => {
-          videoRef.current?.pause?.()
-          videoRef.current?.seek(0)
+          player.pause()
+          player.currentTime = 0
         },
         destroy: async () => {
-          videoRef.current?.dismissFullscreenPlayer?.()
-          void videoRef.current?.exitPictureInPicture?.()
-          videoRef.current?.pause?.()
-          videoRef.current?.seek(0)
+          player.pause()
+          player.currentTime = 0
         },
         seek: async (timeSeconds: number) => {
-          videoRef.current?.seek(Math.max(0, timeSeconds))
+          player.currentTime = Math.max(0, timeSeconds)
         },
         resume: async (playing: boolean) => {
           if (playing) {
-            videoRef.current?.resume?.()
+            player.play()
           } else {
-            videoRef.current?.pause?.()
+            player.pause()
           }
         },
         enterPip: () => {
-          void videoRef.current?.enterPictureInPicture?.()
+          // Expo Video PiP is controlled through VideoView props.
         },
         exitPictureInPicture: () => {
-          videoRef.current?.dismissFullscreenPlayer?.()
-          void videoRef.current?.exitPictureInPicture?.()
+          // Expo Video PiP is controlled through VideoView props.
         },
       },
       {
@@ -203,17 +203,35 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         },
       },
     ),
-    [showNotificationControls],
+    [player, showNotificationControls],
   )
+
+  useEffect(() => {
+    player.playbackRate = playbackRate
+  }, [player, playbackRate])
+
+  useEffect(() => {
+    player.showNowPlayingNotification = showNotificationControls
+    player.staysActiveInBackground = showNotificationControls
+  }, [player, showNotificationControls])
+
+  useEffect(() => {
+    if (isPlaying) {
+      player.play()
+    } else {
+      player.pause()
+    }
+  }, [player, isPlaying])
+
+  useEffect(() => {
+    applyPendingSeek(seekPosition)
+  }, [applyPendingSeek, seekPosition])
 
   useEffect(() => {
     if (Platform.OS !== 'android') return
     const subscription = AppState.addEventListener('change', (nextState) => {
       appStateRef.current = nextState
       if (nextState !== 'active') {
-        // Peer-backed blob streams can legitimately stall for a few seconds while
-        // Android backgrounds or enters PiP. Treat that as a transition, not a
-        // fatal stuck-playback signal that should remount the player.
         suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
         if (!autoEnterPipOnLeave) {
           void adapter.destroy?.()
@@ -247,218 +265,131 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     }
   }, [adapter, playerRef])
 
-  useEffect(() => {
-    void applyPendingSeek(seekPosition)
-  }, [applyPendingSeek, seekPosition])
-
-  const handleLoad = useCallback((event: OnLoadData | any) => {
-    const durationMs = getEventDurationMs(event)
+  useEventListener(player, 'sourceLoad', (event) => {
+    const durationMs = getExpoEventDurationMs(event, player)
     if (durationMs > 0) {
       durationMsRef.current = durationMs
-      void applyPendingSeek(seekPosition, durationMs)
+      applyPendingSeek(seekPosition, durationMs)
     }
 
-    const videoSize = getEventVideoSize(event)
+    const videoSize = getExpoEventVideoSize(event, player)
     onLoad?.({
-      duration: typeof event?.duration === 'number' ? event.duration : durationMs / 1000,
+      duration: durationMs / 1000,
       durationMs,
       videoSize,
-      engine: event.engine,
+      engine: 'expo-video',
     })
 
     if (videoSize) {
+      hasRenderedFrameRef.current = true
       onVideoStateChange?.({
         type: 'video-size',
         mVideoWidth: videoSize.width,
         mVideoHeight: videoSize.height,
-        engine: event.engine,
+        engine: 'expo-video',
       })
     }
-  }, [applyPendingSeek, onLoad, onVideoStateChange, seekPosition])
+  })
 
-  const handleProgress = useCallback((data: OnProgressData | any) => {
-    const durationMs = Math.max(0, Math.round(Number(data?.seekableDuration ?? data?.duration ?? 0) * 1000))
-    if (durationMs > 0) {
-      durationMsRef.current = durationMs
-    }
+  useEventListener(player, 'videoTrackChange', (event) => {
+    const videoSize = getExpoEventVideoSize(event, player)
+    if (!videoSize) return
+    hasRenderedFrameRef.current = true
+    onVideoStateChange?.({
+      type: 'video-size',
+      mVideoWidth: videoSize.width,
+      mVideoHeight: videoSize.height,
+      engine: 'expo-video',
+    })
+    onBuffering?.({ isBuffering: false })
+  })
 
+  useEventListener(player, 'timeUpdate', (event) => {
+    const durationMs = Math.max(0, Math.round(Number(player.duration || 0) * 1000))
+    if (durationMs > 0) durationMsRef.current = durationMs
+
+    const currentTime = Math.max(0, Number(event.currentTime || 0))
     const suppressStuckRecovery = shouldSuppressStuckPlaybackRecovery()
     if (suppressStuckRecovery && playbackStartedAtRef.current !== null) {
       playbackStartedAtRef.current = Date.now()
     }
-
-    // Stuck playback detection — skip entirely on web where the browser handles
-    // buffering natively. On web, onReadyForDisplay may not fire reliably and
-    // P2P blob streaming can legitimately keep currentTime at 0 for several seconds,
-    // causing false positives that remount the <video> element in a loop.
-    if (Platform.OS !== 'web') {
-      if (Number(data?.currentTime) > 0.1) {
-        if (!hasAdvancedRef.current) {
-          hasAdvancedRef.current = true
-        }
-        if (
-          !suppressStuckRecovery &&
-          !hasRenderedFrameRef.current &&
-          playbackStartedAtRef.current !== null &&
-          reloadAttemptRef.current < MAX_RELOAD_ATTEMPTS
-        ) {
-          const playingDuration = Date.now() - playbackStartedAtRef.current
-          if (playingDuration > NO_RENDER_THRESHOLD_MS) {
-            console.warn('[PearInlineVideoView] No video render detected — reloading', {
-              attempt: reloadAttemptRef.current + 1,
-            })
-            reloadAttemptRef.current += 1
-            playbackStartedAtRef.current = null
-            hasAdvancedRef.current = false
-            hasRenderedFrameRef.current = false
-            setSourceKey((prev) => prev + 1)
-            return
-          }
-        }
-      } else if (!suppressStuckRecovery && playbackStartedAtRef.current !== null && !hasAdvancedRef.current) {
-        const stuckDuration = Date.now() - playbackStartedAtRef.current
-        if (stuckDuration > STUCK_THRESHOLD_MS && reloadAttemptRef.current < MAX_RELOAD_ATTEMPTS) {
-          console.warn('[PearInlineVideoView] Stuck playback detected — reloading', {
-            attempt: reloadAttemptRef.current + 1,
-          })
-          reloadAttemptRef.current += 1
-          playbackStartedAtRef.current = null
-          hasRenderedFrameRef.current = false
-          setSourceKey((prev) => prev + 1)
-          return
-        }
-      }
+    if (currentTime > 0.1) {
+      hasAdvancedRef.current = true
     }
 
     onProgress?.({
-      currentTime: Math.max(0, Math.round(Number(data?.currentTime || 0) * 1000)),
+      currentTime: Math.round(currentTime * 1000),
       duration: durationMs,
     })
-  }, [onProgress, shouldSuppressStuckPlaybackRecovery])
+  })
 
-  // Track previous PiP state to detect exit transitions.
-  // Suppresses transient pause/buffer events from ExoPlayer surface reattach.
-  const wasInPipRef = useRef(isInPipMode)
-  const pipExitPlayingRef = useRef(false)
+  useEventListener(player, 'playingChange', ({ isPlaying: nativePlaying }) => {
+    if (nativePlaying && playbackStartedAtRef.current === null) {
+      playbackStartedAtRef.current = Date.now()
+    }
+    if (nativePlaying) {
+      hasReceivedPlayEventRef.current = true
+      pipExitPlayingRef.current = false
+      onPlaying?.()
+      return
+    }
+
+    if (Platform.OS === 'web' && !hasReceivedPlayEventRef.current) return
+    if (pipExitPlayingRef.current) return
+    onPaused?.()
+  })
+
+  useEventListener(player, 'statusChange', ({ status, error }) => {
+    if (status !== previousStatusRef.current) {
+      previousStatusRef.current = status
+      if (status === 'loading') {
+        onBuffering?.({ isBuffering: true })
+      } else if (status === 'readyToPlay') {
+        onBuffering?.({ isBuffering: false })
+      }
+    }
+    if (status === 'error') {
+      console.error('[PearInlineVideoView] error:', error)
+      onError?.({
+        message: error?.message || 'Unknown error',
+        code: error?.code,
+        engine: 'expo-video',
+      })
+    }
+  })
+
+  useEventListener(player, 'playToEnd', () => {
+    onEnded?.()
+  })
+
   if (wasInPipRef.current && !isInPipMode) {
     pipExitPlayingRef.current = true
   }
   wasInPipRef.current = isInPipMode
 
-  const handleBuffer = useCallback((data: OnBufferData | any) => {
-    if (pipExitPlayingRef.current && data?.isBuffering) return
-    onBuffering?.({ isBuffering: Boolean(data?.isBuffering) })
-  }, [onBuffering])
-
-  const handleReadyForDisplay = useCallback(() => {
-    hasRenderedFrameRef.current = true
-    onBuffering?.({ isBuffering: false })
-  }, [onBuffering])
-
-  const handlePlaybackStateChanged = useCallback((state: { isPlaying: boolean; isSeeking: boolean }) => {
-    if (state.isPlaying && !state.isSeeking && playbackStartedAtRef.current === null) {
-      playbackStartedAtRef.current = Date.now()
-    }
-    if (state.isPlaying) {
-      hasReceivedPlayEventRef.current = true
-      pipExitPlayingRef.current = false
-      onPlaying?.()
-    } else if (!state.isSeeking) {
-      // On web, react-native-video fires a 500ms autoplay-denial check that
-      // falsely reports paused before the blob server delivers first bytes.
-      // Suppress this until we've received at least one real play event.
-      if (Platform.OS === 'web' && !hasReceivedPlayEventRef.current) {
-        return
-      }
-      if (pipExitPlayingRef.current) {
-        return
-      }
-      onPaused?.()
-    }
-    // When seeking (e.g. from notification controls), ExoPlayer briefly pauses
-    // to rebuffer. Don't propagate this as onPaused — it would flip isPlaying
-    // to false and the paused={true} prop would keep the player stuck.
-  }, [onPlaying, onPaused])
-
-  const handleEnd = useCallback(() => {
-    onEnded?.()
-  }, [onEnded])
-
-  const handleError = useCallback((error: any) => {
-    console.error('[PearInlineVideoView] error:', error)
-    onError?.({
-      message: error?.message || error?.error?.errorString || error?.error?.message || 'Unknown error',
-      code: error?.error?.code || error?.code,
-      engine: error?.engine,
-    })
-  }, [onError])
-
-  const handlePictureInPictureStatusChanged = useCallback((e: { isActive: boolean }) => {
-    if (Platform.OS === 'android') {
-      suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
-    }
-    onPictureInPictureChanged?.({
-      isInPictureInPicture: e.isActive,
-      width: 0,
-      height: 0,
-    })
-  }, [onPictureInPictureChanged])
-
   return (
     <View testID={testID} style={[styles.container, style]}>
-      <Video
-        key={`rnv-${playbackSession}:${currentVideoKey || ''}:${sourceKey}`}
-        ref={videoRef}
-        source={{
-          uri: videoUrl,
-          metadata: {
-            title: videoTitle || undefined,
-            artist: channelName || undefined,
-            imageUri: thumbnailUrl || undefined,
-          },
-        }}
+      <VideoView
+        key={`expo-video-${playbackSession}:${currentVideoKey || ''}`}
+        player={player}
         style={StyleSheet.absoluteFill}
-        onVideoSize={(data: any) => {
-          const videoSize = getEventVideoSize(data)
-          if (!videoSize) return
-          onVideoStateChange?.({
-            type: 'video-size',
-            mVideoWidth: videoSize.width,
-            mVideoHeight: videoSize.height,
-          })
+        contentFit="contain"
+        nativeControls={false}
+        surfaceType="surfaceView"
+        allowsPictureInPicture={autoEnterPipOnLeave}
+        startsPictureInPictureAutomatically={autoEnterPipOnLeave}
+        onFirstFrameRender={() => {
+          hasRenderedFrameRef.current = true
+          onBuffering?.({ isBuffering: false })
         }}
-        paused={!isPlaying}
-        rate={playbackRate}
-        controls={false}
-        resizeMode="contain"
-        poster={thumbnailUrl ? { source: { uri: thumbnailUrl }, resizeMode: 'contain' } : undefined}
-        progressUpdateInterval={500}
-        // SurfaceView: surface survives reparenting during PiP enter/exit,
-        // preventing the audio/video freeze that TextureView causes.
-        useTextureView={false}
-        // Callbacks
-        onLoad={handleLoad}
-        onProgress={handleProgress}
-        onBuffer={handleBuffer}
-        onEnd={handleEnd}
-        onError={handleError}
-        onReadyForDisplay={handleReadyForDisplay}
-        onPlaybackStateChanged={handlePlaybackStateChanged}
-        // PiP
-        onPictureInPictureStatusChanged={handlePictureInPictureStatusChanged}
-        // Background & PiP support
-        playInBackground={showNotificationControls}
-        playWhenInactive={showNotificationControls}
-        // Route-local surfaces such as Shorts disable notification controls; otherwise
-        // every swiped/remounted inline player registers a Media3 transport session.
-        showNotificationControls={showNotificationControls}
-        // Auto-enter PiP when enabled by the caller. Shorts/Discover owns its
-        // route-local player and should not spawn a system PiP window on leave.
-        enterPictureInPictureOnLeave={autoEnterPipOnLeave}
-        // Buffer config for Android ExoPlayer
-        bufferConfig={Platform.OS === 'android' ? ANDROID_BUFFER_CONFIG : undefined}
-        // Suppress HLS "LIVE" indicator (PearTube uses HLS for VOD)
-        controlsStyles={{ liveLabel: '' }}
+        onPictureInPictureStart={() => {
+          suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
+          onPictureInPictureChanged?.({ isInPictureInPicture: true, width: 0, height: 0 })
+        }}
+        onPictureInPictureStop={() => {
+          suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
+          onPictureInPictureChanged?.({ isInPictureInPicture: false, width: 0, height: 0 })
+        }}
       />
       {children}
     </View>

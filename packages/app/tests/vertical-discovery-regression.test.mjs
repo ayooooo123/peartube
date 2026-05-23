@@ -326,8 +326,11 @@ test('native inline player exposes explicit PiP exit and tears down its surface 
   const portSource = readAppFile('lib/video-player/playerPort.ts')
 
   assert.match(portSource, /exitPictureInPicture\?: \(\) => void \| Promise<void>/, 'PlayerPort should expose explicit PiP exit for route-local teardown')
-  assert.match(source, /exitPictureInPicture:\s*\(\) => \{[\s\S]*dismissFullscreenPlayer\?\.\(\)[\s\S]*exitPictureInPicture\?\.\(\)/, 'native inline player should bridge explicit PiP exit to react-native-video')
-  assert.match(source, /destroy: async \(\) => \{[\s\S]*dismissFullscreenPlayer\?\.\(\)[\s\S]*pause\?\.\(\)[\s\S]*seek\(0\)/, 'destroy should leave no fullscreen/PiP surface playing behind the route')
+  assert.match(source, /from 'expo-video'/, 'native inline player should use Expo Video on SDK 56')
+  assert.match(source, /allowsPictureInPicture=\{autoEnterPipOnLeave\}/, 'Expo Video should keep PiP gated by route-local policy')
+  assert.match(source, /startsPictureInPictureAutomatically=\{autoEnterPipOnLeave\}/, 'Expo Video should retain automatic PiP when enabled')
+  assert.match(source, /exitPictureInPicture:\s*\(\) => \{[\s\S]*Expo Video PiP is controlled through VideoView props/, 'native inline player should bridge explicit PiP exit without react-native-video refs')
+  assert.match(source, /destroy: async \(\) => \{[\s\S]*player\.pause\(\)[\s\S]*player\.currentTime = 0/, 'destroy should leave no playback surface running behind the route')
 })
 
 test('bottom tab screens pad scrollable content by the measured pill tab bar height', () => {

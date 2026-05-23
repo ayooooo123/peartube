@@ -35,10 +35,12 @@ test('PearInlineVideoView adapter controls the shared Expo Video player directly
 
   assert.match(source, /play:\s*async \(\)\s*=> \{\s*player\.play\(\)\s*}/)
   assert.match(source, /pause:\s*async \(\)\s*=> \{\s*player\.pause\(\)\s*}/)
-  assert.match(
-    source,
-    /stop:\s*async \(\)\s*=> \{[\s\S]*player\.pause\(\)[\s\S]*player\.currentTime = 0/,
-  )
+  const stopBody = source.match(/stop:\s*async \(\)\s*=> \{([\s\S]*?)\n\s*},/)?.[1] ?? ''
+  const destroyBody = source.match(/destroy:\s*async \(\)\s*=> \{([\s\S]*?)\n\s*},/)?.[1] ?? ''
+  assert.match(stopBody, /player\.pause\(\)/)
+  assert.match(destroyBody, /player\.pause\(\)/)
+  assert.doesNotMatch(stopBody, /currentTime = 0|seek\(0\)/, 'rapid Android open/close teardown should not seek the player before unmount')
+  assert.doesNotMatch(destroyBody, /currentTime = 0|seek\(0\)/, 'destroy should avoid a redundant seek when native resources are being torn down')
   assert.match(source, /seek:\s*async \(timeSeconds: number\) => \{[\s\S]*player\.currentTime = Math\.max\(0, timeSeconds\)/)
   assert.doesNotMatch(source, /controller\./)
 })

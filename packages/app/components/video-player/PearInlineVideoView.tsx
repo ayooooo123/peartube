@@ -171,11 +171,9 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         },
         stop: async () => {
           player.pause()
-          player.currentTime = 0
         },
         destroy: async () => {
           player.pause()
-          player.currentTime = 0
         },
         seek: async (timeSeconds: number) => {
           player.currentTime = Math.max(0, timeSeconds)

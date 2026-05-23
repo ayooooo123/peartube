@@ -5,6 +5,10 @@ import { test } from 'node:test'
 const contextPath = new URL('../lib/VideoPlayerContext.tsx', import.meta.url)
 const videoRoutePath = new URL('../app/video/[id].tsx', import.meta.url)
 const overlayPath = new URL('../components/VideoPlayerOverlayImpl.tsx', import.meta.url)
+const homePath = new URL('../app/(tabs)/index.tsx', import.meta.url)
+const searchTabPath = new URL('../app/(tabs)/search.tsx', import.meta.url)
+const searchPath = new URL('../app/search.tsx', import.meta.url)
+const studioPath = new URL('../app/(tabs)/studio.tsx', import.meta.url)
 
 async function source(url) {
   return readFile(url, 'utf8')
@@ -27,6 +31,33 @@ test('VideoPlayerContext also clears the connecting gate once backend stats show
   assert.match(statsHandler, /stats\.progress[^\n]+>\s*0/, 'stats handler must treat positive progress as media-ready')
   assert.match(statsHandler, /setIsLoading\(false\)/, 'stats handler must clear global player loading')
   assert.match(statsHandler, /isBufferingRef\.current\s*=\s*false/, 'stats handler must clear buffering ref')
+})
+
+test('VideoPlayerContext keeps player debug logging behind an explicit opt-in gate', async () => {
+  const src = await source(contextPath)
+
+  assert.match(src, /function debugPlayerLog\(\.\.\.args: unknown\[\]\)/, 'expected a dedicated player debug logger')
+  assert.match(src, /__PEARTUBE_DEBUG_VIDEO_PLAYER__/, 'debug logging should be controlled by an explicit global flag')
+  assert.doesNotMatch(src, /console\.log\(/, 'player hot paths should not write directly to console.log')
+})
+
+test('feed and picker screens use action-only player context to avoid progress-driven rerenders', async () => {
+  const contextSource = await source(contextPath)
+  const homeSource = await source(homePath)
+  const searchTabSource = await source(searchTabPath)
+  const searchSource = await source(searchPath)
+  const studioSource = await source(studioPath)
+
+  assert.match(contextSource, /export function useVideoPlayerActions\(\)/, 'VideoPlayerContext should expose an action-only hook')
+  for (const [name, src] of [
+    ['home tab', homeSource],
+    ['search tab', searchTabSource],
+    ['search route', searchSource],
+    ['studio tab', studioSource],
+  ]) {
+    assert.match(src, /useVideoPlayerActions/, `${name} should use the stable action-only hook`)
+    assert.doesNotMatch(src, /useVideoPlayerContext/, `${name} should not subscribe to high-frequency player state`)
+  }
 })
 
 test('mobile/native route uses the shared overlay player instead of an inline player shell', async () => {

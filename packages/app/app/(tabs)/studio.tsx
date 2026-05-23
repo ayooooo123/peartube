@@ -11,7 +11,7 @@ import * as ImagePicker from 'expo-image-picker'
 import * as VideoThumbnails from 'expo-video-thumbnails'
 import { useApp, colors } from '../_layout'
 import { CastHeaderButton } from '@/components/cast'
-import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import { VideoEditModal } from '@/components/VideoEditModal'
 import { formatBytes } from '@/lib/formatters'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
@@ -40,7 +40,7 @@ export default function StudioScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { identity, videos, rpc, uploadVideo, pickVideoFile, pickImageFile, loadVideos, removeVideo } = useApp()
-  const { pauseVideo, closeVideo, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo } = useVideoPlayerContext()
+  const { pauseVideo, closeVideo, suppressForegroundRestoreOnce, suppressForegroundRestoreFor, clearLastClosedVideo } = useVideoPlayerActions()
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadSpeed, setUploadSpeed] = useState(0)  // bytes/sec

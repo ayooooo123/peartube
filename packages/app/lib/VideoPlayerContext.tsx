@@ -17,12 +17,23 @@ import type { ModeBeforePip, PlayerState } from './playerStateMachine'
 
 const ENABLE_ANDROID_SPLIT_PLAYER_ACTIVITY = false
 const CAST_ACTIVE_GLOBAL_KEY = '__PEARTUBE_CAST_ACTIVE__'
+const VIDEO_PLAYER_DEBUG_GLOBAL_KEY = '__PEARTUBE_DEBUG_VIDEO_PLAYER__'
 let ACTIVE_VIDEO_PLAYER_CONTROLLER_ID: number | null = null
 let NEXT_VIDEO_PLAYER_CONTROLLER_ID = 1
 
 function isCastSessionLikelyActiveGlobally(): boolean {
   const g = globalThis as Record<string, unknown>
   return g[CAST_ACTIVE_GLOBAL_KEY] === true
+}
+
+function isVideoPlayerDebugEnabled(): boolean {
+  if (!__DEV__) return false
+  const g = globalThis as Record<string, unknown>
+  return g[VIDEO_PLAYER_DEBUG_GLOBAL_KEY] === true
+}
+
+function debugPlayerLog(...args: unknown[]) {
+  if (isVideoPlayerDebugEnabled()) console.debug(...args)
 }
 
 // Re-export types for backwards compatibility
@@ -105,11 +116,38 @@ interface VideoPlayerContextType {
   onVideoStateChange: (data: { type?: string; mVideoWidth?: number; mVideoHeight?: number }) => void
 }
 
+type VideoPlayerActionsContextType = Pick<
+  VideoPlayerContextType,
+  | 'loadAndPlayVideo'
+  | 'setAmbientVideoContext'
+  | 'pauseVideo'
+  | 'resumeVideo'
+  | 'closeVideo'
+  | 'enterBackgroundAudio'
+  | 'suppressForegroundRestoreOnce'
+  | 'suppressForegroundRestoreFor'
+  | 'clearLastClosedVideo'
+  | 'minimizePlayer'
+  | 'maximizePlayer'
+  | 'seekTo'
+  | 'seekBy'
+  | 'setPlaybackRate'
+  | 'setVideoStats'
+  | 'setIsLoading'
+>
+
 const VideoPlayerContext = createContext<VideoPlayerContextType | null>(null)
+const VideoPlayerActionsContext = createContext<VideoPlayerActionsContextType | null>(null)
 
 export function useVideoPlayerContext() {
   const ctx = useContext(VideoPlayerContext)
   if (!ctx) throw new Error('useVideoPlayerContext must be used within VideoPlayerProvider')
+  return ctx
+}
+
+export function useVideoPlayerActions() {
+  const ctx = useContext(VideoPlayerActionsContext)
+  if (!ctx) throw new Error('useVideoPlayerActions must be used within VideoPlayerProvider')
   return ctx
 }
 
@@ -299,7 +337,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     // Avoid log spam while still surfacing what happened.
     if (__DEV__ && now - pipExitReassertLoggedAtRef.current > 1000) {
       pipExitReassertLoggedAtRef.current = now
-      console.log('[VideoPlayerContext] Reasserting play after PiP exit:', reason)
+      debugPlayerLog('[VideoPlayerContext] Reasserting play after PiP exit:', reason)
     }
   }, [])
 
@@ -309,7 +347,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const restoreLastClosedVideo = useCallback((reason: string) => {
     if (!lastClosedVideoRef.current || !lastClosedUrlRef.current) return false
-    console.log('[VideoPlayerContext] Restoring last closed video:', reason)
+    debugPlayerLog('[VideoPlayerContext] Restoring last closed video:', reason)
     currentVideoRef.current = lastClosedVideoRef.current
     videoUrlRef.current = lastClosedUrlRef.current
     setPlaybackSession((prev) => prev + 1)
@@ -332,7 +370,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     const video = currentVideoRef.current
     const url = videoUrlRef.current
     if (!video || !url) return false
-    console.log('[VideoPlayerContext] Forcing playback reload:', reason)
+    debugPlayerLog('[VideoPlayerContext] Forcing playback reload:', reason)
     setPlaybackSession((prev) => prev + 1)
     dispatch({
       type: 'FORCE_RELOAD_PLAYBACK',
@@ -363,7 +401,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     reason: 'user' | 'remote-stop' | 'android-minimize-close' | 'pip-close' | 'background-audio' = 'user',
     opts?: { preserveLastClosed?: boolean },
   ) => {
-    console.log('[VideoPlayerContext] Closing session:', reason)
+    debugPlayerLog('[VideoPlayerContext] Closing session:', reason)
 
     const preserveNativeSession =
       reason === 'android-minimize-close' &&
@@ -452,7 +490,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const enterBackgroundAudio = useCallback(() => {
     if (!currentVideoRef.current || !videoUrlRef.current) return
-    console.log('[VideoPlayerContext] Entering background audio mode')
+    debugPlayerLog('[VideoPlayerContext] Entering background audio mode')
     // Transition to background_audio mode WITHOUT unmounting the Video component.
     // This keeps state.video and state.url intact so ExoPlayer continues playing
     // via VideoPlaybackService. When the app returns to foreground, the state machine
@@ -566,7 +604,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
             isPlaying: wasPlaying,
           })
         }
-        console.log(
+        debugPlayerLog(
           '[VideoPlayerContext] Going to background, wasPlaying:',
           wasPlaying,
           'playerMode:',
@@ -582,7 +620,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
           // The player was already running — any buffering is surface reattach, not a real stall.
           suppressTransientBufferingRef.current = true
           setIsLoading(false)
-          console.log('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current, 'wasInPiP:', wasInPip, 'pipInFlight:', pipTransitionInFlightRef.current)
+          debugPlayerLog('[VideoPlayerContext] Coming to foreground, wasPlaying:', wasPlayingWhenBackgroundedRef.current, 'wasInPiP:', wasInPip, 'pipInFlight:', pipTransitionInFlightRef.current)
 
          // IMPORTANT: Don't clear PiP state on foreground if we were in PiP.
          // When returning from PiP, Android can deliver the AppState "active" event
@@ -590,7 +628,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
          // makes the PiP exit handler think we were never in PiP, so it won't
          // restore playback state (leading to unintended pauses).
           if (!wasInPip) {
-            console.log('[VideoPlayerContext] Clearing PiP state on foreground')
+            debugPlayerLog('[VideoPlayerContext] Clearing PiP state on foreground')
             isInPipModeRef.current = false
             setPipWindowSize(null)
             if (pipTransitionTimeoutRef.current) {
@@ -660,7 +698,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   useEffect(() => {
     if (Platform.OS !== 'android') return
     const closeSub = DeviceEventEmitter.addListener('onPipClosed', () => {
-      console.log('[VideoPlayerContext] PiP closed (X button) — pausing')
+      debugPlayerLog('[VideoPlayerContext] PiP closed (X button) — pausing')
       setDesiredPlaying(false)
     })
     return () => closeSub.remove()
@@ -674,7 +712,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
      const unsubscribe = _videoStatsEventEmitter.subscribe((driveKey, videoPath, stats) => {
        // Use ref for synchronous access (state may not be updated yet)
        const video = currentVideoRef.current
-       console.log('[VideoPlayerContext] Stats event received, checking match:', {
+       debugPlayerLog('[VideoPlayerContext] Stats event received, checking match:', {
          videoPath,
          driveKey,
          currentPath: video?.path,
@@ -708,7 +746,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       const sameVideo = Boolean(video) && (samePath || sameId) && (keysCompatible || sameId)
 
        if (sameVideo) {
-         console.log('[VideoPlayerContext] Received stats event:', stats.progress + '%')
+         debugPlayerLog('[VideoPlayerContext] Received stats event:', stats.progress + '%')
         setVideoStats(stats)
         if (typeof stats.progress === 'number' && stats.progress > 0) {
           // Once the backend is serving bytes, stop showing the generic
@@ -730,7 +768,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       now - lastPlaybackStartAtRef.current < 1000
     ) {
       if (__DEV__) {
-        console.log('[VideoPlayerContext] Skipping duplicate playback start:', source)
+        debugPlayerLog('[VideoPlayerContext] Skipping duplicate playback start:', source)
       }
       return
     }
@@ -827,7 +865,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Load and play a new video (triggers overlay to fullscreen)
   const loadAndPlayVideo = useCallback((video: VideoData, url: string) => {
-    console.log('[VideoPlayerContext] Loading video:', video.title, 'URL:', url)
+    debugPlayerLog('[VideoPlayerContext] Loading video:', video.title, 'URL:', url)
 
     const requestKey = `${video.channelKey || ''}:${video.id || video.path || ''}:${url}`
 
@@ -874,7 +912,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Pause video
   const pauseVideo = useCallback(() => {
-    console.log('[VideoPlayerContext] Pausing video')
+    debugPlayerLog('[VideoPlayerContext] Pausing video')
     if (Platform.OS === 'web') {
       try {
         getPlayerPort()?.pause?.()
@@ -884,7 +922,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [setDesiredPlaying])
 
   const resumeVideo = useCallback(() => {
-    console.log('[VideoPlayerContext] Resuming video')
+    debugPlayerLog('[VideoPlayerContext] Resuming video')
 
     // On iOS, do a seek while still paused to reinitialize audio, then resume
     // This avoids visible jitter since video isn't playing during the seek
@@ -911,12 +949,12 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       const currentVideo = currentVideoRef.current
       const currentUrl = videoUrlRef.current
       if (!currentVideo || !currentUrl) {
-        console.log('[VideoPlayerContext] No active video to minimize on Android')
+        debugPlayerLog('[VideoPlayerContext] No active video to minimize on Android')
         return
       }
 
       // Using react-native-video native PiP - no longer using split PlayerActivity
-      console.log('[VideoPlayerContext] Minimizing to in-app mini player')
+      debugPlayerLog('[VideoPlayerContext] Minimizing to in-app mini player')
       dispatch({
         type: 'MINIMIZE',
         source: 'minimizePlayer',
@@ -925,7 +963,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       return
     }
 
-    console.log('[VideoPlayerContext] Minimizing to in-app mini player')
+    debugPlayerLog('[VideoPlayerContext] Minimizing to in-app mini player')
     dispatch({
       type: 'MINIMIZE',
       source: 'minimizePlayer',
@@ -935,7 +973,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Maximize from mini player
   const maximizePlayer = useCallback((source: string = 'unknown') => {
-    console.log('[VideoPlayerContext] Maximizing player from:', source)
+    debugPlayerLog('[VideoPlayerContext] Maximizing player from:', source)
     dispatch({ type: 'MAXIMIZE', source: 'maximizePlayer' })
   }, [dispatch, setDesiredPlaying])
 
@@ -1015,7 +1053,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
     if (!didImperativeSeek) {
       const seekValue = clampedTime / dur
-      console.log('[VideoPlayerContext] Fallback seekTo via seekPosition:', clampedTime, 'seconds, seek prop:', seekValue)
+      debugPlayerLog('[VideoPlayerContext] Fallback seekTo via seekPosition:', clampedTime, 'seconds, seek prop:', seekValue)
       setSeekPosition(seekValue)
     } else {
       setSeekPosition(undefined)
@@ -1041,7 +1079,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
     if (!didImperativeSeek) {
       const seekValue = newTime / dur
-      console.log('[VideoPlayerContext] Fallback seekBy via seekPosition:', delta, 'to:', newTime, 'seek prop:', seekValue)
+      debugPlayerLog('[VideoPlayerContext] Fallback seekBy via seekPosition:', delta, 'to:', newTime, 'seek prop:', seekValue)
       setSeekPosition(seekValue)
     } else {
       setSeekPosition(undefined)
@@ -1054,13 +1092,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   // Set playback speed
   const setPlaybackRate = useCallback((rate: number) => {
-    console.log('[VideoPlayerContext] Setting playback rate:', rate)
+    debugPlayerLog('[VideoPlayerContext] Setting playback rate:', rate)
     setPlaybackRateState(rate)
   }, [])
 
   const onProgress = useCallback((data: { currentTime: number; duration: number }) => {
     if (Platform.OS === 'android' && pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
-      console.log('[VideoPlayerContext] PiP exit resume confirmed via progress')
+      debugPlayerLog('[VideoPlayerContext] PiP exit resume confirmed via progress')
       pipExitShouldResumeRef.current = false
       pipExitExpectedPlayingRef.current = false
       pipExitResumeUntilRef.current = 0
@@ -1114,13 +1152,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const onLoaded = useCallback(() => {
-    console.log('[VideoPlayerContext] Player loaded')
+    debugPlayerLog('[VideoPlayerContext] Player loaded')
     isBufferingRef.current = false
     setIsLoading(false)
   }, [])
 
   const onPlaying = useCallback(() => {
-    console.log('[VideoPlayerContext] Player playing')
+    debugPlayerLog('[VideoPlayerContext] Player playing')
     if (Platform.OS === 'ios') {
       iosIgnorePausedUntilRef.current = 0
     }
@@ -1135,7 +1173,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   const onPaused = useCallback(() => {
     if (Platform.OS === 'ios' && Date.now() < iosIgnorePausedUntilRef.current) {
-      console.log('[VideoPlayerContext] Ignoring transient iOS paused event during source swap')
+      debugPlayerLog('[VideoPlayerContext] Ignoring transient iOS paused event during source swap')
       return
     }
     if (pipExitExpectedPlayingRef.current && !isInPipModeRef.current) {
@@ -1147,7 +1185,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       pipExitShouldResumeRef.current = false
       pipExitExpectedPlayingRef.current = false
     }
-    console.log('[VideoPlayerContext] Player paused')
+    debugPlayerLog('[VideoPlayerContext] Player paused')
     // Sync JS state for deliberate external pauses (PiP button, notification
     // pause, audio focus loss). Skip if the player is buffering — that's a
     // transient pause (e.g. after notification seek on uncached content) and
@@ -1160,7 +1198,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [reassertNativePlayAfterPipExit])
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
-    console.log('[VideoPlayerContext] Player buffering:', data?.isBuffering)
+    debugPlayerLog('[VideoPlayerContext] Player buffering:', data?.isBuffering)
     if (data?.isBuffering === undefined) return
     isBufferingRef.current = Boolean(data.isBuffering)
 
@@ -1192,7 +1230,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const onEnded = useCallback(() => {
-    console.log('[VideoPlayerContext] Player ended')
+    debugPlayerLog('[VideoPlayerContext] Player ended')
     isBufferingRef.current = false
     setDesiredPlaying(false)
   }, [setDesiredPlaying])
@@ -1212,7 +1250,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       data.mVideoHeight > 0
     ) {
       const aspectRatio = data.mVideoWidth / data.mVideoHeight
-      console.log('[VideoPlayerContext] Video dimensions:', data.mVideoWidth, 'x', data.mVideoHeight, '- aspect ratio:', aspectRatio.toFixed(3))
+      debugPlayerLog('[VideoPlayerContext] Video dimensions:', data.mVideoWidth, 'x', data.mVideoHeight, '- aspect ratio:', aspectRatio.toFixed(3))
       setVideoAspectRatio(aspectRatio)
       // PiP aspect ratio is handled natively by react-native-video
     }
@@ -1227,6 +1265,40 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     if (isInPipMode) return false
     return true
   }, [currentVideo, playerMode, isInPipMode])
+
+  const actionsValue = useMemo<VideoPlayerActionsContextType>(() => ({
+    loadAndPlayVideo,
+    setAmbientVideoContext,
+    pauseVideo,
+    resumeVideo,
+    closeVideo,
+    enterBackgroundAudio,
+    suppressForegroundRestoreOnce,
+    suppressForegroundRestoreFor,
+    clearLastClosedVideo,
+    minimizePlayer,
+    maximizePlayer,
+    seekTo,
+    seekBy,
+    setPlaybackRate,
+    setVideoStats,
+    setIsLoading,
+  }), [
+    loadAndPlayVideo,
+    setAmbientVideoContext,
+    pauseVideo,
+    resumeVideo,
+    closeVideo,
+    enterBackgroundAudio,
+    suppressForegroundRestoreOnce,
+    suppressForegroundRestoreFor,
+    clearLastClosedVideo,
+    minimizePlayer,
+    maximizePlayer,
+    seekTo,
+    seekBy,
+    setPlaybackRate,
+  ])
 
   // PERFORMANCE: Memoize context value to prevent unnecessary re-renders
   // Components consuming this context will only re-render when these specific values change
@@ -1293,8 +1365,10 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   ])
 
   return (
-    <VideoPlayerContext.Provider value={contextValue}>
-      {children}
-    </VideoPlayerContext.Provider>
+    <VideoPlayerActionsContext.Provider value={actionsValue}>
+      <VideoPlayerContext.Provider value={contextValue}>
+        {children}
+      </VideoPlayerContext.Provider>
+    </VideoPlayerActionsContext.Provider>
   )
 }

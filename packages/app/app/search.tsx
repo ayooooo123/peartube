@@ -10,7 +10,7 @@ import { useApp, colors } from './_layout'
 import { VideoCard, VideoData } from '../components/video'
 import type { VideoData as CoreVideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
-import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { getDesktopVideoGridColumns } from '@/lib/video-layout'
@@ -101,7 +101,7 @@ export default function SearchScreen() {
   const query = typeof params.q === 'string' ? params.q : ''
 
   const { ready, rpc, platformEvents, blobServerPort } = useApp()
-  const { loadAndPlayVideo, closeVideo } = useVideoPlayerContext()
+  const { loadAndPlayVideo, closeVideo } = useVideoPlayerActions()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
 

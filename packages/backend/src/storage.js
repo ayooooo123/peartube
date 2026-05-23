@@ -11,6 +11,7 @@ import b4a from 'b4a';
 import crypto from 'hypercore-crypto';
 import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
+import { prioritizeBlobServerRangeRequest } from './blob-range-priority.js'
 import { loadPublicBeeFromCache } from './public-bee-loader.js'
 import { logger } from './logger.js'
 import { relocateLegacyBlindPeerDir, relocateLegacyCorestoreDir, relocateLegacyLogsDir } from './storage-layout.js'
@@ -1106,6 +1107,9 @@ export async function initializeStorage(config) {
       res.setHeader('Access-Control-Allow-Headers', 'Range')
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
       if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
+      if (req.method === 'GET' && req.headers?.range) {
+        prioritizeBlobServerRangeRequest(blobServer, req).catch(() => {})
+      }
       return origOnRequest(req, res)
     }
 

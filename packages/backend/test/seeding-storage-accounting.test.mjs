@@ -16,8 +16,9 @@ function createMetaDb(seed = {}) {
   }
 }
 
-function createStore({ diskUsageBytes = 0, compactedDiskUsageBytes = null } = {}) {
+function createStore({ diskUsageBytes = 0, compactedDiskUsageBytes = null, clearDiskUsageBytes = 0 } = {}) {
   const state = { diskUsageBytes }
+  const cores = new Map()
   return {
     _peartubeStoragePath: '/tmp/peartube-test-storage',
     storage: {
@@ -34,11 +35,19 @@ function createStore({ diskUsageBytes = 0, compactedDiskUsageBytes = null } = {}
     async getDiskUsageBytes() {
       return state.diskUsageBytes
     },
-    get() {
-      return {
-        async ready() {},
-        async clear() {}
+    get(key) {
+      const keyHex = Buffer.isBuffer(key) ? key.toString('hex') : String(key)
+      if (!cores.has(keyHex)) {
+        cores.set(keyHex, {
+          clearCalls: [],
+          async ready() {},
+          async clear(start, end) {
+            this.clearCalls.push({ start, end })
+            state.diskUsageBytes = Math.max(0, state.diskUsageBytes - clearDiskUsageBytes)
+          }
+        })
       }
+      return cores.get(keyHex)
     }
   }
 }
@@ -49,6 +58,7 @@ const coreB = 'bb'.repeat(32)
 
 test('storage stats include actual app P2P disk usage separately from tracked cache quota', async (t) => {
   const manager = new SeedingManager(createStore({ diskUsageBytes: 10 * GB }), createMetaDb())
+  await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
     byteLength: Math.round(4.92 * GB),
@@ -69,6 +79,7 @@ test('storage stats include actual app P2P disk usage separately from tracked ca
 test('clearCache reports app P2P disk usage after clearing tracked non-pinned cache', async (t) => {
   const store = createStore({ diskUsageBytes: 6 * GB })
   const manager = new SeedingManager(store, createMetaDb())
+  await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
     byteLength: 2 * GB,
@@ -94,6 +105,7 @@ test('clearCache compacts Corestore before measuring app P2P disk usage', async 
     compactedDiskUsageBytes: 4 * GB
   })
   const manager = new SeedingManager(store, createMetaDb())
+  await manager.setConfig({ maxStorageGB: 20 })
 
   await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
     byteLength: 2 * GB,
@@ -113,4 +125,24 @@ test('clearCache compacts Corestore before measuring app P2P disk usage', async 
   t.is(cleared.clearedBytes, 2 * GB)
   t.is(cleared.totalStorageBytes, 4 * GB)
   t.is(cleared.untrackedStorageBytes, 1 * GB)
+})
+
+test('quota enforcement evicts tracked cache when total app storage exceeds limit', async (t) => {
+  const store = createStore({ diskUsageBytes: 10 * GB, clearDiskUsageBytes: 4 * GB })
+  const manager = new SeedingManager(store, createMetaDb())
+  await manager.setConfig({ maxStorageGB: 20 })
+
+  await manager.addSeed('drive-a', 'videos/watched.mp4', 'watched', {
+    byteLength: 4 * GB,
+    blobId: '3:5:0:1234',
+    blobsCoreKey: coreA
+  })
+
+  await manager.setMaxStorageGB(5)
+
+  t.is(manager.getStorageStatsSync().usedBytes, 0)
+  t.is(manager.getActiveSeeds().length, 0)
+  t.alike(store.get(Buffer.from(coreA, 'hex')).clearCalls, [{ start: 3, end: 8 }])
+  t.is(store.storage.flushCalls, 1)
+  t.is(store.storage.compactCalls, 1)
 })

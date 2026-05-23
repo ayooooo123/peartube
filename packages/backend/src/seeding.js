@@ -272,13 +272,17 @@ export class SeedingManager {
   async enforceQuota(options = {}) {
     const protectedKeys = normalizeProtectedSeedKeys(options.protectedKeys)
     const maxBytes = this.config.maxStorageGB * 1024 * 1024 * 1024;
-    let currentBytes = this.calculateStorage();
+    let trackedBytes = this.calculateStorage();
+    const totalStorageBytes = await this.getTotalStorageBytes();
+    let quotaBytes = Number.isFinite(totalStorageBytes)
+      ? Math.max(trackedBytes, totalStorageBytes)
+      : trackedBytes;
 
-    if (currentBytes <= maxBytes) {
+    if (quotaBytes <= maxBytes) {
       return; // Under quota
     }
 
-    console.log('[SeedingManager] Over quota, current:', currentBytes, 'max:', maxBytes);
+    console.log('[SeedingManager] Over quota, current:', trackedBytes, 'total:', totalStorageBytes ?? 'unavailable', 'max:', maxBytes);
 
     // Get seeds sorted by priority (pinned > subscribed > watched) then by age
     const seeds = Array.from(this.activeSeeds.entries())
@@ -296,13 +300,15 @@ export class SeedingManager {
     // Remove oldest/lowest priority seeds until under quota
     let clearedBlob = false;
     for (const seed of seeds) {
-      if (currentBytes <= maxBytes) break;
+      if (quotaBytes <= maxBytes) break;
       if (seed.reason === 'pinned') continue; // Never remove pinned
       if (protectedKeys.has(seed.key)) continue;
 
       this.activeSeeds.delete(seed.key);
       clearedBlob = (await this.clearSeedBlob(seed)) || clearedBlob;
-      currentBytes -= seed.bytes || 0;
+      const seedBytes = Math.max(0, Number(seed.bytes) || 0);
+      trackedBytes = Math.max(0, trackedBytes - seedBytes);
+      quotaBytes = Math.max(trackedBytes, quotaBytes - seedBytes);
       console.log('[SeedingManager] Removed seed to meet quota:', seed.key.slice(0, 32));
     }
 

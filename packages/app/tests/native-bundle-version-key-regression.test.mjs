@@ -53,3 +53,19 @@ test('native backend version key includes embedded bundle fingerprint so upgrade
     'backend version key must be derived from loaded sources, not app metadata alone',
   )
 })
+
+test('initPlatformRPC forwards relay launch options into native backend startup', () => {
+  const source = readAppFile('app/_layout.tsx')
+
+  assert.match(
+    source,
+    /const MOBILE_RELAY_PEERS = \[[\s\S]*?[a-f0-9]{64}[\s\S]*?\]/,
+    'mobile startup must define relay public keys for backend direct dialing',
+  )
+
+  assert.match(
+    source,
+    /launchOptions:\s*\{[\s\S]*?__peartubeLaunchOptions:\s*true[\s\S]*?network:\s*\{[\s\S]*?relayPeers:\s*MOBILE_RELAY_PEERS[\s\S]*?swarmOptions:\s*\{[\s\S]*?knownPeers:\s*MOBILE_RELAY_PEERS/s,
+    'mobile startup must pass explicit relay peer launch options into the backend worklet',
+  )
+})

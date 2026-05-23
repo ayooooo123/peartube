@@ -43,6 +43,19 @@ test('PearInlineVideoView adapter controls the shared VideoRef directly', () => 
   assert.doesNotMatch(source, /controller\./)
 })
 
+test('PearInlineVideoView declares the adapter before AppState effects use it', () => {
+  const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
+  const adapterDeclarationIndex = source.indexOf('const adapter = useMemo')
+  const appStateEffectIndex = source.indexOf("AppState.addEventListener('change'")
+
+  assert.notEqual(adapterDeclarationIndex, -1, 'adapter useMemo should exist')
+  assert.notEqual(appStateEffectIndex, -1, 'Android AppState effect should exist')
+  assert.ok(
+    adapterDeclarationIndex < appStateEffectIndex,
+    'adapter must be initialized before AppState effect closes over it; otherwise playback mount can crash from TDZ access',
+  )
+})
+
 test('legacy MpvMobileVideoView implementation stays removed or only exists as a shim', () => {
   const shimPath = path.join(appRoot, 'components/video-player/MpvMobileVideoView.tsx')
   if (!fs.existsSync(shimPath)) {

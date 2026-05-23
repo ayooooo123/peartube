@@ -131,23 +131,6 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     setSourceKey(0)
   }, [videoUrl])
 
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    const subscription = AppState.addEventListener('change', (nextState) => {
-      appStateRef.current = nextState
-      if (nextState !== 'active') {
-        // Peer-backed blob streams can legitimately stall for a few seconds while
-        // Android backgrounds or enters PiP. Treat that as a transition, not a
-        // fatal stuck-playback signal that should remount the player.
-        suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
-        if (!autoEnterPipOnLeave) {
-          void adapter.destroy?.()
-        }
-      }
-    })
-    return () => subscription.remove()
-  }, [adapter, autoEnterPipOnLeave])
-
   const shouldSuppressStuckPlaybackRecovery = useCallback(() => {
     if (Platform.OS !== 'android') return false
     if (isInPipMode) return true
@@ -222,6 +205,23 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     ),
     [showNotificationControls],
   )
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      appStateRef.current = nextState
+      if (nextState !== 'active') {
+        // Peer-backed blob streams can legitimately stall for a few seconds while
+        // Android backgrounds or enters PiP. Treat that as a transition, not a
+        // fatal stuck-playback signal that should remount the player.
+        suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
+        if (!autoEnterPipOnLeave) {
+          void adapter.destroy?.()
+        }
+      }
+    })
+    return () => subscription.remove()
+  }, [adapter, autoEnterPipOnLeave])
 
   useEffect(() => {
     if (!playerRef) return

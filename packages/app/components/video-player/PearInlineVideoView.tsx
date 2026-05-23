@@ -237,7 +237,10 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     return () => {
       try {
         void adapter.destroy?.()
-      } catch {}
+      } catch {
+        // Best-effort cleanup only. Some native player refs are already disposed
+        // while React tears down the playback surface.
+      }
       if (playerRef.current === adapter) {
         playerRef.current = null
       }

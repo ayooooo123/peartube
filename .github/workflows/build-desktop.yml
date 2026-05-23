@@ -110,6 +110,9 @@ jobs:
       - name: Install xcodegen
         run: brew install xcodegen
 
+      - name: Generate HRPC schema
+        run: npm run schema:full
+
       - name: Generate native desktop project
         working-directory: packages/desktop-native
         run: npm run generate

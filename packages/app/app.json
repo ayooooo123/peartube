@@ -7,11 +7,6 @@
     "scheme": "peartube",
     "icon": "./assets/images/icon.png",
     "userInterfaceStyle": "dark",
-    "splash": {
-      "image": "./assets/images/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0e0e10"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.peartube.app",
@@ -51,6 +46,14 @@
     "plugins": [
       [
         "expo-router"
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0e0e10"
+        }
       ],
       [
         "react-native-video",

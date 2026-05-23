@@ -45,13 +45,13 @@ export function evaluateCandidate({ candidate, config, acceptedChannels = new Se
     return { accepted: false, reason: 'discovery-disabled', retentionClass: null }
   }
 
-  if (acceptedChannels.size >= config.discovery.maxChannels) {
+  if (Number(config.discovery.maxChannels || 0) > 0 && acceptedChannels.size >= config.discovery.maxChannels) {
     return { accepted: false, reason: 'channel-limit', retentionClass: null }
   }
 
   if (candidate.ownerKey) {
     const ownerChannelCount = ownerCounts.get(candidate.ownerKey) || 0
-    if (ownerChannelCount >= config.discovery.maxChannelsPerOwner) {
+    if (Number(config.discovery.maxChannelsPerOwner || 0) > 0 && ownerChannelCount >= config.discovery.maxChannelsPerOwner) {
       return { accepted: false, reason: 'owner-limit', retentionClass: null }
     }
   }

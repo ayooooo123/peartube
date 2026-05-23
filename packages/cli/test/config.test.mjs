@@ -19,6 +19,18 @@ test('resolveRelayConfig defaults to public discovery mode', async (t) => {
   t.is(config.paths.corestore, 'peartube-relay/corestore')
 })
 
+
+test('resolveRelayConfig defaults public discovery relays to seed every discovered channel', async (t) => {
+  const config = resolveRelayConfig({}, { env: {} })
+
+  t.is(config.mode, 'public')
+  t.is(config.policy, 'discovery')
+  t.is(config.discovery.enabled, true)
+  t.is(config.discovery.seedDiscovered, true)
+  t.is(config.discovery.maxChannels, 0)
+  t.is(config.discovery.maxChannelsPerOwner, 0)
+})
+
 test('resolveRelayConfig forces private mode to allowlist policy', async (t) => {
   const config = resolveRelayConfig({ mode: 'private' }, { env: {} })
 
@@ -98,6 +110,7 @@ test('loadRelayConfig supports env-only relay configuration', async (t) => {
       PEARTUBE_ADMISSION_CHANNELS: 'chan-a,chan-b',
       PEARTUBE_ADMISSION_OWNERS: 'owner-a',
       PEARTUBE_DISCOVERY_ENABLED: 'false',
+      PEARTUBE_DISCOVERY_SEED_DISCOVERED: 'false',
       PEARTUBE_DISCOVERY_MAX_CHANNELS: '12',
       PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER: '3',
       PEARTUBE_NETWORK_ANNOUNCE: 'false',
@@ -118,6 +131,7 @@ test('loadRelayConfig supports env-only relay configuration', async (t) => {
   t.alike(config.admission.channels, ['chan-a', 'chan-b'])
   t.alike(config.admission.owners, ['owner-a'])
   t.is(config.discovery.enabled, false)
+  t.is(config.discovery.seedDiscovered, false)
   t.is(config.discovery.maxChannels, 12)
   t.is(config.discovery.maxChannelsPerOwner, 3)
   t.is(config.network.announce, false)

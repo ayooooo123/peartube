@@ -45,7 +45,7 @@ function buildNetworkDoctor({
   return doctor
 }
 
-export async function createRelayRuntime({ config, logger }) {
+export async function createRelayRuntime({ config, logger } = {}) {
   const [
     { initializeStorage, loadChannel, loadPublicBee, getNetworkStats },
     { PublicFeedManager },
@@ -121,8 +121,16 @@ export async function createRelayRuntime({ config, logger }) {
   })
   let candidateHandler = null
 
+  function discoveryAcceptsCandidates() {
+    if (config?.policy === 'allowlist') return false
+    if (config?.discovery?.enabled === false) return false
+    if (config?.discovery?.seedDiscovered === false) return false
+    return true
+  }
+
   function emitFeedEntries() {
     if (typeof candidateHandler !== 'function') return
+    if (!discoveryAcceptsCandidates()) return
 
     for (const entry of publicFeed.getFeed?.() || publicFeed.entries.values()) {
       if (!entry?.driveKey || !entry?.publicBeeKey) continue

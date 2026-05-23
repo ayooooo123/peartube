@@ -12,15 +12,18 @@ function readFile(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8')
 }
 
-test('mobile iOS framework preparation uses bash for associative arrays on macOS runners', () => {
+test('mobile iOS framework preparation avoids bash 4-only associative arrays on macOS runners', () => {
   const workflow = readFile('.github/workflows/build-mobile.yml')
   const script = readFile('packages/app/scripts/create-xcframeworks.sh')
 
-  assert.match(script, /declare -A SKIP_FRAMEWORKS/)
-  assert.match(script, /declare -A SKIP_FAMILIES/)
+  assert.doesNotMatch(
+    script,
+    /declare -A|\$\{[A-Z_]+\[[^\]]+\]:-/,
+    'GitHub macOS runners execute npm scripts with old /bin/bash; ios:prepare must not require bash 4 associative arrays',
+  )
   assert.match(
     workflow,
     /Prepare iOS frameworks[\s\S]*?shell:\s+bash/,
-    'macOS runners default to old bash for script shebangs; invoke npm run ios:prepare under GitHub Actions bash',
+    'keep the workflow shell explicit while the script itself stays compatible with macOS bash 3.x',
   )
 })

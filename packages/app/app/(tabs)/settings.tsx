@@ -2,8 +2,10 @@
  * Settings Tab - App and channel settings
  */
 import { useState, useEffect, useCallback } from 'react'
-import { View, Text, ScrollView, Alert, Share, Clipboard, Pressable, TextInput, Platform, Switch } from 'react-native'
+import { View, Text, ScrollView, Alert, Share, Clipboard, Pressable, Platform } from 'react-native'
 import { useRouter } from 'expo-router'
+import DiagnosticsPanel from '@/components/native-diagnostics/DiagnosticsPanel'
+import { NativeButton, NativeSwitch, NativeTextInput } from '@/components/native-ui'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
@@ -16,10 +18,6 @@ interface StorageStats {
   maxGB: number
   seedCount: number
   pinnedCount: number
-  totalStorageBytes?: number
-  totalStorageGB?: string
-  untrackedStorageBytes?: number
-  untrackedStorageGB?: string
 }
 
 interface TranscodeSettings {
@@ -61,23 +59,10 @@ export default function SettingsScreen() {
   const canManageTranscodeSettings = isPear && typeof (rpc as any)?.getTranscodeSettings === 'function'
   const [transcodeSettings, setTranscodeSettings] = useState<TranscodeSettings | null>(null)
   const [transcodeSettingsLoading, setTranscodeSettingsLoading] = useState(false)
-
-  const getTotalStorageBytes = (stats: StorageStats | null): number => {
-    if (!stats) return 0
-    return Math.max(stats.usedBytes || 0, stats.totalStorageBytes || 0)
-  }
-
-  const getTotalStorageGB = (stats: StorageStats | null): string => {
-    if (!stats) return '0.00'
-    if (stats.totalStorageGB) return stats.totalStorageGB
-    return (getTotalStorageBytes(stats) / (1024 * 1024 * 1024)).toFixed(2)
-  }
-
-  const getUntrackedStorageGB = (stats: StorageStats | null): string => {
-    if (!stats) return '0.00'
-    if (stats.untrackedStorageGB) return stats.untrackedStorageGB
-    return (Math.max(0, getTotalStorageBytes(stats) - (stats.usedBytes || 0)) / (1024 * 1024 * 1024)).toFixed(2)
-  }
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [swarmStatus, setSwarmStatus] = useState<any | null>(null)
+  const [seedingStatus, setSeedingStatus] = useState<any | null>(null)
+  const nativeButtonStyle = { width: '100%' }
 
   // Check if channel is published
   const checkPublishStatus = useCallback(async () => {
@@ -110,6 +95,27 @@ export default function SettingsScreen() {
   useEffect(() => {
     loadStorageStats()
   }, [loadStorageStats])
+
+  const loadDiagnostics = useCallback(async () => {
+    if (!rpc) return
+    setDiagnosticsLoading(true)
+    try {
+      const [swarm, seeding] = await Promise.all([
+        typeof (rpc as any)?.getSwarmStatus === 'function' ? (rpc as any).getSwarmStatus() : Promise.resolve(null),
+        typeof (rpc as any)?.getSeedingStatus === 'function' ? (rpc as any).getSeedingStatus() : Promise.resolve(null),
+      ])
+      setSwarmStatus(swarm || null)
+      setSeedingStatus(seeding || null)
+    } catch (err) {
+      console.error('[Settings] Failed to load diagnostics:', err)
+    } finally {
+      setDiagnosticsLoading(false)
+    }
+  }, [rpc])
+
+  useEffect(() => {
+    loadDiagnostics()
+  }, [loadDiagnostics])
 
   const loadDevices = useCallback(async () => {
     if (!rpc || !identity?.driveKey) return
@@ -485,9 +491,9 @@ export default function SettingsScreen() {
             <Feather name="hard-drive" color={colors.primary} size={20} />
           </View>
           <View className="flex-1 ml-4">
-            <Text className="text-label text-pear-text">PearTube Storage</Text>
+            <Text className="text-label text-pear-text">Peer Content Cache</Text>
             <Text className="text-caption text-pear-text-muted mt-0.5">
-              {storageStats ? `${getTotalStorageGB(storageStats)} GB total • ${storageStats.usedGB} / ${storageStats.maxGB} GB cached` : 'Loading...'}
+              {storageStats ? `${storageStats.usedGB} GB / ${storageStats.maxGB} GB used` : 'Loading...'}
             </Text>
           </View>
         </View>
@@ -502,9 +508,6 @@ export default function SettingsScreen() {
             </View>
             <Text className="text-caption text-pear-text-muted mt-2">
               {storageStats.seedCount} cached videos • {storageStats.pinnedCount} pinned channels
-            </Text>
-            <Text className="text-caption text-pear-text-muted mt-1">
-              {getUntrackedStorageGB(storageStats)} GB app/P2P data outside tracked peer cache
             </Text>
           </View>
         )}
@@ -526,7 +529,7 @@ export default function SettingsScreen() {
             ))}
           </View>
           <View className="flex-row gap-2">
-            <TextInput
+            <NativeTextInput
               value={customStorageLimit}
               onChangeText={setCustomStorageLimit}
               onSubmitEditing={handleCustomStorageLimitApply}
@@ -561,7 +564,7 @@ export default function SettingsScreen() {
       </View>
 
       <Text className="text-caption text-pear-text-muted">
-        Cached peer content is controlled by the cache limit. Total app storage also includes local channel data, indexes, metadata, bundle cache, and other P2P/Corestore data that Android counts for the app.
+        Cached content from other channels. Higher limits help the network by seeding more content to other peers. Your own videos are stored separately and do not count toward this limit.
       </Text>
     </View>
   )
@@ -581,6 +584,14 @@ export default function SettingsScreen() {
 
           {renderStorageSection()}
 
+          <DiagnosticsPanel
+            swarmStatus={swarmStatus}
+            storageStats={storageStats}
+            seedingStatus={seedingStatus}
+            loading={diagnosticsLoading}
+            onRefresh={loadDiagnostics}
+          />
+
           <View className="h-2 bg-pear-bg-card" />
 
           <View className="px-5 py-5">
@@ -591,7 +602,7 @@ export default function SettingsScreen() {
                 <Text className="text-caption text-pear-text-muted mb-3">
                   Pair this device to an existing channel so it can sync and upload from multiple devices.
                 </Text>
-                <TextInput
+                <NativeTextInput
                   placeholder="Paste invite code"
                   value={pairInviteCode}
                   onChangeText={setPairInviteCode}
@@ -599,7 +610,7 @@ export default function SettingsScreen() {
                   autoCapitalize="none"
                   className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
                 />
-                <TextInput
+                <NativeTextInput
                   placeholder="Optional device name"
                   value={pairDeviceName}
                   onChangeText={setPairDeviceName}
@@ -607,21 +618,19 @@ export default function SettingsScreen() {
                   autoCapitalize="none"
                   className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
                 />
-                <Pressable
+                <NativeButton
+                  label={pairing ? 'Pairing...' : 'Pair & Continue'}
                   onPress={async () => {
                     await pairDevice()
                     await loadIdentity()
                   }}
                   disabled={pairing || !pairInviteCode.trim()}
-                  className={`flex-row items-center justify-center gap-2 bg-pear-primary rounded-lg py-3.5 ${(pairing || !pairInviteCode.trim()) ? 'opacity-50' : ''}`}
-                >
-                  <Text className="text-white text-label">
-                    {pairing ? 'Pairing...' : 'Pair & Continue'}
-                  </Text>
-                </Pressable>
+                  variant="filled"
+                  style={nativeButtonStyle}
+                />
               </View>
 
-              <TextInput
+              <NativeTextInput
                 placeholder="Enter your channel name"
                 value={newName}
                 onChangeText={setNewName}
@@ -629,15 +638,13 @@ export default function SettingsScreen() {
                 autoCapitalize="none"
                 className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
               />
-              <Pressable
+              <NativeButton
+                label={creating ? 'Creating...' : 'Create Channel'}
                 onPress={handleCreateIdentity}
                 disabled={creating || !newName.trim()}
-                className={`bg-pear-primary rounded-lg py-3.5 items-center ${(creating || !newName.trim()) ? 'opacity-50' : ''}`}
-              >
-                <Text className="text-white text-label">
-                  {creating ? 'Creating...' : 'Create Channel'}
-                </Text>
-              </Pressable>
+                variant="filled"
+                style={nativeButtonStyle}
+              />
             </View>
           </View>
         </ScrollView>
@@ -813,7 +820,7 @@ export default function SettingsScreen() {
           {/* Pair */}
           <View className="bg-pear-bg-elevated rounded-xl p-4 mb-3">
             <Text className="text-label text-pear-text mb-2">Join with invite code</Text>
-            <TextInput
+            <NativeTextInput
               placeholder="Paste invite code"
               value={pairInviteCode}
               onChangeText={setPairInviteCode}
@@ -821,7 +828,7 @@ export default function SettingsScreen() {
               autoCapitalize="none"
               className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 text-body text-pear-text mb-3"
             />
-            <TextInput
+            <NativeTextInput
               placeholder="Optional device name (e.g. Studio MacBook)"
               value={pairDeviceName}
               onChangeText={setPairDeviceName}
@@ -878,6 +885,14 @@ export default function SettingsScreen() {
         {/* Storage Section */}
         {renderStorageSection()}
 
+        <DiagnosticsPanel
+          swarmStatus={swarmStatus}
+          storageStats={storageStats}
+          seedingStatus={seedingStatus}
+          loading={diagnosticsLoading}
+          onRefresh={loadDiagnostics}
+        />
+
         {/* Divider */}
         <View className="h-2 bg-pear-bg-card" />
 
@@ -895,7 +910,7 @@ export default function SettingsScreen() {
                       Use hardware decode on Pear to reduce CPU load. Disable if you see crashes or unstable playback.
                     </Text>
                   </View>
-                  <Switch
+                  <NativeSwitch
                     value={!!transcodeSettings?.videoToolboxDecodeEnabled}
                     onValueChange={handleVideoToolboxDecodeToggle}
                     disabled={transcodeSettingsLoading || !!transcodeSettings?.videoToolboxDecodeLocked}
@@ -929,7 +944,7 @@ export default function SettingsScreen() {
                       Map hardware frames for read-only access instead of copying. Use for troubleshooting transferData errors.
                     </Text>
                   </View>
-                  <Switch
+                  <NativeSwitch
                     value={!!transcodeSettings?.videoToolboxHwMapEnabled}
                     onValueChange={handleVideoToolboxHwMapToggle}
                     disabled={

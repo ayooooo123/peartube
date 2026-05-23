@@ -3,7 +3,6 @@ import {
   Modal,
   ScrollView,
   Text,
-  TextInput,
   View,
   ActivityIndicator,
   Pressable,
@@ -18,6 +17,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import * as ImagePicker from 'expo-image-picker'
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
+import { NativeButton, NativeTextInput } from '@/components/native-ui'
 import { rpc } from '@peartube/platform/rpc'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ThumbnailImage } from '@/components/video/ThumbnailImage'
@@ -185,6 +185,7 @@ export default function ChannelScreen() {
   const [avatarBase64, setAvatarBase64] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const nativeFormButtonStyle = { flex: 1 }
 
   const isOwner = identityDriveKey === channelKey
   const activeAvatarUrl = avatarPreviewUrl || channelMeta?.avatar || ''
@@ -503,58 +504,53 @@ export default function ChannelScreen() {
               contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 20 }}
             >
               <Text className="text-label text-pear-text mb-1.5">Channel Name</Text>
-              <TextInput
-                className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
-                placeholderTextColor={colors.textMuted}
+              <NativeTextInput
                 value={editName}
                 onChangeText={setEditName}
+                placeholderTextColor={colors.textMuted}
+                className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text"
               />
 
               <View className="mt-4">
                 <Text className="text-label text-pear-text mb-1.5">Description</Text>
-                <TextInput
-                  className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text min-h-28"
-                  placeholderTextColor={colors.textMuted}
+                <NativeTextInput
                   value={editDescription}
                   onChangeText={setEditDescription}
+                  placeholderTextColor={colors.textMuted}
                   multiline
                   textAlignVertical="top"
+                  className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3.5 text-body text-pear-text min-h-28"
                 />
               </View>
 
               <View className="mt-4">
-                <PressableFeedback
+                <NativeButton
+                  label="Choose Avatar"
                   onPress={pickAvatar}
-                  className="bg-pear-bg-input border border-pear-border rounded-lg px-4 py-3 flex-row items-center justify-center gap-2"
-                  accessibilityRole="button"
-                >
-                  <Feather name="image" size={16} color={colors.text} />
-                  <Text className="text-label text-pear-text">Choose Avatar</Text>
-                </PressableFeedback>
+                  variant="outlined"
+                  style={nativeFormButtonStyle}
+                />
               </View>
 
               {saveError ? <Text className="text-pear-error text-caption mt-3">{saveError}</Text> : null}
             </ScrollView>
 
             <View className="px-5 py-4 border-t border-pear-border flex-row gap-3">
-              <PressableFeedback
+              <NativeButton
+                label="Cancel"
                 onPress={closeEditModal}
-                className={`flex-1 rounded-lg py-3 items-center justify-center bg-pear-bg-input border border-pear-border ${isSaving ? 'opacity-50' : ''}`}
                 disabled={isSaving}
-                accessibilityRole="button"
-              >
-                <Text className="text-label text-pear-text">Cancel</Text>
-              </PressableFeedback>
+                variant="outlined"
+                style={nativeFormButtonStyle}
+              />
 
-              <PressableFeedback
+              <NativeButton
+                label={isSaving ? 'Saving...' : 'Save'}
                 onPress={saveChannelChanges}
-                className={`flex-1 rounded-lg py-3 items-center justify-center bg-pear-primary flex-row gap-2 ${isSaving ? 'opacity-50' : ''}`}
                 disabled={isSaving}
-                accessibilityRole="button"
-              >
-                {isSaving ? <ActivityIndicator color="white" size="small" /> : null}
-                <Text className="text-label text-white">Save</Text>
-              </PressableFeedback>
+                variant="filled"
+                style={nativeFormButtonStyle}
+              />
             </View>
           </View>
         </View>

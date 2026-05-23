@@ -131,23 +131,6 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     setSourceKey(0)
   }, [videoUrl])
 
-  useEffect(() => {
-    if (Platform.OS !== 'android') return
-    const subscription = AppState.addEventListener('change', (nextState) => {
-      appStateRef.current = nextState
-      if (nextState !== 'active') {
-        // Peer-backed blob streams can legitimately stall for a few seconds while
-        // Android backgrounds or enters PiP. Treat that as a transition, not a
-        // fatal stuck-playback signal that should remount the player.
-        suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
-        if (!autoEnterPipOnLeave) {
-          void adapter.destroy?.()
-        }
-      }
-    })
-    return () => subscription.remove()
-  }, [adapter, autoEnterPipOnLeave])
-
   const shouldSuppressStuckPlaybackRecovery = useCallback(() => {
     if (Platform.OS !== 'android') return false
     if (isInPipMode) return true
@@ -224,6 +207,23 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   )
 
   useEffect(() => {
+    if (Platform.OS !== 'android') return
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      appStateRef.current = nextState
+      if (nextState !== 'active') {
+        // Peer-backed blob streams can legitimately stall for a few seconds while
+        // Android backgrounds or enters PiP. Treat that as a transition, not a
+        // fatal stuck-playback signal that should remount the player.
+        suppressStuckPlaybackRecoveryUntilRef.current = Date.now() + 6000
+        if (!autoEnterPipOnLeave) {
+          void adapter.destroy?.()
+        }
+      }
+    })
+    return () => subscription.remove()
+  }, [adapter, autoEnterPipOnLeave])
+
+  useEffect(() => {
     if (!playerRef) return
     playerRef.current = adapter
     return () => {
@@ -237,7 +237,10 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     return () => {
       try {
         void adapter.destroy?.()
-      } catch {}
+      } catch {
+        // Best-effort cleanup only. Some native player refs are already disposed
+        // while React tears down the playback surface.
+      }
       if (playerRef.current === adapter) {
         playerRef.current = null
       }

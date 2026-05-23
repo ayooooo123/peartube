@@ -3,6 +3,7 @@ import { loadPublicBee } from '@peartube/backend/storage'
 import { normalizeBlobRefInput } from '@peartube/backend/blob-ref'
 
 const VIDEO_DOWNLOAD_TIMEOUT_MS = 60_000
+const DOWNLOAD_PROGRESS_IDLE_MS = 10_000
 const BLOB_DOWNLOAD_TIMEOUT = 'BLOB_DOWNLOAD_TIMEOUT'
 
 function parseBlobId(blobId) {
@@ -23,7 +24,47 @@ function timeoutPromise(timeoutMs) {
 }
 
 function isBlobDownloadTimeout(err) {
-  return err?.code === BLOB_DOWNLOAD_TIMEOUT || /^Blob download timeout \(\d+ms\)$/.test(err?.message || '')
+  return err?.code === BLOB_DOWNLOAD_TIMEOUT || /^Blob download (?:idle )?timeout \(.*\)$/.test(err?.message || '')
+}
+
+
+function createIdleProgressGuard({ timeoutMs, onTimeout }) {
+  let timer = null
+  let settled = false
+  let rejectGuard = null
+
+  const promise = new Promise((_, reject) => {
+    rejectGuard = reject
+  })
+
+  const clear = () => {
+    if (timer) clearTimeout(timer)
+    timer = null
+  }
+
+  const bump = () => {
+    if (settled) return
+    clear()
+    timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try { onTimeout?.() } catch {
+        // Best effort cleanup only.
+      }
+      const err = new Error(`Blob download idle timeout (${timeoutMs}ms without progress)`)
+      err.code = BLOB_DOWNLOAD_TIMEOUT
+      rejectGuard(err)
+    }, timeoutMs)
+    timer?.unref?.()
+  }
+
+  const stop = () => {
+    settled = true
+    clear()
+  }
+
+  bump()
+  return { promise, bump, stop }
 }
 
 function isDiscoveryMirror(options) {
@@ -101,8 +142,8 @@ async function downloadBlobRef(ctx, ref) {
   if (ctx.swarm && !ctx.swarm.destroyed && blobsCore.discoveryKey) {
     try {
       discoveryHandle = ctx.swarm.join(blobsCore.discoveryKey, { server: true, client: true })
-    } catch (err) {
-      void err
+    } catch {
+      // Discovery joins are opportunistic for relay prefetching.
     }
   }
 
@@ -111,17 +152,40 @@ async function downloadBlobRef(ctx, ref) {
     end: blockOffset + blockLength
   })
 
+  const idleGuard = createIdleProgressGuard({
+    timeoutMs: DOWNLOAD_PROGRESS_IDLE_MS,
+    onTimeout: () => {
+      try { download.destroy?.() } catch {
+      // Best effort cleanup only.
+    }
+    }
+  })
+  const onDownload = () => idleGuard.bump()
+  const onAppend = () => idleGuard.bump()
+  blobsCore.on?.('download', onDownload)
+  blobsCore.on?.('append', onAppend)
+
   try {
     await Promise.race([
       download.done(),
-      timeoutPromise(VIDEO_DOWNLOAD_TIMEOUT_MS)
+      timeoutPromise(VIDEO_DOWNLOAD_TIMEOUT_MS),
+      idleGuard.promise
     ])
   } catch (err) {
-    try { download.destroy?.() } catch {}
+    try { download.destroy?.() } catch {
+      // Best effort cleanup only.
+    }
     throw err
   } finally {
-    try { await discoveryHandle?.destroy?.() } catch {}
-    try { await discoveryHandle?.close?.() } catch {}
+    idleGuard.stop()
+    blobsCore.off?.('download', onDownload)
+    blobsCore.off?.('append', onAppend)
+    try { await discoveryHandle?.destroy?.() } catch {
+      // Best effort cleanup only.
+    }
+    try { await discoveryHandle?.close?.() } catch {
+      // Best effort cleanup only.
+    }
   }
 
   if (Number.isFinite(ref.blobId?.byteLength)) return Number(ref.blobId.byteLength)

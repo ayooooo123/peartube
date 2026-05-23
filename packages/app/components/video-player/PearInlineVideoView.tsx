@@ -43,6 +43,7 @@ const ANDROID_BUFFER_OPTIONS = {
   preferredForwardBufferDuration: 20,
   waitsToMinimizeStalling: true,
 }
+const SEEK_PLAYBACK_RECOVERY_MS = 6000
 
 function getExpoEventDurationMs(data: any, player?: VideoPlayer | null) {
   const rawDurationSeconds = Number(data?.duration ?? player?.duration ?? 0)
@@ -101,6 +102,8 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const wasInPipRef = useRef(isInPipMode)
   const playerRefForCallbacks = useRef<VideoPlayer | null>(null)
   const previousStatusRef = useRef<string | null>(null)
+  const seekPlaybackRecoveryUntilRef = useRef(0)
+  const isPlayingRef = useRef(isPlaying)
 
   const player = useVideoPlayer({ uri: videoUrl, metadata: {
     title: videoTitle || undefined,
@@ -132,8 +135,13 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     playbackStartedAtRef.current = null
     lastAppliedSeekRef.current = null
     previousStatusRef.current = null
+    seekPlaybackRecoveryUntilRef.current = 0
     playerRefForCallbacks.current = player
   }, [player, videoUrl, playbackSession, currentVideoKey])
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying
+  }, [isPlaying])
 
   const shouldSuppressStuckPlaybackRecovery = useCallback(() => {
     if (Platform.OS !== 'android') return false
@@ -157,6 +165,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (lastAppliedSeekRef.current === Math.round(targetSeconds * 1000)) return
 
     lastAppliedSeekRef.current = Math.round(targetSeconds * 1000)
+    seekPlaybackRecoveryUntilRef.current = Date.now() + SEEK_PLAYBACK_RECOVERY_MS
     player.currentTime = Math.max(0, targetSeconds)
   }, [player])
 
@@ -178,6 +187,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
           player.currentTime = 0
         },
         seek: async (timeSeconds: number) => {
+          seekPlaybackRecoveryUntilRef.current = Date.now() + SEEK_PLAYBACK_RECOVERY_MS
           player.currentTime = Math.max(0, timeSeconds)
         },
         resume: async (playing: boolean) => {
@@ -216,6 +226,7 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   }, [player, showNotificationControls])
 
   useEffect(() => {
+    isPlayingRef.current = isPlaying
     if (isPlaying) {
       player.play()
     } else {
@@ -330,12 +341,17 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
     if (nativePlaying) {
       hasReceivedPlayEventRef.current = true
       pipExitPlayingRef.current = false
+      seekPlaybackRecoveryUntilRef.current = 0
       onPlaying?.()
       return
     }
 
     if (Platform.OS === 'web' && !hasReceivedPlayEventRef.current) return
     if (pipExitPlayingRef.current) return
+    if (Date.now() <= seekPlaybackRecoveryUntilRef.current && isPlayingRef.current) {
+      onBuffering?.({ isBuffering: true })
+      return
+    }
     onPaused?.()
   })
 
@@ -346,13 +362,16 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         onBuffering?.({ isBuffering: true })
       } else if (status === 'readyToPlay') {
         onBuffering?.({ isBuffering: false })
+        if (Date.now() <= seekPlaybackRecoveryUntilRef.current && isPlayingRef.current) {
+          player.play()
+        }
       }
     }
     if (status === 'error') {
       console.error('[PearInlineVideoView] error:', error)
       onError?.({
         message: error?.message || 'Unknown error',
-        code: error?.code,
+        code: (error as any)?.code,
         engine: 'expo-video',
       })
     }

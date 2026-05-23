@@ -58,6 +58,12 @@ test('preparePlayback returns a playable URL before warmup settles or fails', as
       isComplete: false,
     },
     warmupStarted: true,
+    peerWarmupStarted: true,
+    peerWarmup: {
+      peerCount: 0,
+      retained: false,
+      timedOut: false,
+    },
   })
 
   t.alike(calls, [

@@ -304,6 +304,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const setDesiredPlaying = useCallback((nextIsPlaying: boolean) => {
+    isPlayingRef.current = nextIsPlaying
     setIsPlaying(nextIsPlaying)
   }, [])
 
@@ -1147,6 +1148,14 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       pipExitShouldResumeRef.current = false
       pipExitExpectedPlayingRef.current = false
     }
+    if (seekConfirmRef.current && isPlayingRef.current) {
+      console.log('[VideoPlayerContext] Ignoring transient paused event during seek')
+      isBufferingRef.current = true
+      try {
+        getPlayerPort()?.play?.()
+      } catch {}
+      return
+    }
     console.log('[VideoPlayerContext] Player paused')
     // Sync JS state for deliberate external pauses (PiP button, notification
     // pause, audio focus loss). Skip if the player is buffering — that's a
@@ -1157,7 +1166,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     if (!isBufferingRef.current) {
       setIsPlaying(false)
     }
-  }, [reassertNativePlayAfterPipExit])
+  }, [getPlayerPort, reassertNativePlayAfterPipExit])
 
   const onBuffering = useCallback((data: { isBuffering: boolean }) => {
     console.log('[VideoPlayerContext] Player buffering:', data?.isBuffering)

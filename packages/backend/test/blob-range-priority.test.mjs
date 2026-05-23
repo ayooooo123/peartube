@@ -1,0 +1,105 @@
+import test from 'brittle'
+import c from 'compact-encoding'
+import HypercoreID from 'hypercore-id-encoding'
+import z32 from 'z32'
+
+import {
+  getPrioritizedBlobDownloadRange,
+  parseHttpByteRange,
+  prioritizeBlobServerRangeRequest,
+} from '../src/blob-range-priority.js'
+
+const blobIdEncoding = {
+  preencode(state, blob) {
+    c.uint.preencode(state, blob.blockOffset)
+    c.uint.preencode(state, blob.blockLength)
+    c.uint.preencode(state, blob.byteOffset)
+    c.uint.preencode(state, blob.byteLength)
+  },
+  encode(state, blob) {
+    c.uint.encode(state, blob.blockOffset)
+    c.uint.encode(state, blob.blockLength)
+    c.uint.encode(state, blob.byteOffset)
+    c.uint.encode(state, blob.byteLength)
+  },
+  decode(state) {
+    return {
+      blockOffset: c.uint.decode(state),
+      blockLength: c.uint.decode(state),
+      byteOffset: c.uint.decode(state),
+      byteLength: c.uint.decode(state),
+    }
+  },
+}
+
+test('parseHttpByteRange normalizes closed and open HTTP byte ranges', (t) => {
+  t.alike(parseHttpByteRange('bytes=65536-131071', 1048576), { start: 65536, end: 131071 })
+  t.alike(parseHttpByteRange('bytes=983040-', 1048576), { start: 983040, end: 1048575 })
+  t.alike(parseHttpByteRange('bytes=-65536', 1048576), { start: 983040, end: 1048575 })
+  t.is(parseHttpByteRange('bytes=131071-65536', 1048576), null)
+  t.is(parseHttpByteRange('items=0-10', 1048576), null)
+})
+
+test('getPrioritizedBlobDownloadRange maps a seek byte range to the matching blob core blocks', (t) => {
+  const blob = {
+    blockOffset: 10,
+    blockLength: 100,
+    byteOffset: 4096,
+    byteLength: 100 * 65536,
+  }
+
+  t.alike(
+    getPrioritizedBlobDownloadRange(blob, { start: 4 * 65536, end: (5 * 65536) - 1 }, { readAheadBytes: 0 }),
+    { start: 14, end: 15, blocks: 1 },
+  )
+
+  t.alike(
+    getPrioritizedBlobDownloadRange(blob, { start: 98 * 65536, end: (99 * 65536) - 1 }, { readAheadBytes: 4 * 65536 }),
+    { start: 108, end: 110, blocks: 2 },
+  )
+})
+
+test('prioritizeBlobServerRangeRequest starts a non-linear core download for the requested HTTP range', async (t) => {
+  const calls = []
+  const key = Buffer.from('b'.repeat(64), 'hex')
+  const blob = {
+    blockOffset: 10,
+    blockLength: 100,
+    byteOffset: 4096,
+    byteLength: 100 * 65536,
+  }
+  const encodedBlob = z32.encode(c.encode(blobIdEncoding, blob))
+  const req = {
+    url: `/?key=${HypercoreID.encode(key)}&blob=${encodedBlob}&type=video%2Fmp4&token=test-token`,
+    headers: {
+      range: `bytes=${4 * 65536}-${(5 * 65536) - 1}`,
+    },
+  }
+  const blobServer = {
+    token: 'test-token',
+    async _getCore(requestKey, info, active) {
+      calls.push(['_getCore', requestKey.toString('hex'), info.blob, active])
+      return {
+        download(options) {
+          calls.push(['download', options])
+          return {
+            done: () => Promise.resolve(),
+            destroy: () => calls.push(['destroy']),
+          }
+        },
+        close() {
+          calls.push(['close'])
+        },
+      }
+    },
+  }
+
+  const result = await prioritizeBlobServerRangeRequest(blobServer, req, { readAheadBytes: 0 })
+  await Promise.resolve()
+  await Promise.resolve()
+
+  t.alike(result, { start: 14, end: 15, blocks: 1 })
+  t.alike(calls[0], ['_getCore', key.toString('hex'), blob, true])
+  t.alike(calls[1], ['download', { start: 14, end: 15, linear: false }])
+  t.ok(calls.some((call) => call[0] === 'close'))
+})

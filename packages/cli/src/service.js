@@ -246,6 +246,17 @@ export async function createRelayService({
         decision
       })
 
+      const mirrorUnavailableVideos = Array.isArray(mirrorStats?.unavailableVideos) ? mirrorStats.unavailableVideos : []
+      const hasUnavailableVideos = mirrorUnavailableVideos.length > 0
+      const mirrorReturnedPreviewVideos = Array.isArray(mirrorStats?.previewVideos)
+      const refreshedPreviewVideos = mirrorReturnedPreviewVideos
+        ? mirrorStats.previewVideos
+        : (hasUnavailableVideos
+            ? []
+            : (Array.isArray(existingChannel?.previewVideos) && existingChannel.previewVideos.length > 0
+                ? existingChannel.previewVideos
+                : undefined))
+
       await relayCatalog.upsertChannel({
         ...baseRecord,
         ...mirrorAttemptRecord,
@@ -254,9 +265,8 @@ export async function createRelayService({
         videosDownloaded: mirrorStats?.videosDownloaded || 0,
         mirroredAt: now,
         lastError: mirrorStats?.lastError || null,
-        previewVideos: Array.isArray(mirrorStats?.previewVideos)
-          ? mirrorStats.previewVideos
-          : undefined,
+        previewVideos: refreshedPreviewVideos,
+        unavailableVideos: hasUnavailableVideos ? mirrorUnavailableVideos : [],
         videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || 0) || 0,
         manifestUpdatedAt: now
       })
@@ -273,9 +283,13 @@ export async function createRelayService({
       if (resolved.publicBeeKey) {
         const seedPreviewVideos = Array.isArray(mirrorStats?.previewVideos)
           ? mirrorStats.previewVideos
-          : []
+          : (hasUnavailableVideos ? [] : (Array.isArray(resolved.previewVideos) ? resolved.previewVideos : []))
+        const persistedPreviewVideos = seedPreviewVideos.length > 0
+          ? seedPreviewVideos
+          : (hasUnavailableVideos || mirrorReturnedPreviewVideos ? [] : (Array.isArray(existingChannel?.previewVideos) ? existingChannel.previewVideos : []))
         await runtime.cacheManager?.addChannel?.(resolved.channelKey, resolved.publicBeeKey, 'discovered', {
-          previewVideos: seedPreviewVideos
+          previewVideos: seedPreviewVideos,
+          clearPreviewVideos: hasUnavailableVideos
         }).catch(() => {})
         const seedStats = await runtime.seeder?.seedChannel?.({
           driveKey: resolved.channelKey,
@@ -290,8 +304,9 @@ export async function createRelayService({
           source: 'relay-cache',
           relayRole: 'cache',
           relayServing: true,
-          previewVideos: seedPreviewVideos,
-          videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || seedPreviewVideos.length || 0) || 0,
+          previewVideos: persistedPreviewVideos,
+          unavailableVideos: mirrorUnavailableVideos,
+          videoCount: Number(mirrorStats?.videoCount || mirrorStats?.videosDownloaded || mirrorStats?.videosFound || persistedPreviewVideos.length || 0) || 0,
           manifestUpdatedAt: now
         }
         await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})

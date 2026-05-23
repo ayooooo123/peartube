@@ -70,7 +70,7 @@ export class CacheManager {
         existing.source = 'pinned'
         changed = true
       }
-      if (Array.isArray(options.previewVideos)) {
+      if (Array.isArray(options.previewVideos) || options.clearPreviewVideos === true) {
         const nextSignature = JSON.stringify(previewVideos)
         const currentSignature = JSON.stringify(existing.previewVideos || [])
         if (nextSignature !== currentSignature) {

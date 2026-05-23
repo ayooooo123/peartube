@@ -13,8 +13,8 @@ export const VALID_POLICIES = [RELAY_POLICY_ALLOWLIST, RELAY_POLICY_DISCOVERY]
 export const DEFAULT_STORAGE_PATH = './peartube-relay'
 export const DEFAULT_MAX_BYTES = 100000 * 1024 * 1024
 
-export const DEFAULT_DISCOVERY_MAX_CHANNELS = 500
-export const DEFAULT_DISCOVERY_MAX_CHANNELS_PER_OWNER = 20
+export const DEFAULT_DISCOVERY_MAX_CHANNELS = 0
+export const DEFAULT_DISCOVERY_MAX_CHANNELS_PER_OWNER = 0
 
 export const RELAY_CATALOG_FILENAME = 'relay-catalog.json'
 export const RELAY_STATUS_FILENAME = 'relay-status.json'
@@ -82,6 +82,7 @@ export const DEFAULT_RELAY_CONFIG = {
   },
   discovery: {
     enabled: true,
+    seedDiscovered: true,
     maxChannels: DEFAULT_DISCOVERY_MAX_CHANNELS,
     maxChannelsPerOwner: DEFAULT_DISCOVERY_MAX_CHANNELS_PER_OWNER
   },

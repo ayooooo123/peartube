@@ -264,6 +264,50 @@ test('createRelayService publishes discovered relay inventory as relay catalog f
   }
 })
 
+
+test('createRelayService accepts discovered channels by default without discovery caps', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-default-discovery-')
+  const runtime = createFakeRuntime()
+  const mirrored = []
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: {
+          enabled: true,
+          seedDiscovered: true,
+          maxChannels: 0,
+          maxChannelsPerOwner: 0
+        }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async (candidate) => {
+        mirrored.push(candidate.channelKey)
+        return { bytesDownloaded: 1024, videosFound: 1, videosDownloaded: 1 }
+      },
+      writeStatusFile: async () => {}
+    })
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-open-default', publicBeeKey: 'bee-open-default' })
+
+    t.alike(mirrored, ['chan-open-default'])
+    t.is(service.catalog.getChannel('chan-open-default').retentionClass, 'discovery')
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('createRelayService starts without forcing an eager feed sync', async (t) => {
   const dir = makeTempDir('peartube-relay-service-logs-')
   const runtime = createFakeRuntime()
@@ -1011,6 +1055,69 @@ test('createRelayService clears playable previews when accepted refresh mirror t
     t.is(channel.videosDownloaded, 0)
     t.is(channel.bytes, 0)
     t.is(channel.lastError, 'mirror unavailable')
+    await service.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+
+test('createRelayService marks timed-out preview refs unavailable instead of preserving them', async (t) => {
+  const dir = makeTempDir('peartube-relay-service-unavailable-refresh-')
+  const runtime = createFakeRuntime()
+  const previewVideos = [{
+    id: 'preview-timeout',
+    blobId: '0:2:0:20',
+    blobsCoreKey: 'aa'.repeat(32),
+    availability: 'playable'
+  }]
+  const unavailableVideos = [{
+    id: 'preview-timeout',
+    blobId: '0:2:0:20',
+    blobsCoreKey: 'aa'.repeat(32),
+    availability: 'unavailable',
+    byteAvailability: 'unavailable',
+    unavailableReason: 'Blob download timeout (60000ms)'
+  }]
+  const published = []
+
+  try {
+    const service = await createRelayService({
+      config: {
+        mode: 'public',
+        policy: 'discovery',
+        storage: { path: dir, maxBytes: 10_000 },
+        paths: {
+          catalog: join(dir, 'relay-catalog.json'),
+          status: join(dir, 'relay-status.json')
+        },
+        admission: { channels: [], owners: [] },
+        discovery: { enabled: true, maxChannels: 5, maxChannelsPerOwner: 2 }
+      },
+      logger: createFakeLogger(),
+      runtimeFactory: async () => runtime,
+      mirrorChannel: async () => ({
+        bytesDownloaded: 0,
+        videosFound: 1,
+        videosDownloaded: 0,
+        previewVideos: [],
+        unavailableVideos,
+        videoCount: 1
+      }),
+      writeStatusFile: async () => {}
+    })
+    runtime.publishRelayCatalogEntry = async (entry) => { published.push(entry) }
+
+    await service.start()
+    await runtime.emit({ channelKey: 'chan-unavailable-refresh', publicBeeKey: 'bee-unavailable-refresh', source: 'discovered', previewVideos })
+
+    const channel = service.catalog.getChannel('chan-unavailable-refresh')
+    t.alike(channel.previewVideos, [])
+    t.is(channel.unavailableVideos.length, 1)
+    t.is(channel.unavailableVideos[0].availability, 'unavailable')
+    t.is(channel.videosDownloaded, 0)
+    t.is(published[published.length - 1].previewVideos.length, 0)
+    t.is(published[published.length - 1].unavailableVideos.length, 1)
     await service.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

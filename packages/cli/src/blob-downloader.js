@@ -111,6 +111,31 @@ function addSuccessfulPreviewVideo(previews, ref) {
   return addPreviewVideo(previews, ref.sourceVideo)
 }
 
+function addUnavailableVideo(unavailableVideos, ref, err) {
+  if (ref?.kind !== 'video') return false
+  const video = ref.sourceVideo
+  if (!video?.id || !video?.blobId || !video?.blobsCoreKey) return false
+  const id = getVideoKey(video)
+  if (unavailableVideos.some((existing) => getVideoKey(existing) === id)) return false
+  unavailableVideos.push({
+    id: String(video.id),
+    title: video?.title ? String(video.title) : 'Untitled',
+    uploadedAt: Number(video?.uploadedAt || 0) || 0,
+    duration: Number(video?.duration || 0) || 0,
+    thumbnail: video?.thumbnail || null,
+    blobId: String(video.blobId),
+    blobsCoreKey: String(video.blobsCoreKey),
+    mimeType: video?.mimeType || 'video/mp4',
+    availability: 'unavailable',
+    byteAvailability: 'unavailable',
+    unavailableReason: err?.message || (err ? String(err) : 'Blob unavailable'),
+    thumbnailBlobId: video?.thumbnailBlobId || null,
+    thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey || null,
+    thumbnailMimeType: video?.thumbnailMimeType || null
+  })
+  return true
+}
+
 function addPreviewVideo(previews, video) {
   if (!video?.id || !video?.blobId || !video?.blobsCoreKey) return false
   const id = getVideoKey(video)
@@ -209,6 +234,7 @@ export async function downloadChannelBlobs(ctx, publicBeeKey, driveKey, logger =
     thumbnailsDownloaded: 0,
     bytesDownloaded: 0,
     previewVideos: [],
+    unavailableVideos: [],
     videoCount: 0,
     lastError: null
   }
@@ -258,20 +284,21 @@ export async function downloadChannelBlobs(ctx, publicBeeKey, driveKey, logger =
       } catch (err) {
         stats.blobsFailed += 1
         stats.lastError = err?.message || String(err)
+        if (ref.kind === 'video') addUnavailableVideo(stats.unavailableVideos, ref, err)
         const logUnavailable = isDiscoveryMirror(options) && isBlobDownloadTimeout(err)
         const logFailure = logUnavailable && typeof logger.warn === 'function'
           ? logger.warn.bind(logger)
           : logError
         logFailure(logUnavailable ? '[blob-downloader] Blob download unavailable' : '[blob-downloader] Blob download failed', {
           driveKey,
-          videoId: ref.videoId || '<unknown-video>',
+          videoId: ref.videoId || ref.sourceVideo?.id || '<unknown-video>',
           kind: ref.kind,
           error: stats.lastError
         })
       }
     }
 
-    stats.videoCount = Math.max(stats.videoCount, stats.previewVideos.length, stats.videosDownloaded)
+    stats.videoCount = Math.max(stats.videoCount, stats.previewVideos.length, stats.unavailableVideos.length, stats.videosDownloaded)
 
     logInfo('[blob-downloader] Channel blob download complete', {
       driveKey,

@@ -248,9 +248,10 @@ function configFromEnv(env = {}) {
     if (env.PEARTUBE_ADMISSION_CHANNELS) config.admission.channels = splitCommaList(env.PEARTUBE_ADMISSION_CHANNELS)
     if (env.PEARTUBE_ADMISSION_OWNERS) config.admission.owners = splitCommaList(env.PEARTUBE_ADMISSION_OWNERS)
   }
-  if (env.PEARTUBE_DISCOVERY_ENABLED || env.PEARTUBE_DISCOVERY_MAX_CHANNELS || env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
+  if (env.PEARTUBE_DISCOVERY_ENABLED || env.PEARTUBE_DISCOVERY_SEED_DISCOVERED || env.PEARTUBE_DISCOVERY_MAX_CHANNELS || env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
     config.discovery = {}
     if (env.PEARTUBE_DISCOVERY_ENABLED) config.discovery.enabled = parseBoolean(env.PEARTUBE_DISCOVERY_ENABLED)
+    if (env.PEARTUBE_DISCOVERY_SEED_DISCOVERED) config.discovery.seedDiscovered = parseBoolean(env.PEARTUBE_DISCOVERY_SEED_DISCOVERED)
     if (env.PEARTUBE_DISCOVERY_MAX_CHANNELS) config.discovery.maxChannels = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS)
     if (env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER) {
       config.discovery.maxChannelsPerOwner = Number(env.PEARTUBE_DISCOVERY_MAX_CHANNELS_PER_OWNER)
@@ -589,6 +590,7 @@ export function resolveRelayConfig(input = {}, { env = process.env || {} } = {})
   config.discovery.enabled = config.mode === RELAY_MODE_PUBLIC && config.policy === RELAY_POLICY_DISCOVERY
     ? config.discovery.enabled !== false
     : false
+  config.discovery.seedDiscovered = config.discovery.seedDiscovered !== false
   config.discovery.maxChannels = Number(config.discovery.maxChannels)
   config.discovery.maxChannelsPerOwner = Number(config.discovery.maxChannelsPerOwner)
 
@@ -667,6 +669,7 @@ export function renderExampleConfig(config = DEFAULT_RELAY_CONFIG) {
   lines.push(
     'discovery:',
     `  enabled: ${config.discovery.enabled}`,
+    `  seedDiscovered: ${config.discovery.seedDiscovered !== false}`,
     `  maxChannels: ${config.discovery.maxChannels}`,
     `  maxChannelsPerOwner: ${config.discovery.maxChannelsPerOwner}`
   )

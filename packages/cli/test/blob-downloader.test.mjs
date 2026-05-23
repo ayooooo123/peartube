@@ -341,3 +341,63 @@ test('downloadChannelBlobs abandons a stalled blob download after idle timeout',
     globalThis.clearTimeout = realClearTimeout
   }
 })
+
+test('downloadChannelBlobs reports unavailable refs after timeout without republishing them', async (t) => {
+  const timeoutCore = {
+    length: 4,
+    byteLength: 400,
+    discoveryKey: 'timeout-discovery',
+    downloads: [],
+    async ready() {},
+    download(range) {
+      this.downloads.push(range)
+      return {
+        async done() { throw new Error('Blob download timeout (60000ms)') }
+      }
+    }
+  }
+  const errors = []
+  const ctx = {
+    swarm: { join() {} },
+    store: {
+      get(key) {
+        const keyHex = Buffer.isBuffer(key) ? key.toString('hex') : String(key)
+        if (keyHex.startsWith('dd')) return timeoutCore
+        throw new Error()
+      }
+    }
+  }
+
+  const stats = await downloadChannelBlobs(
+    ctx,
+    'ee'.repeat(32),
+    'chan-timeout',
+    { info() {}, debug() {}, error(...args) { errors.push(args) } },
+    {
+      previewVideos: [{
+        id: 'timeout-video',
+        title: 'Timeout Video',
+        blobId: '1:2:100:200',
+        blobsCoreKey: 'dd'.repeat(32)
+      }]
+    },
+    {
+      async loadPublicBee() {
+        return {
+          async listVideos() { return [] }
+        }
+      }
+    }
+  )
+
+  t.is(stats.blobsFound, 1)
+  t.is(stats.blobsDownloaded, 0)
+  t.is(stats.videosDownloaded, 0)
+  t.is(stats.previewVideos.length, 0)
+  t.is(stats.unavailableVideos.length, 1)
+  t.is(stats.unavailableVideos[0].id, 'timeout-video')
+  t.is(stats.unavailableVideos[0].availability, 'unavailable')
+  t.is(stats.unavailableVideos[0].byteAvailability, 'unavailable')
+  t.ok(stats.unavailableVideos[0].unavailableReason.includes('Blob download timeout'))
+  t.is(errors.length, 1)
+})

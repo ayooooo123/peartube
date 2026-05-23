@@ -8,7 +8,7 @@ const overlayPath = new URL('../components/VideoPlayerOverlayImpl.tsx', import.m
 const homePath = new URL('../app/(tabs)/index.tsx', import.meta.url)
 const searchTabPath = new URL('../app/(tabs)/search.tsx', import.meta.url)
 const searchPath = new URL('../app/search.tsx', import.meta.url)
-const studioPath = new URL('../app/(tabs)/studio.tsx', import.meta.url)
+const socialPath = new URL('../lib/SocialContext.tsx', import.meta.url)
 
 async function source(url) {
   return readFile(url, 'utf8')
@@ -46,18 +46,25 @@ test('feed and picker screens use action-only player context to avoid progress-d
   const homeSource = await source(homePath)
   const searchTabSource = await source(searchTabPath)
   const searchSource = await source(searchPath)
-  const studioSource = await source(studioPath)
 
   assert.match(contextSource, /export function useVideoPlayerActions\(\)/, 'VideoPlayerContext should expose an action-only hook')
   for (const [name, src] of [
     ['home tab', homeSource],
     ['search tab', searchTabSource],
     ['search route', searchSource],
-    ['studio tab', studioSource],
   ]) {
     assert.match(src, /useVideoPlayerActions/, `${name} should use the stable action-only hook`)
     assert.doesNotMatch(src, /useVideoPlayerContext/, `${name} should not subscribe to high-frequency player state`)
   }
+})
+
+test('SocialProvider subscribes only to stable player session fields', async () => {
+  const contextSource = await source(contextPath)
+  const socialSource = await source(socialPath)
+
+  assert.match(contextSource, /export function useVideoPlayerSession\(\)/, 'VideoPlayerContext should expose a stable session-only hook')
+  assert.match(socialSource, /useVideoPlayerSession/, 'SocialProvider should use the session-only hook')
+  assert.doesNotMatch(socialSource, /useVideoPlayerContext/, 'SocialProvider should not rerender on playback progress or stats changes')
 })
 
 test('mobile/native route uses the shared overlay player instead of an inline player shell', async () => {

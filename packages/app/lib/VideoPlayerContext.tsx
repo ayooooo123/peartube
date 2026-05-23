@@ -138,6 +138,7 @@ type VideoPlayerActionsContextType = Pick<
 
 const VideoPlayerContext = createContext<VideoPlayerContextType | null>(null)
 const VideoPlayerActionsContext = createContext<VideoPlayerActionsContextType | null>(null)
+const VideoPlayerSessionContext = createContext<Pick<VideoPlayerContextType, 'currentVideo' | 'playerMode'> | null>(null)
 
 export function useVideoPlayerContext() {
   const ctx = useContext(VideoPlayerContext)
@@ -148,6 +149,12 @@ export function useVideoPlayerContext() {
 export function useVideoPlayerActions() {
   const ctx = useContext(VideoPlayerActionsContext)
   if (!ctx) throw new Error('useVideoPlayerActions must be used within VideoPlayerProvider')
+  return ctx
+}
+
+export function useVideoPlayerSession() {
+  const ctx = useContext(VideoPlayerSessionContext)
+  if (!ctx) throw new Error('useVideoPlayerSession must be used within VideoPlayerProvider')
   return ctx
 }
 
@@ -1300,6 +1307,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     setPlaybackRate,
   ])
 
+  const sessionValue = useMemo(() => ({
+    currentVideo,
+    playerMode,
+  }), [currentVideo, playerMode])
+
   // PERFORMANCE: Memoize context value to prevent unnecessary re-renders
   // Components consuming this context will only re-render when these specific values change
   const contextValue = useMemo<VideoPlayerContextType>(() => ({
@@ -1366,9 +1378,11 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
 
   return (
     <VideoPlayerActionsContext.Provider value={actionsValue}>
-      <VideoPlayerContext.Provider value={contextValue}>
-        {children}
-      </VideoPlayerContext.Provider>
+      <VideoPlayerSessionContext.Provider value={sessionValue}>
+        <VideoPlayerContext.Provider value={contextValue}>
+          {children}
+        </VideoPlayerContext.Provider>
+      </VideoPlayerSessionContext.Provider>
     </VideoPlayerActionsContext.Provider>
   )
 }

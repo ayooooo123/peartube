@@ -456,6 +456,7 @@ function MobileVideoPlayerScreen() {
     const generation = loadGenerationRef.current + 1
     loadGenerationRef.current = generation
     clearStatsPolling()
+    setLocalStats(null)
     setIsLoading(true)
 
     try {
@@ -542,7 +543,8 @@ function MobileVideoPlayerScreen() {
     const isSameVideoAsCurrent = Boolean(currentRef && targetRef && currentRef === targetRef && sameChannel)
 
     if (!videoLoaded) {
-      if (fromMiniPlayer && isSameVideoAsCurrent && (Platform.OS !== 'web' || isPear)) {
+      if (isSameVideoAsCurrent && videoUrl && (Platform.OS !== 'web' || isPear)) {
+        setIsLoading(false)
         startStatsPolling()
       } else {
         loadVideo()
@@ -554,7 +556,7 @@ function MobileVideoPlayerScreen() {
       clearTimeout(channelInfoTimer)
       clearStatsPolling()
     }
-  }, [videoData, loadingMeta, fromMiniPlayer, isPear, videoLoaded, loadVideo, startStatsPolling, loadChannelInfo, currentVideo, clearStatsPolling])
+  }, [videoData, loadingMeta, isPear, videoLoaded, loadVideo, startStatsPolling, loadChannelInfo, currentVideo, videoUrl, setIsLoading, clearStatsPolling])
 
   // Back/minimize button - beforeRemove listener handles minimizePlayer()
   const goBack = () => {
@@ -577,6 +579,8 @@ function MobileVideoPlayerScreen() {
       </View>
     )
   }
+
+  const displayedStats = videoStats || localStats
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -612,7 +616,7 @@ function MobileVideoPlayerScreen() {
             <View style={{ width: screenWidth, height: videoHeight }}>
               {/* Video is rendered by VideoPlayerOverlay on all platforms */}
               <P2PStatsOverlay
-                stats={localStats || videoStats}
+                stats={displayedStats}
                 showDetails={showStats}
                 onPress={() => setShowStats(!showStats)}
               />
@@ -631,7 +635,7 @@ function MobileVideoPlayerScreen() {
       {/* Video Info & Actions */}
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
         {/* P2P Stats Bar */}
-        {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={localStats || videoStats} />}
+        {(Platform.OS !== 'web' || isPear) && <P2PStatsBar stats={displayedStats} />}
 
         {/* Video Title & Meta */}
         <View style={styles.videoInfo}>

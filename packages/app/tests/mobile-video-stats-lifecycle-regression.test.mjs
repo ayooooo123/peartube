@@ -1,0 +1,61 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const appRoot = path.resolve(__dirname, '..')
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
+}
+
+test('mobile watch page keeps live context stats ahead of stale polled stats', () => {
+  const source = read('app/video/[id].tsx')
+
+  assert.match(
+    source,
+    /const displayedStats = videoStats \|\| localStats/,
+    'event-driven VideoPlayerContext stats should win over older local polling snapshots',
+  )
+  assert.match(
+    source,
+    /<P2PStatsOverlay[\s\S]*stats=\{displayedStats\}/,
+    'inline overlay should use the same fresh stats source',
+  )
+  assert.match(
+    source,
+    /<P2PStatsBar stats=\{displayedStats\}/,
+    'detail stats bar should use the same fresh stats source',
+  )
+})
+
+test('mobile watch page reattaches stats when returning to an already playing video', () => {
+  const source = read('app/video/[id].tsx')
+
+  assert.match(
+    source,
+    /if \(isSameVideoAsCurrent && videoUrl && \(Platform\.OS !== 'web' \|\| isPear\)\) \{[\s\S]*setIsLoading\(false\)[\s\S]*startStatsPolling\(\)/,
+    'returning to the active video should poll stats instead of replaying preparePlayback and showing the loading gate',
+  )
+  assert.doesNotMatch(
+    source,
+    /fromMiniPlayer && isSameVideoAsCurrent/,
+    'same-video lifecycle handling must not depend only on fromMiniPlayer route params',
+  )
+})
+
+test('mobile watch page clears stale local stats only when starting a different load', () => {
+  const source = read('app/video/[id].tsx')
+  const loadStart = source.indexOf('const loadVideo = useCallback(async () =>')
+  assert.notEqual(loadStart, -1, 'expected loadVideo callback')
+  const loadBlock = source.slice(loadStart, source.indexOf('  // Load video when videoData is available', loadStart))
+
+  assert.match(
+    loadBlock,
+    /clearStatsPolling\(\)[\s\S]*setLocalStats\(null\)[\s\S]*setIsLoading\(true\)/,
+    'new playback loads should drop stale local snapshots before showing a loading state',
+  )
+})

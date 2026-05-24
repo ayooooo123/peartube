@@ -72,6 +72,9 @@
       [
         "expo-build-properties",
         {
+          "ios": {
+            "deploymentTarget": "16.4"
+          },
           "android": {
             "minSdkVersion": 29,
             "usesCleartextTraffic": false

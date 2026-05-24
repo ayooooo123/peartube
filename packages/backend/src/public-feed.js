@@ -23,7 +23,8 @@ import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
 import {
   SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
-  CHANNEL_ROOT_DESCRIPTOR_SCHEMA
+  CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
+  verifySignedChannelRootDescriptor
 } from './channel-descriptor.js'
 
 const log = logger('PublicFeed')
@@ -92,6 +93,8 @@ export class PublicFeed {
     this._gossipInterval = null;
     /** @type {number} */
     this._gossipIntervalMs = 30000;
+    /** @type {boolean} */
+    this.requireSignedPeerEntries = options.requireSignedPeerEntries !== false;
     /** @type {Array<{name: string, at: number, sinceStartMs: number, [key: string]: any}>} */
     this._startupEvents = [];
     /** @type {number} */
@@ -267,6 +270,25 @@ export class PublicFeed {
       proof: typeof signed.proof === 'string' ? signed.proof : null,
       attestation: typeof signed.attestation === 'string' ? signed.attestation : null,
     }
+  }
+
+  _normalizedDescriptorMatchesEntry(signedDescriptor, driveKey, publicBeeKey) {
+    const descriptor = signedDescriptor?.descriptor
+    if (!descriptor) return false
+    const lowerDriveKey = typeof driveKey === 'string' ? driveKey.toLowerCase() : null
+    const lowerPublicBeeKey = typeof publicBeeKey === 'string' ? publicBeeKey.toLowerCase() : null
+    if (!lowerDriveKey || descriptor.channelId !== lowerDriveKey) return false
+    if (lowerPublicBeeKey && descriptor.metadataKey !== lowerPublicBeeKey) return false
+    return true
+  }
+
+  async _verifyPeerEntrySnapshot(snapshot, driveKey, publicBeeKey) {
+    if (!this.requireSignedPeerEntries) return true
+    const signedDescriptor = this._normalizeSignedDescriptor(snapshot?.signedDescriptor)
+    if (!signedDescriptor) return false
+    if (!this._normalizedDescriptorMatchesEntry(signedDescriptor, driveKey, publicBeeKey)) return false
+    const verified = await verifySignedChannelRootDescriptor(signedDescriptor)
+    return Boolean(verified?.valid)
   }
 
   _shouldApplySignedDescriptor(current, next) {
@@ -1258,11 +1280,27 @@ export class PublicFeed {
         for (const entry of msg.entries) {
           if (!entry?.driveKey || !isValidKey(entry.publicBeeKey)) continue
           announcedKeys.push(entry.driveKey)
-          if (this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey, entry)) {
-            added++;
-          } else if (this._applyEntrySnapshot(entry.driveKey, entry)) {
-            updated++;
+          if (!this.requireSignedPeerEntries) {
+            if (this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey, entry)) {
+              added++;
+            } else if (this._applyEntrySnapshot(entry.driveKey, entry)) {
+              updated++;
+            }
+            continue
           }
+          this._verifyPeerEntrySnapshot(entry, entry.driveKey, entry.publicBeeKey)
+            .then((verified) => {
+              if (!verified) return
+              let changed = false
+              if (this.addEntry(entry.driveKey, 'peer', entry.publicBeeKey, entry)) changed = true
+              else if (this._applyEntrySnapshot(entry.driveKey, entry)) changed = true
+              if (changed) {
+                this._setPeerFeedKeys(conn, [entry.driveKey])
+                try { this.onFeedUpdate?.() } catch {}
+                this._schedulePersistDiscovered()
+              }
+            })
+            .catch(() => {})
         }
       }
       // Fallback to legacy keys array
@@ -1272,6 +1310,7 @@ export class PublicFeed {
         for (const key of msg.keys) {
           if (!key) continue
           announcedKeys.push(key)
+          if (this.requireSignedPeerEntries) continue
           if (this.addEntry(key, 'peer')) {
             added++;
           }
@@ -1298,15 +1337,31 @@ export class PublicFeed {
       const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
       if (!isValidKey(msg.publicBeeKey)) return
       const entrySource = msg.source === 'relay-cache' ? 'relay-cache' : 'peer'
-      if (this.addEntry(msg.key, entrySource, msg.publicBeeKey, msg)) {
-        this.onFeedUpdate?.();
-        this._schedulePersistDiscovered()
-        // Re-gossip to other peers (exclude sender, include publicBeeKey)
-        this.broadcastSubmitChannel(msg.key, conn, msg.publicBeeKey, msg);
-      } else if (this._applyEntrySnapshot(msg.key, msg)) {
-        this.onFeedUpdate?.()
-        this._schedulePersistDiscovered()
+      if (!this.requireSignedPeerEntries) {
+        if (this.addEntry(msg.key, entrySource, msg.publicBeeKey, msg)) {
+          this.onFeedUpdate?.();
+          this._schedulePersistDiscovered()
+          this.broadcastSubmitChannel(msg.key, conn, msg.publicBeeKey, msg);
+        } else if (this._applyEntrySnapshot(msg.key, msg)) {
+          this.onFeedUpdate?.()
+          this._schedulePersistDiscovered()
+        }
+        return
       }
+      this._verifyPeerEntrySnapshot(msg, msg.key, msg.publicBeeKey)
+        .then((verified) => {
+          if (!verified) return
+          if (this.addEntry(msg.key, entrySource, msg.publicBeeKey, msg)) {
+            this.onFeedUpdate?.();
+            this._schedulePersistDiscovered()
+            // Re-gossip to other peers (exclude sender, include publicBeeKey)
+            this.broadcastSubmitChannel(msg.key, conn, msg.publicBeeKey, msg);
+          } else if (this._applyEntrySnapshot(msg.key, msg)) {
+            this.onFeedUpdate?.()
+            this._schedulePersistDiscovered()
+          }
+        })
+        .catch(() => {})
     }
     // Handle legacy NEED_FEED/FEED_RESPONSE for backwards compat
     else if (msg.type === 'NEED_FEED') {
@@ -1316,6 +1371,7 @@ export class PublicFeed {
     else if (msg.type === 'FEED_RESPONSE' && msg.keys) {
       console.log('[PublicFeed] FEED_RESPONSE received with', msg.keys?.length || 0, 'keys');
       let added = 0;
+      if (this.requireSignedPeerEntries) return
       for (const key of msg.keys) {
         if (this.addEntry(key, 'peer')) {
           added++;

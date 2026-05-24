@@ -1259,6 +1259,13 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
       return
     }
 
+    // If the player is already advancing, a native buffering=true event means a
+    // transient refill, not a new playback preparation. Keep the stats/details
+    // visible instead of flipping the whole watch UI back to the loading gate.
+    if (data.isBuffering && currentTimeRef.current > 0) {
+      return
+    }
+
     // Suppress transient buffering after returning from PiP or background audio.
     // ExoPlayer re-attaches its surface and fires brief buffering events.
     // Cleared by the next onPlaying event confirming real playback resumed.

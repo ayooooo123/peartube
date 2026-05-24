@@ -45,6 +45,17 @@ test('mobile/native route cancels delayed stats polling when closed quickly', as
   assert.doesNotMatch(src, /setTimeout\(\(\) => startStatsPolling\(\), 500\)/, 'stats polling should not be started by uncancellable delayed callbacks')
 })
 
+test('VideoPlayerContext suppresses the loading gate for mid-playback buffering events', async () => {
+  const src = await source(contextPath)
+  const bufferingStart = src.indexOf('const onBuffering = useCallback')
+  assert.notEqual(bufferingStart, -1, 'expected VideoPlayerContext onBuffering callback')
+  const bufferingHandler = src.slice(bufferingStart, src.indexOf('const onEnded', bufferingStart))
+
+  assert.match(bufferingHandler, /data\.isBuffering && currentTimeRef\.current > 0/, 'buffering while playback has advanced should be treated as transient')
+  assert.match(bufferingHandler, /Keep the stats\/details[\s\S]*visible/, 'transient mid-playback buffering should keep stats/details visible')
+  assert.match(bufferingHandler, /setIsLoading\(data\.isBuffering\)/, 'initial buffering should still show loading before playback starts')
+})
+
 test('desktop/native overlay forwards load events into shared player context before local handling', async () => {
   const src = await source(overlayPath)
   assert.match(src, /onLoaded,/, 'overlay must read onLoaded from useVideoPlayerContext')

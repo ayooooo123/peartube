@@ -25,6 +25,9 @@ export const P2PStatsBar = memo(function P2PStatsBar({ stats }: P2PStatsBarProps
   const totalBlocks = Number(stats?.totalBlocks ?? 0)
   const hasBytes = totalBytes > 0
   const hasBlocks = totalBlocks > 0
+  const hasDownloadedBytes = downloadedBytes > 0
+  const hasDownloadedBlocks = downloadedBlocks > 0
+  const hasPlayableProgress = hasDownloadedBytes || hasDownloadedBlocks || Number(stats?.progress ?? 0) > 0
   const hasProgressDetails = hasBytes || hasBlocks || Boolean(stats?.isComplete)
 
   const getStatusInfo = () => {
@@ -32,6 +35,7 @@ export const P2PStatsBar = memo(function P2PStatsBar({ stats }: P2PStatsBarProps
     if (stats.isComplete) return { color: '#4ade80', label: 'Cached' }
     if (stats.status === 'downloading') return { color: '#fbbf24', label: 'Downloading' }
     if (downloadSpeed > 0) return { color: '#fbbf24', label: 'Downloading' }
+    if (hasPlayableProgress) return { color: '#60a5fa', label: 'Streaming' }
     if (stats.status === 'connecting') return { color: '#60a5fa', label: 'Finding video peers' }
     if (stats.status === 'resolving') return { color: '#a78bfa', label: 'Resolving video' }
     if (stats.status === 'error') return { color: '#f87171', label: 'Playback error' }

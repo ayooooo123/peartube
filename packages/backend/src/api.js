@@ -2324,6 +2324,10 @@ export function createApi({
                 thumbnailMimeType: v?.thumbnailMimeType || null
               }).catch(() => {})
             }
+            cancelActiveRangeRequests(prefetchKey)
+            videoStats.cleanupMonitor(driveKey, videoPath)
+          } else {
+            cancelActiveRangeRequests(prefetchKey)
           }
 
           await playbackReady

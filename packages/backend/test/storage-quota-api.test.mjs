@@ -185,6 +185,30 @@ test('prefetchVideo registers in-flight downloads with quota tracking before com
   t.is(seedingManager.getStorageStatsSync().usedBytes, 1024 * 1024)
 })
 
+test('prefetchVideo cleans up core listeners when blob is already fully cached', async (t) => {
+  const metaDb = createMetaDb()
+  const store = createStore()
+  const api = createApi({ ctx: { store, metaDb, swarm: null } })
+  const core = store.get(b4a.from(coreA, 'hex'))
+  core.has = async () => true
+
+  api.getVideoData = async () => ({
+    id: 'cached',
+    path: 'videos/cached.mp4',
+    blobId: '0:8:0:1048576',
+    blobsCoreKey: coreA,
+    byteLength: 1024 * 1024,
+    mimeType: 'video/mp4'
+  })
+
+  const result = await api.prefetchVideo('drive-a', 'videos/cached.mp4')
+
+  t.is(result.success, true)
+  t.is(result.cached, true)
+  t.is(core.listenerCount('download'), 0)
+  t.is(core.listenerCount('upload'), 0)
+})
+
 test('addSeed updates existing cache entries with resolved blob bytes', async (t) => {
   const store = createStore()
   const manager = new SeedingManager(store, createMetaDb())

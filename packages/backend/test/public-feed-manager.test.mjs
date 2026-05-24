@@ -185,6 +185,54 @@ test('PublicFeedManager keeps discovered relay address hints as Hyperswarm diagn
   }
 })
 
+test('PublicFeedManager bounds remembered discovered peers for long-running desktop sessions', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb(), { maxDiscoveredPeers: 3 })
+
+  try {
+    for (let i = 1; i <= 5; i++) {
+      assert.equal(manager.handleDiscoveredPeer({ publicKey: b4a.alloc(32, i) }, NETWORK_TOPIC), true)
+    }
+
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.discoveredPeers, 3)
+    assert.deepEqual(stats.peers.map((peer) => peer.key), [
+      b4a.toString(b4a.alloc(32, 3), 'hex').slice(0, 16),
+      b4a.toString(b4a.alloc(32, 4), 'hex').slice(0, 16),
+      b4a.toString(b4a.alloc(32, 5), 'hex').slice(0, 16),
+    ])
+  } finally {
+    manager.stop()
+  }
+})
+
+test('PublicFeedManager bounds retained peer feed entries from HAVE_FEED gossip', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb(), { maxFeedEntries: 3 })
+  const conn = createConnection()
+
+  try {
+    manager.handleMessage({
+      type: 'HAVE_FEED',
+      entries: Array.from({ length: 5 }, (_, index) => ({
+        driveKey: (index + 1).toString(16).padStart(64, '0'),
+        publicBeeKey: (index + 101).toString(16).padStart(64, '0'),
+      })),
+    }, conn)
+
+    assert.equal(manager.entries.size, 3)
+    assert.equal(manager.entryPeerCounts.size, 3)
+    assert.equal(manager.peerFeedKeys.get(conn)?.size, 3)
+    assert.deepEqual(manager.getFeed().map((entry) => entry.driveKey).sort(), [
+      '3'.padStart(64, '0'),
+      '4'.padStart(64, '0'),
+      '5'.padStart(64, '0'),
+    ])
+  } finally {
+    manager.stop()
+  }
+})
+
 test('PublicFeedManager does not recurse through the storage peer emitter wrapper', () => {
   const publicKey = b4a.alloc(32, 16)
   const keyHex = b4a.toString(publicKey, 'hex')

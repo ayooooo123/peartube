@@ -29,6 +29,8 @@ import {
 const log = logger('PublicFeed')
 const PUBLIC_FEED_CATALOG_VERSION = 1
 const PUBLIC_FEED_RELAY_CATALOG_KEY = 'public-feed-relay-catalog-v1'
+const DEFAULT_MAX_FEED_ENTRIES = 500
+const DEFAULT_MAX_DISCOVERED_PEERS = 512
 const NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
 const NETWORK_TOPIC_HEX = b4a.toString(NETWORK_TOPIC, 'hex')
 
@@ -109,9 +111,19 @@ export class PublicFeed {
     /** @type {number} */
     this._persistDebounceMs = 1500
     /** @type {number} */
-    this._persistMaxEntries = 500
+    this._maxFeedEntries = this._normalizeLimit(options.maxFeedEntries, DEFAULT_MAX_FEED_ENTRIES)
+    /** @type {number} */
+    this._maxDiscoveredPeers = this._normalizeLimit(options.maxDiscoveredPeers, DEFAULT_MAX_DISCOVERED_PEERS)
+    /** @type {number} */
+    this._persistMaxEntries = Math.min(this._maxFeedEntries, this._normalizeLimit(options.maxPersistedEntries, DEFAULT_MAX_FEED_ENTRIES))
 
     log.info('Initialized')
+  }
+
+  _normalizeLimit(value, fallback) {
+    const limit = Number(value ?? fallback)
+    if (!Number.isFinite(limit) || limit <= 0) return fallback
+    return Math.max(1, Math.floor(limit))
   }
 
   _recordStartupEvent(name, details = {}) {
@@ -558,7 +570,30 @@ export class PublicFeed {
       if (topicHex) record.topics.add(topicHex)
     }
     this._discoveredPeers.set(keyHex, record)
+    this._pruneDiscoveredPeersIfNeeded()
     return { keyHex, publicKey: record.publicKey, record }
+  }
+
+  _pruneDiscoveredPeersIfNeeded() {
+    if (this._discoveredPeers.size <= this._maxDiscoveredPeers) return false
+
+    const candidates = Array.from(this._discoveredPeers.entries())
+      .sort(([keyA, a], [keyB, b]) => {
+        const connectedA = this._hasActivePeerConnection(keyA) ? 1 : 0
+        const connectedB = this._hasActivePeerConnection(keyB) ? 1 : 0
+        if (connectedA !== connectedB) return connectedA - connectedB
+        const lastSeenDiff = Number(a.lastSeenAt || 0) - Number(b.lastSeenAt || 0)
+        if (lastSeenDiff !== 0) return lastSeenDiff
+        return keyA.localeCompare(keyB)
+      })
+
+    let pruned = false
+    for (const [key] of candidates) {
+      if (this._discoveredPeers.size <= this._maxDiscoveredPeers) break
+      this._discoveredPeers.delete(key)
+      pruned = true
+    }
+    return pruned
   }
 
 
@@ -1095,7 +1130,7 @@ export class PublicFeed {
   }
 
   _setPeerFeedKeys(conn, keys) {
-    const nextKeys = new Set((keys || []).filter(Boolean))
+    const nextKeys = new Set((keys || []).filter((key) => key && this.entries.has(key)))
     const prevKeys = this.peerFeedKeys.get(conn) || new Set()
     const changed = nextKeys.size !== prevKeys.size || Array.from(nextKeys).some((key) => !prevKeys.has(key))
 
@@ -1150,6 +1185,51 @@ export class PublicFeed {
       try { this.onFeedUpdate?.() } catch {}
     }
     return changed
+  }
+
+  _deleteEntry(driveKey) {
+    const deleted = this.entries.delete(driveKey)
+    if (!deleted) return false
+
+    this.entryPeerCounts.delete(driveKey)
+    for (const keys of this.peerFeedKeys.values()) {
+      try { keys.delete(driveKey) } catch {}
+    }
+    return true
+  }
+
+  _feedEntryPriority(entry) {
+    if (!entry) return -1
+    if (entry.source === 'local' || this.publishedChannels.has(entry.driveKey)) return Number.MAX_SAFE_INTEGER
+
+    let priority = 0
+    if ((this.entryPeerCounts.get(entry.driveKey) || 0) > 0) priority += 100
+    if (entry.relayServing) priority += 50
+    if (typeof entry.publicBeeKey === 'string' && /^[a-f0-9]{64}$/i.test(entry.publicBeeKey)) priority += 25
+    if (entry.source === 'peer') priority += 10
+    return priority
+  }
+
+  _pruneFeedEntriesIfNeeded() {
+    if (this.entries.size <= this._maxFeedEntries) return false
+
+    const candidates = Array.from(this.entries.values())
+      .filter((entry) => entry.source !== 'local' && !this.publishedChannels.has(entry.driveKey))
+      .sort((a, b) => {
+        const priorityDiff = this._feedEntryPriority(a) - this._feedEntryPriority(b)
+        if (priorityDiff !== 0) return priorityDiff
+        const timeA = Number(a.lastSeenAt || a.addedAt || 0)
+        const timeB = Number(b.lastSeenAt || b.addedAt || 0)
+        if (timeA !== timeB) return timeA - timeB
+        return String(a.driveKey || '').localeCompare(String(b.driveKey || ''))
+      })
+
+    let pruned = false
+    for (const entry of candidates) {
+      if (this.entries.size <= this._maxFeedEntries) break
+      if (this._deleteEntry(entry.driveKey)) pruned = true
+    }
+    return pruned
   }
 
   /**
@@ -1336,6 +1416,7 @@ export class PublicFeed {
 
     // Persist (debounced) so restarts retain discovered keys.
     this._schedulePersistDiscovered()
+    if (this._pruneFeedEntriesIfNeeded()) this._schedulePersistDiscovered()
 
     return true;
   }

@@ -38,6 +38,42 @@ test('getChannelMeta uses feed preview count without listing PublicBee videos', 
   t.is(publicBeeListCalls, 0)
 })
 
+test('getChannelMeta accepts HRPC request object shape', async (t) => {
+  const driveKey = 'ee'.repeat(32)
+  const publicBeeKey = 'ff'.repeat(32)
+  let loadedPublicBeeKey = null
+
+  const api = createApi({
+    ctx: {},
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey,
+          publicBeeKey,
+          channelName: 'Request Channel',
+          videoCount: 5,
+          previewVideos: [],
+        }]
+      },
+    },
+    loadPublicBee: async (_ctx, key) => {
+      loadedPublicBeeKey = key
+      return {
+        async getMetadata() {
+          return { name: 'Request Channel', description: 'request metadata', createdAt: 321 }
+        },
+      }
+    },
+  })
+
+  const meta = await api.getChannelMeta({ channelKey: driveKey, publicBeeKey }, { backend: true })
+
+  t.is(loadedPublicBeeKey, publicBeeKey)
+  t.is(meta.driveKey, driveKey)
+  t.is(meta.name, 'Request Channel')
+  t.is(meta.videoCount, 5)
+})
+
 test('getChannelMeta uses feed videoCount without listing local channel videos', async (t) => {
   const driveKey = 'cc'.repeat(32)
   let channelListCalls = 0

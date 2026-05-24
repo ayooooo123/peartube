@@ -186,6 +186,41 @@ export function createApi({
     return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
   }
 
+  function normalizeKeyString(value) {
+    if (typeof value === 'string') return value
+    if (value == null) return null
+    if (b4a.isBuffer(value) || value instanceof Uint8Array) {
+      try {
+        return b4a.toString(value, 'hex')
+      } catch {
+        return null
+      }
+    }
+    if (typeof value === 'object') {
+      return normalizeKeyString(value.channelKey ?? value.driveKey ?? value.key ?? null)
+    }
+    return null
+  }
+
+  function normalizeChannelMetaArgs(driveKeyOrRequest, publicBeeKey) {
+    if (
+      driveKeyOrRequest &&
+      typeof driveKeyOrRequest === 'object' &&
+      !b4a.isBuffer(driveKeyOrRequest) &&
+      !(driveKeyOrRequest instanceof Uint8Array)
+    ) {
+      return {
+        driveKey: normalizeKeyString(driveKeyOrRequest.channelKey ?? driveKeyOrRequest.driveKey ?? driveKeyOrRequest.key),
+        publicBeeKey: normalizeKeyString(driveKeyOrRequest.publicBeeKey ?? publicBeeKey)
+      }
+    }
+
+    return {
+      driveKey: normalizeKeyString(driveKeyOrRequest),
+      publicBeeKey: normalizeKeyString(publicBeeKey)
+    }
+  }
+
   function invalidateChannelCaches(driveKey) {
     try { listVideosCache.delete(driveKey) } catch { /* best effort */ }
     try { channelMetaCache.delete(driveKey) } catch { /* best effort */ }
@@ -705,12 +740,16 @@ export function createApi({
      * Get channel metadata. Keep the default path metadata-only: videoCount is
      * derived from public-feed snapshots/previews when available instead of
      * calling listVideos(), which duplicates expensive PublicBee/channel reads.
-     * @param {string} driveKey
+     * @param {string | {channelKey?: string, driveKey?: string, publicBeeKey?: string}} driveKey
      * @returns {Promise<ChannelMetadata>}
      */
     async getChannelMeta(driveKey, publicBeeKey = null) {
-      console.log('[API] GET_CHANNEL_META:', driveKey?.slice(0, 16));
+      const args = normalizeChannelMetaArgs(driveKey, publicBeeKey)
+      driveKey = args.driveKey
+      publicBeeKey = args.publicBeeKey
+      console.log('[API] GET_CHANNEL_META:', driveKey?.slice?.(0, 16) || '');
       try {
+        if (!driveKey) throw new Error('Missing channel key')
         const cached = channelMetaCache.get(driveKey)
         if (cached && (Date.now() - cached.ts) < CHANNEL_META_CACHE_TTL_MS) {
           return cloneObject(cached.value)

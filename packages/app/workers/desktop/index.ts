@@ -421,6 +421,7 @@ const { rpc: _rpc, backend, destroy } = await createBackend({
   stream: ipcPipe,
   storagePath: storage,
   platform: 'desktop',
+  autoAttachSharedAppHandlers: true,
   onReady: (data: any) => { console.log('[Worker] Backend ready, blob port:', data?.blobServerPort) },
   onError: (err: any) => { console.error('[Worker] Backend error:', err?.message || err) },
   onFeedUpdate: () => {

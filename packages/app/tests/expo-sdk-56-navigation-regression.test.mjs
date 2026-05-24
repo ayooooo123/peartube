@@ -31,3 +31,13 @@ test('SDK 56 app code does not directly import React Navigation packages', () =>
     assert.doesNotMatch(readFile(file), /from ['"]@react-navigation\//, `${file} should import navigation shims from expo-router`)
   }
 })
+
+test('SDK 56 native video config uses the Expo Video plugin', () => {
+  const appConfig = readJson('packages/app/app.json')
+  const plugins = appConfig.expo?.plugins || []
+  const expoVideoPlugin = plugins.find((plugin) => Array.isArray(plugin) && plugin[0] === 'expo-video')
+
+  assert.ok(expoVideoPlugin, 'expo-video should own native player background/PiP configuration on SDK 56')
+  assert.equal(expoVideoPlugin[1]?.supportsBackgroundPlayback, true)
+  assert.equal(expoVideoPlugin[1]?.supportsPictureInPicture, true)
+})

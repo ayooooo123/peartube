@@ -35,6 +35,16 @@ test('mobile/native route uses the shared overlay player instead of an inline pl
   assert.doesNotMatch(src, /onLoad=\{onLoaded\}/, 'route should not try to wire a nonexistent inline player load handler')
 })
 
+test('mobile/native route cancels delayed stats polling when closed quickly', async () => {
+  const src = await source(videoRoutePath)
+
+  assert.match(src, /const statsPollingDelayRef = useRef/, 'watch route should track delayed stats polling timers')
+  assert.match(src, /const mountedRef = useRef\(true\)/, 'watch route should guard async work after unmount')
+  assert.match(src, /const clearStatsPolling = useCallback/, 'watch route should centralize stats polling cleanup')
+  assert.match(src, /const scheduleStatsPolling = useCallback/, 'watch route should schedule stats polling through a cancellable helper')
+  assert.doesNotMatch(src, /setTimeout\(\(\) => startStatsPolling\(\), 500\)/, 'stats polling should not be started by uncancellable delayed callbacks')
+})
+
 test('desktop/native overlay forwards load events into shared player context before local handling', async () => {
   const src = await source(overlayPath)
   assert.match(src, /onLoaded,/, 'overlay must read onLoaded from useVideoPlayerContext')

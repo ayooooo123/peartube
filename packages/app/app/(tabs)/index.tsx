@@ -10,7 +10,7 @@ import { useApp, colors } from '../_layout'
 import { VideoCard } from '../../components/video'
 import type { VideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
-import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
 import { formatTimeAgo } from '@/lib/formatters'
@@ -116,7 +116,7 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { ready, identity, videos, loading, loadVideos, rpc, backendError, startupStatus, retryBackend, platformEvents, blobServerPort, androidDiscoveryPermissionStatus } = useApp()
-  const { loadAndPlayVideo } = useVideoPlayerContext()
+  const { loadAndPlayVideo } = useVideoPlayerActions()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
   const tabBarMetrics = useTabBarMetrics()
@@ -278,7 +278,7 @@ export default function HomeScreen() {
       const result = await Promise.race([feedPromise, timeoutPromise])
 
       if (result?.entries) {
-        const mergedEntries = (Array.isArray(result.entries) ? result.entries : []).filter((entry, index, all) => {
+        const mergedEntries = (Array.isArray(result.entries) ? result.entries : []).filter((entry: any, index: number, all: any[]) => {
           const key = entry?.channelKey || entry?.driveKey
           return key && all.findIndex((candidate) => (candidate?.channelKey || candidate?.driveKey) === key) === index
         }) as FeedEntry[]

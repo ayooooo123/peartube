@@ -7,14 +7,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { View, Text, Pressable, ActivityIndicator, Platform, ScrollView, useWindowDimensions, StyleSheet, Alert } from 'react-native'
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router'
-import { useIsFocused } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Feather } from '@expo/vector-icons'
 import { useApp, colors } from '../_layout'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { formatBytes as formatSize, formatTimeAgo, formatViews } from '@/lib/formatters'
 import { getPlayerPageVideoHeight } from '@/lib/video-layout'
-import { useVideoPlayerContext, VideoStats } from '@/lib/VideoPlayerContext'
+import { useVideoPlayerActions, useVideoPlayerSession, VideoStats } from '@/lib/VideoPlayerContext'
 import { useCast } from '@/lib/cast'
 import { DevicePickerModal, CastRemoteModal } from '@/components/cast'
 import { VideoEditModal } from '@/components/VideoEditModal'
@@ -123,7 +122,9 @@ function P2PStatsBar({ stats }: { stats: VideoStats | null }) {
     }
   }, [stats, appRpc])
 
-  console.log('[P2PStatsBar] Rendering, stats:', stats ? 'present' : 'null', 'globalConnections:', globalConnections)
+  if (__DEV__) {
+    console.log('[P2PStatsBar] Rendering, stats:', stats ? 'present' : 'null', 'globalConnections:', globalConnections)
+  }
 
   // Format bytes to human readable
   const formatBytes = (bytes: number): string => {
@@ -277,30 +278,15 @@ function MobileVideoPlayerScreen() {
   const { width: screenWidth } = useWindowDimensions()
   const videoHeight = getPlayerPageVideoHeight(screenWidth)
   const { rpc, identity } = useApp()
-  const isFocused = useIsFocused()
-
   // VideoPlayerContext - SHARED player for continuous playback
   // Stats come via EVENT_VIDEO_STATS events from backend -> videoStatsEventEmitter -> context
   const {
     currentVideo,
     videoUrl,
-    isPlaying,
     isLoading: loadingVideo,
     videoStats,
-    playbackSession,
-    playerRef,
-    playbackRate,
-    minimizePlayer,
-    loadAndPlayVideo,
-    setIsLoading,
-    isInPipMode,
-    onProgress,
-    onPlaying,
-    onPaused,
-    onBuffering,
-    onEnded,
-    onError,
-  } = useVideoPlayerContext()
+  } = useVideoPlayerSession()
+  const { minimizePlayer, loadAndPlayVideo, setIsLoading } = useVideoPlayerActions()
 
   // Parse video data from params (JSON encoded or URL params)
   const params = useLocalSearchParams()
@@ -318,6 +304,9 @@ function MobileVideoPlayerScreen() {
   const [videoData, setVideoData] = useState<any>(videoDataParam)
   const [loadingMeta, setLoadingMeta] = useState(!videoDataParam && !!channelKeyParam)
   const statsPollingRef = useRef<NodeJS.Timeout | null>(null)
+  const statsPollingDelayRef = useRef<NodeJS.Timeout | null>(null)
+  const mountedRef = useRef(true)
+  const loadGenerationRef = useRef(0)
 
   // Video editing
   const [editingVideo, setEditingVideo] = useState<any>(null)
@@ -329,12 +318,35 @@ function MobileVideoPlayerScreen() {
   const [connectingCastDeviceId, setConnectingCastDeviceId] = useState<string | null>(null)
   const [recentCastDeviceId, setRecentCastDeviceId] = useState<string | null>(null)
 
+  const clearStatsPolling = useCallback(() => {
+    if (statsPollingDelayRef.current) {
+      clearTimeout(statsPollingDelayRef.current)
+      statsPollingDelayRef.current = null
+    }
+    if (statsPollingRef.current) {
+      clearInterval(statsPollingRef.current)
+      statsPollingRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      loadGenerationRef.current += 1
+      clearStatsPolling()
+    }
+  }, [clearStatsPolling])
+
   // Fetch video metadata if not provided (YouTube-style: load from ID)
   useEffect(() => {
     if (videoDataParam || !channelKeyParam || !id || !rpc) return
 
+    let cancelled = false
     const fetchVideoData = async () => {
-      console.log('[VideoPlayer] Fetching video data for:', id, 'from channel:', channelKeyParam)
+      if (__DEV__) {
+        console.log('[VideoPlayer] Fetching video data for:', id, 'from channel:', channelKeyParam)
+      }
       setLoadingMeta(true)
       try {
         const result = await rpc.getVideoData({
@@ -343,8 +355,10 @@ function MobileVideoPlayerScreen() {
           publicBeeKey: publicBeeParam || undefined
         })
         const fetchedVideoData = result?.video || result
-        if (fetchedVideoData) {
-          console.log('[VideoPlayer] Got video data:', fetchedVideoData.title)
+        if (!cancelled && mountedRef.current && fetchedVideoData) {
+          if (__DEV__) {
+            console.log('[VideoPlayer] Got video data:', fetchedVideoData.title)
+          }
           setVideoData({
             id,
             channelKey: channelKeyParam,
@@ -355,11 +369,16 @@ function MobileVideoPlayerScreen() {
       } catch (err) {
         console.error('[VideoPlayer] Failed to fetch video data:', err)
       } finally {
-        setLoadingMeta(false)
+        if (!cancelled && mountedRef.current) {
+          setLoadingMeta(false)
+        }
       }
     }
 
     fetchVideoData()
+    return () => {
+      cancelled = true
+    }
   }, [id, channelKeyParam, publicBeeParam, videoDataParam, rpc])
 
   // Intercept back navigation (swipe gesture, back button) to minimize instead of close
@@ -386,11 +405,14 @@ function MobileVideoPlayerScreen() {
 
   const startStatsPolling = useCallback(() => {
     if (!videoData || !rpc) return
-    if (statsPollingRef.current) clearInterval(statsPollingRef.current)
+    if (!mountedRef.current) return
+    clearStatsPolling()
     const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
       ? videoData.path
       : videoData.id
-    console.log('[VideoPlayer] Starting stats polling for', videoRef)
+    if (__DEV__) {
+      console.log('[VideoPlayer] Starting stats polling for', videoRef)
+    }
 
     const pollStats = async () => {
       try {
@@ -399,8 +421,10 @@ function MobileVideoPlayerScreen() {
           videoId: videoRef
         })
         const stats = result?.stats
-        console.log('[VideoPlayer] Got stats:', stats ? `${stats.progress}%` : 'null')
-        if (stats) {
+        if (__DEV__) {
+          console.log('[VideoPlayer] Got stats:', stats ? `${stats.progress}%` : 'null')
+        }
+        if (mountedRef.current && stats) {
           setLocalStats(stats as VideoStats)
           if (isStatsComplete(stats as VideoStats) && statsPollingRef.current) {
             clearInterval(statsPollingRef.current)
@@ -414,10 +438,24 @@ function MobileVideoPlayerScreen() {
 
     pollStats()
     statsPollingRef.current = setInterval(pollStats, 1000)
-  }, [rpc, videoData])
+  }, [clearStatsPolling, rpc, videoData])
+
+  const scheduleStatsPolling = useCallback((delayMs = 500) => {
+    if (statsPollingDelayRef.current) {
+      clearTimeout(statsPollingDelayRef.current)
+    }
+    statsPollingDelayRef.current = setTimeout(() => {
+      statsPollingDelayRef.current = null
+      if (!mountedRef.current) return
+      startStatsPolling()
+    }, delayMs)
+  }, [startStatsPolling])
 
   const loadVideo = useCallback(async () => {
     if (!videoData || !rpc) return
+    const generation = loadGenerationRef.current + 1
+    loadGenerationRef.current = generation
+    clearStatsPolling()
     setIsLoading(true)
 
     try {
@@ -442,23 +480,27 @@ function MobileVideoPlayerScreen() {
       )
       const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
       if (cachedUrl) {
+        if (!mountedRef.current || loadGenerationRef.current !== generation) return
         loadAndPlayVideo(videoData, cachedUrl)
         if (Platform.OS !== 'web' || isPear) {
-          void rpc.preparePlayback(playbackRequest).then((result) => {
+          void rpc.preparePlayback(playbackRequest).then((result: any) => {
+            if (!mountedRef.current || loadGenerationRef.current !== generation) return
             if (result?.stats) {
               setLocalStats(result.stats as VideoStats)
             }
             if (!isStatsComplete(result?.stats as VideoStats | null | undefined)) {
-              setTimeout(() => startStatsPolling(), 500)
+              scheduleStatsPolling(500)
             }
-          }).catch((err) => {
+          }).catch((err: any) => {
             console.error('[VideoPlayer] preparePlayback failed:', err)
-            setTimeout(() => startStatsPolling(), 500)
+            if (!mountedRef.current || loadGenerationRef.current !== generation) return
+            scheduleStatsPolling(500)
           })
         }
         return
       }
       const result = await rpc.preparePlayback(playbackRequest)
+      if (!mountedRef.current || loadGenerationRef.current !== generation) return
 
       if (result?.url) {
         if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
@@ -471,15 +513,17 @@ function MobileVideoPlayerScreen() {
 
         if (Platform.OS !== 'web' || isPear) {
           if (!isStatsComplete(result?.stats as VideoStats | null | undefined)) {
-            setTimeout(() => startStatsPolling(), 500)
+            scheduleStatsPolling(500)
           }
         }
       }
     } catch (err) {
       console.error('[VideoPlayer] Failed to load video:', err)
-      setIsLoading(false)
+      if (mountedRef.current && loadGenerationRef.current === generation) {
+        setIsLoading(false)
+      }
     }
-  }, [isPear, loadAndPlayVideo, rpc, setIsLoading, startStatsPolling, videoData])
+  }, [clearStatsPolling, isPear, loadAndPlayVideo, rpc, scheduleStatsPolling, setIsLoading, videoData])
 
   // Load video when videoData is available (either from params or fetched)
   useEffect(() => {
@@ -508,12 +552,9 @@ function MobileVideoPlayerScreen() {
 
     return () => {
       clearTimeout(channelInfoTimer)
-      if (statsPollingRef.current) {
-        clearInterval(statsPollingRef.current)
-        statsPollingRef.current = null
-      }
+      clearStatsPolling()
     }
-  }, [videoData, loadingMeta, fromMiniPlayer, isPear, videoLoaded, loadVideo, startStatsPolling, loadChannelInfo, currentVideo])
+  }, [videoData, loadingMeta, fromMiniPlayer, isPear, videoLoaded, loadVideo, startStatsPolling, loadChannelInfo, currentVideo, clearStatsPolling])
 
   // Back/minimize button - beforeRemove listener handles minimizePlayer()
   const goBack = () => {
@@ -907,7 +948,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
     maxWidth: '100%',
     textAlign: 'center',
-    numberOfLines: 1,
   },
   actionLabelActive: {
     color: colors.primary,

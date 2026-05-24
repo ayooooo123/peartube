@@ -631,7 +631,9 @@ export function VideoPlayerOverlay() {
   }, [isInPipMode, playerMode, showControlsTemporarily])
 
   const handlePipStatusChanged = useCallback((event: { isInPictureInPicture: boolean; width: number; height: number }) => {
-    console.log('[VideoPlayerOverlay] PiP status changed:', event.isInPictureInPicture, event.width, event.height)
+    if (__DEV__) {
+      console.log('[VideoPlayerOverlay] PiP status changed:', event.isInPictureInPicture, event.width, event.height)
+    }
     setIsInPipMode(event.isInPictureInPicture)
     if (event.isInPictureInPicture && event.width > 0 && event.height > 0) {
       setPipWindowSize({ width: event.width, height: event.height })
@@ -649,7 +651,9 @@ export function VideoPlayerOverlay() {
     onLoaded()
     const width = info?.videoSize?.width
     const height = info?.videoSize?.height
-    console.log('[VideoPlayerOverlay] Video loaded with dimensions:', width, 'x', height)
+    if (__DEV__) {
+      console.log('[VideoPlayerOverlay] Video loaded with dimensions:', width, 'x', height)
+    }
     // PiP aspect ratio is handled natively by react-native-video
   }, [onLoaded])
 
@@ -2768,7 +2772,7 @@ export function VideoPlayerOverlay() {
 
       {/* Cast button moved into time display row below */}
 
-      {!isInPipMode && Platform.OS !== 'web' && playerMode !== 'mini' && playerMode !== 'hidden' && showControls && (
+      {!isInPipMode && Platform.OS !== 'web' && playerMode !== 'mini' && showControls && (
         <Scrubber
           containerStyle={progressBarStyle}
           duration={effectiveDuration}

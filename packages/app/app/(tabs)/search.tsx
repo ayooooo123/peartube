@@ -7,7 +7,7 @@ import { useApp, colors } from '../_layout'
 import { VideoCard, type VideoData } from '../../components/video'
 import type { VideoData as CoreVideoData } from '@peartube/core'
 import { CastHeaderButton } from '@/components/cast'
-import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+import { useVideoPlayerActions } from '@/lib/VideoPlayerContext'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { useTabBarMetrics } from '@/lib/tabBarHeight'
 import { fetchThumbnailUrlWithRetry } from '@/lib/thumbnail'
@@ -71,7 +71,7 @@ export default function SearchTab() {
   const [query, setQuery] = useState('')
 
   const { ready, rpc, blobServerPort } = useApp()
-  const { loadAndPlayVideo, closeVideo } = useVideoPlayerContext()
+  const { loadAndPlayVideo, closeVideo } = useVideoPlayerActions()
   const { isDesktop } = usePlatform()
   const { width: screenWidth } = useWindowDimensions()
 

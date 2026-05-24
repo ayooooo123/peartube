@@ -1,29 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { dialKnownPeers, getExplicitPeerList } from '../src/known-peers.js'
+import { getExplicitPeerList, getCachedPeerList } from '../src/known-peers.js'
 
 const keyA = 'aa'.repeat(32)
 const keyB = 'bb'.repeat(32)
-
-test('dialKnownPeers dedupes repeated keys and ignores invalid entries', () => {
-  const calls = []
-  const swarm = {
-    joinPeer(publicKey) {
-      calls.push(Buffer.from(publicKey).toString('hex'))
-    }
-  }
-
-  const count = dialKnownPeers(swarm, [
-    { key: keyA },
-    { key: keyA.toUpperCase() },
-    { key: 'not-a-key' },
-    { key: keyB },
-  ])
-
-  assert.equal(count, 2)
-  assert.deepEqual(calls, [keyA, keyB])
-})
 
 test('getExplicitPeerList accepts relayPeers and knownPeers from network and swarmOptions', () => {
   const peers = getExplicitPeerList({
@@ -34,21 +15,16 @@ test('getExplicitPeerList accepts relayPeers and knownPeers from network and swa
   assert.deepEqual(peers, [keyA, keyB, keyA, keyB])
 })
 
-test('dialKnownPeers respects a startup dial limit after dedupe', () => {
-  const calls = []
-  const swarm = {
-    joinPeer(publicKey) {
-      calls.push(Buffer.from(publicKey).toString('hex'))
-    }
+test('getCachedPeerList loads persisted peers for diagnostics without joining them directly', async () => {
+  const cached = [{ key: keyA, lastSeen: 2 }, { key: keyB, lastSeen: 1 }]
+  const ctx = {
+    metaDb: {
+      async get(key) {
+        assert.equal(key, 'known-peers-v1')
+        return { value: cached }
+      },
+    },
   }
 
-  const count = dialKnownPeers(swarm, [
-    { key: keyA },
-    { key: keyA.toUpperCase() },
-    { key: keyB },
-    { key: 'cc'.repeat(32) },
-  ], { limit: 2 })
-
-  assert.equal(count, 2)
-  assert.deepEqual(calls, [keyA, keyB])
+  assert.deepEqual(await getCachedPeerList(ctx), cached)
 })

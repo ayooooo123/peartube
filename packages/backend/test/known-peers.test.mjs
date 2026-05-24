@@ -33,3 +33,22 @@ test('getExplicitPeerList accepts relayPeers and knownPeers from network and swa
 
   assert.deepEqual(peers, [keyA, keyB, keyA, keyB])
 })
+
+test('dialKnownPeers respects a startup dial limit after dedupe', () => {
+  const calls = []
+  const swarm = {
+    joinPeer(publicKey) {
+      calls.push(Buffer.from(publicKey).toString('hex'))
+    }
+  }
+
+  const count = dialKnownPeers(swarm, [
+    { key: keyA },
+    { key: keyA.toUpperCase() },
+    { key: keyB },
+    { key: 'cc'.repeat(32) },
+  ], { limit: 2 })
+
+  assert.equal(count, 2)
+  assert.deepEqual(calls, [keyA, keyB])
+})

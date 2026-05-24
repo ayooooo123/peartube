@@ -1,4 +1,10 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 import { Duplex } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
@@ -1333,4 +1339,14 @@ test('feed snapshot provider propagates explicit empty previews', async () => {
     Protomux.from = originalFrom
     manager.stop()
   }
+})
+
+
+test('PublicFeedManager wires existing swarm sockets before cache restore reads', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'public-feed.js'), 'utf8')
+  const existingIndex = source.indexOf('existing connections before cache restore')
+  const cacheRestoreIndex = source.indexOf('discovered-channels-v2')
+
+  assert.ok(existingIndex > 0, 'existing connection wiring should be explicitly before cache restore')
+  assert.ok(cacheRestoreIndex > existingIndex, 'cache restore should happen after existing socket wiring')
 })

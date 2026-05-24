@@ -86,11 +86,13 @@ export async function loadKnownPeers(metaDb) {
   }
 }
 
-export function dialKnownPeers(swarm, knownList) {
+export function dialKnownPeers(swarm, knownList, options = {}) {
   if (!swarm || typeof swarm.joinPeer !== 'function' || swarm._peartubeOffline) return 0
+  const limit = Number.isFinite(options.limit) && options.limit > 0 ? Math.floor(options.limit) : Infinity
   let dialed = 0
   const seen = new Set()
   for (const entry of knownList) {
+    if (dialed >= limit) break
     try {
       const key = typeof entry?.key === 'string' ? entry.key.toLowerCase() : null
       if (!key || !/^[0-9a-f]{64}$/.test(key) || seen.has(key)) continue

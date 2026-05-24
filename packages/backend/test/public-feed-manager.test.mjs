@@ -214,7 +214,7 @@ test('PublicFeedManager bounds remembered discovered peers for long-running desk
 
 test('PublicFeedManager bounds retained peer feed entries from HAVE_FEED gossip', () => {
   const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb(), { maxFeedEntries: 3 })
+  const manager = new PublicFeedManager(swarm, createMetaDb(), { maxFeedEntries: 3, requireSignedPeerEntries: false })
   const conn = createConnection()
 
   try {
@@ -571,8 +571,8 @@ test('handleConnection immediately opens Protomux feed channel for connected dis
 })
 
 test('real Protomux feed channel exchanges local feed entries between two managers', async () => {
-  const managerA = new PublicFeedManager(createSwarm(), createMetaDb())
-  const managerB = new PublicFeedManager(createSwarm(), createMetaDb())
+  const managerA = new PublicFeedManager(createSwarm(), createMetaDb(), { requireSignedPeerEntries: false })
+  const managerB = new PublicFeedManager(createSwarm(), createMetaDb(), { requireSignedPeerEntries: false })
   const [connA, connB] = createMemoryConnectionPair()
   let updatesB = 0
 
@@ -1101,7 +1101,7 @@ test('peer disconnect notifies listeners when a cached keyed entry loses live an
 
 test('handle HAVE_FEED stores serving manifest data on the entry', () => {
   const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const manager = new PublicFeedManager(swarm, createMetaDb(), { requireSignedPeerEntries: false })
   const conn = createConnection()
 
   try {

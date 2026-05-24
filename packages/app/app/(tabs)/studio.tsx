@@ -516,7 +516,7 @@ export default function StudioScreen() {
               {!isPear && thumbnailError ? (
                 <View className="bg-pear-bg-elevated border border-pear-border rounded-lg p-4">
                   <Text className="text-caption text-pear-text-muted">
-                    Thumbnail generation failed. Tap "Add Thumbnail" to pick an image.
+                    Thumbnail generation failed. Tap Add Thumbnail to pick an image.
                   </Text>
                 </View>
               ) : null}

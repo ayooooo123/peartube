@@ -7,7 +7,7 @@ const VALID_KEY = 'a'.repeat(64)
 const VALID_BLOB = '1:2:3:4'
 const VALID_URL = 'http://127.0.0.1:4321/blob.mp4?token=***'
 
-function createCtx({ peers = [], joinPeer } = {}) {
+function createCtx({ peers = [] } = {}) {
   const calls = []
   const core = {
     discoveryKey: Buffer.from('discovery-key'),
@@ -49,23 +49,14 @@ function createCtx({ peers = [], joinPeer } = {}) {
         },
         joinPeer(publicKey) {
           calls.push(['joinPeer', publicKey.toString('hex')])
-          if (joinPeer) joinPeer(publicKey)
         },
       },
     },
   }
 }
 
-test('preparePlayback starts configured relay peer attachment without blocking the player URL', async () => {
-  let joinedPeerCount = 0
-  const { ctx, core, calls } = createCtx({
-    joinPeer: () => {
-      joinedPeerCount++
-      if (joinedPeerCount === 2) {
-        core.peers.push({ remotePublicKey: Buffer.from('d'.repeat(64), 'hex') })
-      }
-    },
-  })
+test('preparePlayback joins the blob topic and leaves peer selection to Hyperswarm', async () => {
+  const { ctx, core, calls } = createCtx()
   const service = new BlobPlaybackService({ ctx })
 
   let statsCalls = 0
@@ -84,15 +75,10 @@ test('preparePlayback starts configured relay peer attachment without blocking t
 
   assert.equal(result.url, VALID_URL)
   assert.equal(result.warmupStarted, true)
-  assert.equal(result.peerWarmupStarted, true)
   assert.equal(result.stats.peerCount, 0)
   assert.ok(statsCalls >= 1)
 
   await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(core.peers.length, 1)
-  assert.deepEqual(
-    calls.filter((call) => call[0] === 'joinPeer').map((call) => call[1]),
-    ['b'.repeat(64), 'c'.repeat(64)]
-  )
   assert.ok(calls.some((call) => call[0] === 'join'))
+  assert.deepEqual(calls.filter((call) => call[0] === 'joinPeer'), [])
 })

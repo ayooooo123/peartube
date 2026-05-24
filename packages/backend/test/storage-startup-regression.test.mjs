@@ -154,23 +154,21 @@ test('storage plumbs explicit Hyperswarm network options into swarm construction
   assert.match(storageSource, /new LoadedHyperswarm\(hyperswarmOptions\)/)
 })
 
-test('storage uses faster Hyperswarm defaults and limits startup known-peer fanout', () => {
+test('storage uses faster Hyperswarm defaults without app-level direct dialing', () => {
   assert.match(storageSource, /maxParallel:\s*8/)
   assert.match(storageSource, /maxPeers:\s*96/)
-  assert.match(storageSource, /DEFAULT_STARTUP_KNOWN_PEER_DIAL_LIMIT\s*=\s*8/)
-  assert.match(storageSource, /getExplicitPeerList\(\{ network, swarmOptions \}\)/)
-  assert.match(storageSource, /Direct-dialed[\s\S]*explicit peer\(s\) before known-peer cache load/)
-  assert.match(storageSource, /dialKnownPeers\(swarm, known, \{ limit: startupDialLimit \}\)/)
+  assert.doesNotMatch(storageSource, /Direct-dialed[\s\S]*explicit peer\(s\) before known-peer cache load/)
+  assert.doesNotMatch(storageSource, /dialKnownPeers\(/)
+  assert.doesNotMatch(storageSource, /getDialableKnownPeers\(/)
+  assert.match(storageSource, /swarm\.join\(PEARTUBE_NETWORK_TOPIC, \{ server: true, client: true \}\)/)
 })
 
-test('storage starts swarm listen before direct dial and peer-pool topic join', () => {
+test('storage starts swarm listen before peer-pool topic join', () => {
   const listenIndex = storageSource.indexOf('Starting swarm.listen() early')
-  const explicitDialIndex = storageSource.indexOf('explicit peer(s) before known-peer cache load')
   const topicJoinIndex = storageSource.indexOf('Joined peartube-network topic for peer pool building')
 
   assert.ok(listenIndex > 0, 'early listen block should exist')
-  assert.ok(explicitDialIndex > listenIndex, 'explicit peer dial should happen after listen starts')
-  assert.ok(topicJoinIndex > explicitDialIndex, 'topic join should happen after explicit peer dial')
+  assert.ok(topicJoinIndex > listenIndex, 'topic join should happen after listen starts')
 })
 
 
@@ -196,11 +194,10 @@ test('storage captures Hyperswarm connection lifecycle diagnostics', () => {
   assert.match(storageSource, /hyperswarm: diagnostics/)
 })
 
-test('retained content discovery direct-dials configured or cached peers for blob topics', () => {
-  assert.match(storageSource, /getDialableKnownPeers\(ctx\)/)
-  assert.match(storageSource, /dialKnownPeers\(ctx\.swarm, known, \{ limit: ctx\.swarm\?\._peartubeStartupDialLimit \|\| DEFAULT_STARTUP_KNOWN_PEER_DIAL_LIMIT \}\)/)
-  assert.match(storageSource, /network,/)
-  assert.match(storageSource, /swarmOptions,/)
+test('retained content discovery relies on the joined blob topics instead of app-level direct dialing', () => {
+  assert.match(storageSource, /retainSwarmDiscovery\(ctx, blobsCore\.discoveryKey/)
+  assert.doesNotMatch(storageSource, /getDialableKnownPeers\(ctx\)/)
+  assert.doesNotMatch(storageSource, /dialKnownPeers\(ctx\.swarm/)
 })
 
 test('storage captures pre-open DHT connect close diagnostics', () => {

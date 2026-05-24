@@ -1,3 +1,4 @@
+/* eslint-disable no-empty, no-undef, @typescript-eslint/no-require-imports */
 import bareProcess from 'bare-process'
 import os from 'bare-os'
 import HRPC from '../../spec/spec/hrpc/index.js'
@@ -40,6 +41,8 @@ let mpvFrameServerPort = 0
 let mpvFrameServerReady = null
 let bareHttp1Promise = null
 let platformPromise = null
+let transcoderModule = null
+let transcoderModulePromise = null
 
 async function loadBareHTTP1() {
   if (bareHttp1Promise) return bareHttp1Promise
@@ -131,6 +134,50 @@ async function loadBareFFmpeg() {
   })()
 
   return ffmpegLoadPromise
+}
+
+async function ensureTranscoderModule() {
+  if (transcoderModule) return transcoderModule
+  if (!transcoderModulePromise) {
+    transcoderModulePromise = import('../../app/backend/transcoder.mjs')
+      .then((module) => {
+        transcoderModule = module?.default ?? module
+        return transcoderModule
+      })
+      .catch((error) => {
+        transcoderModulePromise = null
+        throw error
+      })
+  }
+
+  return transcoderModulePromise
+}
+
+function createLazyTranscoder() {
+  return {
+    async startTranscode(...args) {
+      const module = await ensureTranscoderModule()
+      return module.startTranscode(...args)
+    },
+    async stopTranscode(...args) {
+      const module = await ensureTranscoderModule()
+      return module.stopTranscode(...args)
+    },
+    async getStatus(...args) {
+      const module = await ensureTranscoderModule()
+      return module.getStatus(...args)
+    },
+  }
+}
+
+function createKeepAliveCleanup() {
+  let keepAliveTimer = setInterval(() => {}, 1 << 30)
+
+  return function cleanupKeepAlive() {
+    if (!keepAliveTimer) return
+    clearInterval(keepAliveTimer)
+    keepAliveTimer = null
+  }
 }
 
 function handleMpvFrameRequest(req, res) {
@@ -433,11 +480,7 @@ async function createNativeSidecarBackend(options = {}) {
     const path = pathModule?.default ?? pathModule
     const fs = fsModule?.default ?? fsModule
     const generateAndStoreThumbnail = thumbnailModule?.generateAndStoreThumbnail
-    const transcoder = {
-      startTranscode: async () => ({ success: false, error: 'Transcoding is not wired in the native sidecar yet.' }),
-      stopTranscode: () => ({ success: false, error: 'Transcoding is not wired in the native sidecar yet.' }),
-      getStatus: () => ({ status: 'unavailable', progress: 0, bytesWritten: 0, error: 'Transcoding is not wired in the native sidecar yet.' }),
-    }
+    const transcoder = createLazyTranscoder()
 
     attachMobileHandlers(backend, {
       api: backend.api,
@@ -634,7 +677,8 @@ function createChannelDataFetcher(client) {
   }
 }
 
-async function shutdownBridge(state) {
+async function shutdownBridge(state, cleanupKeepAlive = null) {
+  cleanupKeepAlive?.()
   await destroyAllMpvPlayers()
   await state.hostSession?.terminate?.()
   state.hostSession = null
@@ -753,7 +797,7 @@ function toSchemaSnapshot(snapshot) {
   }
 }
 
-function registerHandlers(hrpcInstance, state, reportFatal) {
+function registerHandlers(hrpcInstance, state, reportFatal, cleanupKeepAlive = null) {
   hrpcInstance.onDesktopBootstrap(async (req) => {
     const ready = await ensureHostBooted(
       state,
@@ -776,7 +820,7 @@ function registerHandlers(hrpcInstance, state, reportFatal) {
   })
 
   hrpcInstance.onDesktopShutdown(async () => {
-    await shutdownBridge(state)
+    await shutdownBridge(state, cleanupKeepAlive)
     return { success: true }
   })
 
@@ -1279,7 +1323,7 @@ function registerHandlers(hrpcInstance, state, reportFatal) {
 
 async function main() {
   const state = createBridgeState()
-  const keepAliveTimer = setInterval(() => {}, 1 << 30)
+  let keepAliveCleanup = createKeepAliveCleanup()
 
   // bare-rpc expects a duplex stream with on('data'), on('error'), on('drain'), write(), destroy()
   const stream = {
@@ -1334,13 +1378,14 @@ async function main() {
     })
   }
 
-  registerHandlers(hrpc, state, reportFatal)
+  registerHandlers(hrpc, state, reportFatal, keepAliveCleanup)
 
   process.stdin?.resume?.()
 
   process.stdin?.on?.('end', () => {
-    clearInterval(keepAliveTimer)
-    void shutdownBridge(state).finally(() => {
+    const cleanup = keepAliveCleanup
+    keepAliveCleanup = null
+    void shutdownBridge(state, cleanup).finally(() => {
       try {
         Bare.exit(0)
       } catch {}

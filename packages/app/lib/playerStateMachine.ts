@@ -51,6 +51,9 @@ export type TransitionSource =
   | 'androidPipExitRestorePreviousMode'
   | 'loadAndPlayVideo'
   | 'closeVideo'
+  | 'remoteStopClose'
+  | 'androidMinimizeClose'
+  | 'pipClose'
   | 'minimizePlayer'
   | 'maximizePlayer'
   | 'enterBackgroundAudio'
@@ -86,7 +89,7 @@ export type PlayerEvent =
     }
   | {
       type: 'CLOSE_VIDEO'
-      source: 'closeVideo'
+      source: 'closeVideo' | 'remoteStopClose' | 'androidMinimizeClose' | 'pipClose'
     }
   | {
       type: 'MINIMIZE'
@@ -471,10 +474,13 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
               url: event.url || null,
             }
           }
+          if (!event.video || !event.url) {
+            return toHiddenState(state)
+          }
           return {
             ...state,
             video: event.video,
-            url: event.url || null,
+            url: event.url,
           }
         case 'RESTORE_FROM_LAST_CLOSED':
           return invalidTransition(state, event)
@@ -539,10 +545,13 @@ function playerReducerInternal(state: PlayerState, event: PlayerEvent): PlayerSt
               url: event.url || null,
             }
           }
+          if (!event.video || !event.url) {
+            return toHiddenState(state)
+          }
           return {
             ...state,
             video: event.video,
-            url: event.url || null,
+            url: event.url,
           }
         case 'RESTORE_FROM_LAST_CLOSED':
           return invalidTransition(state, event)

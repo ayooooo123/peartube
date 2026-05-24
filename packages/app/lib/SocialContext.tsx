@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { Alert } from 'react-native'
 import { rpc } from '@peartube/platform/rpc'
 import { useApp } from '@/lib/AppContext'
-import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+import { useVideoPlayerSession } from '@/lib/VideoPlayerContext'
 import { COMMENTS_PER_PAGE } from '@/components/video-player'
 
 const SOCIAL_RPC_TIMEOUT_MS = 8000
@@ -58,9 +58,7 @@ export function useSocial() {
 
 export function SocialProvider({ children }: { children: React.ReactNode }) {
   const { identity } = useApp()
-  const player = useVideoPlayerContext()
-  const currentVideo = player.currentVideo
-  const playerMode = player.playerMode
+  const { currentVideo, playerMode } = useVideoPlayerSession()
 
   const commentsLengthRef = useRef(0)
 

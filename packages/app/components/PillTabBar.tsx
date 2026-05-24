@@ -12,7 +12,7 @@ import Animated, {
   interpolate,
   Extrapolation,
 } from 'react-native-reanimated'
-import { useVideoPlayerContext } from '@/lib/VideoPlayerContext'
+import { useVideoPlayerSession } from '@/lib/VideoPlayerContext'
 import { setTabBarMetrics } from '@/lib/tabBarHeight'
 import { usePlatform } from '@/lib/PlatformProvider'
 import { colors } from '@/lib/colors'
@@ -65,7 +65,7 @@ export function PillTabBar() {
   const pathname = usePathname()
   const router = useRouter()
   const { isDesktop } = usePlatform()
-  const { playerMode, isInPipMode, androidSplitPlayerEnabled } = useVideoPlayerContext()
+  const { playerMode, isInPipMode, androidSplitPlayerEnabled } = useVideoPlayerSession()
   const isAndroidWatchPathActive = Platform.OS === 'android' && pathname.startsWith('/video/')
 
   const barVisible = useSharedValue(1)

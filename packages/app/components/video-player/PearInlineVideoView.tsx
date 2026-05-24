@@ -1,5 +1,5 @@
 import { useEventListener } from 'expo'
-import { VideoPlayer, VideoView, useVideoPlayer } from 'expo-video'
+import { VideoView, useVideoPlayer, type VideoPlayer, type VideoSource } from 'expo-video'
 import { memo, ReactNode, RefObject, useCallback, useEffect, useMemo, useRef } from 'react'
 import { AppState, AppStateStatus, Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native'
 import { createPlayerPort, type PlayerPort } from '@/lib/video-player'
@@ -104,12 +104,21 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   const previousStatusRef = useRef<string | null>(null)
   const seekPlaybackRecoveryUntilRef = useRef(0)
   const isPlayingRef = useRef(isPlaying)
+  const playbackRateRef = useRef(playbackRate)
+  const notificationControlsRef = useRef(showNotificationControls)
+  const onErrorRef = useRef(onError)
+  const sourceReplaceGenerationRef = useRef(0)
 
-  const player = useVideoPlayer({ uri: videoUrl, metadata: {
-    title: videoTitle || undefined,
-    artist: channelName || undefined,
-    artwork: thumbnailUrl || undefined,
-  } }, (nextPlayer) => {
+  const videoSource = useMemo<VideoSource>(() => ({
+    uri: videoUrl,
+    metadata: {
+      title: videoTitle || undefined,
+      artist: channelName || undefined,
+      artwork: thumbnailUrl || undefined,
+    },
+  }), [channelName, thumbnailUrl, videoTitle, videoUrl])
+
+  const player = useVideoPlayer(null, (nextPlayer) => {
     playerRefForCallbacks.current = nextPlayer
     nextPlayer.timeUpdateEventInterval = 0.5
     nextPlayer.loop = false
@@ -123,7 +132,6 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         // Some Expo Video versions expose bufferOptions as read-only before source load.
       }
     }
-    if (isPlaying) nextPlayer.play()
   })
 
   playerRefForCallbacks.current = player
@@ -142,6 +150,60 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   useEffect(() => {
     isPlayingRef.current = isPlaying
   }, [isPlaying])
+
+  useEffect(() => {
+    playbackRateRef.current = playbackRate
+  }, [playbackRate])
+
+  useEffect(() => {
+    notificationControlsRef.current = showNotificationControls
+  }, [showNotificationControls])
+
+  useEffect(() => {
+    onErrorRef.current = onError
+  }, [onError])
+
+  useEffect(() => {
+    let cancelled = false
+    const generation = sourceReplaceGenerationRef.current + 1
+    sourceReplaceGenerationRef.current = generation
+
+    const applySource = async () => {
+      try {
+        if (typeof player.replaceAsync === 'function') {
+          await player.replaceAsync(videoSource)
+        } else {
+          player.replace(videoSource)
+        }
+
+        if (cancelled || sourceReplaceGenerationRef.current !== generation) return
+
+        player.playbackRate = playbackRateRef.current
+        player.showNowPlayingNotification = notificationControlsRef.current
+        player.staysActiveInBackground = notificationControlsRef.current
+        if (isPlayingRef.current) {
+          player.play()
+        }
+      } catch (error) {
+        if (cancelled || sourceReplaceGenerationRef.current !== generation) return
+        const message = error instanceof Error ? error.message : 'Failed to load video source'
+        const code = typeof error === 'object' && error !== null && 'code' in error
+          ? (error as { code?: unknown }).code
+          : undefined
+        onErrorRef.current?.({
+          message,
+          code,
+          engine: 'expo-video',
+        })
+      }
+    }
+
+    void applySource()
+
+    return () => {
+      cancelled = true
+    }
+  }, [player, videoSource])
 
   const shouldSuppressStuckPlaybackRecovery = useCallback(() => {
     if (Platform.OS !== 'android') return false
@@ -389,7 +451,6 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
   return (
     <View testID={testID} style={[styles.container, style]}>
       <VideoView
-        key={`expo-video-${playbackSession}:${currentVideoKey || ''}`}
         player={player}
         style={StyleSheet.absoluteFill}
         contentFit="contain"

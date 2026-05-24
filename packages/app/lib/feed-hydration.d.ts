@@ -15,6 +15,7 @@ export function mergeHydratedFeedVideos(options: {
   previousVideos?: any[]
   incomingVideos?: any[]
   refreshedChannelKeys?: string[]
+  feedEntries?: any[]
   identityDriveKey?: string | null
   limit?: number
 }): any[]

@@ -61,6 +61,13 @@
           "enableNotificationControls": true
         }
       ],
+      [
+        "expo-video",
+        {
+          "supportsBackgroundPlayback": true,
+          "supportsPictureInPicture": true
+        }
+      ],
       "./plugins/withEnsureBackendBundles.js",
       [
         "expo-build-properties",

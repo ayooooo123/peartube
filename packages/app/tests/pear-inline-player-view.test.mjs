@@ -66,6 +66,15 @@ test('PearInlineVideoView uses Expo Video on native SDK 56 to avoid react-native
   assert.doesNotMatch(source, /from 'react-native-video'/)
 })
 
+test('PearInlineVideoView keeps one Expo Video player and replaces sources without remounting the VideoView', () => {
+  const source = readAppFile('components/video-player/PearInlineVideoView.tsx')
+
+  assert.match(source, /useVideoPlayer\(null,/)
+  assert.match(source, /replaceAsync/)
+  assert.match(source, /\.replace\(videoSource\)/)
+  assert.doesNotMatch(source, /key=\{`expo-video-/)
+})
+
 test('legacy MpvMobileVideoView implementation stays removed or only exists as a shim', () => {
   const shimPath = path.join(appRoot, 'components/video-player/MpvMobileVideoView.tsx')
   if (!fs.existsSync(shimPath)) {

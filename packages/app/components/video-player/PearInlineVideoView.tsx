@@ -408,7 +408,15 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
       return
     }
 
-    if (Platform.OS === 'web' && !hasReceivedPlayEventRef.current) return
+    if (!hasReceivedPlayEventRef.current && isPlayingRef.current) {
+      try {
+        player.play()
+      } catch {
+        // Best effort: keep JS desired playback state from being cancelled by
+        // an expo-video paused event emitted before the first native play event.
+      }
+      return
+    }
     if (pipExitPlayingRef.current) return
     if (Date.now() <= seekPlaybackRecoveryUntilRef.current && isPlayingRef.current) {
       onBuffering?.({ isBuffering: true })

@@ -339,7 +339,7 @@ struct VideoDetailView: View {
          hostBridge.activeMpvPlayerID != nil {
         hostBridge.recordPlaybackUIEvent("Pausing active bare-mpv session for \(video.id).")
         Task {
-          await hostBridge.pauseActivePlayback()
+          await hostBridge.pauseActivePlayback(for: video)
         }
       } else {
         hostBridge.recordPlaybackUIEvent("Pausing active AVPlayer session for \(video.id).")
@@ -363,7 +363,7 @@ struct VideoDetailView: View {
       if hostBridge.activePlaybackVideoID == video.id,
          hostBridge.activeMpvPlayerID != nil {
         hostBridge.recordPlaybackUIEvent("Resuming existing bare-mpv session for \(video.id).")
-        await hostBridge.resumeActivePlayback()
+        await hostBridge.resumeActivePlayback(for: video)
         appState.resumePlayback()
         appState.setError(nil)
         return

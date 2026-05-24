@@ -100,7 +100,7 @@ final class MpvFrameRenderer: ObservableObject {
     renderTask = Task { [weak self] in
       await self?.runRenderLoop(
         hostBridge: hostBridge,
-        videoID: video.id,
+        video: video,
         playerId: playerId,
         frameURL: frameURL
       )
@@ -114,20 +114,20 @@ final class MpvFrameRenderer: ObservableObject {
 
   private func runRenderLoop(
     hostBridge: HostBridgeService,
-    videoID: NativeVideo.ID,
+    video: NativeVideo,
     playerId: String,
     frameURL: URL?
   ) async {
     var iteration = 0
 
     while !Task.isCancelled {
-      guard hostBridge.activePlaybackVideoID == videoID,
+      guard hostBridge.activePlaybackVideoID == video.id,
             hostBridge.activeMpvPlayerID == playerId else {
         break
       }
 
       if iteration.isMultiple(of: 3),
-         let state = await hostBridge.activePlaybackState() {
+         let state = await hostBridge.activePlaybackState(for: video) {
         currentTime = state.currentTime
         duration = state.duration
         paused = state.paused
@@ -141,7 +141,7 @@ final class MpvFrameRenderer: ObservableObject {
         image = frameImage
         isLoading = false
         errorMessage = nil
-      } else if let frame = await hostBridge.activePlaybackFrame(),
+      } else if let frame = await hostBridge.activePlaybackFrame(for: video),
                 frame.success,
                 frame.hasFrame,
                 let frameImage = Self.makeImage(

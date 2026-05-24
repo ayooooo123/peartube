@@ -80,6 +80,16 @@ struct NativeVideo: Identifiable, Hashable, Codable {
     return backendVideoID
   }
 
+  var thumbnailCacheKey: String {
+    [
+      channelKey,
+      publicBeeKey ?? "",
+      thumbnailReference,
+      blobId ?? "",
+      blobsCoreKey ?? ""
+    ].joined(separator: "|")
+  }
+
   var intrinsicAspectRatio: Double? {
     guard let width, let height, width > 0, height > 0 else {
       return nil

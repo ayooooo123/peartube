@@ -153,22 +153,25 @@ export class BlobPlaybackService {
     try {
       if (warmup) {
         warmupStarted = true
-        await Promise.resolve(warmup(driveKey, videoPath, publicBeeKey))
+        Promise.resolve(warmup(driveKey, videoPath, publicBeeKey)).catch((err) => {
+          console.log('[BlobPlaybackService] preparePlayback warmup failed:', err?.message || err)
+        })
       }
     } catch (err) {
       console.log('[BlobPlaybackService] preparePlayback warmup failed:', err?.message || err)
     }
 
-    const peerWarmup = blobsCoreKey
-      ? await this.waitForBlobCorePeers(blobsCoreKey, { minPeers: 1, timeoutMs: 1500, pollMs: 100 })
-      : undefined
+    if (blobsCoreKey) {
+      this.waitForBlobCorePeers(blobsCoreKey, { minPeers: 1, timeoutMs: 1500, pollMs: 100 }).catch((err) => {
+        console.log('[BlobPlaybackService] preparePlayback peer warmup failed:', err?.message || err)
+      })
+    }
 
     return {
       url: result.url,
       stats: typeof getStats === 'function' ? getStats(driveKey, videoPath) : undefined,
       warmupStarted,
       peerWarmupStarted: Boolean(blobsCoreKey),
-      peerWarmup,
     }
   }
 }

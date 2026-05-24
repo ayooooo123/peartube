@@ -56,8 +56,16 @@ function createCtx({ peers = [], joinPeer } = {}) {
   }
 }
 
-test('preparePlayback waits briefly for configured relay peers to attach to selected blob core', async () => {
-  const { ctx, core, calls } = createCtx()
+test('preparePlayback starts configured relay peer attachment without blocking the player URL', async () => {
+  let joinedPeerCount = 0
+  const { ctx, core, calls } = createCtx({
+    joinPeer: () => {
+      joinedPeerCount++
+      if (joinedPeerCount === 2) {
+        core.peers.push({ remotePublicKey: Buffer.from('d'.repeat(64), 'hex') })
+      }
+    },
+  })
   const service = new BlobPlaybackService({ ctx })
 
   let statsCalls = 0
@@ -67,10 +75,7 @@ test('preparePlayback waits briefly for configured relay peers to attach to sele
     blobId: VALID_BLOB,
     blobsCoreKey: VALID_KEY,
     mimeType: 'video/mp4',
-    warmup: () => {
-      core.peers.push({ remotePublicKey: Buffer.from('d'.repeat(64), 'hex') })
-      return Promise.resolve()
-    },
+    warmup: () => Promise.resolve(),
     getStats: () => {
       statsCalls++
       return { peerCount: core.peers.length }
@@ -80,9 +85,11 @@ test('preparePlayback waits briefly for configured relay peers to attach to sele
   assert.equal(result.url, VALID_URL)
   assert.equal(result.warmupStarted, true)
   assert.equal(result.peerWarmupStarted, true)
-  assert.equal(result.peerWarmup.peerCount, 1)
-  assert.equal(result.stats.peerCount, 1)
+  assert.equal(result.stats.peerCount, 0)
   assert.ok(statsCalls >= 1)
+
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(core.peers.length, 1)
   assert.deepEqual(
     calls.filter((call) => call[0] === 'joinPeer').map((call) => call[1]),
     ['b'.repeat(64), 'c'.repeat(64)]

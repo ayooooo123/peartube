@@ -376,7 +376,7 @@ private struct FloatingMiniPlayer: View {
     if appState.isPlayingPreview {
       if hostBridge.activeMpvPlayerID != nil {
         Task {
-          await hostBridge.pauseActivePlayback()
+          await hostBridge.pauseActivePlayback(for: video)
         }
       } else {
         hostBridge.pauseActiveAVPlayer()
@@ -387,7 +387,7 @@ private struct FloatingMiniPlayer: View {
 
     if hostBridge.activeMpvPlayerID != nil {
       Task {
-        await hostBridge.resumeActivePlayback()
+        await hostBridge.resumeActivePlayback(for: video)
       }
     } else {
       hostBridge.resumeActiveAVPlayer()

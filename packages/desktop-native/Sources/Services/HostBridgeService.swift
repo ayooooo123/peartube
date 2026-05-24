@@ -59,8 +59,8 @@ final class HostBridgeService {
   private(set) var isResolvingPlayback = false
   private(set) var lastPlaybackErrorMessage: String?
   private(set) var playbackStats: NativeVideoStats?
-  private(set) var thumbnailURLs: [NativeVideo.ID: URL] = [:]
-  private(set) var thumbnailRefreshTokens: [NativeVideo.ID: Int] = [:]
+  private(set) var thumbnailURLs: [String: URL] = [:]
+  private(set) var thumbnailRefreshTokens: [String: Int] = [:]
   private(set) var activeAVPlayer: AVPlayer?
   private(set) var activeMpvPlayerID: String?
   private(set) var activeMpvFrameServerPort: Int?
@@ -75,7 +75,7 @@ final class HostBridgeService {
   // RPCGate retired — RPC is now an actor, so concurrency is handled inside
   // BareRPC itself. `gatedRPC` remains a thin passthrough so its ~30 call
   // sites don't need updating.
-  @ObservationIgnored private var inFlightThumbnailIDs = Set<NativeVideo.ID>()
+  @ObservationIgnored private var inFlightThumbnailIDs = Set<String>()
   @ObservationIgnored private let logLimit = 120
   @ObservationIgnored private(set) var selectedStoragePath: String?
   @ObservationIgnored private var lastPlaybackRenderSize = CGSize(width: 1280, height: 720)
@@ -951,11 +951,6 @@ final class HostBridgeService {
       return nil
     }
 
-    guard await waitForAVPlayerReadiness(for: video) != nil else {
-      appendLog("AVPlayer source did not become ready for \(video.title).")
-      return nil
-    }
-
     startPlaybackStatsPolling(for: video)
     return url
   }
@@ -1118,8 +1113,30 @@ final class HostBridgeService {
     }
   }
 
-  func pauseActivePlayback() async {
+  static func shouldAcceptPlaybackCommand(
+    activeVideoID: NativeVideo.ID?,
+    activePlayerID: String?,
+    requestedVideoID: NativeVideo.ID,
+    requestedPlayerID: String
+  ) -> Bool {
+    activeVideoID == requestedVideoID && activePlayerID == requestedPlayerID
+  }
+
+  private func shouldAcceptActivePlaybackCommand(for videoID: NativeVideo.ID, playerId: String) -> Bool {
+    Self.shouldAcceptPlaybackCommand(
+      activeVideoID: activePlaybackVideoID,
+      activePlayerID: activeMpvPlayerID,
+      requestedVideoID: videoID,
+      requestedPlayerID: playerId
+    )
+  }
+
+  func pauseActivePlayback(for video: NativeVideo) async {
     guard let playerId = activeMpvPlayerID else { return }
+    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else {
+      appendLog("Ignoring stale bare-mpv pause for \(video.title).")
+      return
+    }
 
     do {
       _ = try await gatedRPC { hrpc in
@@ -1130,8 +1147,12 @@ final class HostBridgeService {
     }
   }
 
-  func resumeActivePlayback() async {
+  func resumeActivePlayback(for video: NativeVideo) async {
     guard let playerId = activeMpvPlayerID else { return }
+    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else {
+      appendLog("Ignoring stale bare-mpv resume for \(video.title).")
+      return
+    }
 
     do {
       _ = try await gatedRPC { hrpc in
@@ -1142,8 +1163,12 @@ final class HostBridgeService {
     }
   }
 
-  func seekActivePlayback(to time: Double) async {
+  func seekActivePlayback(for video: NativeVideo, to time: Double) async {
     guard let playerId = activeMpvPlayerID else { return }
+    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else {
+      appendLog("Ignoring stale bare-mpv seek for \(video.title).")
+      return
+    }
 
     do {
       _ = try await gatedRPC { hrpc in
@@ -1154,8 +1179,9 @@ final class HostBridgeService {
     }
   }
 
-  func activePlaybackState() async -> NativeMpvState? {
+  func activePlaybackState(for video: NativeVideo) async -> NativeMpvState? {
     guard let playerId = activeMpvPlayerID else { return nil }
+    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else { return nil }
 
     do {
       return try await gatedRPC { hrpc in
@@ -1168,8 +1194,9 @@ final class HostBridgeService {
     }
   }
 
-  func activePlaybackFrame() async -> NativeMpvRenderFrame? {
+  func activePlaybackFrame(for video: NativeVideo) async -> NativeMpvRenderFrame? {
     guard let playerId = activeMpvPlayerID else { return nil }
+    guard shouldAcceptActivePlaybackCommand(for: video.id, playerId: playerId) else { return nil }
 
     do {
       return try await gatedRPC { hrpc in
@@ -1196,11 +1223,11 @@ final class HostBridgeService {
   }
 
   func thumbnailURL(for video: NativeVideo) -> URL? {
-    guard let baseURL = thumbnailURLs[video.id] ?? video.thumbnailURL else {
+    guard let baseURL = thumbnailURLs[video.thumbnailCacheKey] ?? video.thumbnailURL else {
       return nil
     }
 
-    guard let revision = thumbnailRefreshTokens[video.id], revision > 0 else {
+    guard let revision = thumbnailRefreshTokens[video.thumbnailCacheKey], revision > 0 else {
       return baseURL
     }
 
@@ -1217,8 +1244,8 @@ final class HostBridgeService {
   }
 
   func refreshThumbnail(for video: NativeVideo) async {
-    thumbnailRefreshTokens[video.id] = (thumbnailRefreshTokens[video.id] ?? 0) + 1
-    thumbnailURLs.removeValue(forKey: video.id)
+    thumbnailRefreshTokens[video.thumbnailCacheKey] = (thumbnailRefreshTokens[video.thumbnailCacheKey] ?? 0) + 1
+    thumbnailURLs.removeValue(forKey: video.thumbnailCacheKey)
     await resolveThumbnail(for: video, force: true)
   }
 
@@ -1257,23 +1284,26 @@ final class HostBridgeService {
   private func resolveThumbnail(for video: NativeVideo, force: Bool) async {
     if !force, thumbnailURL(for: video) != nil { return }
     guard isReady else { return }
-    guard !inFlightThumbnailIDs.contains(video.id) else { return }
+    let thumbnailKey = video.thumbnailCacheKey
+    guard !inFlightThumbnailIDs.contains(thumbnailKey) else { return }
 
-    inFlightThumbnailIDs.insert(video.id)
-    defer { inFlightThumbnailIDs.remove(video.id) }
+    inFlightThumbnailIDs.insert(thumbnailKey)
+    defer { inFlightThumbnailIDs.remove(thumbnailKey) }
 
     do {
       let response = try await gatedRPC { hrpc in
         try await hrpc.getVideoThumbnail(
           GetVideoThumbnailRequest(
             channelKey: video.channelKey,
-            videoId: video.backendVideoID
+            videoId: video.thumbnailReference,
+            thumbnailBlobId: video.blobId ?? "",
+            thumbnailBlobsCoreKey: video.blobsCoreKey ?? ""
           )
         )
       }
 
       if response.exists, let urlString = response.url, !urlString.isEmpty, let url = URL(string: urlString) {
-        thumbnailURLs[video.id] = url
+        thumbnailURLs[video.thumbnailCacheKey] = url
       }
     } catch {
       appendLog("Thumbnail resolution failed for \(video.title): \(error.localizedDescription)")
@@ -1820,7 +1850,7 @@ final class HostBridgeService {
   private func primeThumbnailCache(with videos: [NativeVideo]) {
     for video in videos {
       if let url = video.thumbnailURL {
-        thumbnailURLs[video.id] = url
+        thumbnailURLs[video.thumbnailCacheKey] = url
       }
     }
   }
@@ -2500,6 +2530,7 @@ final class HostBridgeService {
   static func isAVPlayerReadyForPlayback(_ stats: NativeVideoStats) -> Bool {
     guard stats.success else { return false }
     if stats.isComplete { return true }
+    if stats.progress > 0 { return true }
     if stats.downloadedBlocks > 0 || stats.downloadedBytes > 0 { return true }
 
     guard let status = stats.status?
@@ -2514,7 +2545,7 @@ final class HostBridgeService {
     }
 
     if ["buffering", "downloading"].contains(status) {
-      return stats.peerCount > 0 || stats.downloadedBlocks > 0 || stats.downloadedBytes > 0
+      return stats.peerCount > 0 || stats.progress > 0 || stats.downloadedBlocks > 0 || stats.downloadedBytes > 0
     }
 
     return false

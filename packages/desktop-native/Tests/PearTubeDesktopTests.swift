@@ -2516,6 +2516,71 @@ final class PearTubeDesktopTests: XCTestCase {
     XCTAssertTrue(HostBridgeService.isAVPlayerReadyForPlayback(downloadingStats))
   }
 
+  func testThumbnailCacheKeyUsesPlaybackRefsWhenBackendIDsCollide() {
+    let first = NativeVideo(
+      id: "channel-a::video",
+      backendVideoID: "video",
+      channelKey: "channel-a",
+      title: "First",
+      channelName: "A",
+      durationText: "1:00",
+      summary: "",
+      tags: [],
+      accentHex: "#000000",
+      sections: [.home],
+      thumbnailURL: URL(string: "https://example.com/a.jpg"),
+      path: "/videos/shared-name.mp4",
+      blobId: "0:1:0:10",
+      blobsCoreKey: "aa"
+    )
+    let second = NativeVideo(
+      id: "channel-b::video",
+      backendVideoID: "video",
+      channelKey: "channel-b",
+      title: "Second",
+      channelName: "B",
+      durationText: "1:00",
+      summary: "",
+      tags: [],
+      accentHex: "#000000",
+      sections: [.home],
+      thumbnailURL: URL(string: "https://example.com/b.jpg"),
+      path: "/videos/shared-name.mp4",
+      blobId: "0:2:0:10",
+      blobsCoreKey: "bb"
+    )
+
+    XCTAssertNotEqual(first.thumbnailCacheKey, second.thumbnailCacheKey)
+  }
+
+  func testMpvCommandGuardsRejectStalePlaybackSessions() {
+    XCTAssertTrue(HostBridgeService.shouldAcceptPlaybackCommand(activeVideoID: "video-a", activePlayerID: "player-a", requestedVideoID: "video-a", requestedPlayerID: "player-a"))
+    XCTAssertFalse(HostBridgeService.shouldAcceptPlaybackCommand(activeVideoID: "video-b", activePlayerID: "player-a", requestedVideoID: "video-a", requestedPlayerID: "player-a"))
+    XCTAssertFalse(HostBridgeService.shouldAcceptPlaybackCommand(activeVideoID: "video-a", activePlayerID: "player-b", requestedVideoID: "video-a", requestedPlayerID: "player-a"))
+    XCTAssertFalse(HostBridgeService.shouldAcceptPlaybackCommand(activeVideoID: nil, activePlayerID: "player-a", requestedVideoID: "video-a", requestedPlayerID: "player-a"))
+  }
+
+  func testAVPlayerReadinessAcceptsProgressOnlyStartupStats() {
+    let progressOnlyStats = NativeBridgeVideoStatsResponse(
+      success: true,
+      status: "downloading",
+      progress: 1,
+      totalBlocks: 128,
+      downloadedBlocks: 0,
+      totalBytes: 1024,
+      downloadedBytes: 0,
+      peerCount: 0,
+      swarmConnections: 0,
+      speedMBps: "0.00",
+      uploadSpeedMBps: nil,
+      elapsed: 1,
+      isComplete: false,
+      error: nil
+    )
+
+    XCTAssertTrue(HostBridgeService.isAVPlayerReadyForPlayback(progressOnlyStats))
+  }
+
   func testFeedUpdatedEventCodecRoundTrips() throws {
     let payload = NativeBridgeFeedUpdatedEvent(channelKey: "feed", action: "update")
     let encoded = try NativeBridgePayload.encode(NativeBridgeFeedUpdatedEventCodec(), value: payload)

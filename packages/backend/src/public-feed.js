@@ -690,6 +690,15 @@ export class PublicFeed {
       this._ownsFeedDiscovery = false
     }
 
+    // Set up feed protocol on any existing connections before cache restore. If
+    // storage already connected to a peer during backend warm-up, the Protomux
+    // feed channel should not wait behind disk/cache reads.
+    const existingConns = this.swarm.connections?.size || 0;
+    console.log('[PublicFeed] Setting up feed protocol on', existingConns, 'existing connections before cache restore');
+    for (const conn of this.swarm.connections) {
+      this.handleConnection(conn, {});
+    }
+
     // Load persisted published channels from database
     // Try new format first (with publicBeeKey), fall back to legacy format
     if (this.metaDb) {
@@ -789,12 +798,6 @@ export class PublicFeed {
       try { this.onFeedUpdate?.(); } catch {}
     }
 
-    // Set up feed protocol on any existing connections.
-    const existingConns = this.swarm.connections?.size || 0;
-    console.log('[PublicFeed] Setting up feed protocol on', existingConns, 'existing connections');
-    for (const conn of this.swarm.connections) {
-      this.handleConnection(conn, {});
-    }
     this._startGossipLoop()
     console.log('[PublicFeed] ===== PUBLIC FEED STARTED =====');
   }

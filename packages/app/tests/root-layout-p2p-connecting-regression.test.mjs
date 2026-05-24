@@ -63,3 +63,40 @@ test('initial data loading does not re-enable the startup loading spinner after 
   const loadBlock = source.slice(markerIndex, source.indexOf('  const markBackendReady = useCallback', markerIndex))
   assert.doesNotMatch(loadBlock, /setLoading\(true\)/, 'initial data should run in the background without restoring the startup spinner')
 })
+
+test('desktop web startup timeout exits the P2P startup screen in degraded mode', () => {
+  const source = readAppFile('app/_layout.web.tsx')
+  assert.match(source, /const DESKTOP_BACKEND_STARTUP_TIMEOUT_MS = 30000/)
+
+  const timeoutIndex = source.indexOf("console.warn('[App] Desktop backend startup timeout after'")
+  assert.notEqual(timeoutIndex, -1, 'desktop backend startup timeout handler should exist')
+
+  const timeoutBlock = source.slice(timeoutIndex, source.indexOf('}, DESKTOP_BACKEND_STARTUP_TIMEOUT_MS)', timeoutIndex))
+  assert.match(timeoutBlock, /setBackendError\(/, 'desktop timeout should surface a backend status message')
+  assert.match(timeoutBlock, /setReady\(true\)/, 'desktop timeout should allow the app shell to render')
+  assert.match(timeoutBlock, /setLoading\(false\)/, 'desktop timeout must clear loading so Home stops showing Starting P2P network')
+})
+
+test('desktop web init failure exits the P2P startup screen', () => {
+  const source = readAppFile('app/_layout.web.tsx')
+  const catchIndex = source.indexOf("console.error('[App] Failed to initialize Pear backend:'")
+  assert.notEqual(catchIndex, -1, 'desktop init failure catch should exist')
+
+  const catchBlock = source.slice(catchIndex, source.indexOf('  }, [loadInitialData])', catchIndex))
+  assert.match(catchBlock, /setBackendError\(/, 'desktop init failure should expose the failure')
+  assert.match(catchBlock, /setReady\(true\)/, 'desktop init failure should allow the app shell to render')
+  assert.match(catchBlock, /setLoading\(false\)/, 'desktop init failure must clear loading so Home stops showing Starting P2P network')
+})
+
+test('desktop web backend ready clears loading before initial data loading begins', () => {
+  const source = readAppFile('app/_layout.web.tsx')
+  const readyIndex = source.indexOf('platformRPC.events.onReady(async (data: any) => {')
+  assert.notEqual(readyIndex, -1, 'desktop ready handler should exist')
+
+  const readyBlock = source.slice(readyIndex, source.indexOf('        platformRPC.events.onVideoStats', readyIndex))
+  const setLoadingIndex = readyBlock.indexOf('setLoading(false)')
+  const loadInitialDataIndex = readyBlock.indexOf('loadInitialData().catch')
+  assert.notEqual(setLoadingIndex, -1, 'desktop backend ready should clear loading')
+  assert.notEqual(loadInitialDataIndex, -1, 'desktop backend ready should load initial data in the background')
+  assert.ok(setLoadingIndex < loadInitialDataIndex, 'desktop loading should clear before initial data fetches can hang or retry')
+})

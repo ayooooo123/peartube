@@ -46,6 +46,7 @@ const isBridgeDesktop = typeof window !== 'undefined' && !!(window as any).bridg
 const shouldUseStatsPollingFallback = !isBridgeDesktop
 const isValidBlobServerPort = (port: unknown): port is number =>
   typeof port === 'number' && Number.isFinite(port) && port > 0
+const DESKTOP_BACKEND_STARTUP_TIMEOUT_MS = 30000
 
 // Types from shared package
 import type { Identity, Video } from '@peartube/core'
@@ -72,6 +73,8 @@ export default function RootLayout() {
   const [blobServerPort, setBlobServerPort] = useState<number | null>(() => cachedAppState?.blobServerPort ?? null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const statsPollersRef = useRef<Map<string, NodeJS.Timeout>>(new Map())
+  const desktopStartupTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const desktopBackendReadyRef = useRef(false)
 
   // Backend init effect is declared after initPearBackend
 
@@ -152,6 +155,10 @@ export default function RootLayout() {
     return () => {
       for (const t of statsPollersRef.current.values()) clearInterval(t)
       statsPollersRef.current.clear()
+      if (desktopStartupTimerRef.current) {
+        clearTimeout(desktopStartupTimerRef.current)
+        desktopStartupTimerRef.current = null
+      }
     }
   }, [])
 
@@ -196,6 +203,11 @@ export default function RootLayout() {
 
   const initPearBackend = useCallback(async () => {
     console.log('[App] Initializing Pear desktop backend via platform RPC...')
+    desktopBackendReadyRef.current = false
+    if (desktopStartupTimerRef.current) {
+      clearTimeout(desktopStartupTimerRef.current)
+      desktopStartupTimerRef.current = null
+    }
 
     try {
       // Import platform RPC for web
@@ -205,12 +217,29 @@ export default function RootLayout() {
       const alreadyInitialized = platformRPC.isInitialized()
 
       if (!alreadyInitialized) {
+        desktopStartupTimerRef.current = setTimeout(() => {
+          if (!desktopBackendReadyRef.current) {
+            console.warn('[App] Desktop backend startup timeout after', DESKTOP_BACKEND_STARTUP_TIMEOUT_MS, 'ms - entering degraded mode')
+            setBackendError('Backend is taking longer than expected. You can browse the UI - it will connect when ready.')
+            setReady(true)
+            setLoading(false)
+          }
+          desktopStartupTimerRef.current = null
+        }, DESKTOP_BACKEND_STARTUP_TIMEOUT_MS)
+
         // Subscribe to events only on first init
         platformRPC.events.onReady(async (data: any) => {
+          if (desktopBackendReadyRef.current) return
+          desktopBackendReadyRef.current = true
+          if (desktopStartupTimerRef.current) {
+            clearTimeout(desktopStartupTimerRef.current)
+            desktopStartupTimerRef.current = null
+          }
           console.log('[App] Backend ready, blobServerPort:', data?.blobServerPort)
           setBlobServerPort(isValidBlobServerPort(data?.blobServerPort) ? data.blobServerPort : null)
           setReady(true)
           setLoading(false)
+          setBackendError(null)
           loadInitialData().catch((err: any) => {
             console.error('[App] Background initial data load failed:', err?.message || err)
           })
@@ -228,6 +257,21 @@ export default function RootLayout() {
 
         // Initialize
         await platformRPC.initPlatformRPC()
+        if (!desktopBackendReadyRef.current) {
+          desktopBackendReadyRef.current = true
+          if (desktopStartupTimerRef.current) {
+            clearTimeout(desktopStartupTimerRef.current)
+            desktopStartupTimerRef.current = null
+          }
+          const existingBlobServerPort = platformRPC.getBlobServerPort()
+          setBlobServerPort(isValidBlobServerPort(existingBlobServerPort) ? existingBlobServerPort : null)
+          setReady(true)
+          setLoading(false)
+          setBackendError(null)
+          loadInitialData().catch((err: any) => {
+            console.error('[App] Background initial data load failed:', err?.message || err)
+          })
+        }
       } else {
         // Already initialized - restore from cache or load fresh
         console.log('[App] RPC already initialized, cached state:', cachedAppState ? 'yes' : 'no')
@@ -256,6 +300,13 @@ export default function RootLayout() {
       }
     } catch (err) {
       console.error('[App] Failed to initialize Pear backend:', err)
+      if (desktopStartupTimerRef.current) {
+        clearTimeout(desktopStartupTimerRef.current)
+        desktopStartupTimerRef.current = null
+      }
+      setBackendError(err instanceof Error ? err.message : 'Failed to initialize desktop backend')
+      setReady(true)
+      setLoading(false)
     }
   }, [loadInitialData])
 
@@ -431,6 +482,11 @@ export default function RootLayout() {
       platformRPC?.terminatePlatformRPC?.()
     } catch {}
     platformRPC = null
+    desktopBackendReadyRef.current = false
+    if (desktopStartupTimerRef.current) {
+      clearTimeout(desktopStartupTimerRef.current)
+      desktopStartupTimerRef.current = null
+    }
     setReady(false)
     setLoading(true)
     setBackendError(null)

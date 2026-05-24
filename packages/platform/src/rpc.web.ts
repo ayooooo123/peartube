@@ -117,7 +117,10 @@ async function connectTransport() {
   // New path: Electron bridge from preload.js
   if (window.bridge?.startWorker) {
     console.log('[Platform RPC] Using Electron bridge transport');
-    await window.bridge.startWorker(BACKEND_WORKER);
+    const started = await window.bridge.startWorker(BACKEND_WORKER);
+    if (!started) {
+      throw new Error('Failed to start Electrobun backend worker');
+    }
     console.log('[Platform RPC] Worker started:', BACKEND_WORKER);
     const stream = createBridgePipe(BACKEND_WORKER);
     const client = createProtocolClient({ stream });

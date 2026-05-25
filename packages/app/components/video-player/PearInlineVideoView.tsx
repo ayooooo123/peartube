@@ -246,7 +246,14 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         },
         destroy: async () => {
           player.pause()
+          player.showNowPlayingNotification = false
+          player.staysActiveInBackground = false
           player.currentTime = 0
+          if (typeof player.replaceAsync === 'function') {
+            await player.replaceAsync(null)
+          } else {
+            player.replace(null)
+          }
         },
         seek: async (timeSeconds: number) => {
           seekPlaybackRecoveryUntilRef.current = Date.now() + SEEK_PLAYBACK_RECOVERY_MS

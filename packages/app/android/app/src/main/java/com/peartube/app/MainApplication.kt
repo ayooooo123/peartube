@@ -1,7 +1,9 @@
 package com.peartube.app
 
+import android.app.Activity
 import android.app.Application
 import android.content.res.Configuration
+import android.os.Bundle
 
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
@@ -19,6 +21,7 @@ import com.peartube.app.PeartubeNetworkDiscovery
 class MainApplication : Application(), ReactApplication {
 
   private val networkDiscovery by lazy { PeartubeNetworkDiscovery(this) }
+  private var startedActivityCount = 0
 
   override val reactHost: ReactHost by lazy {
     ExpoReactHostFactory.getDefaultReactHost(
@@ -40,11 +43,33 @@ class MainApplication : Application(), ReactApplication {
       ReleaseLevel.STABLE
     }
     loadReactNative(this)
-    try {
-      networkDiscovery.start()
-    } catch (t: Throwable) {
-      networkDiscovery.logException("startup", t)
-    }
+    registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+      override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+      override fun onActivityStarted(activity: Activity) {
+        startedActivityCount += 1
+        if (startedActivityCount == 1) {
+          try {
+            networkDiscovery.start()
+          } catch (t: Throwable) {
+            networkDiscovery.logException("foreground", t)
+          }
+        }
+      }
+      override fun onActivityResumed(activity: Activity) = Unit
+      override fun onActivityPaused(activity: Activity) = Unit
+      override fun onActivityStopped(activity: Activity) {
+        startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
+        if (startedActivityCount == 0) {
+          try {
+            networkDiscovery.stop()
+          } catch (t: Throwable) {
+            networkDiscovery.logException("background", t)
+          }
+        }
+      }
+      override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+      override fun onActivityDestroyed(activity: Activity) = Unit
+    })
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
   }
 

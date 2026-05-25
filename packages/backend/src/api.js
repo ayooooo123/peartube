@@ -332,10 +332,12 @@ export function createApi({
     const previews = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
     if (previews.length === 0) return []
     const resolvedPublicBeeKey = publicBeeKey || entry?.publicBeeKey || null
+    const feedEntryHasLivePeer = Number(entry?.peerCount || 0) > 0
     return previews
       .filter((video) => video?.id || video?.path)
       .map((video) => {
         const id = normalizeVideoId(video.id || video.path)
+        const videoAvailability = video.availability || video.byteAvailability || (feedEntryHasLivePeer ? 'playable' : null)
         return {
           ...video,
           id,
@@ -343,6 +345,8 @@ export function createApi({
           channelKey: driveKey,
           publicBeeKey: resolvedPublicBeeKey,
           relayBacked: Boolean(entry?.relayServing || entry?.relayRole === 'cache' || entry?.source === 'relay-cache'),
+          availability: videoAvailability || video.availability,
+          byteAvailability: video.byteAvailability || videoAvailability || undefined,
           mimeType: video.mimeType || 'video/mp4',
         }
       })
@@ -931,12 +935,20 @@ export function createApi({
 
         const isPlayableAvailabilityHint = (hint) => hint?.availability === 'playable'
 
-        const resolveExplicitVideoAvailability = ({ localHint, peerHint }) => {
+        const resolveExplicitVideoAvailability = ({ video, localHint, peerHint }) => {
+          const explicitAvailability = video?.byteAvailability || video?.availability || null
+
           // Fast path: if our local store already has the opening blocks, the
           // video is immediately watchable without waiting on remote proof.
           if (isPlayableAvailabilityHint(localHint)) return 'playable'
 
-          // Remote playability must be explicitly proven by a peer serving hint.
+          // Preserve explicit playable preview refs emitted by the public-feed
+          // fallback. Those refs came from a live peer/relay manifest; without
+          // this, Android zero-peer states can downgrade renderable preview
+          // cards to unavailable before the blob hint round-trip completes.
+          if (explicitAvailability === 'playable') return 'playable'
+
+          // Remote playability must otherwise be explicitly proven by a peer serving hint.
           if (peerHint?.availability === 'playable') return 'playable'
           if (peerHint?.availability && peerHint.availability !== 'unknown') {
             return peerHint.availability
@@ -989,7 +1001,7 @@ export function createApi({
             const localHint = id ? localHintsById.get(id) : null
             const peerHint = id ? peerHintsById.get(id) : null
             const availability = id
-              ? resolveExplicitVideoAvailability({ localHint, peerHint })
+              ? resolveExplicitVideoAvailability({ video, localHint, peerHint })
               : 'unavailable'
 
             return {

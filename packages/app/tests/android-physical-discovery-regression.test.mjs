@@ -17,34 +17,33 @@ function readAppFile(relativePath) {
   return fs.readFileSync(path.join(appRoot, relativePath), 'utf8')
 }
 
-test('Android native discovery module owns MulticastLock lifecycle and status diagnostics', () => {
+test('Android native discovery module exposes status helpers while the application lifecycle owns the MulticastLock', () => {
   const moduleSource = readAppFile('android/app/src/main/java/com/peartube/app/PeartubeNetworkDiscoveryModule.kt')
   const packageSource = readAppFile('android/app/src/main/java/com/peartube/app/PeartubeNetworkDiscoveryPackage.kt')
   const applicationSource = readAppFile('android/app/src/main/java/com/peartube/app/MainApplication.kt')
 
-  assert.match(moduleSource, /WifiManager\.MulticastLock/)
-  assert.match(moduleSource, /createMulticastLock\("peartube-network-discovery"\)/)
-  assert.match(moduleSource, /setReferenceCounted\(false\)/)
   assert.match(moduleSource, /fun acquireMulticastLock\(/)
   assert.match(moduleSource, /fun releaseMulticastLock\(/)
   assert.match(moduleSource, /fun getDiscoveryNetworkStatus\(/)
+  assert.doesNotMatch(moduleSource, /private var multicastLock/)
   assert.match(packageSource, /PeartubeNetworkDiscoveryModule\(reactContext\)/)
-  assert.match(applicationSource, /private val networkDiscovery by lazy \{ PeartubeNetworkDiscovery\(this\) \}/)
+  assert.match(applicationSource, /registerActivityLifecycleCallbacks\(/)
   assert.match(applicationSource, /networkDiscovery\.start\(\)/)
+  assert.match(applicationSource, /networkDiscovery\.stop\(\)/)
   assert.match(applicationSource, /networkDiscovery\.logException\("startup", t\)/)
 })
 
-test('root layout requests Android discovery permissions, records results, and acquires MulticastLock before backend startup', () => {
+test('root layout requests Android discovery permissions, records results, and reads multicast lock status before backend startup', () => {
   const source = readAppFile('app/_layout.tsx')
 
   assert.match(source, /NativeModules/)
-  assert.match(source, /PeartubeNetworkDiscovery/)
   assert.match(source, /requestAndroidDiscoveryPermissions/)
   assert.match(source, /PermissionsAndroid\.request\(PermissionsAndroid\.PERMISSIONS\.NEARBY_WIFI_DEVICES\)/)
   assert.match(source, /setAndroidDiscoveryPermissionStatus/)
-  assert.doesNotMatch(source, /PeartubeNetworkDiscovery\?\.acquireMulticastLock\?\.\(\)/)
   assert.match(source, /requirePeartubeNetworkDiscovery\(\)/)
-  assert.match(source, /await discoveryModule\.acquireMulticastLock\(\)/)
+  assert.match(source, /await discoveryModule\.getDiscoveryNetworkStatus\(\)/)
+  assert.doesNotMatch(source, /acquireMulticastLock\(\)/)
+  assert.doesNotMatch(source, /releaseMulticastLock\(\)/)
   assert.match(source, /initNativeBackend\(\)/)
   const helperIndex = source.indexOf('const requestAndroidDiscoveryPermissions = useCallback')
   const effectCallIndex = source.indexOf('await requestAndroidDiscoveryPermissions()')

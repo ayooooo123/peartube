@@ -22,7 +22,8 @@ test('native root passes explicit relay peers into the mobile backend worklet', 
   )
   assert.match(
     source,
-    /launchOptions:\s*\{[\s\S]*__peartubeLaunchOptions:\s*true[\s\S]*network:\s*\{\s*relayPeers:\s*MOBILE_RELAY_PEERS\s*\}[\s\S]*swarmOptions:\s*\{\s*knownPeers:\s*MOBILE_RELAY_PEERS\s*\}[\s\S]*\}/,
+    /launchOptions:\s*\{[\s\S]*__peartubeLaunchOptions:\s*true[\s\S]*network:\s*\{\s*relayPeers:\s*MOBILE_RELAY_PEERS\s*\}[\s\S]*\}/,
     'mobile backend launch should direct-dial the configured relays before relying on topic discovery',
   )
+  assert.doesNotMatch(source, /swarmOptions:\s*\{\s*knownPeers:\s*MOBILE_RELAY_PEERS\s*\}/)
 })

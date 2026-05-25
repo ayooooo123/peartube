@@ -100,7 +100,7 @@ export async function verifySignedChannelRootDescriptor (signed) {
     const descriptor = createChannelRootDescriptor(signed.descriptor || {})
     const attestation = b4a.from(signed.attestation, 'hex')
     const verified = IdentityKey.verify(attestation, encodeCanonicalJson(descriptor), {
-      expectedIndentity: b4a.from(descriptor.identityPublicKey, 'hex')
+      expectedIdentity: b4a.from(descriptor.identityPublicKey, 'hex')
     })
     if (!verified) return { valid: false, error: 'attestation verification failed' }
 

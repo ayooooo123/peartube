@@ -35,7 +35,6 @@ const NAMESPACE_METHODS = Object.freeze({
     verifyAttestation: 'verifyAttestation'
   },
   feed: {
-    getCanonicalFeed: 'getCanonicalFeed',
     getPublicFeed: 'getPublicFeed',
     refreshFeed: 'refreshFeed',
     submitToFeed: 'submitToFeed',
@@ -172,46 +171,6 @@ function normalizeHostErrorPayload(payload) {
   )
 }
 
-function parseOptionalJson(value) {
-  if (value == null || value === '') return null
-  if (typeof value !== 'string') return value
-  try {
-    return JSON.parse(value)
-  } catch {
-    return null
-  }
-}
-
-function normalizeNetworkStatusPayload(payload = {}) {
-  const swarmConnections = payload?.swarmConnections ?? payload?.peerCount ?? 0
-  const peerCount = payload?.peerCount ?? swarmConnections
-  const network = payload?.network ?? parseOptionalJson(payload?.networkJson)
-  const startupTiming = payload?.startupTiming ?? parseOptionalJson(payload?.startupTimingJson)
-  const doctor = payload?.doctor ?? parseOptionalJson(payload?.doctorJson)
-  const directPeerDial = payload?.directPeerDial ?? parseOptionalJson(payload?.directPeerDialJson) ?? doctor?.feed?.directPeerDial ?? null
-
-  return {
-    connected: Boolean(payload?.connected ?? (swarmConnections > 0 || peerCount > 0)),
-    peerCount,
-    swarmConnections,
-    swarmPeers: payload?.swarmPeers ?? 0,
-    feedConnections: payload?.feedConnections ?? 0,
-    feedEntries: payload?.feedEntries ?? 0,
-    channelsLoaded: payload?.channelsLoaded ?? 0,
-    swarmOffline: Boolean(payload?.swarmOffline),
-    swarmOfflineReason: payload?.swarmOfflineReason ?? null,
-    swarmListenResolved: Boolean(payload?.swarmListenResolved),
-    peerPoolJoined: Boolean(payload?.peerPoolJoined),
-    publicFeedDiscoveryJoined: Boolean(payload?.publicFeedDiscoveryJoined),
-    feedTopicHex: payload?.feedTopicHex ?? null,
-    recommendedBoundary: payload?.recommendedBoundary ?? doctor?.recommendedBoundary ?? null,
-    network,
-    startupTiming,
-    doctor,
-    directPeerDial
-  }
-}
-
 function createTransportClosedError(reason) {
   const suffix = reason ? `: ${reason}` : ''
   return createHostError(
@@ -238,14 +197,6 @@ function createMethodCaller(rpc, ready, methodName) {
     } catch (error) {
       throw normalizeProtocolError(error)
     }
-  }
-}
-
-function createNetworkStatusCaller(rpc, ready) {
-  return async (request = {}) => {
-    const response = await createMethodCaller(rpc, ready, 'getSwarmStatus')(request)
-    const status = normalizeNetworkStatusPayload(response)
-    return status
   }
 }
 
@@ -393,9 +344,15 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
 
             settleResolve(emitHostReady(status))
           } catch (error) {
+            const failureCode = error?.code || 'ERR'
+            const failureMessage = error?.message || String(error)
             await appendDebugLine(
-              `[createProtocolClient] getStatus failed ${error?.code || 'ERR'} ${error?.message || String(error)}, waiting for eventReady`
+              `[createProtocolClient] getStatus failed ${failureCode} ${failureMessage}, waiting for eventReady`
             )
+            console.warn('[createProtocolClient] getStatus handshake failed:', failureCode, failureMessage)
+            if (error?.stack) {
+              console.warn(error.stack)
+            }
             // Don't reject on getStatus failure — the backend may still be
             // initializing. Let the eventReady / eventError listeners settle
             // the promise instead. Only reject immediately for version mismatch.
@@ -410,12 +367,6 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     return readyPromise
   }
 
-  const getNetworkStatus = async (request = {}) => {
-    const status = await createNetworkStatusCaller(rpc, ready)(request)
-    events.emit(PROTOCOL_EVENTS.NETWORK_STATUS, status)
-    return status
-  }
-
   return {
     stream,
     rpc,
@@ -426,7 +377,7 @@ export function createProtocolClient({ stream, HRPCImpl } = {}) {
     },
     system: {
       getStatus: createMethodCaller(rpc, ready, 'getStatus'),
-      getSwarmStatus: getNetworkStatus,
+      getSwarmStatus: createMethodCaller(rpc, ready, 'getSwarmStatus'),
       getBlobServerPort: createMethodCaller(rpc, ready, 'getBlobServerPort')
     },
     identity: createNamespace(rpc, ready, NAMESPACE_METHODS.identity),

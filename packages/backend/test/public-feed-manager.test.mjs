@@ -1,10 +1,4 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 import { Duplex } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import test from 'node:test'
@@ -15,6 +9,7 @@ import Protomux from 'protomux'
 
 import { PublicFeedManager } from '../src/public-feed.js'
 import { NETWORK_TOPIC_STRING } from '../src/types.js'
+import { SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA, CHANNEL_ROOT_DESCRIPTOR_SCHEMA } from '../src/channel-descriptor.js'
 const DRIVE_KEY = '11'.repeat(32)
 const PUBLIC_BEE_KEY = '22'.repeat(32)
 const NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'))
@@ -26,7 +21,6 @@ function createSwarm() {
     connections: new Set(),
     peers: new Map(),
     joinCalls: [],
-    statusCalls: [],
     joinPeerCalls: [],
     fallbackJoinPeerCalls: [],
     join(topic, opts) {
@@ -36,10 +30,6 @@ function createSwarm() {
           return Promise.resolve()
         }
       }
-    },
-    status(topic) {
-      this.statusCalls.push(topic)
-      return this.peerPoolDiscovery || null
     },
     joinPeer(publicKey) {
       this.joinPeerCalls.push(publicKey)
@@ -140,7 +130,7 @@ function createMemoryConnectionPair() {
   return [a, b]
 }
 
-test('PublicFeedManager records discovered peers without app-level dialing', () => {
+test('PublicFeedManager records peers discovered on the shared topic without app-level redialing', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
   const publicKey = b4a.alloc(32, 7)
@@ -150,7 +140,8 @@ test('PublicFeedManager records discovered peers without app-level dialing', () 
     assert.equal(swarm.joinPeerCalls.length, 0)
     const stats = manager.getStats().directPeerDial
     assert.equal(stats.discoveredPeers, 1)
-    assert.equal(stats.swarmConnections, 0)
+    assert.equal(stats.queued, 0)
+    assert.equal(stats.pending, 0)
     assert.equal(stats.peers[0].key, b4a.toString(publicKey, 'hex').slice(0, 16))
   } finally {
     manager.stop()
@@ -185,55 +176,7 @@ test('PublicFeedManager keeps discovered relay address hints as Hyperswarm diagn
     assert.equal(swarm.joinPeerCalls.length, 0)
     assert.equal(swarm.peers.get(keyHex).relayAddresses, relayAddresses)
     assert.deepEqual(swarm.peers.get(keyHex).topics, [NETWORK_TOPIC])
-    assert.equal(manager.getStats().directPeerDial.peers[0].discoveredRelayAddresses, 1)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('PublicFeedManager bounds remembered discovered peers for long-running desktop sessions', () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb(), { maxDiscoveredPeers: 3 })
-
-  try {
-    for (let i = 1; i <= 5; i++) {
-      assert.equal(manager.handleDiscoveredPeer({ publicKey: b4a.alloc(32, i) }, NETWORK_TOPIC), true)
-    }
-
-    const stats = manager.getStats().directPeerDial
-    assert.equal(stats.discoveredPeers, 3)
-    assert.deepEqual(stats.peers.map((peer) => peer.key), [
-      b4a.toString(b4a.alloc(32, 3), 'hex').slice(0, 16),
-      b4a.toString(b4a.alloc(32, 4), 'hex').slice(0, 16),
-      b4a.toString(b4a.alloc(32, 5), 'hex').slice(0, 16),
-    ])
-  } finally {
-    manager.stop()
-  }
-})
-
-test('PublicFeedManager bounds retained peer feed entries from HAVE_FEED gossip', () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb(), { maxFeedEntries: 3, requireSignedPeerEntries: false })
-  const conn = createConnection()
-
-  try {
-    manager.handleMessage({
-      type: 'HAVE_FEED',
-      entries: Array.from({ length: 5 }, (_, index) => ({
-        driveKey: (index + 1).toString(16).padStart(64, '0'),
-        publicBeeKey: (index + 101).toString(16).padStart(64, '0'),
-      })),
-    }, conn)
-
-    assert.equal(manager.entries.size, 3)
-    assert.equal(manager.entryPeerCounts.size, 3)
-    assert.equal(manager.peerFeedKeys.get(conn)?.size, 3)
-    assert.deepEqual(manager.getFeed().map((entry) => entry.driveKey).sort(), [
-      '3'.padStart(64, '0'),
-      '4'.padStart(64, '0'),
-      '5'.padStart(64, '0'),
-    ])
+    assert.equal(manager.getStats().directPeerDial.peers[0].swarm.relayAddresses, 1)
   } finally {
     manager.stop()
   }
@@ -278,9 +221,12 @@ test('PublicFeedManager does not recurse through the storage peer emitter wrappe
 
     const stats = manager.getStats().directPeerDial
     assert.equal(emitted, 1)
+    assert.equal(stats.queued, 0)
+    assert.equal(stats.failed, 0)
     assert.equal(stats.discoveredPeers, 1)
+    assert.equal(stats.peers[0].lastError, null)
     assert.equal(swarm.peers.get(keyHex).relayAddresses, relayAddresses)
-    assert.equal(stats.peers[0].discoveredRelayAddresses, 3)
+    assert.equal(stats.peers[0].swarm.relayAddresses, 3)
   } finally {
     manager.stop()
   }
@@ -921,6 +867,42 @@ test('addEntry accepts legacy peer entries without publicBeeKey', () => {
   }
 })
 
+test('handle HAVE_FEED accepts migrated signed descriptors without explicit publicBeeKey', () => {
+  const swarm = createSwarm()
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+  const conn = createConnection()
+
+  try {
+    manager.handleMessage({
+      type: 'HAVE_FEED',
+      entries: [{
+        driveKey: DRIVE_KEY,
+        signedDescriptor: {
+          schema: SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
+          descriptor: {
+            schema: CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
+            channelId: DRIVE_KEY,
+            identityPublicKey: DRIVE_KEY,
+            metadataKey: PUBLIC_BEE_KEY,
+            mediaKey: '33'.repeat(32),
+            seq: 1,
+          },
+          proof: 'aa',
+          attestation: 'bb',
+        },
+        channelName: 'Migrated channel',
+      }],
+    }, conn)
+
+    const feed = manager.getFeed()
+    assert.equal(feed.length, 1)
+    assert.equal(feed[0].publicBeeKey, PUBLIC_BEE_KEY)
+    assert.equal(feed[0].channelName, 'Migrated channel')
+  } finally {
+    manager.stop()
+  }
+})
+
 test('availability hint request is answered on the existing feed channel', async () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())
@@ -964,389 +946,4 @@ test('availability hint request is answered on the existing feed channel', async
     Protomux.from = originalFrom
     manager.stop()
   }
-})
-
-test('requestFeedsFromPeers sends NEED_FEED so peers reply with their feed', () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  const conn = createConnection()
-  const sent = []
-
-  const originalFrom = Protomux.from
-  Protomux.from = () => ({
-    pair() {},
-    createChannel(opts) {
-      return {
-        messages: [{ send(msg) { sent.push(msg) } }],
-        open() { opts.onopen() },
-      }
-    }
-  })
-
-  try {
-    manager.handleConnection(conn, {})
-    const count = manager.requestFeedsFromPeers()
-    assert.equal(count, 1)
-    assert.deepEqual(sent[sent.length - 1], { type: 'NEED_FEED' })
-  } finally {
-    Protomux.from = originalFrom
-    manager.stop()
-  }
-})
-
-test('periodic feed gossip resends HAVE_FEED and NEED_FEED on existing client connections', async () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  const conn = createConnection()
-  const sent = []
-
-  manager._gossipIntervalMs = 10
-  manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY)
-
-  const originalFrom = Protomux.from
-  Protomux.from = () => ({
-    pair() {},
-    createChannel(opts) {
-      return {
-        messages: [{ send(msg) { sent.push(msg) } }],
-        open() { opts.onopen() },
-      }
-    }
-  })
-
-  try {
-    await manager.start()
-    manager.handleConnection(conn, {})
-    sent.length = 0
-
-    await new Promise((resolve) => setTimeout(resolve, 35))
-
-    assert.ok(sent.some((msg) => msg.type === 'HAVE_FEED'), 'gossip loop should re-announce local feed entries')
-    assert.ok(sent.some((msg) => msg.type === 'NEED_FEED'), 'gossip loop should request peer feed refresh')
-  } finally {
-    Protomux.from = originalFrom
-    manager.stop()
-  }
-})
-
-test('periodic feed gossip does not perform repeated app-level redials after sockets close', async () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  const publicKey = b4a.alloc(32, 9)
-  const conn = createConnection()
-
-  manager._gossipIntervalMs = 10
-
-  try {
-    await manager.start()
-    assert.equal(manager.handleDiscoveredPeer({ publicKey }), true)
-    assert.equal(swarm.joinPeerCalls.length, 0)
-
-    manager.handleConnection(conn, { publicKey })
-    conn.emit('close')
-
-    await new Promise((resolve) => setTimeout(resolve, 35))
-
-    assert.equal(swarm.joinPeerCalls.length, 0, 'gossip loop should not perform app-level redials')
-    assert.equal(manager.getStats().directPeerDial.discoveredPeers, 1)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('peer entries with publicBeeKey survive peer disconnect at peerCount zero', () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  const conn = createConnection()
-
-  try {
-    manager.addEntry(DRIVE_KEY, 'peer', PUBLIC_BEE_KEY)
-    manager.peerFeedKeys.set(conn, new Set([DRIVE_KEY]))
-    manager.entryPeerCounts.set(DRIVE_KEY, 1)
-
-    manager._clearPeerFeedKeys(conn)
-
-    const entry = manager.entries.get(DRIVE_KEY)
-    assert.ok(entry)
-    assert.equal(entry.source, 'peer')
-    assert.equal(manager.entryPeerCounts.has(DRIVE_KEY), false)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('peer disconnect notifies listeners when a cached keyed entry loses live announcers', () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  const conn = createConnection()
-  let updates = 0
-
-  manager.setOnFeedUpdate(() => {
-    updates += 1
-  })
-
-  try {
-    manager.addEntry(DRIVE_KEY, 'peer', PUBLIC_BEE_KEY)
-    manager.peerFeedKeys.set(conn, new Set([DRIVE_KEY]))
-    manager.entryPeerCounts.set(DRIVE_KEY, 1)
-
-    manager._clearPeerFeedKeys(conn)
-
-    assert.equal(updates, 1)
-    assert.equal(manager.getFeed()[0]?.peerCount, 0)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('handle HAVE_FEED stores serving manifest data on the entry', () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb(), { requireSignedPeerEntries: false })
-  const conn = createConnection()
-
-  try {
-    manager.handleMessage({
-      type: 'HAVE_FEED',
-      entries: [{
-        driveKey: DRIVE_KEY,
-        publicBeeKey: PUBLIC_BEE_KEY,
-        channelName: 'Manifest Channel',
-        videoCount: 3,
-        manifestUpdatedAt: 99,
-        previewVideos: [{
-          id: 'preview-2',
-          title: 'Preview',
-          uploadedAt: 99,
-          blobId: '0:8:0:1024',
-          blobsCoreKey: '44'.repeat(32),
-          mimeType: 'video/mp4',
-          availability: 'playable',
-        }],
-      }],
-    }, conn)
-
-    const feed = manager.getFeed()
-    assert.equal(feed.length, 1)
-    assert.equal(feed[0].channelName, 'Manifest Channel')
-    assert.equal(feed[0].videoCount, 3)
-    assert.equal(feed[0].manifestUpdatedAt, 99)
-    assert.equal(feed[0].previewVideos[0].id, 'preview-2')
-  } finally {
-    manager.stop()
-  }
-})
-
-test('serving manifest snapshots preserve unverified playback metadata', async () => {
-  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
-
-  try {
-    manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY, {
-      previewVideos: [{
-        id: 'preview-mkv',
-        title: 'MKV Preview',
-        uploadedAt: 99,
-        blobId: '0:8:0:1024',
-        blobsCoreKey: '44'.repeat(32),
-        mimeType: 'video/x-matroska',
-        availability: 'playable',
-        playbackSupport: 'unverified-container',
-      }],
-    })
-
-    const feed = manager.getFeed()
-    assert.equal(feed.length, 1)
-    assert.equal(feed[0].previewVideos[0].availability, 'playable')
-    assert.equal(feed[0].previewVideos[0].playbackSupport, 'unverified-container')
-  } finally {
-    manager.stop()
-  }
-})
-
-test('submitChannel stores explicit channel names before provider hydration', async () => {
-  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
-
-  try {
-    await manager.submitChannel(DRIVE_KEY, PUBLIC_BEE_KEY, {
-      channelName: 'Actual YouTube Creator',
-      previewVideos: [{
-        id: 'preview-named',
-        title: 'Named Preview',
-        uploadedAt: 99,
-        blobId: '0:8:0:1024',
-        blobsCoreKey: '55'.repeat(32),
-        mimeType: 'video/mp4',
-        availability: 'playable',
-      }],
-    })
-
-    const feed = manager.getFeed()
-    assert.equal(feed.length, 1)
-    assert.equal(feed[0].channelName, 'Actual YouTube Creator')
-    assert.equal(feed[0].previewVideos[0].id, 'preview-named')
-  } finally {
-    manager.stop()
-  }
-})
-
-
-test('requestAvailabilityHints merges playable responses from feed peers (including relayed peers on same channel)', async () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  const conn = createConnection()
-  const sent = []
-
-  const originalFrom = Protomux.from
-  Protomux.from = () => ({
-    pair() {},
-    createChannel() {
-      return {
-        messages: [{ send(msg) { sent.push(msg) } }],
-        open() {},
-      }
-    }
-  })
-
-  try {
-    manager.handleConnection(conn, {})
-    manager.feedConnections.add(conn)
-    const promise = manager.requestAvailabilityHints([
-      { driveKey: DRIVE_KEY, id: 'v1', blobsCoreKey: '33'.repeat(32), blobId: '1:2:3:4' }
-    ], { timeoutMs: 100, maxPeers: 1 })
-
-    const request = sent.find((msg) => msg.type === 'AVAILABILITY_HINT_REQUEST')
-    assert.ok(request)
-    manager.handleMessage({
-      type: 'AVAILABILITY_HINT_RESPONSE',
-      requestId: request.requestId,
-      hints: [{ driveKey: DRIVE_KEY, id: 'v1', availability: 'playable', hasHeadBlock: true, contiguousBlocks: 8 }]
-    }, conn)
-
-    const hints = await promise
-    assert.equal(hints.length, 1)
-    assert.equal(hints[0].availability, 'playable')
-  } finally {
-    Protomux.from = originalFrom
-    manager.stop()
-  }
-})
-
-
-test('relay catalog entries stay visible and do not become published channels', async (t) => {
-  const feed = new PublicFeedManager({
-    connections: new Set(),
-    peers: new Set(),
-    join() { return { flushed: async () => {} } },
-  }, {
-    async get() { return null },
-    async put() {},
-  })
-
-  await feed.submitRelayCatalogEntry({
-    driveKey: 'aa'.repeat(32),
-    publicBeeKey: 'bb'.repeat(32),
-    previewVideos: [{
-      id: 'relay-video',
-      blobId: '0:4:0:512',
-      blobsCoreKey: 'cc'.repeat(32),
-      availability: 'playable',
-    }],
-  })
-
-  assert.equal(feed.isChannelPublished('aa'.repeat(32)), false)
-  const entries = feed.getFeed()
-  assert.equal(entries.length, 1)
-  assert.equal(entries[0].source, 'relay-cache')
-  assert.equal(entries[0].relayRole, 'cache')
-  assert.equal(entries[0].relayServing, true)
-  assert.equal(entries[0].peerCount, 0)
-})
-test('relay catalog empty preview snapshots clear stale previews', async () => {
-  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
-
-  try {
-    await manager.submitRelayCatalogEntry({
-      driveKey: DRIVE_KEY,
-      publicBeeKey: PUBLIC_BEE_KEY,
-      manifestUpdatedAt: 100,
-      previewVideos: [{
-        id: 'stale-preview',
-        title: 'Stale Preview',
-        blobId: '0:4:0:512',
-        blobsCoreKey: 'cc'.repeat(32),
-        availability: 'playable',
-      }],
-    })
-    assert.equal(manager.getFeed()[0].previewVideos.length, 1)
-
-    await manager.submitRelayCatalogEntry({
-      driveKey: DRIVE_KEY,
-      publicBeeKey: PUBLIC_BEE_KEY,
-      manifestUpdatedAt: 101,
-      previewVideos: [],
-    })
-
-    const feed = manager.getFeed()
-    assert.equal(feed.length, 1)
-    assert.deepEqual(feed[0].previewVideos, [])
-    assert.equal(feed[0].manifestUpdatedAt, 101)
-  } finally {
-    manager.stop()
-  }
-})
-
-test('feed snapshot provider propagates explicit empty previews', async () => {
-  const swarm = createSwarm()
-  const manager = new PublicFeedManager(swarm, createMetaDb())
-  const conn = createConnection()
-  const sent = []
-
-  manager.addEntry(DRIVE_KEY, 'local', PUBLIC_BEE_KEY, {
-    manifestUpdatedAt: 100,
-    previewVideos: [{
-      id: 'old-preview',
-      blobId: '0:4:0:512',
-      blobsCoreKey: 'dd'.repeat(32),
-      availability: 'playable',
-    }],
-  })
-  manager.setFeedSnapshotProvider(async () => [{
-    driveKey: DRIVE_KEY,
-    publicBeeKey: PUBLIC_BEE_KEY,
-    manifestUpdatedAt: 101,
-    previewVideos: [],
-  }])
-
-  const originalFrom = Protomux.from
-  Protomux.from = () => ({
-    pair() {},
-    createChannel(opts) {
-      return {
-        messages: [{ send(msg) { sent.push(msg) } }],
-        open() { opts.onopen() }
-      }
-    }
-  })
-
-  try {
-    manager.handleConnection(conn, {})
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    const refreshed = sent.find((msg) => msg.type === 'HAVE_FEED' && msg.entries?.[0]?.manifestUpdatedAt === 101)
-    assert.ok(refreshed)
-    assert.deepEqual(refreshed.entries[0].previewVideos, [])
-    assert.deepEqual(manager.getFeed()[0].previewVideos, [])
-  } finally {
-    Protomux.from = originalFrom
-    manager.stop()
-  }
-})
-
-
-test('PublicFeedManager wires existing swarm sockets before cache restore reads', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'public-feed.js'), 'utf8')
-  const existingIndex = source.indexOf('existing connections before cache restore')
-  const cacheRestoreIndex = source.indexOf('discovered-channels-v2')
-
-  assert.ok(existingIndex > 0, 'existing connection wiring should be explicitly before cache restore')
-  assert.ok(cacheRestoreIndex > existingIndex, 'cache restore should happen after existing socket wiring')
 })

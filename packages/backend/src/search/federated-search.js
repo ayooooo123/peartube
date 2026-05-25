@@ -70,15 +70,35 @@ export class FederatedSearch {
   _handleConnection(conn, info) {
     if (!conn || this.peerChannels.has(conn)) return
 
-    const mux = Protomux.from(conn)
+    let mux
+    try {
+      mux = Protomux.from(conn)
+    } catch (err) {
+      console.error('[FederatedSearch] Protomux.from failed during handshake:', err?.message || err, err?.stack || '')
+      return
+    }
+
     const protocol = FederatedSearch.protocolName()
 
-    mux.pair({ protocol }, () => {
-      this._createSearchChannel(mux, conn)
-    })
+    try {
+      mux.pair({ protocol }, () => {
+        try {
+          this._createSearchChannel(mux, conn)
+        } catch (err) {
+          console.error('[FederatedSearch] mux.pair createSearchChannel failed:', err?.message || err, err?.stack || '')
+        }
+      })
+    } catch (err) {
+      console.error('[FederatedSearch] mux.pair failed during handshake:', err?.message || err, err?.stack || '')
+      return
+    }
 
     // Also try opening from our side
-    this._createSearchChannel(mux, conn)
+    try {
+      this._createSearchChannel(mux, conn)
+    } catch (err) {
+      console.error('[FederatedSearch] _createSearchChannel failed during handshake:', err?.message || err, err?.stack || '')
+    }
 
     conn.on('close', () => {
       this.peerChannels.delete(conn)

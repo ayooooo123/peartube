@@ -1730,6 +1730,7 @@ export function createApi({
             videoCount: Array.isArray(rawVideos) ? rawVideos.length : 0,
             manifestUpdatedAt: getStableManifestUpdatedAt(meta, rawVideos, publicBee),
             previewVideos,
+            signedDescriptor: meta?.signedDescriptor || null,
           }
         } catch {
           return null

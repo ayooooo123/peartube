@@ -437,6 +437,7 @@ export class PublicFeed {
           previewVideos: Array.isArray(snapshot.previewVideos)
             ? this._sanitizePreviewVideos(snapshot.previewVideos)
             : this._sanitizePreviewVideos(byKey.get(driveKey)?.previewVideos),
+          signedDescriptor: snapshot.signedDescriptor || byKey.get(driveKey)?.signedDescriptor || null,
         }
         byKey.set(driveKey, merged)
         this._applyEntrySnapshot(driveKey, merged)

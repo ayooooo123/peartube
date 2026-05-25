@@ -17,8 +17,8 @@ test('native root passes explicit relay peers into the mobile backend worklet', 
 
   assert.match(
     source,
-    /const MOBILE_RELAY_PEERS = \[[\s\S]*9890785d1a1b5af8e4bfba0f585f54272b6951e3dc0fdc43a30ed73f1d740f13[\s\S]*d10f6fbdae2d8e439cf9b6e29cbb42199fff101a8e707345eb455faab92e7d7a[\s\S]*8cdc6bc7d9d1bfe99644d06dee042023c54d55af178cfa12bf778fe51f01152a[\s\S]*43f48db991cc40002ebd9661239b49e83c1d6b41c86b06b94a57925d00e5ab05[\s\S]*\]/,
-    'mobile app should ship the known relay public keys used for Android bootstrap',
+    /const MOBILE_RELAY_PEERS = \[[\s\S]*e405808fe789b4807f264ed88ea8b2643ae031f0ffb83435a895e0b775963333[\s\S]*c41caf08c970f335583e9d1b37888940c93c136764ecb0b1358bff86fdd64aa4[\s\S]*146cca33794aa29bcecf90a02600945fafabde3a57d745fe8d1e16ada5520760[\s\S]*76e6525250aa442d7c1913ef1ecc4087b03a8e2eba9c76781950a0622a482f8c[\s\S]*\]/,
+    'mobile app should ship the current relay public keys used for Android bootstrap',
   )
   assert.match(
     source,

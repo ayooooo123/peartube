@@ -1224,10 +1224,12 @@ export async function initializeStorage(config) {
       throw new Error(`Hyperswarm unavailable for required network startup`)
     }
   } else if (!LoadedHyperswarm) {
-    LoadedHyperswarm = hyperswarmModuleReady ? await Promise.race([
-      hyperswarmModuleReady,
-      new Promise((resolve) => setTimeout(() => resolve(null), 100))
-    ]) : null
+    try {
+      LoadedHyperswarm = hyperswarmModuleReady ? await hyperswarmModuleReady : null
+    } catch (error) {
+      await appendDebugLine(`[storage] hyperswarm module load failed during startup ${error?.message || String(error)}`)
+      LoadedHyperswarm = null
+    }
   }
   let swarm
   if (typeof LoadedHyperswarm !== 'function') {

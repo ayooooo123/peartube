@@ -16,7 +16,7 @@ test('storage startup does not eagerly load HTTP before backend ready', () => {
   assert.doesNotMatch(initStorageModulesBody, /loadBareOrNodeHttpModule\(\)/)
 })
 
-test('storage startup does not await optional network dependencies before local readiness', () => {
+test('storage startup waits for the warmed Hyperswarm module instead of racing it against a 100ms timeout', () => {
   const initStorageModulesBody =
     storageSource.match(/async function initStorageModules\(\) \{([\s\S]*?)\n\}/)?.[1] ?? ''
 
@@ -26,7 +26,8 @@ test('storage startup does not await optional network dependencies before local 
   assert.match(storageSource, /function warmOptionalStorageDeps\(\)/)
   assert.match(storageSource, /function warmHyperswarmModule\(\)/)
   assert.match(storageSource, /warmOptionalStorageDeps\(\)[\s\S]*?warmHyperswarmModule\(\)[\s\S]*?await initStorageModules\(\)/)
-  assert.match(storageSource, /Promise\.race\(\[[\s\S]*?hyperswarmModuleReady[\s\S]*?setTimeout\(\(\) => resolve\(null\), 100\)/)
+  assert.match(storageSource, /LoadedHyperswarm = hyperswarmModuleReady \? await hyperswarmModuleReady : null/)
+  assert.doesNotMatch(storageSource, /Promise\.race\(\[[\s\S]*?setTimeout\(\(\) => resolve\(null\), 100\)/)
 })
 
 test('storage can require Hyperswarm instead of falling back after the optional startup race', () => {

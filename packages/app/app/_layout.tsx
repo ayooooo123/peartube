@@ -553,7 +553,6 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
         launchOptions: {
           __peartubeLaunchOptions: true,
           network: { relayPeers: MOBILE_RELAY_PEERS },
-          swarmOptions: { knownPeers: MOBILE_RELAY_PEERS },
         },
       })
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)

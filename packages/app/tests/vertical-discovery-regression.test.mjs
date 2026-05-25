@@ -330,7 +330,7 @@ test('native inline player exposes explicit PiP exit and tears down its surface 
   assert.match(source, /allowsPictureInPicture=\{autoEnterPipOnLeave\}/, 'Expo Video should keep PiP gated by route-local policy')
   assert.match(source, /startsPictureInPictureAutomatically=\{autoEnterPipOnLeave\}/, 'Expo Video should retain automatic PiP when enabled')
   assert.match(source, /exitPictureInPicture:\s*\(\) => \{[\s\S]*Expo Video PiP is controlled through VideoView props/, 'native inline player should bridge explicit PiP exit without react-native-video refs')
-  assert.match(source, /destroy: async \(\) => \{[\s\S]*player\.pause\(\)[\s\S]*player\.currentTime = 0/, 'destroy should leave no playback surface running behind the route')
+  assert.match(source, /destroy: async \(\) => \{[\s\S]*player\.pause\(\)[\s\S]*player\.showNowPlayingNotification = false[\s\S]*player\.staysActiveInBackground = false[\s\S]*player\.currentTime = 0[\s\S]*replaceAsync\(null\)[\s\S]*player\.replace\(null\)/, 'destroy should disable notification/background state and detach the Expo Video source so Android media sessions are released')
 })
 
 test('bottom tab screens pad scrollable content by the measured pill tab bar height', () => {

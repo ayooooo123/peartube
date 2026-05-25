@@ -86,7 +86,7 @@ jobs:
         uses: docker/setup-qemu-action@v4.0.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.0.0
+        uses: docker/setup-buildx-action@v4.1.0
 
       - name: Build relay image
         uses: docker/build-push-action@v7.1.0

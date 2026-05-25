@@ -77,12 +77,6 @@ const BACKEND_SOURCE_CACHE_KEY = '__PEARTUBE_BACKEND_SOURCE__'
 const DOWNLOADER_SOURCE_CACHE_KEY = '__PEARTUBE_DOWNLOADER_WORKER_SOURCE__'
 const CAST_ACTIVE_GLOBAL_KEY = '__PEARTUBE_CAST_ACTIVE__'
 const PeartubeNetworkDiscovery = (NativeModules as any).PeartubeNetworkDiscovery
-const MOBILE_RELAY_PEERS = [
-  'e405808fe789b4807f264ed88ea8b2643ae031f0ffb83435a895e0b775963333',
-  'c41caf08c970f335583e9d1b37888940c93c136764ecb0b1358bff86fdd64aa4',
-  '146cca33794aa29bcecf90a02600945fafabde3a57d745fe8d1e16ada5520760',
-  '76e6525250aa442d7c1913ef1ecc4087b03a8e2eba9c76781950a0622a482f8c',
-]
 
 function requirePeartubeNetworkDiscovery(): any {
   const mod = (NativeModules as any).PeartubeNetworkDiscovery
@@ -550,10 +544,6 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
         ),
         loadBackendSource: async () => sources.backendSource,
         loadDownloaderWorkerSource: async () => sources.downloaderWorkerSource ?? null,
-        launchOptions: {
-          __peartubeLaunchOptions: true,
-          network: { relayPeers: MOBILE_RELAY_PEERS },
-        },
       })
       startupLog('[Startup] initPlatformRPC returned ms=', Date.now() - t0)
 

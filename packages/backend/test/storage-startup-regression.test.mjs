@@ -155,12 +155,12 @@ test('storage plumbs explicit Hyperswarm network options into swarm construction
   assert.match(storageSource, /new LoadedHyperswarm\(hyperswarmOptions\)/)
 })
 
-test('storage direct-dials explicit relay peers before relying on topic discovery', () => {
+test('storage lets Hyperswarm topic discovery own default peer selection', () => {
   assert.match(storageSource, /maxParallel:\s*8/)
   assert.match(storageSource, /maxPeers:\s*96/)
-  assert.match(storageSource, /Direct-dialed[\s\S]*explicit peer\(s\) before known-peer cache load/)
-  assert.match(storageSource, /const explicitPeers = getExplicitPeerList\(\{ network, swarmOptions \}\)/)
-  assert.match(storageSource, /dialKnownPeers\(swarm, explicitPeers\)/)
+  assert.doesNotMatch(storageSource, /Direct-dialed[\s\S]*explicit peer\(s\) before known-peer cache load/)
+  assert.doesNotMatch(storageSource, /const explicitPeers = getExplicitPeerList\(\{ network, swarmOptions \}\)/)
+  assert.doesNotMatch(storageSource, /dialKnownPeers\(swarm, explicitPeers\)/)
   assert.match(storageSource, /swarm\.join\(PEARTUBE_NETWORK_TOPIC, \{ server: true, client: true \}\)/)
 })
 
@@ -195,10 +195,10 @@ test('storage captures Hyperswarm connection lifecycle diagnostics', () => {
   assert.match(storageSource, /hyperswarm: diagnostics/)
 })
 
-test('retained content discovery joins blob topics and warm-dials known peers', () => {
+test('retained content discovery joins blob topics without app-level peer dials', () => {
   assert.match(storageSource, /retainSwarmDiscovery\(ctx, blobsCore\.discoveryKey/)
-  assert.match(storageSource, /getDialableKnownPeers\(ctx\)/)
-  assert.match(storageSource, /dialKnownPeers\(ctx\.swarm, known/)
+  assert.doesNotMatch(storageSource, /getDialableKnownPeers\(ctx\)/)
+  assert.doesNotMatch(storageSource, /dialKnownPeers\(ctx\.swarm, known/)
 })
 
 test('storage captures pre-open DHT connect close diagnostics', () => {

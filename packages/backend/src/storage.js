@@ -26,11 +26,9 @@ import {
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
-import { createKnownPeerCache, loadKnownPeers, dialKnownPeers, getDialableKnownPeers, getExplicitPeerList } from './known-peers.js'
+import { createKnownPeerCache } from './known-peers.js'
 
 const DEFAULT_BLOBS_CORE_UPDATE_TIMEOUT_MS = 15000
-const DEFAULT_STARTUP_KNOWN_PEER_DIAL_LIMIT = 8
-const DEFAULT_RESUME_KNOWN_PEER_DIAL_LIMIT = 8
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -777,19 +775,6 @@ export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
   const handle = ctx.swarm.join(discoveryKey, { server: true, client: true })
   handles.set(discoveryKeyHex, handle)
 
-  if (!ctx.swarm._peartubeOffline) {
-    getDialableKnownPeers(ctx)
-      .then((known) => {
-        const dialed = dialKnownPeers(ctx.swarm, known, { limit: ctx.swarm?._peartubeStartupDialLimit || DEFAULT_STARTUP_KNOWN_PEER_DIAL_LIMIT })
-        if (dialed > 0) {
-          const label = options.label || discoveryKeyHex.slice(0, 16)
-          console.log(`[Storage] Direct-dialed ${dialed} known peer(s) for ${label}`)
-        }
-      })
-      .catch((err) => {
-        console.log('[Storage] Direct peer dial skipped:', err?.message)
-      })
-  }
 
   try {
     const flushed = handle?.flushed?.()
@@ -1240,16 +1225,6 @@ export async function initializeStorage(config) {
     try {
       const hyperswarmOptions = createHyperswarmOptions({ keyPair, network, swarmOptions })
       swarm = new LoadedHyperswarm(hyperswarmOptions);
-      swarm._peartubeStartupDialLimit = Math.max(1, Number(
-        network.startupKnownPeerDialLimit ??
-        swarmOptions.startupKnownPeerDialLimit ??
-        DEFAULT_STARTUP_KNOWN_PEER_DIAL_LIMIT
-      ) || DEFAULT_STARTUP_KNOWN_PEER_DIAL_LIMIT)
-      swarm._peartubeResumeDialLimit = Math.max(1, Number(
-        network.resumeKnownPeerDialLimit ??
-        swarmOptions.resumeKnownPeerDialLimit ??
-        DEFAULT_RESUME_KNOWN_PEER_DIAL_LIMIT
-      ) || DEFAULT_RESUME_KNOWN_PEER_DIAL_LIMIT)
     } catch (err) {
       if (requireNetwork) {
         throw new Error(`Hyperswarm failed to start for required network startup: ${err?.message || String(err)}`)
@@ -1295,8 +1270,8 @@ export async function initializeStorage(config) {
     }
   }
 
-  // Known-peer cache: persist remote pubkeys so the next cold start can
-  // `swarm.joinPeer(pk)` them directly without waiting for a topic DHT lookup.
+  // Known-peer cache: persist remote pubkeys for diagnostics and possible
+  // operator policy. Default discovery stays topic-owned by Hyperswarm.
   const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
   const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
   swarm._peartubeMetaDb = metaDb
@@ -1396,30 +1371,6 @@ export async function initializeStorage(config) {
     }
   }
 
-  // Direct-dial explicitly configured relay/known peers before any persisted DB
-  // read. These are the highest-signal peers on Android cold starts.
-  if (!swarm._peartubeOffline) {
-    const explicitPeers = getExplicitPeerList({ network, swarmOptions })
-    const explicitDialed = dialKnownPeers(swarm, explicitPeers)
-    if (explicitDialed > 0) {
-      globalNetworkStartupTiming?.record('explicit-peer-dialed', { dialed: explicitDialed, candidates: explicitPeers.length })
-      console.log('[Storage] Direct-dialed', explicitDialed, 'explicit peer(s) before known-peer cache load')
-      void appendDebugLine(`[storage] explicit warm-dialed ${explicitDialed} of ${explicitPeers.length} peers`)
-    }
-  }
-
-  // Warm dial: re-connect to recently-seen peers. Limit startup fanout so stale
-  // cached peers do not occupy all client dial slots ahead of configured relays.
-  if (!swarm._peartubeOffline) {
-    const startupDialLimit = swarm._peartubeStartupDialLimit || DEFAULT_STARTUP_KNOWN_PEER_DIAL_LIMIT
-    loadKnownPeers(metaDb).then((known) => {
-      if (!known.length) return
-      const dialed = dialKnownPeers(swarm, known, { limit: startupDialLimit })
-      if (dialed > 0) console.log('[Storage] Warm-dialed', dialed, 'of', known.length, 'known peers (limit:', startupDialLimit + ')')
-    }).catch((err) => {
-      console.log('[Storage] Warm-dial skipped:', err?.message)
-    })
-  }
 
   // Join the PearTube network topic for peer pool building
   // More connected peers = better relay options for symmetric NAT holepunching
@@ -2535,14 +2486,6 @@ export async function resumeNetworking() {
       console.log('[Network] Wakeup sessions marked active');
     }
 
-    if (globalKnownPeerCache && globalSwarm) {
-      loadKnownPeers(globalSwarm._peartubeMetaDb).then((known) => {
-        const dialed = dialKnownPeers(globalSwarm, known, { limit: globalSwarm._peartubeResumeDialLimit || DEFAULT_RESUME_KNOWN_PEER_DIAL_LIMIT })
-        if (dialed > 0) console.log('[Network] Resume warm-dialed', dialed, 'known peers')
-      }).catch((err) => {
-        console.log('[Network] Resume warm-dial skipped:', err?.message)
-      })
-    }
 
     console.log('[Network] Resumed successfully');
   } catch (err) {

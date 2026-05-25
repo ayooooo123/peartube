@@ -1,6 +1,6 @@
 import Foundation
 
-import React
+internal import React
 import UIKit
 
 @objc(MpvPlayerViewManager)

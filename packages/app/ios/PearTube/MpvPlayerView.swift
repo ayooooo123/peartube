@@ -1,7 +1,7 @@
 import Foundation
 
 import UIKit
-import React
+internal import React
 
 @objc(MpvPlayerView)
 final class MpvPlayerView: UIView, MpvPlayerCoreDelegate, MpvPipControllerDelegate {

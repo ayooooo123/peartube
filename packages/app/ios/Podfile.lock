@@ -2745,7 +2745,7 @@ SPEC CHECKSUMS:
   ExpoAsset: 98f83c25d558707659dd6b117adcc03104dd287b
   ExpoDocumentPicker: caa9c7c1071dc31262d86a8fe48f51929d291a43
   ExpoDomWebView: 27205be8754f9992913b8a9a08e65019f2207075
-  ExpoDownloadsSave: 7495bad068f341727e6a23e36b7ba8a072ee1e9c
+  ExpoDownloadsSave: cdb1265da0e4bfbcbb200a9d900e3dd43fb87b86
   ExpoFileSystem: d730a1cb33f2c91dec01561f0d710054fda32ae9
   ExpoFont: 6fe496f2be617ed4367f159f215dcc4ba27d37d6
   ExpoGlassEffect: 7d4233dc0727ee2b28dd757eda70e1b6abf662fd

@@ -284,6 +284,22 @@ function resolveMobileStoragePath(providedStoragePath) {
   return Bare?.argv?.[0] || bareStorageDir || ''
 }
 
+function parseMobileLaunchArgs(args = []) {
+  const first = args[0]
+  if (typeof first !== 'string' || !first.trim().startsWith('{')) {
+    return { launchOptions: null, workerArgs: args }
+  }
+
+  try {
+    const parsed = JSON.parse(first)
+    if (parsed?.__peartubeLaunchOptions === true) {
+      return { launchOptions: parsed, workerArgs: args.slice(1) }
+    }
+  } catch {}
+
+  return { launchOptions: null, workerArgs: args }
+}
+
 export async function startMobileBackend(options = {}) {
   const {
     storagePath: providedStoragePath,
@@ -338,7 +354,8 @@ export async function createMobileRuntimeBackend(options = {}) {
   if (!storagePath) throw new Error('createMobileRuntimeBackend requires a storagePath')
 
   const IPC = stream
-  const workerBundlePath = args[0] || ''
+  const { launchOptions, workerArgs } = parseMobileLaunchArgs(args)
+  const workerBundlePath = workerArgs[0] || ''
   if (workerBundlePath) globalThis.__PEARTUBE_WORKER_PATH__ = workerBundlePath
 
   let rpc = null
@@ -510,6 +527,8 @@ function removeStaleLocks(storageDir) {
     backend = await createBackendContext({
       storagePath: storageDir,
       corestoreWaitForLock: false,
+      network: launchOptions?.network,
+      swarmOptions: launchOptions?.swarmOptions,
       ipcLog,
       onFeedUpdate: () => {
         try {

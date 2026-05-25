@@ -64,6 +64,36 @@ test('mobile backend startup lock cleanup removes db LOCK files before orchestra
   assert.match(removeLocksBody, /path\.join\(storageDir, 'db', 'LOCK'\)/)
 })
 
+test('mobile backend consumes launch options before downloader worker args', () => {
+  const source = readAppFile('backend/index.mjs')
+
+  assert.match(
+    source,
+    /function parseMobileLaunchArgs\(args = \[\]\) \{[\s\S]*__peartubeLaunchOptions[\s\S]*return \{ launchOptions: parsed, workerArgs: args\.slice\(1\) \}[\s\S]*return \{ launchOptions: null, workerArgs: args \}/,
+    'mobile backend entry should peel launchOptions off argv before reading downloader worker args',
+  )
+  assert.match(
+    source,
+    /const \{ launchOptions, workerArgs \} = parseMobileLaunchArgs\(args\)/,
+    'createMobileRuntimeBackend should parse launchOptions from BareKit worker args',
+  )
+  assert.match(
+    source,
+    /network: launchOptions\?\.network/,
+    'createBackendContext should receive launchOptions.network',
+  )
+  assert.match(
+    source,
+    /swarmOptions: launchOptions\?\.swarmOptions/,
+    'createBackendContext should receive launchOptions.swarmOptions',
+  )
+  assert.match(
+    source,
+    /const workerBundlePath = workerArgs\[0\] \|\| ''/,
+    'downloader worker path should be read after launchOptions are removed',
+  )
+})
+
 test('native root layout clears startup timeout and releases loading on explicit startup errors', () => {
   const source = readAppFile('app/_layout.tsx')
   const onErrorBlock = source.match(/platformRPC\.events\.onError\(\(data: any\) => \{([\s\S]*?)\n\s*\}\)/)?.[1] ?? ''

@@ -839,13 +839,13 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
 
     try {
       const discoveryModule = requirePeartubeNetworkDiscovery()
-      const discoveryStatus = await discoveryModule.acquireMulticastLock()
+      const discoveryStatus = await discoveryModule.getDiscoveryNetworkStatus()
       status.multicastLockHeld = discoveryStatus?.multicastLockHeld === true
       status.lastError = discoveryStatus?.lastError ?? status.lastError ?? null
     } catch (err: any) {
       status.multicastLockHeld = false
       status.lastError = err?.message || String(err)
-      console.warn('[App] Android network discovery setup failed:', status.lastError)
+      console.warn('[App] Android network discovery status failed:', status.lastError)
     }
 
     console.log('[App] Android discovery permission status:', JSON.stringify(status))
@@ -866,16 +866,6 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
         cancelled = true
         subscription.remove()
         castPlaybackStateUnsubRef.current?.()
-        if (Platform.OS === 'android') {
-          try {
-            const discoveryModule = requirePeartubeNetworkDiscovery()
-            discoveryModule.releaseMulticastLock().catch((err: any) => {
-              console.log('[App] Android discovery multicast release failed:', err?.message)
-            })
-          } catch (err: any) {
-            console.log('[App] Android discovery multicast release failed:', err?.message)
-          }
-        }
         clearCastSuspendGraceTimer()
         if (startupTimerRef.current) {
           clearTimeout(startupTimerRef.current)

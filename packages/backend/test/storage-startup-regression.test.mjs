@@ -49,18 +49,28 @@ test('blob server startup does not await listen before storage init can finish',
   assert.match(blobServerBody, /blobServerListenPromise\s*\.then\(/)
 })
 
-test('storage startup waits for listen and bootstrapping before peer pool discovery', () => {
-  assert.match(storageSource, /waitForSwarmDiscoveryReady\(swarm\)/)
-  assert.match(storageSource, /maybeStartPeerPoolDiscovery\('bootstrapped-and-listen-resolved'\)/)
-  assert.match(storageSource, /swarm\._peartubeListenPromise = listenPromise/)
-  assert.doesNotMatch(storageSource, /dialPersistedPeers/)
+test('storage joins the PearTube network topic immediately without DHT bootstrap gates', () => {
+  assert.doesNotMatch(storageSource, /function isSwarmDiscoveryReady/)
+  assert.doesNotMatch(storageSource, /waitForSwarmDiscoveryReady\(swarm\)/)
+  assert.doesNotMatch(storageSource, /dht\?\.bootstrapped[\s\S]{0,240}swarm\.join\(PEARTUBE_NETWORK_TOPIC/)
+  assert.match(storageSource, /joinPeerPoolDiscoveryImmediately\('startup'\)/)
+  assert.match(storageSource, /swarm\.join\(PEARTUBE_NETWORK_TOPIC, \{ server: true, client: true \}\)/)
 })
 
 test('storage persists and restores DHT routing table state around lifecycle events', () => {
   assert.match(storageSource, /DHT_ROUTING_TABLE_KEY/)
-  assert.match(storageSource, /persistDhtRoutingTable\([\s\S]*?reason: 'startup'/)
   assert.match(storageSource, /restorePersistedDhtRoutingTable\([\s\S]*?reason: 'startup'/)
   assert.match(storageSource, /persistDhtRoutingTable\(globalSwarm, globalMetaDb, \{ reason: 'suspend' \}\)/)
+})
+
+
+
+test('storage cold start and resume warm-dial recent known peers as explicit seed bootstrap', () => {
+  assert.match(storageSource, /import \{ createKnownPeerCache, loadKnownPeers \} from '\.\/known-peers\.js'/)
+  assert.match(storageSource, /async function warmDialKnownPeers\(swarm, metaDb, \{ reason = 'startup', limit = 5 \} = \{\}\)/)
+  assert.match(storageSource, /await warmDialKnownPeers\(swarm, metaDb, \{ reason: 'startup', limit: 5 \}\)/)
+  assert.match(storageSource, /await warmDialKnownPeers\(globalSwarm, globalMetaDb, \{ reason: 'resume', limit: 5 \}\)/)
+  assert.match(storageSource, /swarm\.joinPeer\(b4a\.from\(peer\.key, 'hex'\)\)/)
 })
 
 test('storage creates an offline swarm fallback when Hyperswarm is unavailable', () => {
@@ -98,7 +108,7 @@ test('offline swarm fallback exposes the swarm methods orchestrator and managers
 })
 
 test('offline swarm fallback skips peer pool discovery instead of joining noop topics at startup', () => {
-  assert.match(storageSource, /maybeStartPeerPoolDiscovery\('bootstrapped-and-listen-resolved'\)/)
+  assert.match(storageSource, /joinPeerPoolDiscoveryImmediately\('startup'\)/)
   assert.match(storageSource, /Skipping peer pool discovery; P2P networking is offline/)
 })
 

@@ -1092,6 +1092,46 @@ test('periodic feed gossip does not perform repeated app-level redials after soc
   }
 })
 
+
+
+test('HAVE_FEED accounting accumulates verified entries across repeated messages on one connection', () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb(), { requireSignedPeerEntries: false })
+  const conn = createConnection()
+  const key2 = '22'.repeat(32)
+  const bee2 = '33'.repeat(32)
+
+  try {
+    manager.handleMessage({ type: 'HAVE_FEED', entries: [{ driveKey: DRIVE_KEY, publicBeeKey: PUBLIC_BEE_KEY }] }, conn)
+    manager.handleMessage({ type: 'HAVE_FEED', entries: [{ driveKey: key2, publicBeeKey: bee2 }] }, conn)
+
+    assert.equal(manager.peerFeedKeys.get(conn)?.has(DRIVE_KEY), true)
+    assert.equal(manager.peerFeedKeys.get(conn)?.has(key2), true)
+    assert.equal(manager.entryPeerCounts.get(DRIVE_KEY), 1)
+    assert.equal(manager.entryPeerCounts.get(key2), 1)
+
+    manager._clearPeerFeedKeys(conn)
+    assert.equal(manager.entryPeerCounts.has(DRIVE_KEY), false)
+    assert.equal(manager.entryPeerCounts.has(key2), false)
+  } finally {
+    manager.stop()
+  }
+})
+
+test('SUBMIT_CHANNEL accounting records accepted gossip even when snapshot refreshes an existing entry', () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb(), { requireSignedPeerEntries: false })
+  const conn = createConnection()
+
+  try {
+    manager.addEntry(DRIVE_KEY, 'peer', PUBLIC_BEE_KEY, { channelName: 'old' })
+    manager.handleMessage({ type: 'SUBMIT_CHANNEL', key: DRIVE_KEY, publicBeeKey: PUBLIC_BEE_KEY, channelName: 'new' }, conn)
+
+    assert.equal(manager.peerFeedKeys.get(conn)?.has(DRIVE_KEY), true)
+    assert.equal(manager.entryPeerCounts.get(DRIVE_KEY), 1)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('peer entries with publicBeeKey survive peer disconnect at peerCount zero', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb())

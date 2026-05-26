@@ -42,6 +42,11 @@ class MainApplication : Application(), ReactApplication {
     } catch (e: IllegalArgumentException) {
       ReleaseLevel.STABLE
     }
+    try {
+      networkDiscovery.start()
+    } catch (t: Throwable) {
+      networkDiscovery.logException("startup", t)
+    }
     loadReactNative(this)
     registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
       override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit

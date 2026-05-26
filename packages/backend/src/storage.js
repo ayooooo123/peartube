@@ -25,7 +25,7 @@ import {
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
-import { createKnownPeerCache, loadKnownPeers, dialKnownPeers } from './known-peers.js'
+import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -134,10 +134,14 @@ let globalSwarmDiagnostics = null;
 let globalNetworkStartupTiming = null;
 let globalKnownPeerCache = null;
 let globalMetaDb = null;
+let globalPlaybackActive = false;
+let globalPlaybackActiveUntil = 0;
+let globalPlaybackActiveUpdatedAt = 0;
 
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
 let watchdogTimer = null
+const PLAYBACK_ACTIVITY_TTL_MS = 60 * 60 * 1000
 
 /**
  * Generate a random session token for blob server URL auth.
@@ -2206,6 +2210,12 @@ export async function suspendNetworking() {
     console.log('[CastDiag] suspendNetworking: SKIPPED (cast is active)');
     return;
   }
+
+  if (isPlaybackActive()) {
+    console.log('[Network] Skipping suspend - local playback is active');
+    console.log('[CastDiag] suspendNetworking: SKIPPED (playback is active)');
+    return;
+  }
   
   console.log('[Network] Suspending...');
   try {
@@ -2239,6 +2249,29 @@ export async function suspendNetworking() {
   } catch (err) {
     console.log('[Network] Suspend error (non-fatal):', err?.message);
   }
+}
+
+export function setPlaybackActive(active, options = {}) {
+  globalPlaybackActive = Boolean(active)
+  globalPlaybackActiveUpdatedAt = Date.now()
+  const ttlMs = Math.max(1000, Number(options.ttlMs || PLAYBACK_ACTIVITY_TTL_MS) || PLAYBACK_ACTIVITY_TTL_MS)
+  globalPlaybackActiveUntil = globalPlaybackActive ? globalPlaybackActiveUpdatedAt + ttlMs : 0
+  console.log('[Network] playbackActive flag set to:', globalPlaybackActive)
+  return {
+    active: globalPlaybackActive,
+    updatedAt: globalPlaybackActiveUpdatedAt,
+    expiresAt: globalPlaybackActiveUntil
+  }
+}
+
+export function isPlaybackActive(now = Date.now()) {
+  if (!globalPlaybackActive) return false
+  if (globalPlaybackActiveUntil > 0 && now > globalPlaybackActiveUntil) {
+    globalPlaybackActive = false
+    globalPlaybackActiveUntil = 0
+    return false
+  }
+  return true
 }
 
 /**

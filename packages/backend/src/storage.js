@@ -25,7 +25,7 @@ import {
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
-import { createKnownPeerCache } from './known-peers.js'
+import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -212,62 +212,36 @@ function decodePersistedValue(value) {
   return value
 }
 
-function isSwarmDiscoveryReady(swarm) {
-  return Boolean(
-    swarm &&
-    !swarm._peartubeOffline &&
-    swarm._peartubeListenResolved &&
-    swarm.dht?.bootstrapped
-  )
-}
-
-async function waitForSwarmDiscoveryReady(swarm) {
-  if (!swarm || swarm._peartubeOffline) return false
-  if (isSwarmDiscoveryReady(swarm)) return true
-
-  if (swarm._peartubeDiscoveryReadyPromise) {
-    return swarm._peartubeDiscoveryReadyPromise
+async function warmDialKnownPeers(swarm, metaDb, { reason = 'startup', limit = 5 } = {}) {
+  if (!swarm || swarm._peartubeOffline || typeof swarm.joinPeer !== 'function' || !metaDb) {
+    return { dialed: 0, skipped: true }
   }
 
-  swarm._peartubeDiscoveryReadyPromise = new Promise((resolve) => {
-    let settled = false
-    let onNetworkUpdate = null
+  let peers = []
+  try {
+    peers = await loadKnownPeers(metaDb)
+  } catch (err) {
+    console.log('[Storage] Known-peer warm dial load failed:', err?.message)
+    return { dialed: 0, error: err?.message || String(err) }
+  }
 
-    const cleanup = (ready) => {
-      if (settled) return
-      settled = true
-      try {
-        if (onNetworkUpdate && typeof swarm.dht?.off === 'function') {
-          swarm.dht.off('network-update', onNetworkUpdate)
-        }
-      } catch { /* best effort */ }
-      resolve(Boolean(ready))
-    }
-
-    onNetworkUpdate = () => {
-      if (isSwarmDiscoveryReady(swarm)) cleanup(true)
-    }
-
+  let dialed = 0
+  for (const peer of peers.slice(0, Math.max(0, Math.min(5, Number(limit) || 5)))) {
+    if (!peer?.key || !/^[a-f0-9]{64}$/i.test(peer.key)) continue
     try {
-      if (typeof swarm.dht?.on === 'function') {
-        swarm.dht.on('network-update', onNetworkUpdate)
-      }
-    } catch { /* best effort */ }
-
-    const listenPromise = swarm._peartubeListenPromise
-    if (listenPromise && typeof listenPromise.then === 'function') {
-      listenPromise.then(() => {
-        swarm._peartubeListenResolved = true
-        if (isSwarmDiscoveryReady(swarm)) cleanup(true)
-      }).catch(() => {
-        cleanup(false)
-      })
+      swarm.joinPeer(b4a.from(peer.key, 'hex'))
+      dialed++
+    } catch (err) {
+      console.log('[Storage] Known-peer warm dial failed:', peer.key.slice(0, 16), err?.message)
     }
+  }
 
-    if (isSwarmDiscoveryReady(swarm)) cleanup(true)
-  })
+  if (dialed > 0) {
+    globalNetworkStartupTiming?.record('known-peer-warm-dial', { reason, dialed })
+    console.log('[Storage] Warm-dialed known peers:', dialed, 'reason:', reason)
+  }
 
-  return swarm._peartubeDiscoveryReadyPromise
+  return { dialed }
 }
 
 function collectPersistedDhtRoutingEntries(swarm) {
@@ -974,47 +948,26 @@ function scheduleDeferredDiscoveryJoin(ctx, discoveryKey, handle, options = {}) 
 
   const swarm = ctx.swarm
   const discoveryKeyHex = b4a.toString(discoveryKey, 'hex')
-  let onNetworkUpdate = null
 
   const start = () => {
-    if (handle._peartubeStarted || handle._peartubeDestroyed || !isSwarmDiscoveryReady(swarm)) return null
+    if (handle._peartubeStarted || handle._peartubeDestroyed || swarm._peartubeOffline) return null
     handle._peartubeStarted = true
     try {
       const realHandle = swarm.join(discoveryKey, { server: true, client: true })
       handle._setRealHandle(realHandle)
       if (options?.label) {
-        console.log(`[Storage] Swarm discovery joined for ${options.label}`)
+        console.log(`[Storage] Swarm discovery joined immediately for ${options.label}`)
       } else {
-        console.log('[Storage] Swarm discovery joined:', discoveryKeyHex.slice(0, 16))
+        console.log('[Storage] Swarm discovery joined immediately:', discoveryKeyHex.slice(0, 16))
       }
       return realHandle
     } catch (err) {
-      console.log('[Storage] Deferred swarm discovery join failed:', err?.message)
+      console.log('[Storage] Immediate swarm discovery join failed:', err?.message)
       handle._setRealHandle(null)
       return null
     }
   }
 
-  const listenPromise = swarm._peartubeListenPromise
-  if (listenPromise && typeof listenPromise.then === 'function') {
-    listenPromise.then(() => start()).catch(() => {})
-  }
-
-  try {
-    if (typeof swarm.dht?.on === 'function') {
-      onNetworkUpdate = () => { start() }
-      swarm.dht.on('network-update', onNetworkUpdate)
-    }
-  } catch { /* best effort */ }
-
-  const originalDestroy = handle.destroy.bind(handle)
-  handle.destroy = () => {
-    try { if (onNetworkUpdate && typeof swarm.dht?.off === 'function') swarm.dht.off('network-update', onNetworkUpdate) } catch { /* best effort */ }
-    originalDestroy()
-  }
-  handle.close = handle.destroy
-
-  void Promise.resolve().then(() => start())
   return start() || handle
 }
 
@@ -1564,23 +1517,23 @@ export async function initializeStorage(config) {
 
   await restorePersistedDhtRoutingTable(swarm, metaDb, { reason: 'startup' })
 
-  // Join the PearTube network topic only after the DHT is bootstrapped and listen() has resolved.
-  // More connected peers = better relay options for symmetric NAT holepunching.
+  // Join the PearTube network topic immediately. Do not wait for DHT bootstrap
+  // or listen() resolution; HyperDHT/Hyperswarm can use the announcement to wake
+  // routing state while startup continues.
   const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'));
   globalPeerPoolTopicHex = b4a.toString(PEARTUBE_NETWORK_TOPIC, 'hex')
   let peerPoolDiscoveryStarted = false
 
-  const maybeStartPeerPoolDiscovery = async (reason = 'ready') => {
+  const joinPeerPoolDiscoveryImmediately = (reason = 'startup') => {
     if (peerPoolDiscoveryStarted || swarm._peartubeOffline) return globalPeerPoolDiscovery
-    if (!isSwarmDiscoveryReady(swarm)) return null
 
     peerPoolDiscoveryStarted = true
     try {
       const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
       globalNetworkStartupTiming?.record('topic-join-called', { topic: 'peer-pool', topicHex: globalPeerPoolTopicHex, reason })
       globalPeerPoolDiscovery = poolDiscovery;
-      console.log('[Storage] Joined peartube-network topic for peer pool building after', reason)
-      // Don't await flushed() - it can hang on mobile
+      console.log('[Storage] Joined peartube-network topic for peer pool building immediately:', reason)
+      // Do not await flushed(); mobile DHT bootstrapping can lag behind the join.
       poolDiscovery.flushed().then(() => {
         console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
         globalNetworkStartupTiming?.record('topic-flushed', { topic: 'peer-pool', connections: swarm.connections?.size || 0, bootstrapped: swarm.dht?.bootstrapped })
@@ -1600,6 +1553,9 @@ export async function initializeStorage(config) {
     console.log('[Storage] Skipping peer pool discovery; P2P networking is offline:', swarm._peartubeOfflineReason)
     await appendDebugLine(`[storage] peer-pool discovery skipped offline reason=${swarm._peartubeOfflineReason}`)
     globalPeerPoolDiscovery = null
+  } else {
+    joinPeerPoolDiscoveryImmediately('startup')
+    await warmDialKnownPeers(swarm, metaDb, { reason: 'startup', limit: 5 })
   }
 
   // Start listening - DON'T block on it since it may hang on mobile
@@ -1629,14 +1585,6 @@ export async function initializeStorage(config) {
         console.log('[Storage] listen() failed:', e?.message)
         void appendDebugLine(`[storage] swarm.listen failed ${e?.message || String(e)}`)
       })
-  }
-
-  if (!swarm._peartubeOffline) {
-    void waitForSwarmDiscoveryReady(swarm).then(() => {
-      void maybeStartPeerPoolDiscovery('bootstrapped-and-listen-resolved')
-    }).catch((err) => {
-      console.log('[Storage] Peer pool discovery wait failed:', err?.message)
-    })
   }
 
   // Log DHT state for debugging
@@ -2705,6 +2653,8 @@ export async function resumeNetworking() {
   try {
     if (globalSwarm) {
       await globalSwarm.resume();
+      await restorePersistedDhtRoutingTable(globalSwarm, globalMetaDb, { reason: 'resume' })
+      await warmDialKnownPeers(globalSwarm, globalMetaDb, { reason: 'resume', limit: 5 })
       console.log('[Network] Swarm resumed, connections:', globalSwarm.connections?.size || 0);
     }
     if (globalBlobServer) {

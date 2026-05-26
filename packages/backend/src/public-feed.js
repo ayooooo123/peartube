@@ -130,10 +130,10 @@ export class PublicFeed {
     /** @type {number} */
     this._persistDebounceMs = 1500
     /** @type {number} */
-    this._persistMaxEntries = 500
+    this._persistMaxEntries = Math.max(1, Number(options.maxFeedEntries || 500) || 500)
 
     /** @type {number} */
-    this.maxPeers = Math.max(1, Number(options.maxPeers || this.swarm?.maxPeers || 48) || 48)
+    this.maxPeers = Math.max(1, Number(options.maxDiscoveredPeers || options.maxPeers || this.swarm?.maxPeers || 48) || 48)
     /** @type {Map<string, {publicKey: any, score: number, firstSeenAt: number, lastSeenAt: number, joined: boolean, demoted: boolean, joinAttempts: number, lastJoinedAt: number | null, lastConnectionAt: number | null, relayHints: number, topics?: Set<string>, lastJoinError?: string | null}>} */
     this._peerDirectory = new Map()
     /** @type {Map<any, any>} */
@@ -654,7 +654,13 @@ export class PublicFeed {
     const keyHex = b4a.toString(publicKey, 'hex')
     if (!keyHex || keyHex === b4a.toString(this.swarm?.keyPair?.publicKey || [], 'hex')) return null
     this._discoveredPeers.set(keyHex, publicKey)
-    if (peer && typeof peer === 'object') {
+    while (this._discoveredPeers.size > this.maxPeers) {
+      const oldestKey = this._discoveredPeers.keys().next().value
+      if (!oldestKey) break
+      this._discoveredPeers.delete(oldestKey)
+      this._discoveredPeerHints.delete(oldestKey)
+    }
+    if (peer && typeof peer === 'object' && this._discoveredPeers.has(keyHex)) {
       const relayAddresses = Array.isArray(peer.relayAddresses) ? peer.relayAddresses : []
       const existing = this._discoveredPeerHints.get(keyHex) || {}
       this._discoveredPeerHints.set(keyHex, {
@@ -666,7 +672,7 @@ export class PublicFeed {
         lastSeenAt: this._now(),
       })
     }
-    return { keyHex, publicKey }
+    return this._discoveredPeers.has(keyHex) ? { keyHex, publicKey } : null
   }
 
   _peerKeyHex(publicKey) {
@@ -693,6 +699,20 @@ export class PublicFeed {
       }
     }
     return lowest
+  }
+
+  _enforceFeedEntryLimit() {
+    while (this.entries.size > this._persistMaxEntries) {
+      const oldestKey = this.entries.keys().next().value
+      if (!oldestKey) break
+      const entry = this.entries.get(oldestKey)
+      if (entry?.source === 'local') break
+      this.entries.delete(oldestKey)
+      this.entryPeerCounts.delete(oldestKey)
+      for (const peerKeys of this.peerFeedKeys.values()) {
+        peerKeys.delete(oldestKey)
+      }
+    }
   }
 
   _enforcePeerDirectoryLimit() {
@@ -844,7 +864,8 @@ export class PublicFeed {
       return false
     }
 
-    this._queuePublicJoinPeer(record, peer, topic)
+    this._directPeerDialStats.skipped++
+    this._directPeerDialStats.lastReason = 'hyperswarm-owned-dialing'
     this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
     if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) {
       this._directPeerDialStats.skipped++
@@ -862,21 +883,6 @@ export class PublicFeed {
       if (err?.stack) this._directPeerLastDialErrorStack.set(keyHex, err.stack)
       return null
     }
-  }
-
-  runBoundedPeerRecovery(reason = 'heartbeat') {
-    const event = {
-      at: this._now(),
-      action: 'observed-peers-without-sockets',
-      reason: 'hyperswarm-owned-dialing',
-      requestedReason: reason,
-      discoveredPeers: this._discoveredPeers.size,
-      connections: this.swarm?.connections?.size || 0,
-      queued: 0,
-    }
-    this._recoveryEvents.push(event)
-    while (this._recoveryEvents.length > 10) this._recoveryEvents.shift()
-    return event
   }
 
   _swarmDialState(keyHex, publicKey = null) {
@@ -956,21 +962,37 @@ export class PublicFeed {
     this._recordStartupEvent('public-feed-start-called')
     console.log('[PublicFeed] ===== STARTING PUBLIC FEED =====');
 
-    // Issue the topic join up front so DHT announce/lookup overlaps with the
-    // metaDb cache restoration below. (Matches the hyperdrive README pattern:
-    // attach handlers → join → do other work; never await flush() on the
-    // hot path.)
-    try {
-      this.feedDiscovery = this.swarm.join(NETWORK_TOPIC, { server: true, client: true })
-      this._recordStartupEvent('public-feed-topic-join-called', { topicHex: NETWORK_TOPIC_HEX })
-      this.feedDiscovery?.flushed?.().then(() => {
-        this._recordStartupEvent('public-feed-topic-flushed', { peers: this.swarm.peers?.size || 0, connections: this.swarm.connections?.size || 0 })
-        console.log('[PublicFeed] Shared network feed discovery flushed, connections:', this.swarm.connections?.size || 0)
-      }).catch(() => {})
-      console.log('[PublicFeed] Joined shared network feed topic:', NETWORK_TOPIC_HEX.slice(0, 16))
-    } catch (err) {
-      console.log('[PublicFeed] Shared network feed topic join failed:', err?.message)
-      this.feedDiscovery = null
+    // Reuse the storage-owned peartube-network discovery handle when present.
+    // Storage joins the topic immediately at startup/resume; the feed catalog
+    // layer should not create a second app-level join path.
+    if (this.swarm.peerPoolDiscovery) {
+      this.feedDiscovery = this.swarm.peerPoolDiscovery
+      this._ownsFeedDiscovery = false
+      this._recordStartupEvent('public-feed-topic-owned-by-storage', { topicHex: NETWORK_TOPIC_HEX })
+      try { this.swarm.status?.(NETWORK_TOPIC) } catch { /* diagnostic only */ }
+    } else {
+      try {
+        this.feedDiscovery = this.swarm.join(NETWORK_TOPIC, { server: true, client: true })
+        this._ownsFeedDiscovery = true
+        this._recordStartupEvent('public-feed-topic-owned-by-storage', { topicHex: NETWORK_TOPIC_HEX, fallbackJoin: true })
+        this._recordStartupEvent('public-feed-topic-join-called', { topicHex: NETWORK_TOPIC_HEX })
+        this.feedDiscovery?.flushed?.().then(() => {
+          this._recordStartupEvent('public-feed-topic-flushed', { peers: this.swarm.peers?.size || 0, connections: this.swarm.connections?.size || 0 })
+          console.log('[PublicFeed] Shared network feed discovery flushed, connections:', this.swarm.connections?.size || 0)
+        }).catch(() => {})
+        console.log('[PublicFeed] Joined shared network feed topic:', NETWORK_TOPIC_HEX.slice(0, 16))
+      } catch (err) {
+        console.log('[PublicFeed] Shared network feed topic join failed:', err?.message)
+        this.feedDiscovery = null
+      }
+    }
+
+    // Wire existing connections before cache restore reads.
+    // Set up feed protocol on any existing connections.
+    const existingConns = this.swarm.connections?.size || 0;
+    console.log('[PublicFeed] Setting up feed protocol on', existingConns, 'existing connections');
+    for (const conn of this.swarm.connections) {
+      this.handleConnection(conn, {});
     }
 
     // Load persisted published channels from database
@@ -1072,12 +1094,6 @@ export class PublicFeed {
       try { this.onFeedUpdate?.(); } catch {}
     }
 
-    // Set up feed protocol on any existing connections.
-    const existingConns = this.swarm.connections?.size || 0;
-    console.log('[PublicFeed] Setting up feed protocol on', existingConns, 'existing connections');
-    for (const conn of this.swarm.connections) {
-      this.handleConnection(conn, {});
-    }
     this._startGossipLoop()
     console.log('[PublicFeed] ===== PUBLIC FEED STARTED =====');
   }
@@ -1456,6 +1472,21 @@ export class PublicFeed {
     return changed
   }
 
+
+  _prunePeerFeedKeysToEntries(conn) {
+    const peerKeys = this.peerFeedKeys.get(conn)
+    if (!peerKeys) return false
+    let changed = false
+    for (const key of Array.from(peerKeys)) {
+      if (this.entries.has(key)) continue
+      peerKeys.delete(key)
+      this.entryPeerCounts.delete(key)
+      changed = true
+    }
+    if (peerKeys.size === 0) this.peerFeedKeys.delete(conn)
+    return changed
+  }
+
   _clearPeerFeedKeys(conn) {
     const prevKeys = this.peerFeedKeys.get(conn)
     if (!prevKeys) return false
@@ -1537,7 +1568,9 @@ export class PublicFeed {
         }
       }
 
-      const peerSetChanged = this._applyPeerFeedKeys(conn, announcedKeys)
+      let peerSetChanged = this._applyPeerFeedKeys(conn, announcedKeys)
+      this._enforceFeedEntryLimit()
+      peerSetChanged = this._prunePeerFeedKeysToEntries(conn) || peerSetChanged
       if (!this._startupEvents.some((event) => event.name === 'first-have-feed-received')) {
         this._recordStartupEvent('first-have-feed-received', { keys: announcedKeys.length, entries: receivedCount })
       }
@@ -1558,6 +1591,7 @@ export class PublicFeed {
       const resolvedPublicBeeKey = this._resolvePublicBeeKey(msg)
       if (!resolvedPublicBeeKey && !msg?.signedDescriptor && !isValidKey(msg?.metadataKey)) return
       const entrySource = msg.source === 'relay-cache' ? 'relay-cache' : 'peer'
+      const peerSetChanged = this._applyPeerFeedKeys(conn, [msg.key])
       if (this.addEntry(msg.key, entrySource, resolvedPublicBeeKey, msg)) {
         this.onFeedUpdate?.();
         this._schedulePersistDiscovered()
@@ -1566,6 +1600,8 @@ export class PublicFeed {
       } else if (this._applyEntrySnapshot(msg.key, msg)) {
         this.onFeedUpdate?.()
         this._schedulePersistDiscovered()
+      } else if (peerSetChanged) {
+        this.onFeedUpdate?.()
       }
     }
     // Handle legacy NEED_FEED/FEED_RESPONSE for backwards compat

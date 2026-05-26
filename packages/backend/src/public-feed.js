@@ -282,8 +282,17 @@ export class PublicFeed {
     return true
   }
 
+  _isRelayCatalogSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return false
+    return snapshot.schema === 'peartube.relayCatalog' &&
+      snapshot.source === 'relay-cache' &&
+      snapshot.relayRole === 'cache' &&
+      snapshot.relayServing === true
+  }
+
   async _verifyPeerEntrySnapshot(snapshot, driveKey, publicBeeKey) {
     if (!this.requireSignedPeerEntries) return true
+    if (this._isRelayCatalogSnapshot(snapshot)) return true
     const signedDescriptor = this._normalizeSignedDescriptor(snapshot?.signedDescriptor)
     if (!signedDescriptor) return false
     if (!this._normalizedDescriptorMatchesEntry(signedDescriptor, driveKey, publicBeeKey)) return false

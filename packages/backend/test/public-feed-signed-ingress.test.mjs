@@ -116,3 +116,74 @@ test('public feed rejects signed peer entries whose descriptor does not bind adv
     manager.stop()
   }
 })
+
+
+test('public feed accepts relay-cache catalog entries without signed descriptors', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  try {
+    manager.handleMessage({
+      type: 'SUBMIT_CHANNEL',
+      key: key(1),
+      publicBeeKey: key(2),
+      schema: 'peartube.relayCatalog',
+      catalogVersion: 1,
+      source: 'relay-cache',
+      relayRole: 'cache',
+      relayServing: true,
+      previewVideos: [{
+        id: 'relay-video',
+        blobId: '0:4:0:512',
+        blobsCoreKey: key(3),
+        availability: 'playable',
+      }],
+    }, {})
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const entry = manager.entries.get(key(1))
+    assert.ok(entry)
+    assert.equal(entry.source, 'relay-cache')
+    assert.equal(entry.relayServing, true)
+    assert.equal(entry.publicBeeKey, key(2))
+    assert.equal(entry.previewVideos[0].availability, 'playable')
+    assert.equal(manager.getFeed().length, 1)
+  } finally {
+    manager.stop()
+  }
+})
+
+
+test('public feed accepts relay-cache HAVE_FEED catalog entries without signed descriptors', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  try {
+    manager.handleMessage({
+      type: 'HAVE_FEED',
+      entries: [{
+        driveKey: key(4),
+        publicBeeKey: key(5),
+        schema: 'peartube.relayCatalog',
+        catalogVersion: 1,
+        source: 'relay-cache',
+        relayRole: 'cache',
+        relayServing: true,
+        channelName: 'Relay cached channel',
+        previewVideos: [{
+          id: 'relay-feed-video',
+          blobId: '0:8:0:1024',
+          blobsCoreKey: key(6),
+          availability: 'playable',
+        }],
+      }],
+    }, {})
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const entry = manager.entries.get(key(4))
+    assert.ok(entry)
+    assert.equal(entry.source, 'peer')
+    assert.equal(entry.relayServing, true)
+    assert.equal(entry.publicBeeKey, key(5))
+    assert.equal(entry.previewVideos[0].id, 'relay-feed-video')
+    assert.equal(manager.getFeed().length, 1)
+  } finally {
+    manager.stop()
+  }
+})

@@ -1382,10 +1382,15 @@ export class PublicFeed {
       const entrySource = msg.source === 'relay-cache' ? 'relay-cache' : 'peer'
       if (!this.requireSignedPeerEntries) {
         if (this.addEntry(msg.key, entrySource, publicBeeKey, normalizedMsg)) {
+          this._setPeerFeedKeys(conn, [msg.key])
           this.onFeedUpdate?.();
           this._schedulePersistDiscovered()
           this.broadcastSubmitChannel(msg.key, conn, publicBeeKey, normalizedMsg);
         } else if (this._applyEntrySnapshot(msg.key, normalizedMsg)) {
+          this._setPeerFeedKeys(conn, [msg.key])
+          this.onFeedUpdate?.()
+          this._schedulePersistDiscovered()
+        } else if (this._setPeerFeedKeys(conn, [msg.key])) {
           this.onFeedUpdate?.()
           this._schedulePersistDiscovered()
         }
@@ -1395,11 +1400,16 @@ export class PublicFeed {
         .then((verified) => {
           if (!verified) return
           if (this.addEntry(msg.key, entrySource, publicBeeKey, normalizedMsg)) {
+            this._setPeerFeedKeys(conn, [msg.key])
             this.onFeedUpdate?.();
             this._schedulePersistDiscovered()
             // Re-gossip to other peers (exclude sender, include publicBeeKey)
             this.broadcastSubmitChannel(msg.key, conn, publicBeeKey, normalizedMsg);
           } else if (this._applyEntrySnapshot(msg.key, normalizedMsg)) {
+            this._setPeerFeedKeys(conn, [msg.key])
+            this.onFeedUpdate?.()
+            this._schedulePersistDiscovered()
+          } else if (this._setPeerFeedKeys(conn, [msg.key])) {
             this.onFeedUpdate?.()
             this._schedulePersistDiscovered()
           }

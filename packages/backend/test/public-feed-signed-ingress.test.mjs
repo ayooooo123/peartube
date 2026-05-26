@@ -120,6 +120,7 @@ test('public feed rejects signed peer entries whose descriptor does not bind adv
 
 test('public feed accepts relay-cache catalog entries without signed descriptors', async () => {
   const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  const conn = {}
   try {
     manager.handleMessage({
       type: 'SUBMIT_CHANNEL',
@@ -136,7 +137,7 @@ test('public feed accepts relay-cache catalog entries without signed descriptors
         blobsCoreKey: key(3),
         availability: 'playable',
       }],
-    }, {})
+    }, conn)
     await new Promise((resolve) => setImmediate(resolve))
 
     const entry = manager.entries.get(key(1))
@@ -145,6 +146,8 @@ test('public feed accepts relay-cache catalog entries without signed descriptors
     assert.equal(entry.relayServing, true)
     assert.equal(entry.publicBeeKey, key(2))
     assert.equal(entry.previewVideos[0].availability, 'playable')
+    assert.equal(manager.peerFeedKeys.get(conn)?.has(key(1)), true)
+    assert.equal(manager.entryPeerCounts.get(key(1)), 1)
     assert.equal(manager.getFeed().length, 1)
   } finally {
     manager.stop()

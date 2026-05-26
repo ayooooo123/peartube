@@ -187,3 +187,46 @@ test('public feed accepts relay-cache HAVE_FEED catalog entries without signed d
     manager.stop()
   }
 })
+
+test('public feed counts already-known async verified HAVE_FEED entries for the peer connection', async () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  const signed = await signedDescriptor({ channelId: key(7), metadataKey: key(8), mediaKey: key(9) })
+  const conn = {}
+
+  try {
+    manager.addEntry(key(7), 'peer', key(8), {
+      driveKey: key(7),
+      publicBeeKey: key(8),
+      signedDescriptor: signed,
+      previewVideos: [{
+        id: 'cached-video',
+        blobId: '0:1:0:128',
+        blobsCoreKey: key(10),
+        availability: 'playable',
+      }],
+    })
+
+    manager.handleMessage({
+      type: 'HAVE_FEED',
+      entries: [{
+        driveKey: key(7),
+        publicBeeKey: key(8),
+        signedDescriptor: signed,
+        previewVideos: [{
+          id: 'cached-video',
+          blobId: '0:1:0:128',
+          blobsCoreKey: key(10),
+          availability: 'playable',
+        }],
+      }],
+    }, conn)
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.equal(manager.peerFeedKeys.get(conn)?.has(key(7)), true)
+    assert.equal(manager.entryPeerCounts.get(key(7)), 1)
+    assert.equal(manager.getStats().totalEntries, 1)
+    assert.equal(manager.getFeed().length, 1)
+  } finally {
+    manager.stop()
+  }
+})

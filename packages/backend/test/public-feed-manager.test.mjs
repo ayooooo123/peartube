@@ -1239,3 +1239,41 @@ test('relay catalog entries stay visible and do not become published channels', 
   assert.equal(entries[0].relayServing, true)
   assert.equal(entries[0].peerCount, 0)
 })
+
+test('SUBMIT_CHANNEL binds the sender as a live peer even when the entry already exists', () => {
+  const manager = new PublicFeedManager(createSwarm(), createMetaDb())
+  const conn = createConnection()
+
+  try {
+    manager.addEntry(DRIVE_KEY, 'relay-cache', PUBLIC_BEE_KEY, {
+      previewVideos: [{
+        id: 'existing-preview',
+        blobId: '0:4:0:512',
+        blobsCoreKey: 'cc'.repeat(32),
+        availability: 'playable',
+      }],
+    })
+
+    manager.handleMessage({
+      type: 'SUBMIT_CHANNEL',
+      key: DRIVE_KEY,
+      publicBeeKey: PUBLIC_BEE_KEY,
+      source: 'relay-cache',
+      relayServing: true,
+      previewVideos: [{
+        id: 'existing-preview',
+        blobId: '0:4:0:512',
+        blobsCoreKey: 'cc'.repeat(32),
+        availability: 'playable',
+      }],
+    }, conn)
+
+    assert.equal(manager.peerFeedKeys.get(conn)?.has(DRIVE_KEY), true)
+    assert.equal(manager.entryPeerCounts.get(DRIVE_KEY), 1)
+    const entries = manager.getFeed()
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].peerCount, 1)
+  } finally {
+    manager.stop()
+  }
+})

@@ -1546,14 +1546,17 @@ export class PublicFeed {
       const isValidKey = (k) => typeof k === 'string' && /^[a-f0-9]{64}$/i.test(k)
       if (!isValidKey(msg.publicBeeKey)) return
       const entrySource = msg.source === 'relay-cache' ? 'relay-cache' : 'peer'
-      if (this.addEntry(msg.key, entrySource, msg.publicBeeKey, msg)) {
-        this.onFeedUpdate?.();
-        this._schedulePersistDiscovered()
-        // Re-gossip to other peers (exclude sender, include publicBeeKey)
-        this.broadcastSubmitChannel(msg.key, conn, msg.publicBeeKey, msg);
-      } else if (this._applyEntrySnapshot(msg.key, msg)) {
+      const added = this.addEntry(msg.key, entrySource, msg.publicBeeKey, msg)
+      const updated = !added && this._applyEntrySnapshot(msg.key, msg)
+      const peerSetChanged = this._setPeerFeedKeys(conn, [msg.key])
+
+      if (added || updated || peerSetChanged) {
         this.onFeedUpdate?.()
         this._schedulePersistDiscovered()
+      }
+      if (added) {
+        // Re-gossip to other peers (exclude sender, include publicBeeKey)
+        this.broadcastSubmitChannel(msg.key, conn, msg.publicBeeKey, msg);
       }
     }
     // Handle legacy NEED_FEED/FEED_RESPONSE for backwards compat

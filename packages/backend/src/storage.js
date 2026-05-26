@@ -25,7 +25,7 @@ import {
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
-import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
+import { createKnownPeerCache } from './known-peers.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -134,14 +134,10 @@ let globalSwarmDiagnostics = null;
 let globalNetworkStartupTiming = null;
 let globalKnownPeerCache = null;
 let globalMetaDb = null;
-let globalPlaybackActive = false;
-let globalPlaybackActiveUntil = 0;
-let globalPlaybackActiveUpdatedAt = 0;
 
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
 let watchdogTimer = null
-const PLAYBACK_ACTIVITY_TTL_MS = 60 * 60 * 1000
 
 /**
  * Generate a random session token for blob server URL auth.
@@ -169,59 +165,208 @@ function peerKeyHex(value) {
   return null
 }
 
-async function dialPersistedPeers(swarm, metaDb, { reason = 'startup' } = {}) {
-  if (!swarm || typeof swarm.joinPeer !== 'function' || swarm._peartubeOffline) {
-    return { knownDialed: 0, relayDialed: 0, totalDialed: 0 }
-  }
+const DHT_ROUTING_TABLE_KEY = 'dht-routing-table-v1'
+const DHT_ROUTING_TABLE_MAX_ENTRIES = 128
 
-  let knownDialed = 0
-  let relayDialed = 0
-  const dialed = new Set()
-
-  try {
-    const known = await loadKnownPeers(metaDb)
-    for (const entry of known) {
-      const keyHex = typeof entry?.key === 'string' ? entry.key.toLowerCase() : null
-      if (!keyHex || dialed.has(keyHex)) continue
-      try {
-        const pk = b4a.from(keyHex, 'hex')
-        if (pk.length !== 32) continue
-        swarm.joinPeer(pk)
-        knownDialed++
-        dialed.add(keyHex)
-      } catch { /* best effort */ }
+function encodePersistedValue(value) {
+  if (value == null) return value
+  if (b4a.isBuffer(value) || value instanceof Uint8Array) {
+    return {
+      __peartubeType: 'buffer',
+      data: b4a.toString(value, 'base64')
     }
-  } catch (err) {
-    console.log('[Storage] Persisted known-peer dial skipped:', err?.message)
   }
+  if (Array.isArray(value)) return value.map(encodePersistedValue)
+  if (typeof value === 'object') {
+    const out = {}
+    for (const [key, nested] of Object.entries(value)) {
+      out[key] = encodePersistedValue(nested)
+    }
+    return out
+  }
+  return value
+}
 
-  try {
-    const swarmPeers = swarm?.peers
-    if (swarmPeers && typeof swarmPeers[Symbol.iterator] === 'function') {
-      for (const [key, peerInfo] of swarmPeers) {
-        const keyHex = peerKeyHex(peerInfo?.publicKey || peerInfo?.remotePublicKey || key)
-        if (!keyHex || dialed.has(keyHex)) continue
-        const relayAddresses = Array.isArray(peerInfo?.relayAddresses) ? peerInfo.relayAddresses : []
-        const shouldDial = relayAddresses.length > 0 || Boolean(peerInfo?.explicit || peerInfo?.queued || peerInfo?.waiting || peerInfo?.proven || peerInfo?.client)
-        if (!shouldDial) continue
-        try {
-          const pk = b4a.from(keyHex, 'hex')
-          if (pk.length !== 32) continue
-          swarm.joinPeer(pk)
-          relayDialed++
-          dialed.add(keyHex)
-        } catch { /* best effort */ }
+function decodePersistedValue(value) {
+  if (value == null) return value
+  if (Array.isArray(value)) return value.map(decodePersistedValue)
+  if (typeof value === 'object') {
+    if (value.__peartubeType === 'buffer' && typeof value.data === 'string') {
+      try {
+        return b4a.from(value.data, 'base64')
+      } catch {
+        return null
       }
     }
+
+    const out = {}
+    for (const [key, nested] of Object.entries(value)) {
+      out[key] = decodePersistedValue(nested)
+    }
+    return out
+  }
+  return value
+}
+
+function isSwarmDiscoveryReady(swarm) {
+  return Boolean(
+    swarm &&
+    !swarm._peartubeOffline &&
+    swarm._peartubeListenResolved &&
+    swarm.dht?.bootstrapped
+  )
+}
+
+async function waitForSwarmDiscoveryReady(swarm) {
+  if (!swarm || swarm._peartubeOffline) return false
+  if (isSwarmDiscoveryReady(swarm)) return true
+
+  if (swarm._peartubeDiscoveryReadyPromise) {
+    return swarm._peartubeDiscoveryReadyPromise
+  }
+
+  swarm._peartubeDiscoveryReadyPromise = new Promise((resolve) => {
+    let settled = false
+    let onNetworkUpdate = null
+
+    const cleanup = (ready) => {
+      if (settled) return
+      settled = true
+      try {
+        if (onNetworkUpdate && typeof swarm.dht?.off === 'function') {
+          swarm.dht.off('network-update', onNetworkUpdate)
+        }
+      } catch { /* best effort */ }
+      resolve(Boolean(ready))
+    }
+
+    onNetworkUpdate = () => {
+      if (isSwarmDiscoveryReady(swarm)) cleanup(true)
+    }
+
+    try {
+      if (typeof swarm.dht?.on === 'function') {
+        swarm.dht.on('network-update', onNetworkUpdate)
+      }
+    } catch { /* best effort */ }
+
+    const listenPromise = swarm._peartubeListenPromise
+    if (listenPromise && typeof listenPromise.then === 'function') {
+      listenPromise.then(() => {
+        swarm._peartubeListenResolved = true
+        if (isSwarmDiscoveryReady(swarm)) cleanup(true)
+      }).catch(() => {
+        cleanup(false)
+      })
+    }
+
+    if (isSwarmDiscoveryReady(swarm)) cleanup(true)
+  })
+
+  return swarm._peartubeDiscoveryReadyPromise
+}
+
+function collectPersistedDhtRoutingEntries(swarm) {
+  const router = swarm?.dht?._router
+  const forwards = router?.forwards
+  if (!forwards || typeof forwards[Symbol.iterator] !== 'function') return []
+
+  const entries = []
+  const seen = new Set()
+
+  for (const [target, state] of forwards) {
+    const targetHex = typeof target === 'string'
+      ? target.toLowerCase()
+      : peerKeyHex(target)
+    if (!targetHex || seen.has(targetHex)) continue
+
+    const record = state?.record
+    if (!(b4a.isBuffer(record) || record instanceof Uint8Array) || record.length === 0) continue
+
+    seen.add(targetHex)
+    entries.push({
+      target: targetHex,
+      relay: encodePersistedValue(state?.relay ?? null),
+      record: b4a.toString(record, 'base64')
+    })
+
+    if (entries.length >= DHT_ROUTING_TABLE_MAX_ENTRIES) break
+  }
+
+  return entries
+}
+
+async function persistDhtRoutingTable(swarm, metaDb, { reason = 'unknown' } = {}) {
+  if (!swarm?.dht || !metaDb) return { saved: 0, skipped: true }
+
+  const entries = collectPersistedDhtRoutingEntries(swarm)
+  if (entries.length === 0) {
+    try {
+      await metaDb.del?.(DHT_ROUTING_TABLE_KEY)
+    } catch { /* best effort */ }
+    return { saved: 0 }
+  }
+
+  try {
+    await metaDb.put(DHT_ROUTING_TABLE_KEY, {
+      updatedAt: Date.now(),
+      reason,
+      entries
+    })
   } catch (err) {
-    console.log('[Storage] Persisted relay-peer dial skipped:', err?.message)
+    console.log('[Storage] Persisting DHT routing table failed:', err?.message)
+    return { saved: 0, error: err?.message || String(err) }
   }
 
-  if (knownDialed + relayDialed > 0) {
-    console.log('[Storage] Explicitly dialed persisted peers:', { reason, knownDialed, relayDialed })
+  return { saved: entries.length }
+}
+
+async function restorePersistedDhtRoutingTable(swarm, metaDb, { reason = 'startup' } = {}) {
+  if (!swarm?.dht || !metaDb) return { restored: 0, skipped: true }
+
+  let persisted = null
+  try {
+    const entry = await metaDb.get(DHT_ROUTING_TABLE_KEY).catch(() => null)
+    persisted = entry?.value ?? null
+  } catch (err) {
+    console.log('[Storage] Loading persisted DHT routing table failed:', err?.message)
+    return { restored: 0, error: err?.message || String(err) }
   }
 
-  return { knownDialed, relayDialed, totalDialed: knownDialed + relayDialed }
+  const entries = Array.isArray(persisted)
+    ? persisted
+    : Array.isArray(persisted?.entries)
+      ? persisted.entries
+      : []
+
+  if (!entries.length) return { restored: 0 }
+
+  let restored = 0
+  for (const entry of entries) {
+    const targetHex = typeof entry?.target === 'string' ? entry.target.toLowerCase() : null
+    const recordHex = typeof entry?.record === 'string' ? entry.record : null
+    if (!targetHex || !recordHex) continue
+    try {
+      const target = b4a.from(targetHex, 'hex')
+      const record = b4a.from(recordHex, 'base64')
+      if (target.length !== 32 || record.length === 0) continue
+      swarm.dht._router.set(targetHex, {
+        relay: decodePersistedValue(entry?.relay ?? null),
+        record,
+        onconnect: null,
+        onholepunch: null
+      })
+      restored++
+    } catch (err) {
+      console.log('[Storage] Skipping persisted DHT route restore entry:', err?.message)
+    }
+  }
+
+  if (restored > 0) {
+    console.log('[Storage] Restored persisted DHT routing table entries:', { reason, restored })
+  }
+
+  return { restored }
 }
 
 // Wakeup for fast content announcements to peers
@@ -781,6 +926,94 @@ function getSwarmDiscoveryHandles(ctx) {
   return ctx._swarmDiscoveryHandles
 }
 
+function createDeferredDiscoveryHandle() {
+  let realHandle = null
+  let destroyed = false
+  let resolveFlushed = null
+  const flushedPromise = new Promise((resolve) => {
+    resolveFlushed = resolve
+  })
+
+  return {
+    _peartubeDeferred: true,
+    _peartubeDestroyed: false,
+    _peartubeStarted: false,
+    _setRealHandle(handle) {
+      if (destroyed) {
+        try { handle?.destroy?.() } catch { /* best effort */ }
+        try { handle?.close?.() } catch { /* best effort */ }
+        resolveFlushed?.(null)
+        return
+      }
+      realHandle = handle || null
+      resolveFlushed?.(realHandle)
+    },
+    async flushed() {
+      await flushedPromise
+      return realHandle?.flushed?.()
+    },
+    destroy() {
+      destroyed = true
+      this._peartubeDestroyed = true
+      try { realHandle?.destroy?.() } catch { /* best effort */ }
+      try { realHandle?.close?.() } catch { /* best effort */ }
+      resolveFlushed?.(null)
+    },
+    close() {
+      this.destroy()
+    }
+  }
+}
+
+function scheduleDeferredDiscoveryJoin(ctx, discoveryKey, handle, options = {}) {
+  if (!ctx?.swarm || !discoveryKey || !handle) return handle
+
+  const swarm = ctx.swarm
+  const discoveryKeyHex = b4a.toString(discoveryKey, 'hex')
+  let onNetworkUpdate = null
+
+  const start = () => {
+    if (handle._peartubeStarted || handle._peartubeDestroyed || !isSwarmDiscoveryReady(swarm)) return null
+    handle._peartubeStarted = true
+    try {
+      const realHandle = swarm.join(discoveryKey, { server: true, client: true })
+      handle._setRealHandle(realHandle)
+      if (options?.label) {
+        console.log(`[Storage] Swarm discovery joined for ${options.label}`)
+      } else {
+        console.log('[Storage] Swarm discovery joined:', discoveryKeyHex.slice(0, 16))
+      }
+      return realHandle
+    } catch (err) {
+      console.log('[Storage] Deferred swarm discovery join failed:', err?.message)
+      handle._setRealHandle(null)
+      return null
+    }
+  }
+
+  const listenPromise = swarm._peartubeListenPromise
+  if (listenPromise && typeof listenPromise.then === 'function') {
+    listenPromise.then(() => start()).catch(() => {})
+  }
+
+  try {
+    if (typeof swarm.dht?.on === 'function') {
+      onNetworkUpdate = () => { start() }
+      swarm.dht.on('network-update', onNetworkUpdate)
+    }
+  } catch { /* best effort */ }
+
+  const originalDestroy = handle.destroy.bind(handle)
+  handle.destroy = () => {
+    try { if (onNetworkUpdate && typeof swarm.dht?.off === 'function') swarm.dht.off('network-update', onNetworkUpdate) } catch { /* best effort */ }
+    originalDestroy()
+  }
+  handle.close = handle.destroy
+
+  void Promise.resolve().then(() => start())
+  return start() || handle
+}
+
 export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
   if (!ctx?.swarm || !discoveryKey) return null
 
@@ -789,23 +1022,9 @@ export function retainSwarmDiscovery(ctx, discoveryKey, options = {}) {
   const existing = handles.get(discoveryKeyHex)
   if (existing) return existing
 
-  const handle = ctx.swarm.join(discoveryKey, { server: true, client: true })
+  const handle = createDeferredDiscoveryHandle()
   handles.set(discoveryKeyHex, handle)
-
-  try {
-    const flushed = handle?.flushed?.()
-    if (flushed && typeof flushed.then === 'function') {
-      const label = options.label || discoveryKeyHex.slice(0, 16)
-      flushed
-        .then(() => {
-          console.log(`[Storage] Swarm discovery flushed for ${label}`)
-        })
-        .catch((err) => {
-          console.log(`[Storage] Swarm discovery flush failed for ${label} (non-fatal):`, err?.message)
-        })
-    }
-  } catch { /* best effort */ }
-
+  scheduleDeferredDiscoveryJoin(ctx, discoveryKey, handle, options)
   return handle
 }
 
@@ -1247,8 +1466,7 @@ export async function initializeStorage(config) {
     }
   }
 
-  // Known-peer cache: persist remote pubkeys so the next cold start can
-  // `swarm.joinPeer(pk)` them directly without waiting for a topic DHT lookup.
+  // Known-peer cache records remote pubkeys for diagnostics and future peer tracking.
   const selfKeyHex = swarm.keyPair?.publicKey ? b4a.toString(swarm.keyPair.publicKey, 'hex') : null
   const knownPeerCache = createKnownPeerCache(metaDb, { selfKeyHex })
   globalKnownPeerCache = knownPeerCache
@@ -1328,24 +1546,24 @@ export async function initializeStorage(config) {
     void appendDebugLine(`[storage] peer discovered ${peerKey} totalPeers=${swarm.peers?.size || 0} relayAddresses=${relayAddresses} connecting=${swarm.connecting || 0}`)
   })
 
-  // Warm dial: re-connect to recently-seen peers. swarm.joinPeer is idempotent
-  // against any topic-based discovery that follows.
-  if (!swarm._peartubeOffline) {
-    void dialPersistedPeers(swarm, metaDb, { reason: 'startup' }).catch((err) => {
-      console.log('[Storage] Warm-dial skipped:', err?.message)
-    })
-  }
+  await restorePersistedDhtRoutingTable(swarm, metaDb, { reason: 'startup' })
 
-  // Join the PearTube network topic for peer pool building
-  // More connected peers = better relay options for symmetric NAT holepunching
+  // Join the PearTube network topic only after the DHT is bootstrapped and listen() has resolved.
+  // More connected peers = better relay options for symmetric NAT holepunching.
   const PEARTUBE_NETWORK_TOPIC = crypto.data(b4a.from(NETWORK_TOPIC_STRING, 'utf-8'));
   globalPeerPoolTopicHex = b4a.toString(PEARTUBE_NETWORK_TOPIC, 'hex')
-  if (!swarm._peartubeOffline) {
+  let peerPoolDiscoveryStarted = false
+
+  const maybeStartPeerPoolDiscovery = async (reason = 'ready') => {
+    if (peerPoolDiscoveryStarted || swarm._peartubeOffline) return globalPeerPoolDiscovery
+    if (!isSwarmDiscoveryReady(swarm)) return null
+
+    peerPoolDiscoveryStarted = true
     try {
       const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
-      globalNetworkStartupTiming?.record('topic-join-called', { topic: 'peer-pool', topicHex: globalPeerPoolTopicHex })
+      globalNetworkStartupTiming?.record('topic-join-called', { topic: 'peer-pool', topicHex: globalPeerPoolTopicHex, reason })
       globalPeerPoolDiscovery = poolDiscovery;
-      console.log('[Storage] Joined peartube-network topic for peer pool building');
+      console.log('[Storage] Joined peartube-network topic for peer pool building after', reason)
       // Don't await flushed() - it can hang on mobile
       poolDiscovery.flushed().then(() => {
         console.log('[Storage] Peer pool topic discovery flushed, connections:', swarm.connections?.size || 0);
@@ -1354,11 +1572,15 @@ export async function initializeStorage(config) {
           `[storage] peer-pool discovery flushed connections=${swarm.connections?.size || 0} bootstrapped=${swarm.dht?.bootstrapped}`
         )
       }).catch(() => {});
+      return poolDiscovery
     } catch (e) {
       console.log('[Storage] Failed to join peer pool topic:', e?.message);
       globalPeerPoolDiscovery = null;
+      return null
     }
-  } else {
+  }
+
+  if (swarm._peartubeOffline) {
     console.log('[Storage] Skipping peer pool discovery; P2P networking is offline:', swarm._peartubeOfflineReason)
     await appendDebugLine(`[storage] peer-pool discovery skipped offline reason=${swarm._peartubeOfflineReason}`)
     globalPeerPoolDiscovery = null
@@ -1369,11 +1591,14 @@ export async function initializeStorage(config) {
   console.log('[Storage] Starting swarm.listen() (non-blocking)...');
   await appendDebugLine('[storage] swarm.listen start')
   const listenPromise = swarm.listen()
+  swarm._peartubeListenPromise = listenPromise
   globalNetworkStartupTiming?.record('swarm-listen-called')
 
   // Track listen state for debugging
   swarm._peartubeListenResolved = false
-  if (listenPromise && typeof listenPromise.then === 'function') {
+  if (!listenPromise || typeof listenPromise.then !== 'function') {
+    swarm._peartubeListenResolved = true
+  } else {
     listenPromise
       .then(() => {
         swarm._peartubeListenResolved = true
@@ -1388,6 +1613,14 @@ export async function initializeStorage(config) {
         console.log('[Storage] listen() failed:', e?.message)
         void appendDebugLine(`[storage] swarm.listen failed ${e?.message || String(e)}`)
       })
+  }
+
+  if (!swarm._peartubeOffline) {
+    void waitForSwarmDiscoveryReady(swarm).then(() => {
+      void maybeStartPeerPoolDiscovery('bootstrapped-and-listen-resolved')
+    }).catch((err) => {
+      console.log('[Storage] Peer pool discovery wait failed:', err?.message)
+    })
   }
 
   // Log DHT state for debugging
@@ -1581,7 +1814,7 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
     // (Even non-writable peers must join; pairing setup is only for writable "members".)
     if (ctx.swarm) {
       try {
-        if (ch.discoveryKey) ctx.swarm.join(ch.discoveryKey)
+        if (ch.discoveryKey) retainSwarmDiscovery(ctx, ch.discoveryKey, { label: `channel:${channelKeyHex.slice(0, 16)}` })
         await Promise.race([
           ch.setupPairing(ctx.swarm),
           new Promise(resolve => setTimeout(resolve, 15000))
@@ -1775,7 +2008,7 @@ export async function createChannel(ctx, options = {}) {
   // Set up pairing and replication - AWAIT to ensure handlers are registered
   if (ctx.swarm) {
     try {
-      if (ch.discoveryKey) ctx.swarm.join(ch.discoveryKey)
+      if (ch.discoveryKey) retainSwarmDiscovery(ctx, ch.discoveryKey, { label: `channel:${channelKeyHex.slice(0, 16)}` })
       // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
       await ch.setupPairing(ctx.swarm)
     } catch (err) {
@@ -1858,7 +2091,7 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
   // Set up pairing and replication - AWAIT to ensure base.replicate(conn) handlers are registered
   if (ctx.swarm) {
     try {
-      if (channel.discoveryKey) ctx.swarm.join(channel.discoveryKey)
+      if (channel.discoveryKey) retainSwarmDiscovery(ctx, channel.discoveryKey, { label: `paired:${channelKeyHex.slice(0, 16)}` })
       // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
       await channel.setupPairing(ctx.swarm)
     } catch (err) {
@@ -2146,6 +2379,12 @@ export async function shutdownBackend(ctx) {
     }
 
     if (ctx.swarm) {
+      console.log('[Backend] Shutdown: persisting DHT routing table before destroy...')
+      try {
+        await persistDhtRoutingTable(ctx.swarm, ctx.metaDb, { reason: 'shutdown' })
+      } catch (err) {
+        console.log('[Backend] Shutdown: DHT routing table persist failed (non-fatal):', err?.message)
+      }
       console.log('[Backend] Shutdown: destroying swarm...')
       await runShutdownStep('swarm destroy', async () => {
         await ctx.swarm.destroy()
@@ -2210,12 +2449,6 @@ export async function suspendNetworking() {
     console.log('[CastDiag] suspendNetworking: SKIPPED (cast is active)');
     return;
   }
-
-  if (isPlaybackActive()) {
-    console.log('[Network] Skipping suspend - local playback is active');
-    console.log('[CastDiag] suspendNetworking: SKIPPED (playback is active)');
-    return;
-  }
   
   console.log('[Network] Suspending...');
   try {
@@ -2234,6 +2467,7 @@ export async function suspendNetworking() {
     }
 
     if (globalSwarm) {
+      await persistDhtRoutingTable(globalSwarm, globalMetaDb, { reason: 'suspend' })
       await globalSwarm.suspend();
       console.log('[Network] Swarm suspended');
     }
@@ -2249,29 +2483,6 @@ export async function suspendNetworking() {
   } catch (err) {
     console.log('[Network] Suspend error (non-fatal):', err?.message);
   }
-}
-
-export function setPlaybackActive(active, options = {}) {
-  globalPlaybackActive = Boolean(active)
-  globalPlaybackActiveUpdatedAt = Date.now()
-  const ttlMs = Math.max(1000, Number(options.ttlMs || PLAYBACK_ACTIVITY_TTL_MS) || PLAYBACK_ACTIVITY_TTL_MS)
-  globalPlaybackActiveUntil = globalPlaybackActive ? globalPlaybackActiveUpdatedAt + ttlMs : 0
-  console.log('[Network] playbackActive flag set to:', globalPlaybackActive)
-  return {
-    active: globalPlaybackActive,
-    updatedAt: globalPlaybackActiveUpdatedAt,
-    expiresAt: globalPlaybackActiveUntil
-  }
-}
-
-export function isPlaybackActive(now = Date.now()) {
-  if (!globalPlaybackActive) return false
-  if (globalPlaybackActiveUntil > 0 && now > globalPlaybackActiveUntil) {
-    globalPlaybackActive = false
-    globalPlaybackActiveUntil = 0
-    return false
-  }
-  return true
 }
 
 /**
@@ -2450,11 +2661,6 @@ export async function resumeNetworking() {
     if (globalSwarm) {
       await globalSwarm.resume();
       console.log('[Network] Swarm resumed, connections:', globalSwarm.connections?.size || 0);
-      if (!globalSwarm._peartubeOffline) {
-        void dialPersistedPeers(globalSwarm, globalMetaDb, { reason: 'resume' }).catch((err) => {
-          console.log('[Network] Resume dial skipped:', err?.message)
-        })
-      }
     }
     if (globalBlobServer) {
       await globalBlobServer.resume();

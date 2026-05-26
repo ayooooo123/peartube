@@ -147,8 +147,12 @@ export function attachMobileHandlers(B, deps) {
 
   B.getPublicFeed = async () => {
     const r = await api.getPublicFeed()
+    const entries = Array.isArray(r?.entries) ? r.entries : []
+    const stats = r?.stats && typeof r.stats === 'object' ? r.stats : {}
+    const visibleEntries = entries.length
+    const feedConnections = Number(stats.feedConnections ?? stats.peerCount ?? 0) || 0
     return {
-      entries: r.entries.map(e => ({
+      entries: entries.map(e => ({
         channelKey: e.driveKey || e.channelKey,
         driveKey: e.driveKey || e.channelKey,
         source: e.source || 'peer',
@@ -160,7 +164,14 @@ export function attachMobileHandlers(B, deps) {
         manifestUpdatedAt: e.manifestUpdatedAt || 0,
         previewVideos: Array.isArray(e.previewVideos) ? e.previewVideos : [],
       })),
-      stats: r.stats || { totalEntries: 0, hiddenCount: 0, peerCount: 0 },
+      stats: {
+        ...stats,
+        peerCount: feedConnections,
+        feedConnections,
+        feedEntries: Number(stats.feedEntries ?? stats.totalEntries ?? visibleEntries) || visibleEntries,
+        totalEntries: Number(stats.totalEntries ?? visibleEntries) || visibleEntries,
+        channelsLoaded: Number(stats.channelsLoaded ?? visibleEntries) || visibleEntries,
+      },
     }
   }
   B.getCanonicalFeed = B.getPublicFeed

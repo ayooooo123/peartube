@@ -13,7 +13,7 @@ import { MultiWriterChannel, ChannelPairer } from './channel/index.js'
 import { PublicChannelBee } from './channel/public-channel-bee.js'
 import { loadPublicBeeFromCache } from './public-bee-loader.js'
 import { logger } from './logger.js'
-import { relocateLegacyBlindPeerDir, relocateLegacyLogsDir } from './storage-layout.js'
+import { relocateLegacyBlindPeerDir, relocateLegacyCorestoreDir, relocateLegacyLogsDir } from './storage-layout.js'
 import { cleanupFailedCorestoreOpen } from './corestore-cleanup.js'
 import {
   loadBareOrNodeFsModule,
@@ -134,10 +134,14 @@ let globalSwarmDiagnostics = null;
 let globalNetworkStartupTiming = null;
 let globalKnownPeerCache = null;
 let globalMetaDb = null;
+let globalPlaybackActive = false;
+let globalPlaybackActiveUntil = 0;
+let globalPlaybackActiveUpdatedAt = 0;
 
 // Cast active flag — set by API handlers to prevent network suspension during active cast
 let globalCastActive = false
 let watchdogTimer = null
+const PLAYBACK_ACTIVITY_TTL_MS = 60 * 60 * 1000
 
 /**
  * Generate a random session token for blob server URL auth.
@@ -1154,6 +1158,18 @@ export async function initializeStorage(config) {
   if (isEmbeddedBareKitStoragePath()) {
     await appendDebugLine('[storage] relocateLegacyLogsDir skipped for embedded BareKit storage')
   } else {
+    try {
+      await appendDebugLine('[storage] relocateLegacyCorestoreDir start')
+      const relocatedCorestoreDir = relocateLegacyCorestoreDir(storagePath, fs, path)
+      await appendDebugLine(`[storage] relocateLegacyCorestoreDir done moved=${relocatedCorestoreDir || 'none'}`)
+      if (relocatedCorestoreDir) {
+        console.log('[Storage] Relocated legacy corestore dir to avoid Corestore migration conflict:', relocatedCorestoreDir)
+      }
+    } catch (error) {
+      await appendDebugLine(`[storage] relocateLegacyCorestoreDir failed ${describeDebugError(error)}`)
+      console.warn('[Storage] Failed to relocate legacy corestore dir before Corestore init:', error?.message)
+    }
+
     try {
       await appendDebugLine('[storage] relocateLegacyBlindPeerDir start')
       const relocatedBlindPeerDir = relocateLegacyBlindPeerDir(storagePath, fs, path)
@@ -2449,6 +2465,12 @@ export async function suspendNetworking() {
     console.log('[CastDiag] suspendNetworking: SKIPPED (cast is active)');
     return;
   }
+
+  if (isPlaybackActive()) {
+    console.log('[Network] Skipping suspend - local playback is active');
+    console.log('[CastDiag] suspendNetworking: SKIPPED (playback is active)');
+    return;
+  }
   
   console.log('[Network] Suspending...');
   try {
@@ -2483,6 +2505,29 @@ export async function suspendNetworking() {
   } catch (err) {
     console.log('[Network] Suspend error (non-fatal):', err?.message);
   }
+}
+
+export function setPlaybackActive(active, options = {}) {
+  globalPlaybackActive = Boolean(active)
+  globalPlaybackActiveUpdatedAt = Date.now()
+  const ttlMs = Math.max(1000, Number(options.ttlMs || PLAYBACK_ACTIVITY_TTL_MS) || PLAYBACK_ACTIVITY_TTL_MS)
+  globalPlaybackActiveUntil = globalPlaybackActive ? globalPlaybackActiveUpdatedAt + ttlMs : 0
+  console.log('[Network] playbackActive flag set to:', globalPlaybackActive)
+  return {
+    active: globalPlaybackActive,
+    updatedAt: globalPlaybackActiveUpdatedAt,
+    expiresAt: globalPlaybackActiveUntil
+  }
+}
+
+export function isPlaybackActive(now = Date.now()) {
+  if (!globalPlaybackActive) return false
+  if (globalPlaybackActiveUntil > 0 && now > globalPlaybackActiveUntil) {
+    globalPlaybackActive = false
+    globalPlaybackActiveUntil = 0
+    return false
+  }
+  return true
 }
 
 /**

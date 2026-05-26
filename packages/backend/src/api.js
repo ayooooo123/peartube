@@ -2881,6 +2881,11 @@ export function createApi({
         storage: networkDebug?.startupTiming || null,
         publicFeed: feedStats.startupTiming || null,
       }
+      const visibleFeedEntries = publicFeed?.getFeed?.() || []
+      const channelsLoaded = Math.max(
+        ctx.channels?.size || 0,
+        visibleFeedEntries.length,
+      )
       const doctor = {
         dht: {
           bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
@@ -2917,7 +2922,7 @@ export function createApi({
         swarmConnections: ctx.swarm?.connections?.size || 0,
         swarmPeers: ctx.swarm?.peers?.size || 0,
         feedConnections: publicFeed?.feedConnections?.size || 0,
-        feedEntries: publicFeed?.entries?.size || 0,
+        feedEntries: visibleFeedEntries.length,
         feedTopicHex: topicHex,
         network: networkDebug,
         startupTiming,
@@ -2930,7 +2935,7 @@ export function createApi({
         swarmPublicKey: ctx.swarm?.keyPair?.publicKey
           ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
           : 'unknown',
-        channelsLoaded: ctx.channels?.size || 0,
+        channelsLoaded,
       };
     }
 

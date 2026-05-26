@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { createApi } from '../src/api.js'
 import { buildSharedSystemHandlers } from '../src/runtime.js'
 import { attachMobileHandlers } from '../src/mobile-handlers.js'
 
@@ -68,4 +69,36 @@ test('mobile GetSwarmStatus forwards full transport diagnostics', async () => {
   assert.deepEqual(result.startupTiming, FULL_SWARM_STATUS.startupTiming)
   assert.deepEqual(result.doctor, FULL_SWARM_STATUS.doctor)
   assert.deepEqual(result.directPeerDial, FULL_SWARM_STATUS.doctor.feed.directPeerDial)
+})
+
+test('backend swarm status reports visible feed entries and channels, not only opened channel objects', () => {
+  const api = createApi({
+    ctx: {
+      channels: new Map(),
+      swarm: {
+        connections: new Set([{}]),
+        peers: new Map(),
+        keyPair: { publicKey: Buffer.alloc(32, 1) },
+      },
+    },
+    publicFeed: {
+      feedConnections: new Set([{}]),
+      entries: new Map([['hidden-raw-entry', {}]]),
+      getFeed() {
+        return [
+          { driveKey: 'aa'.repeat(32), publicBeeKey: 'bb'.repeat(32), source: 'peer' },
+          { driveKey: 'cc'.repeat(32), publicBeeKey: 'dd'.repeat(32), source: 'relay-cache' },
+        ]
+      },
+      getStats() {
+        return { peerCount: 1, feedConnections: 1, startupTiming: null, directPeerDial: null }
+      },
+    },
+  })
+
+  const status = api.getSwarmStatus()
+
+  assert.equal(status.feedEntries, 2)
+  assert.equal(status.channelsLoaded, 2)
+  assert.equal(status.doctor.recommendedBoundary, 'content-playback-or-ui')
 })

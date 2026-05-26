@@ -1303,6 +1303,22 @@ export class PublicFeed {
       let announcedKeys = []
       let receivedCount = 0
 
+      const applyVerifiedEntry = (entry, publicBeeKey, normalizedEntry) => {
+        let changed = false
+        if (this.addEntry(entry.driveKey, 'peer', publicBeeKey, normalizedEntry)) changed = true
+        else if (this._applyEntrySnapshot(entry.driveKey, normalizedEntry)) changed = true
+
+        // The advertised key was real feed state even if the entry already
+        // existed locally. Keep the connection -> key mapping in sync inside
+        // the async signed-ingress path; otherwise UI/API stats stay at
+        // keyed=0/raw=0 until another synchronous message happens.
+        const peerSetChanged = this._setPeerFeedKeys(conn, [entry.driveKey])
+        if (changed || peerSetChanged) {
+          try { this.onFeedUpdate?.() } catch {}
+          this._schedulePersistDiscovered()
+        }
+      }
+
       // Prefer new entries format (with publicBeeKey)
       if (msg.entries && Array.isArray(msg.entries)) {
       log.debug('HAVE_FEED received (entries)', { count: msg.entries.length })
@@ -1323,14 +1339,7 @@ export class PublicFeed {
           this._verifyPeerEntrySnapshot(normalizedEntry, entry.driveKey, publicBeeKey)
             .then((verified) => {
               if (!verified) return
-              let changed = false
-              if (this.addEntry(entry.driveKey, 'peer', publicBeeKey, normalizedEntry)) changed = true
-              else if (this._applyEntrySnapshot(entry.driveKey, normalizedEntry)) changed = true
-              if (changed) {
-                this._setPeerFeedKeys(conn, [entry.driveKey])
-                try { this.onFeedUpdate?.() } catch {}
-                this._schedulePersistDiscovered()
-              }
+              applyVerifiedEntry(entry, publicBeeKey, normalizedEntry)
             })
             .catch(() => {})
         }

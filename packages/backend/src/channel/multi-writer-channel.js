@@ -1325,34 +1325,40 @@ export class MultiWriterChannel extends ReadyResource {
     if (!this.localWriterKeyHex) throw new Error('Channel not ready')
     if (!this.blobs) throw new Error('Blobs not initialized')
 
+    const blobDriveKey = typeof this.blobsKeyHex === 'string' && this.blobsKeyHex.length > 0
+      ? this.blobsKeyHex
+      : undefined
+
     // Check if writer is already registered
     const existing = await this.view.get(prefixedKey('writers', this.localWriterKeyHex)).catch(() => null)
     if (existing?.value) {
       // Backfill blobDriveKey/deviceName if this writer record was created before blobs were ready.
-      const needsBlobDriveKey = !existing.value.blobDriveKey && this.blobsKeyHex
+      const needsBlobDriveKey = !existing.value.blobDriveKey && blobDriveKey
       const needsDeviceName = deviceName && existing.value.deviceName !== deviceName
       if (needsBlobDriveKey || needsDeviceName) {
-        await this.appendOp({
+        const op = {
           type: 'upsert-writer',
           schemaVersion: CURRENT_SCHEMA_VERSION,
           keyHex: this.localWriterKeyHex,
-          deviceName,
-          blobDriveKey: this.blobsKeyHex
-        })
+          deviceName
+        }
+        if (blobDriveKey) op.blobDriveKey = blobDriveKey
+        await this.appendOp(op)
       }
-      return this.blobsKeyHex // Return shared blobs key for compatibility
+      return blobDriveKey || null // Return shared blobs key for compatibility
     }
 
     // Register the writer (all writers share the same Hyperblobs)
-    await this.appendOp({
+    const op = {
       type: 'upsert-writer',
       schemaVersion: CURRENT_SCHEMA_VERSION,
       keyHex: this.localWriterKeyHex,
-      deviceName,
-      blobDriveKey: this.blobsKeyHex // Point to shared blobs
-    })
+      deviceName
+    }
+    if (blobDriveKey) op.blobDriveKey = blobDriveKey
+    await this.appendOp(op)
 
-    return this.blobsKeyHex
+    return blobDriveKey || null
   }
 
   async addWriter({ keyHex, role = 'device', deviceName = '' }) {

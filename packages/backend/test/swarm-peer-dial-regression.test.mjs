@@ -21,7 +21,7 @@ test('swarmRememberPeer does not fabricate Hyperswarm peer info when peer is unk
   assert.equal(swarm.peers.has(keyHex), false)
 })
 
-test('swarmQueuePeer queues through public joinPeer and avoids private priority mutation', () => {
+test('swarmQueuePeer does not call joinPeer or mutate private queue flags', () => {
   const publicKey = b4a.alloc(32, 9)
   const peerInfo = {
     publicKey,
@@ -38,8 +38,8 @@ test('swarmQueuePeer queues through public joinPeer and avoids private priority 
     },
   }
 
-  assert.equal(swarmQueuePeer(swarm, peerInfo), true)
-  assert.deepEqual(swarm.joinPeerCalls, [publicKey])
+  assert.equal(swarmQueuePeer(swarm, peerInfo), false)
+  assert.deepEqual(swarm.joinPeerCalls, [])
   assert.equal(peerInfo.queued, false)
-  assert.equal(peerInfo.explicit, true)
+  assert.equal(peerInfo.explicit, false)
 })

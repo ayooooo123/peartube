@@ -787,38 +787,6 @@ export class PublicFeed {
     return this._peerDirectory.get(keyHex) || null
   }
 
-  _queuePublicJoinPeer(record, peer = null, topic = null) {
-    if (!record || !record.publicKey || typeof this.swarm?.joinPeer !== 'function') return false
-    if (record.joined && record.lastJoinedAt && this._now() - record.lastJoinedAt < this._peerJoinCooldownMs) {
-      return true
-    }
-    if (record.demoted && !record.joined) return false
-
-    const lowest = this._lowestScoringPeer(record.keyHex)
-    if (!record.joined && this._peerDirectory.size >= this.maxPeers && lowest && lowest.keyHex !== record.keyHex && lowest.score > record.score) {
-      record.demoted = true
-      return false
-    }
-
-    try {
-      this.swarm.joinPeer(record.publicKey)
-      record.joined = true
-      record.demoted = false
-      record.joinAttempts++
-      record.lastJoinedAt = this._now()
-      record.lastJoinError = null
-      this._directPeerDialStats.queued++
-      this._directPeerDialStats.lastReason = 'joinPeer'
-      this._directPeerDialStats.lastDialedAt = record.lastJoinedAt
-      return true
-    } catch (err) {
-      record.lastJoinError = err?.message || String(err)
-      this._directPeerDialStats.failed++
-      this._directPeerDialStats.lastReason = 'joinPeer-error'
-      return false
-    }
-  }
-
   _recordPeerConnectionOutcome(conn, reason = 'closed') {
     const remoteKey = this._connectionPeerKeys.get(conn) || conn?.remotePublicKey || conn?.publicKey || null
     const keyHex = this._peerKeyHex(remoteKey)

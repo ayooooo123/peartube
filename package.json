@@ -45,7 +45,6 @@
     "@typescript-eslint/eslint-plugin": "^8.41.0",
     "@typescript-eslint/parser": "^8.41.0",
     "eslint": "^8.57.0",
-    "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-jsx-a11y": "^6.10.0",
     "eslint-plugin-react": "^7.37.0",
     "eslint-plugin-react-hooks": "^4.6.2",
@@ -62,7 +61,6 @@
   "dependencies": {
     "bare-build": "^0.5.3",
     "bare-ffmpeg": "file:packages/bare-ffmpeg",
-    "bare-ipc": "^1.1.1",
     "bare-runtime": "^1.28.4",
     "bare-worker": "^4.1.6",
     "expo": "~56.0.4",

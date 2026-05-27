@@ -42,17 +42,16 @@ function createSwarm() {
   }
 }
 
-test('swarmQueuePeer promotes peer info and queues via public joinPeer without private enqueue', () => {
+test('swarmQueuePeer leaves peer selection to Hyperswarm topic discovery', () => {
   const publicKey = b4a.alloc(32, 2)
   const swarm = createSwarm()
   const peerInfo = swarm._upsertPeer(publicKey, [{ host: '127.0.0.1', port: 49737 }])
 
-  assert.equal(swarmQueuePeer(swarm, peerInfo), true)
+  assert.equal(swarmQueuePeer(swarm, peerInfo), false)
   assert.equal(swarm.enqueueCalls.length, 0)
-  assert.equal(peerInfo.explicit, true)
+  assert.equal(peerInfo.explicit, undefined)
   assert.equal(peerInfo.queued, false)
-  assert.equal(swarm.joinPeerCalls.length, 1)
-  assert.equal(swarm.joinPeerCalls[0], publicKey)
+  assert.equal(swarm.joinPeerCalls.length, 0)
 })
 
 test('swarmRememberPeer preserves existing relay hints when rediscovery lacks hints', () => {

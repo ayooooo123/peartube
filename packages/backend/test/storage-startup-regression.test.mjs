@@ -65,12 +65,12 @@ test('storage persists and restores DHT routing table state around lifecycle eve
 
 
 
-test('storage cold start and resume warm-dial recent known peers as explicit seed bootstrap', () => {
-  assert.match(storageSource, /import \{ createKnownPeerCache, loadKnownPeers \} from '\.\/known-peers\.js'/)
-  assert.match(storageSource, /async function warmDialKnownPeers\(swarm, metaDb, \{ reason = 'startup', limit = 5 \} = \{\}\)/)
-  assert.match(storageSource, /await warmDialKnownPeers\(swarm, metaDb, \{ reason: 'startup', limit: 5 \}\)/)
-  assert.match(storageSource, /await warmDialKnownPeers\(globalSwarm, globalMetaDb, \{ reason: 'resume', limit: 5 \}\)/)
-  assert.match(storageSource, /swarm\.joinPeer\(b4a\.from\(peer\.key, 'hex'\)\)/)
+test('storage does not warm-dial cached peers in the default feed discovery path', () => {
+  assert.match(storageSource, /import \{ createKnownPeerCache \} from '\.\/known-peers\.js'/)
+  assert.doesNotMatch(storageSource, /warmDialKnownPeers/)
+  assert.doesNotMatch(storageSource, /loadKnownPeers\(/)
+  assert.doesNotMatch(storageSource, /swarm\.joinPeer\(b4a\.from\(peer\.key, 'hex'\)\)/)
+  assert.doesNotMatch(storageSource, /swarm\.joinPeer\(/)
 })
 
 test('storage creates an offline swarm fallback when Hyperswarm is unavailable', () => {
@@ -120,28 +120,15 @@ test('storage exposes public bee content discovery retention for cached serving 
   assert.match(storageSource, /retainSwarmDiscovery\(ctx, core\.discoveryKey/)
 })
 
-test('storage exposes Hyperswarm peer discovery as a diagnostic peer event', () => {
-  assert.match(
-    storageSource,
-    /function installSwarmPeerDiscoveryEmitter\(swarm\)/,
-    'storage should install a peer discovery event adapter'
-  )
-  assert.match(
-    storageSource,
-    /installSwarmPeerDiscoveryEmitter\(swarm\)/,
-    'real swarm startup should install the peer discovery event adapter'
-  )
-  assert.match(
-    storageSource,
-    /swarm\.emit\('peer', peer, topic\)/,
-    'adapter should emit peer events with the discovered peer and topic'
-  )
+test('storage does not monkey-patch Hyperswarm peer discovery into app-level peer events', () => {
+  assert.doesNotMatch(storageSource, /function installSwarmPeerDiscoveryEmitter\(swarm\)/)
+  assert.doesNotMatch(storageSource, /installSwarmPeerDiscoveryEmitter\(swarm\)/)
+  assert.doesNotMatch(storageSource, /swarm\.emit\('peer', peer, topic\)/)
 })
 
 test('storage captures Hyperswarm connection lifecycle diagnostics', () => {
   assert.match(storageSource, /function createSwarmDiagnostics\(swarm\)/)
   assert.match(storageSource, /globalSwarmDiagnostics = createSwarmDiagnostics\(swarm\)/)
-  assert.match(storageSource, /globalSwarmDiagnostics\?\.recordPeer\?\.\(peer, topic\)/)
   assert.match(storageSource, /globalSwarmDiagnostics\?\.recordConnection\?\.\(conn, info\)/)
   assert.match(storageSource, /hyperswarm: diagnostics/)
 })

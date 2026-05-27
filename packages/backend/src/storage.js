@@ -25,7 +25,7 @@ import {
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
-import { createKnownPeerCache, loadKnownPeers } from './known-peers.js'
+import { createKnownPeerCache } from './known-peers.js'
 
 function resolveDebugLogPath() {
   return globalThis?.process?.env?.PEARTUBE_NATIVE_WORKLET_DEBUG_LOG || null
@@ -210,38 +210,6 @@ function decodePersistedValue(value) {
     return out
   }
   return value
-}
-
-async function warmDialKnownPeers(swarm, metaDb, { reason = 'startup', limit = 5 } = {}) {
-  if (!swarm || swarm._peartubeOffline || typeof swarm.joinPeer !== 'function' || !metaDb) {
-    return { dialed: 0, skipped: true }
-  }
-
-  let peers = []
-  try {
-    peers = await loadKnownPeers(metaDb)
-  } catch (err) {
-    console.log('[Storage] Known-peer warm dial load failed:', err?.message)
-    return { dialed: 0, error: err?.message || String(err) }
-  }
-
-  let dialed = 0
-  for (const peer of peers.slice(0, Math.max(0, Math.min(5, Number(limit) || 5)))) {
-    if (!peer?.key || !/^[a-f0-9]{64}$/i.test(peer.key)) continue
-    try {
-      swarm.joinPeer(b4a.from(peer.key, 'hex'))
-      dialed++
-    } catch (err) {
-      console.log('[Storage] Known-peer warm dial failed:', peer.key.slice(0, 16), err?.message)
-    }
-  }
-
-  if (dialed > 0) {
-    globalNetworkStartupTiming?.record('known-peer-warm-dial', { reason, dialed })
-    console.log('[Storage] Warm-dialed known peers:', dialed, 'reason:', reason)
-  }
-
-  return { dialed }
 }
 
 function collectPersistedDhtRoutingEntries(swarm) {
@@ -690,22 +658,6 @@ function installSwarmConnectDiagnostics(swarm, diagnostics) {
     return result
   }
   swarm._peartubeConnectDiagnosticsInstalled = true
-  return true
-}
-
-function installSwarmPeerDiscoveryEmitter(swarm) {
-  if (!swarm || swarm._peartubePeerDiscoveryEmitterInstalled) return false
-  if (typeof swarm._handlePeer !== 'function' || typeof swarm.emit !== 'function') return false
-
-  const handlePeer = swarm._handlePeer
-  swarm._handlePeer = function peartubeHandlePeer(peer, topic) {
-    const result = handlePeer.call(this, peer, topic)
-    try {
-      swarm.emit('peer', peer, topic)
-    } catch { /* best effort */ }
-    return result
-  }
-  swarm._peartubePeerDiscoveryEmitterInstalled = true
   return true
 }
 
@@ -1407,7 +1359,6 @@ export async function initializeStorage(config) {
   await appendDebugLine(`[storage] hyperswarm created offline=${Boolean(swarm._peartubeOffline)}`)
   globalSwarmDiagnostics = createSwarmDiagnostics(swarm)
   installSwarmConnectDiagnostics(swarm, globalSwarmDiagnostics)
-  installSwarmPeerDiscoveryEmitter(swarm)
 
   // Set global references for suspend/resume and stats
   globalSwarm = swarm;
@@ -1505,16 +1456,6 @@ export async function initializeStorage(config) {
     log.debug('Swarm update event', { connections: swarm.connections?.size || 0, peers: swarm.peers?.size || 0 })
   });
 
-  // Log peer discovery events (DHT found a peer)
-  swarm.on('peer', (peer, topic) => {
-    globalSwarmDiagnostics?.recordPeer?.(peer, topic)
-    const peerKey = peer?.publicKey ? b4a.toString(peer.publicKey, 'hex').slice(0, 16) : 'unknown'
-    globalNetworkStartupTiming?.record('peer-discovered', { key: peerKey, relayAddresses: Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0, connections: swarm.connections?.size || 0, connecting: swarm.connecting || 0 })
-    const relayAddresses = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses.length : 0
-    console.log('[Storage] PEER DISCOVERED:', peerKey, 'total peers:', swarm.peers?.size || 0, 'relayAddresses:', relayAddresses, 'connecting:', swarm.connecting || 0)
-    void appendDebugLine(`[storage] peer discovered ${peerKey} totalPeers=${swarm.peers?.size || 0} relayAddresses=${relayAddresses} connecting=${swarm.connecting || 0}`)
-  })
-
   await restorePersistedDhtRoutingTable(swarm, metaDb, { reason: 'startup' })
 
   // Join the PearTube network topic immediately. Do not wait for DHT bootstrap
@@ -1555,7 +1496,6 @@ export async function initializeStorage(config) {
     globalPeerPoolDiscovery = null
   } else {
     joinPeerPoolDiscoveryImmediately('startup')
-    await warmDialKnownPeers(swarm, metaDb, { reason: 'startup', limit: 5 })
   }
 
   // Start listening - DON'T block on it since it may hang on mobile
@@ -2654,7 +2594,6 @@ export async function resumeNetworking() {
     if (globalSwarm) {
       await globalSwarm.resume();
       await restorePersistedDhtRoutingTable(globalSwarm, globalMetaDb, { reason: 'resume' })
-      await warmDialKnownPeers(globalSwarm, globalMetaDb, { reason: 'resume', limit: 5 })
       console.log('[Network] Swarm resumed, connections:', globalSwarm.connections?.size || 0);
     }
     if (globalBlobServer) {

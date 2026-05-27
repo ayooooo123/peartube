@@ -4,7 +4,7 @@ import b4a from 'b4a'
 
 import { swarmQueuePeer } from '../src/swarm-peer-dial.js'
 
-test('swarmQueuePeer clears stale queued/waiting flags before joinPeer requeue', () => {
+test('swarmQueuePeer does not perform app-level joinPeer requeue by default', () => {
   const publicKey = b4a.alloc(32, 31)
   const peerInfo = {
     publicKey,
@@ -19,9 +19,9 @@ test('swarmQueuePeer clears stale queued/waiting flags before joinPeer requeue',
     },
   }
 
-  assert.equal(swarmQueuePeer(swarm, peerInfo), true)
-  assert.deepEqual(swarm.joinPeerCalls, [publicKey])
-  assert.equal(peerInfo.explicit, true)
-  assert.equal(peerInfo.queued, false)
-  assert.equal(peerInfo.waiting, false)
+  assert.equal(swarmQueuePeer(swarm, peerInfo), false)
+  assert.deepEqual(swarm.joinPeerCalls, [])
+  assert.equal(peerInfo.explicit, false)
+  assert.equal(peerInfo.queued, true)
+  assert.equal(peerInfo.waiting, true)
 })

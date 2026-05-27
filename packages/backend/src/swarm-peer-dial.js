@@ -93,14 +93,6 @@ export function swarmRememberPeer(swarm, peer, topic = null) {
   return peerInfo
 }
 
-export function swarmQueuePeer(swarm, peerInfo) {
-  if (!swarm || !peerInfo || !peerInfo.publicKey) return false
-  if (typeof swarm.joinPeer === 'function') {
-    peerInfo.explicit = true
-    peerInfo.queued = false
-    peerInfo.waiting = false
-    swarm.joinPeer(peerInfo.publicKey)
-    return true
-  }
+export function swarmQueuePeer(_swarm, _peerInfo) {
   return false
 }

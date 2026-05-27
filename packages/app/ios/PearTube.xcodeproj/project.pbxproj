@@ -407,9 +407,14 @@
 			);
 			inputPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-PearTube/Pods-PearTube-frameworks.sh",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-buffer.3.4.2.framework/bare-buffer.3.4.2",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-crypto.1.12.0.framework/bare-crypto.1.12.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-hrtime.2.1.1.framework/bare-hrtime.2.1.1",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-os.3.6.2.framework/bare-os.3.6.2",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-pipe.4.1.0.framework/bare-pipe.4.1.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-signals.4.2.0.framework/bare-signals.4.2.0",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-subprocess.5.2.1.framework/bare-subprocess.5.2.1",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-tcp.2.2.0.framework/bare-tcp.2.2.0",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/bare-tty.5.0.3.framework/bare-tty.5.0.3",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/BareAddons/crc-native.1.1.8.framework/crc-native.1.1.8",
 				"${PODS_XCFRAMEWORKS_BUILD_DIR}/ExpoModulesJSI/ExpoModulesJSI.framework/ExpoModulesJSI",
@@ -465,9 +470,14 @@
 			);
 			name = "[CP] Embed Pods Frameworks";
 			outputPaths = (
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-buffer.3.4.2.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-crypto.1.12.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-hrtime.2.1.1.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-os.3.6.2.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-pipe.4.1.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-signals.4.2.0.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-subprocess.5.2.1.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tcp.2.2.0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/bare-tty.5.0.3.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/crc-native.1.1.8.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/ExpoModulesJSI.framework",

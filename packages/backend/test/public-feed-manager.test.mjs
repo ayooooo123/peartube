@@ -192,6 +192,48 @@ test('PublicFeedManager keeps discovered relay address hints as Hyperswarm diagn
   }
 })
 
+
+test('PublicFeedManager promotes pending discovered topic peers to explicit priority', () => {
+  const publicKey = b4a.alloc(32, 19)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const relayAddresses = [{ host: '167.86.111.230', port: 49737 }]
+  const swarm = createSwarm()
+  let priorityUpdates = 0
+  swarm.peers.set(keyHex, {
+    publicKey,
+    relayAddresses: [],
+    topics: [],
+    queued: true,
+    waiting: false,
+    explicit: false,
+    _topic(topic) {
+      if (topic && !this.topics.some((seen) => b4a.equals(seen, topic))) this.topics.push(topic)
+    },
+    _updatePriority() {
+      priorityUpdates++
+      return true
+    },
+  })
+
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses }, NETWORK_TOPIC), true)
+    assert.equal(swarm.joinPeerCalls.length, 0)
+    const peerInfo = swarm.peers.get(keyHex)
+    assert.equal(peerInfo.explicit, true)
+    assert.equal(priorityUpdates, 1)
+    assert.equal(peerInfo.relayAddresses, relayAddresses)
+    assert.deepEqual(peerInfo.topics, [NETWORK_TOPIC])
+    const stats = manager.getStats().directPeerDial
+    assert.equal(stats.lastReason, 'dial-already-pending-promoted')
+    assert.equal(stats.peers[0].pending, true)
+    assert.equal(stats.peers[0].swarm.explicit, true)
+  } finally {
+    manager.stop()
+  }
+})
+
 test('PublicFeedManager bounds remembered discovered peers for long-running desktop sessions', () => {
   const swarm = createSwarm()
   const manager = new PublicFeedManager(swarm, createMetaDb(), { maxDiscoveredPeers: 3 })
@@ -407,7 +449,7 @@ test('PublicFeedManager preserves relay-address hints without joinPeer fallback'
   }
 })
 
-test('PublicFeedManager leaves pending Hyperswarm peer candidates untouched', () => {
+test('PublicFeedManager promotes pending Hyperswarm peer candidates without joinPeer fallback', () => {
   const publicKey = b4a.alloc(32, 23)
   const keyHex = b4a.toString(publicKey, 'hex')
   const swarm = createSwarm()
@@ -430,10 +472,13 @@ test('PublicFeedManager leaves pending Hyperswarm peer candidates untouched', ()
   try {
     assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses: peerInfo.relayAddresses }, NETWORK_TOPIC), true)
     assert.equal(swarm.joinPeerCalls.length, 0)
-    assert.equal(peerInfo.explicit, false)
-    assert.equal(priorityUpdates, 0)
+    assert.equal(peerInfo.explicit, true)
+    assert.equal(priorityUpdates, 1)
     const stats = manager.getStats().directPeerDial
+    assert.equal(stats.lastReason, 'dial-already-pending-promoted')
     assert.equal(stats.peers[0].connected, false)
+    assert.equal(stats.peers[0].pending, true)
+    assert.equal(stats.peers[0].swarm.explicit, true)
   } finally {
     manager.stop()
   }

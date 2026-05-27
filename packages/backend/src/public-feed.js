@@ -845,6 +845,32 @@ export class PublicFeed {
   _rememberDiscoveredPeerInSwarm(peer, topic, keyHex) {
     if (!this.swarm || !peer || typeof peer !== 'object') return null
     try {
+      const publicKey = this._peerEntryPublicKey(peer)
+      const peers = this.swarm?.peers
+      let peerInfo = peers && typeof peers.get === 'function' ? peers.get(keyHex) : null
+      if (!peerInfo && peers && typeof peers.get === 'function' && publicKey) {
+        try { peerInfo = peers.get(publicKey) } catch { peerInfo = null }
+      }
+
+      if (peerInfo && typeof peerInfo === 'object') {
+        const relayAddresses = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses : []
+        if (relayAddresses.length > 0 && (!Array.isArray(peerInfo.relayAddresses) || peerInfo.relayAddresses.length === 0)) {
+          peerInfo.relayAddresses = relayAddresses
+        }
+        if (topic) {
+          if (typeof peerInfo._topic === 'function') peerInfo._topic(topic)
+          else {
+            if (!Array.isArray(peerInfo.topics)) peerInfo.topics = []
+            if (!peerInfo.topics.some((seen) => b4a.equals(seen, topic))) peerInfo.topics.push(topic)
+          }
+        }
+        if ((peerInfo.queued || peerInfo.waiting) && peerInfo.explicit !== true) {
+          peerInfo.explicit = true
+          if (typeof peerInfo._updatePriority === 'function') peerInfo._updatePriority()
+          this._directPeerDialStats.lastReason = 'dial-already-pending-promoted'
+        }
+      }
+
       return this._discoveredPeerHints.get(keyHex) || null
     } catch (err) {
       this._directPeerLastDialError.set(keyHex, err?.message || String(err))

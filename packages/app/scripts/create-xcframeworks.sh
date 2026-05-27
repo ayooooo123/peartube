@@ -10,13 +10,7 @@ SIM_DIR="$MOBILE_DIR/prebuilds-sim"
 OUTPUT_DIR="$MOBILE_DIR/Frameworks"
 BARE_KIT_ADDONS_DIR="$MOBILE_DIR/node_modules/react-native-bare-kit/ios/addons"
 SKIP_FRAMEWORKS_FILE="$(mktemp "${TMPDIR:-/tmp}/peartube-skip-frameworks.XXXXXX")"
-SKIP_FAMILIES_FILE="$(mktemp "${TMPDIR:-/tmp}/peartube-skip-families.XXXXXX")"
-trap 'rm -f "$SKIP_FRAMEWORKS_FILE" "$SKIP_FAMILIES_FILE"' EXIT
-
-framework_family() {
-    local framework_name="$1"
-    printf '%s' "$framework_name" | sed -E 's/\.[0-9].*$//'
-}
+trap 'rm -f "$SKIP_FRAMEWORKS_FILE"' EXIT
 
 append_unique_line() {
     local value="$1"
@@ -42,9 +36,7 @@ if [ -d "$BARE_KIT_ADDONS_DIR" ]; then
     for addon_path in "$BARE_KIT_ADDONS_DIR"/*.xcframework; do
         if [ -d "$addon_path" ]; then
             addon_name=$(basename "$addon_path" .xcframework)
-            addon_family=$(framework_family "$addon_name")
             append_unique_line "$addon_name" "$SKIP_FRAMEWORKS_FILE"
-            append_unique_line "$addon_family" "$SKIP_FAMILIES_FILE"
         fi
     done
 fi
@@ -63,15 +55,8 @@ for framework_path in "$DEVICE_DIR"/*.framework; do
         device_binary="$DEVICE_DIR/$framework_name/$name_without_ext"
         sim_binary="$SIM_DIR/$framework_name/$name_without_ext"
 
-        framework_family_name=$(framework_family "$name_without_ext")
-
         if contains_line "$name_without_ext" "$SKIP_FRAMEWORKS_FILE"; then
             echo "Skipping $name_without_ext (exact match already provided by react-native-bare-kit)"
-            continue
-        fi
-
-        if contains_line "$framework_family_name" "$SKIP_FAMILIES_FILE"; then
-            echo "Skipping $name_without_ext (addon family '$framework_family_name' already provided by react-native-bare-kit)"
             continue
         fi
 

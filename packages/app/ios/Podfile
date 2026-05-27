@@ -37,21 +37,13 @@ def ensure_bare_xcframeworks!
       []
     end
 
-  framework_family = ->(name) { name.sub(/\.[0-9].*$/, '') }
-
   overlapping_frameworks = local_frameworks & bare_kit_frameworks
-  local_families = local_frameworks.map { |name| framework_family.call(name) }.uniq
-  bare_kit_families = bare_kit_frameworks.map { |name| framework_family.call(name) }.uniq
-  overlapping_families = local_families & bare_kit_families
-  needs_regen = local_frameworks.empty? || !overlapping_frameworks.empty? || !overlapping_families.empty?
+  needs_regen = local_frameworks.empty? || !overlapping_frameworks.empty?
   return unless needs_regen
 
   if !overlapping_frameworks.empty?
     Pod::UI.puts("BareAddons XCFramework overlap with react-native-bare-kit detected: #{overlapping_frameworks.join(', ')}")
     Pod::UI.puts('Regenerating BareAddons XCFrameworks to remove duplicates...')
-  elsif !overlapping_families.empty?
-    Pod::UI.puts("BareAddons addon-family overlap with react-native-bare-kit detected: #{overlapping_families.join(', ')}")
-    Pod::UI.puts('Regenerating BareAddons XCFrameworks to keep one addon version family...')
   else
     Pod::UI.puts('BareAddons XCFrameworks missing; regenerating...')
   end

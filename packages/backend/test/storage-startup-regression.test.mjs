@@ -26,7 +26,9 @@ test('storage startup does not await optional network dependencies before local 
   assert.match(storageSource, /function warmOptionalStorageDeps\(\)/)
   assert.match(storageSource, /function warmHyperswarmModule\(\)/)
   assert.match(storageSource, /warmOptionalStorageDeps\(\)[\s\S]*?warmHyperswarmModule\(\)[\s\S]*?await initStorageModules\(\)/)
-  assert.match(storageSource, /Promise\.race\(\[[\s\S]*?hyperswarmModuleReady[\s\S]*?setTimeout\(\(\) => resolve\(null\), 100\)/)
+  assert.match(storageSource, /const HYPERSWARM_MODULE_TIMEOUT_MS = 5000/)
+  assert.match(storageSource, /waitForHyperswarmModule\(\)/)
+  assert.doesNotMatch(storageSource, /setTimeout\(\(\) => resolve\(null\), 100\)/)
 })
 
 test('blob server watchdog lazily loads HTTP only when cast probing is needed', () => {
@@ -55,6 +57,7 @@ test('storage joins the PearTube network topic immediately without DHT bootstrap
   assert.doesNotMatch(storageSource, /dht\?\.bootstrapped[\s\S]{0,240}swarm\.join\(PEARTUBE_NETWORK_TOPIC/)
   assert.match(storageSource, /joinPeerPoolDiscoveryImmediately\('startup'\)/)
   assert.match(storageSource, /swarm\.join\(PEARTUBE_NETWORK_TOPIC, \{ server: true, client: true \}\)/)
+  assert.match(storageSource, /swarm\.peerPoolDiscovery = poolDiscovery/)
 })
 
 test('storage persists and restores DHT routing table state around lifecycle events', () => {

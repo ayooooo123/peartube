@@ -84,6 +84,7 @@ const log = logger('Storage')
 let HyperswarmStats = null
 let optionalStorageDepsReady = null
 let hyperswarmModuleReady = null
+const HYPERSWARM_MODULE_TIMEOUT_MS = 5000
 
 // Global network stats instance (set after swarm is created)
 let networkStats = null;
@@ -742,6 +743,18 @@ function warmHyperswarmModule() {
   return hyperswarmModuleReady
 }
 
+async function waitForHyperswarmModule() {
+  if (Hyperswarm) return Hyperswarm
+
+  const ready = hyperswarmModuleReady || warmHyperswarmModule()
+  const timeout = new Promise((resolve) => {
+    setTimeout(() => resolve(null), HYPERSWARM_MODULE_TIMEOUT_MS)
+  })
+  const LoadedHyperswarm = await Promise.race([ready, timeout])
+
+  return typeof LoadedHyperswarm === 'function' ? LoadedHyperswarm : null
+}
+
 async function migrateLegacyCorestoreLayout(storagePath) {
   if (!fs || !path) return
 
@@ -1332,10 +1345,7 @@ export async function initializeStorage(config) {
 
   console.log('[Storage] Creating Hyperswarm...');
   await appendDebugLine('[storage] creating hyperswarm')
-  const LoadedHyperswarm = Hyperswarm || (hyperswarmModuleReady ? await Promise.race([
-    hyperswarmModuleReady,
-    new Promise((resolve) => setTimeout(() => resolve(null), 100))
-  ]) : null)
+  const LoadedHyperswarm = await waitForHyperswarmModule()
   let swarm
   if (typeof LoadedHyperswarm !== 'function') {
     console.warn('[Storage] Hyperswarm unavailable; continuing with offline P2P networking')
@@ -1473,6 +1483,7 @@ export async function initializeStorage(config) {
       const poolDiscovery = swarm.join(PEARTUBE_NETWORK_TOPIC, { server: true, client: true });
       globalNetworkStartupTiming?.record('topic-join-called', { topic: 'peer-pool', topicHex: globalPeerPoolTopicHex, reason })
       globalPeerPoolDiscovery = poolDiscovery;
+      swarm.peerPoolDiscovery = poolDiscovery
       console.log('[Storage] Joined peartube-network topic for peer pool building immediately:', reason)
       // Do not await flushed(); mobile DHT bootstrapping can lag behind the join.
       poolDiscovery.flushed().then(() => {

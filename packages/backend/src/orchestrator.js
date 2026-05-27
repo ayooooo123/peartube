@@ -358,6 +358,15 @@ export async function createBackendContext(config) {
   }
 
   // Phase 4: Wire up swarm connection handling
+  ctx.swarm.on('peer', (peer, topic) => {
+    try {
+      const handled = publicFeed.handleDiscoveredPeer(peer, topic)
+      if (handled) startupGate.noteSwarmPeer()
+    } catch (err) {
+      console.error('[Orchestrator] publicFeed.handleDiscoveredPeer failed:', err?.message)
+    }
+  })
+
   ctx.swarm.on('connection', (conn, info) => {
     console.log('[Orchestrator] Swarm connection received, passing to publicFeed.handleConnection');
     startupGate.noteSwarmPeer()

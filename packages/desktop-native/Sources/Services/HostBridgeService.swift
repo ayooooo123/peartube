@@ -146,7 +146,7 @@ final class HostBridgeService {
     }
 
     private static func intValue(_ value: UInt?, defaultValue: Int = 0) -> Int {
-      value.map(Int.init) ?? defaultValue
+      value.flatMap { Int(exactly: $0) } ?? defaultValue
     }
   }
 
@@ -2170,7 +2170,7 @@ final class HostBridgeService {
   }
 
   private static func validateProtocolVersion(_ version: UInt?) throws {
-    let actual = version.map(Int.init)
+    let actual = version.flatMap { Int(exactly: $0) }
     guard actual == supportedProtocolVersion else {
       throw HostBridgeError.protocolVersionMismatch(
         expected: supportedProtocolVersion,

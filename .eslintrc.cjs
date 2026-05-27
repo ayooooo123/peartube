@@ -25,14 +25,12 @@ module.exports = {
     'react-hooks',
     '@typescript-eslint',
     'jsx-a11y',
-    'import',
   ],
   rules: {
     'react/react-in-jsx-scope': 'off',
     'react/prop-types': 'off',
     '@typescript-eslint/no-explicit-any': 'warn',
     '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
-    'import/no-cycle': ['warn', { ignoreExternal: true }],
   },
   overrides: [
     {
@@ -74,7 +72,6 @@ module.exports = {
     {
       files: ['packages/backend/src/{runtime,swarm,feed,media,hash-utils}.js'],
       rules: {
-        'import/no-cycle': 'error',
         'max-lines': ['error', { max: 400, skipBlankLines: true, skipComments: true }],
       },
     },

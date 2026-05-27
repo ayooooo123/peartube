@@ -336,10 +336,11 @@ export async function createBackendContext(config) {
   ctx.publicFeed = publicFeed
   const startupGate = createStartupGate()
   const videoStats = new VideoStatsTracker();
+  const identityManager = createIdentityManager({ ctx });
   const seedingManager = new SeedingManager(ctx.store, ctx.metaDb, {
+    identityManager,
     getDiskUsageBytes: createStorageUsageMeasurer(storagePath)
   });
-  const identityManager = createIdentityManager({ ctx });
   const uploadManager = createUploadManager({ ctx });
 
   // Phase 3: Wire up callbacks

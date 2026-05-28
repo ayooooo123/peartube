@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "schema": [
+    {
+      "name": "metadata",
+      "namespace": "peartubePublic",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "avatar",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "commentsDbKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "createdAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "createdBy",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "video",
+      "namespace": "peartubePublic",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "duration",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "thumbnail",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailBlobId",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailBlobsCoreKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailMimeType",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobId",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobsCoreKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobDriveKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mimeType",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "size",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "views",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "uploadedAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "uploadedBy",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "updatedBy",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "syncedAt",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    }
+  ]
+}

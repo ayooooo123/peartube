@@ -1,0 +1,465 @@
+{
+  "version": 1,
+  "schema": [
+    {
+      "name": "metadata",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "avatar",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicBeeKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "commentsDbKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "commentsAdminKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "createdAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "createdBy",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "updatedBy",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "schemaVersion",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "logicalClock",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "writer",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "keyHex",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "role",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "deviceName",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobDriveKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "addedAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "removedAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "banned",
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "video",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "description",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "path",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "duration",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "thumbnail",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailBlobId",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailBlobsCoreKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "thumbnailMimeType",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobId",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobsCoreKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "blobDriveKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "mimeType",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "size",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "views",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "uploadedAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "uploadedBy",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "updatedBy",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "schemaVersion",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "logicalClock",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "comment",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "commentId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "authorKeyHex",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "timestamp",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "parentId",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "hidden",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "hiddenBy",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "hiddenAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "removed",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "removedBy",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "removedAt",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "reaction",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "authorKeyHex",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "reactionType",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "timestamp",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "invite",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "idHex",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "inviteZ32",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "publicKeyHex",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "expires",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "createdAt",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "current",
+          "type": "bool",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "watchEvent",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 2,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "eventId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "channelKey",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "watcherKeyHex",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "duration",
+          "type": "uint64",
+          "version": 1
+        },
+        {
+          "name": "completed",
+          "type": "bool",
+          "version": 1
+        },
+        {
+          "name": "timestamp",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "vectorIndex",
+      "namespace": "peartubeChannel",
+      "compact": true,
+      "flagsPosition": 1,
+      "fields": [
+        {
+          "name": "videoId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "vector",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "metadata",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "indexedAt",
+          "type": "uint64",
+          "version": 1
+        }
+      ]
+    }
+  ]
+}

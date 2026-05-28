@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "offset": 0,
+  "schema": [
+    {
+      "name": "metadata",
+      "namespace": "peartubeChannel",
+      "id": 0,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeChannel/metadata",
+      "derived": false,
+      "key": [
+        "key"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "writers",
+      "namespace": "peartubeChannel",
+      "id": 1,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeChannel/writers-by-role"
+      ],
+      "schema": "@peartubeChannel/writer",
+      "derived": false,
+      "key": [
+        "keyHex"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "videos",
+      "namespace": "peartubeChannel",
+      "id": 2,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeChannel/videos-by-uploaded-at"
+      ],
+      "schema": "@peartubeChannel/video",
+      "derived": false,
+      "key": [
+        "id"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "comments",
+      "namespace": "peartubeChannel",
+      "id": 3,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeChannel/comments-by-video-timestamp"
+      ],
+      "schema": "@peartubeChannel/comment",
+      "derived": false,
+      "key": [
+        "videoId",
+        "commentId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "reactions",
+      "namespace": "peartubeChannel",
+      "id": 4,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeChannel/reactions-by-video-type"
+      ],
+      "schema": "@peartubeChannel/reaction",
+      "derived": false,
+      "key": [
+        "videoId",
+        "authorKeyHex"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "invites",
+      "namespace": "peartubeChannel",
+      "id": 5,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeChannel/invite",
+      "derived": false,
+      "key": [
+        "idHex"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "watchEvents",
+      "namespace": "peartubeChannel",
+      "id": 6,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubeChannel/watch-events-by-video-timestamp"
+      ],
+      "schema": "@peartubeChannel/watchEvent",
+      "derived": false,
+      "key": [
+        "videoId",
+        "eventId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "vectorIndexes",
+      "namespace": "peartubeChannel",
+      "id": 7,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubeChannel/vectorIndex",
+      "derived": false,
+      "key": [
+        "videoId"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "writers-by-role",
+      "namespace": "peartubeChannel",
+      "id": 8,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeChannel/writers",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "role"
+      ]
+    },
+    {
+      "name": "videos-by-uploaded-at",
+      "namespace": "peartubeChannel",
+      "id": 9,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeChannel/videos",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "uploadedAt"
+      ]
+    },
+    {
+      "name": "comments-by-video-timestamp",
+      "namespace": "peartubeChannel",
+      "id": 10,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeChannel/comments",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "videoId",
+        "timestamp"
+      ]
+    },
+    {
+      "name": "reactions-by-video-type",
+      "namespace": "peartubeChannel",
+      "id": 11,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeChannel/reactions",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "videoId",
+        "reactionType"
+      ]
+    },
+    {
+      "name": "watch-events-by-video-timestamp",
+      "namespace": "peartubeChannel",
+      "id": 12,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubeChannel/watchEvents",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "videoId",
+        "timestamp"
+      ]
+    }
+  ]
+}

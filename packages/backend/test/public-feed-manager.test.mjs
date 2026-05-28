@@ -74,6 +74,7 @@ function createSwarm() {
       return peerInfo
     },
     _enqueue(peerInfo) {
+      if (!peerInfo?.publicKey) return false
       peerInfo.queued = true
       this.joinPeerCalls.push(peerInfo.publicKey)
       return true
@@ -229,6 +230,56 @@ test('PublicFeedManager promotes pending discovered topic peers to explicit prio
     assert.equal(stats.lastReason, 'dial-already-pending-promoted')
     assert.equal(stats.peers[0].pending, true)
     assert.equal(stats.peers[0].swarm.explicit, true)
+  } finally {
+    manager.stop()
+  }
+})
+
+
+test('PublicFeedManager requeues pending discovered peers after promotion when swarm exposes enqueue', () => {
+  const publicKey = b4a.alloc(32, 31)
+  const keyHex = b4a.toString(publicKey, 'hex')
+  const relayAddresses = [{ host: 'relay.test', port: 49737 }]
+  const swarm = createSwarm()
+  let enqueued = 0
+  swarm._enqueue = (peerInfo) => {
+    enqueued++
+    peerInfo.queued = true
+    swarm.joinPeerCalls.push(peerInfo.publicKey)
+    return true
+  }
+  swarm.peers.set(keyHex, {
+    publicKey,
+    relayAddresses: [],
+    topics: [],
+    queued: true,
+    waiting: false,
+    explicit: false,
+    _topic(topic) {
+      if (topic && !this.topics.some((seen) => b4a.equals(seen, topic))) this.topics.push(topic)
+    },
+    _updatePriority() {
+      return true
+    },
+    _requeue() {
+      enqueued++
+      this.queued = true
+      swarm.joinPeerCalls.push(this.publicKey)
+      return true
+    },
+  })
+
+  const manager = new PublicFeedManager(swarm, createMetaDb())
+
+  try {
+    assert.equal(manager.handleDiscoveredPeer({ publicKey, relayAddresses }, NETWORK_TOPIC), true)
+    const peerInfo = swarm.peers.get(keyHex)
+    assert.equal(peerInfo.explicit, true)
+    assert.equal(enqueued, 1)
+    assert.equal(swarm.joinPeerCalls.length, 1)
+    assert.deepEqual(peerInfo.relayAddresses, relayAddresses)
+    assert.deepEqual(peerInfo.topics, [NETWORK_TOPIC])
+    assert.equal(manager.getStats().directPeerDial.lastReason, 'queued-discovered-peer')
   } finally {
     manager.stop()
   }

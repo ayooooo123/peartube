@@ -5,7 +5,7 @@
 PearTube is a decentralized P2P video platform that runs from one monorepo across:
 
 - iOS/Android via Expo + BareKit
-- Desktop via Pear Runtime (`pear-electron` + worker)
+- Desktop via Electrobun/Bun with embedded `pear-runtime` + worker
 
 ## Monorepo Layout
 
@@ -33,9 +33,9 @@ React Native UI
 ### Desktop
 
 ```text
-Expo web export in Pear window
-  -> worker-client bridge
-  -> Pear worker (pear-src/workers/core/index.ts)
+Expo web export in Electrobun view
+  -> window.bridge over local IPC WebSocket
+  -> Bare worker launched through pear-runtime
   -> @peartube/backend
 ```
 
@@ -64,14 +64,14 @@ Generates:
 - `packages/app/backend.bundle.js`
 - `packages/app/downloader-worker.bundle.js`
 
-### Pear desktop build
+### Electrobun desktop build
 
 ```bash
-npm run pear:build
-npm run pear
+npm run desktop:build
+npm run desktop
 ```
 
-`pear:dev` uses `pear run --dev` (the old `pear dev` command is removed in current Pear CLI).
+`pear run` is deprecated upstream and scheduled for removal. New desktop work should use embedded `pear-runtime` through the Electrobun shell. See `docs/pear-runtime-evolution-readiness.md` for the article-driven migration boundary and remaining OTA release gaps.
 
 ### Android release
 

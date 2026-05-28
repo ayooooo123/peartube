@@ -6,7 +6,7 @@
  *
  * Architecture:
  * - Video bytes are stored in the channel's shared Hyperblobs instance
- * - Video metadata is stored in Autobase via channel.addVideo()
+ * - Video metadata is stored in channel HyperDB via channel.addVideo()
  * - Blob IDs (4 numbers: blockOffset, blockLength, byteOffset, byteLength) are stored in metadata
  */
 
@@ -261,7 +261,7 @@ export function createUploadManager({ ctx }) {
         const avgSpeed = fileSize / totalTime;
         console.log(`[Upload] Transfer complete in ${totalTime.toFixed(1)}s (avg ${(avgSpeed / 1024 / 1024).toFixed(2)} MB/s)`);
 
-        // Create video metadata and store in Autobase
+        // Create video metadata and store in channel HyperDB
         // Ensure all string fields are actually strings to pass validation
         const playbackSupport = getPlaybackSupportForMimeType(mimeType);
         const metadata = {
@@ -283,7 +283,7 @@ export function createUploadManager({ ctx }) {
           playbackSupport: playbackSupport.playbackSupport
         };
 
-        // Store metadata in Autobase
+        // Store metadata in channel HyperDB
         await channel.addVideo(metadata);
 
         console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);
@@ -336,7 +336,7 @@ export function createUploadManager({ ctx }) {
           onProgress(100, fileSize, fileSize);
         }
 
-        // Create video metadata and store in Autobase
+        // Create video metadata and store in channel HyperDB
         // Ensure all string fields are actually strings to pass validation
         const playbackSupport = getPlaybackSupportForMimeType(mimeType);
         const metadata = {
@@ -358,7 +358,7 @@ export function createUploadManager({ ctx }) {
           playbackSupport: playbackSupport.playbackSupport
         };
 
-        // Store metadata in Autobase
+        // Store metadata in channel HyperDB
         await channel.addVideo(metadata);
 
         console.log('[Upload] Complete:', videoId, 'blobId:', blobResult.id, 'blobsCore:', channel.blobsKeyHex?.slice(0, 16), 'keyLen:', channel.blobsKeyHex?.length);

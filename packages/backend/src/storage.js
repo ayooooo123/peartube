@@ -959,7 +959,7 @@ function isValidCoreKeyHex(value) {
  * Retain discovery for a PublicBee and the video/thumbnail blob cores it advertises.
  * This restores the old relay-style cache behavior for any runtime: once we know a
  * publicBeeKey, cached content is announced as content cores without waiting for a
- * full channel Autobase load.
+ * full channel HyperDB load.
  *
  * @param {import('./types.js').StorageContext} ctx
  * @param {string} publicBeeKeyHex
@@ -1423,7 +1423,7 @@ export async function initializeStorage(config) {
       }
 
       // Replicate all Hypercore data in the Corestore:
-      // - Autobase cores (channel metadata, videos, comments, etc.)
+      // - HyperDB channel cores (metadata, videos, comments, reactions)
       // - Hyperblobs cores (video bytes, thumbnails)
       try {
         if (conn.destroyed) return
@@ -1432,29 +1432,6 @@ export async function initializeStorage(config) {
         console.log('[Storage] store.replicate failed (non-fatal):', err?.message);
       }
 
-      // Also replicate all loaded Autobase channels. Each channel's setupPairing
-      // registers its own handler, but only for connections established AFTER the
-      // channel is loaded. This covers channels that were loaded BEFORE this peer
-      // connected.
-      if (channels.size > 0) {
-        console.log('[Storage] Replicating', channels.size, 'Autobase channel(s) on new connection');
-        for (const [keyHex, channel] of channels) {
-          if (conn.destroyed) break
-          if (channel?.base && channel._replicatedConns && !channel._replicatedConns.has(conn)) {
-            try {
-              channel._replicatedConns.add(conn)
-              if (conn.destroyed) {
-                channel._replicatedConns.delete(conn)
-                continue
-              }
-              channel.base.replicate(conn)
-              console.log('[Storage] Replicated Autobase for channel:', keyHex.slice(0, 16))
-            } catch (err) {
-              console.log('[Storage] Error replicating channel', keyHex.slice(0, 16), ':', err?.message)
-            }
-          }
-        }
-      }
     } catch (err) {
       console.log('[Storage] connection handler error (non-fatal):', err?.message)
     }
@@ -1584,7 +1561,7 @@ export async function initializeStorage(config) {
 }
 
 /**
- * Load or create a multi-writer channel by Autobase key.
+ * Load or create a multi-writer channel by HyperDB channel key.
  *
  * @param {import('./types.js').StorageContext} ctx
  * @param {string} channelKeyHex
@@ -1626,22 +1603,6 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
     if (ctx.channels.has(channelKeyHex)) {
       const current = ctx.channels.get(channelKeyHex)
       log.debug('loadChannel returning cached channel', { channelKey: channelKeyHex.slice(0, 16) })
-
-    // CRITICAL: Ensure replication is set up on any connections that came in after the channel was loaded
-    // This handles the case where channel was cached but new peers connected since then
-    if (ctx.swarm && ctx.swarm.connections?.size > 0 && current.base && current._replicatedConns) {
-      for (const conn of ctx.swarm.connections) {
-        if (!current._replicatedConns.has(conn)) {
-          current._replicatedConns.add(conn)
-          try {
-            current.base.replicate(conn)
-            console.log('[Storage] loadChannel: replicated cached channel on new connection:', channelKeyHex.slice(0, 16))
-          } catch (err) {
-            console.log('[Storage] loadChannel: replicate error:', err?.message)
-          }
-        }
-      }
-    }
 
       return current
     }
@@ -1725,8 +1686,8 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
     }
     ctx.channels.set(channelKeyHex, ch)
 
-    // Ensure we join the channel topic so this device can FIND peers and replicate Autobase cores.
-    // (Even non-writable peers must join; pairing setup is only for writable "members".)
+    // Ensure we join the channel topic so this device can find peers and replicate HyperDB cores.
+    // Even non-writable peers must join; pairing setup is only for writable members.
     if (ctx.swarm) {
       try {
         if (ch.discoveryKey) retainSwarmDiscovery(ctx, ch.discoveryKey, { label: `channel:${channelKeyHex.slice(0, 16)}` })
@@ -1739,25 +1700,6 @@ export async function loadChannel(ctx, channelKeyHex, options = {}) {
       }
     }
 
-
-    // Create wakeup session for this channel
-    // This enables fast content announcements to peers when new videos/comments are added
-    if (ctx.wakeup && ch.base) {
-      try {
-        ch.wakeupSession = ctx.wakeup.session(ch.base.key, {
-          onannounce(announcement, peer) {
-            console.log('[Wakeup] Peer announced new content for channel:', channelKeyHex.slice(0, 16));
-            // Trigger sync - the announcement means peer has new data
-            if (ch.base) {
-              ch.base.update().catch(() => {});
-            }
-          }
-        });
-        console.log('[Storage] Wakeup session created for channel:', channelKeyHex.slice(0, 16));
-      } catch (err) {
-        console.log('[Storage] Wakeup session failed (non-fatal):', err?.message);
-      }
-    }
 
     return ch
   })()
@@ -1788,8 +1730,7 @@ function isCoreClosing(core) {
 
 function isChannelUsable(channel) {
   if (isResourceClosing(channel)) return false
-  if (isResourceClosing(channel.base)) return false
-  if (channel.view && isResourceClosing(channel.view)) return false
+  if (isCoreClosing(channel.core)) return false
   return true
 }
 
@@ -1813,10 +1754,10 @@ function getPublicBeeInflight(ctx) {
 /**
  * Load a public channel Hyperbee for viewing.
  * This is the simple, auto-replicating layer for public feed viewers.
- * No Autobase complexity - just load the Hyperbee by key and it syncs via store.replicate().
+ * No old channel-view complexity - just load the public HyperDB by key and it syncs via store.replicate().
  *
  * @param {import('./types.js').StorageContext} ctx
- * @param {string} publicBeeKeyHex - The public Hyperbee key (NOT the Autobase channel key)
+ * @param {string} publicBeeKeyHex - The public index key
  * @returns {Promise<PublicChannelBee>}
  */
 export async function loadPublicBee(ctx, publicBeeKeyHex) {
@@ -1917,34 +1858,16 @@ export async function createChannel(ctx, options = {}) {
 
   // Persist a marker so we can reliably distinguish multi-writer channels.
   try {
-    await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'autobase', createdAt: Date.now() })
+    await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'hyperdb', createdAt: Date.now() })
   } catch { /* best effort */ }
 
   // Set up pairing and replication - AWAIT to ensure handlers are registered
   if (ctx.swarm) {
     try {
       if (ch.discoveryKey) retainSwarmDiscovery(ctx, ch.discoveryKey, { label: `channel:${channelKeyHex.slice(0, 16)}` })
-      // CRITICAL: AWAIT setupPairing to ensure base.replicate(conn) handlers are registered
       await ch.setupPairing(ctx.swarm)
     } catch (err) {
       console.log('[Storage] Pairing setup error (non-fatal):', err?.message)
-    }
-  }
-
-  // Create wakeup session for this channel
-  if (ctx.wakeup && ch.base) {
-    try {
-      ch.wakeupSession = ctx.wakeup.session(ch.base.key, {
-        onannounce(announcement, peer) {
-          console.log('[Wakeup] Peer announced new content for channel:', channelKeyHex.slice(0, 16));
-          if (ch.base) {
-            ch.base.update().catch(() => {});
-          }
-        }
-      });
-      console.log('[Storage] Wakeup session created for new channel:', channelKeyHex.slice(0, 16));
-    } catch (err) {
-      console.log('[Storage] Wakeup session failed (non-fatal):', err?.message);
     }
   }
 
@@ -2000,7 +1923,7 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
 
   // Persist marker for multi-writer channel
   try {
-    await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'autobase', createdAt: Date.now() })
+    await ctx.metaDb.put(`mw-channel:${channelKeyHex}`, { kind: 'hyperdb', createdAt: Date.now() })
   } catch { /* best effort */ }
 
   // Set up pairing and replication - AWAIT to ensure base.replicate(conn) handlers are registered
@@ -2015,22 +1938,6 @@ export async function pairDevice(ctx, inviteCode, options = {}) {
   }
 
   // Create wakeup session for paired channel
-  if (ctx.wakeup && channel.base) {
-    try {
-      channel.wakeupSession = ctx.wakeup.session(channel.base.key, {
-        onannounce(announcement, peer) {
-          console.log('[Wakeup] Peer announced new content for paired channel:', channelKeyHex.slice(0, 16));
-          if (channel.base) {
-            channel.base.update().catch(() => {});
-          }
-        }
-      });
-      console.log('[Storage] Wakeup session created for paired channel:', channelKeyHex.slice(0, 16));
-    } catch (err) {
-      console.log('[Storage] Wakeup session failed (non-fatal):', err?.message);
-    }
-  }
-
   return { channel, channelKeyHex }
 }
 

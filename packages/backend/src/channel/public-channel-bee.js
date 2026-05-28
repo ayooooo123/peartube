@@ -1,12 +1,11 @@
 /**
  * PublicChannelBee - Simple auto-replicating channel index
  *
- * This provides a simple Hyperbee-based storage for public channel data.
- * Unlike Autobase, it auto-replicates via store.replicate() without any
- * special setup.
+ * This provides simple HyperDB-backed storage for public channel data.
+ * It auto-replicates via store.replicate() without any special setup.
  *
  * Use cases:
- * - Public feed discovery (viewers load this, not the Autobase)
+ * - Public feed discovery (viewers load this typed public index)
  * - Instant video list sync
  * - Channel metadata
  *
@@ -319,11 +318,11 @@ export class PublicChannelBee extends ReadyResource {
   }
 
   // ============================================
-  // Bulk Sync (for syncing from Autobase)
+  // Bulk Sync (for syncing from channel HyperDB)
   // ============================================
 
   /**
-   * Sync all videos from a source (e.g., Autobase channel)
+   * Sync all videos from a source snapshot.
    * @param {Array<Object>} videos - Video metadata array
    */
   async syncVideos(videos, opts = {}) {
@@ -374,7 +373,7 @@ export class PublicChannelBee extends ReadyResource {
   }
 
   /**
-   * Sync metadata and videos from an Autobase channel
+   * Sync metadata and videos from a channel.
    * @param {import('./multi-writer-channel.js').MultiWriterChannel} channel
    */
   async syncFromChannel(channel) {
@@ -390,7 +389,7 @@ export class PublicChannelBee extends ReadyResource {
         await this.setMetadata(meta)
       }
 
-      // Sync videos non-destructively. The Autobase view may be stale or
+      // Sync videos non-destructively. The channel DB may be stale or partial
       // partially materialized (especially after bounded replication waits), so
       // absence from this read must not delete already-published public videos.
       const videos = await channel.listVideos()

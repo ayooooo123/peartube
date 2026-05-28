@@ -167,7 +167,7 @@ export function createIdentityManager({ ctx }) {
       const publicKey = b4a.toString(derivedPublicKey || keypair.publicKey, 'hex');
       log.info(' Generated keypair:', publicKey.slice(0, 16));
 
-      // Create the channel's multi-writer metadata log (Autobase)
+      // Create the channel's multi-writer HyperDB store
       const writerKeyName = `peartube-channel-writer:${publicKey}`
       log.info(' Creating channel for identity writer:', writerKeyName.slice(0, 32))
       const { channel, channelKeyHex, encryptionKeyHex } = await createChannel(ctx, {
@@ -536,7 +536,7 @@ export function createIdentityManager({ ctx }) {
     },
 
     /**
-     * Get active multi-writer channel (Autobase)
+     * Get active multi-writer channel (HyperDB)
      * @returns {Promise<any|null>}
      */
     async getActiveChannel() {

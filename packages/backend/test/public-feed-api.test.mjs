@@ -710,9 +710,6 @@ test('submitToFeed fails closed when the channel cannot provide a publicBeeKey',
       async getPublicBeeKey() {
         return null
       },
-      async getCommentsAutobase() {
-        return null
-      },
     }),
   })
 

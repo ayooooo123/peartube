@@ -1,5 +1,5 @@
 import ReadyResource from 'ready-resource'
-import Autobase from 'autobase'
+import crypto from 'hypercore-crypto'
 import BlindPairing from 'blind-pairing'
 import Hyperswarm from 'hyperswarm'
 import z32 from 'z32'
@@ -11,7 +11,7 @@ import { MultiWriterChannel } from './multi-writer-channel.js'
  * ChannelPairer
  *
  * Joins an existing multi-writer channel on a second device using a short invite code.
- * The invite exchange returns the Autobase bootstrap key + encryption key.
+ * The invite exchange returns the HyperDB channel bootstrap key + encryption key.
  */
 export class ChannelPairer extends ReadyResource {
   /**
@@ -31,8 +31,7 @@ export class ChannelPairer extends ReadyResource {
     this.pairing = null
     this.candidate = null
     this.channel = null
-    // Track replicated connections for the pairing swarm we manage (if we create one).
-    // This is intentionally local to the pairer: replication idempotency for Autobase is per-channel.
+    // Track replicated connections for the pairing swarm we manage if we create one.
     this._replicatedConns = new WeakSet()
 
     this._resolve = null
@@ -76,7 +75,10 @@ export class ChannelPairer extends ReadyResource {
     }
 
     console.log('[ChannelPairer] Getting local writer key...')
-    const localWriterKey = await Autobase.getLocalKey(this.store)
+    const localKeyPair = typeof this.store.createKeyPair === 'function'
+      ? await this.store.createKeyPair(`peartube-paired-writer:${this.opts.deviceName || 'device'}`)
+      : crypto.keyPair()
+    const localWriterKey = localKeyPair.publicKey
     console.log('[ChannelPairer] Local writer key:', b4a.toString(localWriterKey, 'hex').slice(0, 16))
 
     console.log('[ChannelPairer] Decoding invite code...')
@@ -111,14 +113,19 @@ export class ChannelPairer extends ReadyResource {
           console.log('[ChannelPairer] Creating channel with key:', b4a.toString(result.key, 'hex').slice(0, 16))
           this.channel = new MultiWriterChannel(this.store, {
             key: result.key,
-            encryptionKey: result.encryptionKey
+            encryptionKey: result.encryptionKey,
+            keyPair: localKeyPair,
+            swarm: this.swarm
           })
           await this.channel.ready()
           console.log('[ChannelPairer] Channel ready')
 
-          // Wait until the original device has added us as a writer.
-          console.log('[ChannelPairer] Waiting for writable...')
-          await this.channel.base.waitForWritable()
+          // HyperDB has no Autobase waitForWritable path. The original device adds
+          // our writer key during the blind-pairing confirmation; once the channel
+          // opens with the paired keypair, uploads can proceed through the channel DB.
+          if (!this.channel.writable) {
+            throw new Error('Paired channel did not open writable')
+          }
           console.log('[ChannelPairer] Channel is writable')
 
           // Register our blob drive for uploads
@@ -134,31 +141,6 @@ export class ChannelPairer extends ReadyResource {
             await discovery.flushed().catch(() => {})
             console.log('[ChannelPairer] Swarm join flushed')
 
-            // CRITICAL: Start Autobase replication on existing connections
-            // This ensures data syncs immediately after pairing, not just for future connections
-            // Use idempotent replication - check before calling base.replicate()
-            if (this.swarm.connections && this.swarm.connections.size > 0) {
-              console.log('[ChannelPairer] Replicating Autobase on', this.swarm.connections.size, 'existing connections')
-              for (const conn of this.swarm.connections) {
-                if (this._replicatedConns.has(conn)) {
-                  console.log('[ChannelPairer] Connection already replicated, skipping')
-                  continue
-                }
-                if (!conn || conn.destroyed) {
-                  continue
-                }
-                this._replicatedConns.add(conn)
-                try {
-                  if (conn.destroyed) {
-                    this._replicatedConns.delete(conn)
-                    continue
-                  }
-                  this.channel.base.replicate(conn)
-                } catch (err) {
-                  console.log('[ChannelPairer] Error replicating:', err?.message)
-                }
-              }
-            }
           }
 
           console.log('[ChannelPairer] Pairing complete')
@@ -178,14 +160,22 @@ export class ChannelPairer extends ReadyResource {
   async _close() {
     try {
       if (this.candidate) await this.candidate.close()
-    } catch {}
+    } catch {
+      // best effort
+    }
     try {
       if (this.pairing) await this.pairing.close()
-    } catch {}
+    } catch {
+      // best effort
+    }
     // If we created our own swarm, we should destroy it; otherwise leave it to owner.
     // Heuristic: if opts.swarm not provided, we created it.
     if (!this.opts.swarm && this.swarm) {
-      try { await this.swarm.destroy() } catch {}
+      try {
+        await this.swarm.destroy()
+      } catch {
+        // best effort
+      }
     }
     this.candidate = null
     this.pairing = null

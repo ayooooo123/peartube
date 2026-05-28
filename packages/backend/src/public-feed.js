@@ -834,7 +834,21 @@ export class PublicFeed {
 
     this._directPeerDialStats.skipped++
     this._directPeerDialStats.lastReason = 'hyperswarm-owned-dialing'
-    this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
+    const rememberedHint = this._rememberDiscoveredPeerInSwarm(peer, topic, remembered.keyHex)
+    const queued = rememberedHint?.peerInfo?.queued === true || rememberedHint?.peerInfo?.waiting === true
+    if (queued && rememberedHint?.explicit !== true) {
+      try {
+        rememberedHint.peerInfo.explicit = true
+        let requeued = false
+        if (typeof rememberedHint.peerInfo._requeue === 'function') {
+          requeued = rememberedHint.peerInfo._requeue() !== false
+        }
+        if (requeued) this._directPeerDialStats.lastReason = 'queued-discovered-peer'
+      } catch (err) {
+        this._directPeerLastDialError.set(remembered.keyHex, err?.message || String(err))
+        if (err?.stack) this._directPeerLastDialErrorStack.set(remembered.keyHex, err.stack)
+      }
+    }
     if (this._hasActivePeerConnection(remembered.keyHex, remembered.publicKey)) {
       this._directPeerDialStats.skipped++
       this._directPeerDialStats.lastReason = 'already-connected-peer'
@@ -853,6 +867,7 @@ export class PublicFeed {
       }
 
       if (peerInfo && typeof peerInfo === 'object') {
+        peerInfo.publicKey = peerInfo.publicKey || publicKey
         const relayAddresses = Array.isArray(peer?.relayAddresses) ? peer.relayAddresses : []
         if (relayAddresses.length > 0 && (!Array.isArray(peerInfo.relayAddresses) || peerInfo.relayAddresses.length === 0)) {
           peerInfo.relayAddresses = relayAddresses
@@ -864,11 +879,22 @@ export class PublicFeed {
             if (!peerInfo.topics.some((seen) => b4a.equals(seen, topic))) peerInfo.topics.push(topic)
           }
         }
-        if ((peerInfo.queued || peerInfo.waiting) && peerInfo.explicit !== true) {
+        const wasQueued = peerInfo.queued === true || peerInfo.waiting === true
+        const wasExplicit = peerInfo.explicit === true
+        const remembered = this._discoveredPeerHints.get(keyHex) || {}
+        const nextHint = {
+          ...remembered,
+          peerInfo,
+          queued: wasQueued,
+          explicit: wasExplicit,
+        }
+        if (wasQueued && peerInfo.explicit !== true) {
           peerInfo.explicit = true
           if (typeof peerInfo._updatePriority === 'function') peerInfo._updatePriority()
           this._directPeerDialStats.lastReason = 'dial-already-pending-promoted'
         }
+        this._discoveredPeerHints.set(keyHex, nextHint)
+        return nextHint
       }
 
       return this._discoveredPeerHints.get(keyHex) || null

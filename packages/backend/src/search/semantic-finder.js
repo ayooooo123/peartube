@@ -36,10 +36,10 @@ export class SemanticFinder {
     this.index = this.globalIndex // alias
     /** @type {Map<string, VectorIndex>} */
     this._channelIndexes = new Map()
-    /** @type {Map<string, number>} channelKey -> last seen view core length */
-    this._channelVectorViewLengths = new Map()
-    /** @type {Map<string, number>} channelKey -> last seen view core length (global index) */
-    this._globalVectorViewLengths = new Map()
+    /** @type {Map<string, number>} channelKey -> last indexed vector count */
+    this._channelVectorCounts = new Map()
+    /** @type {Map<string, number>} channelKey -> last indexed vector count (global index) */
+    this._globalVectorCounts = new Map()
     /** @type {Set<string>} Track which videos are already indexed */
     this._indexedVideoIds = new Set()
     this.initialized = false
@@ -137,6 +137,20 @@ export class SemanticFinder {
     return this._simpleEmbed(text)
   }
 
+  _simpleEmbed(text) {
+    const vec = new Float32Array(this.index.dimension || DEFAULT_DIMENSION)
+    const input = String(text || '')
+    for (let i = 0; i < input.length; i++) {
+      const slot = i % vec.length
+      vec[slot] += ((input.charCodeAt(i) % 31) + 1) / 31
+    }
+    let norm = 0
+    for (const value of vec) norm += value * value
+    norm = Math.sqrt(norm) || 1
+    for (let i = 0; i < vec.length; i++) vec[i] /= norm
+    return vec
+  }
+
   /**
    * Ensure a channel-specific index exists.
    * @param {string} channelKey
@@ -172,40 +186,32 @@ export class SemanticFinder {
   }
 
   /**
-   * Rebuild or update the local ANN index for a channel from the replicated view (`vectors/` prefix).
-   * This is the persistence layer: vectors are replicated via Autobase ops, and re-indexed locally.
+   * Rebuild or update the local ANN index for a channel from replicated HyperDB vector records.
    *
    * @param {string} channelKey
    * @param {import('../channel/multi-writer-channel.js').MultiWriterChannel} channel
    */
   async ensureIndexedFromChannelView(channelKey, channel) {
-    if (!channelKey || !channel?.view) return
+    if (!channelKey || !channel?.db) return
 
-    // Best-effort catch-up so we see newly replicated vector records.
     try {
       await Promise.race([
-        channel.base?.update?.(),
+        channel.db.update?.(),
         new Promise((resolve) => setTimeout(resolve, 1000))
       ])
-    } catch (err) {
-      // Ignore best-effort catch-up failures; indexing can use the current view.
+    } catch {
+      // Ignore best-effort catch-up failures; indexing can use the current DB snapshot.
     }
 
-    const viewLen = channel.view?.core?.length || 0
-    const lastLen = this._channelVectorViewLengths.get(channelKey) || 0
-    if (viewLen && viewLen === lastLen) return
+    const rows = await channel.db.find('@peartubeChannel/vectorIndexes', {}).toArray()
+    const lastCount = this._channelVectorCounts.get(channelKey) || 0
+    if (rows.length && rows.length === lastCount) return
 
     const idx = this._getChannelIndex(channelKey)
     idx.dimension = this.index.dimension || DEFAULT_DIMENSION
-
-    // For now we do a full scan (bounded by number of videos). If needed, we can later
-    // implement incremental scanning by keeping a last key cursor.
     idx.clear()
 
-    const start = 'vectors/'
-    const end = 'vectors/\xff'
-
-    for await (const { value } of channel.view.createReadStream({ gt: start, lt: end })) {
+    for (const value of rows) {
       if (!value?.videoId) continue
       const vec = value.vector ? this._decodeVector(value.vector) : null
       if (!vec) continue
@@ -215,7 +221,7 @@ export class SemanticFinder {
       if (typeof value.metadata === 'string') {
         try {
           meta = JSON.parse(value.metadata)
-        } catch (err) {
+        } catch {
           // Ignore malformed optional metadata during indexing.
         }
       }
@@ -227,40 +233,36 @@ export class SemanticFinder {
       })
     }
 
-    this._channelVectorViewLengths.set(channelKey, viewLen)
+    this._channelVectorCounts.set(channelKey, rows.length)
   }
 
   /**
-   * Import replicated vectors into the global index for cross-channel search.
-   * Best-effort: skips when the view length hasn't changed.
+   * Import replicated HyperDB vectors into the global index for cross-channel search.
    *
    * @param {string} channelKey
    * @param {import('../channel/multi-writer-channel.js').MultiWriterChannel} channel
    */
   async ensureGlobalIndexedFromChannelView(channelKey, channel) {
-    if (!channelKey || !channel?.view) return
+    if (!channelKey || !channel?.db) return
 
     try {
       await Promise.race([
-        channel.base?.update?.(),
+        channel.db.update?.(),
         new Promise((resolve) => setTimeout(resolve, 1000))
       ])
-    } catch (err) {
-      // Ignore best-effort catch-up failures; indexing can use the current view.
+    } catch {
+      // Ignore best-effort catch-up failures; indexing can use the current DB snapshot.
     }
 
-    const viewLen = channel.view?.core?.length || 0
-    const lastLen = this._globalVectorViewLengths.get(channelKey) || 0
-    if (viewLen && viewLen === lastLen) return
+    const rows = await channel.db.find('@peartubeChannel/vectorIndexes', {}).toArray()
+    const lastCount = this._globalVectorCounts.get(channelKey) || 0
+    if (rows.length && rows.length === lastCount) return
 
     const idx = this.globalIndex
     idx.dimension = this.index.dimension || DEFAULT_DIMENSION
-
-    const start = 'vectors/'
-    const end = 'vectors/\xff'
     let indexed = 0
 
-    for await (const { value } of channel.view.createReadStream({ gt: start, lt: end })) {
+    for (const value of rows) {
       if (!value?.videoId) continue
       if (this._indexedVideoIds.has(value.videoId)) continue
 
@@ -272,7 +274,7 @@ export class SemanticFinder {
       if (typeof value.metadata === 'string') {
         try {
           meta = JSON.parse(value.metadata)
-        } catch (err) {
+        } catch {
           // Ignore malformed optional metadata during indexing.
         }
       }
@@ -287,41 +289,10 @@ export class SemanticFinder {
     }
 
     if (indexed > 0) {
-      this._dirty = true
-      this._scheduleSave()
+      console.log(`[SemanticFinder] Imported ${indexed} replicated vector(s) from channel ${channelKey.slice(0, 8)}`)
+      this._markDirty()
     }
-    this._globalVectorViewLengths.set(channelKey, viewLen)
-  }
-
-  /**
-   * Simple embedding using text hashing (fallback)
-   * @param {string} text
-   * @returns {Float32Array}
-   */
-  _simpleEmbed(text) {
-    const normalized = text.toLowerCase().trim()
-    const dimension = this.index.dimension || DEFAULT_DIMENSION
-    const vector = new Float32Array(dimension)
-
-    // Simple hash-based approach (not semantic, but works for basic search)
-    for (let i = 0; i < dimension; i++) {
-      let hash = 0
-      for (let j = 0; j < normalized.length; j++) {
-        hash = ((hash << 5) - hash) + normalized.charCodeAt(j) + i
-        hash = hash & hash // Convert to 32bit integer
-      }
-      vector[i] = (hash % 1000) / 1000 - 0.5 // Normalize to [-0.5, 0.5]
-    }
-
-    // Normalize vector
-    const norm = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0))
-    if (norm > 0) {
-      for (let i = 0; i < dimension; i++) {
-        vector[i] /= norm
-      }
-    }
-
-    return vector
+    this._globalVectorCounts.set(channelKey, rows.length)
   }
 
   /**
@@ -383,8 +354,8 @@ export class SemanticFinder {
   clear() {
     this.globalIndex.clear()
     this._indexedVideoIds.clear()
-    this._channelVectorViewLengths.clear()
-    this._globalVectorViewLengths.clear()
+    this._channelVectorCounts.clear()
+    this._globalVectorCounts.clear()
   }
 
   // ============================================

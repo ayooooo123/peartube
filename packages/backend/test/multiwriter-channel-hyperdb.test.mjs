@@ -26,8 +26,8 @@ async function withChannel(fn) {
 test('MultiWriterChannel stores channel state in HyperDB, not Autobase views', async () => {
   await withChannel(async (channel) => {
     assert.ok(channel.db, 'channel HyperDB instance is opened')
-    assert.equal(channel.base, null, 'Autobase handle is not exposed')
-    assert.equal(channel.view, null, 'raw Hyperbee view is not exposed')
+    assert.equal('base' in channel, false, 'Autobase handle is removed')
+    assert.equal('view' in channel, false, 'raw Hyperbee view is removed')
 
     await channel.updateMetadata({ name: 'HyperDB Root', description: 'typed channel', avatar: 'avatar.png' })
     await channel.updateMetadata({ description: 'updated typed channel' })
@@ -62,7 +62,7 @@ test('MultiWriterChannel video CRUD uses HyperDB collections and uploadedAt inde
 
 test('MultiWriterChannel comments and reactions live in the same HyperDB channel database', async () => {
   await withChannel(async (channel) => {
-    assert.equal(channel.commentsAutobase, null, 'separate comments Autobase is removed')
+    assert.equal('commentsAutobase' in channel, false, 'separate comments Autobase is removed')
     await channel.addVideo({ id: 'video-1', title: 'Video', uploadedAt: 1 })
 
     const first = await channel.comments.addComment('video-1', 'first')

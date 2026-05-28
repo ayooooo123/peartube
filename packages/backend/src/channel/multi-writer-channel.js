@@ -50,10 +50,6 @@ export class MultiWriterChannel extends ReadyResource {
     this.opts = opts
     this.swarm = opts.swarm || null
 
-    this.core = null
-    this.db = null
-    this.base = null
-    this.view = null
 
     this.blobs = null
     this._blobsCore = null
@@ -64,7 +60,6 @@ export class MultiWriterChannel extends ReadyResource {
     this.comments = null
     this.reactions = null
     this.watchLogger = null
-    this.commentsAutobase = null
     this.wakeupSession = null
 
     this._localWriterKey = null
@@ -267,9 +262,6 @@ export class MultiWriterChannel extends ReadyResource {
       this.db = null
     }
     this.core = null
-    this.base = null
-    this.view = null
-    this.commentsAutobase = null
   }
 
   async _flush() {
@@ -683,9 +675,5 @@ export class MultiWriterChannel extends ReadyResource {
     })
     await this._flush()
     return { success: true }
-  }
-
-  async getCommentsAutobase() {
-    return this.comments
   }
 }

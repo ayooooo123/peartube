@@ -162,16 +162,27 @@ export class BlobPlaybackService {
     }
 
     if (blobsCoreKey) {
-      this.waitForBlobCorePeers(blobsCoreKey, { minPeers: 1, timeoutMs: 1500, pollMs: 100 }).catch((err) => {
+      const peerWarmup = this.waitForBlobCorePeers(blobsCoreKey, { minPeers: 1, timeoutMs: 1500, pollMs: 100 }).catch((err) => {
         console.log('[BlobPlaybackService] preparePlayback peer warmup failed:', err?.message || err)
+        return { peerCount: 0, retained: false, timedOut: false }
       })
+      return {
+        url: result.url,
+        stats: typeof getStats === 'function' ? getStats(driveKey, videoPath) : undefined,
+        warmupStarted,
+        peerWarmupStarted: true,
+        peerWarmup: await Promise.race([
+          peerWarmup,
+          wait(0).then(() => ({ peerCount: 0, retained: false, timedOut: false })),
+        ]),
+      }
     }
 
     return {
       url: result.url,
       stats: typeof getStats === 'function' ? getStats(driveKey, videoPath) : undefined,
       warmupStarted,
-      peerWarmupStarted: Boolean(blobsCoreKey),
+      peerWarmupStarted: false,
     }
   }
 }

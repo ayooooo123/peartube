@@ -937,16 +937,16 @@ export function createApi({
 
         const resolveExplicitVideoAvailability = ({ video, localHint, peerHint }) => {
           const explicitAvailability = video?.byteAvailability || video?.availability || null
+          const relayBackedPreview = Boolean(video?.relayBacked || video?.source === 'relay-cache' || video?.relayRole === 'cache' || video?.relayServing)
 
           // Fast path: if our local store already has the opening blocks, the
           // video is immediately watchable without waiting on remote proof.
           if (isPlayableAvailabilityHint(localHint)) return 'playable'
 
-          // Preserve explicit playable preview refs emitted by the public-feed
-          // fallback. Those refs came from a live peer/relay manifest; without
-          // this, Android zero-peer states can downgrade renderable preview
-          // cards to unavailable before the blob hint round-trip completes.
-          if (explicitAvailability === 'playable') return 'playable'
+          // Preserve explicit playable refs only when they came from a live
+          // relay/feed preview. Plain PublicBee rows are cached metadata and
+          // must be revalidated on each read.
+          if (explicitAvailability === 'playable' && relayBackedPreview) return 'playable'
 
           // Remote playability must otherwise be explicitly proven by a peer serving hint.
           if (peerHint?.availability === 'playable') return 'playable'

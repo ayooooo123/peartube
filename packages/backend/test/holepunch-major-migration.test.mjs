@@ -49,9 +49,10 @@ test('major Holepunch dependency migrations are applied consistently', () => {
     !('hyperdb' in cliPkg.dependencies),
     'cli should not keep an unused direct hyperdb dependency',
   )
-  assert.ok(
-    !('hyperdb' in backendPkg.dependencies),
-    'backend should not keep an unused direct hyperdb dependency',
+  assert.equal(
+    backendPkg.dependencies.hyperdb,
+    '^6.7.0',
+    'backend should keep hyperdb as a direct dependency because channel state now uses it',
   )
   assert.equal(
     rootPkg.dependencies['bare-runtime'],

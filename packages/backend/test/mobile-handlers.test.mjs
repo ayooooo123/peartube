@@ -64,7 +64,14 @@ test('feed handlers use getPublicFeed for public and canonical RPC names', async
       manifestUpdatedAt: 456,
       previewVideos: [{ id: 'preview-1', title: 'Preview' }],
     }],
-    stats: { totalEntries: 1, hiddenCount: 0, peerCount: 2 },
+    stats: {
+      totalEntries: 1,
+      hiddenCount: 0,
+      peerCount: 2,
+      feedConnections: 2,
+      feedEntries: 1,
+      channelsLoaded: 1,
+    },
   }
 
   assert.deepEqual(await backend.getPublicFeed({}), expected)

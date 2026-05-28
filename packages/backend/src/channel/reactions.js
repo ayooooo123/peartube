@@ -1,151 +1,57 @@
 /**
  * Reactions Manager
  *
- * Manages reactions (likes, dislikes, emojis) for videos in a multi-writer channel.
- * Reactions are stored in Autobase and aggregated in the view.
+ * HyperDB-backed reactions for videos. One reaction is stored per
+ * (videoId, authorKeyHex), so changing reactions replaces the previous value.
  */
 
-import b4a from 'b4a'
-import { prefixedKey } from './util.js'
-
-const CURRENT_SCHEMA_VERSION = 1
-
-/**
- * Reactions manager for a multi-writer channel
- */
 export class ReactionsManager {
-  /**
-   * @param {import('./multi-writer-channel.js').MultiWriterChannel} channel - Parent channel
-   */
   constructor(channel) {
     this.channel = channel
   }
 
-  /**
-   * Add a reaction to a video
-   * @param {string} videoId - Video ID
-   * @param {string} reactionType - Reaction type (e.g., 'like', 'dislike', 'heart', etc.)
-   * @returns {Promise<{success: boolean}>}
-   */
-  async addReaction(videoId, reactionType) {
-    if (!reactionType || typeof reactionType !== 'string') {
-      throw new Error('Reaction type is required')
-    }
-
-    const authorKeyHex = this.channel.localWriterKeyHex
-    if (!authorKeyHex) {
-      throw new Error('Channel not ready')
-    }
-
-    await this.channel.base.append({
-      type: 'add-reaction',
-      schemaVersion: CURRENT_SCHEMA_VERSION,
+  async addReaction(videoId, reactionType, overrides = {}) {
+    if (!reactionType || typeof reactionType !== 'string') throw new Error('Reaction type is required')
+    const authorKeyHex = overrides.authorKeyHex || this.channel.localWriterKeyHex
+    if (!authorKeyHex) throw new Error('Channel not ready')
+    await this.channel.db.insert('@peartubeChannel/reactions', {
       videoId,
-      reactionType,
       authorKeyHex,
-      timestamp: Date.now()
+      reactionType,
+      timestamp: overrides.timestamp || Date.now()
     })
-
+    await this.channel._flush()
     return { success: true }
   }
 
-  /**
-   * Remove a reaction from a video
-   * @param {string} videoId - Video ID
-   * @returns {Promise<{success: boolean}>}
-   */
-  async removeReaction(videoId) {
-    const authorKeyHex = this.channel.localWriterKeyHex
-    if (!authorKeyHex) {
-      throw new Error('Channel not ready')
-    }
-
-    await this.channel.base.append({
-      type: 'remove-reaction',
-      schemaVersion: CURRENT_SCHEMA_VERSION,
-      videoId,
-      authorKeyHex
-    })
-
+  async removeReaction(videoId, overrides = {}) {
+    const authorKeyHex = overrides.authorKeyHex || this.channel.localWriterKeyHex
+    if (!authorKeyHex) throw new Error('Channel not ready')
+    await this.channel.db.delete('@peartubeChannel/reactions', { videoId, authorKeyHex })
+    await this.channel._flush()
     return { success: true }
   }
 
-  /**
-   * Get reactions for a video
-   * @param {string} videoId - Video ID
-   * @returns {Promise<{counts: Record<string, number>, userReaction: string|null}>}
-   */
   async getReactions(videoId) {
-    // Ensure view is up to date
-    try {
-      await Promise.race([
-        this.channel.base.update(),
-        new Promise((resolve) => setTimeout(resolve, 1000))
-      ])
-    } catch {}
-
-    const prefix = prefixedKey('reactions', `${videoId}/`)
-    const start = `${prefix}`
-    const end = `${prefix}\xff`
-
+    this.channel.db.update?.()
+    const rows = await this.channel.db.find('@peartubeChannel/reactions-by-video-type', {
+      gte: { videoId },
+      lte: { videoId, reactionType: '\xff' }
+    }).toArray()
     const counts = {}
     let userReaction = null
     const authorKeyHex = this.channel.localWriterKeyHex
-
-    for await (const { key, value } of this.channel.view.createReadStream({ gt: start, lt: end })) {
-      if (value && value.reactionType) {
-        counts[value.reactionType] = (counts[value.reactionType] || 0) + 1
-
-        // Check if this is the current user's reaction
-        if (authorKeyHex && value.authorKeyHex === authorKeyHex) {
-          userReaction = value.reactionType
-        }
-      }
+    for (const value of rows) {
+      if (!value?.reactionType) continue
+      counts[value.reactionType] = (counts[value.reactionType] || 0) + 1
+      if (authorKeyHex && value.authorKeyHex === authorKeyHex) userReaction = value.reactionType
     }
-
     return { counts, userReaction }
   }
 
-  /**
-   * Get reaction counts for multiple videos
-   * @param {string[]} videoIds - Array of video IDs
-   * @returns {Promise<Record<string, {counts: Record<string, number>, userReaction: string|null}>>}
-   */
   async getReactionsBatch(videoIds) {
-    // Ensure view is up to date
-    try {
-      await Promise.race([
-        this.channel.base.update(),
-        new Promise((resolve) => setTimeout(resolve, 1000))
-      ])
-    } catch {}
-
     const results = {}
-    const authorKeyHex = this.channel.localWriterKeyHex
-
-    for (const videoId of videoIds) {
-      results[videoId] = { counts: {}, userReaction: null }
-    }
-
-    // Scan all reactions
-    const prefix = prefixedKey('reactions', '')
-    const start = `${prefix}`
-    const end = `${prefix}\xff`
-
-    for await (const { key, value } of this.channel.view.createReadStream({ gt: start, lt: end })) {
-      if (value && value.videoId && value.reactionType) {
-        const videoId = value.videoId
-        if (results[videoId]) {
-          results[videoId].counts[value.reactionType] = (results[videoId].counts[value.reactionType] || 0) + 1
-
-          // Check if this is the current user's reaction
-          if (authorKeyHex && value.authorKeyHex === authorKeyHex) {
-            results[videoId].userReaction = value.reactionType
-          }
-        }
-      }
-    }
-
+    for (const videoId of videoIds || []) results[videoId] = await this.getReactions(videoId)
     return results
   }
 }

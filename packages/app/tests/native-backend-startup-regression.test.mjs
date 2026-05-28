@@ -109,6 +109,22 @@ test('native root layout clears startup timeout and releases loading on explicit
   assert.match(catchBlock, /setLoading\(false\)/)
 })
 
+test('native root layout does not expose RPC context before the platform bridge is initialized', () => {
+  const source = readAppFile('app/_layout.tsx')
+  const contextStart = source.indexOf('const contextValue: AppContextType = {')
+  const contextEnd = source.indexOf('\n  }', contextStart)
+  const contextBlock = contextStart >= 0 && contextEnd > contextStart
+    ? source.slice(contextStart, contextEnd)
+    : ''
+
+  assert.ok(contextBlock, 'contextValue should exist')
+  assert.match(
+    contextBlock,
+    /rpc:\s*platformRPC\?\.isInitialized\?\.\(\)\s*\?\s*platformRPC\.rpc\s*:\s*null/,
+    'AppContext should not expose an RPC facade while native startup is still registering backend handlers',
+  )
+})
+
 test('backend orchestrator records peers discovered on the single shared topic', () => {
   const source = readWorkspaceFile('backend/src/orchestrator.js')
 

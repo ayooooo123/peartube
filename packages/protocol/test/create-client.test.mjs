@@ -258,6 +258,54 @@ test('createProtocolClient rejects ready once when host error event arrives', as
   t.is(error.message, 'boom')
 })
 
+test('createProtocolClient treats transient backend-not-ready status probes as startup noise', async (t) => {
+  FakeHRPC.instances.length = 0
+  const warnCalls = []
+  const originalWarn = console.warn
+  console.warn = (...args) => {
+    warnCalls.push(args)
+  }
+  t.teardown(() => {
+    console.warn = originalWarn
+  })
+
+  class StartingHRPC extends FakeHRPC {
+    getStatus() {
+      return Promise.reject(new Error('Backend not ready'))
+    }
+
+    onEventReady(handler) {
+      this.handlers.ready = handler
+    }
+  }
+
+  const client = createProtocolClient({
+    stream: {},
+    HRPCImpl: StartingHRPC
+  })
+
+  const readyPromise = client.ready()
+  await Promise.resolve()
+
+  FakeHRPC.instances[0].handlers.ready({
+    blobServerPort: 9999,
+    blobServerReady: true,
+    blobServerError: null,
+    protocolVersion: 2
+  })
+
+  const ready = await readyPromise
+  await Promise.resolve()
+
+  t.alike(ready, {
+    blobServerPort: 9999,
+    blobServerReady: true,
+    blobServerError: null,
+    protocolVersion: 2
+  })
+  t.alike(warnCalls, [])
+})
+
 test('createProtocolClient rejects ready when the transport closes before host ready', async (t) => {
   class PendingHRPC extends FakeHRPC {
     getStatus() {

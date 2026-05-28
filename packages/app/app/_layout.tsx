@@ -1104,7 +1104,7 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
     videos,
     loading,
     blobServerPort,
-    rpc: platformRPC?.rpc,
+    rpc: platformRPC?.isInitialized?.() ? platformRPC.rpc : null,
     platformEvents: platformRPC?.events,
     backendError,
     startupStatus,

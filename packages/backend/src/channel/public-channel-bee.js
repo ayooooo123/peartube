@@ -21,6 +21,8 @@ import ReadyResource from 'ready-resource'
 
 import publicDbDefinition from './public-hyperdb-spec/hyperdb/index.js'
 
+const PUBLIC_METADATA_INTERNAL_FIELDS = new Set(['key'])
+
 const DEFAULT_LIST_VIDEOS_SYNC_TIMEOUT_MS = 1500
 const DEFAULT_LIST_VIDEOS_STREAM_TIMEOUT_MS = 1200
 
@@ -126,8 +128,12 @@ export class PublicChannelBee extends ReadyResource {
     if (!meta || typeof meta !== 'object') return null
     const out = { ...meta }
     // PublicBee is intentionally readable by anyone with the key. Never persist
-    // the comments admin writer key here; keep it in private channel metadata only.
+    // private moderation/admin material here.
     delete out.commentsAdminKey
+    delete out.commentsAutobaseKey
+    for (const key of Object.keys(out)) {
+      if (PUBLIC_METADATA_INTERNAL_FIELDS.has(key)) delete out[key]
+    }
     return out
   }
 
@@ -149,6 +155,13 @@ export class PublicChannelBee extends ReadyResource {
     return this._sanitizePublicMetadata(meta || null)
   }
 
+  _toStoredPublicMetadata(meta) {
+    return {
+      ...(this._sanitizePublicMetadata(meta) || {}),
+      key: 'meta'
+    }
+  }
+
   async setMetadata(meta) {
     if (!this.writable) throw new Error('Not writable')
     if (!this.db) {
@@ -159,16 +172,15 @@ export class PublicChannelBee extends ReadyResource {
       return
     }
     // Merge with existing metadata so callers can perform partial updates without
-    // accidentally dropping previously published fields (e.g. commentsAutobaseKey).
+    // accidentally dropping previously published fields.
     const prev = this._sanitizePublicMetadata(await this.getMetadata()) || {}
     const patch = this._sanitizePublicMetadata(meta) || {}
 
-    await this.db.insert('@peartubePublic/metadata', {
+    await this.db.insert('@peartubePublic/metadata', this._toStoredPublicMetadata({
       ...prev,
       ...patch,
-      key: 'meta',
       updatedAt: Date.now()
-    })
+    }))
     await this.db.flush()
     console.log('[PublicBee] Metadata updated')
   }

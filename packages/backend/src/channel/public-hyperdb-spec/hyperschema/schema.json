@@ -34,7 +34,7 @@
           "version": 1
         },
         {
-          "name": "commentsAutobaseKey",
+          "name": "commentsDbKey",
           "type": "string",
           "version": 1
         },

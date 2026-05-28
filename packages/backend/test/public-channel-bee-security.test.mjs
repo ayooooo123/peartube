@@ -4,11 +4,12 @@ import assert from 'node:assert/strict'
 import { PublicChannelBee } from '../src/channel/public-channel-bee.js'
 import { PublicFeedManager } from '../src/public-feed.js'
 
-test('PublicChannelBee strips commentsAdminKey from public metadata writes', async () => {
+test('PublicChannelBee strips private comments metadata from public metadata writes', async () => {
   let stored = {
     name: 'Existing channel',
     commentsAdminKey: 'aa'.repeat(32),
     commentsAutobaseKey: 'bb'.repeat(32),
+    commentsDbKey: 'cc'.repeat(32),
   }
 
   const bee = Object.create(PublicChannelBee.prototype)
@@ -26,13 +27,15 @@ test('PublicChannelBee strips commentsAdminKey from public metadata writes', asy
 
   await bee.setMetadata({
     description: 'Public description',
-    commentsAdminKey: 'cc'.repeat(32),
+    commentsAdminKey: 'dd'.repeat(32),
+    commentsAutobaseKey: 'ee'.repeat(32),
   })
 
   assert.equal(stored.name, 'Existing channel')
   assert.equal(stored.description, 'Public description')
-  assert.equal(stored.commentsAutobaseKey, 'bb'.repeat(32))
+  assert.equal(stored.commentsDbKey, 'cc'.repeat(32))
   assert.equal(stored.commentsAdminKey, undefined)
+  assert.equal(stored.commentsAutobaseKey, undefined)
 })
 
 test('public feed gossip serialization does not forward sensitive metadata fields', () => {

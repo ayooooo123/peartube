@@ -21,7 +21,7 @@ const encoding0 = {
     if (m.description) c.string.preencode(state, m.description)
     if (m.avatar) c.string.preencode(state, m.avatar)
     if (m.publicBeeKey) c.string.preencode(state, m.publicBeeKey)
-    if (m.commentsAutobaseKey) c.string.preencode(state, m.commentsAutobaseKey)
+    if (m.commentsDbKey) c.string.preencode(state, m.commentsDbKey)
     if (m.createdAt) c.uint64.preencode(state, m.createdAt)
     if (m.createdBy) c.string.preencode(state, m.createdBy)
     if (m.updatedAt) c.uint64.preencode(state, m.updatedAt)
@@ -32,7 +32,7 @@ const encoding0 = {
       (m.description ? 2 : 0) |
       (m.avatar ? 4 : 0) |
       (m.publicBeeKey ? 8 : 0) |
-      (m.commentsAutobaseKey ? 16 : 0) |
+      (m.commentsDbKey ? 16 : 0) |
       (m.createdAt ? 32 : 0) |
       (m.createdBy ? 64 : 0) |
       (m.updatedAt ? 128 : 0)
@@ -44,7 +44,7 @@ const encoding0 = {
     if (m.description) c.string.encode(state, m.description)
     if (m.avatar) c.string.encode(state, m.avatar)
     if (m.publicBeeKey) c.string.encode(state, m.publicBeeKey)
-    if (m.commentsAutobaseKey) c.string.encode(state, m.commentsAutobaseKey)
+    if (m.commentsDbKey) c.string.encode(state, m.commentsDbKey)
     if (m.createdAt) c.uint64.encode(state, m.createdAt)
     if (m.createdBy) c.string.encode(state, m.createdBy)
     if (m.updatedAt) c.uint64.encode(state, m.updatedAt)
@@ -59,7 +59,7 @@ const encoding0 = {
       description: (flags & 2) !== 0 ? c.string.decode(state) : null,
       avatar: (flags & 4) !== 0 ? c.string.decode(state) : null,
       publicBeeKey: (flags & 8) !== 0 ? c.string.decode(state) : null,
-      commentsAutobaseKey: (flags & 16) !== 0 ? c.string.decode(state) : null,
+      commentsDbKey: (flags & 16) !== 0 ? c.string.decode(state) : null,
       createdAt: (flags & 32) !== 0 ? c.uint64.decode(state) : 0,
       createdBy: (flags & 64) !== 0 ? c.string.decode(state) : null,
       updatedAt: (flags & 128) !== 0 ? c.uint64.decode(state) : 0
@@ -180,7 +180,7 @@ const encoding2 = {
     if (m.description) c.string.preencode(state, m.description)
     if (m.avatar) c.string.preencode(state, m.avatar)
     if (m.publicBeeKey) c.string.preencode(state, m.publicBeeKey)
-    if (m.commentsAutobaseKey) c.string.preencode(state, m.commentsAutobaseKey)
+    if (m.commentsDbKey) c.string.preencode(state, m.commentsDbKey)
     if (m.createdAt) c.uint64.preencode(state, m.createdAt)
     if (m.createdBy) c.string.preencode(state, m.createdBy)
     if (m.updatedAt) c.uint64.preencode(state, m.updatedAt)
@@ -191,7 +191,7 @@ const encoding2 = {
       (m.description ? 2 : 0) |
       (m.avatar ? 4 : 0) |
       (m.publicBeeKey ? 8 : 0) |
-      (m.commentsAutobaseKey ? 16 : 0) |
+      (m.commentsDbKey ? 16 : 0) |
       (m.createdAt ? 32 : 0) |
       (m.createdBy ? 64 : 0) |
       (m.updatedAt ? 128 : 0)
@@ -202,7 +202,7 @@ const encoding2 = {
     if (m.description) c.string.encode(state, m.description)
     if (m.avatar) c.string.encode(state, m.avatar)
     if (m.publicBeeKey) c.string.encode(state, m.publicBeeKey)
-    if (m.commentsAutobaseKey) c.string.encode(state, m.commentsAutobaseKey)
+    if (m.commentsDbKey) c.string.encode(state, m.commentsDbKey)
     if (m.createdAt) c.uint64.encode(state, m.createdAt)
     if (m.createdBy) c.string.encode(state, m.createdBy)
     if (m.updatedAt) c.uint64.encode(state, m.updatedAt)
@@ -216,7 +216,7 @@ const encoding2 = {
       description: (flags & 2) !== 0 ? c.string.decode(state) : null,
       avatar: (flags & 4) !== 0 ? c.string.decode(state) : null,
       publicBeeKey: (flags & 8) !== 0 ? c.string.decode(state) : null,
-      commentsAutobaseKey: (flags & 16) !== 0 ? c.string.decode(state) : null,
+      commentsDbKey: (flags & 16) !== 0 ? c.string.decode(state) : null,
       createdAt: (flags & 32) !== 0 ? c.uint64.decode(state) : 0,
       createdBy: (flags & 64) !== 0 ? c.string.decode(state) : null,
       updatedAt: (flags & 128) !== 0 ? c.uint64.decode(state) : 0

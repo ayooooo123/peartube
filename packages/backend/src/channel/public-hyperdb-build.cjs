@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const path = require('node:path')
 const Hyperschema = require('hyperschema')
 const HyperDB = require('hyperdb/builder')
@@ -18,7 +19,7 @@ publicSchema.register({
     { name: 'description', type: 'string' },
     { name: 'avatar', type: 'string' },
     { name: 'publicBeeKey', type: 'string' },
-    { name: 'commentsAutobaseKey', type: 'string' },
+    { name: 'commentsDbKey', type: 'string' },
     { name: 'createdAt', type: 'uint64' },
     { name: 'createdBy', type: 'string' },
     { name: 'updatedAt', type: 'uint64' },

@@ -14,9 +14,12 @@
  * once they have the key, and it replicates automatically.
  */
 
+import HyperDB from 'hyperdb'
 import Hyperbee from 'hyperbee'
 import b4a from 'b4a'
 import ReadyResource from 'ready-resource'
+
+import publicDbDefinition from './public-hyperdb-spec/hyperdb/index.js'
 
 const DEFAULT_LIST_VIDEOS_SYNC_TIMEOUT_MS = 1500
 const DEFAULT_LIST_VIDEOS_STREAM_TIMEOUT_MS = 1200
@@ -37,6 +40,8 @@ export class PublicChannelBee extends ReadyResource {
     super()
     this.store = store
     this.opts = opts
+    this.db = null
+    // Kept for legacy tests/callers that verify the raw Hyperbee path is gone.
     this.bee = null
     this.core = null
 
@@ -60,18 +65,19 @@ export class PublicChannelBee extends ReadyResource {
 
     await this.core.ready()
 
-    // Wrap in Hyperbee for key-value storage
-    this.bee = new Hyperbee(this.core, {
-      keyEncoding: 'utf-8',
-      valueEncoding: 'json'
+    // Wrap the public core in HyperDB for typed collections + secondary indexes.
+    this.db = HyperDB.bee(this.core, publicDbDefinition, {
+      autoUpdate: true,
+      writable: this.core.writable !== false,
+      extension: false,
     })
-    await this.bee.ready()
+    await this.db.ready()
 
     console.log('[PublicBee] Ready:', this.keyHex?.slice(0, 16), 'writable:', this.writable, 'length:', this.core.length)
   }
 
   async _close() {
-    if (this.bee) await this.bee.close()
+    if (this.db) await this.db.close()
   }
 
   get key() {
@@ -125,25 +131,45 @@ export class PublicChannelBee extends ReadyResource {
     return out
   }
 
+  _sanitizePublicVideo(video) {
+    if (!video || typeof video !== 'object') return null
+    const out = { ...video }
+    delete out.commentsAdminKey
+    return out
+  }
+
   async getMetadata() {
     await this.waitForSync(1500)
-    const node = await this.bee.get('meta')
-    return this._sanitizePublicMetadata(node?.value || null)
+    if (!this.db) {
+      const existing = await this.bee?.get?.('meta')?.catch?.(() => null)
+      return this._sanitizePublicMetadata(existing?.value || null)
+    }
+    this.db.update?.()
+    const meta = await this.db.get('@peartubePublic/metadata', { key: 'meta' })
+    return this._sanitizePublicMetadata(meta || null)
   }
 
   async setMetadata(meta) {
     if (!this.writable) throw new Error('Not writable')
+    if (!this.db) {
+      const existing = await this.bee?.get?.('meta')?.catch?.(() => null)
+      const prev = this._sanitizePublicMetadata(existing?.value || null) || {}
+      const patch = this._sanitizePublicMetadata(meta) || {}
+      await this.bee?.put?.('meta', { ...prev, ...patch, updatedAt: Date.now() })
+      return
+    }
     // Merge with existing metadata so callers can perform partial updates without
     // accidentally dropping previously published fields (e.g. commentsAutobaseKey).
-    const existing = await this.bee.get('meta').catch(() => null)
-    const prev = this._sanitizePublicMetadata(existing?.value || null) || {}
+    const prev = this._sanitizePublicMetadata(await this.getMetadata()) || {}
     const patch = this._sanitizePublicMetadata(meta) || {}
 
-    await this.bee.put('meta', {
+    await this.db.insert('@peartubePublic/metadata', {
       ...prev,
       ...patch,
+      key: 'meta',
       updatedAt: Date.now()
     })
+    await this.db.flush()
     console.log('[PublicBee] Metadata updated')
   }
 
@@ -158,11 +184,23 @@ export class PublicChannelBee extends ReadyResource {
     // Give replication a chance before scanning.
     await this.waitForSync(syncTimeoutMs)
 
-    const videos = []
-    const stream = this.bee.createReadStream({
-      gte: 'videos/',
-      lt: 'videos0' // '0' comes after '/' in ASCII
+    if (!this.db) {
+      const stream = this.bee?.createReadStream?.({
+        gte: 'videos/',
+        lt: 'videos0'
+      })
+      return this._collectVideoStream(stream, streamTimeoutMs)
+    }
+    this.db.update?.()
+
+    const stream = this.db.find('@peartubePublic/videos-by-uploaded-at', {}, {
+      reverse: true
     })
+    return this._collectVideoStream(stream, streamTimeoutMs)
+  }
+
+  async _collectVideoStream(stream, streamTimeoutMs) {
+    const videos = []
     let timeout = null
     let timedOut = false
 
@@ -183,9 +221,10 @@ export class PublicChannelBee extends ReadyResource {
     }
 
     try {
-      for await (const node of stream) {
-        if (node.value) {
-          videos.push(node.value)
+      for await (const item of stream) {
+        const video = item?.value || item
+        if (video) {
+          videos.push(this._sanitizePublicVideo(video))
         }
       }
     } catch (error) {
@@ -205,23 +244,29 @@ export class PublicChannelBee extends ReadyResource {
   }
 
   async getVideo(videoId) {
-    const node = await this.bee.get(`videos/${videoId}`)
-    return node?.value || null
+    const node = this.db
+      ? await this.db.get('@peartubePublic/videos', { id: videoId })
+      : null
+    return this._sanitizePublicVideo(node) || null
   }
 
   async putVideo(videoId, metadata) {
     if (!this.writable) throw new Error('Not writable')
-    await this.bee.put(`videos/${videoId}`, {
+    if (!this.db) throw new Error('Public HyperDB not ready')
+    await this.db.insert('@peartubePublic/videos', this._sanitizePublicVideo({
       ...metadata,
       id: videoId,
       syncedAt: Date.now()
-    })
+    }))
+    await this.db.flush()
     console.log('[PublicBee] Video added/updated:', videoId)
   }
 
   async deleteVideo(videoId) {
     if (!this.writable) throw new Error('Not writable')
-    await this.bee.del(`videos/${videoId}`)
+    if (!this.db) throw new Error('Public HyperDB not ready')
+    await this.db.delete('@peartubePublic/videos', { id: videoId })
+    await this.db.flush()
     console.log('[PublicBee] Video deleted:', videoId)
   }
 
@@ -238,23 +283,26 @@ export class PublicChannelBee extends ReadyResource {
     if (!this.writable) throw new Error('Not writable')
     if (!Array.isArray(changes) || changes.length === 0) return
 
-    const batch = this.bee.batch()
+    const batch = []
     const now = Date.now()
 
     for (const c of changes) {
       if (!c || typeof c.id !== 'string' || c.id.length === 0) continue
       if (c.type === 'del') {
-        await batch.del(`videos/${c.id}`)
+        batch.push(['@peartubePublic/videos', { id: c.id }, { type: 'delete' }])
       } else if (c.type === 'put') {
-        await batch.put(`videos/${c.id}`, {
+        batch.push(['@peartubePublic/videos', this._sanitizePublicVideo({
           ...(c.value || {}),
           id: c.id,
           syncedAt: now
-        })
+        })])
       }
     }
 
-    await batch.flush()
+    if (batch.length > 0) {
+      await this.db.insertAll(batch)
+      await this.db.flush()
+    }
     console.log('[PublicBee] Applied', changes.length, 'video change(s)')
   }
 
@@ -269,8 +317,10 @@ export class PublicChannelBee extends ReadyResource {
   async syncVideos(videos, opts = {}) {
     if (!this.writable) throw new Error('Not writable')
 
+    if (!this.db) throw new Error('Public HyperDB not ready')
+
     const destructive = opts.destructive !== false
-    const batch = this.bee.batch()
+    const batch = []
 
     // Get existing video IDs only when this sync is allowed to delete missing
     // entries. Non-destructive callers may be syncing from stale/partial views.
@@ -288,10 +338,10 @@ export class PublicChannelBee extends ReadyResource {
     for (const video of videos) {
       if (!video.id) continue
       sourceIds.add(video.id)
-      await batch.put(`videos/${video.id}`, {
+      batch.push(['@peartubePublic/videos', this._sanitizePublicVideo({
         ...video,
         syncedAt: now
-      })
+      })])
     }
 
     // Delete videos that no longer exist in source only for explicitly complete
@@ -299,12 +349,15 @@ export class PublicChannelBee extends ReadyResource {
     if (destructive) {
       for (const id of existing) {
         if (!sourceIds.has(id)) {
-          await batch.del(`videos/${id}`)
+          batch.push(['@peartubePublic/videos', { id }, { type: 'delete' }])
         }
       }
     }
 
-    await batch.flush()
+    if (batch.length > 0) {
+      await this.db.insertAll(batch)
+      await this.db.flush()
+    }
     console.log('[PublicBee] Synced', videos.length, 'videos', destructive ? '(destructive)' : '(non-destructive)')
   }
 

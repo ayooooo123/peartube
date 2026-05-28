@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "offset": 0,
+  "schema": [
+    {
+      "name": "metadata",
+      "namespace": "peartubePublic",
+      "id": 0,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@peartubePublic/metadata",
+      "derived": false,
+      "key": [
+        "key"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "videos",
+      "namespace": "peartubePublic",
+      "id": 1,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@peartubePublic/videos-by-uploaded-at"
+      ],
+      "schema": "@peartubePublic/video",
+      "derived": false,
+      "key": [
+        "id"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "videos-by-uploaded-at",
+      "namespace": "peartubePublic",
+      "id": 2,
+      "type": 2,
+      "version": 1,
+      "collection": "@peartubePublic/videos",
+      "unique": false,
+      "deprecated": false,
+      "key": [
+        "uploadedAt"
+      ]
+    }
+  ]
+}

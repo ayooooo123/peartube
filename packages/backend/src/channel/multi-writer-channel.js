@@ -204,7 +204,11 @@ export class MultiWriterChannel extends ReadyResource {
     await this.publicBee.ready()
 
     if (this.swarm && this.publicBee.discoveryKey) {
-      try { this.swarm.join(this.publicBee.discoveryKey)?.flushed?.().catch(() => {}) } catch {}
+      try {
+        this.swarm.join(this.publicBee.discoveryKey)?.flushed?.().catch(() => {})
+      } catch {
+        // best effort
+      }
     }
 
     if (this.publicBee.keyHex && existingMeta?.publicBeeKey !== this.publicBee.keyHex) {
@@ -214,35 +218,52 @@ export class MultiWriterChannel extends ReadyResource {
   }
 
   async _close() {
+    const closeResource = async (resource) => {
+      if (!resource || typeof resource.close !== 'function') return
+      try {
+        await resource.close()
+      } catch {
+        // best effort
+      }
+    }
+    const destroyResource = async (resource) => {
+      if (!resource || typeof resource.destroy !== 'function') return
+      try {
+        await resource.destroy()
+      } catch {
+        // best effort
+      }
+    }
+
     if (this.wakeupSession) {
-      try { await this.wakeupSession.destroy?.() } catch {}
-      try { await this.wakeupSession.close?.() } catch {}
+      await destroyResource(this.wakeupSession)
+      await closeResource(this.wakeupSession)
       this.wakeupSession = null
     }
     if (this._channelDiscovery) {
-      try { this._channelDiscovery.destroy?.() } catch {}
-      try { this._channelDiscovery.close?.() } catch {}
+      await destroyResource(this._channelDiscovery)
+      await closeResource(this._channelDiscovery)
       this._channelDiscovery = null
     }
     if (this.publicBee) {
-      try { await this.publicBee.close() } catch {}
+      await closeResource(this.publicBee)
       this.publicBee = null
     }
     if (this.pairingMember) {
-      try { await this.pairingMember.close() } catch {}
+      await closeResource(this.pairingMember)
       this.pairingMember = null
     }
     if (this.pairing) {
-      try { await this.pairing.close() } catch {}
+      await closeResource(this.pairing)
       this.pairing = null
     }
     if (this.blobs) this.blobs = null
     if (this._blobsCore) {
-      try { await this._blobsCore.close() } catch {}
+      await closeResource(this._blobsCore)
       this._blobsCore = null
     }
     if (this.db) {
-      try { await this.db.close() } catch {}
+      await closeResource(this.db)
       this.db = null
     }
     this.core = null
@@ -315,8 +336,8 @@ export class MultiWriterChannel extends ReadyResource {
       publicBeeKey: patch.publicBeeKey || currentMeta?.publicBeeKey || this.publicBee?.keyHex || null,
       commentsDbKey: patch.commentsDbKey || currentMeta?.commentsDbKey || this.keyHex || null,
       commentsAdminKey: patch.commentsAdminKey || currentMeta?.commentsAdminKey || null,
-      createdAt: currentMeta?.createdAt || patch.createdAt || now,
-      createdBy: currentMeta?.createdBy || patch.createdBy || this.localWriterKeyHex,
+      createdAt: 'createdAt' in patch ? patch.createdAt : (currentMeta?.createdAt || now),
+      createdBy: 'createdBy' in patch ? patch.createdBy : (currentMeta?.createdBy || this.localWriterKeyHex),
       updatedAt: patch.updatedAt || now,
       updatedBy: patch.updatedBy || this.localWriterKeyHex,
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -543,7 +564,9 @@ export class MultiWriterChannel extends ReadyResource {
       try {
         this._channelDiscovery = swarm.join(this.discoveryKey)
         this._channelDiscovery?.flushed?.().catch(() => {})
-      } catch {}
+      } catch {
+        // best effort
+      }
     }
     if (!this.writable) return
     this.pairing = new BlindPairing(swarm)
@@ -581,7 +604,9 @@ export class MultiWriterChannel extends ReadyResource {
         const discovery = this.swarm.join(this.discoveryKey)
         this._channelDiscovery = discovery
         await discovery.flushed()
-      } catch {}
+      } catch {
+        // best effort
+      }
     }
     if (this.swarm?.connections?.size > 0) return true
     return new Promise((resolve) => {

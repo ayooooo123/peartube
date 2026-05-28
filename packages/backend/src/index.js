@@ -44,7 +44,7 @@ export { createUploadManager } from './upload.js';
 // Transcoding (bare-ffmpeg)
 export * as transcode from './transcode/index.js';
 
-// Multi-writer channels (Autobase)
+// Multi-writer channels (HyperDB)
 export { MultiWriterChannel, ChannelPairer } from './channel/index.js';
 
 // Types and constants

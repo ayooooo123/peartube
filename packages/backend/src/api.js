@@ -155,6 +155,7 @@ export function createApi({
   const CHANNEL_META_CACHE_TTL_MS = 30_000
   const VIDEO_AVAILABILITY_CACHE_TTL_MS = 30_000
   const VIDEO_AVAILABILITY_NEGATIVE_CACHE_TTL_MS = 1_500
+  const PLAYABLE_METADATA_REVALIDATION_GRACE_MS = 30_000
   /** @type {Map<string, Promise<any>>} */
   const prefetchInFlight = new Map()
   const activeRangeRequests = new Map() // key: `${driveKey}:${videoPath}`, value: { ranges: [], core, onDownload, onUpload }
@@ -163,6 +164,8 @@ export function createApi({
   const listVideosCache = new Map()
   /** @type {Map<string, { ts: number, value: any }>} */
   const channelMetaCache = new Map()
+  /** @type {Map<string, { ts: number, value: any }>} */
+  const playableMetadataFirstSeen = new Map()
   /** @type {Map<string, { ts: number, value: any }>} */
   const videoAvailabilityCache = new Map()
 
@@ -227,6 +230,11 @@ export function createApi({
     try {
       for (const key of videoAvailabilityCache.keys()) {
         if (key.startsWith(`${driveKey}:`)) videoAvailabilityCache.delete(key)
+      }
+    } catch { /* best effort */ }
+    try {
+      for (const key of playableMetadataFirstSeen.keys()) {
+        if (key.startsWith(`${driveKey}:`)) playableMetadataFirstSeen.delete(key)
       }
     } catch { /* best effort */ }
   }
@@ -938,21 +946,29 @@ export function createApi({
         const resolveExplicitVideoAvailability = ({ video, localHint, peerHint }) => {
           const explicitAvailability = video?.byteAvailability || video?.availability || null
           const relayBackedPreview = Boolean(video?.relayBacked || video?.source === 'relay-cache' || video?.relayRole === 'cache' || video?.relayServing)
+          const firstSeenAt = Number(video?._playableMetadataFirstSeenAt || 0) || 0
+          const withinPlayableMetadataGrace = firstSeenAt > 0 && (Date.now() - firstSeenAt) < PLAYABLE_METADATA_REVALIDATION_GRACE_MS
 
           // Fast path: if our local store already has the opening blocks, the
           // video is immediately watchable without waiting on remote proof.
           if (isPlayableAvailabilityHint(localHint)) return 'playable'
 
-          // Preserve explicit playable refs only when they came from a live
-          // relay/feed preview. Plain PublicBee rows are cached metadata and
-          // must be revalidated on each read.
-          if (explicitAvailability === 'playable' && relayBackedPreview) return 'playable'
-
-          // Remote playability must otherwise be explicitly proven by a peer serving hint.
-          if (peerHint?.availability === 'playable') return 'playable'
+          // Authoritative peer probes can still downgrade a stale row when a
+          // responding peer explicitly reports that the blob is not currently
+          // serviceable.
           if (peerHint?.availability && peerHint.availability !== 'unknown') {
             return peerHint.availability
           }
+
+          // PublicBee/relay preview rows already carry direct blob refs that
+          // the player can use to warm the Hypercore range. Keep explicit
+          // playable metadata visible briefly while peer proof is pending;
+          // otherwise Android hides every feed video before playback has a
+          // chance to dial the blob peers. Cached rows still revalidate after
+          // the grace window, which prevents permanent false-positive playback.
+          if (explicitAvailability === 'playable' && withinPlayableMetadataGrace) return 'playable'
+
+          if (relayBackedPreview && explicitAvailability === 'unknown') return 'unknown'
 
           return 'unavailable'
         }
@@ -1000,14 +1016,36 @@ export function createApi({
             const id = extractVideoId(video)
             const localHint = id ? localHintsById.get(id) : null
             const peerHint = id ? peerHintsById.get(id) : null
+            const explicitAvailability = video?.byteAvailability || video?.availability || null
+            const availabilityCacheKey = id
+              ? buildBlobRefCacheKey({
+                driveKey,
+                id,
+                blobsCoreKey: video?.blobsCoreKey,
+                blobId: video?.blobId,
+              })
+              : null
+            const firstSeenAt = explicitAvailability === 'playable' && availabilityCacheKey
+              ? (playableMetadataFirstSeen.get(availabilityCacheKey) || Date.now())
+              : 0
+            if (availabilityCacheKey && explicitAvailability === 'playable' && firstSeenAt) {
+              playableMetadataFirstSeen.set(availabilityCacheKey, firstSeenAt)
+            } else if (availabilityCacheKey) {
+              playableMetadataFirstSeen.delete(availabilityCacheKey)
+            }
             const availability = id
-              ? resolveExplicitVideoAvailability({ video, localHint, peerHint })
+              ? resolveExplicitVideoAvailability({
+                video: firstSeenAt ? { ...video, _playableMetadataFirstSeenAt: firstSeenAt } : video,
+                localHint,
+                peerHint,
+              })
               : 'unavailable'
 
             return {
               ...video,
               availability,
               byteAvailability: availability,
+              ...(firstSeenAt ? { _playableMetadataFirstSeenAt: firstSeenAt } : {}),
               contiguousBlocks: Number(localHint?.contiguousBlocks || peerHint?.contiguousBlocks || 0) || 0,
               hasHeadBlock: Boolean(localHint?.hasHeadBlock || peerHint?.hasHeadBlock),
             }

@@ -299,7 +299,7 @@ test('listVideos falls back to the owner public bee when the channel view is emp
   t.is(videos[0]?.publicBeeKey, 'cc'.repeat(32))
 })
 
-test('listVideos marks videos unavailable when neither local cache nor peer hints prove playback', async (t) => {
+test('listVideos keeps metadata-only public bee videos playable while peer proof is pending', async (t) => {
   const driveKey = 'ee'.repeat(32)
   const publicBeeKey = 'ff'.repeat(32)
   const blobsCoreKey = 'aa'.repeat(32)
@@ -339,6 +339,8 @@ test('listVideos marks videos unavailable when neither local cache nor peer hint
           id: 'video-3',
           title: 'Needs proof',
           uploadedAt: 3,
+          availability: 'playable',
+          byteAvailability: 'playable',
           blobId: '0:8:0:1024',
           blobsCoreKey,
         }]
@@ -348,6 +350,8 @@ test('listVideos marks videos unavailable when neither local cache nor peer hint
           id,
           title: 'Needs proof',
           uploadedAt: 3,
+          availability: 'playable',
+          byteAvailability: 'playable',
           blobId: '0:8:0:1024',
           blobsCoreKey,
         }
@@ -359,8 +363,8 @@ test('listVideos marks videos unavailable when neither local cache nor peer hint
 
   t.is(requestCalls.length, 1)
   t.is(videos.length, 1)
-  t.is(videos[0]?.availability, 'unavailable')
-  t.is(videos[0]?.byteAvailability, 'unavailable')
+  t.is(videos[0]?.availability, 'playable')
+  t.is(videos[0]?.byteAvailability, 'playable')
 })
 
 test('listVideos does not mark remote videos playable from unrelated swarm peers alone', async (t) => {
@@ -559,81 +563,94 @@ test('listVideos respects authoritative unavailable hints even when peers are co
   t.is(videos[0]?.byteAvailability, 'unavailable')
 })
 
-test('listVideos revalidates cached remote availability on each read', async (t) => {
-  const driveKey = '12'.repeat(32)
-  const publicBeeKey = '34'.repeat(32)
-  const blobsCoreKey = '56'.repeat(32)
-  let requestCount = 0
+test('listVideos revalidates cached remote availability after the playable metadata grace window', async (t) => {
+  const originalDateNow = Date.now
+  let now = 1000
+  Date.now = () => now
 
-  const api = createApi({
-    ctx: {
-      store: {
-        get() {
+  try {
+    const driveKey = '12'.repeat(32)
+    const publicBeeKey = '34'.repeat(32)
+    const blobsCoreKey = '56'.repeat(32)
+    let requestCount = 0
+
+    const api = createApi({
+      ctx: {
+        store: {
+          get() {
+            return {
+              async ready() {},
+              async has() {
+                return false
+              },
+            }
+          },
+        },
+        semanticFinder: {
+          hasVideo() {
+            return true
+          },
+        },
+        metaDb: {
+          async get() { return null },
+          async put() {},
+        },
+      },
+      publicFeed: {
+        async requestAvailabilityHints() {
+          requestCount += 1
+          if (requestCount === 1) {
+            return [{
+              driveKey,
+              id: 'video-4',
+              availability: 'playable',
+              hasHeadBlock: true,
+              contiguousBlocks: 8,
+            }]
+          }
+          return []
+        },
+      },
+      loadPublicBee: async () => ({
+        async listVideos() {
+          return [{
+            id: 'video-4',
+            title: 'Remote peer only',
+            uploadedAt: 4,
+            availability: 'playable',
+            byteAvailability: 'playable',
+            blobId: '0:8:0:1024',
+            blobsCoreKey,
+          }]
+        },
+        async getVideo(id) {
           return {
-            async ready() {},
-            async has() {
-              return false
-            },
+            id,
+            title: 'Remote peer only',
+            uploadedAt: 4,
+            availability: 'playable',
+            byteAvailability: 'playable',
+            blobId: '0:8:0:1024',
+            blobsCoreKey,
           }
         },
-      },
-      semanticFinder: {
-        hasVideo() {
-          return true
-        },
-      },
-      metaDb: {
-        async get() { return null },
-        async put() {},
-      },
-    },
-    publicFeed: {
-      async requestAvailabilityHints() {
-        requestCount += 1
-        if (requestCount === 1) {
-          return [{
-            driveKey,
-            id: 'video-4',
-            availability: 'playable',
-            hasHeadBlock: true,
-            contiguousBlocks: 8,
-          }]
-        }
-        return []
-      },
-    },
-    loadPublicBee: async () => ({
-      async listVideos() {
-        return [{
-          id: 'video-4',
-          title: 'Remote peer only',
-          uploadedAt: 4,
-          blobId: '0:8:0:1024',
-          blobsCoreKey,
-        }]
-      },
-      async getVideo(id) {
-        return {
-          id,
-          title: 'Remote peer only',
-          uploadedAt: 4,
-          blobId: '0:8:0:1024',
-          blobsCoreKey,
-        }
-      },
-    }),
-  })
+      }),
+    })
 
-  const first = await api.listVideos(driveKey, publicBeeKey)
-  const second = await api.listVideos(driveKey, publicBeeKey)
+    const first = await api.listVideos(driveKey, publicBeeKey)
+    now += 31_000
+    const second = await api.listVideos(driveKey, publicBeeKey)
 
-  t.is(first[0]?.availability, 'playable')
-  t.is(first[0]?.byteAvailability, 'playable')
-  t.is(first[0]?.contiguousBlocks, 8)
-  t.is(first[0]?.hasHeadBlock, true)
-  t.is(second[0]?.availability, 'unavailable')
-  t.is(second[0]?.byteAvailability, 'unavailable')
-  t.is(requestCount, 2)
+    t.is(first[0]?.availability, 'playable')
+    t.is(first[0]?.byteAvailability, 'playable')
+    t.is(first[0]?.contiguousBlocks, 8)
+    t.is(first[0]?.hasHeadBlock, true)
+    t.is(second[0]?.availability, 'unavailable')
+    t.is(second[0]?.byteAvailability, 'unavailable')
+    t.is(requestCount, 2)
+  } finally {
+    Date.now = originalDateNow
+  }
 })
 
 test('getFeedSnapshotEntries keeps manifestUpdatedAt stable for unchanged public bee content', async (t) => {

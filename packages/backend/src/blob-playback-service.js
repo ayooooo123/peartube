@@ -3,6 +3,13 @@ import b4a from 'b4a'
 import { normalizeBlobRefInput, parseBlobRef } from './blob-ref.js'
 import { retainSwarmDiscovery } from './storage.js'
 
+function getCorePeerList(core) {
+  const peers = core?.peers
+  if (Array.isArray(peers)) return peers
+  if (peers && typeof peers.values === 'function') return Array.from(peers.values())
+  return []
+}
+
 function getCorePeerCount(core) {
   const peers = core?.peers
   if (Array.isArray(peers)) return peers.length
@@ -10,6 +17,17 @@ function getCorePeerCount(core) {
   if (typeof peers?.size === 'number') return peers.size
   if (peers && typeof peers.values === 'function') return Array.from(peers.values()).length
   return 0
+}
+
+function getPeerKey(peer) {
+  try {
+    const key = peer?.remotePublicKey || peer?.publicKey || peer?.key || peer?.id || peer?.stream?.remotePublicKey
+    if (!key) return null
+    const hex = typeof key === 'string' ? key : b4a.toString(key, 'hex')
+    return /^[a-f0-9]{64}$/i.test(hex) ? hex : null
+  } catch {
+    return null
+  }
 }
 
 function wait(ms) {
@@ -102,6 +120,53 @@ export class BlobPlaybackService {
     }
   }
 
+  async warmSelectedBlobRef({ blobsCoreKey, blobId, timeoutMs = 1200 }) {
+    const ref = parseBlobRef({ blobsCoreKey, blobId, mimeType: 'video/mp4' })
+    const diagnostics = {
+      blobsCoreKey: ref?.blobsCoreKey || blobsCoreKey || null,
+      blobId: blobId ? String(blobId) : null,
+      peerCount: 0,
+      blobPeerIds: [],
+      hasHeadBlock: false,
+      contiguousBlocks: 0,
+      readyForPlayback: false,
+      error: null,
+    }
+
+    const blobsCore = ref ? this.getBlobCore(ref.blobsCoreKey) : null
+    if (!blobsCore) {
+      diagnostics.error = ref ? 'core-unavailable' : 'invalid-blob-ref'
+      return diagnostics
+    }
+
+    try {
+      await blobsCore.ready()
+      await this.retainBlobCorePeers(ref.blobsCoreKey, blobsCore)
+      try {
+        await Promise.race([
+          blobsCore.update({ wait: true }),
+          wait(Math.max(1, timeoutMs)),
+        ])
+      } catch { /* best effort */ }
+
+      const start = ref.blob.blockOffset
+      const headEnd = Math.min(start + Math.max(1, ref.blob.blockLength || 1), start + 1)
+      try {
+        diagnostics.hasHeadBlock = Boolean(await blobsCore.has?.(start, headEnd))
+        diagnostics.contiguousBlocks = diagnostics.hasHeadBlock ? 1 : 0
+      } catch { /* best effort */ }
+
+      const peers = getCorePeerList(blobsCore)
+      diagnostics.peerCount = getCorePeerCount(blobsCore)
+      diagnostics.blobPeerIds = peers.map(getPeerKey).filter(Boolean)
+      diagnostics.readyForPlayback = diagnostics.hasHeadBlock || diagnostics.peerCount > 0
+      return diagnostics
+    } catch (err) {
+      diagnostics.error = err?.message || String(err)
+      return diagnostics
+    }
+  }
+
   async resolveFromMetadata(meta, { channel } = {}) {
     if (!meta) {
       throw new Error('Video metadata not found')
@@ -143,6 +208,8 @@ export class BlobPlaybackService {
     resolveUrl,
     warmup,
     getStats,
+    warmSelectedBlob = false,
+    selectedBlobWarmupTimeoutMs = 1200,
   }) {
     let warmupStarted = false
 
@@ -162,6 +229,13 @@ export class BlobPlaybackService {
     }
 
     if (blobsCoreKey) {
+      const selectedBlobWarmup = warmSelectedBlob && blobId
+        ? await this.warmSelectedBlobRef({
+          blobsCoreKey,
+          blobId,
+          timeoutMs: selectedBlobWarmupTimeoutMs,
+        })
+        : null
       const peerWarmup = this.waitForBlobCorePeers(blobsCoreKey, { minPeers: 1, timeoutMs: 1500, pollMs: 100 }).catch((err) => {
         console.log('[BlobPlaybackService] preparePlayback peer warmup failed:', err?.message || err)
         return { peerCount: 0, retained: false, timedOut: false }
@@ -171,6 +245,7 @@ export class BlobPlaybackService {
         stats: typeof getStats === 'function' ? getStats(driveKey, videoPath) : undefined,
         warmupStarted,
         peerWarmupStarted: true,
+        selectedBlobWarmup,
         peerWarmup: await Promise.race([
           peerWarmup,
           wait(0).then(() => ({ peerCount: 0, retained: false, timedOut: false })),

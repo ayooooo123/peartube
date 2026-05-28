@@ -1229,6 +1229,8 @@ export function createApi({
         warmup: (...args) => this.prefetchVideo(...args),
         resolveUrl: (...args) => this.getVideoUrl(...args),
         getStats: (...args) => this.getVideoStats(...args),
+        warmSelectedBlob: Boolean(blobId && blobsCoreKey),
+        selectedBlobWarmupTimeoutMs: 1500,
       })
     },
 

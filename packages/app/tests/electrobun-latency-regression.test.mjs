@@ -15,6 +15,25 @@ function readRepoFile(relativePath) {
   return fs.readFileSync(path.resolve(appRoot, '../..', relativePath), 'utf8')
 }
 
+function readPackageJson() {
+  return JSON.parse(readAppFile('package.json'))
+}
+
+test('Electrobun desktop start refreshes staged workspace packages before launching', () => {
+  const { scripts } = readPackageJson()
+
+  assert.match(
+    scripts['desktop:start'],
+    /npm run desktop:ecopy && build\/dev-macos-arm64\/PearTube-dev\.app\/Contents\/MacOS\/launcher/,
+    'desktop:start must not launch a stale packaged backend directly',
+  )
+  assert.match(
+    scripts['desktop:ecopy'],
+    /rsync -a --delete \.\.\/\.\.\/packages\/backend\/ build\/dev-macos-arm64\/PearTube-dev\.app\/Contents\/Resources\/app\/node_modules\/@peartube\/backend\//,
+    'desktop:ecopy should delete stale backend files from the staged app before copying',
+  )
+})
+
 test('Electrobun IPC relay removes the per-socket worker data listener on close', () => {
   const source = readAppFile('src/bun/index.ts')
 

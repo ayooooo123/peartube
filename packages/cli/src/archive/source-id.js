@@ -1,4 +1,9 @@
-import { ARCHIVE_TYPE_YOUTUBE } from '../constants.js'
+import { ARCHIVE_TYPE_RUMBLE, ARCHIVE_TYPE_YOUTUBE } from '../constants.js'
+
+const RUMBLE_HOSTS = new Set([
+  'rumble.com',
+  'www.rumble.com'
+])
 
 const YOUTUBE_HOSTS = new Set([
   'youtube.com',
@@ -46,6 +51,19 @@ function pickYoutubeChannelId(url) {
   return null
 }
 
+function pickRumbleVideoId(url) {
+  if (!url) return null
+
+  const host = url.hostname.toLowerCase()
+  if (!RUMBLE_HOSTS.has(host)) return null
+
+  const segments = url.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
+  const slug = segments[0] || null
+  if (!slug) return null
+
+  return { kind: 'video', id: slug }
+}
+
 export function classifySourceUrl(input) {
   const url = parseUrl(input)
   if (!url) {
@@ -59,6 +77,16 @@ export function classifySourceUrl(input) {
       normalizedUrl: input.trim(),
       identifier: yt.id,
       kind: yt.kind
+    }
+  }
+
+  const rumble = pickRumbleVideoId(url)
+  if (rumble) {
+    return {
+      type: ARCHIVE_TYPE_RUMBLE,
+      normalizedUrl: input.trim(),
+      identifier: rumble.id,
+      kind: rumble.kind
     }
   }
 

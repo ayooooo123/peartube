@@ -792,7 +792,8 @@ export function createApi({
             // optimistic startup hint. It lets feed cards render as playable while
             // peer/local byte proof catches up, but is revalidated by cache TTL.
             const hasOptimisticMetadata = video?.availability === 'playable' || video?.byteAvailability === 'playable'
-            if (hasOptimisticMetadata && (!peerHint || peerHint?.availability === 'playable')) {
+            const hasFeedPreviewGrace = video?.requiresAvailabilityProbe && video?.restoredFromCache && video?.blobId && video?.blobsCoreKey
+            if ((hasOptimisticMetadata || hasFeedPreviewGrace) && (!peerHint || peerHint?.availability === 'playable')) {
               return {
                 ...video,
                 availability: 'playable',

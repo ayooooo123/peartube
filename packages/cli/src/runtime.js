@@ -143,6 +143,14 @@ export async function createRelayRuntime({ config, logger } = {}) {
     }
   }
 
+  ctx.swarm.on('peer', (peer, topic) => {
+    try {
+      publicFeed.handleDiscoveredPeer(peer, topic)
+    } catch (err) {
+      logger.runtime?.warn('Shared-topic peer discovery promotion failed', { error: err?.message || String(err) })
+    }
+  })
+
   ctx.swarm.on('connection', (conn, info) => {
     publicFeed.handleConnection(conn, info)
   })

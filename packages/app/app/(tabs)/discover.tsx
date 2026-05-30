@@ -407,7 +407,7 @@ export default function VerticalDiscoveryScreen() {
     const isStalePlaybackRequest = () => pendingPlayKeyRef.current !== playKey || playbackRequestSeqRef.current !== requestSeq
 
     try {
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey, { requireReady: true }) : null
       if (cachedUrl) {
         void rpc.preparePlayback(playbackRequest).catch(() => undefined)
         if (isStalePlaybackRequest()) return
@@ -420,7 +420,7 @@ export default function VerticalDiscoveryScreen() {
       const result = await rpc.preparePlayback(playbackRequest)
       if (isStalePlaybackRequest()) return
       if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
         setShortsVideoUrl(result.url)
         setShortsPlaybackSession((prev) => prev + 1)
       }

@@ -236,7 +236,7 @@ export default function HomeScreen() {
         blobsCoreKey: videoAny.blobsCoreKey || undefined,
         mimeType: videoAny.mimeType || undefined,
       })
-      if (result?.url) setCachedVideoUrl(cacheKey, result.url)
+      if (result?.url) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
     } catch {
       // Best-effort URL warming; playback still resolves on tap.
     } finally {
@@ -766,7 +766,7 @@ export default function HomeScreen() {
         videoAny.blobId || undefined,
         videoAny.blobsCoreKey || undefined,
       )
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey, { requireReady: true }) : null
       const playbackRequest = {
         channelKey: video.channelKey,
         videoId: videoRef,
@@ -783,7 +783,7 @@ export default function HomeScreen() {
       const result = await rpc.preparePlayback(playbackRequest)
 
       if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
         loadAndPlayVideo(video, result.url)
       }
     } catch (err) {
@@ -814,7 +814,7 @@ export default function HomeScreen() {
         videoAny.blobId || undefined,
         videoAny.blobsCoreKey || undefined,
       )
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey, { requireReady: true }) : null
       const playbackRequest = {
         channelKey: video.channelKey,
         videoId: videoRef,
@@ -831,7 +831,7 @@ export default function HomeScreen() {
       const result = await rpc.preparePlayback(playbackRequest)
 
       if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
         // Load video into the overlay player (animates from mini to fullscreen)
         loadAndPlayVideo(video, result.url)
       }

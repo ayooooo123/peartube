@@ -479,7 +479,7 @@ function MobileVideoPlayerScreen() {
         videoAny.blobId || undefined,
         videoAny.blobsCoreKey || undefined,
       )
-      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey) : null
+      const cachedUrl = cacheKey ? getCachedVideoUrl(cacheKey, { requireReady: true }) : null
       if (cachedUrl) {
         if (!mountedRef.current || loadGenerationRef.current !== generation) return
         loadAndPlayVideo(videoData, cachedUrl)
@@ -504,7 +504,7 @@ function MobileVideoPlayerScreen() {
       if (!mountedRef.current || loadGenerationRef.current !== generation) return
 
       if (result?.url) {
-        if (cacheKey) setCachedVideoUrl(cacheKey, result.url)
+        if (cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result.selectedBlobWarmup?.readyForPlayback))
         // Use context's loadAndPlayVideo - this uses the shared player
         loadAndPlayVideo(videoData, result.url)
 

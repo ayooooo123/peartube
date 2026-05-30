@@ -148,7 +148,7 @@ export async function warmNextPlaybackUrls({
     if (cacheKey) inflightPlaybackWarmups?.current?.add?.(cacheKey)
     try {
       const result = await preparePlayback?.(playbackRequest)
-      if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url)
+      if (result?.url && cacheKey) setCachedVideoUrl(cacheKey, result.url, Boolean(result?.selectedBlobWarmup?.readyForPlayback))
       return result?.url || null
     } finally {
       if (cacheKey) inflightPlaybackWarmups?.current?.delete?.(cacheKey)

@@ -212,7 +212,7 @@ export function createApi({
     }
   }
 
-  function getVideoCorePeerCount(driveKey, videoPath) {
+  function getVideoCorePeerDetails(driveKey, videoPath) {
     try {
       const channel = ctx.channels?.get?.(driveKey)
       const normalizedId = normalizeVideoId(videoPath)
@@ -225,14 +225,40 @@ export function createApi({
 
       for (const candidate of candidates) {
         const core = channel?.videoCores?.get?.(candidate) || channel?.cores?.get?.(candidate)
-        const peers = core?.peers
-        if (Array.isArray(peers)) return peers.length
-        if (typeof peers?.length === 'number') return peers.length
-        if (typeof peers?.size === 'number') return peers.size
+        if (!core) continue
+        const peers = core.peers
+        const peerList = Array.isArray(peers)
+          ? peers
+          : peers && typeof peers.values === 'function'
+            ? Array.from(peers.values())
+            : []
+        const peerCount = Array.isArray(peers)
+          ? peers.length
+          : typeof peers?.length === 'number'
+            ? peers.length
+            : typeof peers?.size === 'number'
+              ? peers.size
+              : peerList.length
+        const blobPeerIds = peerList.map((peer) => {
+          try {
+            const key = peer?.remotePublicKey || peer?.publicKey || peer?.key || peer?.id || peer?.stream?.remotePublicKey
+            if (!key) return null
+            const hex = typeof key === 'string' ? key : b4a.toString(key, 'hex')
+            return /^[a-f0-9]{64}$/i.test(hex) ? hex : null
+          } catch {
+            return null
+          }
+        }).filter(Boolean)
+        const blobCoreKey = core.key ? b4a.toString(core.key, 'hex') : null
+        return { peerCount, blobPeerIds, blobCoreKey }
       }
     } catch { /* best effort */ }
 
-    return 0
+    return { peerCount: 0, blobPeerIds: [], blobCoreKey: null }
+  }
+
+  function getVideoCorePeerCount(driveKey, videoPath) {
+    return getVideoCorePeerDetails(driveKey, videoPath).peerCount
   }
 
   function getFeedEntryVideoCount(driveKey, publicBeeKey = null) {
@@ -915,6 +941,7 @@ export function createApi({
         blobId,
         blobsCoreKey,
         mimeType,
+        warmSelectedBlob: Boolean(blobId && blobsCoreKey),
         warmup: (...args) => this.prefetchVideo(...args),
         resolveUrl: (...args) => this.getVideoUrl(...args),
         getStats: (...args) => this.getVideoStats(...args),
@@ -1531,21 +1558,20 @@ export function createApi({
           publicBeeKey = channel?.publicBeeKey || await channel?.getPublicBeeKey();
           console.log('[API] submitToFeed: got publicBeeKey:', publicBeeKey?.slice(0, 16));
 
-          // Use channel's CommentsAutobase directly - it's already initialized in _open()
-          // and has the key stored in channel metadata + synced to PublicBee
-          const commentsBase = await channel.getCommentsAutobase();
-          if (commentsBase?.keyHex) {
-            console.log('[API] submitToFeed: CommentsAutobase key:', commentsBase.keyHex.slice(0, 16));
+          // Comments are HyperDB-backed in the channel now; publish the channel DB
+          // key as the comments DB key for older clients/debug screens.
+          const commentsDbKey = channel.keyHex || driveKey
+          if (commentsDbKey) {
+            console.log('[API] submitToFeed: comments DB key:', commentsDbKey.slice(0, 16));
 
-            // Ensure PublicBee has the commentsAutobaseKey synced
             if (channel.publicBee?.writable) {
               const pubMeta = await channel.publicBee.getMetadata().catch(() => ({}));
-              if (!pubMeta?.commentsAutobaseKey) {
+              if (!pubMeta?.commentsDbKey) {
                 await channel.publicBee.setMetadata({
                   ...pubMeta,
-                  commentsAutobaseKey: commentsBase.keyHex
+                  commentsDbKey
                 });
-                console.log('[API] submitToFeed: synced commentsAutobaseKey to PublicBee');
+                console.log('[API] submitToFeed: synced commentsDbKey to PublicBee');
               }
             }
           }
@@ -2165,12 +2191,15 @@ export function createApi({
      * @returns {Object}
      */
     getVideoStats(driveKey, videoPath) {
-      const videoPeerCount = getVideoCorePeerCount(driveKey, videoPath);
+      const videoPeerDetails = getVideoCorePeerDetails(driveKey, videoPath);
+      const videoPeerCount = videoPeerDetails.peerCount;
       if (videoStats) {
         const stats = videoStats.getStats(driveKey, videoPath);
         if (stats) {
           stats.swarmConnections = ctx.swarm?.connections?.size || 0;
           stats.peerCount = videoPeerCount || stats.peerCount || 0;
+          stats.blobPeerIds = videoPeerDetails.blobPeerIds;
+          stats.blobCoreKey = videoPeerDetails.blobCoreKey;
           return stats;
         }
       }
@@ -2183,6 +2212,8 @@ export function createApi({
         totalBytes: 0,
         downloadedBytes: 0,
         peerCount: videoPeerCount,
+        blobPeerIds: videoPeerDetails.blobPeerIds,
+        blobCoreKey: videoPeerDetails.blobCoreKey,
         swarmConnections: ctx.swarm?.connections?.size || 0,
         speedMBps: '0',
         elapsed: 0,
@@ -2839,272 +2870,21 @@ export function createApi({
     },
 
     // ============================================
-    // Comments Operations (using separate CommentsAutobase)
+    // Comments Operations (HyperDB channel-backed)
     // ============================================
 
     /**
-     * Get or create CommentsAutobase for a channel
+     * Compatibility helper retained for older API callers. Comments were folded
+     * into the HyperDB multi-writer channel; the old separate CommentsAutobase
+     * module no longer exists and must not be imported by mobile bundles.
      * @param {string} channelKey
-     * @param {string} [publicBeeKey] - PublicBee key for looking up commentsAutobaseKey
-     * @returns {Promise<import('./channel/comments-autobase.js').CommentsAutobase>}
+     * @returns {Promise<import('./channel/multi-writer-channel.js').MultiWriterChannel>}
      */
     async _getCommentsAutobase(channelKey, publicBeeKey = null) {
-      console.log('[API] _getCommentsAutobase: START channelKey:', channelKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16) || 'null')
-
-      // Lazy import to avoid circular deps
-      console.log('[API] _getCommentsAutobase: importing comments-autobase...')
-      const { getOrCreateCommentsAutobase } = await import('./channel/comments-autobase.js')
-      console.log('[API] _getCommentsAutobase: import complete')
-
-      // Cache key
-      const cacheKey = `comments:${channelKey}`
-      if (!ctx._commentsCache) ctx._commentsCache = new Map()
-
-      // IMPORTANT: listComments + getReactions are commonly called in parallel.
-      // If we don't cache the in-flight open, we'll instantiate multiple Autobase
-      // instances for the same key on the same Corestore, which can lead to flaky
-      // replication / empty reads.
-      const cached = ctx._commentsCache.get(cacheKey)
-      if (cached) {
-        console.log('[API] _getCommentsAutobase: found cached promise, waiting with 12s timeout...')
-        // Add timeout to prevent hanging forever on a stuck promise
-        // Must be longer than CommentsAutobase internal timeout (8s for viewer ready)
-        const result = await Promise.race([
-          cached,
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Cached CommentsAutobase promise timed out after 12s')), 12000))
-        ]).catch(err => {
-          console.log('[API] _getCommentsAutobase: cached promise failed:', err?.message)
-          // Clear the bad cache entry so next call can retry
-          ctx._commentsCache.delete(cacheKey)
-          throw err
-        })
-        console.log('[API] _getCommentsAutobase: cached promise resolved')
-
-        // FIX: Try to update admin key on cached instance if not already set
-        // This handles the case where the instance was cached before admin key was available
-        if (!result._adminKeyHex && publicBeeKey) {
-          try {
-            const pubBee = await Promise.race([
-              loadPublicBee(ctx, publicBeeKey),
-              new Promise((resolve) => setTimeout(() => resolve(null), 2000))
-            ])
-            if (pubBee) {
-              const meta = await Promise.race([
-                pubBee.getMetadata(),
-                new Promise((resolve) => setTimeout(() => resolve(null), 1000))
-              ]).catch(() => null)
-              if (meta?.commentsAdminKey) {
-                result.setAdminKey?.(meta.commentsAdminKey)
-                console.log('[API] _getCommentsAutobase: updated admin key on cached instance')
-              }
-            }
-          } catch (err) {
-            console.log('[API] _getCommentsAutobase: could not update admin key on cached instance:', err?.message)
-          }
-        }
-
-        return result
-      }
-
-      const openPromise = (async () => {
-        console.log('[API] _getCommentsAutobase: openPromise STARTED')
-        let resolvedPublicBeeKey = (typeof publicBeeKey === 'string' && publicBeeKey.length > 0) ? publicBeeKey : null
-        let commentsAutobaseKey = null
-        let commentsAdminKey = null
-        /** @type {any|null} */
-        let pubBee = null
-
-        // FIRST: Try to get publicBeeKey from public feed (fastest path for viewers)
-        // Do this BEFORE trying to load any channels to avoid hangs
-        console.log('[API] _getCommentsAutobase: checking public feed for publicBeeKey...')
-        if (!resolvedPublicBeeKey && publicFeed) {
-          console.log('[API] _getCommentsAutobase: publicFeed exists, calling getFeed()...')
-          try {
-            const feed = publicFeed.getFeed()
-            console.log('[API] _getCommentsAutobase: got feed with', feed?.length, 'entries')
-            const entry = feed.find(e => e.channelKey === channelKey || e.driveKey === channelKey)
-            if (entry?.publicBeeKey) {
-              resolvedPublicBeeKey = entry.publicBeeKey
-              console.log('[API] _getCommentsAutobase: found publicBeeKey in feed:', resolvedPublicBeeKey?.slice(0, 16))
-            } else {
-              console.log('[API] _getCommentsAutobase: channel not found in feed or no publicBeeKey')
-            }
-          } catch (err) {
-            console.log('[API] _getCommentsAutobase: feed lookup error:', err?.message)
-          }
-        } else if (!publicFeed) {
-          console.log('[API] _getCommentsAutobase: publicFeed is not available')
-        }
-
-        // Check if we have a local identity for this channel (owner/paired device)
-        console.log('[API] _getCommentsAutobase: checking local identity...')
-        let hasLocalIdentity = false
-        try {
-          const identities = await ctx.metaDb?.get('identities').catch(() => null)
-          hasLocalIdentity = identities?.value?.some(i =>
-            i.channelKey === channelKey || i.driveKey === channelKey
-          ) || false
-        } catch (err) {
-          console.log('[API] _getCommentsAutobase: identity check error:', err?.message)
-        }
-        console.log('[API] _getCommentsAutobase: hasLocalIdentity:', hasLocalIdentity)
-
-        // Only try loading the full channel Autobase when we have a local identity (owner/paired device)
-        // Do NOT load channel just because it's in ctx.channels - that could be a stale/incomplete viewer load
-        /** @type {any|null} */
-        let localChannel = null
-        if (hasLocalIdentity) {
-          console.log('[API] _getCommentsAutobase: loading local channel (owner/paired device)...')
-          try {
-            // Don't block forever: if the channel is slow to open, fall back to PublicBee.
-            localChannel = await Promise.race([
-              loadChannel(ctx, channelKey),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('loadChannel timeout')), 3000))
-            ])
-            console.log('[API] _getCommentsAutobase: local channel loaded')
-
-            // If the channel already has a CommentsAutobase instance, use it (fast path for owners).
-            if (localChannel?.commentsAutobase) {
-              console.log('[API] _getCommentsAutobase: using channel.commentsAutobase')
-              const commentsBase = localChannel.commentsAutobase
-              const isPublishingDevice = Boolean(localChannel.publicBee?.writable)
-              if (isPublishingDevice) commentsBase.setIsChannelOwner?.(true)
-
-              const meta = await Promise.race([
-                localChannel?.getMetadata?.(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('getMetadata timeout')), 2000))
-              ]).catch(() => null)
-              const metaAdminKey = meta?.commentsAdminKey || null
-              if (metaAdminKey) {
-                commentsBase.setAdminKey?.(metaAdminKey)
-              }
-
-              const adminKeyHex = commentsBase.localWriterKeyHex
-              if (!metaAdminKey && adminKeyHex) {
-                commentsBase.setAdminKey?.(adminKeyHex)
-              }
-
-              if (isPublishingDevice && adminKeyHex && (!metaAdminKey || metaAdminKey !== adminKeyHex)) {
-                try {
-                  await localChannel.updateMetadata({ commentsAdminKey: adminKeyHex })
-                } catch (err) {
-                  console.log('[API] _getCommentsAutobase: could not store admin key in channel metadata:', err?.message)
-                }
-              }
-
-              return commentsBase
-            }
-
-            // Prefer canonical keys from channel metadata / PublicBee if available.
-            const meta = await Promise.race([
-              localChannel?.getMetadata?.(),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('getMetadata timeout')), 2000))
-            ]).catch(() => null)
-            commentsAutobaseKey = meta?.commentsAutobaseKey || null
-            commentsAdminKey = meta?.commentsAdminKey || null
-            resolvedPublicBeeKey = resolvedPublicBeeKey ||
-              localChannel?.publicBeeKey ||
-              null
-
-            // Only try getPublicBeeKey if we still don't have it
-            if (!resolvedPublicBeeKey) {
-              resolvedPublicBeeKey = await Promise.race([
-                localChannel?.getPublicBeeKey?.(),
-                new Promise((resolve) => setTimeout(() => resolve(null), 1000))
-              ]).catch(() => null)
-            }
-            console.log('[API] _getCommentsAutobase: from local channel - commentsAutobaseKey:', commentsAutobaseKey?.slice(0, 16) || 'null')
-          } catch (err) {
-            console.log('[API] _getCommentsAutobase: local channel lookup failed:', err?.message)
-          }
-        }
-
-        // Without a PublicBee key, viewers cannot discover comments.
-        console.log('[API] _getCommentsAutobase: resolvedPublicBeeKey is:', resolvedPublicBeeKey?.slice(0, 16) || 'null')
-        if (!resolvedPublicBeeKey) {
-          console.log('[API] _getCommentsAutobase: no publicBeeKey found, throwing error')
-          throw new Error('Comments unavailable (missing publicBeeKey)')
-        }
-
-        // Load the PublicBee and read the published commentsAutobaseKey.
-        // The PublicBee writer (single device) is also the only device allowed to create/publish the comments key.
-        let isPublishingDevice = false
-        console.log('[API] _getCommentsAutobase: about to load PublicBee:', resolvedPublicBeeKey?.slice(0, 16))
-        try {
-          console.log('[API] _getCommentsAutobase: calling loadPublicBee with 5s timeout...')
-          pubBee = await Promise.race([
-            loadPublicBee(ctx, resolvedPublicBeeKey),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('loadPublicBee timeout after 5s')), 5000))
-          ])
-          console.log('[API] _getCommentsAutobase: loadPublicBee completed')
-          isPublishingDevice = Boolean(pubBee?.writable)
-          console.log('[API] _getCommentsAutobase: PublicBee loaded, writable:', isPublishingDevice)
-
-          if (!commentsAutobaseKey) {
-            console.log('[API] _getCommentsAutobase: getting metadata from PublicBee...')
-            const meta = await Promise.race([
-              pubBee.getMetadata(),
-              new Promise((resolve) => setTimeout(() => resolve(null), 2000))
-            ]).catch(() => null)
-            commentsAutobaseKey = meta?.commentsAutobaseKey || null
-            commentsAdminKey = commentsAdminKey || meta?.commentsAdminKey || null
-            console.log('[API] _getCommentsAutobase: commentsAutobaseKey from PublicBee:', commentsAutobaseKey?.slice(0, 16) || 'null')
-          }
-        } catch (err) {
-          console.log('[API] _getCommentsAutobase: PublicBee lookup failed:', err?.message)
-        }
-
-        // IMPORTANT: non-publishing devices must never create a new CommentsAutobase implicitly.
-        // Creating by `{ name }` is deterministic per-device (not globally) and will fork comments.
-        if (!isPublishingDevice && !commentsAutobaseKey) {
-          throw new Error('Comments unavailable (commentsAutobaseKey not published yet)')
-        }
-
-        console.log('[API] _getCommentsAutobase: creating CommentsAutobase, isOwner:', isPublishingDevice, 'key:', commentsAutobaseKey?.slice(0, 16) || 'new')
-        console.log('[API] _getCommentsAutobase: swarm connections:', ctx.swarm?.connections?.size || 0)
-
-        let commentsBase
-        try {
-          commentsBase = await getOrCreateCommentsAutobase(ctx.store, {
-            channelKey,
-            commentsAutobaseKey,
-            commentsAdminKey,
-            isChannelOwner: isPublishingDevice,
-            swarm: ctx.swarm
-          })
-        } catch (err) {
-          // Provide a user-friendly error for viewers when owner is offline
-          if (err?.message?.includes('timeout') && !isPublishingDevice) {
-            throw new Error('Comments unavailable - channel owner may be offline. Try again later.')
-          }
-          throw err
-        }
-        console.log('[API] _getCommentsAutobase: CommentsAutobase ready, key:', commentsBase.keyHex?.slice(0, 16))
-        if (commentsAdminKey) {
-          commentsBase.setAdminKey?.(commentsAdminKey)
-        }
-
-        // Publishing device: publish the key to PublicBee if it wasn't there yet.
-        if (isPublishingDevice && pubBee?.writable && commentsBase.keyHex && !commentsAutobaseKey) {
-          try {
-            await pubBee.setMetadata({ commentsAutobaseKey: commentsBase.keyHex })
-            console.log('[API] _getCommentsAutobase: published commentsAutobaseKey to PublicBee')
-          } catch (err) {
-            console.log('[API] _getCommentsAutobase: could not publish key to PublicBee:', err?.message)
-          }
-        }
-
-        return commentsBase
-      })()
-
-      ctx._commentsCache.set(cacheKey, openPromise)
-      try {
-        return await openPromise
-      } catch (err) {
-        ctx._commentsCache.delete(cacheKey)
-        throw err
-      }
+      console.log('[API] _getCommentsAutobase compat: loading HyperDB channel:', channelKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16) || 'null')
+      return loadChannelBounded(channelKey, 3000)
     },
+
 
     /**
      * Add a comment to a video
@@ -3121,16 +2901,12 @@ export function createApi({
       console.log('[API] addComment: channelKey:', channelKey?.slice(0, 16), 'videoId:', videoId?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16) || 'null')
 
       try {
-        console.log('[API] addComment: getting CommentsAutobase...')
-        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        console.log('[API] addComment: got CommentsAutobase, adding comment...')
-        const result = await commentsBase.addComment(videoId, text, parentId)
-        const peerCount = commentsBase?.swarm?.connections?.size || 0
-        const queued = typeof result?.queued === 'boolean'
-          ? result.queued
-          : (!commentsBase?.writable && peerCount === 0)
+        console.log('[API] addComment: loading HyperDB channel comments...')
+        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        if (!channel?.comments) throw new Error('Comments not initialized')
+        const result = await channel.comments.addComment(videoId, text, parentId)
         console.log('[API] addComment: comment added:', result.commentId?.slice(0, 8))
-        return { success: true, commentId: result.commentId, queued }
+        return { success: true, commentId: result.commentId, queued: false }
       } catch (err) {
         console.error('[API] addComment error:', err.message)
         return { success: false, error: err.message }
@@ -3149,8 +2925,9 @@ export function createApi({
      */
     async listComments(channelKey, videoId, options = {}) {
       try {
-        const commentsBase = await this._getCommentsAutobase(channelKey, options.publicBeeKey)
-        const comments = await commentsBase.listComments(videoId, options)
+        const channel = await this._getCommentsAutobase(channelKey, options.publicBeeKey)
+        if (!channel?.comments) throw new Error('Comments not initialized')
+        const comments = await channel.comments.listComments(videoId, options)
         return { success: true, comments }
       } catch (err) {
         console.error('[API] listComments error:', err.message)
@@ -3167,8 +2944,9 @@ export function createApi({
      */
     async hideComment(channelKey, videoId, commentId, publicBeeKey = null) {
       try {
-        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        await commentsBase.hideComment(videoId, commentId)
+        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        if (!channel?.comments) throw new Error('Comments not initialized')
+        await channel.comments.hideComment(videoId, commentId)
         return { success: true }
       } catch (err) {
         console.error('[API] hideComment error:', err.message)
@@ -3185,8 +2963,9 @@ export function createApi({
      */
     async removeComment(channelKey, videoId, commentId, publicBeeKey = null) {
       try {
-        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        await commentsBase.removeComment(videoId, commentId)
+        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        if (!channel?.comments) throw new Error('Comments not initialized')
+        await channel.comments.removeComment(videoId, commentId)
         return { success: true }
       } catch (err) {
         console.error('[API] removeComment error:', err.message)
@@ -3195,7 +2974,7 @@ export function createApi({
     },
 
     // ============================================
-    // Reactions Operations (using separate CommentsAutobase)
+    // Reactions Operations (HyperDB channel-backed)
     // ============================================
 
     /**
@@ -3207,8 +2986,9 @@ export function createApi({
      */
     async addReaction(channelKey, videoId, reactionType, publicBeeKey = null) {
       try {
-        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        await commentsBase.addReaction(videoId, reactionType)
+        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        if (!channel?.reactions) throw new Error('Reactions not initialized')
+        await channel.reactions.addReaction(videoId, reactionType)
         return { success: true }
       } catch (err) {
         console.error('[API] addReaction error:', err.message)
@@ -3224,8 +3004,9 @@ export function createApi({
      */
     async removeReaction(channelKey, videoId, publicBeeKey = null) {
       try {
-        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        await commentsBase.removeReaction(videoId)
+        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        if (!channel?.reactions) throw new Error('Reactions not initialized')
+        await channel.reactions.removeReaction(videoId)
         return { success: true }
       } catch (err) {
         console.error('[API] removeReaction error:', err.message)
@@ -3241,9 +3022,10 @@ export function createApi({
      */
     async getReactions(channelKey, videoId, publicBeeKey = null) {
       try {
-        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        const result = await commentsBase.getReactionCounts(videoId)
-        return { success: true, counts: { like: result.likes, dislike: result.dislikes }, userReaction: result.userReaction }
+        const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        if (!channel?.reactions) throw new Error('Reactions not initialized')
+        const result = await channel.reactions.getReactions(videoId)
+        return { success: true, counts: result.counts || {}, userReaction: result.userReaction || null }
       } catch (err) {
         console.error('[API] getReactions error:', err.message)
         return { success: false, counts: {}, userReaction: null, error: err.message }
@@ -3286,7 +3068,7 @@ export function createApi({
         // Try to load channel first
         let channel = null
         try {
-          channel = await loadChannel(ctx, channelKey)
+          channel = await loadChannelBounded(channelKey, 3000)
           debugInfo.hasChannel = true
           debugInfo.channelWritable = channel.writable
 
@@ -3294,17 +3076,15 @@ export function createApi({
           if (channel.publicBee) {
             debugInfo.hasPublicBee = true
             const pubMeta = await channel.publicBee.getMetadata().catch(() => ({}))
-            debugInfo.publicBeeHasCommentsKey = Boolean(pubMeta?.commentsAutobaseKey)
+            debugInfo.publicBeeHasCommentsKey = Boolean(pubMeta?.commentsDbKey || pubMeta?.commentsAutobaseKey)
           }
 
-          // Check if channel has CommentsAutobase
-          if (channel.commentsAutobase) {
-            const ca = channel.commentsAutobase
-            debugInfo.commentsAutobaseKey = ca.keyHex?.slice(0, 16) || null
-            debugInfo.isWriter = ca.writable
-            debugInfo.isChannelOwner = ca.isChannelOwner()
-            debugInfo.localWriterKey = ca.localWriterKeyHex?.slice(0, 16) || null
-            debugInfo.viewLength = ca.view?.core?.length || 0
+          if (channel.comments) {
+            debugInfo.commentsAutobaseKey = channel.keyHex?.slice(0, 16) || channelKey?.slice(0, 16) || null
+            debugInfo.isWriter = channel.writable || false
+            debugInfo.isChannelOwner = Boolean(channel.writable)
+            debugInfo.localWriterKey = channel.localWriterKeyHex?.slice(0, 16) || null
+            debugInfo.viewLength = channel.core?.length || channel.db?.core?.length || 0
             debugInfo.commentsConnected = true
             debugInfo.success = true
             return debugInfo
@@ -3313,15 +3093,7 @@ export function createApi({
           debugInfo.channelError = err?.message
         }
 
-        // Try to get CommentsAutobase via API method
-        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
-        debugInfo.commentsAutobaseKey = commentsBase?.keyHex?.slice(0, 16) || null
-        debugInfo.isWriter = commentsBase?.writable || false
-        debugInfo.isChannelOwner = commentsBase?.isChannelOwner?.() || false
-        debugInfo.localWriterKey = commentsBase?.localWriterKeyHex?.slice(0, 16) || null
-        debugInfo.viewLength = commentsBase?.view?.core?.length || 0
-        debugInfo.commentsConnected = true
-        debugInfo.success = true
+        throw new Error('Comments not initialized')
       } catch (err) {
         debugInfo.lastError = err?.message || 'Unknown error'
       }

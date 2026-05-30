@@ -14,11 +14,7 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ExpoReactHostFactory
 
-import com.peartube.app.PeartubeNetworkDiscovery
-
 class MainApplication : Application(), ReactApplication {
-
-  private val networkDiscovery by lazy { PeartubeNetworkDiscovery(this) }
 
   override val reactHost: ReactHost by lazy {
     ExpoReactHostFactory.getDefaultReactHost(
@@ -27,7 +23,6 @@ class MainApplication : Application(), ReactApplication {
         PackageList(this).packages.apply {
           // Packages that cannot be autolinked yet can be added manually here, for example:
           // add(MyReactNativePackage())
-          add(PeartubeNetworkDiscoveryPackage())
         }
     )
   }
@@ -40,11 +35,6 @@ class MainApplication : Application(), ReactApplication {
       ReleaseLevel.STABLE
     }
     loadReactNative(this)
-    try {
-      networkDiscovery.start()
-    } catch (t: Throwable) {
-      networkDiscovery.logException("startup", t)
-    }
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
   }
 

@@ -1,8 +1,10 @@
 import test from 'brittle'
+import { EventEmitter } from 'node:events'
 import { downloadChannelBlobs, addVideoDownloadRefs } from '../src/blob-downloader.js'
 
 function createCore({ length = 10, byteLength = 100 } = {}) {
-  return {
+  const core = new EventEmitter()
+  Object.assign(core, {
     length,
     byteLength,
     readyCalls: 0,
@@ -17,7 +19,8 @@ function createCore({ length = 10, byteLength = 100 } = {}) {
         async done() {}
       }
     }
-  }
+  })
+  return core
 }
 
 test('addVideoDownloadRefs collects video and thumbnail blob refs without duplicates', (t) => {
@@ -98,7 +101,8 @@ test('downloadChannelBlobs downloads feed preview refs when PublicBee has no vid
 
 test('downloadChannelBlobs only republishes successfully cached video previews', async (t) => {
   const playableCore = createCore({ length: 4, byteLength: 400 })
-  const missingCore = {
+  const missingCore = new EventEmitter()
+  Object.assign(missingCore, {
     discoveryKey: 'missing-discovery',
     async ready() {},
     download() {
@@ -106,7 +110,7 @@ test('downloadChannelBlobs only republishes successfully cached video previews',
         async done() { throw new Error('remote blocks unavailable') }
       }
     }
-  }
+  })
   const ctx = {
     swarm: { join() {} },
     store: {
@@ -156,4 +160,83 @@ test('downloadChannelBlobs only republishes successfully cached video previews',
   t.is(stats.videosDownloaded, 1)
   t.is(stats.previewVideos.length, 1)
   t.is(stats.previewVideos[0].id, 'playable')
+})
+
+
+test('downloadChannelBlobs abandons a stalled blob download after idle timeout', async (t) => {
+  const previous = globalThis.setTimeout
+  const timers = []
+  globalThis.setTimeout = (fn, _ms) => {
+    const timer = {
+      fn,
+      cleared: false,
+      unref() {}
+    }
+    timers.push(timer)
+    return timer
+  }
+  globalThis.clearTimeout = (timer) => {
+    if (timer) timer.cleared = true
+  }
+
+  const stalledCore = createCore({ length: 4, byteLength: 400 })
+  let destroyed = false
+  stalledCore.download = function download(range) {
+    this.downloads.push(range)
+    return {
+      destroy() { destroyed = true },
+      done() { return new Promise(() => {}) }
+    }
+  }
+
+  try {
+    const ctx = {
+      swarm: { join() {} },
+      store: {
+        get() { return stalledCore }
+      }
+    }
+
+    const promise = downloadChannelBlobs(
+      ctx,
+      'ee'.repeat(32),
+      'chan-stalled',
+      { info() {}, debug() {}, error() {} },
+      {
+        previewVideos: [{
+          id: 'stalled',
+          title: 'Stalled',
+          blobId: '1:2:100:200',
+          blobsCoreKey: 'aa'.repeat(32)
+        }]
+      },
+      {
+        async loadPublicBee() {
+          return {
+            async listVideos() {
+              return []
+            }
+          }
+        }
+      }
+    )
+
+    for (let i = 0; i < 20 && stalledCore.downloads.length === 0; i += 1) {
+      await Promise.resolve()
+    }
+    t.is(stalledCore.downloads.length, 1, 'stalled download should have started')
+    const idleTimer = timers.find((timer) => !timer.cleared)
+    t.ok(idleTimer, 'idle timer should be armed')
+    idleTimer.fn()
+
+    const stats = await promise
+    t.ok(destroyed, 'stalled download should be destroyed after idle timeout')
+    t.is(stats.blobsFound, 1)
+    t.is(stats.blobsDownloaded, 0)
+    t.is(stats.videosDownloaded, 0)
+    t.alike(stats.previewVideos, [])
+  } finally {
+    globalThis.setTimeout = previous
+    globalThis.clearTimeout = clearTimeout
+  }
 })

@@ -8,6 +8,11 @@ const YOUTUBE_HOSTS = new Set([
   'youtu.be'
 ])
 
+const RUMBLE_HOSTS = new Set([
+  'rumble.com',
+  'www.rumble.com'
+])
+
 function parseUrl(input) {
   if (typeof input !== 'string') return null
   try {
@@ -46,6 +51,27 @@ function pickYoutubeChannelId(url) {
   return null
 }
 
+function pickRumbleSource(url) {
+  if (!url) return null
+
+  const host = url.hostname.toLowerCase()
+  if (!RUMBLE_HOSTS.has(host)) return null
+
+  const path = url.pathname.replace(/\/+$/, '')
+  const segments = path.split('/').filter(Boolean)
+  if (segments[0] === 'c' && segments[1]) {
+    return { kind: 'channel', id: segments[1] }
+  }
+  if (segments[0] === 'playlists' && segments[1]) {
+    return { kind: 'playlist', id: segments[1] }
+  }
+  const videoSlug = segments[0]
+  if (videoSlug && /^v[0-9a-z]+/i.test(videoSlug)) {
+    return { kind: 'video', id: videoSlug.replace(/\.html$/i, '') }
+  }
+  return null
+}
+
 export function classifySourceUrl(input) {
   const url = parseUrl(input)
   if (!url) {
@@ -59,6 +85,16 @@ export function classifySourceUrl(input) {
       normalizedUrl: input.trim(),
       identifier: yt.id,
       kind: yt.kind
+    }
+  }
+
+  const rumble = pickRumbleSource(url)
+  if (rumble) {
+    return {
+      type: ARCHIVE_TYPE_YOUTUBE,
+      normalizedUrl: input.trim(),
+      identifier: `rumble:${rumble.kind}:${rumble.id}`,
+      kind: `rumble-${rumble.kind}`
     }
   }
 

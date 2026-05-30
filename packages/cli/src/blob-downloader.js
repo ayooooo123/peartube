@@ -3,6 +3,7 @@ import { loadPublicBee } from '@peartube/backend/storage'
 import { normalizeBlobRefInput } from '@peartube/backend/blob-ref'
 
 const VIDEO_DOWNLOAD_TIMEOUT_MS = 60_000
+const DOWNLOAD_PROGRESS_IDLE_MS = 10_000
 
 function parseBlobId(blobId) {
   const normalized = normalizeBlobRefInput(blobId)
@@ -15,6 +16,41 @@ function timeoutPromise(timeoutMs) {
     const timer = setTimeout(() => reject(new Error(`Blob download timeout (${timeoutMs}ms)`)), timeoutMs)
     timer?.unref?.()
   })
+}
+
+function createIdleProgressGuard({ timeoutMs, onTimeout }) {
+  let timer = null
+  let settled = false
+  let rejectGuard = null
+
+  const promise = new Promise((_, reject) => {
+    rejectGuard = reject
+  })
+
+  const clear = () => {
+    if (timer) clearTimeout(timer)
+    timer = null
+  }
+
+  const bump = () => {
+    if (settled) return
+    clear()
+    timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      try { onTimeout?.() } catch {}
+      rejectGuard(new Error(`Blob download idle timeout (${timeoutMs}ms without progress)`))
+    }, timeoutMs)
+    timer?.unref?.()
+  }
+
+  const stop = () => {
+    settled = true
+    clear()
+  }
+
+  bump()
+  return { promise, bump, stop }
 }
 
 function getVideoKey(video) {
@@ -97,10 +133,28 @@ async function downloadBlobRef(ctx, ref) {
     end: blockOffset + blockLength
   })
 
-  await Promise.race([
-    download.done(),
-    timeoutPromise(VIDEO_DOWNLOAD_TIMEOUT_MS)
-  ])
+  const idleGuard = createIdleProgressGuard({
+    timeoutMs: DOWNLOAD_PROGRESS_IDLE_MS,
+    onTimeout: () => {
+      try { download.destroy?.() } catch {}
+    }
+  })
+  const onDownload = () => idleGuard.bump()
+  const onAppend = () => idleGuard.bump()
+  blobsCore.on?.('download', onDownload)
+  blobsCore.on?.('append', onAppend)
+
+  try {
+    await Promise.race([
+      download.done(),
+      timeoutPromise(VIDEO_DOWNLOAD_TIMEOUT_MS),
+      idleGuard.promise
+    ])
+  } finally {
+    idleGuard.stop()
+    blobsCore.off?.('download', onDownload)
+    blobsCore.off?.('append', onAppend)
+  }
 
   if (Number.isFinite(ref.blobId?.byteLength)) return Number(ref.blobId.byteLength)
 

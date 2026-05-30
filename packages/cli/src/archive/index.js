@@ -188,10 +188,25 @@ export function createArchiver({
 
     let listing
     try {
-      listing = await ytDlpClient.listVideos(source.url, {
-        maxItems: source.maxItems || archiveConfig.maxItems,
-        signal: abortSignal()
-      })
+      if (source.kind === 'rumble-video') {
+        const id = String(source.identifier || source.sourceId || source.url)
+          .replace(/^rumble:video:/, '')
+          .replace(/^youtube:rumble:video:/, '')
+        listing = [{
+          id,
+          title: source.label || id,
+          duration: null,
+          uploader: source.creatorName || source.label || null,
+          uploadDate: null,
+          url: source.url,
+          webpageUrl: source.url
+        }]
+      } else {
+        listing = await ytDlpClient.listVideos(source.url, {
+          maxItems: source.maxItems || archiveConfig.maxItems,
+          signal: abortSignal()
+        })
+      }
     } catch (err) {
       logger.archive.warn('Listing source failed', {
         sourceId: source.sourceId,

@@ -168,7 +168,7 @@ const mainRunner = createNativeRunner({
   },
   workletId: BACKEND_WORKLET_ID,
   resolveLaunchArgs(options) {
-    return [options.storagePath, ...nativeRuntimeConfig.workerArgs];
+    return [options.storagePath, options.entrypoint, ...nativeRuntimeConfig.workerArgs];
   },
 });
 
@@ -505,6 +505,10 @@ export async function initPlatformRPC(config: {
   loadBackendSource?: () => Promise<string>;
   loadDownloaderWorkerSource?: () => Promise<string | null | undefined>;
   storagePath?: string;
+  launchOptions?: {
+    network?: Record<string, unknown>;
+    swarmOptions?: Record<string, unknown>;
+  };
 }): Promise<void> {
   if (_isInitialized && mainBridge.isInitialized()) {
     _startupState = 'ready';
@@ -591,7 +595,17 @@ export async function initPlatformRPC(config: {
 
     nativeRuntimeConfig.backendPath = backendPath;
     nativeRuntimeConfig.backendSource = backendPath ? '' : backendSource;
-    nativeRuntimeConfig.workerArgs = downloaderWorkerPath ? [downloaderWorkerPath] : [];
+    const launchOptionsArg = config.launchOptions
+      ? JSON.stringify({
+        __peartubeLaunchOptions: true,
+        network: config.launchOptions.network,
+        swarmOptions: config.launchOptions.swarmOptions,
+      })
+      : null;
+    nativeRuntimeConfig.workerArgs = [
+      ...(launchOptionsArg ? [launchOptionsArg] : []),
+      ...(downloaderWorkerPath ? [downloaderWorkerPath] : []),
+    ];
 
     if (backendPath) {
       console.log('[Platform RPC] Backend worklet will launch from file:', backendPath);

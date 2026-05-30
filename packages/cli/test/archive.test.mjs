@@ -193,10 +193,10 @@ test('classifySourceUrl recognises YouTube channels, handles, and playlists', (t
     kind: 'playlist'
   })
   t.alike(classifySourceUrl('https://rumble.com/v7afkp6-america-first-ep.-1689.html'), {
-    type: 'rumble',
+    type: 'youtube',
     normalizedUrl: 'https://rumble.com/v7afkp6-america-first-ep.-1689.html',
-    identifier: 'v7afkp6-america-first-ep.-1689.html',
-    kind: 'video'
+    identifier: 'rumble:video:v7afkp6-america-first-ep.-1689',
+    kind: 'rumble-video'
   })
   t.is(classifySourceUrl('https://example.com/feed').type, null)
   t.is(classifySourceUrl('not-a-url').type, null)

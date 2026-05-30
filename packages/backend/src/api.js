@@ -10,7 +10,7 @@ import crypto from 'hypercore-crypto';
 import HypercoreID from 'hypercore-id-encoding';
 import z32 from 'z32';
 import c from 'compact-encoding';
-import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery, setPlaybackActive as setStoragePlaybackActive, isPlaybackActive as isStoragePlaybackActive } from './storage.js';
+import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
 import { SemanticFinder } from './search/semantic-finder.js';
 import { FederatedSearch } from './search/federated-search.js';
@@ -18,8 +18,6 @@ import { Recommender } from './recommendations/recommender.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { NETWORK_TOPIC_STRING } from './types.js'
-import { collectCorestoreGarbage } from './corestore-gc.js'
-import { SeedingAuthorizationError } from './seeding.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -89,11 +87,7 @@ export function createApi({
 
   const listPublicBeeVideosBounded = async ({ publicBee, driveKey, publicBeeKey, timeoutMs = 1500 }) => {
     try {
-      return await withTimeout(
-        publicBee.listVideos({ timeoutMs }),
-        timeoutMs + 100,
-        `PublicBee listVideos ${driveKey?.slice?.(0, 16) || ''} ${publicBeeKey?.slice?.(0, 16) || ''}`
-      )
+      return await withTimeout(publicBee.listVideos(), timeoutMs, `PublicBee listVideos ${driveKey?.slice?.(0, 16) || ''} ${publicBeeKey?.slice?.(0, 16) || ''}`)
     } catch (err) {
       console.warn('[API] PublicBee listVideos bounded timeout/failure:', driveKey?.slice?.(0, 16), publicBeeKey?.slice?.(0, 16), err?.message)
       return []
@@ -156,7 +150,6 @@ export function createApi({
   const CHANNEL_META_CACHE_TTL_MS = 30_000
   const VIDEO_AVAILABILITY_CACHE_TTL_MS = 30_000
   const VIDEO_AVAILABILITY_NEGATIVE_CACHE_TTL_MS = 1_500
-  const PLAYABLE_METADATA_REVALIDATION_GRACE_MS = 30_000
   /** @type {Map<string, Promise<any>>} */
   const prefetchInFlight = new Map()
   const activeRangeRequests = new Map() // key: `${driveKey}:${videoPath}`, value: { ranges: [], core, onDownload, onUpload }
@@ -165,8 +158,6 @@ export function createApi({
   const listVideosCache = new Map()
   /** @type {Map<string, { ts: number, value: any }>} */
   const channelMetaCache = new Map()
-  /** @type {Map<string, { ts: number, value: any }>} */
-  const playableMetadataFirstSeen = new Map()
   /** @type {Map<string, { ts: number, value: any }>} */
   const videoAvailabilityCache = new Map()
 
@@ -190,52 +181,12 @@ export function createApi({
     return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value)
   }
 
-  function normalizeKeyString(value) {
-    if (typeof value === 'string') return value
-    if (value == null) return null
-    if (b4a.isBuffer(value) || value instanceof Uint8Array) {
-      try {
-        return b4a.toString(value, 'hex')
-      } catch {
-        return null
-      }
-    }
-    if (typeof value === 'object') {
-      return normalizeKeyString(value.channelKey ?? value.driveKey ?? value.key ?? null)
-    }
-    return null
-  }
-
-  function normalizeChannelMetaArgs(driveKeyOrRequest, publicBeeKey) {
-    if (
-      driveKeyOrRequest &&
-      typeof driveKeyOrRequest === 'object' &&
-      !b4a.isBuffer(driveKeyOrRequest) &&
-      !(driveKeyOrRequest instanceof Uint8Array)
-    ) {
-      return {
-        driveKey: normalizeKeyString(driveKeyOrRequest.channelKey ?? driveKeyOrRequest.driveKey ?? driveKeyOrRequest.key),
-        publicBeeKey: normalizeKeyString(driveKeyOrRequest.publicBeeKey ?? publicBeeKey)
-      }
-    }
-
-    return {
-      driveKey: normalizeKeyString(driveKeyOrRequest),
-      publicBeeKey: normalizeKeyString(publicBeeKey)
-    }
-  }
-
   function invalidateChannelCaches(driveKey) {
     try { listVideosCache.delete(driveKey) } catch { /* best effort */ }
     try { channelMetaCache.delete(driveKey) } catch { /* best effort */ }
     try {
       for (const key of videoAvailabilityCache.keys()) {
         if (key.startsWith(`${driveKey}:`)) videoAvailabilityCache.delete(key)
-      }
-    } catch { /* best effort */ }
-    try {
-      for (const key of playableMetadataFirstSeen.keys()) {
-        if (key.startsWith(`${driveKey}:`)) playableMetadataFirstSeen.delete(key)
       }
     } catch { /* best effort */ }
   }
@@ -261,23 +212,7 @@ export function createApi({
     }
   }
 
-  function describeCorePeer(peer) {
-    try {
-      const key = peer?.remotePublicKey || peer?.publicKey || peer?.key || peer?.id || peer?.stream?.remotePublicKey || null
-      const keyHex = key
-        ? (typeof key === 'string' ? key : b4a.toString(key, 'hex'))
-        : null
-      return {
-        key: keyHex && /^[a-f0-9]{64}$/i.test(keyHex) ? keyHex : null,
-        remoteAddress: peer?.remoteAddress || peer?.stream?.remoteAddress || null,
-        type: peer?.constructor?.name || null
-      }
-    } catch {
-      return { key: null, remoteAddress: null, type: null }
-    }
-  }
-
-  function getVideoCorePeerDetails(driveKey, videoPath) {
+  function getVideoCorePeerCount(driveKey, videoPath) {
     try {
       const channel = ctx.channels?.get?.(driveKey)
       const normalizedId = normalizeVideoId(videoPath)
@@ -290,42 +225,25 @@ export function createApi({
 
       for (const candidate of candidates) {
         const core = channel?.videoCores?.get?.(candidate) || channel?.cores?.get?.(candidate)
-        if (!core) continue
-        const peers = core.peers
-        const peerList = Array.isArray(peers)
-          ? peers
-          : peers && typeof peers.values === 'function'
-            ? Array.from(peers.values())
-            : []
-        const peerCount = Array.isArray(peers)
-          ? peers.length
-          : typeof peers?.length === 'number'
-            ? peers.length
-            : typeof peers?.size === 'number'
-              ? peers.size
-              : peerList.length
-        const blobPeers = peerList.map(describeCorePeer)
-        return {
-          peerCount,
-          blobPeerIds: blobPeers.map((peer) => peer.key).filter(Boolean),
-          blobPeers,
-          blobCoreKey: core.key ? b4a.toString(core.key, 'hex') : null
-        }
+        const peers = core?.peers
+        if (Array.isArray(peers)) return peers.length
+        if (typeof peers?.length === 'number') return peers.length
+        if (typeof peers?.size === 'number') return peers.size
       }
     } catch { /* best effort */ }
 
-    return { peerCount: 0, blobPeerIds: [], blobPeers: [], blobCoreKey: null }
-  }
-
-  function getVideoCorePeerCount(driveKey, videoPath) {
-    return getVideoCorePeerDetails(driveKey, videoPath).peerCount
+    return 0
   }
 
   function getFeedEntryVideoCount(driveKey, publicBeeKey = null) {
     const entry = getPublicFeedEntry(driveKey)
     if (!entry) return 0
-    const previews = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
-    if (previews.length > 0) return previews.length
+    const videos = Array.isArray(entry?.videos)
+      ? entry.videos
+      : Array.isArray(entry?.previewVideos)
+        ? entry.previewVideos
+        : []
+    if (videos.length > 0) return videos.length
     if (
       publicBeeKey &&
       entry.publicBeeKey &&
@@ -338,15 +256,17 @@ export function createApi({
 
   function previewVideosFromFeedEntry(driveKey, publicBeeKey = null) {
     const entry = getPublicFeedEntry(driveKey)
-    const previews = Array.isArray(entry?.previewVideos) ? entry.previewVideos : []
-    if (previews.length === 0) return []
+    const videos = Array.isArray(entry?.videos)
+      ? entry.videos
+      : Array.isArray(entry?.previewVideos)
+        ? entry.previewVideos
+        : []
+    if (videos.length === 0) return []
     const resolvedPublicBeeKey = publicBeeKey || entry?.publicBeeKey || null
-    const feedEntryHasLivePeer = Number(entry?.peerCount || 0) > 0
-    return previews
+    return videos
       .filter((video) => video?.id || video?.path)
       .map((video) => {
         const id = normalizeVideoId(video.id || video.path)
-        const videoAvailability = video.availability || video.byteAvailability || (feedEntryHasLivePeer ? 'playable' : null)
         return {
           ...video,
           id,
@@ -354,8 +274,6 @@ export function createApi({
           channelKey: driveKey,
           publicBeeKey: resolvedPublicBeeKey,
           relayBacked: Boolean(entry?.relayServing || entry?.relayRole === 'cache' || entry?.source === 'relay-cache'),
-          availability: videoAvailability || video.availability,
-          byteAvailability: video.byteAvailability || videoAvailability || undefined,
           mimeType: video.mimeType || 'video/mp4',
         }
       })
@@ -424,148 +342,12 @@ export function createApi({
    */
   async function loadAllDownloadIntents(ctx) {
     const intents = []
-    if (typeof ctx?.metaDb?.createReadStream !== 'function') return intents
     for await (const entry of ctx.metaDb.createReadStream({ gte: 'download-intent:', lt: 'download-intent:~' })) {
       if (entry.value) {
         intents.push(entry.value)
       }
     }
     return intents
-  }
-
-  function getDownloadIntentMetaKey(intent) {
-    return `download-intent:${intent.driveKey}:${intent.videoPath}`
-  }
-
-  function getPrefetchKey(driveKey, videoPath) {
-    return `${driveKey}:${videoPath}`
-  }
-
-  function cancelActiveRangeRequests(prefetchKey) {
-    const existingRanges = activeRangeRequests.get(prefetchKey)
-    if (!existingRanges) return false
-
-    console.log('[API] Cancelling active range requests for:', prefetchKey)
-    existingRanges.ranges.forEach(r => { try { r?.destroy?.() } catch { /* best effort */ } })
-    if (existingRanges.core) {
-      try { existingRanges.core.off('download', existingRanges.onDownload) } catch { /* best effort */ }
-      try { existingRanges.core.off('upload', existingRanges.onUpload) } catch { /* best effort */ }
-    }
-    activeRangeRequests.delete(prefetchKey)
-    return true
-  }
-
-  function activeSeedKeys() {
-    const seeds = typeof seedingManager?.getActiveSeeds === 'function' ? seedingManager.getActiveSeeds() : []
-    return new Set(seeds.map((seed) => getPrefetchKey(seed.driveKey, seed.videoPath)))
-  }
-
-  function cancelRangeRequestsForRemovedSeeds(protectedKeys = new Set()) {
-    if (typeof seedingManager?.getActiveSeeds !== 'function') return
-    const retained = activeSeedKeys()
-    for (const key of activeRangeRequests.keys()) {
-      if (protectedKeys.has(key)) continue
-      if (!retained.has(key)) cancelActiveRangeRequests(key)
-    }
-  }
-
-  async function removeSeedForDownloadIntent(intent) {
-    if (typeof seedingManager?.getActiveSeeds !== 'function' || typeof seedingManager?.removeSeed !== 'function') return
-    const seed = seedingManager.getActiveSeeds()
-      .find((candidate) => candidate?.driveKey === intent.driveKey && candidate?.videoPath === intent.videoPath)
-    if (!seed || seed.reason === 'pinned') return
-    await seedingManager.removeSeed(intent.driveKey, intent.videoPath, { clearBlob: false })
-  }
-
-  async function clearDownloadIntent(intent) {
-    if (!intent?.driveKey || !intent?.videoPath) return { clearedBytes: 0, cleared: false }
-
-    const prefetchKey = getPrefetchKey(intent.driveKey, intent.videoPath)
-    cancelActiveRangeRequests(prefetchKey)
-
-    let cleared = false
-    let clearedBytes = 0
-    const blobsCoreKey = normalizeBlobsCoreKey(intent.blobsCoreKey)
-    const blob = normalizeBlobRefInput(intent.blobId)
-
-    if (blobsCoreKey && blob && ctx?.store) {
-      try {
-        const core = ctx.store.get({ key: b4a.from(blobsCoreKey, 'hex') })
-        await core?.ready?.()
-        if (typeof core?.clear === 'function') {
-          await core.clear(blob.blockOffset, blob.blockOffset + blob.blockLength)
-          cleared = true
-          clearedBytes = Number(intent.totalBytes || blob.byteLength || 0) || 0
-          console.log('[API] Cleared partial cached blob range:', blobsCoreKey.slice(0, 16), blob.blockOffset, blob.blockOffset + blob.blockLength)
-        }
-      } catch (err) {
-        console.log('[API] Failed to clear partial cached blob range:', err?.message)
-      }
-    }
-
-    try {
-      if (typeof ctx?.metaDb?.del === 'function') await ctx.metaDb.del(getDownloadIntentMetaKey(intent))
-    } catch (err) {
-      console.log('[API] Failed to delete download intent:', err?.message)
-    }
-
-    try {
-      await removeSeedForDownloadIntent(intent)
-    } catch (err) {
-      console.log('[API] Failed to remove partial download seed:', err?.message)
-    }
-
-    return { clearedBytes: Math.round(clearedBytes), cleared }
-  }
-
-  async function clearDownloadIntents({ protectedKeys = [], onlyUntrackedSeeds = false } = {}) {
-    const protectedSet = protectedKeys instanceof Set ? protectedKeys : new Set(protectedKeys)
-    const retainedSeeds = onlyUntrackedSeeds ? activeSeedKeys() : null
-    const intents = await loadAllDownloadIntents(ctx)
-    let clearedBytes = 0
-    let clearedCount = 0
-    let clearedRanges = 0
-
-    for (const intent of intents) {
-      const prefetchKey = getPrefetchKey(intent?.driveKey, intent?.videoPath)
-      if (protectedSet.has(prefetchKey)) continue
-      if (retainedSeeds?.has(prefetchKey)) continue
-
-      const result = await clearDownloadIntent(intent)
-      clearedBytes += result.clearedBytes || 0
-      clearedCount += 1
-      if (result.cleared) clearedRanges += 1
-    }
-
-    if (clearedRanges > 0) {
-      await collectCorestoreGarbage(ctx?.store, {
-        label: 'partial download cache clear',
-        log: console.log
-      })
-    }
-
-    if (clearedCount > 0) {
-      console.log('[API] Cleared partial download intents:', clearedCount, 'bytes:', clearedBytes)
-    }
-
-    return { clearedBytes: Math.round(clearedBytes), clearedCount }
-  }
-
-  function normalizeClearedBytes(result) {
-    if (typeof result === 'number' && Number.isFinite(result)) return Math.max(0, Math.round(result))
-    if (result && typeof result === 'object') {
-      const value = Number(result.clearedBytes)
-      return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0
-    }
-    return 0
-  }
-
-  function isSeedingAuthorizationError(err) {
-    return err instanceof SeedingAuthorizationError || err?.name === 'SeedingAuthorizationError'
-  }
-
-  function seedingUnauthorizedResult(extra = {}) {
-    return { success: false, ...extra, error: 'Unauthorized seeding mutation' }
   }
 
   return {
@@ -761,21 +543,17 @@ export function createApi({
      * Get channel metadata. Keep the default path metadata-only: videoCount is
      * derived from public-feed snapshots/previews when available instead of
      * calling listVideos(), which duplicates expensive PublicBee/channel reads.
-     * @param {string | {channelKey?: string, driveKey?: string, publicBeeKey?: string}} driveKey
+     * @param {string} driveKey
      * @returns {Promise<ChannelMetadata>}
      */
     async getChannelMeta(driveKey, publicBeeKey = null) {
-      const args = normalizeChannelMetaArgs(driveKey, publicBeeKey)
-      driveKey = args.driveKey
-      publicBeeKey = args.publicBeeKey
-      console.log('[API] GET_CHANNEL_META:', driveKey?.slice?.(0, 16) || '');
+      console.log('[API] GET_CHANNEL_META:', driveKey?.slice(0, 16));
       try {
-        if (!driveKey) throw new Error('Missing channel key')
         const cached = channelMetaCache.get(driveKey)
         if (cached && (Date.now() - cached.ts) < CHANNEL_META_CACHE_TTL_MS) {
           return cloneObject(cached.value)
         }
-        // Fast/public-feed path: if publicBeeKey is provided, don't load the full channel.
+        // Fast/public-feed path: if publicBeeKey is provided, don't load Autobase.
         // Viewers should be able to read metadata via the auto-replicating PublicBee.
         if (publicBeeKey) {
           const publicBee = await loadPublicBee(ctx, publicBeeKey)
@@ -952,113 +730,22 @@ export function createApi({
 
         const isPlayableAvailabilityHint = (hint) => hint?.availability === 'playable'
 
-        const resolveExplicitVideoAvailability = ({ video, localHint, peerHint }) => {
-          const explicitAvailability = video?.byteAvailability || video?.availability || null
-          const relayBackedPreview = Boolean(video?.relayBacked || video?.source === 'relay-cache' || video?.relayRole === 'cache' || video?.relayServing)
-          const firstSeenAt = Number(video?._playableMetadataFirstSeenAt || 0) || 0
-          const withinPlayableMetadataGrace = firstSeenAt > 0 && (Date.now() - firstSeenAt) < PLAYABLE_METADATA_REVALIDATION_GRACE_MS
-
+        const resolveExplicitVideoAvailability = ({ localHint, peerHint }) => {
           // Fast path: if our local store already has the opening blocks, the
           // video is immediately watchable without waiting on remote proof.
           if (isPlayableAvailabilityHint(localHint)) return 'playable'
 
-          // Authoritative peer probes can still downgrade a stale row when a
-          // responding peer explicitly reports that the blob is not currently
-          // serviceable.
+          // Remote playability must be explicitly proven by a peer serving hint.
+          if (peerHint?.availability === 'playable') return 'playable'
           if (peerHint?.availability && peerHint.availability !== 'unknown') {
             return peerHint.availability
           }
-
-          // PublicBee/relay preview rows already carry direct blob refs that
-          // the player can use to warm the Hypercore range. Keep explicit
-          // playable metadata visible briefly while peer proof is pending;
-          // otherwise Android hides every feed video before playback has a
-          // chance to dial the blob peers. Cached rows still revalidate after
-          // the grace window, which prevents permanent false-positive playback.
-          if (explicitAvailability === 'playable' && withinPlayableMetadataGrace) return 'playable'
-
-          if (relayBackedPreview && explicitAvailability === 'unknown') return 'unknown'
 
           return 'unavailable'
         }
 
         const attachVideoAvailability = async (videos) => {
-          if (!Array.isArray(videos) || videos.length === 0) return []
-          const MAX_PROBES = 12
-          const sample = videos.slice(0, MAX_PROBES)
-          const idsToProbe = new Set(sample.map((video) => extractVideoId(video)).filter(Boolean))
-
-          const localHintsById = new Map()
-          const peerHintsById = new Map()
-          const unknownRequests = []
-
-          await Promise.all(Array.from(idsToProbe).map(async (id) => {
-            const video = videos.find((candidate) => extractVideoId(candidate) === id)
-            if (!video) return
-            const localHint = await getLocalVideoAvailabilityHint(video)
-            localHintsById.set(id, localHint)
-            if (!isPlayableAvailabilityHint(localHint) && video?.blobsCoreKey && video?.blobId) {
-              unknownRequests.push({
-                driveKey,
-                id,
-                blobsCoreKey: video.blobsCoreKey,
-                blobId: video.blobId,
-              })
-            }
-          }))
-
-          // Per-video peer confirmation via the public-feed gossip layer.
-          // Feed/watchability gating now fails closed: remote videos only become
-          // playable when a peer explicitly proves it can currently serve them.
-          const hintsQueryable = unknownRequests.length > 0 && typeof publicFeed?.requestAvailabilityHints === 'function'
-          if (hintsQueryable) {
-            try {
-              const hinted = await publicFeed.requestAvailabilityHints(unknownRequests, { timeoutMs: 400, maxPeers: 6 })
-              for (const hint of hinted || []) {
-                if (!hint?.id) continue
-                peerHintsById.set(hint.id, hint)
-              }
-            } catch { /* best effort */ }
-          }
-
-          return videos.map((video) => {
-            const id = extractVideoId(video)
-            const localHint = id ? localHintsById.get(id) : null
-            const peerHint = id ? peerHintsById.get(id) : null
-            const explicitAvailability = video?.byteAvailability || video?.availability || null
-            const availabilityCacheKey = id
-              ? buildBlobRefCacheKey({
-                driveKey,
-                id,
-                blobsCoreKey: video?.blobsCoreKey,
-                blobId: video?.blobId,
-              })
-              : null
-            const firstSeenAt = explicitAvailability === 'playable' && availabilityCacheKey
-              ? (playableMetadataFirstSeen.get(availabilityCacheKey) || Date.now())
-              : 0
-            if (availabilityCacheKey && explicitAvailability === 'playable' && firstSeenAt) {
-              playableMetadataFirstSeen.set(availabilityCacheKey, firstSeenAt)
-            } else if (availabilityCacheKey) {
-              playableMetadataFirstSeen.delete(availabilityCacheKey)
-            }
-            const availability = id
-              ? resolveExplicitVideoAvailability({
-                video: firstSeenAt ? { ...video, _playableMetadataFirstSeenAt: firstSeenAt } : video,
-                localHint,
-                peerHint,
-              })
-              : 'unavailable'
-
-            return {
-              ...video,
-              availability,
-              byteAvailability: availability,
-              ...(firstSeenAt ? { _playableMetadataFirstSeenAt: firstSeenAt } : {}),
-              contiguousBlocks: Number(localHint?.contiguousBlocks || peerHint?.contiguousBlocks || 0) || 0,
-              hasHeadBlock: Boolean(localHint?.hasHeadBlock || peerHint?.hasHeadBlock),
-            }
-          })
+          return cloneArrayOfObjects(videos)
         }
 
         const cached = listVideosCache.get(driveKey)
@@ -1073,7 +760,7 @@ export function createApi({
         }
 
         // FAST PATH: If publicBeeKey is provided, read directly from PublicBee
-        // This is the preferred path for public feed viewers - no full channel sync needed
+        // This is the preferred path for public feed viewers - no Autobase sync needed
         // IMPORTANT: If publicBeeKey is provided, this is definitely a multi-writer channel,
         // so we should not fall back to legacy storage paths.
         if (publicBeeKey) {
@@ -1082,12 +769,7 @@ export function createApi({
           await markAsMultiWriterChannel(driveKey)
           try {
             const publicBee = await loadPublicBee(ctx, publicBeeKey)
-            const videos = await listPublicBeeVideosBounded({
-              publicBee,
-              driveKey,
-              publicBeeKey,
-              timeoutMs: 1200,
-            })
+            const videos = await publicBee.listVideos()
             console.log('[API] LIST_VIDEOS: PublicBee returned', videos?.length, 'videos')
             if ((videos?.length || 0) === 0) {
               const previewVideos = previewVideosFromFeedEntry(driveKey, publicBeeKey)
@@ -1214,8 +896,7 @@ export function createApi({
 
     /**
      * Prepare normal watch playback without forcing the UI to orchestrate warmup and URL resolution separately.
-     * Warmup is bounded and runs before returning so the player does not race
-     * P2P discovery/initial block fetch on first range read.
+     * Warmup is best-effort and must not block returning a playable blob-server URL.
      * @param {string} driveKey
      * @param {string} videoPath
      * @param {string} [publicBeeKey]
@@ -1226,7 +907,6 @@ export function createApi({
      */
     async preparePlayback(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType) {
       console.log('[API] preparePlayback:', driveKey?.slice(0, 16), videoPath)
-      setStoragePlaybackActive(true, { source: 'preparePlayback' })
 
       return blobPlayback.preparePlayback({
         driveKey,
@@ -1238,8 +918,6 @@ export function createApi({
         warmup: (...args) => this.prefetchVideo(...args),
         resolveUrl: (...args) => this.getVideoUrl(...args),
         getStats: (...args) => this.getVideoStats(...args),
-        warmSelectedBlob: Boolean(blobId && blobsCoreKey),
-        selectedBlobWarmupTimeoutMs: 1500,
       })
     },
 
@@ -1733,31 +1411,10 @@ export function createApi({
             publicBeeKey,
           }))
           const enrichedVideos = await enrichMissingBlobMeta(baseVideos, (id) => publicBee.getVideo(id))
-          const hintRequests = enrichedVideos
-            .slice(0, Math.max(limitPerChannel * 2, limitPerChannel))
-            .map((video) => {
-              const id = extractVideoId(video)
-              if (!id || !video?.blobId || !video?.blobsCoreKey) return null
-              return {
-                driveKey,
-                id,
-                blobId: video.blobId,
-                blobsCoreKey: video.blobsCoreKey,
-              }
-            })
-            .filter(Boolean)
-
-          const hints = await this.getAvailabilityHints(hintRequests)
-          const hintById = new Map((hints || []).map((hint) => [hint.id, hint]))
-
-          const previewVideos = enrichedVideos
+          const videos = enrichedVideos
             .map((video) => {
               const id = extractVideoId(video)
               if (!id) return null
-              const hint = hintById.get(id)
-              const availability = hint?.availability === 'playable' ? 'playable'
-                : (hint?.availability || 'unknown') !== 'unknown' ? (hint?.availability || 'unknown')
-                : 'unknown'
               return {
                 id,
                 title: video?.title ? String(video.title) : 'Untitled',
@@ -1769,20 +1426,12 @@ export function createApi({
                 mimeType: video?.mimeType ? String(video.mimeType) : null,
                 playbackSupport: video?.playbackSupport ? String(video.playbackSupport) : null,
                 containerSupport: video?.containerSupport ? String(video.containerSupport) : (video?.playbackSupport ? String(video.playbackSupport) : null),
-                // Trust the per-video availability hint if present. Previously
-                // this fell back to "playable" whenever the swarm had any peer
-                // connection, which surfaced truly-unavailable videos. Now we
-                // only surface 'playable' if the hint system actually confirmed
-                // it — matching the stricter listVideos path.
-                availability,
-                byteAvailability: availability,
                 thumbnailBlobId: video?.thumbnailBlobId ? String(video.thumbnailBlobId) : null,
                 thumbnailBlobsCoreKey: video?.thumbnailBlobsCoreKey ? String(video.thumbnailBlobsCoreKey) : null,
                 thumbnailMimeType: video?.thumbnailMimeType ? String(video.thumbnailMimeType) : null,
               }
             })
-            .filter((video) => video && video.byteAvailability === 'playable')
-            .slice(0, limitPerChannel)
+            .filter(Boolean)
 
           return {
             driveKey,
@@ -1790,13 +1439,13 @@ export function createApi({
             channelName: meta?.name || null,
             videoCount: Array.isArray(rawVideos) ? rawVideos.length : 0,
             manifestUpdatedAt: getStableManifestUpdatedAt(meta, rawVideos, publicBee),
-            previewVideos,
+            videos,
+            previewVideos: videos,
           }
         } catch {
           return null
         }
       }))
-
       return snapshots.filter(Boolean)
     },
 
@@ -1833,7 +1482,8 @@ export function createApi({
             requiresAvailabilityProbe: Boolean(entry?.requiresAvailabilityProbe),
             lastSeen: entry?.lastSeen || entry?.lastSeenAt || entry?.addedAt || 0,
             manifestUpdatedAt: entry?.manifestUpdatedAt || 0,
-            previewVideos: Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
+            videos: Array.isArray(entry?.videos) ? entry.videos : Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
+            previewVideos: Array.isArray(entry?.videos) ? entry.videos : Array.isArray(entry?.previewVideos) ? entry.previewVideos : [],
           }
         })
         .filter((entry) => typeof entry.channelKey === 'string' && entry.channelKey.length > 0)
@@ -1881,17 +1531,22 @@ export function createApi({
           publicBeeKey = channel?.publicBeeKey || await channel?.getPublicBeeKey();
           console.log('[API] submitToFeed: got publicBeeKey:', publicBeeKey?.slice(0, 16));
 
-          // Comments/reactions now live in the channel HyperDB, so there is no
-          // separate comments discovery key to publish. PublicBee metadata keeps only
-          // the public channel/comment database pointer.
-          if (channel.publicBee?.writable && channel.keyHex) {
-            const pubMeta = await channel.publicBee.getMetadata().catch(() => ({}));
-            if (!pubMeta?.commentsDbKey) {
-              await channel.publicBee.setMetadata({
-                ...pubMeta,
-                commentsDbKey: channel.keyHex
-              });
-              console.log('[API] submitToFeed: synced commentsDbKey to PublicBee');
+          // Use channel's CommentsAutobase directly - it's already initialized in _open()
+          // and has the key stored in channel metadata + synced to PublicBee
+          const commentsBase = await channel.getCommentsAutobase();
+          if (commentsBase?.keyHex) {
+            console.log('[API] submitToFeed: CommentsAutobase key:', commentsBase.keyHex.slice(0, 16));
+
+            // Ensure PublicBee has the commentsAutobaseKey synced
+            if (channel.publicBee?.writable) {
+              const pubMeta = await channel.publicBee.getMetadata().catch(() => ({}));
+              if (!pubMeta?.commentsAutobaseKey) {
+                await channel.publicBee.setMetadata({
+                  ...pubMeta,
+                  commentsAutobaseKey: commentsBase.keyHex
+                });
+                console.log('[API] submitToFeed: synced commentsAutobaseKey to PublicBee');
+              }
             }
           }
         } catch (err) {
@@ -1957,14 +1612,20 @@ export function createApi({
      * @returns {Promise<Object>}
      */
     async prefetchVideo(driveKey, videoPath, publicBeeKey = null) {
-      const prefetchKey = getPrefetchKey(driveKey, videoPath)
+      const prefetchKey = `${driveKey}:${videoPath}`
       const existing = prefetchInFlight.get(prefetchKey)
       if (existing) return existing
 
       // Cancel any orphaned range requests from a previous prefetch session
-      if (activeRangeRequests.has(prefetchKey)) {
+      const existingRanges = activeRangeRequests.get(prefetchKey)
+      if (existingRanges) {
         console.log('[API] Cancelling orphaned range requests for:', videoPath)
-        cancelActiveRangeRequests(prefetchKey)
+        existingRanges.ranges.forEach(r => { try { r?.destroy?.() } catch { /* best effort */ } })
+        if (existingRanges.core) {
+          try { existingRanges.core.off('download', existingRanges.onDownload) } catch { /* best effort */ }
+          try { existingRanges.core.off('upload', existingRanges.onUpload) } catch { /* best effort */ }
+        }
+        activeRangeRequests.delete(prefetchKey)
       }
 
       const prefetchPromise = (async () => {
@@ -2100,27 +1761,6 @@ export function createApi({
               mimeType: v?.mimeType || existingIntent?.mimeType || '',
               startedAt: Date.now()
             }).catch(err => console.log('[API] Failed to save download intent:', err?.message))
-          }
-
-          if (seedingManager) {
-            await seedingManager.addSeed(driveKey, videoPath, 'watched', {
-              blockLength: totalBlocks,
-              byteLength: totalBytes,
-              publicBeeKey: publicBeeKey || v?.publicBeeKey || existingIntent?.publicBeeKey || null,
-              blobId: blobMeta.blobId,
-              blobsCoreKey: blobMeta.blobsCoreKey,
-              thumbnailBlobId: v?.thumbnailBlobId || existingIntent?.thumbnailBlobId || null,
-              thumbnailBlobsCoreKey: v?.thumbnailBlobsCoreKey || existingIntent?.thumbnailBlobsCoreKey || null,
-              mimeType: v?.mimeType || existingIntent?.mimeType || null,
-              thumbnailMimeType: v?.thumbnailMimeType || existingIntent?.thumbnailMimeType || null
-            }, { protectSelf: true }).catch(err => console.log('[API] Failed to register in-flight seed:', err?.message))
-
-            await clearDownloadIntents({
-              protectedKeys: [prefetchKey],
-              onlyUntrackedSeeds: true
-            }).catch(err => console.log('[API] Failed to clear untracked partial downloads:', err?.message))
-
-            cancelRangeRequestsForRemovedSeeds(new Set([prefetchKey]))
           }
 
           // Count initial blocks already available
@@ -2419,10 +2059,6 @@ export function createApi({
                 thumbnailMimeType: v?.thumbnailMimeType || null
               }).catch(() => {})
             }
-            cancelActiveRangeRequests(prefetchKey)
-            videoStats.cleanupMonitor(driveKey, videoPath)
-          } else {
-            cancelActiveRangeRequests(prefetchKey)
           }
 
           await playbackReady
@@ -2529,18 +2165,12 @@ export function createApi({
      * @returns {Object}
      */
     getVideoStats(driveKey, videoPath) {
-      const videoPeerDetails = getVideoCorePeerDetails(driveKey, videoPath);
-      const videoPeerCount = videoPeerDetails.peerCount;
+      const videoPeerCount = getVideoCorePeerCount(driveKey, videoPath);
       if (videoStats) {
         const stats = videoStats.getStats(driveKey, videoPath);
         if (stats) {
           stats.swarmConnections = ctx.swarm?.connections?.size || 0;
           stats.peerCount = videoPeerCount || stats.peerCount || 0;
-          stats.blobPeerIds = videoPeerDetails.blobPeerIds;
-          stats.blobPeerIdsJson = JSON.stringify(videoPeerDetails.blobPeerIds || []);
-          stats.blobPeers = videoPeerDetails.blobPeers;
-          stats.blobPeersJson = JSON.stringify(videoPeerDetails.blobPeers || []);
-          stats.blobCoreKey = videoPeerDetails.blobCoreKey;
           return stats;
         }
       }
@@ -2553,11 +2183,6 @@ export function createApi({
         totalBytes: 0,
         downloadedBytes: 0,
         peerCount: videoPeerCount,
-        blobPeerIds: videoPeerDetails.blobPeerIds,
-        blobPeerIdsJson: JSON.stringify(videoPeerDetails.blobPeerIds || []),
-        blobPeers: videoPeerDetails.blobPeers,
-        blobPeersJson: JSON.stringify(videoPeerDetails.blobPeers || []),
-        blobCoreKey: videoPeerDetails.blobCoreKey,
         swarmConnections: ctx.swarm?.connections?.size || 0,
         speedMBps: '0',
         elapsed: 0,
@@ -2793,13 +2418,8 @@ export function createApi({
      */
     async setSeedingConfig(config) {
       if (seedingManager) {
-        try {
-          await seedingManager.setConfig(config);
-          return { success: true, config: seedingManager.config };
-        } catch (err) {
-          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult()
-          throw err
-        }
+        await seedingManager.setConfig(config);
+        return { success: true, config: seedingManager.config };
       }
       return { success: false, error: 'Seeding manager not initialized' };
     },
@@ -2812,14 +2432,9 @@ export function createApi({
     async pinChannel(driveKey) {
       console.log('[API] PIN_CHANNEL:', driveKey?.slice(0, 16));
       if (seedingManager && driveKey) {
-        try {
-          await seedingManager.pinChannel(driveKey);
-          await loadChannel(ctx, driveKey);
-          return { success: true };
-        } catch (err) {
-          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult()
-          throw err
-        }
+        await seedingManager.pinChannel(driveKey);
+        await loadChannel(ctx, driveKey);
+        return { success: true };
       }
       return { success: false, error: 'Invalid request' };
     },
@@ -2832,13 +2447,8 @@ export function createApi({
     async unpinChannel(driveKey) {
       console.log('[API] UNPIN_CHANNEL:', driveKey?.slice(0, 16));
       if (seedingManager && driveKey) {
-        try {
-          await seedingManager.unpinChannel(driveKey);
-          return { success: true };
-        } catch (err) {
-          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult()
-          throw err
-        }
+        await seedingManager.unpinChannel(driveKey);
+        return { success: true };
       }
       return { success: false, error: 'Invalid request' };
     },
@@ -2884,15 +2494,8 @@ export function createApi({
     async setStorageLimit(maxGB) {
       console.log('[API] SET_STORAGE_LIMIT:', maxGB, 'GB');
       if (seedingManager) {
-        try {
-          await clearDownloadIntents().catch(err => console.log('[API] Failed to clear partial downloads for storage limit:', err?.message))
-          await seedingManager.setMaxStorageGB(maxGB);
-          cancelRangeRequestsForRemovedSeeds()
-          return { success: true };
-        } catch (err) {
-          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult()
-          throw err
-        }
+        await seedingManager.setMaxStorageGB(maxGB);
+        return { success: true };
       }
       return { success: false };
     },
@@ -2904,18 +2507,8 @@ export function createApi({
     async clearCache() {
       console.log('[API] CLEAR_CACHE');
       if (seedingManager) {
-        try {
-          const partial = await clearDownloadIntents().catch(err => {
-            console.log('[API] Failed to clear partial downloads:', err?.message)
-            return { clearedBytes: 0 }
-          });
-          const cleared = await seedingManager.clearCache();
-          cancelRangeRequestsForRemovedSeeds()
-          return { success: true, clearedBytes: normalizeClearedBytes(cleared) + normalizeClearedBytes(partial) };
-        } catch (err) {
-          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult({ clearedBytes: 0 })
-          throw err
-        }
+        const clearedBytes = await seedingManager.clearCache();
+        return { success: true, clearedBytes };
       }
       return { success: false, clearedBytes: 0 };
     },
@@ -2950,11 +2543,6 @@ export function createApi({
         storage: networkDebug?.startupTiming || null,
         publicFeed: feedStats.startupTiming || null,
       }
-      const visibleFeedEntries = publicFeed?.getFeed?.() || []
-      const channelsLoaded = Math.max(
-        ctx.channels?.size || 0,
-        visibleFeedEntries.length,
-      )
       const doctor = {
         dht: {
           bootstrapped: ctx.swarm?.dht?.bootstrapped ?? null,
@@ -2991,7 +2579,7 @@ export function createApi({
         swarmConnections: ctx.swarm?.connections?.size || 0,
         swarmPeers: ctx.swarm?.peers?.size || 0,
         feedConnections: publicFeed?.feedConnections?.size || 0,
-        feedEntries: visibleFeedEntries.length,
+        feedEntries: publicFeed?.entries?.size || 0,
         feedTopicHex: topicHex,
         network: networkDebug,
         startupTiming,
@@ -3004,7 +2592,7 @@ export function createApi({
         swarmPublicKey: ctx.swarm?.keyPair?.publicKey
           ? b4a.toString(ctx.swarm.keyPair.publicKey, 'hex').slice(0, 32)
           : 'unknown',
-        channelsLoaded,
+        channelsLoaded: ctx.channels?.size || 0,
       };
     }
 
@@ -3222,7 +2810,7 @@ export function createApi({
         // Index to global index (YouTube-Fast)
         await finder.indexFromMetadata({ ...video, id: videoId }, channelKey)
 
-        // Store vector index record in channel HyperDB for replication to other peers
+        // Store vector index op in Autobase (for replication to other peers)
         const isMW = await isMultiWriterChannelKey(channelKey)
         if (isMW) {
           const channel = await loadChannel(ctx, channelKey)
@@ -3232,7 +2820,9 @@ export function createApi({
             'base64'
           )
 
-          await channel.addVectorIndex({
+          await channel.base.append({
+            type: 'add-vector-index',
+            schemaVersion: 1,
             videoId,
             vector: vectorBase64,
             text: `${video.title || ''} ${video.description || ''}`,
@@ -3249,13 +2839,271 @@ export function createApi({
     },
 
     // ============================================
-    // Comments and Reactions Operations (channel HyperDB)
+    // Comments Operations (using separate CommentsAutobase)
     // ============================================
 
-    async _getCommentsChannel(channelKey) {
-      const channel = await loadChannelBounded(channelKey, 3000)
-      if (!channel?.comments) throw new Error('Comments unavailable')
-      return channel
+    /**
+     * Get or create CommentsAutobase for a channel
+     * @param {string} channelKey
+     * @param {string} [publicBeeKey] - PublicBee key for looking up commentsAutobaseKey
+     * @returns {Promise<import('./channel/comments-autobase.js').CommentsAutobase>}
+     */
+    async _getCommentsAutobase(channelKey, publicBeeKey = null) {
+      console.log('[API] _getCommentsAutobase: START channelKey:', channelKey?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16) || 'null')
+
+      // Lazy import to avoid circular deps
+      console.log('[API] _getCommentsAutobase: importing comments-autobase...')
+      const { getOrCreateCommentsAutobase } = await import('./channel/comments-autobase.js')
+      console.log('[API] _getCommentsAutobase: import complete')
+
+      // Cache key
+      const cacheKey = `comments:${channelKey}`
+      if (!ctx._commentsCache) ctx._commentsCache = new Map()
+
+      // IMPORTANT: listComments + getReactions are commonly called in parallel.
+      // If we don't cache the in-flight open, we'll instantiate multiple Autobase
+      // instances for the same key on the same Corestore, which can lead to flaky
+      // replication / empty reads.
+      const cached = ctx._commentsCache.get(cacheKey)
+      if (cached) {
+        console.log('[API] _getCommentsAutobase: found cached promise, waiting with 12s timeout...')
+        // Add timeout to prevent hanging forever on a stuck promise
+        // Must be longer than CommentsAutobase internal timeout (8s for viewer ready)
+        const result = await Promise.race([
+          cached,
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Cached CommentsAutobase promise timed out after 12s')), 12000))
+        ]).catch(err => {
+          console.log('[API] _getCommentsAutobase: cached promise failed:', err?.message)
+          // Clear the bad cache entry so next call can retry
+          ctx._commentsCache.delete(cacheKey)
+          throw err
+        })
+        console.log('[API] _getCommentsAutobase: cached promise resolved')
+
+        // FIX: Try to update admin key on cached instance if not already set
+        // This handles the case where the instance was cached before admin key was available
+        if (!result._adminKeyHex && publicBeeKey) {
+          try {
+            const pubBee = await Promise.race([
+              loadPublicBee(ctx, publicBeeKey),
+              new Promise((resolve) => setTimeout(() => resolve(null), 2000))
+            ])
+            if (pubBee) {
+              const meta = await Promise.race([
+                pubBee.getMetadata(),
+                new Promise((resolve) => setTimeout(() => resolve(null), 1000))
+              ]).catch(() => null)
+              if (meta?.commentsAdminKey) {
+                result.setAdminKey?.(meta.commentsAdminKey)
+                console.log('[API] _getCommentsAutobase: updated admin key on cached instance')
+              }
+            }
+          } catch (err) {
+            console.log('[API] _getCommentsAutobase: could not update admin key on cached instance:', err?.message)
+          }
+        }
+
+        return result
+      }
+
+      const openPromise = (async () => {
+        console.log('[API] _getCommentsAutobase: openPromise STARTED')
+        let resolvedPublicBeeKey = (typeof publicBeeKey === 'string' && publicBeeKey.length > 0) ? publicBeeKey : null
+        let commentsAutobaseKey = null
+        let commentsAdminKey = null
+        /** @type {any|null} */
+        let pubBee = null
+
+        // FIRST: Try to get publicBeeKey from public feed (fastest path for viewers)
+        // Do this BEFORE trying to load any channels to avoid hangs
+        console.log('[API] _getCommentsAutobase: checking public feed for publicBeeKey...')
+        if (!resolvedPublicBeeKey && publicFeed) {
+          console.log('[API] _getCommentsAutobase: publicFeed exists, calling getFeed()...')
+          try {
+            const feed = publicFeed.getFeed()
+            console.log('[API] _getCommentsAutobase: got feed with', feed?.length, 'entries')
+            const entry = feed.find(e => e.channelKey === channelKey || e.driveKey === channelKey)
+            if (entry?.publicBeeKey) {
+              resolvedPublicBeeKey = entry.publicBeeKey
+              console.log('[API] _getCommentsAutobase: found publicBeeKey in feed:', resolvedPublicBeeKey?.slice(0, 16))
+            } else {
+              console.log('[API] _getCommentsAutobase: channel not found in feed or no publicBeeKey')
+            }
+          } catch (err) {
+            console.log('[API] _getCommentsAutobase: feed lookup error:', err?.message)
+          }
+        } else if (!publicFeed) {
+          console.log('[API] _getCommentsAutobase: publicFeed is not available')
+        }
+
+        // Check if we have a local identity for this channel (owner/paired device)
+        console.log('[API] _getCommentsAutobase: checking local identity...')
+        let hasLocalIdentity = false
+        try {
+          const identities = await ctx.metaDb?.get('identities').catch(() => null)
+          hasLocalIdentity = identities?.value?.some(i =>
+            i.channelKey === channelKey || i.driveKey === channelKey
+          ) || false
+        } catch (err) {
+          console.log('[API] _getCommentsAutobase: identity check error:', err?.message)
+        }
+        console.log('[API] _getCommentsAutobase: hasLocalIdentity:', hasLocalIdentity)
+
+        // Only try loading the full channel Autobase when we have a local identity (owner/paired device)
+        // Do NOT load channel just because it's in ctx.channels - that could be a stale/incomplete viewer load
+        /** @type {any|null} */
+        let localChannel = null
+        if (hasLocalIdentity) {
+          console.log('[API] _getCommentsAutobase: loading local channel (owner/paired device)...')
+          try {
+            // Don't block forever: if the channel is slow to open, fall back to PublicBee.
+            localChannel = await Promise.race([
+              loadChannel(ctx, channelKey),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('loadChannel timeout')), 3000))
+            ])
+            console.log('[API] _getCommentsAutobase: local channel loaded')
+
+            // If the channel already has a CommentsAutobase instance, use it (fast path for owners).
+            if (localChannel?.commentsAutobase) {
+              console.log('[API] _getCommentsAutobase: using channel.commentsAutobase')
+              const commentsBase = localChannel.commentsAutobase
+              const isPublishingDevice = Boolean(localChannel.publicBee?.writable)
+              if (isPublishingDevice) commentsBase.setIsChannelOwner?.(true)
+
+              const meta = await Promise.race([
+                localChannel?.getMetadata?.(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('getMetadata timeout')), 2000))
+              ]).catch(() => null)
+              const metaAdminKey = meta?.commentsAdminKey || null
+              if (metaAdminKey) {
+                commentsBase.setAdminKey?.(metaAdminKey)
+              }
+
+              const adminKeyHex = commentsBase.localWriterKeyHex
+              if (!metaAdminKey && adminKeyHex) {
+                commentsBase.setAdminKey?.(adminKeyHex)
+              }
+
+              if (isPublishingDevice && adminKeyHex && (!metaAdminKey || metaAdminKey !== adminKeyHex)) {
+                try {
+                  await localChannel.updateMetadata({ commentsAdminKey: adminKeyHex })
+                } catch (err) {
+                  console.log('[API] _getCommentsAutobase: could not store admin key in channel metadata:', err?.message)
+                }
+              }
+
+              return commentsBase
+            }
+
+            // Prefer canonical keys from channel metadata / PublicBee if available.
+            const meta = await Promise.race([
+              localChannel?.getMetadata?.(),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('getMetadata timeout')), 2000))
+            ]).catch(() => null)
+            commentsAutobaseKey = meta?.commentsAutobaseKey || null
+            commentsAdminKey = meta?.commentsAdminKey || null
+            resolvedPublicBeeKey = resolvedPublicBeeKey ||
+              localChannel?.publicBeeKey ||
+              null
+
+            // Only try getPublicBeeKey if we still don't have it
+            if (!resolvedPublicBeeKey) {
+              resolvedPublicBeeKey = await Promise.race([
+                localChannel?.getPublicBeeKey?.(),
+                new Promise((resolve) => setTimeout(() => resolve(null), 1000))
+              ]).catch(() => null)
+            }
+            console.log('[API] _getCommentsAutobase: from local channel - commentsAutobaseKey:', commentsAutobaseKey?.slice(0, 16) || 'null')
+          } catch (err) {
+            console.log('[API] _getCommentsAutobase: local channel lookup failed:', err?.message)
+          }
+        }
+
+        // Without a PublicBee key, viewers cannot discover comments.
+        console.log('[API] _getCommentsAutobase: resolvedPublicBeeKey is:', resolvedPublicBeeKey?.slice(0, 16) || 'null')
+        if (!resolvedPublicBeeKey) {
+          console.log('[API] _getCommentsAutobase: no publicBeeKey found, throwing error')
+          throw new Error('Comments unavailable (missing publicBeeKey)')
+        }
+
+        // Load the PublicBee and read the published commentsAutobaseKey.
+        // The PublicBee writer (single device) is also the only device allowed to create/publish the comments key.
+        let isPublishingDevice = false
+        console.log('[API] _getCommentsAutobase: about to load PublicBee:', resolvedPublicBeeKey?.slice(0, 16))
+        try {
+          console.log('[API] _getCommentsAutobase: calling loadPublicBee with 5s timeout...')
+          pubBee = await Promise.race([
+            loadPublicBee(ctx, resolvedPublicBeeKey),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('loadPublicBee timeout after 5s')), 5000))
+          ])
+          console.log('[API] _getCommentsAutobase: loadPublicBee completed')
+          isPublishingDevice = Boolean(pubBee?.writable)
+          console.log('[API] _getCommentsAutobase: PublicBee loaded, writable:', isPublishingDevice)
+
+          if (!commentsAutobaseKey) {
+            console.log('[API] _getCommentsAutobase: getting metadata from PublicBee...')
+            const meta = await Promise.race([
+              pubBee.getMetadata(),
+              new Promise((resolve) => setTimeout(() => resolve(null), 2000))
+            ]).catch(() => null)
+            commentsAutobaseKey = meta?.commentsAutobaseKey || null
+            commentsAdminKey = commentsAdminKey || meta?.commentsAdminKey || null
+            console.log('[API] _getCommentsAutobase: commentsAutobaseKey from PublicBee:', commentsAutobaseKey?.slice(0, 16) || 'null')
+          }
+        } catch (err) {
+          console.log('[API] _getCommentsAutobase: PublicBee lookup failed:', err?.message)
+        }
+
+        // IMPORTANT: non-publishing devices must never create a new CommentsAutobase implicitly.
+        // Creating by `{ name }` is deterministic per-device (not globally) and will fork comments.
+        if (!isPublishingDevice && !commentsAutobaseKey) {
+          throw new Error('Comments unavailable (commentsAutobaseKey not published yet)')
+        }
+
+        console.log('[API] _getCommentsAutobase: creating CommentsAutobase, isOwner:', isPublishingDevice, 'key:', commentsAutobaseKey?.slice(0, 16) || 'new')
+        console.log('[API] _getCommentsAutobase: swarm connections:', ctx.swarm?.connections?.size || 0)
+
+        let commentsBase
+        try {
+          commentsBase = await getOrCreateCommentsAutobase(ctx.store, {
+            channelKey,
+            commentsAutobaseKey,
+            commentsAdminKey,
+            isChannelOwner: isPublishingDevice,
+            swarm: ctx.swarm
+          })
+        } catch (err) {
+          // Provide a user-friendly error for viewers when owner is offline
+          if (err?.message?.includes('timeout') && !isPublishingDevice) {
+            throw new Error('Comments unavailable - channel owner may be offline. Try again later.')
+          }
+          throw err
+        }
+        console.log('[API] _getCommentsAutobase: CommentsAutobase ready, key:', commentsBase.keyHex?.slice(0, 16))
+        if (commentsAdminKey) {
+          commentsBase.setAdminKey?.(commentsAdminKey)
+        }
+
+        // Publishing device: publish the key to PublicBee if it wasn't there yet.
+        if (isPublishingDevice && pubBee?.writable && commentsBase.keyHex && !commentsAutobaseKey) {
+          try {
+            await pubBee.setMetadata({ commentsAutobaseKey: commentsBase.keyHex })
+            console.log('[API] _getCommentsAutobase: published commentsAutobaseKey to PublicBee')
+          } catch (err) {
+            console.log('[API] _getCommentsAutobase: could not publish key to PublicBee:', err?.message)
+          }
+        }
+
+        return commentsBase
+      })()
+
+      ctx._commentsCache.set(cacheKey, openPromise)
+      try {
+        return await openPromise
+      } catch (err) {
+        ctx._commentsCache.delete(cacheKey)
+        throw err
+      }
     },
 
     /**
@@ -3264,13 +3112,25 @@ export function createApi({
      * @param {string} videoId
      * @param {string} text
      * @param {string} [parentId]
+     * @param {string} [publicBeeKey]
      * @returns {Promise<{success: boolean, commentId?: string, error?: string}>}
      */
-    async addComment(channelKey, videoId, text, parentId = null) {
+    async addComment(channelKey, videoId, text, parentId = null, publicBeeKey = null) {
+      // SYNC LOG - this should ALWAYS appear immediately
+      console.log('[API] ====== addComment ENTERED ======')
+      console.log('[API] addComment: channelKey:', channelKey?.slice(0, 16), 'videoId:', videoId?.slice(0, 16), 'publicBeeKey:', publicBeeKey?.slice(0, 16) || 'null')
+
       try {
-        const channel = await this._getCommentsChannel(channelKey)
-        const result = await channel.comments.addComment(videoId, text, parentId)
-        return { success: true, commentId: result.commentId, queued: false }
+        console.log('[API] addComment: getting CommentsAutobase...')
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        console.log('[API] addComment: got CommentsAutobase, adding comment...')
+        const result = await commentsBase.addComment(videoId, text, parentId)
+        const peerCount = commentsBase?.swarm?.connections?.size || 0
+        const queued = typeof result?.queued === 'boolean'
+          ? result.queued
+          : (!commentsBase?.writable && peerCount === 0)
+        console.log('[API] addComment: comment added:', result.commentId?.slice(0, 8))
+        return { success: true, commentId: result.commentId, queued }
       } catch (err) {
         console.error('[API] addComment error:', err.message)
         return { success: false, error: err.message }
@@ -3284,12 +3144,13 @@ export function createApi({
      * @param {Object} [options]
      * @param {number} [options.page=0]
      * @param {number} [options.limit=50]
+     * @param {string} [options.publicBeeKey]
      * @returns {Promise<{comments: Array, success: boolean, error?: string}>}
      */
     async listComments(channelKey, videoId, options = {}) {
       try {
-        const channel = await this._getCommentsChannel(channelKey)
-        const comments = await channel.comments.listComments(videoId, options)
+        const commentsBase = await this._getCommentsAutobase(channelKey, options.publicBeeKey)
+        const comments = await commentsBase.listComments(videoId, options)
         return { success: true, comments }
       } catch (err) {
         console.error('[API] listComments error:', err.message)
@@ -3304,10 +3165,10 @@ export function createApi({
      * @param {string} commentId
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async hideComment(channelKey, videoId, commentId) {
+    async hideComment(channelKey, videoId, commentId, publicBeeKey = null) {
       try {
-        const channel = await this._getCommentsChannel(channelKey)
-        await channel.comments.hideComment(videoId, commentId)
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        await commentsBase.hideComment(videoId, commentId)
         return { success: true }
       } catch (err) {
         console.error('[API] hideComment error:', err.message)
@@ -3322,16 +3183,20 @@ export function createApi({
      * @param {string} commentId
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async removeComment(channelKey, videoId, commentId) {
+    async removeComment(channelKey, videoId, commentId, publicBeeKey = null) {
       try {
-        const channel = await this._getCommentsChannel(channelKey)
-        await channel.comments.removeComment(videoId, commentId)
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        await commentsBase.removeComment(videoId, commentId)
         return { success: true }
       } catch (err) {
         console.error('[API] removeComment error:', err.message)
         return { success: false, error: err.message }
       }
     },
+
+    // ============================================
+    // Reactions Operations (using separate CommentsAutobase)
+    // ============================================
 
     /**
      * Add a reaction to a video
@@ -3340,10 +3205,10 @@ export function createApi({
      * @param {string} reactionType
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async addReaction(channelKey, videoId, reactionType) {
+    async addReaction(channelKey, videoId, reactionType, publicBeeKey = null) {
       try {
-        const channel = await this._getCommentsChannel(channelKey)
-        await channel.reactions.addReaction(videoId, reactionType)
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        await commentsBase.addReaction(videoId, reactionType)
         return { success: true }
       } catch (err) {
         console.error('[API] addReaction error:', err.message)
@@ -3357,10 +3222,10 @@ export function createApi({
      * @param {string} videoId
      * @returns {Promise<{success: boolean, error?: string}>}
      */
-    async removeReaction(channelKey, videoId) {
+    async removeReaction(channelKey, videoId, publicBeeKey = null) {
       try {
-        const channel = await this._getCommentsChannel(channelKey)
-        await channel.reactions.removeReaction(videoId)
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        await commentsBase.removeReaction(videoId)
         return { success: true }
       } catch (err) {
         console.error('[API] removeReaction error:', err.message)
@@ -3374,11 +3239,11 @@ export function createApi({
      * @param {string} videoId
      * @returns {Promise<{counts: Record<string, number>, userReaction: string|null, success: boolean, error?: string}>}
      */
-    async getReactions(channelKey, videoId) {
+    async getReactions(channelKey, videoId, publicBeeKey = null) {
       try {
-        const channel = await this._getCommentsChannel(channelKey)
-        const result = await channel.reactions.getReactions(videoId)
-        return { success: true, counts: result.counts, userReaction: result.userReaction }
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        const result = await commentsBase.getReactionCounts(videoId)
+        return { success: true, counts: { like: result.likes, dislike: result.dislikes }, userReaction: result.userReaction }
       } catch (err) {
         console.error('[API] getReactions error:', err.message)
         return { success: false, counts: {}, userReaction: null, error: err.message }
@@ -3388,44 +3253,73 @@ export function createApi({
     /**
      * Get debug info about the comments system for a channel
      * @param {string} channelKey
+     * @param {string} [publicBeeKey]
      * @returns {Promise<Object>}
      */
-    async getCommentsDebugInfo(channelKey) {
+    async getCommentsDebugInfo(channelKey, publicBeeKey = null) {
       const debugInfo = {
         success: false,
+        // Connection
         swarmPeers: ctx.swarm?.connections?.size || 0,
         commentsConnected: false,
-        commentsDbKey: null,
+
+        // CommentsAutobase
+        commentsAutobaseKey: null,
         isWriter: false,
         isChannelOwner: false,
         localWriterKey: null,
+
+        // Channel info
         channelKey: channelKey?.slice(0, 16) || null,
+        publicBeeKey: publicBeeKey?.slice(0, 16) || null,
         hasPublicBee: false,
         publicBeeHasCommentsKey: false,
-        commentCount: 0,
-        reactionCount: 0,
+
+        // Data
+        viewLength: 0,
+
+        // Errors
         lastError: null
       }
 
       try {
-        const channel = await this._getCommentsChannel(channelKey)
-        debugInfo.hasChannel = true
-        debugInfo.channelWritable = channel.writable
-        debugInfo.commentsDbKey = channel.keyHex?.slice(0, 16) || null
-        debugInfo.isWriter = channel.writable
-        debugInfo.isChannelOwner = channel.writable
-        debugInfo.localWriterKey = channel.localWriterKeyHex?.slice(0, 16) || null
-        debugInfo.hasPublicBee = Boolean(channel.publicBee)
-        if (channel.publicBee) {
-          const pubMeta = await channel.publicBee.getMetadata().catch(() => ({}))
-          debugInfo.publicBeeHasCommentsKey = Boolean(pubMeta?.commentsDbKey)
+        // Try to load channel first
+        let channel = null
+        try {
+          channel = await loadChannel(ctx, channelKey)
+          debugInfo.hasChannel = true
+          debugInfo.channelWritable = channel.writable
+
+          // Check if channel has PublicBee
+          if (channel.publicBee) {
+            debugInfo.hasPublicBee = true
+            const pubMeta = await channel.publicBee.getMetadata().catch(() => ({}))
+            debugInfo.publicBeeHasCommentsKey = Boolean(pubMeta?.commentsAutobaseKey)
+          }
+
+          // Check if channel has CommentsAutobase
+          if (channel.commentsAutobase) {
+            const ca = channel.commentsAutobase
+            debugInfo.commentsAutobaseKey = ca.keyHex?.slice(0, 16) || null
+            debugInfo.isWriter = ca.writable
+            debugInfo.isChannelOwner = ca.isChannelOwner()
+            debugInfo.localWriterKey = ca.localWriterKeyHex?.slice(0, 16) || null
+            debugInfo.viewLength = ca.view?.core?.length || 0
+            debugInfo.commentsConnected = true
+            debugInfo.success = true
+            return debugInfo
+          }
+        } catch (err) {
+          debugInfo.channelError = err?.message
         }
-        const [comments, reactions] = await Promise.all([
-          channel.db.find('@peartubeChannel/comments', {}).toArray().catch(() => []),
-          channel.db.find('@peartubeChannel/reactions', {}).toArray().catch(() => [])
-        ])
-        debugInfo.commentCount = comments.length
-        debugInfo.reactionCount = reactions.length
+
+        // Try to get CommentsAutobase via API method
+        const commentsBase = await this._getCommentsAutobase(channelKey, publicBeeKey)
+        debugInfo.commentsAutobaseKey = commentsBase?.keyHex?.slice(0, 16) || null
+        debugInfo.isWriter = commentsBase?.writable || false
+        debugInfo.isChannelOwner = commentsBase?.isChannelOwner?.() || false
+        debugInfo.localWriterKey = commentsBase?.localWriterKeyHex?.slice(0, 16) || null
+        debugInfo.viewLength = commentsBase?.view?.core?.length || 0
         debugInfo.commentsConnected = true
         debugInfo.success = true
       } catch (err) {
@@ -3551,12 +3445,6 @@ export function createApi({
         console.error('[API] suspendNetwork error:', err.message)
         return { success: false, error: err.message }
       }
-    },
-
-    async setPlaybackActive(req = {}) {
-      const active = typeof req === 'boolean' ? req : Boolean(req?.active)
-      const state = setStoragePlaybackActive(active, { source: 'app' })
-      return { success: true, active: isStoragePlaybackActive(), state }
     },
 
     /**

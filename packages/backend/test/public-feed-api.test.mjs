@@ -60,6 +60,7 @@ test('getPublicFeed returns peer entries even when publicBeeKey is absent', (t) 
     lastSeen: 1,
     manifestUpdatedAt: 0,
     previewVideos: [],
+    videos: [],
   })
 })
 
@@ -240,6 +241,58 @@ test('listVideos uses feed previews instead of slow channel fallback when keyed 
   t.is(videos[0]?.id, 'video-1')
   t.is(videos[0]?.channelKey, 'aa'.repeat(32))
   t.is(videos[0]?.publicBeeKey, 'bb'.repeat(32))
+})
+
+test('listVideos uses legacy previewVideos from relay feed entries', async (t) => {
+  const api = createApi({
+    ctx: {
+      semanticFinder: {
+        hasVideo() {
+          return true
+        },
+      },
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey: '12'.repeat(32),
+          publicBeeKey: '34'.repeat(32),
+          addedAt: 1,
+          source: 'peer',
+          peerCount: 1,
+          previewVideos: [{
+            id: 'relay-preview-1',
+            title: 'Relay preview only',
+            blobId: '0:4:0:2048',
+            blobsCoreKey: '56'.repeat(32),
+          }],
+        }]
+      },
+      getStats() { return { totalEntries: 1, hiddenCount: 0, peerCount: 1 } },
+    },
+    loadPublicBee: async () => ({
+      async listVideos() {
+        return []
+      },
+      async getVideo() {
+        return null
+      },
+    }),
+    loadChannel: async () => {
+      throw new Error('should not load channel for preview-backed peer feed')
+    },
+  })
+
+  const videos = await api.listVideos('12'.repeat(32), '34'.repeat(32))
+
+  t.is(videos.length, 1)
+  t.is(videos[0]?.id, 'relay-preview-1')
+  t.is(videos[0]?.channelKey, '12'.repeat(32))
+  t.is(videos[0]?.publicBeeKey, '34'.repeat(32))
 })
 
 test('listVideos falls back to the owner public bee when the channel view is empty', async (t) => {
@@ -613,23 +666,25 @@ test('listVideos revalidates cached remote availability after the playable metad
       },
       loadPublicBee: async () => ({
         async listVideos() {
+          const playable = requestCount === 0
           return [{
             id: 'video-4',
             title: 'Remote peer only',
             uploadedAt: 4,
-            availability: 'playable',
-            byteAvailability: 'playable',
+            availability: playable ? 'playable' : 'unknown',
+            byteAvailability: playable ? 'playable' : 'unknown',
             blobId: '0:8:0:1024',
             blobsCoreKey,
           }]
         },
         async getVideo(id) {
+          const playable = requestCount === 0
           return {
             id,
             title: 'Remote peer only',
             uploadedAt: 4,
-            availability: 'playable',
-            byteAvailability: 'playable',
+            availability: playable ? 'playable' : 'unknown',
+            byteAvailability: playable ? 'playable' : 'unknown',
             blobId: '0:8:0:1024',
             blobsCoreKey,
           }

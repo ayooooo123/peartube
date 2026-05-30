@@ -23,7 +23,37 @@ async function withChannel(fn) {
   }
 }
 
-test('MultiWriterChannel stores channel state in HyperDB, not Autobase views', async () => {
+test('MultiWriterChannel opens remote read-only channels without committing bootstrap records', async () => {
+  const dirA = mkdtempSync(join(tmpdir(), 'peartube-mw-owner-'))
+  const dirB = mkdtempSync(join(tmpdir(), 'peartube-mw-viewer-'))
+  const storeA = new Corestore(dirA)
+  const storeB = new Corestore(dirB)
+  await storeA.ready()
+  await storeB.ready()
+
+  let owner = null
+  let viewer = null
+  try {
+    owner = new MultiWriterChannel(storeA, { name: 'owner' })
+    await owner.ready()
+    await owner.updateMetadata({ name: 'Owner channel' })
+
+    viewer = new MultiWriterChannel(storeB, { key: owner.key })
+    await viewer.ready()
+
+    assert.equal(viewer.writable, false)
+    assert.ok(viewer.keyHex)
+  } finally {
+    await viewer?.close?.().catch(() => {})
+    await owner?.close?.().catch(() => {})
+    await storeA.close().catch(() => {})
+    await storeB.close().catch(() => {})
+    rmSync(dirA, { recursive: true, force: true })
+    rmSync(dirB, { recursive: true, force: true })
+  }
+})
+
+test('MultiWriterChannel stores channel state in HyperDB, not Autobase views', async (t) => {
   await withChannel(async (channel) => {
     assert.ok(channel.db, 'channel HyperDB instance is opened')
     assert.equal('base' in channel, false, 'Autobase handle is removed')

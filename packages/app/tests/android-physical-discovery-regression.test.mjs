@@ -145,3 +145,13 @@ test('Home Discover separates feed counts from peers and does not call hydrating
   assert.match(source, /state === 'hydrating'[\s\S]*\? 'Loading playable previews'/, 'hydrating feed entries should not be labeled as looking for peers')
   assert.match(source, /feed entries detected; resolving playable video previews\./, 'hydrating detail should mention feed entries being resolved')
 })
+
+test('Android registers network discovery as a TurboReactPackage so release new-architecture builds expose NativeModules.PeartubeNetworkDiscovery', () => {
+  const packageSource = readAppFile('android/app/src/main/java/com/peartube/app/PeartubeNetworkDiscoveryPackage.kt')
+
+  assert.match(packageSource, /TurboReactPackage/, 'release new-architecture builds should use TurboReactPackage registration')
+  assert.match(packageSource, /override fun getModule\(name: String, reactContext: ReactApplicationContext\): NativeModule\?/, 'package should expose getModule lookup by module name')
+  assert.match(packageSource, /if \(name == "PeartubeNetworkDiscovery"\)/, 'package should return the discovery module by exported name')
+  assert.match(packageSource, /ReactModuleInfoProvider/, 'package should provide ReactModuleInfo metadata for the custom module')
+  assert.match(packageSource, /PeartubeNetworkDiscoveryModule::class\.java\.name/, 'metadata should reference the module class name')
+})

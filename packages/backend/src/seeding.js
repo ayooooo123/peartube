@@ -39,6 +39,17 @@ function mergeSeedReason(existingReason, nextReason) {
     : existingReason
 }
 
+export class SeedingAuthorizationError extends Error {
+  constructor(message = 'Unauthorized seeding mutation') {
+    super(message)
+    this.name = 'SeedingAuthorizationError'
+  }
+}
+
+function normalizeDriveKey(value) {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
 export class SeedingManager {
   /**
    * @param {import('corestore')} store - Corestore instance
@@ -48,6 +59,8 @@ export class SeedingManager {
   constructor(store, metaDb, options = {}) {
     this.store = store;
     this.metaDb = metaDb;
+    this.identityManager = options.identityManager || null;
+    this.requiresIdentityAuthorization = Object.prototype.hasOwnProperty.call(options, 'identityManager');
     this.getDiskUsageBytes = typeof options.getDiskUsageBytes === 'function'
       ? options.getDiskUsageBytes
       : (typeof store?.getDiskUsageBytes === 'function' ? () => store.getDiskUsageBytes() : null);
@@ -63,6 +76,23 @@ export class SeedingManager {
       maxVideosPerChannel: 10     // Max videos to seed per channel if auto-seeding subscriptions
     };
     console.log('[SeedingManager] Initialized');
+  }
+
+  getActiveIdentityDriveKey() {
+    const active = this.identityManager?.getActiveIdentity?.()
+    return normalizeDriveKey(active?.driveKey || active?.channelKey)
+  }
+
+  assertAuthorizedMutation(options = {}) {
+    if (options.authorized === true) return
+    if (!this.requiresIdentityAuthorization) return
+    if (this.getActiveIdentityDriveKey()) return
+    throw new SeedingAuthorizationError()
+  }
+
+  assertAuthorizedForSeed(driveKey, reason, options = {}) {
+    if (reason === 'watched' && options.userInitiated !== true) return
+    this.assertAuthorizedMutation(options)
   }
 
   /**
@@ -105,6 +135,8 @@ export class SeedingManager {
    * @returns {Promise<boolean>}
    */
   async addSeed(driveKey, videoPath, reason, blobInfo, options = {}) {
+    this.assertAuthorizedForSeed(driveKey, reason, options)
+
     if (!this.config.autoSeedWatched && reason === 'watched') {
       console.log('[SeedingManager] Auto-seed watched disabled, skipping');
       return false;
@@ -199,7 +231,8 @@ export class SeedingManager {
    * Pin a channel for always seeding
    * @param {string} driveKey
    */
-  async pinChannel(driveKey) {
+  async pinChannel(driveKey, options = {}) {
+    this.assertAuthorizedMutation(options)
     this.pinnedChannels.add(driveKey);
     await this.persistPinnedChannels();
     console.log('[SeedingManager] Pinned channel:', driveKey.slice(0, 16));
@@ -209,7 +242,8 @@ export class SeedingManager {
    * Unpin a channel
    * @param {string} driveKey
    */
-  async unpinChannel(driveKey) {
+  async unpinChannel(driveKey, options = {}) {
+    this.assertAuthorizedMutation(options)
     this.pinnedChannels.delete(driveKey);
     await this.persistPinnedChannels();
     console.log('[SeedingManager] Unpinned channel:', driveKey.slice(0, 16));
@@ -219,7 +253,8 @@ export class SeedingManager {
    * Update seeding config
    * @param {Partial<SeedingConfig>} newConfig
    */
-  async setConfig(newConfig) {
+  async setConfig(newConfig, options = {}) {
+    this.assertAuthorizedMutation(options)
     this.config = { ...this.config, ...newConfig };
     await this.metaDb.put('seeding-config', this.config);
     console.log('[SeedingManager] Updated config:', this.config);
@@ -401,7 +436,8 @@ export class SeedingManager {
    * @param {number} gb
    * @returns {Promise<void>}
    */
-  async setMaxStorageGB(gb) {
+  async setMaxStorageGB(gb, options = {}) {
+    this.assertAuthorizedMutation(options)
     if (gb < 1) gb = 1;
     if (gb > 100) gb = 100;
     this.config.maxStorageGB = gb;
@@ -459,7 +495,8 @@ export class SeedingManager {
    * Clear all non-pinned cached content
    * @returns {Promise<{ clearedBytes: number, totalStorageBytes: number, totalStorageGB: string, untrackedStorageBytes: number, untrackedStorageGB: string }>} bytes cleared and post-clear total storage snapshot
    */
-  async clearCache() {
+  async clearCache(options = {}) {
+    this.assertAuthorizedMutation(options)
     let clearedBytes = 0;
     const toRemove = [];
     let clearedBlob = false;

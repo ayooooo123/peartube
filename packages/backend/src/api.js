@@ -19,6 +19,7 @@ import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoTo
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { collectCorestoreGarbage } from './corestore-gc.js'
+import { SeedingAuthorizationError } from './seeding.js'
 
 /**
  * @typedef {import('./types.js').StorageContext} StorageContext
@@ -557,6 +558,14 @@ export function createApi({
       return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0
     }
     return 0
+  }
+
+  function isSeedingAuthorizationError(err) {
+    return err instanceof SeedingAuthorizationError || err?.name === 'SeedingAuthorizationError'
+  }
+
+  function seedingUnauthorizedResult(extra = {}) {
+    return { success: false, ...extra, error: 'Unauthorized seeding mutation' }
   }
 
   return {
@@ -2784,8 +2793,13 @@ export function createApi({
      */
     async setSeedingConfig(config) {
       if (seedingManager) {
-        await seedingManager.setConfig(config);
-        return { success: true, config: seedingManager.config };
+        try {
+          await seedingManager.setConfig(config);
+          return { success: true, config: seedingManager.config };
+        } catch (err) {
+          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult()
+          throw err
+        }
       }
       return { success: false, error: 'Seeding manager not initialized' };
     },
@@ -2798,9 +2812,14 @@ export function createApi({
     async pinChannel(driveKey) {
       console.log('[API] PIN_CHANNEL:', driveKey?.slice(0, 16));
       if (seedingManager && driveKey) {
-        await seedingManager.pinChannel(driveKey);
-        await loadChannel(ctx, driveKey);
-        return { success: true };
+        try {
+          await seedingManager.pinChannel(driveKey);
+          await loadChannel(ctx, driveKey);
+          return { success: true };
+        } catch (err) {
+          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult()
+          throw err
+        }
       }
       return { success: false, error: 'Invalid request' };
     },
@@ -2813,8 +2832,13 @@ export function createApi({
     async unpinChannel(driveKey) {
       console.log('[API] UNPIN_CHANNEL:', driveKey?.slice(0, 16));
       if (seedingManager && driveKey) {
-        await seedingManager.unpinChannel(driveKey);
-        return { success: true };
+        try {
+          await seedingManager.unpinChannel(driveKey);
+          return { success: true };
+        } catch (err) {
+          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult()
+          throw err
+        }
       }
       return { success: false, error: 'Invalid request' };
     },
@@ -2860,10 +2884,15 @@ export function createApi({
     async setStorageLimit(maxGB) {
       console.log('[API] SET_STORAGE_LIMIT:', maxGB, 'GB');
       if (seedingManager) {
-        await clearDownloadIntents().catch(err => console.log('[API] Failed to clear partial downloads for storage limit:', err?.message))
-        await seedingManager.setMaxStorageGB(maxGB);
-        cancelRangeRequestsForRemovedSeeds()
-        return { success: true };
+        try {
+          await clearDownloadIntents().catch(err => console.log('[API] Failed to clear partial downloads for storage limit:', err?.message))
+          await seedingManager.setMaxStorageGB(maxGB);
+          cancelRangeRequestsForRemovedSeeds()
+          return { success: true };
+        } catch (err) {
+          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult()
+          throw err
+        }
       }
       return { success: false };
     },
@@ -2875,13 +2904,18 @@ export function createApi({
     async clearCache() {
       console.log('[API] CLEAR_CACHE');
       if (seedingManager) {
-        const partial = await clearDownloadIntents().catch(err => {
-          console.log('[API] Failed to clear partial downloads:', err?.message)
-          return { clearedBytes: 0 }
-        });
-        const cleared = await seedingManager.clearCache();
-        cancelRangeRequestsForRemovedSeeds()
-        return { success: true, clearedBytes: normalizeClearedBytes(cleared) + normalizeClearedBytes(partial) };
+        try {
+          const partial = await clearDownloadIntents().catch(err => {
+            console.log('[API] Failed to clear partial downloads:', err?.message)
+            return { clearedBytes: 0 }
+          });
+          const cleared = await seedingManager.clearCache();
+          cancelRangeRequestsForRemovedSeeds()
+          return { success: true, clearedBytes: normalizeClearedBytes(cleared) + normalizeClearedBytes(partial) };
+        } catch (err) {
+          if (isSeedingAuthorizationError(err)) return seedingUnauthorizedResult({ clearedBytes: 0 })
+          throw err
+        }
       }
       return { success: false, clearedBytes: 0 };
     },

@@ -401,3 +401,82 @@ test('downloadChannelBlobs reports unavailable refs after timeout without republ
   t.ok(stats.unavailableVideos[0].unavailableReason.includes('Blob download timeout'))
   t.is(errors.length, 1)
 })
+
+
+test('downloadChannelBlobs abandons a stalled blob download after idle timeout', async (t) => {
+  const previous = globalThis.setTimeout
+  const timers = []
+  globalThis.setTimeout = (fn, _ms) => {
+    const timer = {
+      fn,
+      cleared: false,
+      unref() {}
+    }
+    timers.push(timer)
+    return timer
+  }
+  globalThis.clearTimeout = (timer) => {
+    if (timer) timer.cleared = true
+  }
+
+  const stalledCore = createCore({ length: 4, byteLength: 400 })
+  let destroyed = false
+  stalledCore.download = function download(range) {
+    this.downloads.push(range)
+    return {
+      destroy() { destroyed = true },
+      done() { return new Promise(() => {}) }
+    }
+  }
+
+  try {
+    const ctx = {
+      swarm: { join() {} },
+      store: {
+        get() { return stalledCore }
+      }
+    }
+
+    const promise = downloadChannelBlobs(
+      ctx,
+      'ee'.repeat(32),
+      'chan-stalled',
+      { info() {}, debug() {}, error() {} },
+      {
+        previewVideos: [{
+          id: 'stalled',
+          title: 'Stalled',
+          blobId: '1:2:100:200',
+          blobsCoreKey: 'aa'.repeat(32)
+        }]
+      },
+      {
+        async loadPublicBee() {
+          return {
+            async listVideos() {
+              return []
+            }
+          }
+        }
+      }
+    )
+
+    for (let i = 0; i < 20 && stalledCore.downloads.length === 0; i += 1) {
+      await Promise.resolve()
+    }
+    t.is(stalledCore.downloads.length, 1, 'stalled download should have started')
+    const idleTimer = timers.find((timer) => !timer.cleared)
+    t.ok(idleTimer, 'idle timer should be armed')
+    idleTimer.fn()
+
+    const stats = await promise
+    t.ok(destroyed, 'stalled download should be destroyed after idle timeout')
+    t.is(stats.blobsFound, 1)
+    t.is(stats.blobsDownloaded, 0)
+    t.is(stats.videosDownloaded, 0)
+    t.alike(stats.previewVideos, [])
+  } finally {
+    globalThis.setTimeout = previous
+    globalThis.clearTimeout = clearTimeout
+  }
+})

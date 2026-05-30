@@ -1,9 +1,4 @@
-import { ARCHIVE_TYPE_RUMBLE, ARCHIVE_TYPE_YOUTUBE } from '../constants.js'
-
-const RUMBLE_HOSTS = new Set([
-  'rumble.com',
-  'www.rumble.com'
-])
+import { ARCHIVE_TYPE_YOUTUBE } from '../constants.js'
 
 const YOUTUBE_HOSTS = new Set([
   'youtube.com',
@@ -11,6 +6,11 @@ const YOUTUBE_HOSTS = new Set([
   'm.youtube.com',
   'music.youtube.com',
   'youtu.be'
+])
+
+const RUMBLE_HOSTS = new Set([
+  'rumble.com',
+  'www.rumble.com'
 ])
 
 function parseUrl(input) {
@@ -51,17 +51,25 @@ function pickYoutubeChannelId(url) {
   return null
 }
 
-function pickRumbleVideoId(url) {
+function pickRumbleSource(url) {
   if (!url) return null
 
   const host = url.hostname.toLowerCase()
   if (!RUMBLE_HOSTS.has(host)) return null
 
-  const segments = url.pathname.replace(/\/+$/, '').split('/').filter(Boolean)
-  const slug = segments[0] || null
-  if (!slug) return null
-
-  return { kind: 'video', id: slug }
+  const path = url.pathname.replace(/\/+$/, '')
+  const segments = path.split('/').filter(Boolean)
+  if (segments[0] === 'c' && segments[1]) {
+    return { kind: 'channel', id: segments[1] }
+  }
+  if (segments[0] === 'playlists' && segments[1]) {
+    return { kind: 'playlist', id: segments[1] }
+  }
+  const videoSlug = segments[0]
+  if (videoSlug && /^v[0-9a-z]+/i.test(videoSlug)) {
+    return { kind: 'video', id: videoSlug.replace(/\.html$/i, '') }
+  }
+  return null
 }
 
 export function classifySourceUrl(input) {
@@ -80,13 +88,13 @@ export function classifySourceUrl(input) {
     }
   }
 
-  const rumble = pickRumbleVideoId(url)
+  const rumble = pickRumbleSource(url)
   if (rumble) {
     return {
-      type: ARCHIVE_TYPE_RUMBLE,
+      type: ARCHIVE_TYPE_YOUTUBE,
       normalizedUrl: input.trim(),
-      identifier: rumble.id,
-      kind: rumble.kind
+      identifier: `rumble:${rumble.kind}:${rumble.id}`,
+      kind: `rumble-${rumble.kind}`
     }
   }
 

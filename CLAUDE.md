@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PearTube is a decentralized P2P video streaming platform built on Pear Runtime and Hypercore Protocol. It runs on iOS, Android, and Desktop from a unified codebase.
+PearTube is a decentralized P2P video streaming platform built on Hypercore Protocol with embedded Pear runtime support on desktop. It runs on iOS, Android, and Desktop from a unified codebase.
 
 ## Common Commands
 
@@ -80,7 +80,7 @@ packages/
 
 **Desktop (Electrobun — main):**
 - Expo web export served by Electrobun
-- Worker for P2P backend
+- Bare worker for P2P backend launched through embedded `pear-runtime`
 - HRPC over pipe (`packages/platform/src/rpc.web.ts`)
 
 **Desktop (Swift native — experimental):**
@@ -151,7 +151,7 @@ This project uses the Holepunch stack:
 - **hyperswarm** - P2P networking and discovery
 - **corestore** - Storage management
 
-Mobile uses **react-native-bare-kit** for running native P2P code. Desktop uses **Pear Runtime** (pear-electron + pear-run) or the **Swift native shell** (SwiftUI + bare-native sidecar).
+Mobile uses **react-native-bare-kit** for running native P2P code. Main desktop uses **Electrobun + embedded `pear-runtime`**; the Swift native shell (SwiftUI + bare-native sidecar) is experimental. Do not add new `pear run` / `global.Pear.run` paths — upstream Pear CLI is removing `pear run`; see `docs/pear-runtime-evolution-readiness.md` for the current boundary.
 
 Native addon submodules:
 - **bare-mpv** - libmpv video player (fork at `ayooooo123/bare-mpv`, git submodule)
@@ -169,9 +169,9 @@ cd packages/app/ios && rm -rf Pods Podfile.lock && pod install --repo-update
 
 **Backend not connecting:** Ensure `packages/app/backend.bundle.js` exists. Rebuild with `npm run bundle:backend`.
 
-**Desktop "No handler registered" errors:** Rebuild and relaunch Pear (`npm run pear:build && npm run pear`). Shared HRPC handlers are wired through `packages/backend/src/backend-entry.js`.
+**Desktop "No handler registered" errors:** Rebuild and relaunch the Electrobun desktop app (`npm run desktop:build && npm run desktop`). Shared HRPC handlers are wired through `packages/backend/src/backend-entry.js`.
 
-**"Cannot find module" in Pear:** Ensure relative paths in HTML (`./_expo/` not `/_expo/`). Rebuild with `npm run pear:build`.
+**"Cannot find module" in desktop builds:** Ensure relative paths in HTML (`./_expo/` not `/_expo/`) and verify `packages/app/src/bun/index.ts` resolves the compiled worker under `desktop-build/build/workers/`. Rebuild with `npm run desktop:build`.
 
 **Native Desktop "Unsupported native bridge command: N":** The sidecar binary is stale. Rebuild: `cd packages/desktop-native && node scripts/build-native-sidecar.mjs`.
 

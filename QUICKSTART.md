@@ -4,7 +4,7 @@
 
 - Node.js 18+
 - For iOS: Xcode 15+, CocoaPods
-- For Desktop: Pear CLI (`npm install -g pear`)
+- For Desktop: Bun + Electrobun toolchain; Pear CLI is only needed for future OTA/deployment work
 
 ## Setup
 
@@ -29,16 +29,16 @@ This will:
 3. Launch in iOS Simulator
 4. Start the P2P backend
 
-#### Pear Desktop
+#### Electrobun Desktop
 
 ```bash
-npm run pear
+npm run desktop
 ```
 
 This will:
 1. Export Expo web build
 2. Compile the worker
-3. Launch Pear runtime
+3. Launch the Electrobun shell with embedded `pear-runtime`
 4. Display the desktop UI
 
 ## Project Structure
@@ -50,7 +50,8 @@ peartube/
 │   │   ├── app/          # Expo Router screens
 │   │   ├── components/   # React components
 │   │   ├── backend/      # Mobile BareKit worklet
-│   │   └── pear-src/     # Desktop Pear assets
+│   │   ├── workers/      # Desktop Bare worker
+│   │   └── src/          # Electrobun Bun/view bridge
 │   ├── backend/          # Backend business logic
 │   ├── core/             # Shared types + UI helpers
 │   ├── platform/         # Platform abstraction
@@ -69,8 +70,8 @@ peartube/
 ```bash
 npm run ios            # Run iOS app
 npm run android        # Run Android app
-npm run pear           # Run Pear desktop app
-npm run pear:build     # Build Pear desktop only
+npm run desktop        # Run Electrobun desktop app
+npm run desktop:build  # Build desktop web/worker output only
 npm run bundle:backend # Bundle mobile backend
 npm run build:android:apk  # Build Android release APKs
 npm start              # Start Expo dev server
@@ -80,8 +81,8 @@ npm start              # Start Expo dev server
 
 ```bash
 npm run ios            # Run iOS
-npm run pear:dev       # Build and run Pear
-npm run pear:build     # Build Pear only
+npm run desktop:dev    # Build and run Electrobun desktop
+npm run desktop:build  # Build desktop web/worker output only
 npm run bundle:backend # Bundle backend worklet
 npm run build:android:apk # Build release APKs
 ```
@@ -98,12 +99,12 @@ cd ..
 npm run ios
 ```
 
-### Pear Won't Start
+### Desktop Won't Start
 
-Make sure Pear CLI is installed:
+Rebuild and launch the Electrobun app:
 ```bash
-npm install -g pear
-pear --version
+npm run desktop:build
+npm run desktop
 ```
 
 ### Backend Not Connecting
@@ -123,8 +124,8 @@ npm run bundle:backend
 If desktop logs include `No handler registered for command`, rebuild and relaunch Pear so worker and backend handler wiring are in sync:
 
 ```bash
-npm run pear:build
-npm run pear
+npm run desktop:build
+npm run desktop
 ```
 
 ## What's Next?

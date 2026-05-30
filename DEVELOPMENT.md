@@ -13,8 +13,8 @@
 # Root-level
 npm run ios
 npm run android
-npm run pear
-npm run pear:build
+npm run desktop
+npm run desktop:build
 npm run bundle:backend
 npm run build:android:apk
 npm run typecheck
@@ -32,9 +32,10 @@ npm run bundle:backend --prefix packages/app
 
 ## Desktop Notes
 
-- Pear dev command now uses `pear run --dev`.
-- `npm run pear` (root) and `npm run pear:dev --prefix packages/app` both use the new CLI form.
-- Desktop worker is compiled from `packages/app/pear-src/workers/core/index.ts` into `packages/app/pear/build/workers/core/index.js`.
+- Main desktop shell is Electrobun/Bun with embedded `pear-runtime`; do not add new `pear run` or `global.Pear.run` paths.
+- `npm run desktop` builds and launches the Electrobun app.
+- `npm run desktop:build` exports the Expo web app and compiles `packages/app/workers/desktop/index.ts` into `packages/app/desktop-build/build/workers/core/index.mjs`.
+- Pear CLI deployment/runtime guidance changed in May 2026. See `docs/pear-runtime-evolution-readiness.md` before touching desktop release or OTA flows.
 
 ## Android Release Notes
 
@@ -57,8 +58,8 @@ npm run build:android:aab
 ### Desktop shows "No handler registered for command"
 
 ```bash
-npm run pear:build
-npm run pear
+npm run desktop:build
+npm run desktop
 ```
 
 ### Mobile backend does not start

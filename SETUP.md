@@ -5,7 +5,8 @@
 - **Node.js 18+**: Required for all platforms
 - **Xcode 15+**: Required for iOS development
 - **CocoaPods**: Required for iOS native modules
-- **Pear CLI**: Required for desktop (`npm install -g pear`)
+- **Bun + Electrobun toolchain**: Required for the main desktop shell
+- **Pear CLI**: Required only for future Pear OTA/deployment work, not for local desktop launch
 
 ## Installation
 
@@ -34,9 +35,9 @@ cd ..
 npm run ios
 ```
 
-**Pear Desktop:**
+**Electrobun Desktop:**
 ```bash
-npm run pear
+npm run desktop
 ```
 
 ## Project Structure
@@ -58,8 +59,10 @@ peartube/
 │   │   ├── components/   # Shared React components
 │   │   ├── lib/          # App utilities
 │   │   ├── backend/      # Mobile BareKit worklet source
-│   │   ├── pear-src/     # Desktop Pear source files
-│   │   ├── pear/         # Built Pear output (generated)
+│   │   ├── workers/      # Desktop Bare worker source
+│   │   ├── src/bun/      # Electrobun/Bun desktop main process
+│   │   ├── src/view/     # Electrobun renderer bridge
+│   │   ├── desktop-build/# Built desktop web/worker output (generated)
 │   │   ├── ios/          # iOS native project
 │   │   └── Frameworks/   # iOS native addons
 │   │
@@ -83,8 +86,8 @@ peartube/
 |---------|-------------|
 | `npm run ios` | Run iOS app |
 | `npm run android` | Run Android app |
-| `npm run pear` | Build and run Pear desktop |
-| `npm run pear:build` | Build Pear desktop only |
+| `npm run desktop` | Build and run Electrobun desktop |
+| `npm run desktop:build` | Build desktop web/worker output only |
 | `npm run bundle:backend` | Bundle mobile backend worklet |
 | `npm run build:android:apk` | Build Android release APKs |
 | `npm start` | Start Expo dev server |
@@ -94,10 +97,10 @@ peartube/
 | Command | Description |
 |---------|-------------|
 | `npm run ios` | Run iOS app |
-| `npm run pear:dev` | Build and run Pear |
-| `npm run pear:build` | Build Pear only |
-| `npm run pear:export` | Export Expo web |
-| `npm run pear:worker` | Compile desktop worker |
+| `npm run desktop:dev` | Build and run Electrobun desktop |
+| `npm run desktop:build` | Build desktop web/worker output only |
+| `npm run desktop:export` | Export Expo web |
+| `npm run desktop:worker` | Compile desktop worker |
 | `npm run bundle:backend` | Bundle mobile worklet |
 | `npm run build:android:apk` | Build release APKs |
 
@@ -109,11 +112,11 @@ peartube/
 - **BareKit** native worklet for P2P backend
 - **HRPC** communication between app and worklet
 
-### Desktop (Pear)
+### Desktop (Electrobun + pear-runtime)
 
-- **Expo web export** served by pear-electron
-- **pear-run** worker for P2P backend
-- **HRPC** communication via worker-client.js
+- **Expo web export** served in an Electrobun view
+- **Bare worker** launched by embedded `pear-runtime`
+- **HRPC** communication via the `window.bridge` transport in `packages/platform/src/rpc.web.ts`
 
 Both platforms share:
 - Same React components (with `.web.tsx` variants)
@@ -138,11 +141,11 @@ cd packages/app/Frameworks
 # Remove frameworks that are also in node_modules/react-native-bare-kit/ios/addons/
 ```
 
-### Pear Won't Launch
+### Desktop Won't Launch
 
-1. Check Pear is installed: `pear --version`
-2. Rebuild: `npm run pear:build`
-3. Check logs: `cd packages/app/pear && pear run --dev .`
+1. Rebuild: `npm run desktop:build`
+2. Launch: `npm run desktop`
+3. Check `packages/app/src/bun/index.ts` worker startup logs and `packages/app/src/view/index.ts` bridge logs.
 
 ### Backend Not Connecting
 
@@ -151,15 +154,16 @@ cd packages/app/Frameworks
 
 ### "No handler registered for command" on Desktop
 
-1. Rebuild Pear app + worker: `npm run pear:build`
-2. Relaunch desktop app: `npm run pear`
-3. Confirm desktop uses `pear run --dev` under the hood (the old `pear dev` command is deprecated)
+1. Rebuild desktop app + worker: `npm run desktop:build`
+2. Relaunch desktop app: `npm run desktop`
+3. Confirm the Electrobun bridge reaches the Bare worker through embedded `pear-runtime`.
 
 ## Environment
 
 - Node.js 18+
 - iOS deployment target: 15.1
-- Pear runtime: v2
+- Desktop runtime: Electrobun + embedded `pear-runtime`
+- Pear CLI deployment/runtime note: `pear run` is deprecated upstream; see `docs/pear-runtime-evolution-readiness.md` before adding desktop OTA release automation.
 
 ---
 

@@ -295,6 +295,70 @@ test('listVideos uses legacy previewVideos from relay feed entries', async (t) =
   t.is(videos[0]?.publicBeeKey, '34'.repeat(32))
 })
 
+test('listVideos keeps restored relay preview refs playable while availability proof is pending', async (t) => {
+  const driveKey = '13'.repeat(32)
+  const publicBeeKey = '35'.repeat(32)
+  const blobsCoreKey = '57'.repeat(32)
+  const api = createApi({
+    ctx: {
+      store: {
+        get() {
+          return {
+            async ready() {},
+            async has() { return false },
+          }
+        },
+      },
+      semanticFinder: {
+        hasVideo() { return true },
+      },
+      metaDb: {
+        async get() { return null },
+        async put() {},
+      },
+    },
+    publicFeed: {
+      getFeed() {
+        return [{
+          driveKey,
+          publicBeeKey,
+          addedAt: 1,
+          source: 'peer',
+          peerCount: 1,
+          restoredFromCache: true,
+          requiresAvailabilityProbe: true,
+          previewVideos: [{
+            id: 'restored-relay-preview-1',
+            title: 'Restored relay preview',
+            blobId: '0:4:0:2048',
+            blobsCoreKey,
+            availability: 'unknown',
+            byteAvailability: 'unknown',
+            restoredFromCache: true,
+            requiresAvailabilityProbe: true,
+          }],
+        }]
+      },
+      getStats() { return { totalEntries: 1, hiddenCount: 0, peerCount: 1 } },
+      async requestAvailabilityHints() { return [] },
+    },
+    loadPublicBee: async () => ({
+      async listVideos() { return [] },
+      async getVideo() { return null },
+    }),
+    loadChannel: async () => {
+      throw new Error('should not load channel for restored preview-backed peer feed')
+    },
+  })
+
+  const videos = await api.listVideos(driveKey, publicBeeKey)
+
+  t.is(videos.length, 1)
+  t.is(videos[0]?.id, 'restored-relay-preview-1')
+  t.is(videos[0]?.availability, 'playable')
+  t.is(videos[0]?.byteAvailability, 'playable')
+})
+
 test('listVideos falls back to the owner public bee when the channel view is empty', async (t) => {
   let channelLoads = 0
   let publicBeeReads = 0

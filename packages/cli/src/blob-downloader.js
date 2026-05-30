@@ -38,7 +38,7 @@ function createIdleProgressGuard({ timeoutMs, onTimeout }) {
     timer = setTimeout(() => {
       if (settled) return
       settled = true
-      try { onTimeout?.() } catch {}
+      try { onTimeout?.() } catch (err) { void err }
       rejectGuard(new Error(`Blob download idle timeout (${timeoutMs}ms without progress)`))
     }, timeoutMs)
     timer?.unref?.()
@@ -136,7 +136,7 @@ async function downloadBlobRef(ctx, ref) {
   const idleGuard = createIdleProgressGuard({
     timeoutMs: DOWNLOAD_PROGRESS_IDLE_MS,
     onTimeout: () => {
-      try { download.destroy?.() } catch {}
+      try { download.destroy?.() } catch (err) { void err }
     }
   })
   const onDownload = () => idleGuard.bump()

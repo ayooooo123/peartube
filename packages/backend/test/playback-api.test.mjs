@@ -42,29 +42,29 @@ test('preparePlayback returns a playable URL before warmup settles or fails', as
     'video/mp4',
   )
 
-  t.alike(result, {
-    url: 'http://127.0.0.1:60023/video.mp4',
-    stats: {
-      status: 'unknown',
-      progress: 0,
-      totalBlocks: 0,
-      downloadedBlocks: 0,
-      totalBytes: 0,
-      downloadedBytes: 0,
-      peerCount: 0,
-      swarmConnections: 0,
-      speedMBps: '0',
-      elapsed: 0,
-      isComplete: false,
-    },
-    warmupStarted: true,
-    peerWarmupStarted: true,
-    peerWarmup: {
-      peerCount: 0,
-      retained: false,
-      timedOut: false,
-    },
+  t.is(result.url, 'http://127.0.0.1:60023/video.mp4')
+  t.alike(result.stats, {
+    status: 'unknown',
+    progress: 0,
+    totalBlocks: 0,
+    downloadedBlocks: 0,
+    totalBytes: 0,
+    downloadedBytes: 0,
+    peerCount: 0,
+    swarmConnections: 0,
+    speedMBps: '0',
+    elapsed: 0,
+    isComplete: false,
   })
+  t.is(result.warmupStarted, true)
+  t.is(result.peerWarmupStarted, true)
+  t.alike(result.peerWarmup, {
+    peerCount: 0,
+    retained: false,
+    timedOut: false,
+  })
+  t.is(result.selectedBlobWarmup.readyForPlayback, false)
+  t.is(result.selectedBlobWarmup.error, 'invalid-blob-ref')
 
   t.alike(calls, [
     ['getVideoUrl', ['channel-key', 'videos/demo.mp4', 'public-bee-key', 'blob-id', 'blobs-core-key', 'video/mp4']],

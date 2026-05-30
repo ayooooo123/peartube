@@ -343,6 +343,75 @@ export async function createRelayService({
     return { accepted: true, retentionClass: decision.retentionClass, reason: decision.reason }
   }
 
+  async function publishArchiveJobToFeed(job) {
+    if (closed) return { published: false, reason: 'closed' }
+    if (job?.status !== 'completed') return { published: false, reason: 'not-completed' }
+    if (!job?.channelKey || !job?.publicBeeKey || !job?.previewVideo?.id) {
+      return { published: false, reason: 'missing-refs' }
+    }
+
+    const previewVideos = [{
+      ...job.previewVideo,
+      publicBeeKey: job.publicBeeKey || job.previewVideo.publicBeeKey || null,
+      channelKey: job.channelKey,
+      driveKey: job.channelKey,
+      relayBacked: true,
+      source: job.previewVideo.source || 'relay-cache',
+      relayRole: job.previewVideo.relayRole || 'cache',
+      relayServing: true,
+      availability: job.previewVideo.availability || 'playable',
+      byteAvailability: job.previewVideo.byteAvailability || job.previewVideo.availability || 'playable'
+    }]
+    const manifestUpdatedAt = Number(job.completedAt || job.updatedAt || nowFn()) || Date.now()
+
+    await relayCatalog.upsertChannel({
+      channelKey: job.channelKey,
+      publicBeeKey: job.publicBeeKey,
+      source: 'archive-job',
+      retentionClass: 'private',
+      relayRole: 'cache',
+      relayServing: true,
+      lastDecisionReason: 'archive-completed',
+      lastSeenAt: manifestUpdatedAt,
+      mirroredAt: manifestUpdatedAt,
+      previewVideos,
+      unavailableVideos: [],
+      videoCount: previewVideos.length,
+      manifestUpdatedAt
+    })
+
+    await runtime.cacheManager?.addChannel?.(job.channelKey, job.publicBeeKey, 'private', {
+      previewVideos
+    }).catch(() => {})
+    await runtime.publicFeed?.submitChannel?.(job.channelKey, job.publicBeeKey, {
+      channelName: job.channelName || previewVideos[0]?.channelName || null,
+      previewVideos,
+      videoCount: previewVideos.length,
+      manifestUpdatedAt
+    }).catch(() => {})
+    const seedStats = await runtime.seeder?.seedChannel?.({
+      driveKey: job.channelKey,
+      publicBeeKey: job.publicBeeKey,
+      previewVideos
+    }).catch(() => null)
+    const catalogEntry = seedStats?.catalogEntry || {
+      schema: 'peartube.relayCatalog',
+      catalogVersion: 1,
+      driveKey: job.channelKey,
+      publicBeeKey: job.publicBeeKey,
+      source: 'relay-cache',
+      relayRole: 'cache',
+      relayServing: true,
+      previewVideos,
+      unavailableVideos: [],
+      videoCount: previewVideos.length,
+      manifestUpdatedAt
+    }
+    await runtime.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
+    await persistStatus()
+    return { published: true, previewVideos: previewVideos.length }
+  }
+
   function scheduleCandidate(candidate) {
     queue = queue.then(() => processCandidate(candidate))
     return queue
@@ -386,6 +455,22 @@ export async function createRelayService({
         feedEntries: status.runtime.feedEntries,
         mirroredChannels: status.summary.totalChannels
       })
+
+      if (runtime.ctx?.metaDb) {
+        const store = createArchiveJobStore({ metaDb: runtime.ctx.metaDb })
+        const jobs = await store.listJobs().catch(() => [])
+        for (const job of jobs) {
+          if (job?.status === 'completed') {
+            await publishArchiveJobToFeed(job).catch((err) => {
+              logger.archive.warn('Completed archive job feed publication failed', {
+                id: job.id || null,
+                videoId: job.videoId || null,
+                error: err?.message || String(err)
+              })
+            })
+          }
+        }
+      }
 
       if (config.archive?.uiEnabled) {
         const runtimeFsModule = fsModule || await import('#fs')
@@ -508,6 +593,9 @@ export async function createRelayService({
     async processCandidate(candidate) {
       return scheduleCandidate(candidate)
     },
+    async publishArchiveJobToFeed(job) {
+      return publishArchiveJobToFeed(job)
+    },
     async enqueueArchiveJob(input, { runNow = false } = {}) {
       if (!runtime.ctx?.metaDb) throw new Error('archive jobs require relay runtime metadata storage')
       const runtimeFsModule = fsModule || await import('#fs')
@@ -535,7 +623,8 @@ export async function createRelayService({
           api: runtime.api,
           runtime,
           fs: runtimeFsModule
-        })
+        }),
+        onCompleted: (job) => service.publishArchiveJobToFeed(job)
       })
       const job = await manager.enqueue(input)
       if (runNow) return manager.runJob(job.id)

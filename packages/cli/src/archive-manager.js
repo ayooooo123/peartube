@@ -352,19 +352,39 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
     },
     async seedChannel({ channelKey, publicBeeKey, previewVideos }) {
       if (channelKey && publicBeeKey) {
-        await runtime?.cacheManager?.addChannel?.(channelKey, publicBeeKey, 'private').catch(() => {})
-        await runtime?.publicFeed?.submitChannel?.(channelKey, publicBeeKey).catch(() => {})
-        await runtime?.seeder?.seedChannel?.({
+        const playablePreviews = Array.isArray(previewVideos) ? previewVideos.filter(Boolean) : []
+        await runtime?.cacheManager?.addChannel?.(channelKey, publicBeeKey, 'private', {
+          previewVideos: playablePreviews
+        }).catch(() => {})
+        await runtime?.publicFeed?.submitChannel?.(channelKey, publicBeeKey, {
+          previewVideos: playablePreviews,
+          videoCount: playablePreviews.length,
+          manifestUpdatedAt: Date.now()
+        }).catch(() => {})
+        const seedStats = await runtime?.seeder?.seedChannel?.({
           driveKey: channelKey,
           publicBeeKey,
-          previewVideos: Array.isArray(previewVideos) ? previewVideos : []
-        }).catch(() => {})
+          previewVideos: playablePreviews
+        }).catch(() => null)
+        const catalogEntry = seedStats?.catalogEntry || {
+          schema: 'peartube.relayCatalog',
+          catalogVersion: 1,
+          driveKey: channelKey,
+          publicBeeKey,
+          source: 'relay-cache',
+          relayRole: 'cache',
+          relayServing: true,
+          previewVideos: playablePreviews,
+          videoCount: playablePreviews.length,
+          manifestUpdatedAt: Date.now()
+        }
+        await runtime?.publishRelayCatalogEntry?.(catalogEntry).catch(() => {})
       }
     }
   }
 }
 
-export function createArchiveManager({ store, downloader, publisher, logger = null }) {
+export function createArchiveManager({ store, downloader, publisher, logger = null, onCompleted = null }) {
   if (!store) throw new Error('store is required')
   if (!downloader) throw new Error('downloader is required')
   if (!publisher) throw new Error('publisher is required')
@@ -432,6 +452,9 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           completedAt: now(),
           error: null
         })
+        if (typeof onCompleted === 'function') {
+          await onCompleted(completed)
+        }
         return completed
       } catch (err) {
         logger?.archive?.error?.('Archive job failed', { id, error: err?.message || String(err) })

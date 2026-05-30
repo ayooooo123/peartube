@@ -146,6 +146,8 @@ export class MultiWriterChannel extends ReadyResource {
   }
 
   async _ensureBootstrapRecords() {
+    if (!this.writable) return
+
     const now = Date.now()
     const meta = await this.getMetadata().catch(() => null)
     if (!this.writable) return

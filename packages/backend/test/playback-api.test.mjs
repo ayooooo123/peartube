@@ -2,7 +2,7 @@ import test from 'brittle'
 
 import { createApi } from '../src/api.js'
 
-test('preparePlayback returns a playable URL before warmup settles or fails', async (t) => {
+test('preparePlayback returns a playable URL after bounded warmup failure', async (t) => {
   const api = createApi({ ctx: {} })
   const calls = []
 
@@ -42,19 +42,42 @@ test('preparePlayback returns a playable URL before warmup settles or fails', as
     'video/mp4',
   )
 
-  t.is(result.url, 'http://127.0.0.1:60023/video.mp4')
-  t.alike(result.stats, {
-    status: 'unknown',
-    progress: 0,
-    totalBlocks: 0,
-    downloadedBlocks: 0,
-    totalBytes: 0,
-    downloadedBytes: 0,
-    peerCount: 0,
-    swarmConnections: 0,
-    speedMBps: '0',
-    elapsed: 0,
-    isComplete: false,
+  t.alike(result, {
+    url: 'http://127.0.0.1:60023/video.mp4',
+    stats: {
+      status: 'unknown',
+      progress: 0,
+      totalBlocks: 0,
+      downloadedBlocks: 0,
+      totalBytes: 0,
+      downloadedBytes: 0,
+      peerCount: 0,
+      swarmConnections: 0,
+      speedMBps: '0',
+      elapsed: 0,
+      isComplete: false,
+    },
+    warmupStarted: true,
+    warmupResult: {
+      success: false,
+      error: 'warmup failed',
+    },
+    peerWarmupStarted: true,
+    selectedBlobWarmup: {
+      blobsCoreKey: 'blobs-core-key',
+      blobId: 'blob-id',
+      peerCount: 0,
+      blobPeerIds: [],
+      hasHeadBlock: false,
+      contiguousBlocks: 0,
+      readyForPlayback: false,
+      error: 'invalid-blob-ref',
+    },
+    peerWarmup: {
+      peerCount: 0,
+      retained: false,
+      timedOut: false,
+    },
   })
   t.is(result.warmupStarted, true)
   t.is(result.peerWarmupStarted, true)
@@ -182,4 +205,19 @@ test('getVideoStats does not fall back to global swarm connections as video peer
 
   t.is(stats.peerCount, 0)
   t.is(stats.swarmConnections, 3)
+})
+
+test('getVideoStats omits absent optional string fields for native HRPC encoding', (t) => {
+  const api = createApi({
+    ctx: {
+      swarm: { connections: new Set() },
+      channels: new Map(),
+    },
+  })
+
+  const stats = api.getVideoStats('channel-key', 'missing-video')
+
+  t.is(Object.prototype.hasOwnProperty.call(stats, 'blobCoreKey'), false)
+  t.is(stats.blobPeerIdsJson, '[]')
+  t.is(stats.blobPeersJson, '[]')
 })

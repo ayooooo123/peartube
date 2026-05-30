@@ -34,6 +34,12 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function getWarmupTimeoutMs(value) {
+  const ms = Number(value)
+  if (!Number.isFinite(ms)) return 5500
+  return Math.max(0, ms)
+}
+
 export class BlobPlaybackService {
   constructor({ ctx }) {
     this.ctx = ctx
@@ -207,25 +213,38 @@ export class BlobPlaybackService {
     mimeType,
     resolveUrl,
     warmup,
+    warmupTimeoutMs,
     getStats,
     warmSelectedBlob = false,
     selectedBlobWarmupTimeoutMs = 1200,
   }) {
     let warmupStarted = false
+    let warmupResult = null
 
     const result = resolveUrl
       ? await resolveUrl(driveKey, videoPath, publicBeeKey, blobId, blobsCoreKey, mimeType)
       : this.resolveDirectBlobUrl({ blobsCoreKey, blobId, mimeType })
+    const url = typeof result?.url === 'string' && result.url.length > 0 ? result.url : null
+    if (!url) {
+      throw new Error('Playback URL unavailable')
+    }
 
     try {
       if (warmup) {
         warmupStarted = true
-        Promise.resolve(warmup(driveKey, videoPath, publicBeeKey)).catch((err) => {
+        const warmupPromise = Promise.resolve(warmup(driveKey, videoPath, publicBeeKey)).catch((err) => {
           console.log('[BlobPlaybackService] preparePlayback warmup failed:', err?.message || err)
+          return { success: false, error: err?.message || String(err) }
         })
+        const timeoutMs = getWarmupTimeoutMs(warmupTimeoutMs)
+        warmupResult = await Promise.race([
+          warmupPromise,
+          wait(timeoutMs).then(() => ({ success: false, timedOut: true })),
+        ])
       }
     } catch (err) {
       console.log('[BlobPlaybackService] preparePlayback warmup failed:', err?.message || err)
+      warmupResult = { success: false, error: err?.message || String(err) }
     }
 
     if (blobsCoreKey) {
@@ -241,9 +260,10 @@ export class BlobPlaybackService {
         return { peerCount: 0, retained: false, timedOut: false }
       })
       return {
-        url: result.url,
+        url,
         stats: typeof getStats === 'function' ? getStats(driveKey, videoPath) : undefined,
         warmupStarted,
+        warmupResult,
         peerWarmupStarted: true,
         selectedBlobWarmup,
         peerWarmup: await Promise.race([
@@ -254,9 +274,10 @@ export class BlobPlaybackService {
     }
 
     return {
-      url: result.url,
+      url,
       stats: typeof getStats === 'function' ? getStats(driveKey, videoPath) : undefined,
       warmupStarted,
+      warmupResult,
       peerWarmupStarted: false,
     }
   }

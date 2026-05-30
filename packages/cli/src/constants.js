@@ -26,7 +26,8 @@ export const RETENTION_PRIORITY = {
 }
 
 export const ARCHIVE_TYPE_YOUTUBE = 'youtube'
-export const VALID_ARCHIVE_TYPES = [ARCHIVE_TYPE_YOUTUBE]
+export const ARCHIVE_TYPE_RUMBLE = 'rumble'
+export const VALID_ARCHIVE_TYPES = [ARCHIVE_TYPE_YOUTUBE, ARCHIVE_TYPE_RUMBLE]
 
 export const DEFAULT_ARCHIVE_POLL_SECONDS = 3600
 export const DEFAULT_ARCHIVE_FORMAT = 'bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b'

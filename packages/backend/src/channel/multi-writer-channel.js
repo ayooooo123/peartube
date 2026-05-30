@@ -148,6 +148,7 @@ export class MultiWriterChannel extends ReadyResource {
   async _ensureBootstrapRecords() {
     const now = Date.now()
     const meta = await this.getMetadata().catch(() => null)
+    if (!this.writable) return
     if (!meta) {
       await this.db.insert('@peartubeChannel/metadata', {
         key: 'meta',

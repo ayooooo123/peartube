@@ -771,7 +771,44 @@ export function createApi({
         }
 
         const attachVideoAvailability = async (videos) => {
-          return cloneArrayOfObjects(videos)
+          return await Promise.all(cloneArrayOfObjects(videos).map(async (video) => {
+            const localHint = await getLocalVideoAvailabilityHint(video)
+            let peerHint = null
+            if (publicFeed && typeof publicFeed.requestAvailabilityHints === 'function') {
+              try {
+                const hints = await publicFeed.requestAvailabilityHints([{
+                  driveKey,
+                  publicBeeKey,
+                  id: video?.id,
+                  blobsCoreKey: video?.blobsCoreKey,
+                  blobId: video?.blobId,
+                }])
+                peerHint = Array.isArray(hints) ? hints.find((hint) => hint?.id === video?.id) || null : null
+              } catch { /* best effort */ }
+            }
+            const availability = resolveExplicitVideoAvailability({ localHint, peerHint })
+            const hint = isPlayableAvailabilityHint(localHint) ? localHint : peerHint
+            // Metadata carried by PublicBee / relay catalogs is a short-lived
+            // optimistic startup hint. It lets feed cards render as playable while
+            // peer/local byte proof catches up, but is revalidated by cache TTL.
+            const hasOptimisticMetadata = video?.availability === 'playable' || video?.byteAvailability === 'playable'
+            if (hasOptimisticMetadata && (!peerHint || peerHint?.availability === 'playable')) {
+              return {
+                ...video,
+                availability: 'playable',
+                byteAvailability: 'playable',
+                contiguousBlocks: Number(video?.contiguousBlocks || hint?.contiguousBlocks || 0) || 0,
+                hasHeadBlock: Boolean(video?.hasHeadBlock || hint?.hasHeadBlock),
+              }
+            }
+            return {
+              ...video,
+              availability,
+              byteAvailability: availability,
+              contiguousBlocks: Number(hint?.contiguousBlocks || 0) || 0,
+              hasHeadBlock: Boolean(hint?.hasHeadBlock),
+            }
+          }))
         }
 
         const cached = listVideosCache.get(driveKey)

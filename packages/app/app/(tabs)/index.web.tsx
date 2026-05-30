@@ -225,6 +225,30 @@ function safeDecodeURIComponent(value: string): string {
   }
 }
 
+function getPendingWatchVideo(route: WatchRoute): VideoData | null {
+  const matchesRoute = (candidate: any) => (
+    candidate?.id === route.videoId &&
+    (candidate.channelKey === route.channelKey || candidate.driveKey === route.channelKey)
+  )
+
+  const stagedVideo = (window as any).__peartubePendingWatchVideo
+  if (matchesRoute(stagedVideo)) return stagedVideo
+
+  try {
+    const rawVideo = window.sessionStorage?.getItem('peartube:pendingWatchVideo')
+    if (!rawVideo) return null
+
+    const parsedVideo = JSON.parse(rawVideo)
+    if (matchesRoute(parsedVideo)) return parsedVideo
+
+    window.sessionStorage?.removeItem('peartube:pendingWatchVideo')
+  } catch (err) {
+    console.debug('[Home] Failed to read pending watch video:', err)
+  }
+
+  return null
+}
+
 // WatchPageView - YouTube-style video playback page
 interface WatchPageViewProps {
   channelKey: string
@@ -2117,9 +2141,12 @@ export default function HomeScreen() {
         if (foundVideo) {
           setWatchVideo({ ...foundVideo, channelKey: route.channelKey })
         } else {
-          const pendingVideo = (window as any).__peartubePendingWatchVideo
-          if (pendingVideo?.id === route.videoId && (pendingVideo.channelKey === route.channelKey || pendingVideo.driveKey === route.channelKey)) {
+          const pendingVideo = getPendingWatchVideo(route)
+          if (pendingVideo) {
             setWatchVideo({ ...pendingVideo, channelKey: route.channelKey })
+            try {
+              window.sessionStorage?.removeItem('peartube:pendingWatchVideo')
+            } catch {}
           } else {
             loadVideoInfoRef.current(route.channelKey, route.videoId)
           }
@@ -2184,7 +2211,12 @@ export default function HomeScreen() {
       }
       feedCache.lastLoadedAt = Date.now()
     } catch (err) {
-      console.error('[Home] Failed to load public feed:', err)
+      const message = err instanceof Error ? err.message : String(err)
+      if (message.includes('Backend not ready')) {
+        console.log('[Home] Public feed load deferred until backend ready')
+      } else {
+        console.error('[Home] Failed to load public feed:', err)
+      }
     } finally {
       setFeedLoading(false)
     }

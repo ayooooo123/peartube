@@ -4,6 +4,7 @@
  *
  * Uses @peartube/platform/rpc for unified backend communication.
  */
+import '@/lib/ignoreDevWarnings'
 import '../global.css'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Stack } from 'expo-router'
@@ -511,7 +512,7 @@ const BACKEND_STARTUP_TIMEOUT_MS = 30000
           if (resolvedBundleSources.downloaderWorkerSource) {
             console.log('[App] Downloader worker bundle length:', resolvedBundleSources.downloaderWorkerSource.length)
           } else {
-            console.warn('[App] Downloader worker bundle unavailable - continuing without downloader worker')
+            console.log('[App] Downloader worker bundle unavailable - continuing without downloader worker')
           }
         }
 

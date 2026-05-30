@@ -35,10 +35,10 @@ test('vertical discovery uses paged full-screen feed and plays inline in the sho
   assert.doesNotMatch(source, /useVideoPlayerContext\(/, 'vertical discovery should not bind the Shorts player to the global watch player context')
   assert.doesNotMatch(source, /handoffToShorts\(\)/, 'Shorts playback should not hand off through the normal player')
   assert.match(source, /preparePlayback\(playbackRequest\)/, 'vertical player should resolve playback through backend preparePlayback')
-  assert.match(source, /getCachedVideoUrl\(cacheKey\)/, 'vertical player should use the short playback URL cache')
+  assert.match(source, /getCachedVideoUrl\(cacheKey(?:, \{ requireReady: true \})?\)/, 'vertical player should use the short playback URL cache')
   assert.doesNotMatch(source, /setAmbientVideoContext\(/, 'Shorts playback and comments should not update global watch-player metadata')
   assert.match(source, /setShortsVideoUrl\(/, 'vertical player should keep playback URL in local shorts-player state')
-  assert.match(source, /const cachedUrl = cacheKey \? getCachedVideoUrl\(cacheKey\) : null/, 'cached Shorts playback should attach directly to the Shorts player')
+  assert.match(source, /const cachedUrl = cacheKey \? getCachedVideoUrl\(cacheKey(?:, \{ requireReady: true \})?\) : null/, 'cached Shorts playback should attach directly to the Shorts player')
   assert.match(source, /const result = await rpc\.preparePlayback\(playbackRequest\)/, 'prepared Shorts playback should attach directly to the Shorts player')
 })
 
@@ -113,7 +113,7 @@ test('vertical discovery preloads the next few videos into the playback URL cach
   assert.match(controllerSource, /const nextVideos = \(videos \|\| \[\]\)\.slice\(activeIndex \+ 1, activeIndex \+ 1 \+ windowSize\)/, 'controller should warm the next few videos, not only one or two')
   assert.match(controllerSource, /inflightPlaybackWarmups\?\.current\?\.has\?\.\(cacheKey\)/, 'controller preload should de-dupe overlapping preparePlayback warmups')
   assert.match(controllerSource, /const result = await preparePlayback\?\.\(playbackRequest\)/, 'controller preload should await preparePlayback so it can keep the resolved URL')
-  assert.match(controllerSource, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'controller preload should populate the playback URL cache for instant swipe playback')
+  assert.match(controllerSource, /if \(result\?\.url && cacheKey\) setCachedVideoUrl\(cacheKey, result\.url(?:, Boolean\(result\?\.selectedBlobWarmup\?\.readyForPlayback\))?\)/, 'controller preload should populate the playback URL cache for instant swipe playback')
 })
 
 test('Home Discover preloads visible feed playback URLs into the shared URL cache', () => {
@@ -123,7 +123,7 @@ test('Home Discover preloads visible feed playback URLs into the shared URL cach
   assert.match(source, /inflightPlaybackWarmups\.current\.has\(cacheKey\)/, 'Home warmups should be de-duped')
   assert.match(source, /const nextVideos = feedVideosWithThumbs\.slice\(0, 4\)/, 'Home should warm the first few visible Discover cards')
   assert.match(source, /const result = await rpc\.preparePlayback\(\{[\s\S]*blobId:[\s\S]*blobsCoreKey:[\s\S]*mimeType:/, 'Home warmups should preserve direct blob playback refs')
-  assert.match(source, /if \(result\?\.url\) setCachedVideoUrl\(cacheKey, result\.url\)/, 'Home warmups should populate the shared playback URL cache')
+  assert.match(source, /if \(result\?\.url\) setCachedVideoUrl\(cacheKey, result\.url(?:, Boolean\(result\.selectedBlobWarmup\?\.readyForPlayback\))?\)/, 'Home warmups should populate the shared playback URL cache')
 })
 
 test('Home Discover falls back to public feed RPC and labels feed entries separately from live peers', () => {

@@ -48,9 +48,7 @@ function createIdleProgressGuard({ timeoutMs, onTimeout }) {
     timer = setTimeout(() => {
       if (settled) return
       settled = true
-      try { onTimeout?.() } catch {
-        // Best effort cleanup only.
-      }
+      try { onTimeout?.() } catch (err) { void err }
       const err = new Error(`Blob download idle timeout (${timeoutMs}ms without progress)`)
       err.code = BLOB_DOWNLOAD_TIMEOUT
       rejectGuard(err)
@@ -180,9 +178,7 @@ async function downloadBlobRef(ctx, ref) {
   const idleGuard = createIdleProgressGuard({
     timeoutMs: DOWNLOAD_PROGRESS_IDLE_MS,
     onTimeout: () => {
-      try { download.destroy?.() } catch {
-      // Best effort cleanup only.
-    }
+      try { download.destroy?.() } catch (err) { void err }
     }
   })
   const onDownload = () => idleGuard.bump()
@@ -197,20 +193,14 @@ async function downloadBlobRef(ctx, ref) {
       idleGuard.promise
     ])
   } catch (err) {
-    try { download.destroy?.() } catch {
-      // Best effort cleanup only.
-    }
+    try { download.destroy?.() } catch (err) { void err }
     throw err
   } finally {
     idleGuard.stop()
     blobsCore.off?.('download', onDownload)
     blobsCore.off?.('append', onAppend)
-    try { await discoveryHandle?.destroy?.() } catch {
-      // Best effort cleanup only.
-    }
-    try { await discoveryHandle?.close?.() } catch {
-      // Best effort cleanup only.
-    }
+    try { await discoveryHandle?.destroy?.() } catch (err) { void err }
+    try { await discoveryHandle?.close?.() } catch (err) { void err }
   }
 
   if (Number.isFinite(ref.blobId?.byteLength)) return Number(ref.blobId.byteLength)

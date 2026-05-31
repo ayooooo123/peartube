@@ -175,6 +175,7 @@ export function VideoPlayerOverlay() {
     currentVideo,
     videoUrl,
     isPlaying,
+    isStartingPlayback,
     isLoading,
     playerMode,
     videoStats,
@@ -1858,12 +1859,14 @@ export function VideoPlayerOverlay() {
       return
     }
 
-    if (isPlaying) {
+    if (isStartingPlayback) {
+      resumeVideo()
+    } else if (isPlaying) {
       pauseVideo()
     } else {
       resumeVideo()
     }
-  }, [isCasting, castIsPlaying, cast, isPlaying, pauseVideo, resumeVideo])
+  }, [isCasting, castIsPlaying, cast, isPlaying, isStartingPlayback, pauseVideo, resumeVideo])
 
   const handleDesktopSeekStart = useCallback(() => {
     if (effectiveDuration > 0) {

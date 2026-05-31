@@ -50,6 +50,7 @@ interface VideoPlayerContextType {
 
   // Player state
   isPlaying: boolean
+  isStartingPlayback: boolean
   isLoading: boolean
   playerMode: PlayerMode
   videoStats: VideoStats | null
@@ -109,6 +110,7 @@ type VideoPlayerSessionContextType = Pick<VideoPlayerContextType,
   | 'currentVideo'
   | 'videoUrl'
   | 'isPlaying'
+  | 'isStartingPlayback'
   | 'isLoading'
   | 'playerMode'
   | 'videoStats'
@@ -1313,6 +1315,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
   }, [])
 
   const progress = duration > 0 ? currentTime / duration : 0
+  const isStartingPlayback = Boolean(currentVideo && isLoading && isPlaying)
   
   const shouldEnablePip = useMemo(() => {
     if (Platform.OS !== 'android') return false
@@ -1326,6 +1329,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     currentVideo,
     videoUrl,
     isPlaying,
+    isStartingPlayback,
     isLoading,
     playerMode,
     videoStats,
@@ -1342,6 +1346,7 @@ export function VideoPlayerProvider({ children }: VideoPlayerProviderProps) {
     currentVideo,
     videoUrl,
     isPlaying,
+    isStartingPlayback,
     isLoading,
     playerMode,
     videoStats,

@@ -13,7 +13,9 @@ function withAndroidAbiSplits(config) {
         abi {
             reset()
             enable true
-            include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+            def targetAbiProperty = (findProperty('targetAbis') ?: findProperty('reactNativeArchitectures') ?: '').toString()
+            def includedAbis = targetAbiProperty ? targetAbiProperty.split(',').collect { it.trim() }.findAll { it } : ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]
+            include(*includedAbis)
             universalApk false
         }
     }

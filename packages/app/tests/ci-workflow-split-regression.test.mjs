@@ -64,6 +64,7 @@ test('build workflows stay separate from publish workflows', () => {
 
 test('tagged Android releases only build the arm64-v8a APK', () => {
   const releaseAndroid = readFile('.github/workflows/release-android.yml')
+  const abiSplitsPlugin = readFile('packages/app/plugins/withAndroidAbiSplits.js')
 
   assert.match(
     releaseAndroid,
@@ -74,6 +75,26 @@ test('tagged Android releases only build the arm64-v8a APK', () => {
     releaseAndroid,
     /abi:\s*\[[^\]]*(armeabi-v7a|x86|x86_64)/,
     'release-android should skip armv7 and emulator APK builds for tagged releases',
+  )
+  assert.match(
+    releaseAndroid,
+    /--max-workers\s+2/,
+    'release-android should cap Gradle workers so dex merging does not exhaust runner heap',
+  )
+  assert.match(
+    releaseAndroid,
+    /org\.gradle\.jvmargs=-Xmx4096m/,
+    'release-android should raise Gradle heap for D8 dex merging',
+  )
+  assert.match(
+    abiSplitsPlugin,
+    /findProperty\('targetAbis'\)/,
+    'ABI split generation should honor the release workflow targetAbis property',
+  )
+  assert.doesNotMatch(
+    abiSplitsPlugin,
+    /include "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/,
+    'ABI split generation should not hard-code all Android ABIs for arm64-only releases',
   )
 })
 

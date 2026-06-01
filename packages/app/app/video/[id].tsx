@@ -50,14 +50,6 @@ function isStatsComplete(stats: VideoStats | null | undefined) {
   )
 }
 
-function canAttemptPlayback(videoData: any) {
-  if (!videoData) return false
-  if (videoData.blobId && videoData.blobsCoreKey) return true
-  if (typeof videoData.path === 'string' && videoData.path.length > 0) return true
-  if (typeof videoData.publicBeeKey === 'string' && videoData.publicBeeKey.length > 0) return true
-  return videoData.title !== 'Unknown'
-}
-
 // P2P Stats Overlay Component
 function P2PStatsOverlay({ stats, showDetails, onPress }: {
   stats: VideoStats | null
@@ -311,7 +303,6 @@ function MobileVideoPlayerScreen() {
   const [localStats, setLocalStats] = useState<VideoStats | null>(null)
   const [videoData, setVideoData] = useState<any>(videoDataParam)
   const [loadingMeta, setLoadingMeta] = useState(!videoDataParam && !!channelKeyParam)
-  const [loadErrorText, setLoadErrorText] = useState('Failed to load video')
   const statsPollingRef = useRef<NodeJS.Timeout | null>(null)
   const statsPollingDelayRef = useRef<NodeJS.Timeout | null>(null)
   const mountedRef = useRef(true)
@@ -466,16 +457,9 @@ function MobileVideoPlayerScreen() {
     loadGenerationRef.current = generation
     clearStatsPolling()
     setLocalStats(null)
-    setLoadErrorText('Failed to load video')
     setIsLoading(true)
 
     try {
-      if (!canAttemptPlayback(videoData)) {
-        console.log('[VideoPlayer] Playback skipped: video metadata is unavailable')
-        setLoadErrorText('Video metadata unavailable')
-        setIsLoading(false)
-        return
-      }
       const videoRef = (videoData.path && typeof videoData.path === 'string' && videoData.path.startsWith('/'))
         ? videoData.path
         : videoData.id
@@ -536,7 +520,6 @@ function MobileVideoPlayerScreen() {
       }
     } catch (err) {
       console.error('[VideoPlayer] Failed to load video:', err)
-      setLoadErrorText('Failed to load video')
       if (mountedRef.current && loadGenerationRef.current === generation) {
         setIsLoading(false)
       }
@@ -640,7 +623,7 @@ function MobileVideoPlayerScreen() {
             </View>
           ) : (
             <View style={styles.errorContainer}>
-              <Text style={styles.errorText}>{loadErrorText}</Text>
+              <Text style={styles.errorText}>Failed to load video</Text>
               <Pressable style={styles.retryButton} onPress={loadVideo}>
                 <Text style={styles.retryText}>Retry</Text>
               </Pressable>

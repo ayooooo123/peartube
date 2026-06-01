@@ -111,6 +111,69 @@ test('archive manager downloads, imports, publishes, and seeds videos through in
   t.absent(Object.keys(publicJob).includes('url'), 'completed public job view omits original URL')
 })
 
+
+test('archive manager uses source video title and thumbnail without channel suffix in preview cards', async (t) => {
+  const metaDb = new Map()
+  const store = createArchiveJobStore({ metaDb: {
+    async get(key) { return metaDb.has(key) ? { value: metaDb.get(key) } : null },
+    async put(key, value) { metaDb.set(key, value) }
+  } })
+  const imports = []
+  const seeded = []
+  const manager = createArchiveManager({
+    store,
+    downloader: {
+      async download() {
+        return {
+          filePath: '/tmp/source.mp4',
+          title: 'Original Source Video Title',
+          description: 'Source description',
+          mimeType: 'video/mp4',
+          duration: 123,
+          thumbnailUrl: 'https://source.example/thumb.jpg'
+        }
+      }
+    },
+    publisher: {
+      async ensureAnonymousChannel() {
+        return { channelKey: 'drive-key', publicBeeKey: 'public-bee', channel: { blobs: true } }
+      },
+      async importVideo(input) {
+        imports.push(input)
+        return {
+          videoId: 'video-1',
+          metadata: {
+            blobId: '0:4:0:4096',
+            blobsCoreKey: 'aa'.repeat(32),
+            thumbnailUrl: input.thumbnailUrl,
+            duration: input.duration,
+            mimeType: input.mimeType,
+            uploadedAt: 1700000000000
+          }
+        }
+      },
+      async publishChannel() {},
+      async seedChannel(input) { seeded.push(input) }
+    }
+  })
+
+  const job = await manager.enqueue({
+    url: 'https://rumble.com/example.html',
+    channelName: 'America First Full Episodes',
+    title: 'America First Full Episodes'
+  })
+  const result = await manager.runJob(job.id)
+
+  t.is(imports[0].title, 'Original Source Video Title')
+  t.is(imports[0].thumbnailUrl, 'https://source.example/thumb.jpg')
+  t.is(result.title, 'Original Source Video Title')
+  t.is(result.previewVideo.title, 'Original Source Video Title')
+  t.is(result.previewVideo.thumbnailUrl, 'https://source.example/thumb.jpg')
+  t.absent(result.previewVideo.title.includes('Rumble archive'), 'title has no archive suffix')
+  t.absent(result.previewVideo.title.includes('America First Full Episodes'), 'title is not replaced by channel name')
+  t.is(seeded[0].previewVideos[0].title, 'Original Source Video Title')
+})
+
 test('archive TUI and WebUI render queue, archive form, and publish actions', async (t) => {
   const model = {
     status: { peers: 3, feedEntries: 7, seeding: { videos: 11 } },
@@ -159,6 +222,48 @@ test('yt-dlp downloader extracts the actual after_move filepath and verifies it 
   t.is(result.filePath, '/archive/tmp/arch_1/example.mp4')
   t.alike(createdDirs, ['/archive/tmp/arch_1'])
   t.ok(calls[0].args.includes('after_move:filepath'), 'keeps yt-dlp after_move filepath print')
+})
+
+
+test('yt-dlp downloader reads source title duration channel and thumbnail URL from info json', async (t) => {
+  const infoPath = '/archive/tmp/arch_meta/example.info.json'
+  const existing = new Set(['/archive/tmp/arch_meta/example.mp4', infoPath])
+  const downloader = createYtDlpDownloader({
+    outputDir: '/archive/tmp',
+    fs: {
+      mkdirSync() {},
+      rmSync() {},
+      existsSync(path) { return existing.has(path) },
+      readFileSync(path) {
+        t.is(path, infoPath)
+        return JSON.stringify({
+          title: 'Real Source Title',
+          description: 'Real source description',
+          duration: 456,
+          thumbnail: 'https://source.example/thumb.jpg',
+          uploader: 'Real Channel'
+        })
+      }
+    },
+    path: {
+      join(...parts) { return parts.join('/').replace(/\/+/g, '/') }
+    },
+    spawnFn() {
+      return {
+        stdout: { on(event, cb) { if (event === 'data') cb('filepath\n/archive/tmp/arch_meta/example.mp4\n') } },
+        stderr: { on() {} },
+        on(event, cb) { if (event === 'close') cb(0) }
+      }
+    }
+  })
+
+  const result = await downloader.download({ id: 'arch_meta', url: 'https://rumble.com/example.html' })
+
+  t.is(result.title, 'Real Source Title')
+  t.is(result.description, 'Real source description')
+  t.is(result.duration, 456)
+  t.is(result.thumbnailUrl, 'https://source.example/thumb.jpg')
+  t.is(result.creatorName, 'Real Channel')
 })
 
 test('yt-dlp downloader fails with useful context when reported output file is missing', async (t) => {

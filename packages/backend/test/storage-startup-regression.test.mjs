@@ -51,17 +51,6 @@ test('blob server startup does not await listen before storage init can finish',
   assert.match(blobServerBody, /blobServerListenPromise\s*\.then\(/)
 })
 
-test('blob server range requests prioritize matching blob blocks before streaming', () => {
-  const blobServerPatchBody = storageSource.match(
-    /const origOnRequest = blobServer\._onrequest\.bind\(blobServer\)([\s\S]*?)console\.log\('\[Storage\] Starting blob server listen/
-  )?.[1] ?? ''
-
-  assert.match(storageSource, /import \{ prioritizeBlobServerRangeRequest \} from '\.\/blob-range-priority\.js'/)
-  assert.ok(blobServerPatchBody, 'blob server request patch should exist')
-  assert.match(blobServerPatchBody, /await prioritizeBlobServerRangeRequest\(blobServer, req\)/)
-  assert.match(blobServerPatchBody, /return origOnRequest\(req, res\)/)
-})
-
 test('storage joins the PearTube network topic immediately without DHT bootstrap gates', () => {
   assert.doesNotMatch(storageSource, /function isSwarmDiscoveryReady/)
   assert.doesNotMatch(storageSource, /waitForSwarmDiscoveryReady\(swarm\)/)

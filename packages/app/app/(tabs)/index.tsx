@@ -333,12 +333,7 @@ export default function HomeScreen() {
         console.log('[Home] Failed to load swarm status:', (err as any)?.message || err)
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.includes('Backend not ready')) {
-        console.log('[Home] Public feed load deferred until backend ready')
-      } else {
-        console.error('[Home] Failed to load public feed:', err)
-      }
+      console.error('[Home] Failed to load public feed:', err)
     } finally {
       setFeedLoading(false)
     }

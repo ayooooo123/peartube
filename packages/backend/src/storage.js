@@ -25,7 +25,6 @@ import {
 } from './runtime-modules.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 import { normalizeBlobRefInput } from './blob-ref.js'
-import { prioritizeBlobServerRangeRequest } from './blob-range-priority.js'
 import { createKnownPeerCache } from './known-peers.js'
 
 function resolveDebugLogPath() {
@@ -1256,9 +1255,6 @@ export async function initializeStorage(config) {
       res.setHeader('Access-Control-Allow-Headers', 'Range')
       res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
       if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
-      await prioritizeBlobServerRangeRequest(blobServer, req).catch((err) => {
-        console.log('[Storage] Blob range priority failed:', err?.message || err)
-      })
       return origOnRequest(req, res)
     }
 

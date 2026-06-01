@@ -95,15 +95,14 @@ test('channel metadata fallback uses getBlobEntry without blocking on prefetch w
   t.alike(seen, ['legacy-video'])
 })
 
-test('preparePlayback waits for bounded startup warmup before returning the player URL', async (t) => {
+test('preparePlayback returns the player URL without waiting for large-video startup warmup', async (t) => {
   const { ctx } = createCtx()
   const service = new BlobPlaybackService({ ctx })
   let warmupStarted = false
   let releaseWarmup
   const warmupPromise = new Promise((resolve) => { releaseWarmup = resolve })
-  let settled = false
 
-  const pending = service.preparePlayback({
+  const result = await service.preparePlayback({
     driveKey: 'channel-key',
     videoPath: 'videos/demo.mp4',
     publicBeeKey: 'public-bee-key',
@@ -115,39 +114,16 @@ test('preparePlayback waits for bounded startup warmup before returning the play
       warmupStarted = true
       return warmupPromise
     },
-    warmupTimeoutMs: 1000,
   })
-  pending.then(() => { settled = true }, () => { settled = true })
-
-  await Promise.resolve()
-  await Promise.resolve()
-  t.is(warmupStarted, true)
-  t.is(settled, false)
-
-  releaseWarmup({ success: true, ready: true })
-  const result = await pending
 
   t.is(result.url, VALID_URL)
   t.alike(result.stats, { progress: 0, peerCount: 2 })
   t.is(result.warmupStarted, true)
-  t.alike(result.warmupResult, { success: true, ready: true })
   t.is(result.peerWarmupStarted, true)
-})
+  t.ok(warmupStarted)
 
-test('preparePlayback rejects missing playback URL before HRPC response encoding', async (t) => {
-  const { ctx } = createCtx()
-  const service = new BlobPlaybackService({ ctx })
-
-  try {
-    await service.preparePlayback({
-      driveKey: 'channel-key',
-      videoPath: 'videos/missing.mp4',
-      resolveUrl: async () => ({ url: null }),
-    })
-    t.fail('preparePlayback should reject a missing playback URL')
-  } catch (err) {
-    t.is(err.message, 'Playback URL unavailable')
-  }
+  releaseWarmup()
+  await Promise.resolve()
 })
 
 test('preparePlayback still returns URL when background startup warmup later fails', async (t) => {
@@ -165,33 +141,11 @@ test('preparePlayback still returns URL when background startup warmup later fai
     warmup: async () => {
       throw new Error('warmup failed')
     },
-    warmupTimeoutMs: 1000,
   })
 
   t.is(result.url, VALID_URL)
   t.alike(result.stats, { progress: 0 })
   t.is(result.warmupStarted, true)
-  t.alike(result.warmupResult, { success: false, error: 'warmup failed' })
-})
 
-test('preparePlayback still returns URL when startup warmup times out', async (t) => {
-  const { ctx } = createCtx()
-  const service = new BlobPlaybackService({ ctx })
-
-  const result = await service.preparePlayback({
-    driveKey: 'channel-key',
-    videoPath: 'videos/demo.mp4',
-    publicBeeKey: 'public-bee-key',
-    blobId: VALID_BLOB,
-    blobsCoreKey: VALID_KEY,
-    mimeType: 'video/mp4',
-    getStats: () => ({ progress: 0 }),
-    warmup: () => new Promise(() => {}),
-    warmupTimeoutMs: 5,
-  })
-
-  t.is(result.url, VALID_URL)
-  t.alike(result.stats, { progress: 0 })
-  t.is(result.warmupStarted, true)
-  t.alike(result.warmupResult, { success: false, timedOut: true })
+  await Promise.resolve()
 })

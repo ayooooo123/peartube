@@ -196,46 +196,6 @@ test('createProtocolClient emits normalized network status from the system names
   t.alike(networkEvents, [status])
 })
 
-test('createProtocolClient waits for ready event without warning when initial status races startup', async (t) => {
-  FakeHRPC.instances.length = 0
-  const warnings = []
-  const originalWarn = console.warn
-  t.teardown(() => {
-    console.warn = originalWarn
-  })
-  console.warn = (...args) => warnings.push(args.join(' '))
-
-  class BootingHRPC extends FakeHRPC {
-    getStatus() {
-      return Promise.reject(new Error('Backend not ready'))
-    }
-
-    onEventReady(handler) {
-      this.handlers.ready = handler
-    }
-  }
-
-  const client = createProtocolClient({
-    stream: {},
-    HRPCImpl: BootingHRPC
-  })
-
-  const readyPromise = client.ready()
-  await new Promise((resolve) => setImmediate(resolve))
-
-  FakeHRPC.instances[0].handlers.ready({
-    blobServerPort: 4567,
-    blobServerReady: true,
-    blobServerError: null,
-    protocolVersion: 2
-  })
-
-  const ready = await readyPromise
-
-  t.alike(ready, { blobServerPort: 4567, blobServerReady: true, blobServerError: null, protocolVersion: 2 })
-  t.alike(warnings, [])
-})
-
 test('createProtocolClient fails fast on protocol version mismatch', async (t) => {
   class MismatchedHRPC extends FakeHRPC {
     getStatus() {

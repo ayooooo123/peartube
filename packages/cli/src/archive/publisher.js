@@ -90,17 +90,21 @@ async function announceArchiveChannel(runtime, channelEntry, logger, sourceId, o
       }))
     : await listChannelPreviewVideos(channelEntry)
 
-  try {
-    if (previewVideos.length > 0) {
-      await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey, {
+  const channelOptions = previewVideos.length > 0
+    ? {
         channelName: channelEntry.channelName || null,
         previewVideos,
-      })
-    } else {
-      await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey, {
+        videoCount: previewVideos.length,
+        manifestUpdatedAt: Date.now()
+      }
+    : {
         channelName: channelEntry.channelName || null,
-      })
-    }
+        videoCount: 0,
+        manifestUpdatedAt: Date.now()
+      }
+
+  try {
+    await runtime.publicFeed?.submitChannel?.(channelKey, publicBeeKey, channelOptions)
   } catch (err) {
     logger?.archive?.debug?.('Public-feed submit failed', {
       sourceId,
@@ -108,9 +112,17 @@ async function announceArchiveChannel(runtime, channelEntry, logger, sourceId, o
     })
   }
   try {
-    await runtime.cacheManager?.pinChannel?.(channelKey, publicBeeKey)
+    if (previewVideos.length > 0 && typeof runtime.cacheManager?.addChannel === 'function') {
+      await runtime.cacheManager.addChannel(channelKey, publicBeeKey, 'private', {
+        previewVideos,
+        videoCount: previewVideos.length,
+        manifestUpdatedAt: channelOptions.manifestUpdatedAt
+      })
+    } else {
+      await runtime.cacheManager?.pinChannel?.(channelKey, publicBeeKey)
+    }
   } catch (err) {
-    logger?.archive?.debug?.('Pin channel failed', {
+    logger?.archive?.debug?.('Cache archive channel failed', {
       sourceId,
       error: err?.message || String(err)
     })
@@ -122,6 +134,32 @@ async function announceArchiveChannel(runtime, channelEntry, logger, sourceId, o
     await runtime.seeder?.seedChannel?.(seedEntry)
   } catch (err) {
     logger?.archive?.debug?.('Seed channel failed', {
+      sourceId,
+      error: err?.message || String(err)
+    })
+  }
+  try {
+    if (previewVideos.length > 0 && typeof runtime.publishRelayCatalogEntry === 'function') {
+      await runtime.publishRelayCatalogEntry({
+        schema: 'peartube.relayCatalog',
+        catalogVersion: 1,
+        driveKey: channelKey,
+        channelKey,
+        publicBeeKey,
+        source: 'archive-job',
+        retentionClass: 'private',
+        relayRole: 'cache',
+        relayServing: true,
+        lastDecisionReason: 'archive-completed',
+        lastSeenAt: channelOptions.manifestUpdatedAt,
+        mirroredAt: channelOptions.manifestUpdatedAt,
+        previewVideos,
+        videoCount: previewVideos.length,
+        manifestUpdatedAt: channelOptions.manifestUpdatedAt
+      })
+    }
+  } catch (err) {
+    logger?.archive?.debug?.('Relay catalog publish failed', {
       sourceId,
       error: err?.message || String(err)
     })

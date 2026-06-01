@@ -1,7 +1,7 @@
 import { spawn } from '#subprocess'
 import crypto from 'hypercore-crypto'
 import b4a from 'b4a'
-import { mkdirSync, rmSync, existsSync } from '#fs'
+import { mkdirSync, rmSync, existsSync, readFileSync } from '#fs'
 import { join } from '#path'
 
 const JOBS_KEY = 'relay-archive-jobs'
@@ -200,7 +200,7 @@ export function createYtDlpDownloader({
   ytDlpExtraArgs = [],
   ytDlpRetryExtraArgs = [],
   spawnFn = spawn,
-  fs = { mkdirSync, rmSync, existsSync },
+  fs = { mkdirSync, rmSync, existsSync, readFileSync },
   path = { join }
 } = {}) {
   if (!outputDir) throw new Error('outputDir is required')
@@ -274,10 +274,38 @@ export function createYtDlpDownloader({
         throw new Error(`yt-dlp reported output file does not exist: ${filePath}`)
       }
 
+      const stem = filePath.replace(/\.[^.]+$/, '')
+      const infoPath = `${stem}.info.json`
+      let info = null
+      if (typeof fs.existsSync === 'function' && fs.existsSync(infoPath) && typeof fs.readFileSync === 'function') {
+        try {
+          const parsed = JSON.parse(String(fs.readFileSync(infoPath, 'utf8') || '{}'))
+          if (parsed && typeof parsed === 'object') info = parsed
+        } catch {
+          info = null
+        }
+      }
+      const sourceTitle = typeof info?.title === 'string' && info.title.trim()
+        ? info.title.trim()
+        : null
+      const sourceDescription = typeof info?.description === 'string'
+        ? info.description
+        : null
+      const sourceDuration = Number.isFinite(info?.duration) ? Number(info.duration) : undefined
+      const thumbnailUrl = typeof info?.thumbnail === 'string' && info.thumbnail.trim()
+        ? info.thumbnail.trim()
+        : null
+      const creatorName = typeof info?.uploader === 'string' && info.uploader.trim()
+        ? info.uploader.trim()
+        : null
+
       return {
         filePath,
-        title: input.title || filePath.split('/').pop()?.replace(/\.[^.]+$/, '') || 'Archived video',
-        description: input.description || `Archived anonymously from ${new URL(input.url).hostname}`,
+        title: input.title || sourceTitle || filePath.split('/').pop()?.replace(/\.[^.]+$/, '') || 'Archived video',
+        description: input.description || sourceDescription || `Archived anonymously from ${new URL(input.url).hostname}`,
+        duration: sourceDuration,
+        thumbnailUrl,
+        creatorName,
         mimeType: filePath.endsWith('.webm') ? 'video/webm' : 'video/mp4',
         cleanup() {
           try {
@@ -408,19 +436,21 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
       try {
         downloaded = await downloader.download({ id, ...privateInput })
         const channelInfo = await publisher.ensureAnonymousChannel(privateInput)
+        const sourceTitle = downloaded.title || privateInput.title
+        const sourceDescription = downloaded.description || privateInput.description
         const imported = await publisher.importVideo({
-          ...downloaded,
           ...privateInput,
+          ...downloaded,
           channel: channelInfo.channel,
-          title: privateInput.title || downloaded.title,
-          description: privateInput.description || downloaded.description
+          title: sourceTitle,
+          description: sourceDescription
         })
         const importedMetadata = imported?.metadata || imported
 
         const previewVideo = imported?.videoId ? {
           id: imported.videoId,
-          title: privateInput.title || downloaded.title || imported.videoId,
-          description: privateInput.description || downloaded.description || '',
+          title: sourceTitle || imported.videoId,
+          description: sourceDescription || '',
           path: importedMetadata.path || `/videos/${imported.videoId}.mp4`,
           uploadedAt: importedMetadata.uploadedAt || now(),
           duration: Number(importedMetadata.duration || downloaded.duration || 0) || 0,
@@ -435,7 +465,8 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
           blobsCoreKey: importedMetadata.blobsCoreKey || null,
           thumbnailBlobId: importedMetadata.thumbnailBlobId || null,
           thumbnailBlobsCoreKey: importedMetadata.thumbnailBlobsCoreKey || null,
-          thumbnailMimeType: importedMetadata.thumbnailMimeType || null
+          thumbnailMimeType: importedMetadata.thumbnailMimeType || null,
+          thumbnailUrl: importedMetadata.thumbnailUrl || downloaded.thumbnailUrl || null
         } : null
         if (privateInput.publish !== false) {
           await publisher.publishChannel(channelInfo)
@@ -444,7 +475,7 @@ export function createArchiveManager({ store, downloader, publisher, logger = nu
 
         const completed = await store.updateJob(id, {
           status: 'completed',
-          title: privateInput.title || downloaded.title,
+          title: sourceTitle || downloaded.title,
           videoId: imported.videoId,
           channelKey: channelInfo.channelKey,
           publicBeeKey: channelInfo.publicBeeKey || null,

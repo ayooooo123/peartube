@@ -27,6 +27,77 @@ function createDefaultServer(handler) {
   return createServer(handler)
 }
 
+function normalizeCatalogPreviewVideos(channel, previewVideos = []) {
+  const hasLocalBlobEvidence = channel.source === 'local' || channel.localPublished === true
+  return (Array.isArray(previewVideos) ? previewVideos : []).map((video) => {
+    if (!hasLocalBlobEvidence || !video?.blobId || !video?.blobsCoreKey) return video
+    return {
+      ...video,
+      availability: video.availability === 'playable' ? video.availability : 'playable',
+      byteAvailability: video.byteAvailability === 'playable' ? video.byteAvailability : 'playable'
+    }
+  })
+}
+
+function normalizeCatalogChannel(channel, previewVideos = []) {
+  const channelKey = channel.channelKey || channel.driveKey
+  const publicBeeKey = channel.publicBeeKey || null
+  const normalizedPreviewVideos = normalizeCatalogPreviewVideos(channel, previewVideos)
+  return {
+    ...channel,
+    channelKey,
+    driveKey: channel.driveKey || channelKey,
+    publicBeeKey,
+    source: channel.source || 'relay-cache',
+    relayRole: channel.relayRole || 'cache',
+    relayServing: channel.relayServing !== false,
+    videoCount: Number(channel.videoCount || normalizedPreviewVideos.length || channel.videosDownloaded || channel.videosFound || 0) || 0,
+    manifestUpdatedAt: Number(channel.manifestUpdatedAt || channel.mirroredAt || channel.lastSeenAt || Date.now()) || Date.now(),
+    previewVideos: normalizedPreviewVideos
+  }
+}
+
+async function readPublishedChannels(metaDb) {
+  const node = await metaDb?.get?.('published-channels-v2').catch?.(() => null)
+  return Array.isArray(node?.value) ? node.value : []
+}
+
+export async function buildCatalogChannels({ channels = [], store = null, publicFeed = null, metaDb = null } = {}) {
+  const previewsByChannel = await store?.getCompletedVideoPreviewsByChannel?.()
+  const byKey = new Map()
+
+  for (const channel of channels || []) {
+    const channelKey = channel.channelKey || channel.driveKey
+    if (!channelKey) continue
+    const previewVideos = Array.isArray(channel.previewVideos) && channel.previewVideos.length > 0
+      ? channel.previewVideos
+      : (previewsByChannel?.get?.(channelKey) || [])
+    byKey.set(channelKey, normalizeCatalogChannel(channel, previewVideos))
+  }
+
+  const feedEntries = typeof publicFeed?.getFeed === 'function'
+    ? publicFeed.getFeed()
+    : Array.from(publicFeed?.entries?.values?.() || [])
+
+  for (const entry of feedEntries || []) {
+    const channelKey = entry.channelKey || entry.driveKey
+    if (!channelKey || byKey.has(channelKey)) continue
+    const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
+    if (previewVideos.length === 0 && Number(entry.videoCount || 0) <= 0) continue
+    byKey.set(channelKey, normalizeCatalogChannel(entry, previewVideos))
+  }
+
+  for (const entry of await readPublishedChannels(metaDb)) {
+    const channelKey = entry.channelKey || entry.driveKey
+    if (!channelKey) continue
+    const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
+    if (previewVideos.length === 0 && Number(entry.videoCount || 0) <= 0) continue
+    byKey.set(channelKey, normalizeCatalogChannel({ source: 'local', relayRole: 'publisher', ...entry }, previewVideos))
+  }
+
+  return Array.from(byKey.values())
+}
+
 export async function createArchiveConsole({
   service,
   downloader,
@@ -75,20 +146,11 @@ export async function createArchiveConsole({
 
       if (req.method === 'GET' && req.url === '/catalog.json') {
         const channels = service.catalog?.getChannels?.() || []
-        const previewsByChannel = await store.getCompletedVideoPreviewsByChannel?.()
-        const catalogChannels = channels.map((channel) => {
-          const previewVideos = Array.isArray(channel.previewVideos) && channel.previewVideos.length > 0
-            ? channel.previewVideos
-            : (previewsByChannel?.get?.(channel.channelKey) || [])
-          return {
-            ...channel,
-            source: channel.source || 'relay-cache',
-            relayRole: channel.relayRole || 'cache',
-            relayServing: true,
-            videoCount: Number(channel.videoCount || previewVideos.length || channel.videosDownloaded || channel.videosFound || 0) || 0,
-            manifestUpdatedAt: Number(channel.manifestUpdatedAt || channel.mirroredAt || channel.lastSeenAt || Date.now()) || Date.now(),
-            previewVideos
-          }
+        const catalogChannels = await buildCatalogChannels({
+          channels,
+          store,
+          publicFeed: service.runtime?.publicFeed,
+          metaDb: service.runtime?.ctx?.metaDb
         })
         res.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',

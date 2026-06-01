@@ -266,29 +266,35 @@ export default function SearchScreen() {
       // First, close any existing video and wait for state to propagate
       closeVideo()
 
-      const pendingWatch = { ...video, channelKey }
-      const targetHash = `/watch/${encodeURIComponent(channelKey)}/${encodeURIComponent(video.id)}`
-
-      try {
-        ;(window as any).__peartubePendingWatchVideo = pendingWatch
-        window.sessionStorage?.setItem('peartube:pendingWatchVideo', JSON.stringify(pendingWatch))
-        window.dispatchEvent(new CustomEvent('peartube:watch-video', { detail: { video: pendingWatch } }))
-      } catch (err) {
-        console.debug('[Search] Failed to stage pending watch video:', err)
-      }
-
-      router.replace('/')
-
       const setWatchHash = () => {
         console.log('[Search] Setting hash to watch:', channelKey, video.id)
-        window.location.hash = targetHash
-        window.dispatchEvent(new HashChangeEvent('hashchange'))
+        try {
+          const pendingWatch = { ...video, channelKey }
+          ;(window as any).__peartubePendingWatchVideo = pendingWatch
+          window.dispatchEvent(new CustomEvent('peartube:watch-video', { detail: { video: pendingWatch } }))
+        } catch (err) {
+          console.debug('[Search] Failed to stage pending watch video:', err)
+        }
+        window.location.hash = `/watch/${encodeURIComponent(channelKey)}/${encodeURIComponent(video.id)}`
       }
 
-      setTimeout(setWatchHash, 150)
-      setTimeout(() => {
-        if (window.location.hash !== `#${targetHash}`) setWatchHash()
-      }, 450)
+      const ensureHome = () => {
+        const path = window.location.pathname.replace(/\/+$/, '') || '/'
+        if (path !== '/') {
+          router.replace('/')
+        }
+      }
+
+      if (typeof (router as any).canGoBack === 'function' && (router as any).canGoBack()) {
+        router.back()
+        setTimeout(() => {
+          ensureHome()
+          setTimeout(setWatchHash, 50)
+        }, 0)
+      } else {
+        ensureHome()
+        setTimeout(setWatchHash, 50)
+      }
       return
     }
 

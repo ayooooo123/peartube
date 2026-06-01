@@ -439,7 +439,14 @@ export const PearInlineVideoView = memo(function PearInlineVideoView({
         onBuffering?.({ isBuffering: true })
       } else if (status === 'readyToPlay') {
         onBuffering?.({ isBuffering: false })
-        if (Date.now() <= seekPlaybackRecoveryUntilRef.current && isPlayingRef.current) {
+        if (!hasReceivedPlayEventRef.current && isPlayingRef.current) {
+          try {
+            player.play()
+          } catch {
+            // Best effort: Android can report readyToPlay while remaining
+            // paused if play() was requested before the source was ready.
+          }
+        } else if (Date.now() <= seekPlaybackRecoveryUntilRef.current && isPlayingRef.current) {
           player.play()
         }
       }

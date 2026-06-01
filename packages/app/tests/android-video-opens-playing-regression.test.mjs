@@ -18,3 +18,13 @@ test('Android keeps initial desired play state when expo-video emits a pre-play 
   assert.match(handler, /player\.play\(\)/, 'ignored pre-play paused events should reassert native play')
   assert.doesNotMatch(handler, /Platform\.OS === 'web' && !hasReceivedPlayEventRef\.current/, 'the pre-play paused guard must not be web-only')
 })
+
+test('Android reasserts desired play when source first becomes ready before native playing event', async () => {
+  const src = await source(inlineViewPath)
+  const handlerStart = src.indexOf("useEventListener(player, 'statusChange'")
+  assert.notEqual(handlerStart, -1, 'expected expo-video statusChange handler')
+  const handler = src.slice(handlerStart, src.indexOf("useEventListener(player, 'playToEnd'", handlerStart))
+
+  assert.match(handler, /status === 'readyToPlay'[\s\S]*!hasReceivedPlayEventRef\.current[\s\S]*isPlayingRef\.current[\s\S]*player\.play\(\)/, 'readyToPlay should reassert play when Android has desired playback but has not emitted native playing yet')
+  assert.ok(handler.indexOf("status === 'readyToPlay'") < handler.indexOf('Date.now() <= seekPlaybackRecoveryUntilRef.current'), 'initial ready-to-play reassertion should run before seek-only recovery')
+})

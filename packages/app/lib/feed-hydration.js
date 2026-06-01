@@ -147,6 +147,12 @@ export function shouldAutoLoadFeedVideos({ feedEntries, swarmStatus }) {
   return getFeedVideoHydrationMode({ feedEntries, swarmStatus }) !== 'off'
 }
 
+export function selectFeedEntryVideosWithPreviewFallback(loadedVideos, previewFallback) {
+  const loaded = Array.isArray(loadedVideos) ? loadedVideos : []
+  if (loaded.length > 0) return loaded
+  return Array.isArray(previewFallback) && previewFallback.length > 0 ? previewFallback : loaded
+}
+
 export function shouldRenderFeedVideo({ video, identityDriveKey }) {
   const channelKey = video?.channelKey || video?.driveKey || null
   if (identityDriveKey && channelKey === identityDriveKey) return true

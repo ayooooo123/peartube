@@ -26,6 +26,7 @@ import {
   isConfirmedFeedHydrationResult,
   mergeHydratedFeedVideos,
   mergePreviewFeedVideos,
+  selectFeedEntryVideosWithPreviewFallback,
   shouldKeepFeedVideoForVisibleEntries,
   shouldRenderFeedVideo,
 } from '@/lib/feed-hydration'
@@ -550,7 +551,7 @@ export default function HomeScreen() {
           const previewFallback = getFeedPreviewVideos([entry], channelMetaRef.current, identity?.driveKey || undefined, 50) as VideoData[]
           if (result !== timeoutToken) {
             resolved = true
-            loadedVideos = (result as any)?.videos || []
+            loadedVideos = selectFeedEntryVideosWithPreviewFallback((result as any)?.videos || [], previewFallback)
           } else {
             loadedVideos = previewFallback
           }

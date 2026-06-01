@@ -10,6 +10,7 @@ import {
   isConfirmedFeedHydrationResult,
   mergeHydratedFeedVideos,
   mergePreviewFeedVideos,
+  selectFeedEntryVideosWithPreviewFallback,
   shouldKeepFeedVideoForVisibleEntries,
   shouldRenderFeedVideo,
 } from '../lib/feed-hydration.js'
@@ -126,6 +127,21 @@ test('getFeedVideoHydrationMode uses local-only hydration for cached entries bef
     feedEntries: [{ driveKey: 'status-backed', peerCount: 0 }],
     swarmStatus: { peers: 0, feedConnections: 0, feedEntries: 88 },
   }), 'network')
+})
+
+test('selectFeedEntryVideosWithPreviewFallback uses direct feed previews when hydration returns empty', () => {
+  const previews = [{
+    id: 'relay-preview',
+    title: 'Relay archive',
+    uploadedAt: 40,
+    availability: 'playable',
+    blobId: '0:8:0:1024',
+    blobsCoreKey: 'aa'.repeat(32),
+  }]
+
+  assert.equal(selectFeedEntryVideosWithPreviewFallback([], previews), previews)
+  assert.deepEqual(selectFeedEntryVideosWithPreviewFallback([{ id: 'hydrated' }], previews), [{ id: 'hydrated' }])
+  assert.deepEqual(selectFeedEntryVideosWithPreviewFallback([], []), [])
 })
 
 test('getFeedPreviewVideos only uses local or live-peer manifest previews', () => {

@@ -35,7 +35,9 @@ async function closeQuietly(resource) {
   if (!resource || typeof resource.close !== 'function') return
   try {
     await resource.close()
-  } catch {}
+  } catch {
+    // Best effort cleanup for partially-open test resources.
+  }
 }
 
 test('new channels do not replicate over pre-existing unrelated swarm connections during open', async (t) => {

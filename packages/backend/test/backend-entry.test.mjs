@@ -7,6 +7,12 @@ test('backend API module imports in relay runtime', async (t) => {
   t.is(typeof apiModule.createApi, 'function')
 })
 
+test('backend package root imports without stale export drift', async (t) => {
+  const backendModule = await import('../src/index.js')
+  t.is(typeof backendModule.createUniversalCore, 'function')
+  t.is(typeof backendModule.createUniversalHrpcSurface, 'function')
+})
+
 test('attachSharedAppHandlers skips loading shared app handlers unless requested', async (t) => {
   t.is(typeof backendEntry.attachSharedAppHandlers, 'function')
   if (typeof backendEntry.attachSharedAppHandlers !== 'function') return

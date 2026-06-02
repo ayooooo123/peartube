@@ -18,8 +18,9 @@ export { PublicFeed, PublicFeed as PublicFeedManager } from './public-feed.js';
 // Modular facades for smaller backend surfaces
 export { createBackendRuntime } from './runtime.js';
 export * as feed from './feed.js';
-export * as media from './media.js';
-export * as swarm from './swarm.js';
+// Bare-only media, transcode, and cast surfaces stay available through package
+// subpath exports. Do not re-export them from the package root: root import must
+// remain safe under Node test runners that do not define Bare.
 
 // Video Stats - P2P download progress tracking
 export { VideoStatsTracker } from './video-stats.js';
@@ -34,15 +35,11 @@ export { createApi } from './api.js';
 export {
   createIdentityManager,
   generateMnemonic,
-  keypairFromMnemonic,
   validateMnemonic
 } from './identity.js';
 
 // Video Upload
 export { createUploadManager } from './upload.js';
-
-// Transcoding (bare-ffmpeg)
-export * as transcode from './transcode/index.js';
 
 // Multi-writer channels (HyperDB)
 export { MultiWriterChannel, ChannelPairer } from './channel/index.js';
@@ -59,5 +56,3 @@ export { createBackendContext } from './orchestrator.js';
 // Universal core - shared Bare-native entrypoint across all shells
 export { createUniversalCore, createUniversalHrpcSurface } from './universal-core.js';
 export * as universalCore from './universal-core.js';
-
-export * as cast from './cast/index.js';

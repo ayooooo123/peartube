@@ -39,10 +39,20 @@ function normalizeCatalogPreviewVideos(channel, previewVideos = []) {
   })
 }
 
+function isPlayableCatalogPreview(video) {
+  if (!video?.blobId || !video?.blobsCoreKey) return false
+  return video.availability === 'playable' || video.byteAvailability === 'playable'
+}
+
+function playableCatalogPreviews(channel, previewVideos = []) {
+  return normalizeCatalogPreviewVideos(channel, previewVideos).filter(isPlayableCatalogPreview)
+}
+
 function normalizeCatalogChannel(channel, previewVideos = []) {
   const channelKey = channel.channelKey || channel.driveKey
   const publicBeeKey = channel.publicBeeKey || null
-  const normalizedPreviewVideos = normalizeCatalogPreviewVideos(channel, previewVideos)
+  const normalizedPreviewVideos = playableCatalogPreviews(channel, previewVideos)
+  if (normalizedPreviewVideos.length === 0) return null
   return {
     ...channel,
     channelKey,
@@ -72,7 +82,8 @@ export async function buildCatalogChannels({ channels = [], store = null, public
     const previewVideos = Array.isArray(channel.previewVideos) && channel.previewVideos.length > 0
       ? channel.previewVideos
       : (previewsByChannel?.get?.(channelKey) || [])
-    byKey.set(channelKey, normalizeCatalogChannel(channel, previewVideos))
+    const normalized = normalizeCatalogChannel(channel, previewVideos)
+    if (normalized) byKey.set(channelKey, normalized)
   }
 
   const feedEntries = typeof publicFeed?.getFeed === 'function'
@@ -84,7 +95,8 @@ export async function buildCatalogChannels({ channels = [], store = null, public
     if (!channelKey || byKey.has(channelKey)) continue
     const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
     if (previewVideos.length === 0 && Number(entry.videoCount || 0) <= 0) continue
-    byKey.set(channelKey, normalizeCatalogChannel(entry, previewVideos))
+    const normalized = normalizeCatalogChannel(entry, previewVideos)
+    if (normalized) byKey.set(channelKey, normalized)
   }
 
   for (const entry of await readPublishedChannels(metaDb)) {
@@ -92,7 +104,8 @@ export async function buildCatalogChannels({ channels = [], store = null, public
     if (!channelKey) continue
     const previewVideos = Array.isArray(entry.previewVideos) ? entry.previewVideos : []
     if (previewVideos.length === 0 && Number(entry.videoCount || 0) <= 0) continue
-    byKey.set(channelKey, normalizeCatalogChannel({ source: 'local', relayRole: 'publisher', ...entry }, previewVideos))
+    const normalized = normalizeCatalogChannel({ source: 'local', relayRole: 'publisher', ...entry }, previewVideos)
+    if (normalized) byKey.set(channelKey, normalized)
   }
 
   return Array.from(byKey.values())

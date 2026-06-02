@@ -1,6 +1,6 @@
 {
   "name": "@peartube/backend",
-  "version": "0.1.115",
+  "version": "0.1.185",
   "private": true,
   "type": "module",
   "main": "./src/index.js",

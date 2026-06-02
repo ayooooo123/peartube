@@ -1420,6 +1420,7 @@ test('relay catalog entries stay visible and do not become published channels', 
       blobId: '0:4:0:512',
       blobsCoreKey: 'cc'.repeat(32),
       availability: 'playable',
+      thumbnailUrl: 'https://cdn.example/thumb.jpg',
     }],
   })
 
@@ -1430,6 +1431,7 @@ test('relay catalog entries stay visible and do not become published channels', 
   assert.equal(entries[0].relayRole, 'cache')
   assert.equal(entries[0].relayServing, true)
   assert.equal(entries[0].peerCount, 0)
+  assert.equal(entries[0].previewVideos[0].thumbnailUrl, 'https://cdn.example/thumb.jpg')
 })
 test('relay catalog empty preview snapshots clear stale previews', async () => {
   const manager = new PublicFeedManager(createSwarm(), createMetaDb())

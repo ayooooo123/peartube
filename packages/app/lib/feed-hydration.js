@@ -1,8 +1,20 @@
 function getFeedEntryPriority(entry) {
   if (entry?.source === 'local') return 0
-  if ((entry?.peerCount ?? 0) > 0) return 1
-  if (entry?.publicBeeKey) return 2
-  return 3
+  if (hasRenderableDirectFeedPreview(entry)) return 1
+  if ((entry?.peerCount ?? 0) > 0) return 2
+  if (entry?.publicBeeKey) return 3
+  return 4
+}
+
+function hasRenderableDirectFeedPreview(entry) {
+  return Boolean(
+    entry?.publicBeeKey &&
+    Array.isArray(entry?.previewVideos) &&
+    entry.previewVideos.some((video) => (
+      hasDirectBlobRef(video) &&
+      (video?.byteAvailability || video?.availability) === 'playable'
+    ))
+  )
 }
 
 export function getMissingChannelMetaRequests(feedEntries, channelMeta, limit = Infinity) {

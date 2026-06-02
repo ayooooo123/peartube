@@ -164,7 +164,13 @@ export function createArchiver({
         title: ytEntry.title || ''
       })
 
-      return { archived: true, status: 'archived', bytes: result.bytes }
+      return {
+        archived: true,
+        status: 'archived',
+        bytes: result.bytes,
+        channelKey: result.channelKey || null,
+        publicBeeKey: result.publicBeeKey || null
+      }
     } catch (err) {
       const updated = await state.markFailed(source.sourceId, ytEntry.id, err, {
         maxRetries: archiveConfig.maxRetries
@@ -225,6 +231,9 @@ export function createArchiver({
     let failedCount = 0
     let skippedCount = 0
     let bytesAddedThisPoll = 0
+    let channelKey = null
+    let publicBeeKey = null
+    let sawArchivedContent = false
 
     for (const ytEntry of listing) {
       if (stopped) break
@@ -232,20 +241,46 @@ export function createArchiver({
       if (result.archived) {
         archivedCount += 1
         bytesAddedThisPoll += Number(result.bytes) || 0
+        channelKey = result.channelKey || channelKey
+        publicBeeKey = result.publicBeeKey || publicBeeKey
+        sawArchivedContent = true
       } else if (result.skipped && result.status === 'budget') {
         skippedCount += 1
         // budget exhausted — stop processing this poll; the next poll will try again
         break
       } else if (result.skipped) {
         skippedCount += 1
+        if (result.status === ARCHIVE_STATUS.ARCHIVED) sawArchivedContent = true
       } else {
         failedCount += 1
       }
     }
 
+    if (sawArchivedContent) {
+      try {
+        const pub = await ensurePublisher()
+        if (typeof pub.ensureSourceChannel === 'function') {
+          const channelEntry = await pub.ensureSourceChannel(source)
+          channelKey = channelEntry?.channelKey || channelKey
+          publicBeeKey = channelEntry?.publicBeeKey || publicBeeKey
+        }
+      } catch (err) {
+        logger.archive.warn('Archive source reannounce failed', {
+          sourceId: source.sourceId,
+          error: err?.message || String(err)
+        })
+      }
+    }
+
+    const existingSourceRecord = await state.getSource(source.sourceId).catch(() => null)
+
     await state.putSource(source.sourceId, {
+      ...(existingSourceRecord || {}),
       url: source.url,
       type: source.type,
+      label: source.label || existingSourceRecord?.label || null,
+      channelKey: channelKey || existingSourceRecord?.channelKey || null,
+      publicBeeKey: publicBeeKey || existingSourceRecord?.publicBeeKey || null,
       lastPolledAt: Date.now(),
       lastError: null,
       lastSeenVideos: listing.length,

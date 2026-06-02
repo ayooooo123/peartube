@@ -13,10 +13,12 @@ import c from 'compact-encoding';
 import { getVideoUrlFromBlob, loadChannel as storageLoadChannel, loadPublicBee as storageLoadPublicBee, pairDevice as pairChannelDevice, suspendNetworking, resumeNetworking, getNetworkStats, getNetworkStatsReadable, retainSwarmDiscovery } from './storage.js';
 import { createBlobPlaybackService } from './blob-playback-service.js';
 import { SemanticFinder } from './search/semantic-finder.js';
+import { buildMetadataEnvelope } from './search/metadata-envelope.js';
 import { FederatedSearch } from './search/federated-search.js';
 import { Recommender } from './recommendations/recommender.js';
 import { getVideoToolboxDecodeSettings, setVideoToolboxDecodeEnabled, setVideoToolboxHwMapEnabled } from './transcode/videotoolbox-settings.mjs';
 import { buildBlobRefCacheKey, normalizeBlobsCoreKey, normalizeBlobRefInput, parseBlobRef, stringifyBlobId } from './blob-ref.js';
+import { encodeIndexKey } from './index-encoder.js'
 import { NETWORK_TOPIC_STRING } from './types.js'
 
 /**
@@ -110,6 +112,64 @@ export function createApi({
       console.log('[API] SemanticFinder initialized, index size:', context.semanticFinder.globalSize())
     }
     return context.semanticFinder
+  }
+
+  async function buildSearchEnvelope(channelKey, videoId, options = {}) {
+    const normalizeVideoId = (value) => {
+      if (!value || typeof value !== 'string') return value
+      if (value.startsWith('/videos/')) {
+        const match = value.match(/\/videos\/([^.]+)/)
+        if (match?.[1]) return match[1]
+      }
+      const base = value.split('/').pop() || value
+      return base.replace(/\.[^./]+$/, '') || value
+    }
+
+    try {
+      const channel = await loadChannelBounded(channelKey, 3000)
+      if (!channel) return null
+      const normalizedVideoId = normalizeVideoId(videoId)
+      const video = await channel.getVideo(normalizedVideoId)
+      if (!video) return null
+
+      let comments = []
+      if (options.includeComments !== false && channel.comments?.listComments) {
+        try {
+          comments = await channel.comments.listComments(normalizedVideoId, { page: 0, limit: 200 })
+        } catch { /* best effort */ }
+      }
+
+      const subtitles = options.includeSubtitles === false
+        ? []
+        : (video.subtitles ?? video.subtitleText ?? video.transcript ?? video.captions ?? [])
+
+      return buildMetadataEnvelope(video, {
+        videoId: normalizedVideoId,
+        channelKey,
+        publicBeeKey: options.publicBeeKey || null,
+        comments,
+        subtitles,
+      })
+    } catch (err) {
+      console.log('[API] buildSearchEnvelope error:', err?.message)
+      return null
+    }
+  }
+
+  async function refreshSearchIndex(channelKey, videoId, options = {}) {
+    try {
+      if (!ctx.semanticFinder) return { success: false, skipped: true }
+      const envelope = await buildSearchEnvelope(channelKey, videoId, options)
+      if (!envelope) return { success: false, skipped: true }
+      await ctx.semanticFinder.indexEnvelope(envelope, {
+        channelKey,
+        publicBeeKey: options.publicBeeKey || null,
+      })
+      return { success: true }
+    } catch (err) {
+      console.log('[API] refreshSearchIndex error:', err?.message)
+      return { success: false, error: err?.message }
+    }
   }
 
   /**
@@ -499,6 +559,7 @@ export function createApi({
         if (category !== undefined) updates.category = category
         await channel.updateVideo(videoId, updates)
         invalidateChannelCaches(channelKey)
+        await refreshSearchIndex(channelKey, videoId)
         return { success: true }
       } catch (err) {
         console.error('[API] updateVideoMetadata error:', err?.message)
@@ -792,8 +853,7 @@ export function createApi({
             // optimistic startup hint. It lets feed cards render as playable while
             // peer/local byte proof catches up, but is revalidated by cache TTL.
             const hasOptimisticMetadata = video?.availability === 'playable' || video?.byteAvailability === 'playable'
-            const hasFeedPreviewGrace = video?.requiresAvailabilityProbe && video?.restoredFromCache && video?.blobId && video?.blobsCoreKey
-            if ((hasOptimisticMetadata || hasFeedPreviewGrace) && (!peerHint || peerHint?.availability === 'playable')) {
+            if (hasOptimisticMetadata && (!peerHint || peerHint?.availability === 'playable')) {
               return {
                 ...video,
                 availability: 'playable',
@@ -1676,7 +1736,7 @@ export function createApi({
      * @returns {Promise<Object>}
      */
     async prefetchVideo(driveKey, videoPath, publicBeeKey = null) {
-      const prefetchKey = `${driveKey}:${videoPath}`
+      const prefetchKey = encodeIndexKey(driveKey || '', videoPath || '')
       const existing = prefetchInFlight.get(prefetchKey)
       if (existing) return existing
 
@@ -2862,28 +2922,27 @@ export function createApi({
      */
     async indexVideoVectors(channelKey, videoId) {
       try {
-        // Get video data
-        const video = await this.getVideoData(channelKey, videoId)
-        if (!video) {
+        const envelope = await buildSearchEnvelope(channelKey, videoId, { includeComments: true, includeSubtitles: true })
+        if (!envelope) {
           return { success: false, error: 'Video not found' }
         }
 
-        // Ensure semantic finder is initialized with persistence
         const finder = await ensureSemanticFinder(ctx)
 
-        // Skip if already indexed
-        if (finder.hasVideo(videoId)) {
+        if (finder.hasVideo(envelope.videoId)) {
           return { success: true, alreadyIndexed: true }
         }
 
-        // Index to global index (YouTube-Fast)
-        await finder.indexFromMetadata({ ...video, id: videoId }, channelKey)
+        await finder.indexEnvelope(envelope, {
+          channelKey,
+          publicBeeKey: envelope.publicBeeKey || null,
+        })
 
-        // Store vector index op in Autobase (for replication to other peers)
         const isMW = await isMultiWriterChannelKey(channelKey)
         if (isMW) {
           const channel = await loadChannel(ctx, channelKey)
-          const embedding = await finder.embed(`${video.title || ''} ${video.description || ''}`)
+          const text = envelope.searchText || `${envelope.title || ''} ${envelope.description || ''}`
+          const embedding = await finder.embed(text)
           const vectorBase64 = b4a.toString(
             b4a.from(embedding.buffer, embedding.byteOffset, embedding.byteLength),
             'base64'
@@ -2892,10 +2951,10 @@ export function createApi({
           await channel.base.append({
             type: 'add-vector-index',
             schemaVersion: 1,
-            videoId,
+            videoId: envelope.videoId,
             vector: vectorBase64,
-            text: `${video.title || ''} ${video.description || ''}`,
-            metadata: JSON.stringify({ channelKey, title: video.title }),
+            text,
+            metadata: JSON.stringify({ channelKey, title: envelope.title, sources: envelope.sourceFields }),
             indexedAt: Date.now()
           })
         }
@@ -2944,6 +3003,7 @@ export function createApi({
         if (!channel?.comments) throw new Error('Comments not initialized')
         const result = await channel.comments.addComment(videoId, text, parentId)
         console.log('[API] addComment: comment added:', result.commentId?.slice(0, 8))
+        await refreshSearchIndex(channelKey, videoId, { publicBeeKey })
         return { success: true, commentId: result.commentId, queued: false }
       } catch (err) {
         console.error('[API] addComment error:', err.message)
@@ -2985,6 +3045,7 @@ export function createApi({
         const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
         if (!channel?.comments) throw new Error('Comments not initialized')
         await channel.comments.hideComment(videoId, commentId)
+        await refreshSearchIndex(channelKey, videoId, { publicBeeKey })
         return { success: true }
       } catch (err) {
         console.error('[API] hideComment error:', err.message)
@@ -3004,6 +3065,7 @@ export function createApi({
         const channel = await this._getCommentsAutobase(channelKey, publicBeeKey)
         if (!channel?.comments) throw new Error('Comments not initialized')
         await channel.comments.removeComment(videoId, commentId)
+        await refreshSearchIndex(channelKey, videoId, { publicBeeKey })
         return { success: true }
       } catch (err) {
         console.error('[API] removeComment error:', err.message)

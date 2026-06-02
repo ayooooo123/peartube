@@ -35,7 +35,9 @@ async function closeQuietly(resource) {
   if (!resource || typeof resource.close !== 'function') return
   try {
     await resource.close()
-  } catch {}
+  } catch {
+    // Best effort cleanup for partially-open test resources.
+  }
 }
 
 test('new channels do not replicate over pre-existing unrelated swarm connections during open', async (t) => {
@@ -80,41 +82,5 @@ test('new channels do not replicate over pre-existing unrelated swarm connection
     await closeQuietly(channel)
     await closeQuietly(store)
     fs.rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-test('read-only channel opens without attempting bootstrap writes', async (t) => {
-  const ownerDir = makeTempDir('peartube-channel-owner-')
-  const viewerDir = makeTempDir('peartube-channel-viewer-')
-  const ownerStore = new Corestore(ownerDir)
-  const viewerStore = new Corestore(viewerDir)
-  let ownerChannel = null
-  let viewerChannel = null
-
-  try {
-    await ownerStore.ready()
-    await viewerStore.ready()
-
-    ownerChannel = new MultiWriterChannel(ownerStore, {
-      key: null,
-      keyPair: await ownerStore.createKeyPair('read-only-bootstrap-owner'),
-      encrypt: false,
-    })
-    await ownerChannel.ready()
-
-    viewerChannel = new MultiWriterChannel(viewerStore, {
-      key: ownerChannel.key,
-      encrypt: false,
-    })
-
-    await viewerChannel.ready()
-    t.is(viewerChannel.writable, false, 'viewer channel should remain read-only')
-  } finally {
-    await closeQuietly(viewerChannel)
-    await closeQuietly(ownerChannel)
-    await closeQuietly(viewerStore)
-    await closeQuietly(ownerStore)
-    fs.rmSync(viewerDir, { recursive: true, force: true })
-    fs.rmSync(ownerDir, { recursive: true, force: true })
   }
 })

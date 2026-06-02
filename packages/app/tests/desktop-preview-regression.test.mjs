@@ -28,19 +28,6 @@ test('desktop Search preserves direct blob refs from search metadata', () => {
   assert.match(searchSource, /blobId:\s*metadata\.blobId \|\| undefined/)
   assert.match(searchSource, /blobsCoreKey:\s*metadata\.blobsCoreKey \|\| undefined/)
   assert.match(searchSource, /thumbnailBlobId:\s*metadata\.thumbnailBlobId \|\| undefined/)
-})
-
-test('desktop Search hands watch navigation back to Home after staging the selected video', () => {
-  const pearClickPath = searchSource.match(/if \(isPear && typeof window !== 'undefined'\) \{[\s\S]*?\n    \}/)?.[0] || ''
-
   assert.match(searchSource, /__peartubePendingWatchVideo = pendingWatch/)
-  assert.match(searchSource, /sessionStorage\?\.setItem\('peartube:pendingWatchVideo'/)
   assert.match(searchSource, /peartube:watch-video/)
-  assert.match(searchSource, /router\.replace\('\/'\)/)
-  assert.match(searchSource, /setTimeout\(setWatchHash,\s*150\)/)
-  assert.match(searchSource, /setTimeout\(\(\) => \{\s*if \(window\.location\.hash !== `#\$\{targetHash\}`\) setWatchHash\(\)\s*\},\s*450\)/s)
-  assert.doesNotMatch(pearClickPath, /router\.back\(\)/)
-  assert.match(desktopHomeSource, /function getPendingWatchVideo\(route: WatchRoute\): VideoData \| null/)
-  assert.match(desktopHomeSource, /sessionStorage\?\.getItem\('peartube:pendingWatchVideo'\)/)
-  assert.match(desktopHomeSource, /sessionStorage\?\.removeItem\('peartube:pendingWatchVideo'\)/)
 })

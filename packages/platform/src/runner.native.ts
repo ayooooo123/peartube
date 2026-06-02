@@ -5,8 +5,6 @@ import { createJsonFrameParser, encodeJsonFrame } from './ipc-json-framing.js'
 import type { PlatformLifecycleEvent, PlatformRunner } from './rpc.shared'
 import { launchNativeWorklet } from './native-worklet-launch.js'
 
-declare const Buffer: any
-
 type WorkletInstance = {
   start(id: string, source: string, args?: string[]): void
   start(path: string, args?: string[]): void
@@ -79,7 +77,7 @@ function sendShutdownSignalViaIpc(worklet: WorkletInstance, timeoutMs: number) {
     try {
       ipc.on?.('data', onData)
       ipc.on?.('close', onClose)
-      ipc.write(Buffer.from(encodeJsonFrame({ type: 'shutdown' })))
+      ipc.write(encodeJsonFrame({ type: 'shutdown' }))
     } catch {
       cleanup()
       resolve()

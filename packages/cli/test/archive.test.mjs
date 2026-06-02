@@ -105,12 +105,18 @@ test('archive publisher announces and seeds after public bee content changes', a
     cacheManager: {
       async pinChannel(driveKey, publicBeeKey) {
         calls.push(['pin', driveKey, publicBeeKey, videoCount])
+      },
+      async addChannel(driveKey, publicBeeKey, source, options) {
+        calls.push(['cache', driveKey, publicBeeKey, source, videoCount, options?.previewVideos?.map((video) => video.blobId) || []])
       }
     },
     seeder: {
       async seedChannel(channel) {
         calls.push(['seed', channel.driveKey, channel.publicBeeKey, videoCount, channel.previewVideos?.map((video) => video.blobId) || []])
       }
+    },
+    async publishRelayCatalogEntry(entry) {
+      calls.push(['catalog', entry.driveKey, entry.publicBeeKey, entry.source, videoCount, entry.previewVideos?.map((video) => video.blobId) || []])
     }
   }
 
@@ -124,8 +130,9 @@ test('archive publisher announces and seeds after public bee content changes', a
     ['pin', 'aa'.repeat(32), 'bb'.repeat(32), 0],
     ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 0, []],
     ['submit', 'aa'.repeat(32), 'bb'.repeat(32), 1, ['0:4:0:4096'], 'Configured Label', ['Configured Label']],
-    ['pin', 'aa'.repeat(32), 'bb'.repeat(32), 1],
+    ['cache', 'aa'.repeat(32), 'bb'.repeat(32), 'private', 1, ['0:4:0:4096']],
     ['seed', 'aa'.repeat(32), 'bb'.repeat(32), 1, ['0:4:0:4096']],
+    ['catalog', 'aa'.repeat(32), 'bb'.repeat(32), 'archive-job', 1, ['0:4:0:4096']],
   ])
 })
 

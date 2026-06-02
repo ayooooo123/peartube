@@ -13,6 +13,7 @@
 
 import b4a from 'b4a'
 import { VectorIndex } from './vector-index.js'
+import { buildMetadataEnvelope, buildSearchText } from './metadata-envelope.js'
 
 const DEFAULT_EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2'
 const DEFAULT_DIMENSION = 384
@@ -303,17 +304,96 @@ export class SemanticFinder {
    * @param {any} [metadata] - Additional metadata
    */
   async indexVideo(videoId, title, description = '', metadata = {}) {
-    const text = `${title} ${description}`.trim()
+    const envelope = buildMetadataEnvelope({ id: videoId, title, description, ...metadata }, metadata)
+    await this.indexEnvelope(envelope, metadata)
+  }
+
+  /**
+   * Index a metadata envelope produced by the archive/search pipeline.
+   * @param {Object} envelope
+   * @param {Object} [metadata]
+   */
+  async indexEnvelope(envelope, metadata = {}) {
+    const normalized = buildMetadataEnvelope({ id: envelope?.videoId || envelope?.id }, {
+      ...metadata,
+      ...envelope,
+      videoId: envelope?.videoId || envelope?.id,
+      channelKey: metadata?.channelKey || envelope?.channelKey || null,
+      publicBeeKey: metadata?.publicBeeKey || envelope?.publicBeeKey || null,
+    })
+    const text = buildSearchText(normalized)
+    if (!normalized.videoId || !text) return
+
     const embedding = await this.embed(text)
-    const channelKey = metadata?.channelKey || null
+    const channelKey = normalized.channelKey || metadata?.channelKey || null
     const idx = channelKey ? this._getChannelIndex(channelKey) : this.index
     idx.dimension = this.index.dimension || DEFAULT_DIMENSION
-    idx.add(videoId, embedding, {
-      videoId,
-      title,
-      description,
-      ...metadata
-    })
+    const storedMetadata = {
+      videoId: normalized.videoId,
+      channelKey,
+      publicBeeKey: normalized.publicBeeKey || null,
+      title: normalized.title,
+      description: normalized.description,
+      subtitles: normalized.subtitles,
+      comments: normalized.comments,
+      tags: normalized.tags,
+      searchText: normalized.searchText,
+      sourceFields: normalized.sourceFields,
+      ...metadata,
+    }
+    idx.add(normalized.videoId, embedding, storedMetadata)
+    if (this.globalIndex !== idx) {
+      this.globalIndex.add(normalized.videoId, embedding, storedMetadata)
+    }
+    this._indexedVideoIds.add(normalized.videoId)
+    this._dirty = true
+    this._scheduleSave()
+  }
+
+  /**
+   * Index a video directly from metadata (proactive indexing)
+   * @param {Object} video - Video metadata object
+   * @param {string} channelKey - Channel key
+   */
+  async indexFromMetadata(video, channelKey) {
+    const envelope = buildMetadataEnvelope(video, { channelKey })
+    const text = buildSearchText(envelope)
+    if (!envelope.videoId || !text) return
+
+    try {
+      const embedding = await this.embed(text)
+      this.globalIndex.add(envelope.videoId, embedding, {
+        videoId: envelope.videoId,
+        channelKey,
+        title: envelope.title,
+        description: envelope.description,
+        subtitles: envelope.subtitles,
+        comments: envelope.comments,
+        tags: envelope.tags,
+        searchText: envelope.searchText,
+        sourceFields: envelope.sourceFields,
+        duration: video.duration,
+        thumbnail: video.thumbnail,
+        category: video.category,
+        createdAt: video.createdAt || video.uploadedAt,
+        size: video.size,
+        path: video.path || null,
+        mimeType: video.mimeType || null,
+        blobId: video.blobId || null,
+        blobsCoreKey: video.blobsCoreKey || null,
+        thumbnailBlobId: video.thumbnailBlobId || null,
+        thumbnailBlobsCoreKey: video.thumbnailBlobsCoreKey || null,
+        thumbnailMimeType: video.thumbnailMimeType || null,
+        availability: video.availability || null,
+        publicBeeKey: video.publicBeeKey || null
+      })
+      this._indexedVideoIds.add(envelope.videoId)
+      this._dirty = true
+      this._scheduleSave()
+      console.log('[SemanticFinder] Indexed video:', video.title?.slice(0, 40))
+    } catch (err) {
+      console.error('[SemanticFinder] Failed to index video:', video.id, err?.message)
+    }
   }
 
   /**
@@ -321,7 +401,10 @@ export class SemanticFinder {
    * @param {string} videoId
    */
   removeVideo(videoId) {
-    this.index.remove(videoId)
+    this.globalIndex.remove(videoId)
+    for (const idx of this._channelIndexes.values()) {
+      idx.remove(videoId)
+    }
     this._indexedVideoIds.delete(videoId)
     this._dirty = true
     this._scheduleSave()
@@ -372,49 +455,6 @@ export class SemanticFinder {
   }
 
   /**
-   * Index a video directly from metadata (proactive indexing)
-   * @param {Object} video - Video metadata object
-   * @param {string} channelKey - Channel key
-   */
-  async indexFromMetadata(video, channelKey) {
-    if (!video?.id) return
-    if (this._indexedVideoIds.has(video.id)) return // Already indexed
-
-    const text = `${video.title || ''} ${video.description || ''}`.trim()
-    if (!text) return
-
-    try {
-      const embedding = await this.embed(text)
-      this.globalIndex.add(video.id, embedding, {
-        videoId: video.id,
-        channelKey,
-        title: video.title,
-        description: video.description,
-        duration: video.duration,
-        thumbnail: video.thumbnail,
-        category: video.category,
-        createdAt: video.createdAt || video.uploadedAt,
-        size: video.size,
-        path: video.path || null,
-        mimeType: video.mimeType || null,
-        blobId: video.blobId || null,
-        blobsCoreKey: video.blobsCoreKey || null,
-        thumbnailBlobId: video.thumbnailBlobId || null,
-        thumbnailBlobsCoreKey: video.thumbnailBlobsCoreKey || null,
-        thumbnailMimeType: video.thumbnailMimeType || null,
-        availability: video.availability || null,
-        publicBeeKey: video.publicBeeKey || null
-      })
-      this._indexedVideoIds.add(video.id)
-      this._dirty = true
-      this._scheduleSave()
-      console.log('[SemanticFinder] Indexed video:', video.title?.slice(0, 40))
-    } catch (err) {
-      console.error('[SemanticFinder] Failed to index video:', video.id, err?.message)
-    }
-  }
-
-  /**
    * Search the global index (fast O(1) search)
    * @param {string} query
    * @param {number} topK
@@ -429,6 +469,16 @@ export class SemanticFinder {
     const results = this.globalIndex.search(embedding, topK)
     console.log('[SemanticFinder] globalSearch: returning', results.length, 'results')
     return results
+  }
+
+  /**
+   * Search the archive index using the unified metadata envelope.
+   * @param {string} query
+   * @param {number} topK
+   * @returns {Promise<Array<{id: string, score: number, metadata: any}>>}
+   */
+  async searchArchive(query, topK = 50) {
+    return this.globalSearch(query, topK)
   }
 
   /**

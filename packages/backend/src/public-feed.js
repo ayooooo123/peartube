@@ -21,6 +21,7 @@ import b4a from 'b4a'
 import { NETWORK_TOPIC_STRING, PROTOCOL_NAME } from './types.js';
 import { logger } from './logger.js'
 import { hashFeedEntries, hashPreviewVideos } from './hash-utils.js'
+import { encodeIndexKey } from './index-encoder.js'
 import { swarmHasConnection } from './swarm-peer-dial.js'
 import {
   SIGNED_CHANNEL_ROOT_DESCRIPTOR_SCHEMA,
@@ -107,10 +108,8 @@ export class PublicFeed {
     this._now = () => Date.now();
     /** @type {any | null} */
     this.feedDiscovery = null;
-    /** @type {any | null} */
-    this._gossipInterval = null;
-    /** @type {number} */
-    this._gossipIntervalMs = 30000;
+    /** @type {boolean} */
+    this._ownsFeedDiscovery = false;
     /** @type {Array<{name: string, at: number, sinceStartMs: number, [key: string]: any}>} */
     this._startupEvents = [];
     /** @type {number} */
@@ -502,7 +501,7 @@ export class PublicFeed {
     for (const res of settled) {
       if (res.status !== 'fulfilled') continue
       for (const hint of res.value || []) {
-        const key = `${hint?.driveKey || ''}:${hint?.id || ''}`
+        const key = encodeIndexKey(hint?.driveKey || '', hint?.id || '')
         if (!hint?.driveKey || !hint?.id) continue
         const prev = merged.get(key)
         if (!prev || prev.availability !== 'playable') {
@@ -1114,7 +1113,6 @@ export class PublicFeed {
       try { this.onFeedUpdate?.(); } catch {}
     }
 
-    this._startGossipLoop()
     console.log('[PublicFeed] ===== PUBLIC FEED STARTED =====');
   }
 
@@ -1130,38 +1128,6 @@ export class PublicFeed {
       channelCandidates: this.peerChannels.size,
       candidateConnections: this.peerChannels.size,
       rememberedPeerCandidates: this._discoveredPeers.size,
-    }
-  }
-
-  _startGossipLoop() {
-    if (this._gossipInterval) return
-    try {
-      this._gossipInterval = setInterval(() => {
-        if (!this.started) return
-        const openConns = this._openFeedConnections()
-        if (openConns.length === 0) {
-          if (this.peerChannels.size > 0) {
-            console.log('[PublicFeed] Periodic feed gossip skipped unopened channels=', this.peerChannels.size)
-          }
-          return
-        }
-        let announced = 0
-        for (const conn of openConns) {
-          try {
-            this.sendHaveFeed(conn)
-            announced++
-          } catch (err) {
-            console.log('[PublicFeed] periodic HAVE_FEED failed:', err?.message)
-          }
-        }
-        const requested = this.requestFeedsFromPeers()
-        if (announced || requested) {
-          console.log('[PublicFeed] Periodic feed gossip announced=', announced, 'requested=', requested)
-        }
-      }, this._gossipIntervalMs)
-      if (typeof this._gossipInterval?.unref === 'function') this._gossipInterval.unref()
-    } catch (err) {
-      console.log('[PublicFeed] Periodic feed gossip setup failed:', err?.message)
     }
   }
 
@@ -1193,12 +1159,11 @@ export class PublicFeed {
       this._directPeerLastDialError.clear()
       this._directPeerLastDialErrorStack.clear()
       if (this._persistTimer) clearTimeout(this._persistTimer)
-      if (this._gossipInterval) clearInterval(this._gossipInterval)
-      this.feedDiscovery?.destroy?.()
+      if (this._ownsFeedDiscovery) this.feedDiscovery?.destroy?.()
     } catch {}
     this._persistTimer = null
-    this._gossipInterval = null
     this.feedDiscovery = null
+    this._ownsFeedDiscovery = false
   }
 
   /**
@@ -1383,14 +1348,6 @@ export class PublicFeed {
           this.sendHaveFeed(conn);
         } catch (err) {
           console.log('[PublicFeed] sendHaveFeed failed on open (non-fatal):', err?.message);
-        }
-        // Also immediately request the peer's current feed snapshot so discovery
-        // does not wait for the next periodic refresh cycle.
-        try {
-          channel.messages[0].send({ type: 'NEED_FEED' })
-          console.log('[PublicFeed] Sent NEED_FEED on channel open')
-        } catch (err) {
-          console.log('[PublicFeed] NEED_FEED on open failed (non-fatal):', err?.message)
         }
       },
       onclose: () => {
@@ -1940,27 +1897,11 @@ export class PublicFeed {
   }
 
   /**
-   * Request feeds from all connected peers by re-sending our HAVE_FEED
-   * This triggers peers to respond with their current feeds
+   * Legacy feed polling has been retired; retained for compatibility.
    * @returns {number} Number of peers contacted
    */
   requestFeedsFromPeers() {
-    console.log('[PublicFeed] ===== REQUESTING FEEDS FROM PEERS =====');
-    let sent = 0;
-    for (const conn of this._openFeedConnections()) {
-      const channel = this.peerChannels.get(conn)
-      if (!channel) continue
-      try {
-        // Request the peer's current feed snapshot. Re-sending our own HAVE_FEED
-        // here does not make the peer reply; NEED_FEED does.
-        channel.messages[0].send({ type: 'NEED_FEED' })
-        sent++;
-      } catch (err) {
-        console.log('[PublicFeed] NEED_FEED request failed:', err?.message)
-      }
-    }
-    console.log('[PublicFeed] Sent NEED_FEED to', sent, 'peers');
-    return sent;
+    return 0;
   }
 
   /**

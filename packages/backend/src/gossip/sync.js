@@ -90,13 +90,14 @@ export function createGossipSync(options = {}) {
   }
 
   async function exchange(peer, descriptors = []) {
-    const remoteFilter = await peer?.sendBloom?.(await buildOutboundFilter(descriptors))
+    const outboundDescriptors = Array.isArray(descriptors) && descriptors.length > 0 ? descriptors : state.knownDescriptors
+    const remoteFilter = await peer?.sendBloom?.(await buildOutboundFilter(outboundDescriptors))
     const remote = remoteFilter?.has ? remoteFilter : (remoteFilter ? decodeDescriptorBloom(remoteFilter) : null)
-    const localCandidates = Array.isArray(descriptors) ? descriptors : []
+    const localCandidates = Array.isArray(descriptors) && descriptors.length > 0 ? descriptors : state.knownDescriptors
     const remoteMissing = localCandidates.filter((descriptor) => {
       const id = normalizeDescriptorId(descriptor)
       if (!id) return false
-      return !remote?.bits || !remote?.has?.(id)
+      return !remote?.has?.(id)
     })
     const allowed = []
     for (const descriptor of remoteMissing) {

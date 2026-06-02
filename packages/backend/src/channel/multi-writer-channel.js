@@ -210,7 +210,12 @@ export class MultiWriterChannel extends ReadyResource {
     if (this.publicBee.keyHex && existingMeta?.publicBeeKey !== this.publicBee.keyHex) {
       await this.updateMetadata({ publicBeeKey: this.publicBee.keyHex })
     }
-    await this.syncToPublicBee()
+    await this._syncPublicBeeFromFeedChannel()
+  }
+
+  async _syncPublicBeeFromFeedChannel() {
+    if (!this.publicBee?.writable) return
+    await this.publicBee.syncFromChannel(this)
   }
 
   async _close() {
@@ -338,16 +343,7 @@ export class MultiWriterChannel extends ReadyResource {
     })
     await this.db.insert('@peartubeChannel/metadata', meta)
     await this._flush()
-
-    if (this.publicBee?.writable) {
-      const publicPatch = {}
-      for (const key of ['name', 'description', 'avatar', 'createdAt', 'createdBy', 'commentsDbKey']) {
-        if (key in meta) publicPatch[key] = meta[key]
-      }
-      await this.publicBee.setMetadata(publicPatch).catch((err) => {
-        console.log('[Channel] updateMetadata public sync error (non-fatal):', err?.message)
-      })
-    }
+    await this._syncPublicBeeFromFeedChannel()
   }
 
   async listWriters() {
@@ -454,7 +450,7 @@ export class MultiWriterChannel extends ReadyResource {
     })
     await this.db.insert('@peartubeChannel/videos', videoMeta)
     await this._flush()
-    if (this.publicBee?.writable) await this.publicBee.putVideo(id, this._toPublicVideoMeta(videoMeta)).catch(() => {})
+    await this._syncPublicBeeFromFeedChannel()
   }
 
   async updateVideo(id, updates) {
@@ -473,19 +469,14 @@ export class MultiWriterChannel extends ReadyResource {
     })
     await this.db.insert('@peartubeChannel/videos', videoMeta)
     await this._flush()
-    if (this.publicBee?.writable) await this.publicBee.putVideo(id, this._toPublicVideoMeta(videoMeta)).catch(() => {})
+    await this._syncPublicBeeFromFeedChannel()
   }
 
   async deleteVideo(id) {
     if (!this.writable) throw new Error('Channel is not writable')
     await this.db.delete('@peartubeChannel/videos', { id })
     await this._flush()
-    if (this.publicBee?.writable) await this.publicBee.deleteVideo(id).catch(() => {})
-  }
-
-  async syncToPublicBee() {
-    if (!this.publicBee?.writable) return
-    await this.publicBee.syncFromChannel(this)
+    await this._syncPublicBeeFromFeedChannel()
   }
 
   async putBlob(data) {

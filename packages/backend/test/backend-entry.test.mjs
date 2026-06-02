@@ -2,6 +2,11 @@ import test from 'brittle'
 
 import * as backendEntry from '../src/backend-entry.js'
 
+test('backend API module imports in relay runtime', async (t) => {
+  const apiModule = await import('../src/api.js')
+  t.is(typeof apiModule.createApi, 'function')
+})
+
 test('attachSharedAppHandlers skips loading shared app handlers unless requested', async (t) => {
   t.is(typeof backendEntry.attachSharedAppHandlers, 'function')
   if (typeof backendEntry.attachSharedAppHandlers !== 'function') return

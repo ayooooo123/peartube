@@ -129,7 +129,9 @@ function localThumbnailPathForVideo(filePath, fs) {
   for (const candidate of [`${stem}.jpg`, `${stem}.jpeg`, `${stem}.webp`, `${stem}.png`]) {
     try {
       if (typeof fs.existsSync === 'function' && fs.existsSync(candidate)) return candidate
-    } catch {}
+    } catch {
+      // Ignore unreadable adjacent thumbnail candidates and keep scanning.
+    }
   }
   return null
 }

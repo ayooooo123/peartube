@@ -396,7 +396,9 @@ export function createArchivePublisher({ identityManager, uploadManager, api, ru
               thumbnailMimeType
             }
           }
-        } catch {}
+        } catch {
+          // Thumbnail attachment is best-effort; keep the imported video publishable.
+        }
       }
       return result
     },

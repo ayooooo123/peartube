@@ -847,8 +847,208 @@ export function createUniversalCore(options = {}) {
   const usefulWork = createUsefulWorkLedger(options.usefulWork)
   const availability = createAvailabilityPlanner(options.availability)
   const resources = createResourcePolicy({ role, ...options.resources })
-  const state = options.state || createConcurrentState(options)
+  const concurrentState = options.state || createConcurrentState(options)
   const playerCore = createDualPlayerPlaybackCore(options.players || {})
+  const onEvent = typeof options.onEvent === 'function' ? options.onEvent : () => {}
+  const playbackLeases = new Map()
+  let lifecycleState = 'created'
+  let backend = null
+  let services = null
+  let nativeHandles = {}
+  let eventSeq = 0
+  let lifecycleTail = Promise.resolve()
+
+  function runLifecycle(task) {
+    const run = lifecycleTail.then(task, task)
+    lifecycleTail = run.catch(() => {})
+    return run
+  }
+
+  function emitCoreEvent(type, payload = {}) {
+    const event = { event: 'autobase:event', detail: { type, payload } }
+    onEvent(event)
+    return event
+  }
+
+  function eventSinkSnapshot() {
+    return {
+      current: {
+        lastSeq: eventSeq,
+        recent: Array.from({ length: eventSeq }, (_, index) => ({ seq: index + 1 })).slice(-64),
+      },
+    }
+  }
+
+  const eventSink = {
+    async append(kind = 'event', payload = {}) {
+      eventSeq += 1
+      const record = { seq: eventSeq, kind, payload }
+      const metaDb = backend?.ctx?.metaDb
+      if (typeof metaDb?.put === 'function') {
+        await metaDb.put('universal-core:snapshot', eventSinkSnapshot())
+      }
+      return record
+    },
+    snapshot: eventSinkSnapshot,
+  }
+
+  async function createNativeHandle(name, mod, context) {
+    if (!mod) return null
+    if (typeof mod.create === 'function') return await mod.create({ ...context, nativeName: name })
+    if (typeof mod.default?.create === 'function') return await mod.default.create({ ...context, nativeName: name })
+    return mod
+  }
+
+  async function callIfPresent(target, names, context) {
+    for (const name of names) {
+      const fn = target?.[name]
+      if (typeof fn === 'function') return await fn.call(target, context)
+    }
+    return null
+  }
+
+  async function initializeNativeHandles(context) {
+    const loaded = typeof options.loadNativeModules === 'function'
+      ? await options.loadNativeModules()
+      : (options.nativeModules || {})
+    const created = []
+    nativeHandles = {}
+    try {
+      for (const name of ['libhc', 'libkv', 'libudx']) {
+        const mod = loaded?.[name]
+        if (!mod) continue
+        const handle = await createNativeHandle(name, mod, context)
+        if (!handle) continue
+        nativeHandles[name] = handle
+        created.push(name)
+        await callIfPresent(handle, ['init', 'open', 'boot'], { ...context, nativeName: name, phase: 'init' })
+      }
+    } catch (error) {
+      for (const name of created.reverse()) {
+        const handle = nativeHandles[name]
+        await callIfPresent(handle, ['rollback', 'reset', 'abort'], { ...context, nativeName: name, phase: 'init', error }).catch(() => {})
+        await callIfPresent(handle, ['shutdown', 'close', 'stop', 'destroy'], { ...context, nativeName: name, phase: 'init', error }).catch(() => {})
+        delete nativeHandles[name]
+      }
+      throw error
+    }
+  }
+
+  async function transitionNative(phase, names, methods, context = {}) {
+    for (const name of names) {
+      await callIfPresent(nativeHandles[name], methods, { ...context, nativeName: name, phase })
+      await callIfPresent(nativeHandles[name], ['flush', 'drain', 'sync', 'barrier'], { ...context, nativeName: name, phase })
+    }
+  }
+
+  async function init() {
+    return await runLifecycle(async () => {
+      if (backend) return backend
+      lifecycleState = 'initializing'
+      await initializeNativeHandles({ platform: options.platform, storagePath: options.storagePath })
+      const createBackendContext = typeof options.createBackendContext === 'function'
+        ? options.createBackendContext
+        : null
+      backend = createBackendContext ? await createBackendContext(options) : { ctx: {} }
+      const mirrorWorker = typeof options.createMirrorSeedWorker === 'function'
+        ? options.createMirrorSeedWorker({ backend, core: api })
+        : {}
+      let mirrorRefreshInFlight = null
+      services = {
+        gossip: typeof options.createGossipService === 'function' ? options.createGossipService({ backend, core: api }) : {},
+        storage: typeof options.createStorageService === 'function' ? options.createStorageService({ backend, core: api }) : {},
+        mirrorSeed: {
+          ...mirrorWorker,
+          async refresh(reason = 'manual') {
+            if (mirrorRefreshInFlight) return { skipped: true, why: 'refresh already in flight' }
+            mirrorRefreshInFlight = (async () => {
+              try {
+                if (typeof mirrorWorker.refresh === 'function') return await mirrorWorker.refresh(reason)
+                const entries = backend?.publicFeed?.getFeed?.() || []
+                for (const entry of entries) await backend?.seedingManager?.addSeed?.(entry)
+                return { refreshed: true }
+              } finally {
+                mirrorRefreshInFlight = null
+              }
+            })()
+            return await mirrorRefreshInFlight
+          },
+        },
+        hrpc: options.hrpc || null,
+      }
+      lifecycleState = 'initialized'
+      await eventSink.append('core.initialized', { state: lifecycleState })
+      emitCoreEvent('core.initialized', { state: lifecycleState })
+      return backend
+    })
+  }
+
+  async function start() {
+    return await runLifecycle(async () => {
+      lifecycleState = 'starting'
+      await transitionNative('start', ['libhc', 'libkv', 'libudx'], ['start', 'resume', 'open', 'boot'], { platform: options.platform })
+      lifecycleState = 'started'
+      emitCoreEvent('core.started', { state: lifecycleState })
+      return backend
+    })
+  }
+
+  async function suspend() {
+    return await runLifecycle(async () => {
+      lifecycleState = 'suspending'
+      await transitionNative('suspend', ['libudx', 'libkv', 'libhc'], ['suspend', 'pause', 'stop'], { platform: options.platform })
+      lifecycleState = 'suspended'
+      emitCoreEvent('core.suspended', { state: lifecycleState })
+      return backend
+    })
+  }
+
+  async function resume() {
+    return await runLifecycle(async () => {
+      lifecycleState = 'resuming'
+      await transitionNative('resume', ['libhc', 'libkv', 'libudx'], ['resume', 'start', 'open', 'boot'], { platform: options.platform })
+      lifecycleState = 'resumed'
+      emitCoreEvent('core.resumed', { state: lifecycleState })
+      return backend
+    })
+  }
+
+  async function shutdown() {
+    return await runLifecycle(async () => {
+      lifecycleState = 'shutting_down'
+      await transitionNative('shutdown', ['libudx', 'libkv', 'libhc'], ['shutdown', 'close', 'stop', 'destroy'], { platform: options.platform })
+      lifecycleState = 'shutdown'
+      emitCoreEvent('core.shutdown', { state: lifecycleState })
+      return backend
+    })
+  }
+
+  function getStatus() {
+    return { state: lifecycleState, role, backendReady: Boolean(backend), servicesReady: Boolean(services) }
+  }
+
+  const playback = {
+    ...playerCore,
+    async acquire(surface, context = {}) {
+      const normalized = normalizePlayerSurface(surface)
+      const hostSurfaceId = context.hostSurfaceId || context.surfaceId || normalized
+      if (normalized === PLAYER_SHORTS && (context.pictureInPicture || context.allowPiP)) {
+        return { granted: false, reason: 'shorts surface is not PiP-capable' }
+      }
+      for (const lease of playbackLeases.values()) {
+        if (lease.hostSurfaceId === hostSurfaceId && lease.surface !== normalized) {
+          return { granted: false, reason: `surface already owned by ${lease.surface}` }
+        }
+      }
+      const lease = { id: hashText({ surface: normalized, hostSurfaceId, at: Date.now() }), surface: normalized, hostSurfaceId }
+      playbackLeases.set(lease.id, lease)
+      return { granted: true, context: lease }
+    },
+    async release(context = {}) {
+      playbackLeases.delete(context.id)
+      return { released: true }
+    },
+  }
 
   function scorePeer(peer = {}, now = Date.now()) {
     const identityScore = sybil.scoreIdentity(peer.identity || peer, now)
@@ -869,7 +1069,7 @@ export function createUniversalCore(options = {}) {
       fanoutBudget: sybil.allowsFanout(peer.identity || peer, resources.profile.maxFanout),
       requestBudget: sybil.allowsRequest(peer.identity || peer, peer.inFlightRequests || 0),
     }
-    state.peers.set(id, record)
+    concurrentState.peers.set(id, record)
     return record
   }
 
@@ -883,7 +1083,7 @@ export function createUniversalCore(options = {}) {
     if (!availability.shouldAdmit(normalized, context.now || Date.now())) {
       return { accepted: false, reason: 'unreachable-or-stale' }
     }
-    const result = applyConcurrentUpdate(state, {
+    const result = applyConcurrentUpdate(concurrentState, {
       descriptorId: normalized.descriptorId,
       descriptor: normalized,
       state: availability.shouldForward(normalized, context.now || Date.now()) ? 'active' : 'verified',
@@ -894,14 +1094,14 @@ export function createUniversalCore(options = {}) {
     }, context)
 
     if (result.applied) recordUsefulWork('descriptor-verified', 1, { descriptorId: normalized.descriptorId, peerId: context.peerId, at: context.observedAt || Date.now() })
-    return { accepted: result.applied, record: result.record, state }
+    return { accepted: result.applied, record: result.record, state: concurrentState }
   }
 
   function ingestProof(proof, context = {}) {
     const descriptorId = descriptorIdOf(proof?.descriptorId || proof?.descriptor || '')
     if (!descriptorId) return { accepted: false, reason: 'missing-descriptor-id' }
     const reachable = Boolean(proof?.reachable !== false && proof?.signatureValid !== false)
-    const result = applyConcurrentUpdate(state, {
+    const result = applyConcurrentUpdate(concurrentState, {
       descriptorId,
       descriptor: context.descriptor || proof.descriptor || { descriptorId },
       state: reachable ? 'active' : 'quarantined',
@@ -919,18 +1119,17 @@ export function createUniversalCore(options = {}) {
     } else {
       recordUsefulWork('proof-rejected', 1, { descriptorId, peerId: context.peerId, at: context.observedAt || Date.now() })
     }
-    return { accepted: result.applied, record: result.record, state }
+    return { accepted: result.applied, record: result.record, state: concurrentState }
   }
 
   function shouldSyncPeer(peer = {}, now = Date.now()) {
-    const peerRecord = state.peers.get(toHex(peer.peerId || peer.identity?.publicKey || '')) || registerPeer(peer)
+    const peerRecord = concurrentState.peers.get(toHex(peer.peerId || peer.identity?.publicKey || '')) || registerPeer(peer)
     return resources.budgetFor(peer.resources || peer).canSync && peerRecord.score >= 20 && sybil.allowsRequest(peer.identity || peer, peer.inFlightRequests || 0, now)
   }
 
   function chooseFanoutPeers(peers = [], now = Date.now()) {
     const ranked = Array.isArray(peers)
-      ? peers.map((peer) => ({ peer, score: scorePeer(peer, now) }))
-          .sort((a, b) => b.score - a.score)
+      ? peers.map((peer) => ({ peer, score: scorePeer(peer, now) })).sort((a, b) => b.score - a.score)
       : []
     const limit = sybil.allowsFanout(options.identity || {}, resources.profile.maxFanout, now)
     return ranked.slice(0, limit).map((entry) => entry.peer)
@@ -982,24 +1181,29 @@ export function createUniversalCore(options = {}) {
   function stateSnapshot() {
     return {
       role,
-      peers: Array.from(state.peers.values()),
-      descriptors: Array.from(state.descriptors.values()),
-      quarantines: Array.from(state.quarantines.values()),
-      tombstones: Array.from(state.tombstones.values()),
-      causalWatermark: state.causalWatermark,
-      lastAppliedAt: state.lastAppliedAt,
+      peers: Array.from(concurrentState.peers.values()),
+      descriptors: Array.from(concurrentState.descriptors.values()),
+      quarantines: Array.from(concurrentState.quarantines.values()),
+      tombstones: Array.from(concurrentState.tombstones.values()),
+      causalWatermark: concurrentState.causalWatermark,
+      lastAppliedAt: concurrentState.lastAppliedAt,
       players: playerSnapshot(),
     }
   }
 
-  return {
+  const api = {
     role,
-    state,
+    get state() { return lifecycleState },
+    get concurrentState() { return concurrentState },
+    get backend() { return backend },
+    get services() { return services },
     sybil,
     usefulWork,
     availability,
     resources,
     playerCore,
+    playback,
+    eventSink,
     scorePeer,
     registerPeer,
     recordUsefulWork,
@@ -1015,6 +1219,47 @@ export function createUniversalCore(options = {}) {
     playerSnapshot,
     usefulWorkSnapshot,
     stateSnapshot,
+    getStatus,
+    init,
+    start,
+    suspend,
+    resume,
+    shutdown,
+  }
+
+  return api
+}
+
+/**
+ * HRPC surface for the universal core lifecycle.
+ * Runtime adapters register this shared surface instead of each shell inventing
+ * its own core status/start/suspend/resume/shutdown handlers.
+ */
+export function createUniversalHrpcSurface(core) {
+  return {
+    async GetUniversalCoreStatus() {
+      return core.getStatus()
+    },
+    async UniversalCoreInit() {
+      await core.init()
+      return core.getStatus()
+    },
+    async UniversalCoreStart() {
+      await core.start()
+      return core.getStatus()
+    },
+    async UniversalCoreSuspend() {
+      await core.suspend()
+      return core.getStatus()
+    },
+    async UniversalCoreResume() {
+      await core.resume()
+      return core.getStatus()
+    },
+    async UniversalCoreShutdown() {
+      await core.shutdown()
+      return core.getStatus()
+    },
   }
 }
 
@@ -1035,4 +1280,5 @@ export default {
   createUnifiedAutobaseSink,
   createDualPlayerPlaybackCore,
   createUniversalCore,
+  createUniversalHrpcSurface,
 }

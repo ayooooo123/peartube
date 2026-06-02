@@ -289,10 +289,12 @@ export function createApi({
         : []
     if (videos.length === 0) return []
     const resolvedPublicBeeKey = publicBeeKey || entry?.publicBeeKey || null
+    const feedEntryHasLivePeer = Number(entry?.peerCount || 0) > 0
     return videos
       .filter((video) => video?.id || video?.path)
       .map((video) => {
         const id = normalizeVideoId(video.id || video.path)
+        const videoAvailability = video.availability || video.byteAvailability || (feedEntryHasLivePeer ? 'playable' : null)
         return {
           ...video,
           id,
@@ -301,6 +303,8 @@ export function createApi({
           publicBeeKey: resolvedPublicBeeKey,
           relayBacked: Boolean(entry?.relayServing || entry?.relayRole === 'cache' || entry?.source === 'relay-cache'),
           mimeType: video.mimeType || 'video/mp4',
+          availability: videoAvailability || video.availability,
+          byteAvailability: video.byteAvailability || videoAvailability || video.availability,
         }
       })
   }
@@ -756,15 +760,20 @@ export function createApi({
 
         const isPlayableAvailabilityHint = (hint) => hint?.availability === 'playable'
 
-        const resolveExplicitVideoAvailability = ({ localHint, peerHint }) => {
+        const resolveExplicitVideoAvailability = ({ localHint, peerHint, video }) => {
+          const explicitAvailability = video?.byteAvailability || video?.availability || null
           // Fast path: if our local store already has the opening blocks, the
           // video is immediately watchable without waiting on remote proof.
           if (isPlayableAvailabilityHint(localHint)) return 'playable'
+          if (explicitAvailability === 'playable') return 'playable'
 
           // Remote playability must be explicitly proven by a peer serving hint.
           if (peerHint?.availability === 'playable') return 'playable'
           if (peerHint?.availability && peerHint.availability !== 'unknown') {
             return peerHint.availability
+          }
+          if (explicitAvailability && explicitAvailability !== 'unknown') {
+            return explicitAvailability
           }
 
           return 'unavailable'
@@ -786,7 +795,7 @@ export function createApi({
                 peerHint = Array.isArray(hints) ? hints.find((hint) => hint?.id === video?.id) || null : null
               } catch { /* best effort */ }
             }
-            const availability = resolveExplicitVideoAvailability({ localHint, peerHint })
+            const availability = resolveExplicitVideoAvailability({ localHint, peerHint, video })
             const hint = isPlayableAvailabilityHint(localHint) ? localHint : peerHint
             // Metadata carried by PublicBee / relay catalogs is a short-lived
             // optimistic startup hint. It lets feed cards render as playable while

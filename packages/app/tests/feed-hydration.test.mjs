@@ -58,6 +58,34 @@ test('getFeedVideoLoadEntries prioritizes local and live-peer entries before cac
   ])
 })
 
+test('getFeedVideoLoadEntries prioritizes playable relay archive previews before stale live-peer entries', () => {
+  const directPlayable = {
+    driveKey: 'relay-playable',
+    peerCount: 0,
+    publicBeeKey: 'bee-relay',
+    previewVideos: [{
+      id: 'playable-archive',
+      availability: 'playable',
+      byteAvailability: 'playable',
+      blobId: '0:1:0:32',
+      blobsCoreKey: 'aa'.repeat(32),
+    }],
+  }
+  const staleLive = { driveKey: 'stale-live', peerCount: 4, publicBeeKey: 'bee-live', previewVideos: [] }
+  const cached = { driveKey: 'cached', peerCount: 0, publicBeeKey: 'bee-cached', previewVideos: [] }
+
+  const entries = getFeedVideoLoadEntries([
+    staleLive,
+    cached,
+    directPlayable,
+  ], 2)
+
+  assert.deepEqual(entries.map((entry) => entry.driveKey), [
+    'relay-playable',
+    'stale-live',
+  ])
+})
+
 test('getFeedVideoHydrationMode uses local-only hydration for cached entries before peers arrive', () => {
   assert.equal(getFeedVideoHydrationMode({
     feedEntries: [{ driveKey: 'a' }],
